@@ -152,4 +152,115 @@ mod tests {
         cursor.show();
         assert!(cursor.visible);
     }
+
+    #[test]
+    fn test_cursor_bounds_checking() {
+        let mut cursor = Cursor::new();
+
+        // Move past max_col
+        cursor.move_right(100, 79);
+        assert_eq!(cursor.col, 79);
+
+        // Move past max_row
+        cursor.move_down(100, 23);
+        assert_eq!(cursor.row, 23);
+
+        // Move left beyond 0 (saturating_sub)
+        cursor.move_left(100);
+        assert_eq!(cursor.col, 0);
+
+        // Move up beyond 0 (saturating_sub)
+        cursor.move_up(100);
+        assert_eq!(cursor.row, 0);
+    }
+
+    #[test]
+    fn test_cursor_move_to_line_start() {
+        let mut cursor = Cursor::new();
+        cursor.goto(50, 10);
+        cursor.move_to_line_start();
+        assert_eq!(cursor.col, 0);
+        assert_eq!(cursor.row, 10);
+    }
+
+    #[test]
+    fn test_cursor_move_to_next_line() {
+        let mut cursor = Cursor::new();
+        cursor.goto(50, 10);
+        cursor.move_to_next_line(23);
+        assert_eq!(cursor.col, 0);
+        assert_eq!(cursor.row, 11);
+    }
+
+    #[test]
+    fn test_cursor_move_to_next_line_at_bottom() {
+        let mut cursor = Cursor::new();
+        cursor.goto(50, 23);
+        cursor.move_to_next_line(23);
+        assert_eq!(cursor.col, 0);
+        assert_eq!(cursor.row, 23); // Should clamp to max
+    }
+
+    #[test]
+    fn test_cursor_style_changes() {
+        let mut cursor = Cursor::new();
+        assert_eq!(cursor.style(), CursorStyle::BlinkingBlock);
+
+        cursor.set_style(CursorStyle::SteadyBlock);
+        assert_eq!(cursor.style(), CursorStyle::SteadyBlock);
+
+        cursor.set_style(CursorStyle::BlinkingUnderline);
+        assert_eq!(cursor.style(), CursorStyle::BlinkingUnderline);
+
+        cursor.set_style(CursorStyle::SteadyUnderline);
+        assert_eq!(cursor.style(), CursorStyle::SteadyUnderline);
+
+        cursor.set_style(CursorStyle::BlinkingBar);
+        assert_eq!(cursor.style(), CursorStyle::BlinkingBar);
+
+        cursor.set_style(CursorStyle::SteadyBar);
+        assert_eq!(cursor.style(), CursorStyle::SteadyBar);
+    }
+
+    #[test]
+    fn test_cursor_style_equality() {
+        assert_eq!(CursorStyle::BlinkingBlock, CursorStyle::BlinkingBlock);
+        assert_ne!(CursorStyle::BlinkingBlock, CursorStyle::SteadyBlock);
+        assert_ne!(CursorStyle::BlinkingBar, CursorStyle::SteadyBar);
+    }
+
+    #[test]
+    fn test_cursor_copy() {
+        let mut cursor1 = Cursor::new();
+        cursor1.goto(10, 5);
+        cursor1.hide();
+        cursor1.set_style(CursorStyle::SteadyBar);
+
+        let cursor2 = cursor1;
+
+        assert_eq!(cursor1.col, cursor2.col);
+        assert_eq!(cursor1.row, cursor2.row);
+        assert_eq!(cursor1.visible, cursor2.visible);
+        assert_eq!(cursor1.style, cursor2.style);
+    }
+
+    #[test]
+    fn test_cursor_equality() {
+        let mut cursor1 = Cursor::new();
+        let mut cursor2 = Cursor::new();
+
+        assert_eq!(cursor1, cursor2);
+
+        cursor1.goto(5, 5);
+        assert_ne!(cursor1, cursor2);
+
+        cursor2.goto(5, 5);
+        assert_eq!(cursor1, cursor2);
+
+        cursor1.hide();
+        assert_ne!(cursor1, cursor2);
+
+        cursor2.hide();
+        assert_eq!(cursor1, cursor2);
+    }
 }

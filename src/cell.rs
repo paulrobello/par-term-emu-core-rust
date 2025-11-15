@@ -288,4 +288,257 @@ mod tests {
         flags.set_bold(true);
         assert!(flags.bold());
     }
+
+    #[test]
+    fn test_all_cell_flags() {
+        let mut flags = CellFlags::default();
+
+        // Test bold
+        assert!(!flags.bold());
+        flags.set_bold(true);
+        assert!(flags.bold());
+        flags.set_bold(false);
+        assert!(!flags.bold());
+
+        // Test dim
+        assert!(!flags.dim());
+        flags.set_dim(true);
+        assert!(flags.dim());
+        flags.set_dim(false);
+        assert!(!flags.dim());
+
+        // Test italic
+        assert!(!flags.italic());
+        flags.set_italic(true);
+        assert!(flags.italic());
+        flags.set_italic(false);
+        assert!(!flags.italic());
+
+        // Test underline
+        assert!(!flags.underline());
+        flags.set_underline(true);
+        assert!(flags.underline());
+        flags.set_underline(false);
+        assert!(!flags.underline());
+
+        // Test blink
+        assert!(!flags.blink());
+        flags.set_blink(true);
+        assert!(flags.blink());
+        flags.set_blink(false);
+        assert!(!flags.blink());
+
+        // Test reverse
+        assert!(!flags.reverse());
+        flags.set_reverse(true);
+        assert!(flags.reverse());
+        flags.set_reverse(false);
+        assert!(!flags.reverse());
+
+        // Test hidden
+        assert!(!flags.hidden());
+        flags.set_hidden(true);
+        assert!(flags.hidden());
+        flags.set_hidden(false);
+        assert!(!flags.hidden());
+
+        // Test strikethrough
+        assert!(!flags.strikethrough());
+        flags.set_strikethrough(true);
+        assert!(flags.strikethrough());
+        flags.set_strikethrough(false);
+        assert!(!flags.strikethrough());
+
+        // Test overline
+        assert!(!flags.overline());
+        flags.set_overline(true);
+        assert!(flags.overline());
+        flags.set_overline(false);
+        assert!(!flags.overline());
+
+        // Test guarded
+        assert!(!flags.guarded());
+        flags.set_guarded(true);
+        assert!(flags.guarded());
+        flags.set_guarded(false);
+        assert!(!flags.guarded());
+
+        // Test wide_char
+        assert!(!flags.wide_char());
+        flags.set_wide_char(true);
+        assert!(flags.wide_char());
+        flags.set_wide_char(false);
+        assert!(!flags.wide_char());
+
+        // Test wide_char_spacer
+        assert!(!flags.wide_char_spacer());
+        flags.set_wide_char_spacer(true);
+        assert!(flags.wide_char_spacer());
+        flags.set_wide_char_spacer(false);
+        assert!(!flags.wide_char_spacer());
+    }
+
+    #[test]
+    fn test_cell_flags_combinations() {
+        let mut flags = CellFlags::default();
+
+        // Set multiple flags
+        flags.set_bold(true);
+        flags.set_italic(true);
+        flags.set_underline(true);
+
+        assert!(flags.bold());
+        assert!(flags.italic());
+        assert!(flags.underline());
+        assert!(!flags.blink());
+
+        // Disable one flag
+        flags.set_bold(false);
+        assert!(!flags.bold());
+        assert!(flags.italic());
+        assert!(flags.underline());
+    }
+
+    #[test]
+    fn test_underline_styles() {
+        let mut flags = CellFlags::default();
+        assert_eq!(flags.underline_style, UnderlineStyle::None);
+
+        flags.underline_style = UnderlineStyle::Straight;
+        assert_eq!(flags.underline_style, UnderlineStyle::Straight);
+
+        flags.underline_style = UnderlineStyle::Double;
+        assert_eq!(flags.underline_style, UnderlineStyle::Double);
+
+        flags.underline_style = UnderlineStyle::Curly;
+        assert_eq!(flags.underline_style, UnderlineStyle::Curly);
+
+        flags.underline_style = UnderlineStyle::Dotted;
+        assert_eq!(flags.underline_style, UnderlineStyle::Dotted);
+
+        flags.underline_style = UnderlineStyle::Dashed;
+        assert_eq!(flags.underline_style, UnderlineStyle::Dashed);
+    }
+
+    #[test]
+    fn test_cell_with_colors() {
+        let fg = Color::Rgb(255, 128, 64);
+        let bg = Color::Rgb(32, 64, 128);
+        let cell = Cell::with_colors('X', fg, bg);
+
+        assert_eq!(cell.c, 'X');
+        assert_eq!(cell.fg, fg);
+        assert_eq!(cell.bg, bg);
+        assert_eq!(cell.width(), 1);
+    }
+
+    #[test]
+    fn test_cell_reset() {
+        let mut cell = Cell::new('A');
+        cell.fg = Color::Rgb(255, 0, 0);
+        cell.bg = Color::Rgb(0, 255, 0);
+        cell.flags.set_bold(true);
+        cell.flags.set_italic(true);
+
+        assert!(!cell.is_empty());
+        assert!(cell.flags.bold());
+
+        cell.reset();
+
+        assert_eq!(cell.c, ' ');
+        assert!(cell.is_empty());
+        assert!(!cell.flags.bold());
+        assert!(!cell.flags.italic());
+    }
+
+    #[test]
+    fn test_cell_is_empty() {
+        let cell = Cell::default();
+        assert!(cell.is_empty());
+
+        let mut cell = Cell::new('A');
+        assert!(!cell.is_empty());
+
+        cell.c = ' ';
+        assert!(cell.is_empty());
+
+        cell.flags.set_bold(true);
+        assert!(!cell.is_empty());
+    }
+
+    #[test]
+    fn test_cell_with_emoji() {
+        let cell = Cell::new('😀');
+        assert_eq!(cell.c, '😀');
+        // Emoji should have width 2
+        assert_eq!(cell.width(), 2);
+    }
+
+    #[test]
+    fn test_cell_with_zero_width_char() {
+        // Combining characters have width 0
+        let cell = Cell::new('\u{0301}'); // Combining acute accent
+        assert_eq!(cell.c, '\u{0301}');
+        // Zero-width chars actually have width 0, not defaulting to 1
+        assert_eq!(cell.width(), 0);
+    }
+
+    #[test]
+    fn test_cell_hyperlink_id() {
+        let mut flags = CellFlags::default();
+        assert_eq!(flags.hyperlink_id, None);
+
+        flags.hyperlink_id = Some(42);
+        assert_eq!(flags.hyperlink_id, Some(42));
+
+        flags.hyperlink_id = None;
+        assert_eq!(flags.hyperlink_id, None);
+    }
+
+    #[test]
+    fn test_cell_underline_color() {
+        let mut cell = Cell::default();
+        assert_eq!(cell.underline_color, None);
+
+        cell.underline_color = Some(Color::Rgb(255, 0, 0));
+        assert_eq!(cell.underline_color, Some(Color::Rgb(255, 0, 0)));
+
+        cell.underline_color = None;
+        assert_eq!(cell.underline_color, None);
+    }
+
+    #[test]
+    fn test_cell_flags_equality() {
+        let mut flags1 = CellFlags::default();
+        let mut flags2 = CellFlags::default();
+
+        assert_eq!(flags1, flags2);
+
+        flags1.set_bold(true);
+        assert_ne!(flags1, flags2);
+
+        flags2.set_bold(true);
+        assert_eq!(flags1, flags2);
+    }
+
+    #[test]
+    fn test_underline_style_equality() {
+        assert_eq!(UnderlineStyle::None, UnderlineStyle::None);
+        assert_eq!(UnderlineStyle::Straight, UnderlineStyle::Straight);
+        assert_ne!(UnderlineStyle::None, UnderlineStyle::Straight);
+        assert_ne!(UnderlineStyle::Curly, UnderlineStyle::Dotted);
+    }
+
+    #[test]
+    fn test_cell_clone() {
+        let mut cell1 = Cell::new('A');
+        cell1.fg = Color::Rgb(255, 0, 0);
+        cell1.flags.set_bold(true);
+
+        let cell2 = cell1;
+
+        assert_eq!(cell1.c, cell2.c);
+        assert_eq!(cell1.fg, cell2.fg);
+        assert_eq!(cell1.flags, cell2.flags);
+    }
 }
