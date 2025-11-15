@@ -1,0 +1,101 @@
+[build-system]
+requires = [
+    "maturin>=1.9,<2.0",
+]
+build-backend = "maturin"
+
+[project]
+name = "par-term-emu-core-rust"
+version = "0.2.0"
+description = "A comprehensive terminal emulator library in Rust with Python bindings - supports true color, alt screen, mouse reporting, bracketed paste, and full Unicode"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Paul Robello", email = "probello@gmail.com" },
+]
+maintainers = [
+    { name = "Paul Robello", email = "probello@gmail.com" },
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Environment :: Console",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Rust",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows :: Windows 10",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Topic :: Terminals",
+    "Topic :: Terminals :: Terminal Emulators/X Terminals",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+keywords = [
+    "terminal",
+    "emulator",
+    "vt100",
+    "vt220",
+    "ansi",
+    "pty",
+    "rust",
+    "pyo3",
+    "terminal-emulator",
+    "unicode",
+    "true-color",
+]
+dependencies = []
+
+[project.license]
+file = "LICENSE"
+
+[project.urls]
+Homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
+Documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/README.md"
+Repository = "https://github.com/paulrobello/par-term-emu-core-rust"
+Issues = "https://github.com/paulrobello/par-term-emu-core-rust/issues"
+Discussions = "https://github.com/paulrobello/par-term-emu-core-rust/discussions"
+
+[project.optional-dependencies]
+# Image processing for sixel examples and screenshot features
+image = [
+    "pillow>=12.0.0",
+]
+
+[tool.maturin]
+features = [
+    "pyo3/extension-module",
+]
+python-source = "python"
+module-name = "par_term_emu_core_rust._native"
+
+[tool.pytest.ini_options]
+timeout = 5
+timeout_method = "thread"
+filterwarnings = [
+    "ignore:.*PyPtyTerminal is unsendable.*:pytest.PytestUnraisableExceptionWarning",
+]
+
+[tool.ruff]
+target-version = "py314"
+extend-exclude = [
+    "examples",
+]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "basic"
+
+[dependency-groups]
+dev = [
+    "maturin>=1.10.1",
+    "pre-commit>=4.4.0",
+    "pyright>=1.1.407",
+    "pytest>=9.0.1",
+    "pytest-timeout>=2.4.0",
+    "ruff>=0.14.5",
+]

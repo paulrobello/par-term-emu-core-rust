@@ -1,0 +1,19 @@
+{
+  "include": [
+    "python",
+    "tests",
+    "examples"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "target"
+  ],
+  "ignore": [
+    "examples/**",
+    "tui/**"
+  ],
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none",
+  "pythonVersion": "3.13"
+}

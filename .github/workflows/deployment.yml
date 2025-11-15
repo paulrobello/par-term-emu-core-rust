@@ -1,0 +1,230 @@
+name: Build and Deploy
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Linux builds
+  linux:
+    name: Linux ${{ matrix.target }} - Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+        target: [x86_64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Set up QEMU
+        if: matrix.target == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          sccache: 'true'
+          manylinux: auto
+
+      - name: Create virtual environment (x86_64 only)
+        if: matrix.target == 'x86_64'
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install --find-links dist par-term-emu-core-rust
+
+      - name: Install test dependencies (x86_64 only)
+        if: matrix.target == 'x86_64'
+        run: |
+          source .venv/bin/activate
+          uv pip install pytest pytest-timeout
+
+      - name: Run tests (x86_64 only)
+        if: matrix.target == 'x86_64'
+        run: |
+          source .venv/bin/activate
+          timeout 300 pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
+          path: dist
+
+  # macOS builds
+  macos:
+    name: macOS - Python ${{ matrix.python-version }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        run: pip install uv
+      - name: Build wheels - x86_64
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          sccache: 'true'
+      - name: Build wheels - universal2
+        uses: PyO3/maturin-action@v1
+        with:
+          target: universal2-apple-darwin
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          sccache: 'true'
+      - name: Create virtual environment
+        run: |
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install --find-links dist par-term-emu-core-rust
+      - name: Install test dependencies
+        run: |
+          source .venv/bin/activate
+          uv pip install pytest pytest-timeout
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.python-version }}
+          path: dist
+
+  # Windows builds
+  windows:
+    name: Windows - Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64
+          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          sccache: 'true'
+
+      - name: Create virtual environment
+        run: |
+          uv venv .venv
+          .venv\Scripts\activate
+          uv pip install --find-links dist par-term-emu-core-rust
+
+      - name: Install test dependencies
+        run: |
+          .venv\Scripts\activate
+          uv pip install pytest pytest-timeout
+
+      - name: Run tests (skip PTY tests on Windows)
+        run: |
+          .venv\Scripts\activate
+          pytest tests/ -v --timeout=5 --timeout-method=thread -k "not pty"
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-${{ matrix.python-version }}
+          path: dist
+
+  # Source distribution
+  sdist:
+    name: Build source distribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-sdist
+          path: dist
+
+  # Publish to PyPI
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [linux, macos, windows, sdist]
+    environment:
+      name: pypi
+      url: https://pypi.org/p/par-term-emu-core-rust
+    permissions:
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Get version
+        id: get_version
+        run: |
+          version=$(python -c "import sys; sys.path.insert(0, 'python'); from par_term_emu_core_rust import __version__; print(__version__)")
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "Package version: $version"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wheels-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true
+
+      - name: Discord notification
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        uses: Ilshidur/action-discord@master
+        with:
+          args: 'The project {{ EVENT_PAYLOAD.repository.full_name }} v${{ steps.get_version.outputs.version }} has been published to PyPI.'
+        continue-on-error: true

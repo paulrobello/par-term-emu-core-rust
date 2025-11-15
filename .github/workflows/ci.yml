@@ -1,0 +1,125 @@
+name: CI
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]  # Windows disabled due to hanging tests
+        python-version: ["3.12", "3.13", "3.14"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up MSVC
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Install uv
+      run: pip install uv
+
+    - name: Create virtual environment and sync dependencies
+      run: uv venv .venv && uv sync --all-extras
+
+    - name: Install maturin in virtual environment
+      run: uv pip install maturin
+
+    - name: Build Python package
+      run: uv run maturin develop --release
+
+    - name: Run Python tests (Linux)
+      if: runner.os == 'Linux'
+      run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+
+    - name: Run Python tests (macOS)
+      if: runner.os == 'macOS'
+      run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.14"
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        override: true
+
+    - name: Install uv
+      run: pip install uv
+
+    - name: Create virtual environment and sync dev dependencies
+      run: uv venv .venv && uv sync --group dev
+
+    - name: Check Rust formatting
+      run: cargo fmt -- --check
+
+    - name: Run Rust clippy
+      run: cargo clippy -- -D warnings
+
+    - name: Check Python formatting
+      run: uv run ruff format --check .
+
+    - name: Run Python linting
+      run: uv run ruff check .
+
+    - name: Run Python type checking
+      run: uv run pyright .
+
+  build:
+    name: Build wheels
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]  # Windows disabled due to hanging tests
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.14"
+
+    - name: Set up MSVC
+      if: runner.os == 'Windows'
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Install maturin
+      run: pip install maturin
+
+    - name: Build wheels
+      run: maturin build --release
+
+    - name: Upload wheels
+      uses: actions/upload-artifact@v4
+      with:
+        name: wheels-${{ matrix.label }}
+        path: target/wheels/

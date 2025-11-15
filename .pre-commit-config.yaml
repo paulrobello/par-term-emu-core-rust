@@ -1,0 +1,83 @@
+# Pre-commit hooks for par-term-emu
+# Install: uv run pre-commit install
+# Run manually: uv run pre-commit run --all-files
+
+repos:
+  # Standard pre-commit hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^(tests/.*\.expected|.*\.snap)$
+      - id: end-of-file-fixer
+        exclude: ^(tests/.*\.expected|.*\.snap)$
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+      - id: check-merge-conflict
+      - id: mixed-line-ending
+
+  # Rust formatting
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt
+        description: Format Rust code with rustfmt
+        entry: cargo fmt --all --
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+  # Rust linting
+  - repo: local
+    hooks:
+      - id: cargo-clippy
+        name: cargo clippy
+        description: Lint Rust code with clippy
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+  # Python formatting with ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        description: Format Python code with ruff
+
+  # Python linting with ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.4
+    hooks:
+      - id: ruff
+        name: ruff check
+        description: Lint Python code with ruff
+        args: [--fix]
+
+  # Python type checking with pyright
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        description: Type check Python code with pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # Python tests with pytest
+  # NOTE: This runs on pre-commit. You may want to disable this if tests are slow.
+  # Comment out this section if you prefer to run tests manually before pushing.
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        description: Run Python integration tests
+        entry: bash -c 'uv sync && maturin develop && uv run pytest tests/ -v'
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-commit]
