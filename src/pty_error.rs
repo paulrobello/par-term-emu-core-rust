@@ -57,7 +57,10 @@ mod tests {
     #[test]
     fn test_process_spawn_error_display() {
         let err = PtyError::ProcessSpawnError("Command not found".to_string());
-        assert_eq!(err.to_string(), "Failed to spawn process: Command not found");
+        assert_eq!(
+            err.to_string(),
+            "Failed to spawn process: Command not found"
+        );
     }
 
     #[test]
@@ -137,7 +140,7 @@ mod tests {
         let errors = vec![
             PtyError::ProcessSpawnError("spawn".to_string()),
             PtyError::ProcessExitedError(0),
-            PtyError::IoError(IoError::new(ErrorKind::Other, "io")),
+            PtyError::IoError(IoError::other("io")),
             PtyError::ResizeError("resize".to_string()),
             PtyError::NotStartedError,
             PtyError::LockError("lock".to_string()),

@@ -1218,4 +1218,3 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Author
 
 Paul Robello - probello@gmail.com
-
