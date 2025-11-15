@@ -204,7 +204,7 @@ jobs:
       - name: Get version
         id: get_version
         run: |
-          version=$(python -c "import sys; sys.path.insert(0, 'python'); from par_term_emu_core_rust import __version__; print(__version__)")
+          version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "Package version: $version"
 
