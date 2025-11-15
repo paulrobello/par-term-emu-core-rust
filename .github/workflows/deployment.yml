@@ -221,12 +221,21 @@ jobs:
             ./dist/*.tar.gz
             ./dist/*.whl
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
+          VERSION="v${{ steps.get_version.outputs.version }}"
+
+          # Check if release exists
+          if gh release view "$VERSION" --repo '${{ github.repository }}' >/dev/null 2>&1; then
+            echo "Release $VERSION already exists. Deleting and recreating..."
+            gh release delete "$VERSION" --repo '${{ github.repository }}' --yes
+          fi
+
+          # Create new release
           gh release create \
-          'v${{ steps.get_version.outputs.version }}' \
+          "$VERSION" \
           --repo '${{ github.repository }}' \
           --generate-notes \
           --latest
@@ -237,7 +246,8 @@ jobs:
         run: |
           gh release upload \
           'v${{ steps.get_version.outputs.version }}' dist/** \
-          --repo '${{ github.repository }}'
+          --repo '${{ github.repository }}' \
+          --clobber
 
       - name: Discord notification
         if: success()
