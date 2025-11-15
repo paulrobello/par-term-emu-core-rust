@@ -1,178 +1,28 @@
-name: Release 🐍 distribution
+name: Release and Publish
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  id-token: write
+  actions: write
 
 jobs:
-  # Build wheels for all platforms
-  build-wheels:
-    name: Build wheels - ${{ matrix.platform }}
-    strategy:
-      matrix:
-        include:
-          # Linux x86_64
-          - os: ubuntu-latest
-            python-version: "3.14"  # Temporarily 3.14 only for faster CI
-            target: x86_64
-            platform: linux-x86_64
-          # Linux ARM64
-          - os: ubuntu-latest
-            python-version: "3.14"  # Temporarily 3.14 only for faster CI
-            target: aarch64
-            platform: linux-aarch64
-          # macOS x86_64
-          - os: macos-latest
-            python-version: "3.14"  # Temporarily 3.14 only for faster CI
-            target: x86_64
-            platform: macos-x86_64
-          # macOS universal2
-          - os: macos-latest
-            python-version: "3.14"  # Temporarily 3.14 only for faster CI
-            target: universal2-apple-darwin
-            platform: macos-universal2
-          # Windows
-          - os: windows-latest
-            python-version: "3.14"  # Temporarily 3.14 only for faster CI
-            target: x86_64
-            platform: windows-x86_64
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.14"
-
-      - name: Set up QEMU
-        if: matrix.platform == 'linux-aarch64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist -i ${{ matrix.python-version }}
-          sccache: 'true'
-          manylinux: ${{ startsWith(matrix.platform, 'linux') && 'auto' || '' }}
-
-      - name: Upload wheels
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-${{ matrix.platform }}
-          path: dist
-
-  # Build source distribution
-  build-sdist:
-    name: Build source distribution
+  # Trigger the combined build, release, and publish workflow
+  trigger-deployment:
+    name: Trigger Build and Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Build sdist
-        uses: PyO3/maturin-action@v1
-        with:
-          command: sdist
-          args: --out dist
-
-      - name: Upload sdist
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheels-sdist
-          path: dist
-
-  # Create GitHub release
-  github-release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    needs: [build-wheels, build-sdist]
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-
-      - name: Get version
-        id: get_version
-        run: |
-          version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$version" >> $GITHUB_OUTPUT
-          echo "Package version: $version"
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: wheels-*
-          path: dist
-          merge-multiple: true
-
-      - name: Sign the dists with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.0.0
-        with:
-          inputs: >-
-            ./dist/*.tar.gz
-            ./dist/*.whl
-
-      - name: Create GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          gh release create \
-          'v${{ steps.get_version.outputs.version }}' \
-          --repo '${{ github.repository }}' \
-          --generate-notes \
-          --latest
-
-      - name: Upload artifacts to GitHub Release
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload \
-          'v${{ steps.get_version.outputs.version }}' dist/** \
-          --repo '${{ github.repository }}'
-
-      - name: Discord notification
-        if: success()
-        env:
-          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@master
-        with:
-          args: 'A new release v${{ steps.get_version.outputs.version }} has been created for {{ EVENT_PAYLOAD.repository.full_name }}.'
-        continue-on-error: true
-
-  # Trigger PyPI publish workflow
-  trigger-pypi-publish:
-    name: Trigger PyPI Publish
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    needs: [github-release]
-    if: success()
-    steps:
-      - name: Trigger PyPI workflow
+      - name: Trigger deployment workflow
         uses: actions/github-script@v7
         with:
           script: |
-            github.rest.actions.createWorkflowDispatch({
+            const result = await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'deployment.yml',
               ref: 'main'
-            })
+            });
+            console.log('Workflow dispatch triggered successfully');
 
       - name: Discord notification
         if: success()
@@ -180,5 +30,5 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         uses: Ilshidur/action-discord@master
         with:
-          args: 'PyPI publish workflow has been triggered for {{ EVENT_PAYLOAD.repository.full_name }}.'
+          args: 'Release and publish workflow has been triggered for {{ EVENT_PAYLOAD.repository.full_name }}.'
         continue-on-error: true
