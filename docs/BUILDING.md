@@ -189,7 +189,9 @@ make pre-commit-uninstall
 
 ## Running the TUI Application
 
-> **📝 Note:** A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu](https://github.com/paulrobello/par-term-emu). This core library focuses on the terminal emulation engine, while the sister project provides the interactive TUI application with themes, clipboard integration, and other user-facing features.
+> **📝 Note:** A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)). This core library focuses on the terminal emulation engine, while the sister project provides the interactive TUI application with themes, clipboard integration, and other user-facing features.
+>
+> **Installation**: `pip install par-term-emu-tui-rust`
 
 ## Running Examples
 

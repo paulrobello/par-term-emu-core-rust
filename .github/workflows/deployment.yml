@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 20
     strategy:
       matrix:
-        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+        python-version: ["3.12", "3.13", "3.14"]
         target: [x86_64, aarch64]
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +74,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -121,7 +121,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        python-version: ["3.14"]  # Temporarily 3.14 only for faster CI
+        python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
 

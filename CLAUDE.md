@@ -6,7 +6,7 @@ Guidance for Claude Code when working with this repository.
 
 Rust terminal emulator library with Python 3.12+ bindings (PyO3). Provides VT100/VT220/VT320/VT420 compatibility with PTY support.
 
-**Sister Project**: `../par-term-emu` (pure Python implementation). Keep config files, CLI options, and features in sync.
+**Sister Project**: `../par-term-emu-tui-rust` - Full-featured TUI application ([GitHub](https://github.com/paulrobello/par-term-emu-tui-rust), [PyPI](https://pypi.org/project/par-term-emu-tui-rust/)). Keep config files, CLI options, and features in sync.
 
 ## Quick Start
 

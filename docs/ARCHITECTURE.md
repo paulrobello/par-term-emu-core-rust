@@ -514,7 +514,7 @@ Platform-specific:
 - `maturin`: Build system
 - `pytest`: Testing (dev dependency)
 
-> **Note**: A full-featured TUI application is available in the sister project [par-term-emu](https://github.com/paulrobello/par-term-emu), which uses the Textual framework.
+> **Note**: A full-featured TUI application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
 
 ## Build Process
 

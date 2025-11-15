@@ -483,7 +483,7 @@ term.screenshot_to_file(
 
 #### TUI Integration
 
-> **Note**: TUI integration features are available in the sister project [par-term-emu](https://github.com/paulrobello/par-term-emu), which includes screenshot hotkeys and other interactive features.
+> **Note**: TUI integration features are available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust), which includes screenshot hotkeys and other interactive features.
 
 ### Text Extraction & Smart Selection
 
@@ -1115,7 +1115,9 @@ See the `examples/` directory for complete usage examples:
 
 ## TUI Demo Application
 
-> **Note**: A full-featured TUI (Text User Interface) application for this terminal emulator is available in the sister project [par-term-emu](https://github.com/paulrobello/par-term-emu). The TUI provides an interactive terminal application with themes, clipboard integration, and more.
+> **Note**: A full-featured TUI (Text User Interface) application for this terminal emulator is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust). The TUI provides an interactive terminal application with themes, clipboard integration, and more.
+
+**Installation**: `pip install par-term-emu-tui-rust`
 
 ## Security
 

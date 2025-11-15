@@ -107,13 +107,15 @@ if attrs:
 
 ## Try the Interactive TUI
 
-> **Note**: A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu](https://github.com/paulrobello/par-term-emu). The TUI provides:
+> **Note**: A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)). The TUI provides:
 > - Interactive shell sessions
 > - Mouse support (selection, copy/paste, scrolling)
 > - 11 beautiful themes
 > - Full ANSI/VT100 compatibility
 > - Clipboard integration
 > - Screenshot hotkeys
+>
+> **Installation**: `pip install par-term-emu-tui-rust`
 
 For a quick demonstration of terminal emulation capabilities, explore the example scripts in the `examples/` directory.
 

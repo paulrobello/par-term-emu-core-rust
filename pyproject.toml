@@ -6,7 +6,7 @@ build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.2.0"
+version = "0.2.1"
 description = "A comprehensive terminal emulator library in Rust with Python bindings - supports true color, alt screen, mouse reporting, bracketed paste, and full Unicode"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -40,7 +40,10 @@ keywords = [
     "emulator",
     "vt100",
     "vt220",
+    "vt320",
+    "vt420",
     "ansi",
+    "sixel",
     "pty",
     "rust",
     "pyo3",
