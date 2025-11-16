@@ -130,7 +130,6 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-    use crate::color::Color;
     use crate::terminal::Terminal;
 
     #[test]

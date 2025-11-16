@@ -467,7 +467,6 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::color::{Color, NamedColor};
     use crate::shell_integration::ShellIntegrationMarker;
     use crate::terminal::Terminal;
 
