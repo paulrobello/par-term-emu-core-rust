@@ -142,4 +142,161 @@ mod tests {
         si.set_cwd("/home/user".to_string());
         assert_eq!(si.cwd(), Some("/home/user"));
     }
+
+    #[test]
+    fn test_shell_integration_default() {
+        let si = ShellIntegration::default();
+        assert!(si.marker().is_none());
+        assert!(si.command().is_none());
+        assert!(si.exit_code().is_none());
+        assert!(si.cwd().is_none());
+    }
+
+    #[test]
+    fn test_shell_integration_marker_transitions() {
+        let mut si = ShellIntegration::new();
+
+        si.set_marker(ShellIntegrationMarker::PromptStart);
+        assert_eq!(si.marker(), Some(ShellIntegrationMarker::PromptStart));
+
+        si.set_marker(ShellIntegrationMarker::CommandStart);
+        assert_eq!(si.marker(), Some(ShellIntegrationMarker::CommandStart));
+
+        si.set_marker(ShellIntegrationMarker::CommandExecuted);
+        assert_eq!(si.marker(), Some(ShellIntegrationMarker::CommandExecuted));
+
+        si.set_marker(ShellIntegrationMarker::CommandFinished);
+        assert_eq!(si.marker(), Some(ShellIntegrationMarker::CommandFinished));
+    }
+
+    #[test]
+    fn test_shell_integration_exit_codes() {
+        let mut si = ShellIntegration::new();
+
+        si.set_exit_code(0);
+        assert_eq!(si.exit_code(), Some(0));
+
+        si.set_exit_code(1);
+        assert_eq!(si.exit_code(), Some(1));
+
+        si.set_exit_code(127);
+        assert_eq!(si.exit_code(), Some(127));
+
+        si.set_exit_code(-1);
+        assert_eq!(si.exit_code(), Some(-1));
+    }
+
+    #[test]
+    fn test_shell_integration_command_updates() {
+        let mut si = ShellIntegration::new();
+
+        si.set_command("echo hello".to_string());
+        assert_eq!(si.command(), Some("echo hello"));
+
+        si.set_command("ls -la".to_string());
+        assert_eq!(si.command(), Some("ls -la"));
+    }
+
+    #[test]
+    fn test_shell_integration_cwd_updates() {
+        let mut si = ShellIntegration::new();
+
+        si.set_cwd("/home/user".to_string());
+        assert_eq!(si.cwd(), Some("/home/user"));
+
+        si.set_cwd("/tmp".to_string());
+        assert_eq!(si.cwd(), Some("/tmp"));
+    }
+
+    #[test]
+    fn test_shell_integration_in_prompt_states() {
+        let mut si = ShellIntegration::new();
+
+        assert!(!si.in_prompt());
+
+        si.set_marker(ShellIntegrationMarker::PromptStart);
+        assert!(si.in_prompt());
+
+        si.set_marker(ShellIntegrationMarker::CommandStart);
+        assert!(!si.in_prompt());
+    }
+
+    #[test]
+    fn test_shell_integration_in_command_input_states() {
+        let mut si = ShellIntegration::new();
+
+        assert!(!si.in_command_input());
+
+        si.set_marker(ShellIntegrationMarker::CommandStart);
+        assert!(si.in_command_input());
+
+        si.set_marker(ShellIntegrationMarker::CommandExecuted);
+        assert!(!si.in_command_input());
+    }
+
+    #[test]
+    fn test_shell_integration_in_command_output_states() {
+        let mut si = ShellIntegration::new();
+
+        assert!(!si.in_command_output());
+
+        si.set_marker(ShellIntegrationMarker::CommandExecuted);
+        assert!(si.in_command_output());
+
+        si.set_marker(ShellIntegrationMarker::CommandFinished);
+        assert!(!si.in_command_output());
+    }
+
+    #[test]
+    fn test_shell_integration_full_workflow() {
+        let mut si = ShellIntegration::new();
+
+        // Start prompt
+        si.set_marker(ShellIntegrationMarker::PromptStart);
+        assert!(si.in_prompt());
+
+        // User starts typing command
+        si.set_marker(ShellIntegrationMarker::CommandStart);
+        si.set_command("echo hello".to_string());
+        assert!(si.in_command_input());
+        assert_eq!(si.command(), Some("echo hello"));
+
+        // Command executes
+        si.set_marker(ShellIntegrationMarker::CommandExecuted);
+        assert!(si.in_command_output());
+
+        // Command finishes
+        si.set_marker(ShellIntegrationMarker::CommandFinished);
+        si.set_exit_code(0);
+        assert!(!si.in_command_output());
+        assert_eq!(si.exit_code(), Some(0));
+    }
+
+    #[test]
+    fn test_shell_integration_empty_command() {
+        let mut si = ShellIntegration::new();
+        si.set_command("".to_string());
+        assert_eq!(si.command(), Some(""));
+    }
+
+    #[test]
+    fn test_shell_integration_marker_equality() {
+        assert_eq!(ShellIntegrationMarker::PromptStart, ShellIntegrationMarker::PromptStart);
+        assert_ne!(ShellIntegrationMarker::PromptStart, ShellIntegrationMarker::CommandStart);
+    }
+
+    #[test]
+    fn test_shell_integration_clone() {
+        let mut si = ShellIntegration::new();
+        si.set_marker(ShellIntegrationMarker::PromptStart);
+        si.set_command("test".to_string());
+        si.set_exit_code(0);
+        si.set_cwd("/home".to_string());
+
+        let cloned = si.clone();
+        assert_eq!(cloned.marker(), si.marker());
+        assert_eq!(cloned.command(), si.command());
+        assert_eq!(cloned.exit_code(), si.exit_code());
+        assert_eq!(cloned.cwd(), si.cwd());
+    }
 }
