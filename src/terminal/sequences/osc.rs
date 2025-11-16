@@ -493,18 +493,9 @@ mod tests {
     #[test]
     fn test_parse_color_spec_hex_format() {
         // Valid #RRGGBB format
-        assert_eq!(
-            Terminal::parse_color_spec("#FF00AA"),
-            Some((255, 0, 170))
-        );
-        assert_eq!(
-            Terminal::parse_color_spec("#ff00aa"),
-            Some((255, 0, 170))
-        );
-        assert_eq!(
-            Terminal::parse_color_spec("#123456"),
-            Some((18, 52, 86))
-        );
+        assert_eq!(Terminal::parse_color_spec("#FF00AA"), Some((255, 0, 170)));
+        assert_eq!(Terminal::parse_color_spec("#ff00aa"), Some((255, 0, 170)));
+        assert_eq!(Terminal::parse_color_spec("#123456"), Some((18, 52, 86)));
     }
 
     #[test]
