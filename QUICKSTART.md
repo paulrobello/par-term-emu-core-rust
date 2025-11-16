@@ -105,19 +105,20 @@ if attrs:
     print(f"Bold: {attrs.bold}")
 ```
 
-## Try the Interactive TUI
+## Explore Examples
 
-> **Note**: A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)). The TUI provides:
-> - Interactive shell sessions
-> - Mouse support (selection, copy/paste, scrolling)
-> - 11 beautiful themes
-> - Full ANSI/VT100 compatibility
-> - Clipboard integration
-> - Screenshot hotkeys
->
-> **Installation**: `pip install par-term-emu-tui-rust`
+The project includes 33 example scripts demonstrating various features. Explore the `examples/` directory for code samples including PTY sessions, graphics, and advanced terminal features.
 
-For a quick demonstration of terminal emulation capabilities, explore the example scripts in the `examples/` directory.
+```bash
+# Run all examples
+make examples-all
+
+# Or run individual examples
+uv run python examples/colors_demo.py
+uv run python examples/pty_shell.py
+```
+
+> **Note**: For a full-featured interactive TUI application, check out the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)).
 
 ## Next Steps
 

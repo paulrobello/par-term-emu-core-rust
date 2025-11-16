@@ -1,6 +1,6 @@
 # Advanced Features
 
-Comprehensive guide to advanced terminal emulation features in par-term-emu.
+Comprehensive guide to advanced terminal emulation features in par-term-emu-core-rust.
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu.
 
 ## Overview
 
-par-term-emu provides comprehensive terminal emulation with VT100/VT220/VT320/VT420 compatibility and modern terminal features including true color, alternate screen buffer, mouse support, clipboard operations, hyperlinks, and graphics rendering.
+par-term-emu-core-rust provides comprehensive terminal emulation with VT100/VT220/VT320/VT420 compatibility and modern terminal features including true color, alternate screen buffer, mouse support, clipboard operations, hyperlinks, and graphics rendering.
 
 ### Feature Architecture
 
@@ -93,7 +93,7 @@ graph TB
 
 ## True Color Support
 
-par-term-emu supports 24-bit RGB (true color) terminal output for 16.7 million colors.
+par-term-emu-core-rust supports 24-bit RGB (true color) terminal output for 16.7 million colors.
 
 ### Usage
 
@@ -161,7 +161,7 @@ if term.is_alt_screen_active():
 
 ## Mouse Reporting
 
-par-term-emu supports multiple mouse tracking protocols, allowing applications to receive mouse events.
+par-term-emu-core-rust supports multiple mouse tracking protocols, allowing applications to receive mouse events.
 
 ### Mouse Modes
 
@@ -923,7 +923,7 @@ print(term.content())
 
 ## Unicode Support
 
-par-term-emu has full Unicode support, including:
+par-term-emu-core-rust has full Unicode support, including:
 
 ### Wide Characters
 

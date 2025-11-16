@@ -1,6 +1,6 @@
 # Architecture Documentation
 
-This document describes the internal architecture of par-term-emu.
+This document describes the internal architecture of par-term-emu-core-rust.
 
 ## Table of Contents
 
@@ -26,7 +26,7 @@ This document describes the internal architecture of par-term-emu.
 
 ## Overview
 
-par-term-emu is a terminal emulator library written in Rust with Python bindings. It uses the VTE (Virtual Terminal Emulator) crate for ANSI sequence parsing and PyO3 for Python interoperability.
+par-term-emu-core-rust is a terminal emulator library written in Rust with Python bindings. It uses the VTE (Virtual Terminal Emulator) crate for ANSI sequence parsing and PyO3 for Python interoperability.
 
 ## Core Components
 
@@ -66,6 +66,7 @@ pub struct Cell {
     pub c: char,
     pub fg: Color,
     pub bg: Color,
+    pub underline_color: Option<Color>,  // SGR 58/59
     pub flags: CellFlags,
 }
 ```
@@ -99,9 +100,13 @@ The grid uses a flat Vec for efficient storage and access:
 pub struct Grid {
     cols: usize,
     rows: usize,
-    cells: Vec<Cell>,           // Row-major order
-    scrollback: Vec<Vec<Cell>>,  // Scrolled lines
+    cells: Vec<Cell>,              // Row-major order
+    scrollback_cells: Vec<Cell>,   // Flat circular buffer
+    scrollback_start: usize,       // Circular buffer head
+    scrollback_lines: usize,       // Current scrollback count
     max_scrollback: usize,
+    wrapped: Vec<bool>,            // Line wrap tracking
+    scrollback_wrapped: Vec<bool>, // Scrollback wrap tracking
 }
 ```
 
@@ -123,14 +128,76 @@ Features:
 - Manages terminal state (colors, attributes)
 - Handles all terminal operations
 
+### 6. Supporting Modules
+
+**Mouse Handling** (`src/mouse.rs`)
+- Mouse event types and button tracking
+- Mouse mode management (Normal, Button, Any)
+- Mouse encoding formats (SGR, UTF-8, URXVT)
+
+**Shell Integration** (`src/shell_integration.rs`)
+- OSC 133 prompt/command/output markers
+- Command execution tracking
+- Integration with modern shells (fish, zsh, bash)
+
+**Sixel Graphics** (`src/sixel.rs`)
+- Sixel image parser and decoder
+- Graphics storage and positioning
+- Half-block and pixel rendering modes
+
+**Utility Modules**
+- `ansi_utils.rs` - ANSI sequence parsing and generation helpers
+- `color_utils.rs` - Color conversion and manipulation utilities
+- `text_utils.rs` - Text processing and Unicode handling
+- `html_export.rs` - HTML export functionality for terminal content
+- `debug.rs` - Debug utilities and logging helpers
+
+**PTY Support**
+- `pty_session.rs` - PTY session management with portable-pty
+- `pty_error.rs` - PTY-specific error types
+
 ```rust
 pub struct Terminal {
+    // Screen management
     grid: Grid,
+    alt_grid: Grid,
+    alt_screen_active: bool,
+
+    // Cursor state
     cursor: Cursor,
+    alt_cursor: Cursor,
+    saved_cursor: Option<Cursor>,
+
+    // Text attributes
     fg: Color,
     bg: Color,
+    underline_color: Option<Color>,
     flags: CellFlags,
-    // ... saved state ...
+
+    // Terminal modes
+    mouse_mode: MouseMode,
+    mouse_encoding: MouseEncoding,
+    focus_tracking: bool,
+    bracketed_paste: bool,
+    synchronized_updates: bool,
+    auto_wrap: bool,
+    origin_mode: bool,
+    application_cursor: bool,
+
+    // Advanced features
+    shell_integration: ShellIntegration,
+    hyperlinks: HashMap<u32, String>,
+    graphics: Vec<SixelGraphic>,
+    keyboard_flags: u16,
+
+    // Margins and regions
+    scroll_region_top: usize,
+    scroll_region_bottom: usize,
+    left_margin: usize,
+    right_margin: usize,
+    use_lr_margins: bool,
+
+    // ... additional state ...
 }
 ```
 
@@ -335,17 +402,27 @@ The screenshot module provides high-quality rendering of terminal content to var
 
 #### Components
 
-1. **Font Cache** (`font_cache.rs`)
+1. **Configuration** (`config.rs`)
+   - **Purpose**: Screenshot configuration and format options
+   - **Features**:
+     - Image format selection (PNG, JPEG, BMP, SVG)
+     - Font size and padding configuration
+     - Sixel rendering mode options
+     - Quality settings for lossy formats
+
+2. **Font Cache** (`font_cache.rs`)
    - **Library**: Swash (pure Rust font library)
    - **Purpose**: Loads and caches font glyphs for efficient rendering
    - **Features**:
      - Embedded JetBrains Mono font (no external dependencies)
-     - Automatic emoji font fallback (NotoColorEmoji, Apple Color Emoji, Segoe UI Emoji)
+     - Embedded Noto Emoji font for emoji support
+     - Automatic emoji font fallback (Apple Color Emoji, Segoe UI Emoji)
      - Color emoji rendering with RGBA output
      - Glyph caching for performance (by character, size, bold, italic)
      - Glyph-by-ID rendering for shaped text
+   - **Embedded Fonts**: `JetBrainsMono-Regular.ttf`, `NotoEmoji-Regular.ttf`
 
-2. **Text Shaper** (`shaper.rs`)
+3. **Text Shaper** (`shaper.rs`)
    - **Library**: Swash (integrated text shaping)
    - **Purpose**: Handles complex text rendering with ligatures and multi-codepoint sequences
    - **Features**:
@@ -355,7 +432,7 @@ The screenshot module provides high-quality rendering of terminal content to var
      - Font run segmentation for mixed-script text
      - Pure Rust implementation (no C dependencies)
 
-3. **Renderer** (`renderer.rs`)
+4. **Renderer** (`renderer.rs`)
    - **Purpose**: Converts terminal grid to image pixels
    - **Features**:
      - Hybrid rendering: character-based (fast) + line-based shaping (complex emoji)
@@ -366,7 +443,21 @@ The screenshot module provides high-quality rendering of terminal content to var
      - Alpha blending for smooth text and graphics
      - Pure Rust rendering pipeline (no C dependencies)
 
-4. **Format Support** (`formats/`)
+5. **Utilities** (`utils.rs`)
+   - **Purpose**: Helper functions for screenshot rendering
+   - **Features**:
+     - Color conversion and blending utilities
+     - Text measurement and positioning helpers
+     - Regional Indicator detection for emoji flags
+
+6. **Error Handling** (`error.rs`)
+   - **Purpose**: Screenshot-specific error types
+   - **Features**:
+     - Comprehensive error variants for font, rendering, and encoding failures
+     - Integration with standard error handling
+
+7. **Format Support** (`formats/`)
+   - **Modules**: `mod.rs`, `png.rs`, `jpeg.rs`, `bmp.rs`, `svg.rs`
    - **Raster formats**: PNG, JPEG, BMP (via `image` crate)
    - **Vector format**: SVG (custom implementation for scalable text)
 
@@ -511,10 +602,10 @@ Platform-specific:
 
 ### Python
 
-- `maturin`: Build system
-- `pytest`: Testing (dev dependency)
+- `maturin`: Build system for PyO3 bindings
+- `pytest`: Testing framework (dev dependency)
 
-> **Note**: A full-featured TUI application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
+> **Note**: This is a core library. For a full-featured TUI application built on this library, see the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
 
 ## Build Process
 

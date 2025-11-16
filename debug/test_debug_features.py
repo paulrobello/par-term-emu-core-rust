@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test script for par-term-emu debug infrastructure.
+"""Test script for par-term-emu-tui-rust debug infrastructure.
 
 This script verifies that all debug features are working correctly:
 1. Debug logging to /tmp/par_term_emu_debug.log
@@ -234,7 +234,7 @@ def main() -> None:
     print("""
 ╔══════════════════════════════════════════════════════════════════════╗
 ║                                                                      ║
-║           par-term-emu Debug Infrastructure Test Suite              ║
+║           par-term-emu-tui-rust Debug Infrastructure Test Suite              ║
 ║                                                                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """)

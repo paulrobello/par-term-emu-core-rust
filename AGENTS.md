@@ -2,17 +2,17 @@
 
 ## Project Structure & Module Organization
 - `src/` — Rust library modules: `terminal.rs`, `grid.rs`, `sixel.rs`, `pty_session.rs`, etc.
-- `python/par_term_emu/` — Python package and PyO3 `_native` extension.
-- `examples/` — Runnable Python demos (ANSI, PTY, sixel, TUI helpers).
+- `python/par_term_emu_core_rust/` — Python package and PyO3 `_native` extension.
+- `examples/` — Runnable Python demos (ANSI, PTY, sixel, graphics).
 - `tests/` — Pytest suite; integration-heavy terminal/PTY tests.
-- `tui/` — Optional Textual-based demo app.
 - `docs/` — Architecture, security, and debugging notes.
 - `Makefile` — Primary developer entry points.
+
+**Sister Project**: [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) — Full-featured TUI application using this library.
 
 ## Tooling Rules (Very Important)
 - Always use `uv` for Python. Never call `pip` directly; prefer `uv run <cmd>`.
 - Build the PyO3 extension via `maturin develop` (already wired in `make dev`), not bare `cargo build`.
-- macOS/Windows shells: run everything from a normal terminal, not inside our TUI.
 
 ## Build, Test, and Development Commands
 - `make setup-venv` — Create `.venv` via `uv` and install tools.
@@ -20,7 +20,7 @@
 - `make build` | `make build-release` — Debug/release builds.
 - `make test` | `make test-rust` | `make test-python` — Run tests.
 - `make fmt` | `make lint` | `make checkall` — Format/lint Rust+Python.
-- `make examples` | `make tui` — Run demos (`make tui-install` first for TUI).
+- `make examples-all` | `make examples-basic` | `make examples-pty` — Run example scripts.
 - `make pre-commit-install` — Install hooks; recommended before committing.
 
 Quick workflow (from a clean checkout):
@@ -37,17 +37,15 @@ Quick workflow (from a clean checkout):
 - CSI parameter semantics: per VT spec, parameter 0 or a missing parameter defaults to 1. Always normalize with something equivalent to:
   - Rust: `let n = params.iter().next().and_then(|p| p.first()).copied().unwrap_or(1) as usize; let n = if n == 0 { 1 } else { n };`
 
-## TUI Integration Notes
-- Do not run the Textual TUI from within the TUI itself (causes display corruption). Always launch it from a regular terminal: `make tui`.
-- PTY reader runs in Rust; Textual polls an atomic generation counter. Use `update_generation()` and avoid blocking the event loop.
+## PTY Integration Notes
+- PTY reader runs in Rust with thread-safe state management.
+- Generation counter pattern allows poll-based updates. Use `update_generation()` for state changes.
+- Always ensure proper mutex handling to avoid deadlocks with Python GIL.
 
 ## Debugging Cheatsheet
-- Clear logs: `make debug-clear`
-- Run with logs: `DEBUG_LEVEL=3 make tui` (levels 0–4; 3 recommended)
-- Tail logs: `make debug-tail`
-- Log locations:
-  - Rust: `/tmp/par_term_emu_debug_rust.log`
-  - Python: `/tmp/par_term_emu_debug_python.log`
+- Test examples: `make examples-all` or run individual examples from `examples/` directory.
+- Use Python debugger: `uv run python -m pdb examples/pty_basic.py`
+- Enable Rust logging: `RUST_LOG=debug cargo test`
 
 ## Testing Guidelines
 - Frameworks: `cargo test` and `pytest` (default timeout 30s). Python tests live in `tests/` and are named `test_*.py`. Use `pytest.skipif` for platform specifics. For PTY tests, avoid brittle sleeps—prefer event‑driven waits and deterministic assertions.
