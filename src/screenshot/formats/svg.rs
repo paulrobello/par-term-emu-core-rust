@@ -529,9 +529,7 @@ mod tests {
 
     #[test]
     fn test_class_attribute_building() {
-        let mut classes = Vec::new();
-        classes.push("bold");
-        classes.push("italic");
+        let classes = ["bold", "italic"];
 
         let class_attr = if !classes.is_empty() {
             format!(r#" class="{}""#, classes.join(" "))

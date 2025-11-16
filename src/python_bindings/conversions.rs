@@ -163,7 +163,8 @@ mod tests {
             );
         }
 
-        let halfblocks_variants = vec!["halfblocks", "half-blocks", "half_blocks", "blocks", "true"];
+        let halfblocks_variants =
+            vec!["halfblocks", "half-blocks", "half_blocks", "blocks", "true"];
         for variant in halfblocks_variants {
             assert!(
                 parse_sixel_mode(variant).is_ok(),

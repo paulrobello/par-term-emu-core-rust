@@ -361,12 +361,10 @@ mod tests {
     #[test]
     fn test_pyscreensnapshot_get_line_valid_row() {
         let snapshot = PyScreenSnapshot {
-            lines: vec![
-                vec![
-                    ('H', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
-                    ('i', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
-                ],
-            ],
+            lines: vec![vec![
+                ('H', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
+                ('i', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
+            ]],
             wrapped_lines: vec![false],
             cursor_pos: (0, 0),
             cursor_visible: true,
@@ -385,7 +383,12 @@ mod tests {
     #[test]
     fn test_pyscreensnapshot_get_line_out_of_bounds() {
         let snapshot = PyScreenSnapshot {
-            lines: vec![vec![('A', (255, 255, 255), (0, 0, 0), PyAttributes::default())]],
+            lines: vec![vec![(
+                'A',
+                (255, 255, 255),
+                (0, 0, 0),
+                PyAttributes::default(),
+            )]],
             wrapped_lines: vec![false],
             cursor_pos: (0, 0),
             cursor_visible: true,
@@ -634,9 +637,9 @@ mod tests {
         let width = 2usize;
         let idx = (y * width + x) * 4;
 
-        pixels[idx] = 255;     // R
-        pixels[idx + 1] = 0;   // G
-        pixels[idx + 2] = 0;   // B
+        pixels[idx] = 255; // R
+        pixels[idx + 1] = 0; // G
+        pixels[idx + 2] = 0; // B
         pixels[idx + 3] = 255; // A
 
         let graphic = PyGraphic {
@@ -724,9 +727,9 @@ mod tests {
     fn test_pygraphic_alpha_channel() {
         // Test graphics with various alpha values
         let pixels = vec![
-            255, 0, 0, 0,    // Red, fully transparent
-            0, 255, 0, 128,  // Green, semi-transparent
-            0, 0, 255, 255,  // Blue, fully opaque
+            255, 0, 0, 0, // Red, fully transparent
+            0, 255, 0, 128, // Green, semi-transparent
+            0, 0, 255, 255, // Blue, fully opaque
             128, 128, 128, 64, // Gray, mostly transparent
         ];
 

@@ -1029,6 +1029,9 @@ mod tests {
             padding_px: 10,
             char_width_multiplier: 1.0,
             line_height_multiplier: 1.0,
+            include_scrollback: false,
+            scrollback_lines: None,
+            antialiasing: true,
             background_color: Some((0, 0, 0)),
             sixel_render_mode: SixelRenderMode::Disabled,
             render_cursor: false,
@@ -1075,12 +1078,12 @@ mod tests {
 
     #[test]
     fn test_render_background() {
-        let config = create_test_config();
+        let _config = create_test_config();
         // Need actual font for renderer, but we can test if we mock it
         // For now, test the helper functions that don't require fonts
 
         // Create a small test image
-        let mut image = RgbaImage::new(100, 100);
+        let _image = RgbaImage::new(100, 100);
 
         // We can't create a full Renderer without fonts, but we can test
         // the logic by creating a mock renderer structure
@@ -1090,8 +1093,8 @@ mod tests {
     #[test]
     fn test_render_straight_underline_pixels() {
         // Create a test image and config
-        let config = create_test_config();
-        let mut image = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
+        let _config = create_test_config();
+        let _image = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
 
         // We need a renderer to call the method, but it requires FontCache
         // which needs actual fonts. Let's test the underline rendering logic
@@ -1104,42 +1107,50 @@ mod tests {
 
     #[test]
     fn test_resolve_colors_normal() {
-        use crate::cell::{Cell, CellFlags};
+        use crate::cell::Cell;
         use crate::color::Color;
 
-        let config = create_test_config();
+        let _config = create_test_config();
         // Can't create Renderer without FontCache, so we'll test the logic separately
 
-        let mut cell = Cell::default();
-        cell.fg = Color::Rgb(255, 0, 0); // Red foreground
-        cell.bg = Color::Rgb(0, 0, 255); // Blue background
+        let cell = Cell {
+            fg: Color::Rgb(255, 0, 0), // Red foreground
+            bg: Color::Rgb(0, 0, 255), // Blue background
+            ..Default::default()
+        };
 
         // Test that colors are returned as-is for normal cell
         // This would require creating a Renderer instance
+        assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
     }
 
     #[test]
     fn test_resolve_colors_with_reverse() {
-        use crate::cell::{Cell, CellFlags};
+        use crate::cell::Cell;
         use crate::color::Color;
 
-        let mut cell = Cell::default();
-        cell.fg = Color::Rgb(255, 0, 0); // Red
-        cell.bg = Color::Rgb(0, 0, 255); // Blue
+        let mut cell = Cell {
+            fg: Color::Rgb(255, 0, 0), // Red
+            bg: Color::Rgb(0, 0, 255), // Blue
+            ..Default::default()
+        };
         cell.flags.set_reverse(true);
 
         // When reverse is set, fg and bg should be swapped
         // Expected: fg=Blue, bg=Red
+        assert!(cell.flags.reverse());
     }
 
     #[test]
     fn test_resolve_colors_with_dim() {
-        use crate::cell::{Cell, CellFlags};
+        use crate::cell::Cell;
         use crate::color::Color;
 
-        let mut cell = Cell::default();
-        cell.fg = Color::Rgb(200, 100, 50);
-        cell.bg = Color::Rgb(0, 0, 255);
+        let mut cell = Cell {
+            fg: Color::Rgb(200, 100, 50),
+            bg: Color::Rgb(0, 0, 255),
+            ..Default::default()
+        };
         cell.flags.set_dim(true);
 
         // When dim is set, foreground should be at ~50% brightness
@@ -1213,7 +1224,10 @@ mod tests {
         for style in styles {
             // Each style should match one of the render patterns
             let is_block = matches!(style, CursorStyle::BlinkingBlock | CursorStyle::SteadyBlock);
-            let is_underline = matches!(style, CursorStyle::BlinkingUnderline | CursorStyle::SteadyUnderline);
+            let is_underline = matches!(
+                style,
+                CursorStyle::BlinkingUnderline | CursorStyle::SteadyUnderline
+            );
             let is_bar = matches!(style, CursorStyle::BlinkingBar | CursorStyle::SteadyBar);
 
             assert!(is_block || is_underline || is_bar);
@@ -1237,12 +1251,12 @@ mod tests {
         for style in styles {
             // Each style should be matchable
             match style {
-                UnderlineStyle::None => {},
-                UnderlineStyle::Straight => {},
-                UnderlineStyle::Double => {},
-                UnderlineStyle::Curly => {},
-                UnderlineStyle::Dotted => {},
-                UnderlineStyle::Dashed => {},
+                UnderlineStyle::None => {}
+                UnderlineStyle::Straight => {}
+                UnderlineStyle::Double => {}
+                UnderlineStyle::Curly => {}
+                UnderlineStyle::Dotted => {}
+                UnderlineStyle::Dashed => {}
             }
         }
     }
@@ -1274,7 +1288,7 @@ mod tests {
         let cell_width = (base_width * width_mult) as u32;
         let cell_height = (base_height * height_mult) as u32;
 
-        assert_eq!(cell_width, 9);  // 8.0 * 1.2 = 9.6 -> 9
+        assert_eq!(cell_width, 9); // 8.0 * 1.2 = 9.6 -> 9
         assert_eq!(cell_height, 24); // 16.0 * 1.5 = 24.0
     }
 
@@ -1289,9 +1303,9 @@ mod tests {
 
         for mode in modes {
             match mode {
-                SixelRenderMode::Disabled => {},
-                SixelRenderMode::Pixels => {},
-                SixelRenderMode::HalfBlocks => {},
+                SixelRenderMode::Disabled => {}
+                SixelRenderMode::Pixels => {}
+                SixelRenderMode::HalfBlocks => {}
             }
         }
     }
@@ -1376,7 +1390,7 @@ mod tests {
             let offset = (wave * 1.5) as i32;
 
             // Offset should be in range [-1, 1] after multiplication by 1.5
-            assert!(offset >= -2 && offset <= 2);
+            assert!((-2..=2).contains(&offset));
         }
     }
 
@@ -1436,8 +1450,8 @@ mod tests {
         let sixel_y_top = (0.0 * pixels_per_cell_y + pixels_per_cell_y / 4.0) as usize;
         let sixel_y_bottom = (0.0 * pixels_per_cell_y + 3.0 * pixels_per_cell_y / 4.0) as usize;
 
-        assert_eq!(sixel_x, 5);        // Center horizontally
-        assert_eq!(sixel_y_top, 2);    // 1/4 position
+        assert_eq!(sixel_x, 5); // Center horizontally
+        assert_eq!(sixel_y_top, 2); // 1/4 position
         assert_eq!(sixel_y_bottom, 7); // 3/4 position
     }
 

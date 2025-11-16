@@ -647,7 +647,12 @@ mod tests {
         // Should insert wide char (shifts by 2)
         assert_eq!(term.active_grid().get(0, 0).unwrap().c, 'A');
         assert_eq!(term.active_grid().get(1, 0).unwrap().c, '😀');
-        assert!(term.active_grid().get(2, 0).unwrap().flags.wide_char_spacer());
+        assert!(term
+            .active_grid()
+            .get(2, 0)
+            .unwrap()
+            .flags
+            .wide_char_spacer());
         assert_eq!(term.active_grid().get(3, 0).unwrap().c, 'B');
     }
 

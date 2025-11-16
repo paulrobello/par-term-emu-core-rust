@@ -85,10 +85,7 @@ mod tests {
     #[test]
     fn test_invalid_config_display() {
         let err = ScreenshotError::InvalidConfig("Quality must be 1-100".to_string());
-        assert_eq!(
-            err.to_string(),
-            "Invalid config: Quality must be 1-100"
-        );
+        assert_eq!(err.to_string(), "Invalid config: Quality must be 1-100");
     }
 
     #[test]
@@ -126,14 +123,11 @@ mod tests {
     #[test]
     fn test_from_image_error() {
         use image::ImageError;
-        let img_err = ImageError::Unsupported(
-            image::error::UnsupportedError::from_format_and_kind(
+        let img_err =
+            ImageError::Unsupported(image::error::UnsupportedError::from_format_and_kind(
                 image::error::ImageFormatHint::Unknown,
-                image::error::UnsupportedErrorKind::Format(
-                    image::error::ImageFormatHint::Unknown,
-                ),
-            ),
-        );
+                image::error::UnsupportedErrorKind::Format(image::error::ImageFormatHint::Unknown),
+            ));
         let err: ScreenshotError = img_err.into();
         match err {
             ScreenshotError::FormatError(msg) => {
@@ -157,11 +151,12 @@ mod tests {
         let _ = ScreenshotError::RenderError("test".to_string());
         let _ = ScreenshotError::FormatError("test".to_string());
         let _ = ScreenshotError::InvalidConfig("test".to_string());
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let _ = ScreenshotError::IoError(io_err);
     }
 
     #[test]
+    #[allow(clippy::unnecessary_literal_unwrap)]
     fn test_screenshot_result_type() {
         let ok_result: ScreenshotResult<i32> = Ok(42);
         assert_eq!(ok_result.unwrap(), 42);

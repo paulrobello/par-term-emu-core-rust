@@ -281,8 +281,14 @@ mod tests {
 
     #[test]
     fn test_shell_integration_marker_equality() {
-        assert_eq!(ShellIntegrationMarker::PromptStart, ShellIntegrationMarker::PromptStart);
-        assert_ne!(ShellIntegrationMarker::PromptStart, ShellIntegrationMarker::CommandStart);
+        assert_eq!(
+            ShellIntegrationMarker::PromptStart,
+            ShellIntegrationMarker::PromptStart
+        );
+        assert_ne!(
+            ShellIntegrationMarker::PromptStart,
+            ShellIntegrationMarker::CommandStart
+        );
     }
 
     #[test]

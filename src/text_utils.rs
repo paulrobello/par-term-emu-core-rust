@@ -538,7 +538,10 @@ mod tests {
         }
 
         let result = get_line_unwrapped(&grid, 2);
-        assert_eq!(result.map(|s| s.trim_end().to_string()), Some("hello".to_string()));
+        assert_eq!(
+            result.map(|s| s.trim_end().to_string()),
+            Some("hello".to_string())
+        );
     }
 
     #[test]

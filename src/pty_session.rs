@@ -991,7 +991,7 @@ mod tests {
     #[test]
     fn test_get_default_shell_not_empty() {
         let shell = PtySession::get_default_shell();
-        assert!(shell.len() > 0);
+        assert!(!shell.is_empty());
         #[cfg(unix)]
         assert!(shell.contains("sh") || shell.contains("bash"));
     }
@@ -1025,4 +1025,3 @@ mod tests {
         // Should handle unicode without panicking
     }
 }
-
