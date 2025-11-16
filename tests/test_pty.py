@@ -283,6 +283,81 @@ def test_pty_terminal_title():
     # 3. It matches the Terminal API contract
 
 
+def test_pty_terminal_hyperlink():
+    """Test getting hyperlink from PtyTerminal"""
+    from par_term_emu_core_rust import PtyTerminal, Terminal
+
+    # Test with regular Terminal first (as reference)
+    term_regular = Terminal(80, 24)
+    term_regular.process_str("\x1b]8;;https://example.com\x07Click\x1b]8;;\x07")
+    assert term_regular.get_hyperlink(0, 0) == "https://example.com"
+
+    # Verify PtyTerminal has the same API
+    pty_term = PtyTerminal(80, 24)
+    assert hasattr(pty_term, "get_hyperlink"), (
+        "PtyTerminal should have get_hyperlink() method"
+    )
+    assert pty_term.get_hyperlink(0, 0) is None  # Empty initially
+
+    # Note: Since PTY tests are skipped in CI and we can't actually send
+    # sequences through a running PTY process here, we've verified:
+    # 1. The method exists
+    # 2. It returns None for positions without hyperlinks
+    # 3. It matches the Terminal API contract
+
+
+def test_pty_terminal_flush_synchronized_updates():
+    """Test flush_synchronized_updates from PtyTerminal"""
+    from par_term_emu_core_rust import PtyTerminal, Terminal
+
+    # Test with regular Terminal first (as reference)
+    term_regular = Terminal(80, 24)
+    term_regular.flush_synchronized_updates()  # Should not raise
+
+    # Verify PtyTerminal has the same API
+    pty_term = PtyTerminal(80, 24)
+    assert hasattr(pty_term, "flush_synchronized_updates"), (
+        "PtyTerminal should have flush_synchronized_updates() method"
+    )
+    pty_term.flush_synchronized_updates()  # Should not raise
+
+    # Note: Since PTY tests are skipped in CI, we've verified:
+    # 1. The method exists
+    # 2. It can be called without errors
+    # 3. It matches the Terminal API contract
+
+
+def test_pty_terminal_focus_events():
+    """Test focus event methods from PtyTerminal"""
+    from par_term_emu_core_rust import PtyTerminal, Terminal
+
+    # Test with regular Terminal first (as reference)
+    term_regular = Terminal(80, 24)
+    focus_in = term_regular.get_focus_in_event()
+    focus_out = term_regular.get_focus_out_event()
+    assert focus_in == b"\x1b[I"
+    assert focus_out == b"\x1b[O"
+
+    # Verify PtyTerminal has the same API
+    pty_term = PtyTerminal(80, 24)
+    assert hasattr(pty_term, "get_focus_in_event"), (
+        "PtyTerminal should have get_focus_in_event() method"
+    )
+    assert hasattr(pty_term, "get_focus_out_event"), (
+        "PtyTerminal should have get_focus_out_event() method"
+    )
+
+    pty_focus_in = pty_term.get_focus_in_event()
+    pty_focus_out = pty_term.get_focus_out_event()
+    assert pty_focus_in == b"\x1b[I"
+    assert pty_focus_out == b"\x1b[O"
+
+    # Note: Since PTY tests are skipped in CI, we've verified:
+    # 1. Both methods exist
+    # 2. They return the correct event sequences
+    # 3. They match the Terminal API contract
+
+
 def test_context_manager():
     """Test using PtyTerminal as a context manager"""
     from par_term_emu_core_rust import PtyTerminal
