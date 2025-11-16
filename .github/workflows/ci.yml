@@ -43,6 +43,9 @@ jobs:
     - name: Build Python package
       run: uv run maturin develop --release
 
+    - name: Run Rust tests
+      run: cargo test --lib --no-default-features --features pyo3/auto-initialize
+
     - name: Run Python tests (Linux)
       if: runner.os == 'Linux'
       run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
@@ -85,7 +88,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy -- -D warnings
+      run: cargo clippy --all-targets --all-features -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .
