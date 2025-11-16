@@ -238,3 +238,453 @@ impl Terminal {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::Color;
+
+    fn create_test_terminal() -> Terminal {
+        Terminal::new(80, 24)
+    }
+
+    #[test]
+    fn test_write_char_basic() {
+        let mut term = create_test_terminal();
+        term.write_char('A');
+
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.c, 'A');
+        assert_eq!(term.cursor.col, 1);
+        assert_eq!(term.cursor.row, 0);
+    }
+
+    #[test]
+    fn test_write_char_carriage_return() {
+        let mut term = create_test_terminal();
+        term.write_char('A');
+        term.write_char('B');
+        term.write_char('C');
+        assert_eq!(term.cursor.col, 3);
+
+        term.write_char('\r');
+        assert_eq!(term.cursor.col, 0);
+        assert_eq!(term.cursor.row, 0);
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_carriage_return_with_lr_margins() {
+        let mut term = create_test_terminal();
+        term.use_lr_margins = true;
+        term.left_margin = 5;
+        term.right_margin = 75;
+
+        term.cursor.col = 10;
+        term.write_char('\r');
+
+        assert_eq!(term.cursor.col, 5); // Should move to left margin
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_line_feed() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 5;
+        term.write_char('\n');
+
+        assert_eq!(term.cursor.col, 5); // Column unchanged
+        assert_eq!(term.cursor.row, 1); // Row advanced
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_line_feed_new_line_mode() {
+        let mut term = create_test_terminal();
+        term.line_feed_new_line_mode = true;
+        term.cursor.col = 5;
+        term.write_char('\n');
+
+        assert_eq!(term.cursor.col, 0); // CR+LF behavior
+        assert_eq!(term.cursor.row, 1);
+    }
+
+    #[test]
+    fn test_write_char_line_feed_at_scroll_bottom() {
+        let mut term = create_test_terminal();
+        term.scroll_region_top = 0;
+        term.scroll_region_bottom = 23;
+        term.cursor.row = 23;
+
+        // Write some content in first row
+        term.cursor.row = 0;
+        term.write_char('X');
+
+        // Go to bottom and trigger scroll
+        term.cursor.row = 23;
+        term.write_char('\n');
+
+        // Should stay at row 23 after scrolling
+        assert_eq!(term.cursor.row, 23);
+
+        // First row should be blank after scroll
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.c, ' ');
+    }
+
+    #[test]
+    fn test_write_char_tab() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 0;
+
+        // Default tab stops at every 8 columns
+        term.write_char('\t');
+        assert_eq!(term.cursor.col, 8);
+        assert!(!term.pending_wrap);
+
+        term.write_char('\t');
+        assert_eq!(term.cursor.col, 16);
+    }
+
+    #[test]
+    fn test_write_char_tab_at_end() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 78;
+
+        term.write_char('\t');
+        assert_eq!(term.cursor.col, 79); // Clamped to last column
+    }
+
+    #[test]
+    fn test_write_char_backspace() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 5;
+
+        term.write_char('\x08');
+        assert_eq!(term.cursor.col, 4);
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_backspace_at_start() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 0;
+
+        term.write_char('\x08');
+        assert_eq!(term.cursor.col, 0); // Stays at 0
+    }
+
+    #[test]
+    fn test_write_char_control_chars_ignored() {
+        let mut term = create_test_terminal();
+        term.cursor.col = 5;
+
+        // Test various control characters (except CR, LF, TAB, BS)
+        term.write_char('\x01'); // SOH
+        term.write_char('\x02'); // STX
+        term.write_char('\x1B'); // ESC
+
+        assert_eq!(term.cursor.col, 5); // Cursor unchanged
+
+        let cell = term.active_grid().get(5, 0).unwrap();
+        assert_eq!(cell.c, ' '); // No character written
+    }
+
+    #[test]
+    fn test_write_char_wide_character() {
+        let mut term = create_test_terminal();
+
+        term.write_char('😀'); // Emoji (wide char)
+
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.c, '😀');
+        assert_eq!(cell.width, 2);
+        assert!(cell.flags.wide_char());
+
+        // Check spacer cell
+        let spacer = term.active_grid().get(1, 0).unwrap();
+        assert_eq!(spacer.c, ' ');
+        assert!(spacer.flags.wide_char_spacer());
+
+        assert_eq!(term.cursor.col, 2); // Cursor advanced by 2
+    }
+
+    #[test]
+    fn test_write_char_wide_character_wrap() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.cursor.col = 79; // Last column
+
+        term.write_char('😀'); // Wide char won't fit
+
+        // Should wrap to next line
+        assert_eq!(term.cursor.col, 2);
+        assert_eq!(term.cursor.row, 1);
+
+        // Character should be on second row
+        let cell = term.active_grid().get(0, 1).unwrap();
+        assert_eq!(cell.c, '😀');
+
+        // First row should be marked as wrapped
+        assert!(term.active_grid().is_line_wrapped(0));
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+
+        // Fill line to last column
+        for _ in 0..80 {
+            term.write_char('A');
+        }
+
+        assert_eq!(term.cursor.col, 79);
+        assert!(term.pending_wrap);
+
+        // Next character should trigger wrap
+        term.write_char('B');
+        assert_eq!(term.cursor.col, 1);
+        assert_eq!(term.cursor.row, 1);
+        assert!(!term.pending_wrap);
+
+        let cell = term.active_grid().get(0, 1).unwrap();
+        assert_eq!(cell.c, 'B');
+    }
+
+    #[test]
+    fn test_write_char_no_auto_wrap() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = false;
+
+        // Fill line to last column
+        for _ in 0..80 {
+            term.write_char('A');
+        }
+
+        assert_eq!(term.cursor.col, 79); // Stays at last column
+        assert!(!term.pending_wrap);
+
+        // Next character overwrites last cell
+        term.write_char('B');
+        assert_eq!(term.cursor.col, 79);
+        assert_eq!(term.cursor.row, 0);
+
+        let cell = term.active_grid().get(79, 0).unwrap();
+        assert_eq!(cell.c, 'B');
+    }
+
+    #[test]
+    fn test_write_char_insert_mode() {
+        let mut term = create_test_terminal();
+        term.insert_mode = true;
+
+        // Write some characters
+        term.write_char('A');
+        term.write_char('B');
+        term.write_char('C');
+
+        // Move back and insert
+        term.cursor.col = 1;
+        term.write_char('X');
+
+        // Should have: A X B C (C shifted right)
+        assert_eq!(term.active_grid().get(0, 0).unwrap().c, 'A');
+        assert_eq!(term.active_grid().get(1, 0).unwrap().c, 'X');
+        assert_eq!(term.active_grid().get(2, 0).unwrap().c, 'B');
+        assert_eq!(term.active_grid().get(3, 0).unwrap().c, 'C');
+    }
+
+    #[test]
+    fn test_write_char_with_attributes() {
+        let mut term = create_test_terminal();
+
+        // Set some attributes
+        term.fg = Color::Rgb(255, 0, 0);
+        term.bg = Color::Rgb(0, 255, 0);
+        term.flags.set_bold(true);
+        term.flags.set_italic(true);
+
+        term.write_char('A');
+
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.c, 'A');
+        assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
+        assert_eq!(cell.bg, Color::Rgb(0, 255, 0));
+        assert!(cell.flags.bold());
+        assert!(cell.flags.italic());
+    }
+
+    #[test]
+    fn test_write_char_with_hyperlink() {
+        let mut term = create_test_terminal();
+        term.current_hyperlink_id = Some(42);
+
+        term.write_char('A');
+
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.flags.hyperlink_id, Some(42));
+    }
+
+    #[test]
+    fn test_write_char_guarded() {
+        let mut term = create_test_terminal();
+        term.char_protected = true;
+
+        term.write_char('A');
+
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert!(cell.flags.guarded());
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap_clears_on_cr() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.pending_wrap = true;
+
+        term.write_char('\r');
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap_clears_on_lf() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.pending_wrap = true;
+
+        term.write_char('\n');
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap_clears_on_tab() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.pending_wrap = true;
+
+        term.write_char('\t');
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap_clears_on_backspace() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.pending_wrap = true;
+
+        term.write_char('\x08');
+        assert!(!term.pending_wrap);
+    }
+
+    #[test]
+    fn test_write_char_line_wrapping_marks() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+
+        // Fill first line
+        for _ in 0..80 {
+            term.write_char('A');
+        }
+
+        assert!(term.pending_wrap);
+
+        // Next char triggers wrap and marks line
+        term.write_char('B');
+
+        assert!(term.active_grid().is_line_wrapped(0));
+        assert!(!term.active_grid().is_line_wrapped(1));
+    }
+
+    #[test]
+    fn test_write_char_wide_at_scroll_bottom() {
+        let mut term = create_test_terminal();
+        term.scroll_region_top = 0;
+        term.scroll_region_bottom = 23;
+        term.cursor.row = 23;
+        term.cursor.col = 79;
+        term.auto_wrap = true;
+
+        // Write wide char that triggers wrap and scroll
+        term.write_char('😀');
+
+        // Should be on row 23 after scroll
+        assert_eq!(term.cursor.row, 23);
+        assert_eq!(term.cursor.col, 2);
+    }
+
+    #[test]
+    fn test_write_char_cjk_characters() {
+        let mut term = create_test_terminal();
+
+        // Test various CJK characters (all wide)
+        term.write_char('中'); // Chinese
+        assert_eq!(term.cursor.col, 2);
+
+        term.write_char('日'); // Japanese
+        assert_eq!(term.cursor.col, 4);
+
+        term.write_char('한'); // Korean
+        assert_eq!(term.cursor.col, 6);
+
+        // Verify all are marked as wide
+        assert!(term.active_grid().get(0, 0).unwrap().flags.wide_char());
+        assert!(term.active_grid().get(2, 0).unwrap().flags.wide_char());
+        assert!(term.active_grid().get(4, 0).unwrap().flags.wide_char());
+    }
+
+    #[test]
+    fn test_write_char_insert_mode_wide_char() {
+        let mut term = create_test_terminal();
+        term.insert_mode = true;
+
+        term.write_char('A');
+        term.write_char('B');
+
+        term.cursor.col = 1;
+        term.write_char('😀');
+
+        // Should insert wide char (shifts by 2)
+        assert_eq!(term.active_grid().get(0, 0).unwrap().c, 'A');
+        assert_eq!(term.active_grid().get(1, 0).unwrap().c, '😀');
+        assert!(term.active_grid().get(2, 0).unwrap().flags.wide_char_spacer());
+        assert_eq!(term.active_grid().get(3, 0).unwrap().c, 'B');
+    }
+
+    #[test]
+    fn test_write_char_lf_with_lr_margins_outside() {
+        let mut term = create_test_terminal();
+        term.use_lr_margins = true;
+        term.left_margin = 10;
+        term.right_margin = 70;
+        term.scroll_region_top = 0;
+        term.scroll_region_bottom = 23;
+
+        // Position cursor outside left/right margins but in scroll region
+        term.cursor.col = 5;
+        term.cursor.row = 23;
+
+        term.write_char('\n');
+
+        // Should not scroll when outside LR margins (iTerm2 behavior)
+        assert_eq!(term.cursor.row, 23); // Clamped to bottom
+    }
+
+    #[test]
+    fn test_write_char_pending_wrap_with_lr_margins() {
+        let mut term = create_test_terminal();
+        term.auto_wrap = true;
+        term.use_lr_margins = true;
+        term.left_margin = 10;
+        term.right_margin = 70;
+
+        term.cursor.col = 79;
+        term.pending_wrap = true;
+
+        term.write_char('A');
+
+        // Should wrap to left margin
+        assert_eq!(term.cursor.col, 11);
+        assert_eq!(term.cursor.row, 1);
+    }
+}
