@@ -507,4 +507,360 @@ mod tests {
         assert!(result.is_some());
         assert!(result.unwrap().starts_with("https://"));
     }
+
+    #[test]
+    fn test_is_word_char_defaults() {
+        assert!(is_word_char('a', None));
+        assert!(is_word_char('Z', None));
+        assert!(is_word_char('0', None));
+        assert!(is_word_char('_', None));
+        assert!(is_word_char('.', None));
+        assert!(is_word_char('-', None));
+        assert!(!is_word_char(' ', None));
+        assert!(!is_word_char('(', None));
+    }
+
+    #[test]
+    fn test_is_word_char_custom() {
+        let custom = "@#";
+        assert!(is_word_char('@', Some(custom)));
+        assert!(is_word_char('#', Some(custom)));
+        assert!(!is_word_char('.', Some(custom)));
+    }
+
+    #[test]
+    fn test_get_line_unwrapped_no_wrapping() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(10, 5, 0);
+
+        for (i, c) in "hello".chars().enumerate() {
+            grid.set(i, 2, Cell::new(c));
+        }
+
+        let result = get_line_unwrapped(&grid, 2);
+        assert_eq!(result.map(|s| s.trim_end().to_string()), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_get_line_unwrapped_with_wrapping() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(10, 5, 0);
+
+        // Set first line and mark as wrapped
+        for (i, c) in "abcdefghij".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+        grid.set_line_wrapped(1, true);
+
+        // Set second line (continuation)
+        for (i, c) in "klmnop".chars().enumerate() {
+            grid.set(i, 1, Cell::new(c));
+        }
+
+        let result = get_line_unwrapped(&grid, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("abcdefghij"));
+    }
+
+    #[test]
+    fn test_select_word_boundaries() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "hello world".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_word(&grid, 2, 0, None);
+        assert!(result.is_some());
+        let ((start_col, start_row), (end_col, end_row)) = result.unwrap();
+        assert_eq!(start_col, 0);
+        assert_eq!(end_col, 5);
+        assert_eq!(start_row, 0);
+        assert_eq!(end_row, 0);
+    }
+
+    #[test]
+    fn test_select_word_on_space() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "hello world".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        // Click on space
+        let result = select_word(&grid, 5, 0, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_bracket_parentheses() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "(hello)".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        // Click on opening paren
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert_eq!(result, Some((6, 0)));
+
+        // Click on closing paren
+        let result = find_matching_bracket(&grid, 6, 0);
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn test_find_matching_bracket_nested() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "((a))".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        // Click on outer opening paren
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert_eq!(result, Some((4, 0)));
+
+        // Click on inner opening paren
+        let result = find_matching_bracket(&grid, 1, 0);
+        assert_eq!(result, Some((3, 0)));
+    }
+
+    #[test]
+    fn test_find_matching_bracket_square() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "[test]".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert_eq!(result, Some((5, 0)));
+    }
+
+    #[test]
+    fn test_find_matching_bracket_curly() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "{code}".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert_eq!(result, Some((5, 0)));
+    }
+
+    #[test]
+    fn test_find_matching_bracket_angle() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "<tag>".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert_eq!(result, Some((4, 0)));
+    }
+
+    #[test]
+    fn test_find_matching_bracket_not_found() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "(hello".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        // No matching closing paren
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_bracket_non_bracket() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "hello".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        // Click on regular letter
+        let result = find_matching_bracket(&grid, 0, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_select_semantic_region_quotes() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "\"hello world\"".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 5, 0, "\"");
+        assert_eq!(result, Some("hello world".to_string()));
+    }
+
+    #[test]
+    fn test_select_semantic_region_parentheses() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "(test)".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 2, 0, "()");
+        assert_eq!(result, Some("test".to_string()));
+    }
+
+    #[test]
+    fn test_select_semantic_region_brackets() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "[array]".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 3, 0, "[]");
+        assert_eq!(result, Some("array".to_string()));
+    }
+
+    #[test]
+    fn test_select_semantic_region_curly() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "{data}".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 2, 0, "{}");
+        assert_eq!(result, Some("data".to_string()));
+    }
+
+    #[test]
+    fn test_select_semantic_region_nested() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "((inner))".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 4, 0, "()");
+        assert_eq!(result, Some("inner".to_string()));
+    }
+
+    #[test]
+    fn test_select_semantic_region_not_found() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+
+        for (i, c) in "hello".chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = select_semantic_region(&grid, 2, 0, "\"");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_url_at_http() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+        let text = "check http://test.com here";
+        for (i, c) in text.chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = get_url_at(&grid, 10, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("http://test.com"));
+    }
+
+    #[test]
+    fn test_get_url_at_ftp() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+        let text = "ftp://server.com/file.txt";
+        for (i, c) in text.chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = get_url_at(&grid, 5, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().starts_with("ftp://"));
+    }
+
+    #[test]
+    fn test_get_url_at_mailto() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+        let text = "email mailto:test@example.com here";
+        for (i, c) in text.chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = get_url_at(&grid, 15, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("mailto:"));
+    }
+
+    #[test]
+    fn test_get_url_at_no_url() {
+        use crate::cell::Cell;
+        let mut grid = Grid::new(80, 24, 0);
+        let text = "just plain text";
+        for (i, c) in text.chars().enumerate() {
+            grid.set(i, 0, Cell::new(c));
+        }
+
+        let result = get_url_at(&grid, 5, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_get_word_at_invalid_position() {
+        let grid = Grid::new(80, 24, 0);
+        assert!(get_word_at(&grid, 100, 0, None).is_none());
+        assert!(get_word_at(&grid, 0, 100, None).is_none());
+    }
+
+    #[test]
+    fn test_select_word_invalid_position() {
+        let grid = Grid::new(80, 24, 0);
+        assert!(select_word(&grid, 100, 0, None).is_none());
+        assert!(select_word(&grid, 0, 100, None).is_none());
+    }
+
+    #[test]
+    fn test_find_matching_bracket_invalid_position() {
+        let grid = Grid::new(80, 24, 0);
+        assert!(find_matching_bracket(&grid, 100, 0).is_none());
+        assert!(find_matching_bracket(&grid, 0, 100).is_none());
+    }
+
+    #[test]
+    fn test_get_line_unwrapped_invalid_row() {
+        let grid = Grid::new(80, 24, 0);
+        assert!(get_line_unwrapped(&grid, 100).is_none());
+    }
+
+    #[test]
+    fn test_select_semantic_region_invalid_position() {
+        let grid = Grid::new(80, 24, 0);
+        assert!(select_semantic_region(&grid, 100, 0, "\"").is_none());
+        assert!(select_semantic_region(&grid, 0, 100, "\"").is_none());
+    }
 }
