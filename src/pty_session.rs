@@ -894,4 +894,135 @@ mod tests {
         session.set_env("TEST_VAR", "test_value");
         // Just ensure it doesn't panic
     }
+
+    #[test]
+    fn test_set_multiple_env_vars() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.set_env("VAR1", "value1");
+        session.set_env("VAR2", "value2");
+        session.set_env("VAR3", "value3");
+        // Should allow multiple env vars
+    }
+
+    #[test]
+    fn test_set_cwd() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let path = std::path::Path::new("/tmp");
+        session.set_cwd(path);
+        // Just ensure it doesn't panic
+    }
+
+    #[test]
+    fn test_size_getters() {
+        let session = PtySession::new(100, 50, 2000);
+        let (cols, rows) = session.size();
+        assert_eq!(cols, 100);
+        assert_eq!(rows, 50);
+    }
+
+    #[test]
+    fn test_terminal_access() {
+        let session = PtySession::new(80, 24, 1000);
+        let terminal = session.terminal();
+        assert!(terminal.lock().is_ok());
+    }
+
+    #[test]
+    fn test_update_generation() {
+        let session = PtySession::new(80, 24, 1000);
+        let gen1 = session.update_generation();
+        let gen2 = session.update_generation();
+        assert_eq!(gen1, gen2); // Should be same if no updates
+    }
+
+    #[test]
+    fn test_is_running_initially_false() {
+        let session = PtySession::new(80, 24, 1000);
+        assert!(!session.is_running());
+    }
+
+    #[test]
+    fn test_new_with_different_sizes() {
+        let session1 = PtySession::new(40, 20, 500);
+        assert_eq!(session1.size(), (40, 20));
+
+        let session2 = PtySession::new(120, 40, 2000);
+        assert_eq!(session2.size(), (120, 40));
+
+        let session3 = PtySession::new(200, 60, 5000);
+        assert_eq!(session3.size(), (200, 60));
+    }
+
+    #[test]
+    fn test_resize_multiple_times() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        session.resize(100, 30).ok();
+        assert_eq!(session.size(), (100, 30));
+
+        session.resize(120, 40).ok();
+        assert_eq!(session.size(), (120, 40));
+
+        session.resize(60, 20).ok();
+        assert_eq!(session.size(), (60, 20));
+    }
+
+    #[test]
+    fn test_resize_to_small_size() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.resize(10, 5).ok();
+        assert_eq!(session.size(), (10, 5));
+    }
+
+    #[test]
+    fn test_resize_to_large_size() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.resize(500, 200).ok();
+        assert_eq!(session.size(), (500, 200));
+    }
+
+    #[test]
+    fn test_write_empty_data() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.write(b"");
+        assert!(result.is_err()); // Should fail as not spawned
+    }
+
+    #[test]
+    fn test_get_default_shell_not_empty() {
+        let shell = PtySession::get_default_shell();
+        assert!(shell.len() > 0);
+        #[cfg(unix)]
+        assert!(shell.contains("sh") || shell.contains("bash"));
+    }
+
+    #[test]
+    fn test_terminal_locked_state() {
+        let session = PtySession::new(80, 24, 1000);
+        {
+            let terminal = session.terminal();
+            let _lock1 = terminal.lock().unwrap();
+            // While holding lock, should not be able to get another
+        }
+        // After releasing, should be able to lock again
+        let terminal = session.terminal();
+        let _lock2 = terminal.lock().unwrap();
+        drop(_lock2); // Explicitly drop to avoid unused variable warning
+    }
+
+    #[test]
+    fn test_set_env_with_empty_values() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.set_env("EMPTY_VAR", "");
+        session.set_env("", "value");
+        // Should handle edge cases without panicking
+    }
+
+    #[test]
+    fn test_set_env_with_unicode() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.set_env("UNICODE_VAR", "Hello 世界 🌍");
+        // Should handle unicode without panicking
+    }
 }
+
