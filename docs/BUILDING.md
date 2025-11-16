@@ -1,6 +1,6 @@
-# Building par-term-emu
+# Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu library.
+This guide explains how to build and install the par-term-emu-core-rust library.
 
 ## Table of Contents
 
@@ -18,7 +18,6 @@ This guide explains how to build and install the par-term-emu library.
   - [Python Tests](#python-tests)
   - [Code Quality Checks](#code-quality-checks)
   - [Pre-commit Hooks](#pre-commit-hooks)
-- [Running the TUI Application](#running-the-tui-application)
 - [Running Examples](#running-examples)
 - [Cross-Compilation](#cross-compilation)
   - [Linux](#linux)
@@ -187,12 +186,6 @@ make pre-commit-uninstall
 
 > **📝 Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
 
-## Running the TUI Application
-
-> **📝 Note:** A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)). This core library focuses on the terminal emulation engine, while the sister project provides the interactive TUI application with themes, clipboard integration, and other user-facing features.
->
-> **Installation**: `pip install par-term-emu-tui-rust`
-
 ## Running Examples
 
 After installing the package, run the example scripts:
@@ -219,7 +212,7 @@ uv run python examples/pty_shell.py
 # ... and many more in the examples/ directory
 ```
 
-> **📝 Note:** The project includes 33 example scripts demonstrating various features including basic terminal operations, PTY sessions, Sixel graphics, mouse tracking, hyperlinks, notifications, shell integration, and more. See the `examples/` directory for the complete list.
+> **📝 Note:** The project includes 32 example scripts demonstrating various features including basic terminal operations, PTY sessions, Sixel graphics, mouse tracking, hyperlinks, notifications, shell integration, and more. See the `examples/` directory for the complete list.
 
 ## Cross-Compilation
 
@@ -374,3 +367,4 @@ docker rm builder
 - [CROSS_PLATFORM.md](CROSS_PLATFORM.md) - Cross-platform build instructions
 - [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Configuration file reference
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
+- [Sister Project: par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) - Full-featured TUI application

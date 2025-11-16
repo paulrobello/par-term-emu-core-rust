@@ -212,8 +212,8 @@ examples-basic: dev
 	@echo "  Running Basic Terminal Examples"
 	@echo "======================================================================"
 	@echo ""
-	@echo "Running basic_usage.py..."
-	uv run python examples/basic_usage.py
+	@echo "Running basic_usage_improved.py..."
+	uv run python examples/basic_usage_improved.py
 	@echo ""
 	@echo "Running colors_demo.py..."
 	uv run python examples/colors_demo.py
