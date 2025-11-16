@@ -58,3 +58,5 @@ make checkall    # All quality checks (run before commits)
 - **docs/DOCUMENTATION_STYLE_GUIDE.md** - Documentation standards
 - [PyO3 guide](https://pyo3.rs/) - Python bindings reference
 - [xterm sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) - VT spec
+- never push unless the user requests it
+- always run `make checkall` and fix all isues before pushing
