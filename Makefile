@@ -114,8 +114,8 @@ watch:
 test: test-rust test-python
 
 test-rust:
-	@echo "Skipping Rust unit tests (PyO3 extension-module prevents linking)"
-	@echo "Rust code is thoroughly tested through Python integration tests"
+	@echo "Running Rust tests..."
+	cargo test --lib --no-default-features --features pyo3/auto-initialize
 
 test-python: dev
 	@echo "Running Python tests..."

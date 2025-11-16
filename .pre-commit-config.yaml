@@ -41,17 +41,15 @@ repos:
         pass_filenames: false
 
   # Rust tests
-  # NOTE: Disabled due to PyO3 extension-module feature preventing linking
-  # Rust code is tested through Python integration tests instead
-  # - repo: local
-  #   hooks:
-  #     - id: cargo-test
-  #       name: cargo test
-  #       description: Run Rust tests
-  #       entry: cargo test --lib
-  #       language: system
-  #       types: [rust]
-  #       pass_filenames: false
+  - repo: local
+    hooks:
+      - id: cargo-test
+        name: cargo test
+        description: Run Rust tests
+        entry: cargo test --lib --no-default-features --features pyo3/auto-initialize
+        language: system
+        types: [rust]
+        pass_filenames: false
 
   # Python formatting with ruff
   - repo: https://github.com/astral-sh/ruff-pre-commit
