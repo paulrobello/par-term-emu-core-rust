@@ -512,7 +512,8 @@ if bounds:
     (start_col, start_row), (end_col, end_row) = bounds
     print(f"Word spans from ({start_col}, {start_row}) to ({end_col}, {end_row})")
 
-# Custom word characters (include underscores)
+# Custom word characters (default is iTerm2-compatible: "/-+\~_.")
+# For snake_case/identifiers, you might want to include additional chars:
 word = term.get_word_at(4, 1, word_chars="_-")  # "snake_case"
 
 # Get full logical line (following wraps)
@@ -715,10 +716,10 @@ Create a new terminal with specified dimensions.
 
 #### Text Extraction Utilities
 
-- `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor position
+- `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor position (default word_chars: "/-+\~_." iTerm2-compatible)
 - `get_url_at(col: int, row: int) -> str | None`: Detect and extract URL at cursor position
 - `get_line_unwrapped(row: int) -> str | None`: Get full logical line following wrapping
-- `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries for smart selection
+- `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries for smart selection (default word_chars: "/-+\~_." iTerm2-compatible)
 - `find_matching_bracket(col: int, row: int) -> tuple[int, int] | None`: Find matching bracket/parenthesis. Supports (), [], {}, <>. Returns position of matching bracket or None
 - `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters. Supports (), [], {}, <>, "", '', ``. Returns content or None
 

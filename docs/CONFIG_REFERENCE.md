@@ -380,7 +380,7 @@ auto_copy_selection: true                 # Auto-copy on select
 keep_selection_after_copy: true           # Keep highlight after copy
 expose_system_clipboard: true             # OSC 52 access
 copy_trailing_newline: true               # Include \n when copying lines
-word_characters: "-_.~:/?#[]@!$&'()*+,;=" # Word boundary characters
+word_characters: "/-+\\~_." # Word boundary characters (iTerm2-compatible default)
 triple_click_selects_wrapped_lines: true  # Follow wrapping on triple-click
 
 # --- Scrollback ---

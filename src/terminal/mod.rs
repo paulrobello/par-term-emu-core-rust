@@ -840,7 +840,7 @@ impl Terminal {
     /// # Arguments
     /// * `col` - Column position (0-indexed)
     /// * `row` - Row position (0-indexed)
-    /// * `word_chars` - Optional custom word characters (default: "-_.~:/?#[]@!$&'()*+,;=")
+    /// * `word_chars` - Optional custom word characters (default: "/-+\\~_." iTerm2-compatible)
     ///
     /// # Returns
     /// The word at the cursor position, or None if not on a word

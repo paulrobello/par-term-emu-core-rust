@@ -3,8 +3,9 @@
 use crate::grid::Grid;
 use unicode_width::UnicodeWidthChar;
 
-/// Default word characters for word boundary detection
-pub const DEFAULT_WORD_CHARS: &str = "-_.~:/?#[]@!$&'()*+,;=";
+/// Default word characters for word boundary detection (iTerm2-compatible)
+/// Matches iTerm2's default: slash, hyphen, plus, backslash, tilde, underscore, dot
+pub const DEFAULT_WORD_CHARS: &str = "/-+\\~_.";
 
 /// Check if a character is a word character
 pub fn is_word_char(c: char, word_chars: Option<&str>) -> bool {
