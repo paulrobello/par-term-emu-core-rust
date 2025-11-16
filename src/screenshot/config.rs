@@ -171,3 +171,211 @@ impl ScreenshotConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = ScreenshotConfig::default();
+        assert_eq!(config.font_path, None);
+        assert_eq!(config.font_size, 14.0);
+        assert_eq!(config.line_height_multiplier, 1.2);
+        assert_eq!(config.char_width_multiplier, 1.0);
+        assert!(!config.include_scrollback);
+        assert_eq!(config.scrollback_lines, None);
+        assert!(config.antialiasing);
+        assert_eq!(config.padding_px, 10);
+        assert_eq!(config.background_color, None);
+        assert_eq!(config.format, ImageFormat::Png);
+        assert_eq!(config.quality, 90);
+        assert!(!config.render_cursor);
+        assert_eq!(config.cursor_color, (255, 255, 255));
+        assert_eq!(config.sixel_render_mode, SixelRenderMode::HalfBlocks);
+        assert_eq!(config.link_color, None);
+        assert_eq!(config.bold_color, None);
+        assert!(!config.use_bold_color);
+    }
+
+    #[test]
+    fn test_new_config() {
+        let config = ScreenshotConfig::new();
+        let default_config = ScreenshotConfig::default();
+        assert_eq!(config.font_size, default_config.font_size);
+        assert_eq!(config.format, default_config.format);
+    }
+
+    #[test]
+    fn test_with_font_path() {
+        let path = PathBuf::from("/path/to/font.ttf");
+        let config = ScreenshotConfig::new().with_font_path(path.clone());
+        assert_eq!(config.font_path, Some(path));
+    }
+
+    #[test]
+    fn test_with_font_size() {
+        let config = ScreenshotConfig::new().with_font_size(20.0);
+        assert_eq!(config.font_size, 20.0);
+    }
+
+    #[test]
+    fn test_with_format() {
+        let config = ScreenshotConfig::new().with_format(ImageFormat::Jpeg);
+        assert_eq!(config.format, ImageFormat::Jpeg);
+
+        let config = ScreenshotConfig::new().with_format(ImageFormat::Svg);
+        assert_eq!(config.format, ImageFormat::Svg);
+
+        let config = ScreenshotConfig::new().with_format(ImageFormat::Bmp);
+        assert_eq!(config.format, ImageFormat::Bmp);
+    }
+
+    #[test]
+    fn test_with_scrollback() {
+        let config = ScreenshotConfig::new().with_scrollback(true);
+        assert!(config.include_scrollback);
+
+        let config = ScreenshotConfig::new().with_scrollback(false);
+        assert!(!config.include_scrollback);
+    }
+
+    #[test]
+    fn test_with_padding() {
+        let config = ScreenshotConfig::new().with_padding(20);
+        assert_eq!(config.padding_px, 20);
+
+        let config = ScreenshotConfig::new().with_padding(0);
+        assert_eq!(config.padding_px, 0);
+    }
+
+    #[test]
+    fn test_with_quality() {
+        let config = ScreenshotConfig::new().with_quality(75);
+        assert_eq!(config.quality, 75);
+    }
+
+    #[test]
+    fn test_with_quality_clamped() {
+        // Quality should be clamped to max 100
+        let config = ScreenshotConfig::new().with_quality(150);
+        assert_eq!(config.quality, 100);
+
+        let config = ScreenshotConfig::new().with_quality(255);
+        assert_eq!(config.quality, 100);
+    }
+
+    #[test]
+    fn test_with_quality_minimum() {
+        let config = ScreenshotConfig::new().with_quality(1);
+        assert_eq!(config.quality, 1);
+    }
+
+    #[test]
+    fn test_with_cursor() {
+        let config = ScreenshotConfig::new().with_cursor(true);
+        assert!(config.render_cursor);
+
+        let config = ScreenshotConfig::new().with_cursor(false);
+        assert!(!config.render_cursor);
+    }
+
+    #[test]
+    fn test_with_sixel_mode() {
+        let config = ScreenshotConfig::new().with_sixel_mode(SixelRenderMode::Disabled);
+        assert_eq!(config.sixel_render_mode, SixelRenderMode::Disabled);
+
+        let config = ScreenshotConfig::new().with_sixel_mode(SixelRenderMode::Pixels);
+        assert_eq!(config.sixel_render_mode, SixelRenderMode::Pixels);
+
+        let config = ScreenshotConfig::new().with_sixel_mode(SixelRenderMode::HalfBlocks);
+        assert_eq!(config.sixel_render_mode, SixelRenderMode::HalfBlocks);
+    }
+
+    #[test]
+    fn test_with_link_color() {
+        let config = ScreenshotConfig::new().with_link_color((0, 0, 255));
+        assert_eq!(config.link_color, Some((0, 0, 255)));
+    }
+
+    #[test]
+    fn test_with_bold_color() {
+        let config = ScreenshotConfig::new().with_bold_color((255, 0, 0));
+        assert_eq!(config.bold_color, Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn test_with_use_bold_color() {
+        let config = ScreenshotConfig::new().with_use_bold_color(true);
+        assert!(config.use_bold_color);
+
+        let config = ScreenshotConfig::new().with_use_bold_color(false);
+        assert!(!config.use_bold_color);
+    }
+
+    #[test]
+    fn test_builder_pattern_chaining() {
+        let config = ScreenshotConfig::new()
+            .with_font_size(16.0)
+            .with_format(ImageFormat::Jpeg)
+            .with_quality(85)
+            .with_scrollback(true)
+            .with_padding(15)
+            .with_cursor(true)
+            .with_sixel_mode(SixelRenderMode::Pixels)
+            .with_link_color((0, 100, 200))
+            .with_bold_color((200, 0, 0))
+            .with_use_bold_color(true);
+
+        assert_eq!(config.font_size, 16.0);
+        assert_eq!(config.format, ImageFormat::Jpeg);
+        assert_eq!(config.quality, 85);
+        assert!(config.include_scrollback);
+        assert_eq!(config.padding_px, 15);
+        assert!(config.render_cursor);
+        assert_eq!(config.sixel_render_mode, SixelRenderMode::Pixels);
+        assert_eq!(config.link_color, Some((0, 100, 200)));
+        assert_eq!(config.bold_color, Some((200, 0, 0)));
+        assert!(config.use_bold_color);
+    }
+
+    #[test]
+    fn test_image_format_default() {
+        assert_eq!(ImageFormat::default(), ImageFormat::Png);
+    }
+
+    #[test]
+    fn test_image_format_equality() {
+        assert_eq!(ImageFormat::Png, ImageFormat::Png);
+        assert_eq!(ImageFormat::Jpeg, ImageFormat::Jpeg);
+        assert_eq!(ImageFormat::Svg, ImageFormat::Svg);
+        assert_eq!(ImageFormat::Bmp, ImageFormat::Bmp);
+        assert_ne!(ImageFormat::Png, ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn test_sixel_render_mode_equality() {
+        assert_eq!(SixelRenderMode::Disabled, SixelRenderMode::Disabled);
+        assert_eq!(SixelRenderMode::Pixels, SixelRenderMode::Pixels);
+        assert_eq!(SixelRenderMode::HalfBlocks, SixelRenderMode::HalfBlocks);
+        assert_ne!(SixelRenderMode::Pixels, SixelRenderMode::HalfBlocks);
+    }
+
+    #[test]
+    fn test_config_clone() {
+        let config = ScreenshotConfig::new()
+            .with_font_size(18.0)
+            .with_format(ImageFormat::Svg);
+
+        let cloned = config.clone();
+        assert_eq!(cloned.font_size, 18.0);
+        assert_eq!(cloned.format, ImageFormat::Svg);
+    }
+
+    #[test]
+    fn test_config_debug() {
+        let config = ScreenshotConfig::new();
+        let debug_str = format!("{:?}", config);
+        assert!(debug_str.contains("ScreenshotConfig"));
+    }
+}
