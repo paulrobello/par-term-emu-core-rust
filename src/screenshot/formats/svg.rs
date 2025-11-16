@@ -213,4 +213,374 @@ mod tests {
         assert_eq!(escape_xml("<tag>"), "&lt;tag&gt;");
         assert_eq!(escape_xml("\"quoted\""), "&quot;quoted&quot;");
     }
+
+    #[test]
+    fn test_escape_xml_all_special_chars() {
+        let input = r#"<&"'>"#;
+        let expected = "&lt;&amp;&quot;&apos;&gt;";
+        assert_eq!(escape_xml(input), expected);
+    }
+
+    #[test]
+    fn test_escape_xml_no_special_chars() {
+        let input = "Hello World 123";
+        assert_eq!(escape_xml(input), input);
+    }
+
+    #[test]
+    fn test_escape_xml_mixed_content() {
+        let input = "Hello <world> & \"friends\"!";
+        let expected = "Hello &lt;world&gt; &amp; &quot;friends&quot;!";
+        assert_eq!(escape_xml(input), expected);
+    }
+
+    #[test]
+    fn test_is_default_color_white() {
+        let color = Color::Named(NamedColor::White);
+        assert!(is_default_color(&color));
+    }
+
+    #[test]
+    fn test_is_default_color_black() {
+        let color = Color::Named(NamedColor::Black);
+        assert!(!is_default_color(&color));
+    }
+
+    #[test]
+    fn test_is_default_color_rgb() {
+        let color = Color::Rgb(255, 255, 255);
+        assert!(!is_default_color(&color));
+    }
+
+    #[test]
+    fn test_is_default_color_indexed() {
+        let color = Color::Indexed(7); // White index
+        assert!(!is_default_color(&color));
+    }
+
+    #[test]
+    fn test_dimension_calculations() {
+        let font_size = 14.0;
+        let char_width = font_size * 0.6;
+        let line_height = font_size * 1.2;
+
+        assert_eq!(char_width, 8.4);
+        assert_eq!(line_height, 16.8);
+    }
+
+    #[test]
+    fn test_canvas_size_with_padding() {
+        let rows = 24;
+        let cols = 80;
+        let font_size = 14.0;
+        let padding = 10u32;
+
+        let char_width = font_size * 0.6;
+        let line_height = font_size * 1.2;
+
+        let content_width = cols as f32 * char_width;
+        let content_height = rows as f32 * line_height;
+        let canvas_width = content_width + (padding as f32 * 2.0);
+        let canvas_height = content_height + (padding as f32 * 2.0);
+
+        assert_eq!(content_width, 672.0); // 80 * 8.4
+        assert_eq!(content_height, 403.2); // 24 * 16.8
+        assert_eq!(canvas_width, 692.0); // 672 + 20
+        assert_eq!(canvas_height, 423.2); // 403.2 + 20
+    }
+
+    #[test]
+    fn test_baseline_position() {
+        let row = 5;
+        let font_size = 14.0;
+        let line_height = font_size * 1.2;
+
+        let y = row as f32 * line_height + font_size;
+
+        assert_eq!(y, 98.0); // 5 * 16.8 + 14 = 84 + 14
+    }
+
+    #[test]
+    fn test_svg_contains_xml_declaration() {
+        let grid = Grid::new(10, 5, 100);
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+    }
+
+    #[test]
+    fn test_svg_contains_xmlns() {
+        let grid = Grid::new(10, 5, 100);
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"xmlns="http://www.w3.org/2000/svg""#));
+    }
+
+    #[test]
+    fn test_svg_contains_css_styles() {
+        let grid = Grid::new(10, 5, 100);
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains("<style>"));
+        assert!(svg.contains(".bold { font-weight: bold; }"));
+        assert!(svg.contains(".italic { font-style: italic; }"));
+        assert!(svg.contains(".underline { text-decoration: underline; }"));
+        assert!(svg.contains(".strikethrough { text-decoration: line-through; }"));
+        assert!(svg.contains(".dim { opacity: 0.6; }"));
+    }
+
+    #[test]
+    fn test_svg_has_background_rect() {
+        let grid = Grid::new(10, 5, 100);
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"<rect width="100%" height="100%""#));
+    }
+
+    #[test]
+    fn test_svg_with_bold_text() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('B');
+        cell.flags.set_bold(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"class="bold""#));
+    }
+
+    #[test]
+    fn test_svg_with_italic_text() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('I');
+        cell.flags.set_italic(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"class="italic""#));
+    }
+
+    #[test]
+    fn test_svg_with_underline_text() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('U');
+        cell.flags.set_underline(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"class="underline""#));
+    }
+
+    #[test]
+    fn test_svg_with_strikethrough_text() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('S');
+        cell.flags.set_strikethrough(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"class="strikethrough""#));
+    }
+
+    #[test]
+    fn test_svg_with_dim_text() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('D');
+        cell.flags.set_dim(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"class="dim""#));
+    }
+
+    #[test]
+    fn test_svg_with_multiple_classes() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('M');
+        cell.flags.set_bold(true);
+        cell.flags.set_italic(true);
+        cell.flags.set_underline(true);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains("bold"));
+        assert!(svg.contains("italic"));
+        assert!(svg.contains("underline"));
+    }
+
+    #[test]
+    fn test_svg_with_custom_font_size() {
+        let grid = Grid::new(10, 5, 100);
+        let font_size = 20.0;
+        let result = encode(&grid, font_size, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"font-size="20""#));
+    }
+
+    #[test]
+    fn test_svg_with_custom_padding() {
+        let grid = Grid::new(10, 5, 100);
+        let padding = 25u32;
+        let result = encode(&grid, 14.0, padding);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        // Transform should have padding offset
+        assert!(svg.contains(r#"transform="translate(25, 25)""#));
+    }
+
+    #[test]
+    fn test_svg_empty_grid() {
+        let grid = Grid::new(10, 5, 100);
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        // Should still have valid SVG structure
+        assert!(svg.contains("<?xml"));
+        assert!(svg.contains("<svg"));
+        assert!(svg.contains("</svg>"));
+    }
+
+    #[test]
+    fn test_svg_single_character() {
+        let mut grid = Grid::new(80, 24, 1000);
+        let cell = Cell::new('X');
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(">X</text>"));
+    }
+
+    #[test]
+    fn test_svg_with_rgb_color() {
+        let mut grid = Grid::new(10, 5, 100);
+        let mut cell = Cell::new('C');
+        cell.fg = Color::Rgb(255, 128, 64);
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(r#"fill="rgb(255,128,64)""#));
+    }
+
+    #[test]
+    fn test_svg_run_grouping() {
+        let mut grid = Grid::new(10, 5, 100);
+
+        // Add consecutive characters with same attributes
+        for col in 0..5 {
+            let cell = Cell::new('A');
+            grid.set(col, 0, cell);
+        }
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        // Should group into single text element
+        assert!(svg.contains(">AAAAA</text>"));
+    }
+
+    #[test]
+    fn test_svg_special_chars_escaped() {
+        let mut grid = Grid::new(10, 5, 100);
+        let cell = Cell::new('<');
+        grid.set(0, 0, cell);
+
+        let result = encode(&grid, 14.0, 0);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+        assert!(svg.contains(">&lt;</text>"));
+    }
+
+    #[test]
+    fn test_class_attribute_building() {
+        let mut classes = Vec::new();
+        classes.push("bold");
+        classes.push("italic");
+
+        let class_attr = if !classes.is_empty() {
+            format!(r#" class="{}""#, classes.join(" "))
+        } else {
+            String::new()
+        };
+
+        assert_eq!(class_attr, r#" class="bold italic""#);
+    }
+
+    #[test]
+    fn test_empty_class_attribute() {
+        let classes: Vec<&str> = Vec::new();
+
+        let class_attr = if !classes.is_empty() {
+            format!(r#" class="{}""#, classes.join(" "))
+        } else {
+            String::new()
+        };
+
+        assert_eq!(class_attr, "");
+    }
+
+    #[test]
+    fn test_svg_viewbox_matches_dimensions() {
+        let grid = Grid::new(80, 24, 1000);
+        let result = encode(&grid, 14.0, 10);
+        assert!(result.is_ok());
+
+        let svg = String::from_utf8(result.unwrap()).unwrap();
+
+        // Extract width and height from svg tag
+        // With 80 cols, 24 rows, font_size 14.0, padding 10:
+        // char_width = 8.4, line_height = 16.8
+        // canvas_width = 80 * 8.4 + 20 = 692
+        // canvas_height = 24 * 16.8 + 20 = 423.2 -> 423
+        assert!(svg.contains(r#"width="692""#));
+        assert!(svg.contains(r#"height="423""#));
+        assert!(svg.contains(r#"viewBox="0 0 692 423""#));
+    }
+
+    #[test]
+    fn test_x_position_calculation() {
+        let start_col = 10;
+        let font_size = 14.0;
+        let char_width = font_size * 0.6;
+
+        let x = start_col as f32 * char_width;
+
+        assert_eq!(x, 84.0); // 10 * 8.4
+    }
 }
