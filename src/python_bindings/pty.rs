@@ -640,6 +640,35 @@ impl PyPtyTerminal {
         Ok(result)
     }
 
+    /// Get hyperlink URL at the specified position (OSC 8)
+    ///
+    /// Retrieves the URL associated with a hyperlink at the given position.
+    /// Hyperlinks are created using OSC 8 sequences (e.g., `\x1b]8;;URL\x07text\x1b]8;;\x07`).
+    ///
+    /// Args:
+    ///     col: Column position (0-based)
+    ///     row: Row position (0-based)
+    ///
+    /// Returns:
+    ///     URL string if a hyperlink exists at that position, None otherwise
+    fn get_hyperlink(&self, col: usize, row: usize) -> PyResult<Option<String>> {
+        let terminal = self.inner.terminal();
+        let result = if let Ok(term) = terminal.lock() {
+            if let Some(cell) = term.active_grid().get(col, row) {
+                if let Some(id) = cell.flags.hyperlink_id {
+                    term.get_hyperlink_url(id)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Ok(result)
+    }
+
     /// Get all cell data for a row in a single atomic operation
     ///
     /// This method retrieves all cell information for an entire row with a single lock,
@@ -1313,6 +1342,40 @@ impl PyPtyTerminal {
         Ok(enabled)
     }
 
+    /// Get focus in event sequence
+    ///
+    /// Returns the escape sequence to send when terminal gains focus.
+    /// Only relevant when focus tracking is enabled (CSI ? 1004 h).
+    ///
+    /// Returns:
+    ///     Bytes for focus in event: b'\x1b[I'
+    fn get_focus_in_event(&self) -> PyResult<Vec<u8>> {
+        let terminal = self.inner.terminal();
+        let event = if let Ok(term) = terminal.lock() {
+            term.report_focus_in()
+        } else {
+            Vec::new()
+        };
+        Ok(event)
+    }
+
+    /// Get focus out event sequence
+    ///
+    /// Returns the escape sequence to send when terminal loses focus.
+    /// Only relevant when focus tracking is enabled (CSI ? 1004 h).
+    ///
+    /// Returns:
+    ///     Bytes for focus out event: b'\x1b[O'
+    fn get_focus_out_event(&self) -> PyResult<Vec<u8>> {
+        let terminal = self.inner.terminal();
+        let event = if let Ok(term) = terminal.lock() {
+            term.report_focus_out()
+        } else {
+            Vec::new()
+        };
+        Ok(event)
+    }
+
     /// Check if bracketed paste mode is enabled
     ///
     /// Returns:
@@ -1397,6 +1460,18 @@ impl PyPtyTerminal {
             false
         };
         Ok(enabled)
+    }
+
+    /// Flush synchronized updates (DEC 2026)
+    ///
+    /// When synchronized update mode is active (CSI ? 2026 h), this flushes
+    /// all pending updates atomically for flicker-free rendering.
+    fn flush_synchronized_updates(&mut self) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = terminal.lock() {
+            term.flush_synchronized_updates();
+        }
+        Ok(())
     }
 
     // Device query response methods
