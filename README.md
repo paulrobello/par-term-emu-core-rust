@@ -111,12 +111,13 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ### Screenshot Support
 
-- **Multiple Formats**: PNG, JPEG, BMP, and **SVG** (vector graphics!)
+- **Multiple Formats**: PNG, JPEG, BMP, **SVG** (vector graphics!), and **HTML**
 - **Embedded Font**: JetBrains Mono bundled - no font installation required!
 - **Programming Ligatures**: Supports =>, !=, >=, and other code ligatures
 - **Box Drawing**: Perfect rendering of box drawing characters (┌─┐│└┘)
 - **High-Quality Rendering**: True font rendering with antialiasing for raster formats
 - **SVG Vector Output**: Infinitely scalable screenshots with selectable text
+- **HTML Output**: Styled HTML with full color support and text attributes (includes full document or content-only mode)
 - **Color Emoji Support**: Full color emoji rendering with automatic font fallback (NotoColorEmoji, Apple Color Emoji, Segoe UI Emoji)
 - **Flag Emoji Support**: Proper rendering of flag emojis (🇺🇸 🇨🇳 🇯🇵) via text shaping
 - **Cursor Rendering**: Capture cursor position with 3 styles (Block, Underline, Bar) and custom colors
@@ -445,6 +446,9 @@ term.screenshot_to_file("output.jpg", format="jpeg", quality=90)
 # SVG format for infinitely scalable vector graphics
 term.screenshot_to_file("output.svg", format="svg")  # Selectable text!
 
+# HTML format for styled terminal output (embeddable or standalone)
+term.screenshot_to_file("output.html", format="html")  # Full HTML document
+
 # Custom configuration
 term.screenshot_to_file(
     "output.png",
@@ -480,6 +484,7 @@ term.screenshot_to_file(
 - **JPEG**: Smaller file size, configurable quality (1-100)
 - **BMP**: Uncompressed, large file size
 - **SVG**: Vector format with infinitely scalable, selectable text - perfect for documentation!
+- **HTML**: Styled HTML output with full color support and text attributes - embeddable or standalone document
 
 #### TUI Integration
 
