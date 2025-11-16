@@ -60,3 +60,4 @@ make checkall    # All quality checks (run before commits)
 - [xterm sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) - VT spec
 - never push unless the user requests it
 - always run `make checkall` and fix all isues before pushing
+- always add tests and update documentation for new features

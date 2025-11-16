@@ -260,6 +260,29 @@ def test_get_char_and_colors():
     term.get_attributes(0, 0)
 
 
+def test_pty_terminal_title():
+    """Test getting terminal title from PtyTerminal"""
+    from par_term_emu_core_rust import PtyTerminal, Terminal
+
+    # Test with regular Terminal first (as reference)
+    term_regular = Terminal(80, 24)
+    term_regular.process_str("\x1b]0;Regular Title\x07")
+    assert term_regular.title() == "Regular Title"
+
+    # Now test PtyTerminal has the same API
+    pty_term = PtyTerminal(80, 24)
+
+    # Check initial title is empty
+    assert hasattr(pty_term, "title"), "PtyTerminal should have title() method"
+    assert pty_term.title() == ""
+
+    # Note: Since PTY tests are skipped in CI and we can't actually send
+    # sequences through a running PTY process here, we've verified:
+    # 1. The method exists
+    # 2. It returns a string (empty initially)
+    # 3. It matches the Terminal API contract
+
+
 def test_context_manager():
     """Test using PtyTerminal as a context manager"""
     from par_term_emu_core_rust import PtyTerminal

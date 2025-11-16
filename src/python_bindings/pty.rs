@@ -208,6 +208,22 @@ impl PyPtyTerminal {
         Ok(self.inner.content())
     }
 
+    /// Get the terminal title
+    ///
+    /// Returns the title string set by OSC 0, 1, or 2 sequences.
+    ///
+    /// Returns:
+    ///     Current terminal title string
+    fn title(&self) -> PyResult<String> {
+        let terminal = self.inner.terminal();
+        let title = if let Ok(term) = terminal.lock() {
+            term.title().to_string()
+        } else {
+            String::new()
+        };
+        Ok(title)
+    }
+
     /// Export entire buffer (scrollback + current screen) as plain text
     ///
     /// This exports all buffer contents with:
