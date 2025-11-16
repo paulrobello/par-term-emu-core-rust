@@ -1426,4 +1426,5 @@ mod tests {
     use super::*;
 
     include!("../tests/terminal_tests.rs");
+    include!("../tests/grid_integration_tests.rs");
 }
