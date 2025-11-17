@@ -512,6 +512,56 @@ print(f"Total graphics: {count}")
 term.clear_graphics()
 ```
 
+### Resource Limits and Safety
+
+Sixel graphics can be large, so the core enforces per-terminal limits to prevent
+pathological memory usage:
+
+- Default limits per terminal:
+  - Max bitmap width: 1024 pixels
+  - Max bitmap height: 1024 pixels
+  - Max repeat count (`!Pn`): 10_000
+  - Max in-memory graphics: 256
+- Hard ceilings (cannot be exceeded even via the API):
+  - Max width: 4096 pixels
+  - Max height: 4096 pixels
+  - Max repeat count: 10_000
+
+You can tune limits at runtime from Python:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Inspect current Sixel limits
+max_w, max_h, max_repeat = term.get_sixel_limits()
+
+# Tighten limits for untrusted content (e.g., 512x512, repeat up to 2000)
+term.set_sixel_limits(512, 512, 2000)
+
+# Inspect Sixel stats (for debugging/monitoring)
+stats = term.get_sixel_stats()
+print(
+    f"Sixel stats: max={stats['max_width_px']}x{stats['max_height_px']}, "
+    f"repeat={stats['max_repeat']}, "
+    f"graphics={stats['current_graphics']}/{stats['max_graphics']}, "
+    f"dropped={stats['dropped_graphics']}"
+)
+
+# These limits apply to future Sixel DCS sequences processed by this terminal.
+```
+
+For PTY-backed terminals:
+
+```python
+from par_term_emu_core_rust import PtyTerminal
+
+pty = PtyTerminal(80, 24)
+pty.set_sixel_limits(512, 512, 2000)
+pty.set_sixel_graphics_limit(128)
+```
+
 ### Use Cases
 
 - Display charts and graphs in terminal
@@ -1091,6 +1141,27 @@ with PtyTerminal(80, 24, scrollback=5000) as pty:
     with open("shell_session.txt", "w") as f:
         f.write(plain_log)
 ```
+
+#### Sixel Limits for PTY Sessions
+
+When using `PtyTerminal`, you can apply the same Sixel safety limits as with
+`Terminal`. This is especially useful if the PTY will display untrusted
+content that might emit large Sixel images:
+
+```python
+from par_term_emu_core_rust import PtyTerminal
+
+with PtyTerminal(80, 24, scrollback=5000) as pty:
+    # Tighten Sixel limits for this PTY-backed terminal
+    pty.set_sixel_limits(512, 512, 2000)
+
+    pty.spawn_shell()
+    pty.write_str("cat image.sixel\n")
+    # ... interact as normal ...
+```
+
+Limits are per-session and apply to future Sixel DCS sequences processed by
+that PTY’s internal terminal.
 
 ### Use Cases
 

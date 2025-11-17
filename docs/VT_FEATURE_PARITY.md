@@ -723,6 +723,15 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - Raster attributes for size declaration
 - Half-block rendering fallback for terminals without Sixel support
 
+**Resource Limits:**
+- Sixel graphics are subject to per-terminal limits to prevent pathological
+  memory usage:
+  - Default: 1024x1024 pixels, max repeat count 10_000, max 256 graphics.
+  - Hard ceilings: 4096x4096 pixels, repeat count ≤ 10_000, max 1024 graphics.
+- Limits can be tuned via:
+  - Rust: `Terminal::set_sixel_limits(max_width, max_height, max_repeat)`.
+  - Python: `Terminal.set_sixel_limits(...)` and `PtyTerminal.set_sixel_limits(...)`.
+
 **Security:** Can be blocked via `disable_insecure_sequences`
 
 **Implementation:** Sixel rendering in `src/sixel.rs` and DCS handlers in `src/terminal/sequences/dcs.rs`

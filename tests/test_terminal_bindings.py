@@ -143,6 +143,25 @@ class TestContentOperations:
         assert term.get_line(100) is None
         # Note: negative indices raise OverflowError, not return None
 
+    def test_get_line_unwrapped_with_wrapping(self):
+        """Test get_line_unwrapped returns full logical line across wraps"""
+        term = Terminal(10, 4)
+
+        # Write a long line that wraps across multiple rows
+        long_text = "ABCDEFGHijklmnop"
+        term.process_str(long_text)
+
+        # Row 0 and row 1 should contain fragments of the same logical line.
+        # get_line_unwrapped should return the full line regardless of which
+        # physical row we query from.
+        full0 = term.get_line_unwrapped(0)
+        full1 = term.get_line_unwrapped(1)
+
+        assert full0 is not None
+        assert full1 is not None
+        assert long_text in full0
+        assert full0 == full1
+
     def test_get_char(self):
         """Test getting individual characters"""
         term = Terminal(80, 24)
@@ -502,6 +521,24 @@ class TestSpecialFeatures:
         content = term.content()
         assert "Hello" in content
         assert "World" in content
+
+    def test_text_selection_and_brackets(self):
+        """Test find_matching_bracket and select_semantic_region APIs"""
+        term = Terminal(40, 5)
+
+        # Brackets and quoted region
+        term.process_str('(inner)\n"hello world"')
+
+        # Matching brackets on first line
+        match_open = term.find_matching_bracket(0, 0)
+        match_close = term.find_matching_bracket(6, 0)
+        assert match_open == (6, 0)
+        assert match_close == (0, 0)
+
+        # Semantic region inside quotes on second line
+        # Need to click INSIDE the quotes (e.g., on 'h' in "hello"), not on the delimiter
+        region = term.select_semantic_region(8, 1, '"')
+        assert region == "hello world"
 
 
 if __name__ == "__main__":

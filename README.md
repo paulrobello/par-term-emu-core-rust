@@ -7,6 +7,35 @@
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/par_term_emu_core_rust)
 ![PyPI - License](https://img.shields.io/pypi/l/par_term_emu_core_rust)
 
+## What's New in 0.4.0
+
+### Sixel Resource Limits and Safety
+
+Version 0.4.0 adds comprehensive resource management for Sixel graphics to prevent memory exhaustion from untrusted or malformed content:
+
+- **Configurable Resource Limits**: Control maximum bitmap dimensions (width/height), repeat counts, and in-memory graphics count
+- **Per-Terminal Limits**: Each terminal instance can have its own safety limits
+- **Hard Safety Ceilings**: Built-in maximum limits (4096x4096 pixels, 10,000 repeat count) that cannot be exceeded
+- **Drop Tracking**: Monitor how many graphics were dropped due to resource limits
+- **Statistics API**: New methods to inspect and tune Sixel resource usage:
+  - `get_sixel_limits()` / `set_sixel_limits(max_width, max_height, max_repeat)`
+  - `get_sixel_graphics_limit()` / `set_sixel_graphics_limit(max_graphics)`
+  - `get_dropped_sixel_graphics()`
+  - `get_sixel_stats()` - comprehensive statistics dictionary
+
+### Grid Resize Improvements
+
+- **Fixed Scrollback Handling**: Scrollback buffer is now properly managed during terminal resize
+- **Width Change Safety**: Scrollback is cleared when terminal width changes to prevent indexing errors and misaligned lines
+- **Height Preservation**: Scrollback content is preserved when only terminal height changes
+- **Enhanced Tests**: Added comprehensive tests for resize behavior with scrollback
+
+### Documentation Enhancements
+
+- **Sixel Safety Guide**: Extensive documentation on resource limits and safety best practices in `docs/ADVANCED_FEATURES.md`
+- **PTY Integration**: Clear examples of applying Sixel limits to PTY-backed terminals
+- **API Reference Updates**: Complete documentation for all new Sixel management methods
+
 ## Description
 
 A comprehensive terminal emulator library written in Rust with Python bindings for Python 3.12+. Provides VT100/VT220/VT320/VT420 compatibility with PTY support, matching iTerm2's feature set.
@@ -15,6 +44,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## Table of Contents
 
+- [What's New in 0.4.0](#whats-new-in-040)
 - [Description](#description)
 - [Technology](#technology)
 - [Prerequisites](#prerequisites)

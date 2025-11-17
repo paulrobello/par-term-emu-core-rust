@@ -2139,4 +2139,117 @@ impl PyPtyTerminal {
             Ok(None)
         }
     }
+
+    /// Get Sixel resource limits (max width, height, repeat)
+    ///
+    /// Returns:
+    ///     Tuple of (max_width_px, max_height_px, max_repeat)
+    fn get_sixel_limits(&self) -> PyResult<(usize, usize, usize)> {
+        let terminal = self.inner.terminal();
+        let limits = if let Ok(term) = terminal.lock() {
+            term.sixel_limits()
+        } else {
+            crate::sixel::SixelLimits::default()
+        };
+        Ok((limits.max_width, limits.max_height, limits.max_repeat))
+    }
+
+    /// Set Sixel resource limits (max width, height, repeat)
+    ///
+    /// Args:
+    ///     max_width: Maximum Sixel bitmap width in pixels
+    ///     max_height: Maximum Sixel bitmap height in pixels
+    ///     max_repeat: Maximum repeat count for !Pn sequences
+    ///
+    /// Limits are clamped to safe hard maxima at the Rust layer.
+    fn set_sixel_limits(
+        &mut self,
+        max_width: usize,
+        max_height: usize,
+        max_repeat: usize,
+    ) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = terminal.lock() {
+            term.set_sixel_limits(max_width, max_height, max_repeat);
+        }
+        Ok(())
+    }
+
+    /// Get maximum number of Sixel graphics retained
+    ///
+    /// Returns:
+    ///     Maximum number of in-memory Sixel graphics for this PTY terminal
+    fn get_sixel_graphics_limit(&self) -> PyResult<usize> {
+        let terminal = self.inner.terminal();
+        let limit = if let Ok(term) = terminal.lock() {
+            term.max_sixel_graphics()
+        } else {
+            crate::sixel::SIXEL_DEFAULT_MAX_GRAPHICS
+        };
+        Ok(limit)
+    }
+
+    /// Set maximum number of Sixel graphics retained
+    ///
+    /// Args:
+    ///     max_graphics: Maximum number of in-memory Sixel graphics
+    ///
+    /// Oldest graphics are dropped if the new limit is lower than the
+    /// current number of graphics. The value is clamped to a safe range.
+    fn set_sixel_graphics_limit(&mut self, max_graphics: usize) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = terminal.lock() {
+            term.set_max_sixel_graphics(max_graphics);
+        }
+        Ok(())
+    }
+
+    /// Get count of Sixel graphics dropped due to limits
+    ///
+    /// Returns:
+    ///     Number of Sixel graphics that have been dropped because of size or count limits
+    fn get_dropped_sixel_graphics(&self) -> PyResult<usize> {
+        let terminal = self.inner.terminal();
+        let count = if let Ok(term) = terminal.lock() {
+            term.dropped_sixel_graphics()
+        } else {
+            0
+        };
+        Ok(count)
+    }
+
+    /// Get Sixel statistics as a dictionary
+    ///
+    /// Returns:
+    ///     {
+    ///       "max_width_px": int,
+    ///       "max_height_px": int,
+    ///       "max_repeat": int,
+    ///       "max_graphics": int,
+    ///       "current_graphics": int,
+    ///       "dropped_graphics": int,
+    ///     }
+    fn get_sixel_stats(&self) -> PyResult<HashMap<String, usize>> {
+        let terminal = self.inner.terminal();
+        let (limits, max_graphics, current_graphics, dropped_graphics) =
+            if let Ok(term) = terminal.lock() {
+                term.sixel_stats()
+            } else {
+                (
+                    crate::sixel::SixelLimits::default(),
+                    crate::sixel::SIXEL_DEFAULT_MAX_GRAPHICS,
+                    0,
+                    0,
+                )
+            };
+
+        let mut stats = HashMap::new();
+        stats.insert("max_width_px".to_string(), limits.max_width);
+        stats.insert("max_height_px".to_string(), limits.max_height);
+        stats.insert("max_repeat".to_string(), limits.max_repeat);
+        stats.insert("max_graphics".to_string(), max_graphics);
+        stats.insert("current_graphics".to_string(), current_graphics);
+        stats.insert("dropped_graphics".to_string(), dropped_graphics);
+        Ok(stats)
+    }
 }

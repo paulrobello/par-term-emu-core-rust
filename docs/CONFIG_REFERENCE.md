@@ -226,6 +226,52 @@ These settings control potentially sensitive or insecure terminal features at th
 
 ---
 
+## Sixel Resource Limits
+
+Sixel graphics are subject to per-terminal resource limits to prevent
+pathological memory usage from malicious or malformed input.
+
+### Defaults and Hard Ceilings
+
+- **Default per-terminal limits:**
+  - `max_width_px` = 1024
+  - `max_height_px` = 1024
+  - `max_repeat` (for `!Pn` sequences) = 10_000
+  - `max_graphics` (in-memory Sixel graphics) = 256
+- **Hard ceilings (enforced in Rust):**
+  - `max_width_px` ≤ 4096
+  - `max_height_px` ≤ 4096
+  - `max_repeat` ≤ 10_000
+  - `max_graphics` ≤ 1024
+
+These limits are applied when parsing Sixel DCS sequences and when constructing
+the final in-memory bitmap for screenshots or rendering.
+
+### API Control
+
+You can query and adjust limits at runtime:
+
+- Rust (`Terminal`):
+  - `fn sixel_limits(&self) -> SixelLimits`
+  - `fn set_sixel_limits(&mut self, max_width: usize, max_height: usize, max_repeat: usize)`
+  - `fn max_sixel_graphics(&self) -> usize`
+  - `fn set_max_sixel_graphics(&mut self, max_graphics: usize)`
+    - Values are clamped into the safe range `[1, HARD_MAX]`.
+
+- Python (`Terminal` and `PtyTerminal`):
+
+  ```python
+  max_w, max_h, max_repeat = term.get_sixel_limits()
+  term.set_sixel_limits(512, 512, 2000)
+  term.set_sixel_graphics_limit(128)
+  stats = term.get_sixel_stats()
+  ```
+
+Use tighter limits (e.g. 512x512) when displaying untrusted Sixel content, and
+only relax them in trusted environments where large images are expected.
+
+---
+
 ## Keyboard Protocol
 
 ### Kitty Keyboard Protocol

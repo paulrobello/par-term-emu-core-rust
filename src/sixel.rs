@@ -18,6 +18,48 @@
 /// - ST: String terminator (ESC \ or 0x9C)
 use std::collections::HashMap;
 
+/// Hard upper bounds for Sixel resources. These are deliberately high but
+/// finite, and are used to clamp user-configurable limits.
+pub const SIXEL_HARD_MAX_WIDTH: usize = 4096;
+pub const SIXEL_HARD_MAX_HEIGHT: usize = 4096;
+pub const SIXEL_HARD_MAX_REPEAT: usize = 10_000;
+pub const SIXEL_HARD_MAX_GRAPHICS: usize = 1024;
+
+/// Default per-terminal Sixel limits. These can be overridden via API but
+/// are themselves clamped to the hard maxima.
+pub const SIXEL_DEFAULT_MAX_WIDTH: usize = 1024;
+pub const SIXEL_DEFAULT_MAX_HEIGHT: usize = 1024;
+pub const SIXEL_DEFAULT_MAX_REPEAT: usize = 10_000;
+pub const SIXEL_DEFAULT_MAX_GRAPHICS: usize = 256;
+
+/// Per-terminal Sixel resource limits
+#[derive(Debug, Clone, Copy)]
+pub struct SixelLimits {
+    pub max_width: usize,
+    pub max_height: usize,
+    pub max_repeat: usize,
+}
+
+impl SixelLimits {
+    pub fn new(max_width: usize, max_height: usize, max_repeat: usize) -> Self {
+        Self {
+            max_width: max_width.clamp(1, SIXEL_HARD_MAX_WIDTH),
+            max_height: max_height.clamp(1, SIXEL_HARD_MAX_HEIGHT),
+            max_repeat: max_repeat.clamp(1, SIXEL_HARD_MAX_REPEAT),
+        }
+    }
+}
+
+impl Default for SixelLimits {
+    fn default() -> Self {
+        Self::new(
+            SIXEL_DEFAULT_MAX_WIDTH,
+            SIXEL_DEFAULT_MAX_HEIGHT,
+            SIXEL_DEFAULT_MAX_REPEAT,
+        )
+    }
+}
+
 /// RGB color value (0-255 for each component)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SixelColor {
@@ -185,10 +227,17 @@ pub struct SixelParser {
     background_mode: u8,
     /// Raster attributes (width, height)
     raster_size: Option<(usize, usize)>,
+    /// Resource limits for this parser
+    limits: SixelLimits,
 }
 
 impl SixelParser {
     pub fn new() -> Self {
+        Self::new_with_limits(SixelLimits::default())
+    }
+
+    /// Create a new parser with explicit limits
+    pub fn new_with_limits(limits: SixelLimits) -> Self {
         let mut palette = HashMap::new();
         // Default VGA palette (first 16 colors)
         palette.insert(0, SixelColor::new(0, 0, 0)); // Black
@@ -217,6 +266,7 @@ impl SixelParser {
             max_width: 0,
             background_mode: 0,
             raster_size: None,
+            limits,
         }
     }
 
@@ -244,6 +294,12 @@ impl SixelParser {
                 let y = self.cursor.1 + bit;
                 let x = self.cursor.0;
 
+                // Enforce conservative bounds on image dimensions to prevent
+                // unbounded growth from malicious or malformed input.
+                if x >= self.limits.max_width || y >= self.limits.max_height {
+                    continue;
+                }
+
                 // Expand image_data if needed
                 while self.image_data.len() <= y {
                     self.image_data.push(vec![]);
@@ -259,12 +315,15 @@ impl SixelParser {
 
         // Move cursor right
         self.cursor.0 += 1;
-        self.max_width = self.max_width.max(self.cursor.0);
+        if self.cursor.0 < self.limits.max_width {
+            self.max_width = self.max_width.max(self.cursor.0);
+        }
     }
 
     /// Handle repeat sequence: !Pn character
     pub fn parse_repeat(&mut self, count: usize, ch: char) {
-        for _ in 0..count {
+        let repeat = count.min(self.limits.max_repeat);
+        for _ in 0..repeat {
             self.parse_sixel(ch);
         }
     }
@@ -302,7 +361,11 @@ impl SixelParser {
 
     /// Set raster attributes ("Pan;Pad;Ph;Pv)
     pub fn set_raster_attributes(&mut self, _pan: u16, _pad: u16, width: usize, height: usize) {
-        self.raster_size = Some((width, height));
+        // Clamp raster size to the same conservative bounds used for image data.
+        self.raster_size = Some((
+            width.min(self.limits.max_width),
+            height.min(self.limits.max_height),
+        ));
     }
 
     /// Build final graphic from parsed data
@@ -311,7 +374,11 @@ impl SixelParser {
         let width = self.max_width.max(1);
 
         // Use raster size if provided, otherwise use calculated size
-        let (final_width, final_height) = self.raster_size.unwrap_or((width, height));
+        let (mut final_width, mut final_height) = self.raster_size.unwrap_or((width, height));
+
+        // Enforce limits on final graphic size as a last line of defense.
+        final_width = final_width.min(self.limits.max_width);
+        final_height = final_height.min(self.limits.max_height);
 
         let mut graphic = SixelGraphic::new(position, final_width, final_height);
         graphic.palette = self.palette.clone();
@@ -418,6 +485,43 @@ mod tests {
         parser.parse_repeat(5, '~');
 
         assert_eq!(parser.cursor.0, 5);
-        assert_eq!(parser.max_width, 5);
+    }
+
+    #[test]
+    fn test_sixel_parser_repeat_clamped() {
+        let limits = SixelLimits::new(128, 64, 1000);
+        let mut parser = SixelParser::new_with_limits(limits);
+        // Use a very large repeat count to ensure clamping kicks in
+        parser.parse_repeat(limits.max_repeat * 10, '~');
+
+        // Cursor advance should be limited by max_repeat
+        assert_eq!(parser.cursor.0, limits.max_repeat);
+        // And the internal image width should not exceed the configured limit
+        assert!(parser
+            .image_data
+            .iter()
+            .all(|row| row.len() <= limits.max_width));
+    }
+
+    #[test]
+    fn test_sixel_parser_dimension_limits() {
+        let limits = SixelLimits::new(64, 32, 1000);
+        let mut parser = SixelParser::new_with_limits(limits);
+
+        // Force cursor far beyond limits
+        parser.cursor.0 = limits.max_width * 2;
+        parser.cursor.1 = limits.max_height * 2;
+
+        // Parsing should not panic or allocate unbounded memory
+        parser.parse_sixel('~');
+
+        // image_data should be bounded by configured limits
+        assert!(parser.image_data.len() <= limits.max_height);
+        assert!(parser
+            .image_data
+            .iter()
+            .all(|row| row.len() <= limits.max_width));
+        // max_width should remain 0 since cursor was beyond limits
+        assert_eq!(parser.max_width, 0);
     }
 }

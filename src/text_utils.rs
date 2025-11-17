@@ -152,20 +152,23 @@ pub fn get_line_unwrapped(grid: &Grid, row: usize) -> Option<String> {
     let mut result = String::new();
     let mut current_row = row;
 
-    // Go back to find the start of the logical line
-    while current_row > 0 && grid.is_line_wrapped(current_row) {
+    // Go back to find the start of the logical line.
+    // A row N is a continuation of the previous row if row N-1 is marked
+    // as wrapped (meaning row N-1 continues into N).
+    while current_row > 0 && grid.is_line_wrapped(current_row - 1) {
         current_row -= 1;
     }
 
-    // Now collect forward
+    // Now collect forward, including all rows that are marked as wrapping
+    // into the next row.
     loop {
         let line = grid.row_text(current_row);
         result.push_str(&line);
 
-        current_row += 1;
-        if current_row >= grid.rows() || !grid.is_line_wrapped(current_row) {
+        if current_row + 1 >= grid.rows() || !grid.is_line_wrapped(current_row) {
             break;
         }
+        current_row += 1;
     }
 
     if result.is_empty() {
@@ -549,20 +552,23 @@ mod tests {
         use crate::cell::Cell;
         let mut grid = Grid::new(10, 5, 0);
 
-        // Set first line and mark as wrapped
+        // Set first line and mark as wrapped into the next line
         for (i, c) in "abcdefghij".chars().enumerate() {
             grid.set(i, 0, Cell::new(c));
         }
-        grid.set_line_wrapped(1, true);
+        grid.set_line_wrapped(0, true);
 
         // Set second line (continuation)
         for (i, c) in "klmnop".chars().enumerate() {
             grid.set(i, 1, Cell::new(c));
         }
 
+        // Calling from the second physical row should return the full logical line
         let result = get_line_unwrapped(&grid, 1);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("abcdefghij"));
+        assert_eq!(
+            result.map(|s| s.trim_end().to_string()),
+            Some("abcdefghijklmnop".to_string())
+        );
     }
 
     #[test]

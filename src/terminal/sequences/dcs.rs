@@ -96,7 +96,7 @@ impl Terminal {
 
         if action == 'q' {
             // Sixel graphics
-            let mut parser = sixel::SixelParser::new();
+            let mut parser = sixel::SixelParser::new_with_limits(self.sixel_limits);
 
             // Extract parameters
             let params_vec: Vec<u16> = params.iter().flat_map(|p| p.iter().copied()).collect();
@@ -223,6 +223,17 @@ impl Terminal {
                     // Each terminal row displays 2 pixel rows using Unicode half-blocks
                     let graphic_height_in_rows = graphic_height.div_ceil(2);
 
+                    // Enforce per-terminal limit on number of retained graphics.
+                    if self.graphics.len() >= self.max_sixel_graphics {
+                        // Drop the oldest graphic to make room for the new one.
+                        self.graphics.remove(0);
+                        self.dropped_sixel_graphics = self.dropped_sixel_graphics.saturating_add(1);
+                        debug::log(
+                            debug::DebugLevel::Debug,
+                            "SIXEL",
+                            "Dropped oldest graphic due to max_sixel_graphics limit",
+                        );
+                    }
                     self.graphics.push(graphic);
 
                     // After Sixel graphic, cursor should move to left margin of line below graphic
@@ -631,6 +642,57 @@ mod tests {
 
         // Graphics list should have one more entry
         assert_eq!(term.graphics.len(), initial_graphics_count + 1);
+    }
+
+    #[test]
+    fn test_sixel_graphics_limit_enforced() {
+        let mut term = create_test_terminal();
+        let params = create_empty_params();
+
+        // Only allow 2 graphics to be retained
+        term.set_max_sixel_graphics(2);
+
+        // Helper to emit a tiny sixel graphic
+        let emit_sixel = |term: &mut Terminal| {
+            term.dcs_hook(&params, &[], false, 'q');
+            for &byte in b"??" {
+                term.dcs_put(byte);
+            }
+            term.dcs_unhook();
+        };
+
+        emit_sixel(&mut term);
+        emit_sixel(&mut term);
+        assert_eq!(term.graphics.len(), 2);
+    }
+
+    #[test]
+    fn test_sixel_graphics_drop_counter() {
+        let mut term = create_test_terminal();
+        let params = create_empty_params();
+
+        term.set_max_sixel_graphics(1);
+
+        let emit_sixel = |term: &mut Terminal| {
+            term.dcs_hook(&params, &[], false, 'q');
+            for &byte in b"??" {
+                term.dcs_put(byte);
+            }
+            term.dcs_unhook();
+        };
+
+        emit_sixel(&mut term);
+        assert_eq!(term.graphics.len(), 1);
+        assert_eq!(term.dropped_sixel_graphics(), 0);
+
+        emit_sixel(&mut term);
+        assert_eq!(term.graphics.len(), 1);
+        assert_eq!(term.dropped_sixel_graphics(), 1);
+
+        // Emit a third graphic; limit should be enforced by dropping the oldest
+        emit_sixel(&mut term);
+        assert_eq!(term.graphics.len(), 1);
+        assert_eq!(term.dropped_sixel_graphics(), 2);
     }
 
     #[test]

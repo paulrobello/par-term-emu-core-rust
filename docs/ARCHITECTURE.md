@@ -165,6 +165,26 @@ Features:
 - `pty_session.rs` - PTY session management with portable-pty
 - `pty_error.rs` - PTY-specific error types
 
+`PtySession` owns:
+
+- An `Arc<Mutex<Terminal>>` for all terminal state.
+- A `portable_pty::PtyPair` and child process handle.
+- A background reader thread that:
+  - Reads from the PTY master.
+  - Feeds bytes into the `Terminal` via `term.process(..)` while holding the terminal mutex.
+  - Writes device-query responses (DA/DSR/DECRQM/etc.) back to the child via the shared writer.
+- An `Arc<AtomicBool>` `running` flag that reflects the session’s view of whether the child is still alive.
+
+`running` is deliberately a **best-effort** indicator:
+
+- It is set to `true` when a child is successfully spawned.
+- It is set to `false` when:
+  - EOF is observed on the PTY reader (reader thread).
+  - `try_wait()` observes an exited child.
+  - `wait()` completes.
+  - `kill()` is called.
+- There may be a short window where the OS still considers the process live even though `running == false`, or vice versa (between a process exit and the reader thread seeing EOF). Callers that need precise exit status should use `try_wait()`/`wait()` instead of relying solely on `is_running()`.
+
 ```rust
 pub struct Terminal {
     // Screen management

@@ -249,6 +249,8 @@ impl Grid {
             return;
         }
 
+        let width_changed = cols != self.cols;
+
         let mut new_cells = vec![Cell::default(); cols * rows];
         let mut new_wrapped = vec![false; rows];
 
@@ -272,6 +274,16 @@ impl Grid {
         self.rows = rows;
         self.cells = new_cells;
         self.wrapped = new_wrapped;
+
+        // If the width changed, any existing scrollback stored with the old
+        // column count can no longer be indexed safely. To avoid panics and
+        // misaligned lines, clear scrollback state when columns change.
+        if width_changed && self.max_scrollback > 0 {
+            self.scrollback_cells.clear();
+            self.scrollback_wrapped.clear();
+            self.scrollback_start = 0;
+            self.scrollback_lines = 0;
+        }
     }
 
     /// Get scrollback buffer (returns a temporary Vec<Vec<Cell>> for API compatibility)
@@ -1498,6 +1510,51 @@ mod tests {
         assert_eq!(grid.rows(), 10);
         // Data at (50, 20) should be lost
         assert!(grid.get(50, 20).is_none());
+    }
+
+    #[test]
+    fn test_resize_preserves_scrollback_when_width_unchanged() {
+        let mut grid = Grid::new(10, 3, 3);
+
+        // Create a few scrollback lines by scrolling up
+        for ch in ['A', 'B', 'C'] {
+            grid.set(0, 0, Cell::new(ch));
+            grid.scroll_up(1);
+        }
+
+        assert_eq!(grid.scrollback_len(), 3);
+        let before = grid
+            .scrollback_line(0)
+            .and_then(|line| line.first())
+            .unwrap()
+            .c;
+        assert_eq!(before, 'A');
+
+        // Change only height; width stays the same
+        grid.resize(10, 5);
+
+        assert_eq!(grid.scrollback_len(), 3);
+        let after = grid
+            .scrollback_line(0)
+            .and_then(|line| line.first())
+            .unwrap()
+            .c;
+        assert_eq!(after, 'A');
+    }
+
+    #[test]
+    fn test_resize_clears_scrollback_when_width_changes() {
+        let mut grid = Grid::new(10, 3, 3);
+
+        grid.set(0, 0, Cell::new('X'));
+        grid.scroll_up(1);
+        assert_eq!(grid.scrollback_len(), 1);
+
+        grid.resize(20, 3);
+
+        assert_eq!(grid.cols(), 20);
+        assert_eq!(grid.scrollback_len(), 0);
+        assert!(grid.scrollback_line(0).is_none());
     }
 
     #[test]

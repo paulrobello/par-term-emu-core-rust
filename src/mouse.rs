@@ -85,7 +85,9 @@ impl MouseEvent {
     fn encode_utf8(&self) -> Vec<u8> {
         let button_code = self.button | (self.modifiers << 2) | if self.pressed { 0 } else { 3 };
         let mut bytes = vec![b'\x1b', b'[', b'M', button_code + 32];
-        bytes.extend(&[(self.col + 1) as u8 + 32, (self.row + 1) as u8 + 32]);
+        let col = self.col.saturating_add(1).min(223) as u8 + 32;
+        let row = self.row.saturating_add(1).min(223) as u8 + 32;
+        bytes.extend(&[col, row]);
         bytes
     }
 
@@ -96,8 +98,8 @@ impl MouseEvent {
             b'[',
             b'M',
             button_code + 32,
-            (self.col + 1).min(223) as u8 + 32,
-            (self.row + 1).min(223) as u8 + 32,
+            self.col.saturating_add(1).min(223) as u8 + 32,
+            self.row.saturating_add(1).min(223) as u8 + 32,
         ]
     }
 }
@@ -216,6 +218,21 @@ mod tests {
         let default = event.encode(MouseMode::Normal, MouseEncoding::Default);
         assert_eq!(default[4], 255); // col: (250 + 1).min(223) + 32 = 223 + 32 = 255
         assert_eq!(default[5], 233); // row: (200 + 1).min(223) + 32 = 201 + 32 = 233
+    }
+
+    #[test]
+    fn test_mouse_event_utf8_large_coordinates_clamped() {
+        // Large coordinates should be clamped similarly to default encoding
+        let event = MouseEvent::new(0, 250, 200, true, 0);
+        let encoded = event.encode(MouseMode::Normal, MouseEncoding::Utf8);
+
+        assert_eq!(encoded.len(), 6);
+        assert_eq!(encoded[0], b'\x1b');
+        assert_eq!(encoded[1], b'[');
+        assert_eq!(encoded[2], b'M');
+        assert_eq!(encoded[3], 32); // button code + 32
+        assert_eq!(encoded[4], 255); // col: (250 + 1).min(223) + 32 = 223 + 32 = 255
+        assert_eq!(encoded[5], 233); // row: (200 + 1).min(223) + 32 = 201 + 32 = 233
     }
 
     #[test]

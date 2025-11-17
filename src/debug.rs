@@ -12,7 +12,7 @@
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::{Mutex, Once};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Debug level configuration
@@ -119,17 +119,10 @@ impl DebugLogger {
     }
 }
 
-static INIT: Once = Once::new();
-static mut LOGGER: Option<Mutex<DebugLogger>> = None;
+static LOGGER: OnceLock<Mutex<DebugLogger>> = OnceLock::new();
 
 fn get_logger() -> &'static Mutex<DebugLogger> {
-    #[allow(static_mut_refs)]
-    unsafe {
-        INIT.call_once(|| {
-            LOGGER = Some(Mutex::new(DebugLogger::new()));
-        });
-        LOGGER.as_ref().unwrap()
-    }
+    LOGGER.get_or_init(|| Mutex::new(DebugLogger::new()))
 }
 
 fn get_timestamp() -> String {
@@ -139,13 +132,17 @@ fn get_timestamp() -> String {
 
 /// Check if debugging is enabled at given level
 pub fn is_enabled(level: DebugLevel) -> bool {
-    let logger = get_logger().lock().unwrap();
+    let logger = get_logger()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     level <= logger.level
 }
 
 /// Log a message at specified level
 pub fn log(level: DebugLevel, category: &str, msg: &str) {
-    let mut logger = get_logger().lock().unwrap();
+    let mut logger = get_logger()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     logger.log(level, category, msg);
 }
 

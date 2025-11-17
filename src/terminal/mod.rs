@@ -119,6 +119,12 @@ pub struct Terminal {
     next_hyperlink_id: u32,
     /// Sixel graphics storage
     graphics: Vec<sixel::SixelGraphic>,
+    /// Maximum number of Sixel graphics to retain
+    max_sixel_graphics: usize,
+    /// Counter of Sixel graphics dropped due to limits
+    dropped_sixel_graphics: usize,
+    /// Sixel resource limits (per-terminal)
+    sixel_limits: sixel::SixelLimits,
     /// Current Sixel parser (active during DCS)
     sixel_parser: Option<sixel::SixelParser>,
     /// Buffer for DCS data accumulation
@@ -265,6 +271,9 @@ impl Terminal {
             current_hyperlink_id: None,
             next_hyperlink_id: 0,
             graphics: Vec::new(),
+            max_sixel_graphics: sixel::SIXEL_DEFAULT_MAX_GRAPHICS,
+            dropped_sixel_graphics: 0,
+            sixel_limits: sixel::SixelLimits::default(),
             sixel_parser: None,
             dcs_buffer: Vec::new(),
             dcs_active: false,
@@ -608,6 +617,71 @@ impl Terminal {
             self.process(&buffer);
             self.synchronized_updates = saved_mode;
         }
+    }
+
+    /// Get current Sixel resource limits
+    pub fn sixel_limits(&self) -> sixel::SixelLimits {
+        self.sixel_limits
+    }
+
+    /// Set Sixel resource limits (pixels and repeat count).
+    ///
+    /// Limits are clamped to safe hard maxima defined in `sixel.rs` and
+    /// applied to new Sixel parser instances created for subsequent DCS
+    /// sequences.
+    pub fn set_sixel_limits(&mut self, max_width: usize, max_height: usize, max_repeat: usize) {
+        self.sixel_limits = sixel::SixelLimits::new(max_width, max_height, max_repeat);
+    }
+
+    /// Get the maximum number of Sixel graphics retained for this terminal
+    pub fn max_sixel_graphics(&self) -> usize {
+        self.max_sixel_graphics
+    }
+
+    /// Set the maximum number of Sixel graphics retained for this terminal.
+    ///
+    /// The value is clamped to a safe range and applies to graphics created
+    /// after the change. If the new limit is lower than the current number of
+    /// graphics, the oldest graphics are dropped to respect the limit.
+    pub fn set_max_sixel_graphics(&mut self, max_graphics: usize) {
+        use crate::sixel::SIXEL_HARD_MAX_GRAPHICS;
+
+        let clamped = max_graphics.clamp(1, SIXEL_HARD_MAX_GRAPHICS);
+        self.max_sixel_graphics = clamped;
+
+        if self.graphics.len() > clamped {
+            let excess = self.graphics.len() - clamped;
+            self.dropped_sixel_graphics = self.dropped_sixel_graphics.saturating_add(excess);
+            self.graphics.drain(0..excess);
+            debug::log(
+                debug::DebugLevel::Debug,
+                "SIXEL",
+                &format!(
+                    "Dropped {} oldest graphics due to reduced max_sixel_graphics limit (now {})",
+                    excess, clamped
+                ),
+            );
+        }
+    }
+
+    /// Get the number of Sixel graphics dropped due to limits
+    pub fn dropped_sixel_graphics(&self) -> usize {
+        self.dropped_sixel_graphics
+    }
+
+    /// Get Sixel statistics for this terminal.
+    ///
+    /// Returns:
+    /// - limits: SixelLimits (max width/height/repeat)
+    /// - max_graphics: maximum number of retained graphics
+    /// - current_graphics: current number of graphics stored
+    /// - dropped_graphics: number of graphics dropped due to limits
+    pub fn sixel_stats(&self) -> (sixel::SixelLimits, usize, usize, usize) {
+        let limits = self.sixel_limits;
+        let max_graphics = self.max_sixel_graphics;
+        let current_graphics = self.graphics.len();
+        let dropped_graphics = self.dropped_sixel_graphics;
+        (limits, max_graphics, current_graphics, dropped_graphics)
     }
 
     /// Process a buffered Sixel command (color, raster, repeat)
