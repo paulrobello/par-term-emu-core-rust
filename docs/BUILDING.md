@@ -32,7 +32,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ### Rust
 
-You need Rust 1.75 or later. Install it from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (currently tested with Rust 1.91+). Install it from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -130,13 +130,28 @@ make watch
 
 ## Running Tests
 
+The project includes comprehensive test coverage:
+- **676 Rust unit tests** across 37 modules
+- **267 Python integration tests** in 10 test files
+- Tests cover: VT sequences, grid operations, PTY sessions, screenshots, and Python bindings
+
 ### Rust Tests
 
-Run the Rust unit tests:
+Run the Rust unit tests with the correct PyO3 feature flags:
 
 ```bash
-cargo test
+# Correct command (required for PyO3 compatibility)
+cargo test --lib --no-default-features --features pyo3/auto-initialize
+
+# Or use the make target
+make test-rust
 ```
+
+> **⚠️ Important:** The simple `cargo test` command will fail due to PyO3's `extension-module` feature. Tests require the `auto-initialize` feature instead. The Makefile target handles this automatically.
+
+**Why different features?**
+- **Production builds** use `pyo3/extension-module` (tells linker NOT to link against libpython)
+- **Rust tests** use `pyo3/auto-initialize` (initializes Python interpreter for testing)
 
 ### Python Tests
 
@@ -150,6 +165,14 @@ make test-python
 uv run maturin develop --release
 uv run pytest tests/ -v
 ```
+
+**Test configuration:**
+- Default timeout: 5 seconds per test (10 seconds for slow tests)
+- Some PTY tests are excluded in CI (may hang in automated environments):
+  - `test_pty.py` - Basic PTY operations
+  - `test_ioctl_size.py` - IOCTL size operations
+  - `test_pty_resize_sigwinch.py` - Signal handling
+  - `test_nested_shell_resize.py` - Complex PTY interactions
 
 ### Code Quality Checks
 
@@ -332,8 +355,6 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-dev \
-    libfreetype6-dev \
-    libharfbuzz-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -357,7 +378,7 @@ docker cp builder:/build/target/wheels/ ./wheels/
 docker rm builder
 ```
 
-> **⚠️ Warning:** Make sure to include `libfreetype6-dev` and `libharfbuzz-dev` for screenshot functionality to work properly.
+> **✅ Note:** Screenshot functionality uses pure Rust libraries (Swash for font rendering), so no external font library dependencies (FreeType, HarfBuzz) are required.
 
 ## See Also
 
