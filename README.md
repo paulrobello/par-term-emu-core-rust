@@ -7,34 +7,23 @@
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/par_term_emu_core_rust)
 ![PyPI - License](https://img.shields.io/pypi/l/par_term_emu_core_rust)
 
-## What's New in 0.4.0
+## What's New in 0.5.0
 
-### Sixel Resource Limits and Safety
+### Bold Brightening Support
 
-Version 0.4.0 adds comprehensive resource management for Sixel graphics to prevent memory exhaustion from untrusted or malformed content:
+Version 0.5.0 adds configurable bold brightening for improved terminal compatibility:
 
-- **Configurable Resource Limits**: Control maximum bitmap dimensions (width/height), repeat counts, and in-memory graphics count
-- **Per-Terminal Limits**: Each terminal instance can have its own safety limits
-- **Hard Safety Ceilings**: Built-in maximum limits (4096x4096 pixels, 10,000 repeat count) that cannot be exceeded
-- **Drop Tracking**: Monitor how many graphics were dropped due to resource limits
-- **Statistics API**: New methods to inspect and tune Sixel resource usage:
-  - `get_sixel_limits()` / `set_sixel_limits(max_width, max_height, max_repeat)`
-  - `get_sixel_graphics_limit()` / `set_sixel_graphics_limit(max_graphics)`
-  - `get_dropped_sixel_graphics()`
-  - `get_sixel_stats()` - comprehensive statistics dictionary
+- **New `set_bold_brightening()` Method**: Enable/disable bold text brightening for ANSI colors 0-7
+- **iTerm2 Compatibility**: Matches iTerm2's "Use Bright Bold" setting behavior
+- **Automatic Color Conversion**: Bold text with ANSI colors 0-7 automatically uses bright variants 8-15
+- **Snapshot Integration**: `create_snapshot()` automatically applies bold brightening when enabled
+- **Comprehensive Documentation**: New section in `docs/ADVANCED_FEATURES.md` with examples
 
-### Grid Resize Improvements
+### Enhanced Color Configuration
 
-- **Fixed Scrollback Handling**: Scrollback buffer is now properly managed during terminal resize
-- **Width Change Safety**: Scrollback is cleared when terminal width changes to prevent indexing errors and misaligned lines
-- **Height Preservation**: Scrollback content is preserved when only terminal height changes
-- **Enhanced Tests**: Added comprehensive tests for resize behavior with scrollback
-
-### Documentation Enhancements
-
-- **Sixel Safety Guide**: Extensive documentation on resource limits and safety best practices in `docs/ADVANCED_FEATURES.md`
-- **PTY Integration**: Clear examples of applying Sixel limits to PTY-backed terminals
-- **API Reference Updates**: Complete documentation for all new Sixel management methods
+- **Bold Brightening API**: Programmatic control over bold color rendering
+- **Snapshot Accuracy**: Screen snapshots now correctly reflect bold brightening state
+- **Backward Compatible**: Feature is opt-in and doesn't affect existing code
 
 ## Description
 
@@ -44,7 +33,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## Table of Contents
 
-- [What's New in 0.4.0](#whats-new-in-040)
+- [What's New in 0.5.0](#whats-new-in-050)
 - [Description](#description)
 - [Technology](#technology)
 - [Prerequisites](#prerequisites)
@@ -712,6 +701,7 @@ Create a new terminal with specified dimensions.
 - `set_cursor_color(r: int, g: int, b: int)`: Set cursor color (RGB)
 - `set_default_fg(r: int, g: int, b: int)`: Set default foreground color
 - `set_default_bg(r: int, g: int, b: int)`: Set default background color
+- `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (when enabled, bold text with ANSI colors 0-7 uses bright variants 8-15, matching iTerm2's "Use Bright Bold" setting)
 - `query_cursor_color()`: Query cursor color (response in drain_responses())
 - `query_default_fg()`: Query default foreground color (response in drain_responses())
 - `query_default_bg()`: Query default background color (response in drain_responses())
@@ -735,14 +725,14 @@ Create a new terminal with specified dimensions.
 - `graphics_count() -> int`: Get count of Sixel graphics stored
 - `graphics_at_row(row: int) -> list[Graphic]`: Get Sixel graphics at specific row
 - `clear_graphics()`: Clear all Sixel graphics
-- `create_snapshot() -> ScreenSnapshot`: Create snapshot of current screen state
+- `create_snapshot() -> ScreenSnapshot`: Create atomic snapshot of current screen state (includes bold brightening if enabled)
 - `flush_synchronized_updates()`: Flush synchronized updates buffer (DEC 2026)
 - `simulate_mouse_event(...)`: Simulate mouse event for testing
 - `export_text() -> str`: Export entire buffer (scrollback + current screen) as plain text without styling
 - `export_styled() -> str`: Export entire buffer (scrollback + current screen) with ANSI styling
 - `export_html(include_styles: bool = True) -> str`: Export current screen as HTML with full styling (full document or content only)
-- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color) -> bytes`: Take screenshot and return image bytes
-- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color)`: Take screenshot and save to file
+- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color) -> bytes`: Take screenshot and return image bytes (automatically respects bold_brightening setting)
+- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color)`: Take screenshot and save to file (automatically respects bold_brightening setting)
 
 #### Text Extraction Utilities
 
@@ -1207,6 +1197,22 @@ The library consists of several key components:
 - **PyTerminal**: Python wrapper for Terminal (ANSI parsing)
 - **PyPtyTerminal**: Python wrapper for PtySession (interactive shells)
 - **PyO3**: Zero-cost bindings between Rust and Python
+
+## Version History
+
+### 0.5.0 (2025-01-17)
+- Added `set_bold_brightening()` method for configurable bold color brightening
+- Enhanced `create_snapshot()` to automatically apply bold brightening when enabled
+- Bold brightening converts ANSI colors 0-7 to bright variants 8-15 for bold text
+- Matches iTerm2's "Use Bright Bold" setting for improved terminal compatibility
+
+### 0.4.0 (2025-01-15)
+- Initial stable release with comprehensive VT100/VT220/VT320/VT420 support
+- Full PTY support with process lifecycle management
+- Sixel graphics rendering with configurable limits
+- Screenshot generation in PNG, JPEG, SVG, and BMP formats
+- Shell integration (OSC 133) support
+- Atomic screen snapshots for TUI applications
 
 ## Contributing
 

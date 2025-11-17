@@ -73,6 +73,8 @@ pub struct ScreenshotConfig {
     pub bold_color: Option<(u8, u8, u8)>,
     /// Use custom bold color instead of cell's color
     pub use_bold_color: bool,
+    /// Enable bold brightening (bold text with ANSI colors 0-7 uses bright variants 8-15)
+    pub bold_brightening: bool,
 }
 
 impl Default for ScreenshotConfig {
@@ -95,6 +97,7 @@ impl Default for ScreenshotConfig {
             link_color: None,
             bold_color: None,
             use_bold_color: false,
+            bold_brightening: false,
         }
     }
 }
@@ -170,6 +173,12 @@ impl ScreenshotConfig {
         self.use_bold_color = use_bold;
         self
     }
+
+    /// Enable/disable bold brightening
+    pub fn with_bold_brightening(mut self, enabled: bool) -> Self {
+        self.bold_brightening = enabled;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +205,7 @@ mod tests {
         assert_eq!(config.link_color, None);
         assert_eq!(config.bold_color, None);
         assert!(!config.use_bold_color);
+        assert!(!config.bold_brightening);
     }
 
     #[test]
@@ -325,7 +335,8 @@ mod tests {
             .with_sixel_mode(SixelRenderMode::Pixels)
             .with_link_color((0, 100, 200))
             .with_bold_color((200, 0, 0))
-            .with_use_bold_color(true);
+            .with_use_bold_color(true)
+            .with_bold_brightening(true);
 
         assert_eq!(config.font_size, 16.0);
         assert_eq!(config.format, ImageFormat::Jpeg);
@@ -337,6 +348,7 @@ mod tests {
         assert_eq!(config.link_color, Some((0, 100, 200)));
         assert_eq!(config.bold_color, Some((200, 0, 0)));
         assert!(config.use_bold_color);
+        assert!(config.bold_brightening);
     }
 
     #[test]
@@ -377,5 +389,14 @@ mod tests {
         let config = ScreenshotConfig::new();
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("ScreenshotConfig"));
+    }
+
+    #[test]
+    fn test_with_bold_brightening() {
+        let config = ScreenshotConfig::new().with_bold_brightening(true);
+        assert!(config.bold_brightening);
+
+        let config = ScreenshotConfig::new().with_bold_brightening(false);
+        assert!(!config.bold_brightening);
     }
 }

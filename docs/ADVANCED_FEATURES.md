@@ -6,6 +6,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 
 - [Overview](#overview)
 - [True Color Support](#true-color-support)
+  - [Bold Brightening](#bold-brightening)
 - [Alternate Screen Buffer](#alternate-screen-buffer)
 - [Mouse Reporting](#mouse-reporting)
 - [Bracketed Paste Mode](#bracketed-paste-mode)
@@ -118,6 +119,30 @@ term.process_str("\x1b[38;2;255;255;0;48;2;0;0;128mYellow on blue\x1b[0m\n")
 - **16 bright colors**: `\x1b[90-97m` (foreground), `\x1b[100-107m` (background)
 - **256-color palette**: `\x1b[38;5;<n>m` (foreground), `\x1b[48;5;<n>m` (background)
 - **24-bit RGB**: `\x1b[38;2;<r>;<g>;<b>m` (foreground), `\x1b[48;2;<r>;<g>;<b>m` (background)
+
+### Bold Brightening
+
+Bold brightening is a feature where bold text with ANSI colors 0-7 (standard colors) automatically uses the bright color variants 8-15. This matches the behavior of iTerm2's "Use Bright Bold" setting and many traditional terminal emulators.
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Enable bold brightening (default is typically off)
+term.set_bold_brightening(True)
+
+# Bold text with red (color 1) will appear as bright red (color 9)
+term.process_str("\x1b[1;31mThis appears bright red\x1b[0m\n")
+
+# Disable bold brightening
+term.set_bold_brightening(False)
+
+# Now bold red appears as regular red, just bolded
+term.process_str("\x1b[1;31mThis appears regular red (bold)\x1b[0m\n")
+```
+
+**Note**: Bold brightening only affects ANSI colors 0-7, not 256-color or RGB colors. When creating snapshots with `create_snapshot()` or taking screenshots with `screenshot()` / `screenshot_to_file()`, the bold brightening setting is automatically applied to the captured colors.
 
 ## Alternate Screen Buffer
 

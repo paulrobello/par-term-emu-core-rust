@@ -318,6 +318,14 @@ impl PyPtyTerminal {
             }
         };
 
+        // Get bold_brightening setting from terminal
+        let terminal = self.inner.terminal();
+        let bold_brightening = if let Ok(term) = terminal.lock() {
+            term.bold_brightening()
+        } else {
+            false
+        };
+
         let config = ScreenshotConfig {
             format: img_format,
             font_path: font_path.map(std::path::PathBuf::from),
@@ -331,6 +339,7 @@ impl PyPtyTerminal {
             link_color,
             bold_color,
             use_bold_color: use_bold_color.unwrap_or(false),
+            bold_brightening,
             ..Default::default()
         };
 
@@ -742,6 +751,9 @@ impl PyPtyTerminal {
         let rows = grid.rows();
         let cols = grid.cols();
 
+        // Get bold brightening setting
+        let bold_brightening = term.bold_brightening();
+
         // Capture all lines while holding terminal lock
         let mut lines = Vec::with_capacity(rows);
         let mut wrapped_lines = Vec::with_capacity(rows);
@@ -749,9 +761,22 @@ impl PyPtyTerminal {
             let mut line = Vec::with_capacity(cols);
             for col in 0..cols {
                 if let Some(cell) = grid.get(col, row) {
+                    // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
+                    let mut fg = cell.fg;
+                    if bold_brightening && cell.flags.bold() {
+                        if let crate::color::Color::Named(named) = fg {
+                            if (named as u8) < 8 {
+                                // Convert normal ANSI color (0-7) to bright variant (8-15)
+                                fg = crate::color::Color::Named(crate::color::NamedColor::from_u8(
+                                    named as u8 + 8,
+                                ));
+                            }
+                        }
+                    }
+
                     line.push((
                         cell.c,
-                        cell.fg.to_rgb(),
+                        fg.to_rgb(),
                         cell.bg.to_rgb(),
                         PyAttributes {
                             bold: cell.flags.bold(),
@@ -1264,6 +1289,21 @@ impl PyPtyTerminal {
         let terminal = self.inner.terminal();
         if let Ok(mut term) = terminal.lock() {
             term.set_use_bold_color(use_bold);
+        }
+        Ok(())
+    }
+
+    /// Enable/disable bold brightening
+    ///
+    /// When enabled, bold text with ANSI colors 0-7 uses bright variants 8-15.
+    /// This matches iTerm2's "Use Bright Bold" setting.
+    ///
+    /// Args:
+    ///     enabled: Whether to brighten bold text with colors 0-7
+    fn set_bold_brightening(&mut self, enabled: bool) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = terminal.lock() {
+            term.set_bold_brightening(enabled);
         }
         Ok(())
     }

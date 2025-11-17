@@ -184,37 +184,52 @@ impl Renderer {
 
     /// Resolve effective foreground and background colors
     fn resolve_colors(&self, cell: &Cell) -> ((u8, u8, u8), (u8, u8, u8)) {
-        let mut fg = cell.fg.to_rgb();
+        let mut fg = cell.fg;
         let mut bg = cell.bg.to_rgb();
 
-        // Apply theme colors BEFORE reverse/dim transformations
+        // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
+        if self.config.bold_brightening && cell.flags.bold() {
+            if let crate::color::Color::Named(named) = fg {
+                if (named as u8) < 8 {
+                    // Convert normal ANSI color (0-7) to bright variant (8-15)
+                    fg = crate::color::Color::Named(crate::color::NamedColor::from_u8(
+                        named as u8 + 8,
+                    ));
+                }
+            }
+        }
+
+        // Convert fg to RGB after bold brightening
+        let mut fg_rgb = fg.to_rgb();
+
+        // Apply theme colors AFTER bold brightening but BEFORE reverse/dim transformations
         // This ensures theme colors work correctly with reverse video and dim
 
         // Use link color for hyperlinked text
         if cell.flags.hyperlink_id.is_some() {
             if let Some(link_color) = self.config.link_color {
-                fg = link_color;
+                fg_rgb = link_color;
             }
         }
 
         // Use custom bold color when enabled and cell is bold
         if cell.flags.bold() && self.config.use_bold_color {
             if let Some(bold_color) = self.config.bold_color {
-                fg = bold_color;
+                fg_rgb = bold_color;
             }
         }
 
         // Handle reverse video
         if cell.flags.reverse() {
-            std::mem::swap(&mut fg, &mut bg);
+            std::mem::swap(&mut fg_rgb, &mut bg);
         }
 
         // Handle dim (reduce brightness by ~50%)
         if cell.flags.dim() {
-            fg = (fg.0 / 2, fg.1 / 2, fg.2 / 2);
+            fg_rgb = (fg_rgb.0 / 2, fg_rgb.1 / 2, fg_rgb.2 / 2);
         }
 
-        (fg, bg)
+        (fg_rgb, bg)
     }
 
     /// Render block element characters as filled rectangles for pixel-perfect rendering
@@ -1039,6 +1054,7 @@ mod tests {
             link_color: None,
             bold_color: None,
             use_bold_color: false,
+            bold_brightening: false,
             quality: 90,
             format: crate::screenshot::config::ImageFormat::Png,
         }
