@@ -17,7 +17,7 @@ base64 = "0.22.1"
 bitflags = "2.10.0"
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
-image = "0.25.8"
+image = "0.25.9"
 swash = "0.2.6"
 
 [target.'cfg(unix)'.dependencies]
