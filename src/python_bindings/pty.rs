@@ -825,6 +825,17 @@ impl PyPtyTerminal {
         Ok(self.inner.has_updates_since(last_generation))
     }
 
+    /// Get the current bell event count
+    ///
+    /// This counter increments each time the terminal receives a bell character (BEL/\\x07).
+    /// Applications can poll this to detect bell events for visual bell implementations.
+    ///
+    /// Returns:
+    ///     The total number of bell events received since terminal creation
+    fn bell_count(&self) -> PyResult<u64> {
+        Ok(self.inner.bell_count())
+    }
+
     /// Get mouse tracking mode
     ///
     /// Returns:

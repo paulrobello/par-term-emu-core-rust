@@ -143,6 +143,8 @@ pub struct Terminal {
     color_stack: Vec<(Color, Color, Option<Color>)>,
     /// Notifications from OSC 9 / OSC 777 sequences
     notifications: Vec<Notification>,
+    /// Bell event counter - incremented each time bell (BEL/\x07) is received
+    bell_count: u64,
     /// VTE parser instance (maintains state across process() calls)
     parser: vte::Parser,
     /// DECAWM delayed wrap: set after printing in last column
@@ -275,6 +277,7 @@ impl Terminal {
             ansi_palette: Self::default_ansi_palette(),
             color_stack: Vec::new(),
             notifications: Vec::new(),
+            bell_count: 0,
             parser: vte::Parser::new(),
             pending_wrap: false,
             pixel_width: 0,
@@ -704,6 +707,16 @@ impl Terminal {
     /// Check if there are pending notifications
     pub fn has_notifications(&self) -> bool {
         !self.notifications.is_empty()
+    }
+
+    /// Get the current bell count
+    ///
+    /// This counter increments each time the terminal receives a bell character (BEL/\x07).
+    /// Applications can poll this to detect bell events for visual bell implementations.
+    ///
+    /// Returns the total number of bell events received since terminal creation.
+    pub fn bell_count(&self) -> u64 {
+        self.bell_count
     }
 
     /// Process input data
@@ -1374,7 +1387,10 @@ impl Perform for Terminal {
             b'\r' => self.write_char('\r'),
             b'\t' => self.write_char('\t'),
             b'\x08' => self.write_char('\x08'),
-            b'\x07' => {} // Bell - ignore for now
+            b'\x07' => {
+                // Bell - increment counter for visual bell support
+                self.bell_count = self.bell_count.wrapping_add(1);
+            }
             _ => {}
         }
     }

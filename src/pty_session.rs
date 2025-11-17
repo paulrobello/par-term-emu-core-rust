@@ -819,6 +819,20 @@ impl PtySession {
     pub fn has_updates_since(&self, last_generation: u64) -> bool {
         self.update_generation() > last_generation
     }
+
+    /// Get the current bell event count
+    ///
+    /// This counter increments each time the terminal receives a bell character (BEL/\x07).
+    /// Applications can poll this to detect bell events for visual bell implementations.
+    ///
+    /// # Returns
+    /// The total number of bell events received since terminal creation
+    pub fn bell_count(&self) -> u64 {
+        self.terminal
+            .lock()
+            .map(|term| term.bell_count())
+            .unwrap_or(0)
+    }
 }
 
 impl Drop for PtySession {

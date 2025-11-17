@@ -30,6 +30,7 @@
 //! - Shell integration (OSC 133)
 //! - OSC 8 hyperlinks (recognized)
 //! - Full Unicode support including emoji and wide characters
+//! - Bell event tracking for visual bell implementations
 
 pub mod ansi_utils;
 pub mod cell;

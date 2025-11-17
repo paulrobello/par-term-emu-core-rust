@@ -334,12 +334,18 @@ CSI 49 m    - Default background
 
 **Sequence Examples:**
 ```
-CSI ? 1 " q        Enable protection
+CSI ? 1 " q        Enable protection (or ESC V for SPA)
 Hello World        (these chars are protected)
-CSI ? 0 " q        Disable protection
+CSI ? 0 " q        Disable protection (or ESC W for EPA)
 Normal text        (these chars are NOT protected)
 CSI 1 ; 1 ; 5 ; 20 $ {    DECSERA - only erases unprotected text
 ```
+
+**Alternative Sequences:**
+- `ESC V` (SPA - Start of Protected Area) - Enable character protection
+- `ESC W` (EPA - End of Protected Area) - Disable character protection
+
+See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 
 ### Cursor Style
 
@@ -514,6 +520,8 @@ ESC (Escape) sequences follow the pattern: `ESC final`
 | `ESC D` | IND | VT100 | Index (move down, scroll up at bottom) |
 | `ESC E` | NEL | VT100 | Next line (CR + LF with scroll) |
 | `ESC c` | RIS | VT100 | Reset to initial state (full terminal reset) |
+| `ESC V` | SPA | VT420 | Start of Protected Area (enable char protection) |
+| `ESC W` | EPA | VT420 | End of Protected Area (disable char protection) |
 
 ### Cursor Save/Restore Details
 
@@ -815,7 +823,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 | Rectangle checksum | ✅ Full | DECRQCRA (request checksum) |
 | Attribute change extent | ✅ Full | DECSACE (stream/rectangle mode) |
 | Left/Right margins | ✅ Full | DECLRMM, DECSLRM |
-| Character protection | ✅ Full | DECSCA with selective erase (DECSERA) |
+| Character protection | ✅ Full | DECSCA (CSI ? Ps " q), SPA/EPA (ESC V/W), selective erase |
 
 ### xterm Compatibility
 
@@ -859,12 +867,6 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
    - Downloadable character sets
    - **Reason:** Complex, rarely used
    - **Impact:** Very low (almost never used)
-
-3. **Protected Areas (DECSCA)**
-   - Character protection attribute
-   - DECSERA selective erase respects protection
-   - **Status:** DECSERA implemented, but protection attribute not set
-   - **Impact:** Low (rarely used feature)
 
 4. **Most XTWINOPS Operations**
    - Window resize, minimize, raise, etc.
