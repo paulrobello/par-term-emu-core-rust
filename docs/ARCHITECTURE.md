@@ -149,7 +149,16 @@ Features:
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
 - `color_utils.rs` - Color conversion and manipulation utilities
 - `text_utils.rs` - Text processing and Unicode handling
+  - Word boundary detection with configurable word characters
+  - Default word characters: `"/-+\\~_."` (iTerm2-compatible)
+  - `DEFAULT_WORD_CHARS` constant for word selection
+  - `is_word_char()`, `get_word_at()`, `select_word()` functions
 - `html_export.rs` - HTML export functionality for terminal content
+  - Complete HTML document generation with embedded styles
+  - Scrollback buffer export support
+  - Inline CSS for terminal styling
+  - Color preservation (foreground, background, attributes)
+  - Monospace font stack: Monaco, Menlo, Ubuntu Mono, Consolas, monospace
 - `debug.rs` - Debug utilities and logging helpers
 
 **PTY Support**
@@ -337,17 +346,32 @@ All public methods are wrapped with `#[pymethods]` and provide:
 
 ## Testing Strategy
 
+### Test Coverage
+
+**Current test counts (as of latest commit):**
+- **Rust tests:** 676 unit and integration tests
+- **Python tests:** 267 tests across multiple test modules (34 skipped in CI)
+- **Total:** 943 tests ensuring comprehensive coverage
+
 ### Rust Tests
 
-- Unit tests in each module
-- Integration tests for full sequences
-- Property-based tests for invariants
+- **Unit tests** in each module (included via `#[cfg(test)]` modules)
+- **Integration tests** for full ANSI sequences and terminal operations
+- **Property-based tests** for invariants (using `proptest` crate)
+- **PyO3 configuration:** Tests run with `--no-default-features --features pyo3/auto-initialize`
+  - The `extension-module` feature prevents linking during tests
+  - Must use `auto-initialize` feature for test environment
+  - Run via: `cargo test --lib --no-default-features --features pyo3/auto-initialize`
 
 ### Python Tests
 
-- API contract tests
-- Example-based tests
-- Edge case handling
+- **API contract tests** validating Python bindings behavior
+- **Example-based tests** covering common use cases
+- **Edge case handling** for error conditions and boundary cases
+- **Timeout protection:** 5-second default per test (10-second for slow tests)
+- **PTY tests** excluded in CI (hang in automated environments):
+  - `test_pty.py`, `test_ioctl_size.py`
+  - `test_pty_resize_sigwinch.py`, `test_nested_shell_resize.py`
 
 ## Implemented Features
 
@@ -423,14 +447,14 @@ The screenshot module provides high-quality rendering of terminal content to var
    - **Embedded Fonts**: `JetBrainsMono-Regular.ttf`, `NotoEmoji-Regular.ttf`
 
 3. **Text Shaper** (`shaper.rs`)
-   - **Library**: Swash (integrated text shaping)
+   - **Library**: Swash (pure Rust text shaping and font rendering)
    - **Purpose**: Handles complex text rendering with ligatures and multi-codepoint sequences
    - **Features**:
      - Flag emoji support via Regional Indicator ligatures (🇺🇸 🇨🇳 🇯🇵)
      - Multi-font support (Regular, Emoji, CJK) with automatic selection
      - Positioned glyph output with advance/offset information
      - Font run segmentation for mixed-script text
-     - Pure Rust implementation (no C dependencies)
+     - Pure Rust implementation (no C dependencies, no HarfBuzz)
 
 4. **Renderer** (`renderer.rs`)
    - **Purpose**: Converts terminal grid to image pixels
@@ -523,7 +547,7 @@ graph TD
     B[Create Renderer<br/>FontCache + TextShaper + Config]
     C[For each grid row]
     D{Contains Regional<br/>Indicators?}
-    E[HarfBuzz text shaping<br/>- Extract line text<br/>- Shape with TextShaper<br/>- Render positioned glyphs]
+    E[Swash text shaping<br/>- Extract line text<br/>- Shape with TextShaper<br/>- Render positioned glyphs]
     F[Fast character rendering<br/>For each cell:<br/>- Resolve colors<br/>- Render background<br/>- Render character<br/>- Render decorations]
     G[Render Sixel graphics]
     H[Render cursor<br/>if visible]
@@ -585,29 +609,75 @@ graph TD
 
 ### Rust
 
-Core dependencies:
-- `pyo3`: Python bindings
-- `vte`: ANSI parser
-- `unicode-width`: Character width calculation
-- `portable-pty`: PTY support
-- `base64`: Base64 encoding/decoding
-- `bitflags`: Bit flag management
+**Core dependencies:**
+- `pyo3`: 0.27.1 - Python bindings
+- `vte`: 0.15.0 - ANSI parser
+- `unicode-width`: 0.2.2 - Character width calculation
+- `portable-pty`: 0.9.0 - PTY support
+- `base64`: 0.22.1 - Base64 encoding/decoding
+- `bitflags`: 2.10.0 - Bit flag management
 
-Screenshot/rendering support:
-- `image`: Image encoding/decoding (PNG, JPEG, BMP)
-- `swash`: Pure Rust font rendering and text shaping with color emoji support
+**Screenshot/rendering support:**
+- `image`: 0.25.8 - Image encoding/decoding (PNG, JPEG, BMP)
+- `swash`: 0.2.6 - Pure Rust font rendering and text shaping with color emoji support
 
-Platform-specific:
-- `libc`: Unix system calls (Unix only)
+**Development dependencies:**
+- `proptest`: 1.9.0 - Property-based testing framework
+
+**Platform-specific:**
+- `libc`: 0.2.177 - Unix system calls (Unix only)
 
 ### Python
 
-- `maturin`: Build system for PyO3 bindings
-- `pytest`: Testing framework (dev dependency)
+**Build and development tools:**
+- `maturin`: >=1.10.1 - Build system for PyO3 bindings
+- `uv`: Latest - Fast Python package installer and resolver
+
+**Testing:**
+- `pytest`: >=9.0.1 - Testing framework
+- `pytest-timeout`: >=2.4.0 - Test timeout protection
+
+**Code quality:**
+- `ruff`: >=0.14.5 - Linting and formatting
+- `pyright`: >=1.1.407 - Static type checking
+- `pre-commit`: >=4.4.0 - Git hook management
+
+**Python version requirements:** 3.12, 3.13, or 3.14
 
 > **Note**: This is a core library. For a full-featured TUI application built on this library, see the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
 
 ## Build Process
+
+### PyO3 Feature Configuration
+
+The project uses conditional PyO3 feature compilation to support both production builds and testing:
+
+**Cargo.toml features:**
+```toml
+[dependencies]
+pyo3 = "0.27.1"
+
+[dev-dependencies]
+pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
+
+[features]
+default = ["pyo3/extension-module"]
+```
+
+**Build commands:**
+- **Development build:** `maturin develop --release` (uses `extension-module` feature)
+- **Running Rust tests:** `cargo test --lib --no-default-features --features pyo3/auto-initialize`
+- **Production wheels:** `maturin build --release` (uses default features with `extension-module`)
+
+> **⚠️ Important:** Never run `cargo build` directly for PyO3 modules. Always use `maturin develop` or the `make dev` target to ensure proper Python integration.
+
+**Why these features:**
+- **`extension-module`:** Tells linker NOT to link against libpython (correct for Python extensions)
+- **`auto-initialize`:** Initializes Python interpreter for Rust tests (required for `cargo test`)
+- **Default feature:** Enables `extension-module` automatically for production builds
+- **Test override:** Uses `--no-default-features` to disable `extension-module` during testing
+
+### Build Flow
 
 ```mermaid
 graph TD
@@ -631,6 +701,80 @@ graph TD
     style E fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
     style F fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
 ```
+
+## Continuous Integration
+
+### CI/CD Pipeline
+
+The project uses GitHub Actions (`.github/workflows/ci.yml`) with three parallel jobs:
+
+#### Test Job
+- **Platforms:** Ubuntu, macOS, Windows
+- **Python versions:** 3.12, 3.13, 3.14 (matrix: 9 combinations)
+- **Timeout:** 15 minutes per job
+- **Steps:**
+  1. **Rust tests:** `cargo test --lib --no-default-features --features pyo3/auto-initialize`
+  2. **Python tests:** `pytest tests/ -v --timeout=5 --timeout-method=thread`
+  3. **PTY tests excluded in CI:**
+     - `test_pty.py` - Hangs in automated environments
+     - `test_ioctl_size.py` - Requires real PTY
+     - `test_pty_resize_sigwinch.py` - Signal handling issues in CI
+     - `test_nested_shell_resize.py` - Complex PTY interactions
+
+#### Lint Job
+- **Platform:** Ubuntu only
+- **Python version:** 3.14
+- **Timeout:** 15 minutes
+- **Checks:**
+  - Rust formatting: `cargo fmt -- --check`
+  - Rust clippy: `cargo clippy --all-targets --all-features -- -D warnings`
+  - Python formatting: `ruff format --check`
+  - Python linting: `ruff check`
+  - Python type checking: `pyright`
+
+#### Build Job
+- **Platforms:** Ubuntu, macOS, Windows
+- **Python version:** 3.14
+- **Timeout:** 15 minutes
+- **Output:** Platform-specific wheels uploaded as artifacts
+- **Command:** `maturin build --release`
+
+### Running Checks Locally
+
+```bash
+# Run all checks with auto-fix
+make checkall
+
+# Individual checks
+make test-rust    # Rust unit tests
+make test-python  # Python integration tests
+cargo fmt         # Format Rust code
+cargo clippy      # Lint Rust code
+uv run ruff format .  # Format Python code
+uv run ruff check .   # Lint Python code
+uv run pyright .      # Type check Python code
+```
+
+### Pre-commit Hooks
+
+The project uses `pre-commit` hooks to enforce quality standards. Install with:
+
+```bash
+make pre-commit-install  # or: uv run pre-commit install
+```
+
+**Hooks enabled:**
+- Trailing whitespace removal
+- End-of-file fixing
+- YAML/TOML syntax checking
+- Large file detection
+- Rust formatting (`cargo fmt`)
+- Rust linting (`cargo clippy`)
+- Rust tests (`cargo test --lib --no-default-features --features pyo3/auto-initialize`)
+- Python formatting (`ruff format`)
+- Python linting (`ruff check --fix`)
+- Python type checking (`pyright`)
+- Python tests (`pytest`)
 
 ## Debugging
 
@@ -681,6 +825,7 @@ When contributing, please:
 
 - [VT_FEATURE_PARITY.md](VT_FEATURE_PARITY.md) - Complete VT feature support matrix
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features guide
+- [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Terminal configuration reference
 - [BUILDING.md](BUILDING.md) - Build and installation instructions
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
 - [README.md](../README.md) - Project overview and API reference
