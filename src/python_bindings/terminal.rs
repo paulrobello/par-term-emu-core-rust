@@ -3348,6 +3348,239 @@ impl PyTerminal {
 
         Ok(super::types::PySessionState::from(&session))
     }
+
+    // === Feature 21: Image Protocol Support ===
+
+    /// Add an inline image
+    ///
+    /// Args:
+    ///     image: PyInlineImage to add
+    fn add_inline_image(&mut self, image: &super::types::PyInlineImage) -> PyResult<()> {
+        use crate::terminal::{ImageFormat, ImageProtocol, InlineImage};
+
+        let protocol = match image.protocol.as_str() {
+            "sixel" => ImageProtocol::Sixel,
+            "iterm2" => ImageProtocol::ITerm2,
+            "kitty" => ImageProtocol::Kitty,
+            _ => return Err(PyValueError::new_err("Invalid image protocol")),
+        };
+
+        let format = match image.format.as_str() {
+            "png" => ImageFormat::PNG,
+            "jpeg" => ImageFormat::JPEG,
+            "gif" => ImageFormat::GIF,
+            "bmp" => ImageFormat::BMP,
+            "rgba" => ImageFormat::RGBA,
+            "rgb" => ImageFormat::RGB,
+            _ => return Err(PyValueError::new_err("Invalid image format")),
+        };
+
+        let rust_image = InlineImage {
+            id: image.id.clone(),
+            protocol,
+            format,
+            data: image.data.clone(),
+            width: image.width,
+            height: image.height,
+            position: image.position,
+            display_cols: image.display_cols,
+            display_rows: image.display_rows,
+        };
+
+        self.inner.add_inline_image(rust_image);
+        Ok(())
+    }
+
+    /// Get inline images at a specific position
+    ///
+    /// Args:
+    ///     col: Column index
+    ///     row: Row index
+    ///
+    /// Returns:
+    ///     List of PyInlineImage at the position
+    fn get_images_at(&self, col: usize, row: usize) -> PyResult<Vec<super::types::PyInlineImage>> {
+        let images = self.inner.get_images_at(col, row);
+        Ok(images.iter().map(super::types::PyInlineImage::from).collect())
+    }
+
+    /// Get all inline images
+    ///
+    /// Returns:
+    ///     List of all PyInlineImage
+    fn get_all_images(&self) -> PyResult<Vec<super::types::PyInlineImage>> {
+        let images = self.inner.get_all_images();
+        Ok(images.iter().map(super::types::PyInlineImage::from).collect())
+    }
+
+    /// Delete image by ID
+    ///
+    /// Args:
+    ///     id: Image ID to delete
+    ///
+    /// Returns:
+    ///     True if image was found and deleted
+    fn delete_image(&mut self, id: &str) -> PyResult<bool> {
+        Ok(self.inner.delete_image(id))
+    }
+
+    /// Clear all inline images
+    fn clear_images(&mut self) -> PyResult<()> {
+        self.inner.clear_images();
+        Ok(())
+    }
+
+    /// Get image by ID
+    ///
+    /// Args:
+    ///     id: Image ID to find
+    ///
+    /// Returns:
+    ///     PyInlineImage if found, None otherwise
+    fn get_image_by_id(&self, id: &str) -> PyResult<Option<super::types::PyInlineImage>> {
+        Ok(self
+            .inner
+            .get_image_by_id(id)
+            .map(|img| super::types::PyInlineImage::from(&img)))
+    }
+
+    /// Set maximum inline images
+    ///
+    /// Args:
+    ///     max: Maximum number of images to keep
+    fn set_max_inline_images(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_inline_images(max);
+        Ok(())
+    }
+
+    // === Feature 28: Benchmarking Suite ===
+
+    /// Run rendering benchmark
+    ///
+    /// Args:
+    ///     iterations: Number of iterations to run
+    ///
+    /// Returns:
+    ///     PyBenchmarkResult with timing statistics
+    fn benchmark_rendering(&mut self, iterations: u64) -> PyResult<super::types::PyBenchmarkResult> {
+        let result = self.inner.benchmark_rendering(iterations);
+        Ok(super::types::PyBenchmarkResult::from(&result))
+    }
+
+    /// Run escape sequence parsing benchmark
+    ///
+    /// Args:
+    ///     text: Text to parse
+    ///     iterations: Number of iterations to run
+    ///
+    /// Returns:
+    ///     PyBenchmarkResult with timing statistics
+    fn benchmark_parsing(
+        &mut self,
+        text: &str,
+        iterations: u64,
+    ) -> PyResult<super::types::PyBenchmarkResult> {
+        let result = self.inner.benchmark_parsing(text, iterations);
+        Ok(super::types::PyBenchmarkResult::from(&result))
+    }
+
+    /// Run grid operations benchmark
+    ///
+    /// Args:
+    ///     iterations: Number of iterations to run
+    ///
+    /// Returns:
+    ///     PyBenchmarkResult with timing statistics
+    fn benchmark_grid_ops(&mut self, iterations: u64) -> PyResult<super::types::PyBenchmarkResult> {
+        let result = self.inner.benchmark_grid_ops(iterations);
+        Ok(super::types::PyBenchmarkResult::from(&result))
+    }
+
+    /// Run full benchmark suite
+    ///
+    /// Args:
+    ///     suite_name: Name for the benchmark suite
+    ///
+    /// Returns:
+    ///     PyBenchmarkSuite with all benchmark results
+    fn run_benchmark_suite(&mut self, suite_name: String) -> PyResult<super::types::PyBenchmarkSuite> {
+        let suite = self.inner.run_benchmark_suite(suite_name);
+        Ok(super::types::PyBenchmarkSuite::from(&suite))
+    }
+
+    // === Feature 29: Terminal Compliance Testing ===
+
+    /// Run compliance tests for a specific level
+    ///
+    /// Args:
+    ///     level: Compliance level to test ("vt52", "vt100", "vt220", "vt320", "vt420", "vt520", "xterm")
+    ///
+    /// Returns:
+    ///     PyComplianceReport with test results
+    fn test_compliance(&mut self, level: &str) -> PyResult<super::types::PyComplianceReport> {
+        use crate::terminal::ComplianceLevel;
+
+        let rust_level = match level.to_lowercase().as_str() {
+            "vt52" => ComplianceLevel::VT52,
+            "vt100" => ComplianceLevel::VT100,
+            "vt220" => ComplianceLevel::VT220,
+            "vt320" => ComplianceLevel::VT320,
+            "vt420" => ComplianceLevel::VT420,
+            "vt520" => ComplianceLevel::VT520,
+            "xterm" => ComplianceLevel::XTerm,
+            _ => return Err(PyValueError::new_err("Invalid compliance level")),
+        };
+
+        let report = self.inner.test_compliance(rust_level);
+        Ok(super::types::PyComplianceReport::from(&report))
+    }
+
+    /// Generate compliance report as formatted string
+    ///
+    /// Args:
+    ///     report: PyComplianceReport to format
+    ///
+    /// Returns:
+    ///     Formatted compliance report string
+    #[staticmethod]
+    fn format_compliance_report(report: &super::types::PyComplianceReport) -> PyResult<String> {
+        use crate::terminal::{ComplianceLevel, ComplianceReport, ComplianceTest, Terminal};
+
+        let rust_level = match report.level.as_str() {
+            "vt52" => ComplianceLevel::VT52,
+            "vt100" => ComplianceLevel::VT100,
+            "vt220" => ComplianceLevel::VT220,
+            "vt320" => ComplianceLevel::VT320,
+            "vt420" => ComplianceLevel::VT420,
+            "vt520" => ComplianceLevel::VT520,
+            "xterm" => ComplianceLevel::XTerm,
+            _ => return Err(PyValueError::new_err("Invalid compliance level")),
+        };
+
+        let rust_tests: Vec<ComplianceTest> = report
+            .tests
+            .iter()
+            .map(|t| ComplianceTest {
+                name: t.name.clone(),
+                category: t.category.clone(),
+                passed: t.passed,
+                expected: t.expected.clone(),
+                actual: t.actual.clone(),
+                notes: t.notes.clone(),
+            })
+            .collect();
+
+        let rust_report = ComplianceReport {
+            terminal_info: report.terminal_info.clone(),
+            level: rust_level,
+            tests: rust_tests,
+            passed: report.passed,
+            failed: report.failed,
+            compliance_percent: report.compliance_percent,
+        };
+
+        Ok(Terminal::format_compliance_report(&rust_report))
+    }
 }
 
 /// Helper function to parse clipboard slot from string

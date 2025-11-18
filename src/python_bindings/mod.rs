@@ -26,10 +26,12 @@ pub use enums::{PyCursorStyle, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
 pub use terminal::PyTerminal;
 pub use types::{
-    PyAttributes, PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette,
+    PyAttributes, PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry,
+    PyColorHSL, PyColorHSV, PyColorPalette, PyComplianceReport, PyComplianceTest,
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
-    PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPaneState, PyPerformanceMetrics,
-    PyProfilingData, PyRegexMatch, PyRenderingHint, PyScreenSnapshot, PyScrollbackStats,
-    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
-    PySnapshotDiff, PyTmuxNotification, PyWindowLayout,
+    PyImageFormat, PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent,
+    PyMousePosition, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PySessionState, PyShellIntegration, PySnapshotDiff, PyTmuxNotification,
+    PyWindowLayout,
 };

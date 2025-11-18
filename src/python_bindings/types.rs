@@ -1660,6 +1660,293 @@ impl From<&crate::terminal::SessionState> for PySessionState {
     }
 }
 
+// === Feature 21: Image Protocol Support ===
+
+/// Image protocol
+#[pyclass(name = "ImageProtocol")]
+#[derive(Clone)]
+pub enum PyImageProtocol {
+    Sixel,
+    ITerm2,
+    Kitty,
+}
+
+/// Image format
+#[pyclass(name = "ImageFormat")]
+#[derive(Clone)]
+pub enum PyImageFormat {
+    PNG,
+    JPEG,
+    GIF,
+    BMP,
+    RGBA,
+    RGB,
+}
+
+/// Inline image
+#[pyclass(name = "InlineImage")]
+#[derive(Clone)]
+pub struct PyInlineImage {
+    #[pyo3(get)]
+    pub id: Option<String>,
+    #[pyo3(get)]
+    pub protocol: String,
+    #[pyo3(get)]
+    pub format: String,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+    #[pyo3(get)]
+    pub width: u32,
+    #[pyo3(get)]
+    pub height: u32,
+    #[pyo3(get)]
+    pub position: (usize, usize),
+    #[pyo3(get)]
+    pub display_cols: usize,
+    #[pyo3(get)]
+    pub display_rows: usize,
+}
+
+#[pymethods]
+impl PyInlineImage {
+    fn __repr__(&self) -> String {
+        format!(
+            "InlineImage(protocol={}, format={}, size={}x{}, pos={:?})",
+            self.protocol, self.format, self.width, self.height, self.position
+        )
+    }
+}
+
+impl From<&crate::terminal::InlineImage> for PyInlineImage {
+    fn from(img: &crate::terminal::InlineImage) -> Self {
+        use crate::terminal::{ImageFormat, ImageProtocol};
+
+        let protocol = match img.protocol {
+            ImageProtocol::Sixel => "sixel",
+            ImageProtocol::ITerm2 => "iterm2",
+            ImageProtocol::Kitty => "kitty",
+        }
+        .to_string();
+
+        let format = match img.format {
+            ImageFormat::PNG => "png",
+            ImageFormat::JPEG => "jpeg",
+            ImageFormat::GIF => "gif",
+            ImageFormat::BMP => "bmp",
+            ImageFormat::RGBA => "rgba",
+            ImageFormat::RGB => "rgb",
+        }
+        .to_string();
+
+        PyInlineImage {
+            id: img.id.clone(),
+            protocol,
+            format,
+            data: img.data.clone(),
+            width: img.width,
+            height: img.height,
+            position: img.position,
+            display_cols: img.display_cols,
+            display_rows: img.display_rows,
+        }
+    }
+}
+
+// === Feature 28: Benchmarking Suite ===
+
+/// Benchmark result
+#[pyclass(name = "BenchmarkResult")]
+#[derive(Clone)]
+pub struct PyBenchmarkResult {
+    #[pyo3(get)]
+    pub category: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub iterations: u64,
+    #[pyo3(get)]
+    pub total_time_us: u64,
+    #[pyo3(get)]
+    pub avg_time_us: u64,
+    #[pyo3(get)]
+    pub min_time_us: u64,
+    #[pyo3(get)]
+    pub max_time_us: u64,
+    #[pyo3(get)]
+    pub ops_per_sec: f64,
+    #[pyo3(get)]
+    pub memory_bytes: Option<usize>,
+}
+
+#[pymethods]
+impl PyBenchmarkResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "BenchmarkResult(category={}, name={}, iterations={}, avg_us={}, ops/sec={:.0})",
+            self.category, self.name, self.iterations, self.avg_time_us, self.ops_per_sec
+        )
+    }
+}
+
+impl From<&crate::terminal::BenchmarkResult> for PyBenchmarkResult {
+    fn from(result: &crate::terminal::BenchmarkResult) -> Self {
+        use crate::terminal::BenchmarkCategory;
+
+        let category = match result.category {
+            BenchmarkCategory::Rendering => "rendering",
+            BenchmarkCategory::Parsing => "parsing",
+            BenchmarkCategory::GridOps => "gridops",
+            BenchmarkCategory::Scrollback => "scrollback",
+            BenchmarkCategory::Memory => "memory",
+            BenchmarkCategory::Throughput => "throughput",
+        }
+        .to_string();
+
+        PyBenchmarkResult {
+            category,
+            name: result.name.clone(),
+            iterations: result.iterations,
+            total_time_us: result.total_time_us,
+            avg_time_us: result.avg_time_us,
+            min_time_us: result.min_time_us,
+            max_time_us: result.max_time_us,
+            ops_per_sec: result.ops_per_sec,
+            memory_bytes: result.memory_bytes,
+        }
+    }
+}
+
+/// Benchmark suite
+#[pyclass(name = "BenchmarkSuite")]
+#[derive(Clone)]
+pub struct PyBenchmarkSuite {
+    #[pyo3(get)]
+    pub results: Vec<PyBenchmarkResult>,
+    #[pyo3(get)]
+    pub total_time_ms: u64,
+    #[pyo3(get)]
+    pub suite_name: String,
+}
+
+#[pymethods]
+impl PyBenchmarkSuite {
+    fn __repr__(&self) -> String {
+        format!(
+            "BenchmarkSuite(name={}, tests={}, time={}ms)",
+            self.suite_name,
+            self.results.len(),
+            self.total_time_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::BenchmarkSuite> for PyBenchmarkSuite {
+    fn from(suite: &crate::terminal::BenchmarkSuite) -> Self {
+        PyBenchmarkSuite {
+            results: suite.results.iter().map(PyBenchmarkResult::from).collect(),
+            total_time_ms: suite.total_time_ms,
+            suite_name: suite.suite_name.clone(),
+        }
+    }
+}
+
+// === Feature 29: Terminal Compliance Testing ===
+
+/// Compliance test
+#[pyclass(name = "ComplianceTest")]
+#[derive(Clone)]
+pub struct PyComplianceTest {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub category: String,
+    #[pyo3(get)]
+    pub passed: bool,
+    #[pyo3(get)]
+    pub expected: String,
+    #[pyo3(get)]
+    pub actual: String,
+    #[pyo3(get)]
+    pub notes: Option<String>,
+}
+
+#[pymethods]
+impl PyComplianceTest {
+    fn __repr__(&self) -> String {
+        format!(
+            "ComplianceTest(name={}, category={}, passed={})",
+            self.name, self.category, self.passed
+        )
+    }
+}
+
+impl From<&crate::terminal::ComplianceTest> for PyComplianceTest {
+    fn from(test: &crate::terminal::ComplianceTest) -> Self {
+        PyComplianceTest {
+            name: test.name.clone(),
+            category: test.category.clone(),
+            passed: test.passed,
+            expected: test.expected.clone(),
+            actual: test.actual.clone(),
+            notes: test.notes.clone(),
+        }
+    }
+}
+
+/// Compliance report
+#[pyclass(name = "ComplianceReport")]
+#[derive(Clone)]
+pub struct PyComplianceReport {
+    #[pyo3(get)]
+    pub terminal_info: String,
+    #[pyo3(get)]
+    pub level: String,
+    #[pyo3(get)]
+    pub tests: Vec<PyComplianceTest>,
+    #[pyo3(get)]
+    pub passed: usize,
+    #[pyo3(get)]
+    pub failed: usize,
+    #[pyo3(get)]
+    pub compliance_percent: f64,
+}
+
+#[pymethods]
+impl PyComplianceReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "ComplianceReport(level={}, passed={}/{}, compliance={:.1}%)",
+            self.level, self.passed, self.passed + self.failed, self.compliance_percent
+        )
+    }
+}
+
+impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
+    fn from(report: &crate::terminal::ComplianceReport) -> Self {
+        use crate::terminal::ComplianceLevel;
+
+        let level = match report.level {
+            ComplianceLevel::VT52 => "vt52",
+            ComplianceLevel::VT100 => "vt100",
+            ComplianceLevel::VT220 => "vt220",
+            ComplianceLevel::VT320 => "vt320",
+            ComplianceLevel::VT420 => "vt420",
+            ComplianceLevel::VT520 => "vt520",
+            ComplianceLevel::XTerm => "xterm",
+        }
+        .to_string();
+
+        PyComplianceReport {
+            terminal_info: report.terminal_info.clone(),
+            level,
+            tests: report.tests.iter().map(PyComplianceTest::from).collect(),
+            passed: report.passed,
+            failed: report.failed,
+            compliance_percent: report.compliance_percent,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -63,13 +63,14 @@ pub use python_bindings::{
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
-    PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette, PyCursorStyle,
-    PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
-    PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPaneState, PyPerformanceMetrics,
-    PyProfilingData, PyPtyTerminal, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
-    PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode, PySessionState,
-    PyShellIntegration, PySnapshotDiff, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
-    PyWindowLayout,
+    PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV,
+    PyColorPalette, PyComplianceReport, PyComplianceTest, PyCursorStyle, PyDamageRegion,
+    PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
+    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
+    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyPtyTerminal, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PySessionState, PyShellIntegration, PySnapshotDiff, PyTerminal,
+    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -139,6 +140,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPaneState>()?;
     m.add_class::<PyWindowLayout>()?;
     m.add_class::<PySessionState>()?;
+    m.add_class::<PyImageProtocol>()?;
+    m.add_class::<PyImageFormat>()?;
+    m.add_class::<PyInlineImage>()?;
+    m.add_class::<PyBenchmarkResult>()?;
+    m.add_class::<PyBenchmarkSuite>()?;
+    m.add_class::<PyComplianceTest>()?;
+    m.add_class::<PyComplianceReport>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
