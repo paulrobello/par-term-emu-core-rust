@@ -793,6 +793,107 @@ pub struct ComplianceReport {
     pub compliance_percent: f64,
 }
 
+// === Feature 30: OSC 52 Clipboard Sync ===
+
+/// Clipboard target for OSC 52
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClipboardTarget {
+    /// System clipboard (c)
+    Clipboard,
+    /// Primary selection (p)
+    Primary,
+    /// Secondary selection (s)
+    Secondary,
+    /// Cut buffer 0 (c0)
+    CutBuffer0,
+}
+
+/// Clipboard operation type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardOperation {
+    /// Set clipboard content
+    Set,
+    /// Query clipboard content
+    Query,
+    /// Clear clipboard
+    Clear,
+}
+
+/// Clipboard sync event
+#[derive(Debug, Clone)]
+pub struct ClipboardSyncEvent {
+    /// Target clipboard
+    pub target: ClipboardTarget,
+    /// Operation type
+    pub operation: ClipboardOperation,
+    /// Content (for Set operations)
+    pub content: Option<String>,
+    /// Timestamp of event
+    pub timestamp: u64,
+    /// Whether this came from remote session
+    pub is_remote: bool,
+}
+
+/// Clipboard sync history entry
+#[derive(Debug, Clone)]
+pub struct ClipboardHistoryEntry {
+    /// Clipboard target
+    pub target: ClipboardTarget,
+    /// Content
+    pub content: String,
+    /// Timestamp
+    pub timestamp: u64,
+    /// Source identifier (e.g., session ID, hostname)
+    pub source: Option<String>,
+}
+
+// === Feature 31: Shell Integration++ ===
+
+/// Command execution record
+#[derive(Debug, Clone)]
+pub struct CommandExecution {
+    /// Command that was executed
+    pub command: String,
+    /// Current working directory when command was run
+    pub cwd: Option<String>,
+    /// Start timestamp (milliseconds since epoch)
+    pub start_time: u64,
+    /// End timestamp (milliseconds since epoch)
+    pub end_time: Option<u64>,
+    /// Exit code
+    pub exit_code: Option<i32>,
+    /// Command duration in milliseconds
+    pub duration_ms: Option<u64>,
+    /// Whether command succeeded (exit code 0)
+    pub success: Option<bool>,
+}
+
+/// Shell integration statistics
+#[derive(Debug, Clone)]
+pub struct ShellIntegrationStats {
+    /// Total commands executed
+    pub total_commands: usize,
+    /// Successful commands (exit code 0)
+    pub successful_commands: usize,
+    /// Failed commands (non-zero exit code)
+    pub failed_commands: usize,
+    /// Average command duration (milliseconds)
+    pub avg_duration_ms: f64,
+    /// Total execution time (milliseconds)
+    pub total_duration_ms: u64,
+}
+
+/// CWD change notification
+#[derive(Debug, Clone)]
+pub struct CwdChange {
+    /// Previous working directory
+    pub old_cwd: Option<String>,
+    /// New working directory
+    pub new_cwd: String,
+    /// Timestamp of change
+    pub timestamp: u64,
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -1020,6 +1121,28 @@ pub struct Terminal {
     inline_images: Vec<InlineImage>,
     /// Maximum number of inline images to store
     max_inline_images: usize,
+
+    // === Feature 30: OSC 52 Clipboard Sync ===
+    /// Clipboard sync events log
+    clipboard_sync_events: Vec<ClipboardSyncEvent>,
+    /// Clipboard sync history across targets
+    clipboard_sync_history: std::collections::HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
+    /// Maximum clipboard sync history entries per target
+    max_clipboard_sync_history: usize,
+    /// Remote session identifier for clipboard sync
+    remote_session_id: Option<String>,
+
+    // === Feature 31: Shell Integration++ ===
+    /// Command execution history
+    command_history: Vec<CommandExecution>,
+    /// Current executing command
+    current_command: Option<CommandExecution>,
+    /// Working directory change history
+    cwd_changes: Vec<CwdChange>,
+    /// Maximum command history entries
+    max_command_history: usize,
+    /// Maximum CWD change history
+    max_cwd_history: usize,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1310,6 +1433,19 @@ impl Terminal {
             // Inline images
             inline_images: Vec::new(),
             max_inline_images: 100, // Keep last 100 images
+
+            // OSC 52 Clipboard Sync
+            clipboard_sync_events: Vec::new(),
+            clipboard_sync_history: std::collections::HashMap::new(),
+            max_clipboard_sync_history: 50, // Keep last 50 entries per target
+            remote_session_id: None,
+
+            // Shell Integration++
+            command_history: Vec::new(),
+            current_command: None,
+            cwd_changes: Vec::new(),
+            max_command_history: 100, // Keep last 100 commands
+            max_cwd_history: 50, // Keep last 50 CWD changes
         }
     }
 
@@ -4737,6 +4873,247 @@ impl Terminal {
         }
 
         output
+    }
+
+    // === Feature 30: OSC 52 Clipboard Sync ===
+
+    /// Record a clipboard sync event
+    pub fn record_clipboard_sync(
+        &mut self,
+        target: ClipboardTarget,
+        operation: ClipboardOperation,
+        content: Option<String>,
+        is_remote: bool,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let event = ClipboardSyncEvent {
+            target,
+            operation,
+            content: content.clone(),
+            timestamp,
+            is_remote,
+        };
+
+        self.clipboard_sync_events.push(event);
+
+        // Add to history if it's a Set operation
+        if let (ClipboardOperation::Set, Some(content)) = (operation, content) {
+            let entry = ClipboardHistoryEntry {
+                target,
+                content,
+                timestamp,
+                source: self.remote_session_id.clone(),
+            };
+
+            self.clipboard_sync_history
+                .entry(target)
+                .or_default()
+                .push(entry);
+
+            // Limit history size
+            if let Some(entries) = self.clipboard_sync_history.get_mut(&target) {
+                if entries.len() > self.max_clipboard_sync_history {
+                    entries.drain(0..entries.len() - self.max_clipboard_sync_history);
+                }
+            }
+        }
+
+    }
+
+    /// Get clipboard sync events
+    pub fn get_clipboard_sync_events(&self) -> &[ClipboardSyncEvent] {
+        &self.clipboard_sync_events
+    }
+
+    /// Get clipboard sync history for a target
+    pub fn get_clipboard_sync_history(
+        &self,
+        target: ClipboardTarget,
+    ) -> Option<&[ClipboardHistoryEntry]> {
+        self.clipboard_sync_history
+            .get(&target)
+            .map(|v| v.as_slice())
+    }
+
+    /// Clear clipboard sync events
+    pub fn clear_clipboard_sync_events(&mut self) {
+        self.clipboard_sync_events.clear();
+    }
+
+    /// Set remote session ID
+    pub fn set_remote_session_id(&mut self, session_id: Option<String>) {
+        self.remote_session_id = session_id;
+    }
+
+    /// Get remote session ID
+    pub fn remote_session_id(&self) -> Option<&str> {
+        self.remote_session_id.as_deref()
+    }
+
+    /// Set maximum clipboard sync history
+    pub fn set_max_clipboard_sync_history(&mut self, max: usize) {
+        self.max_clipboard_sync_history = max;
+        for entries in self.clipboard_sync_history.values_mut() {
+            if entries.len() > max {
+                entries.drain(0..entries.len() - max);
+            }
+        }
+    }
+
+    // === Feature 31: Shell Integration++ ===
+
+    /// Start tracking a command execution
+    pub fn start_command_execution(&mut self, command: String) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        self.current_command = Some(CommandExecution {
+            command,
+            cwd: self.shell_integration.cwd().map(String::from),
+            start_time: timestamp,
+            end_time: None,
+            exit_code: None,
+            duration_ms: None,
+            success: None,
+        });
+
+    }
+
+    /// End tracking the current command execution
+    pub fn end_command_execution(&mut self, exit_code: i32) {
+        if let Some(mut cmd) = self.current_command.take() {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            cmd.end_time = Some(timestamp);
+            cmd.exit_code = Some(exit_code);
+            cmd.duration_ms = Some(timestamp.saturating_sub(cmd.start_time));
+            cmd.success = Some(exit_code == 0);
+
+            self.command_history.push(cmd);
+
+            // Limit history size
+            if self.command_history.len() > self.max_command_history {
+                self.command_history
+                    .drain(0..self.command_history.len() - self.max_command_history);
+            }
+
+        }
+    }
+
+    /// Get command execution history
+    pub fn get_command_history(&self) -> &[CommandExecution] {
+        &self.command_history
+    }
+
+    /// Get current executing command
+    pub fn get_current_command(&self) -> Option<&CommandExecution> {
+        self.current_command.as_ref()
+    }
+
+    /// Record a CWD change
+    pub fn record_cwd_change(&mut self, new_cwd: String) {
+        let old_cwd = self.shell_integration.cwd().map(String::from);
+
+        // Only record if CWD actually changed
+        if old_cwd.as_deref() != Some(&new_cwd) {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let change = CwdChange {
+                old_cwd,
+                new_cwd: new_cwd.clone(),
+                timestamp,
+            };
+
+            self.cwd_changes.push(change);
+
+            // Limit history size
+            if self.cwd_changes.len() > self.max_cwd_history {
+                self.cwd_changes
+                    .drain(0..self.cwd_changes.len() - self.max_cwd_history);
+            }
+
+            // Update shell integration
+            self.shell_integration.set_cwd(new_cwd);
+        }
+    }
+
+    /// Get CWD change history
+    pub fn get_cwd_changes(&self) -> &[CwdChange] {
+        &self.cwd_changes
+    }
+
+    /// Get shell integration statistics
+    pub fn get_shell_integration_stats(&self) -> ShellIntegrationStats {
+        let total_commands = self.command_history.len();
+        let successful_commands = self
+            .command_history
+            .iter()
+            .filter(|cmd| cmd.success == Some(true))
+            .count();
+        let failed_commands = self
+            .command_history
+            .iter()
+            .filter(|cmd| cmd.success == Some(false))
+            .count();
+
+        let total_duration_ms: u64 = self
+            .command_history
+            .iter()
+            .filter_map(|cmd| cmd.duration_ms)
+            .sum();
+
+        let avg_duration_ms = if total_commands > 0 {
+            total_duration_ms as f64 / total_commands as f64
+        } else {
+            0.0
+        };
+
+        ShellIntegrationStats {
+            total_commands,
+            successful_commands,
+            failed_commands,
+            avg_duration_ms,
+            total_duration_ms,
+        }
+    }
+
+    /// Clear command execution history
+    pub fn clear_command_history(&mut self) {
+        self.command_history.clear();
+    }
+
+    /// Clear CWD change history
+    pub fn clear_cwd_history(&mut self) {
+        self.cwd_changes.clear();
+    }
+
+    /// Set maximum command history size
+    pub fn set_max_command_history(&mut self, max: usize) {
+        self.max_command_history = max;
+        if self.command_history.len() > max {
+            self.command_history
+                .drain(0..self.command_history.len() - max);
+        }
+    }
+
+    /// Set maximum CWD history size
+    pub fn set_max_cwd_history(&mut self, max: usize) {
+        self.max_cwd_history = max;
+        if self.cwd_changes.len() > max {
+            self.cwd_changes.drain(0..self.cwd_changes.len() - max);
+        }
     }
 }
 

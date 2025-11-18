@@ -3581,6 +3581,226 @@ impl PyTerminal {
 
         Ok(Terminal::format_compliance_report(&rust_report))
     }
+
+    // === Feature 30: OSC 52 Clipboard Sync ===
+
+    /// Record a clipboard sync event
+    ///
+    /// Args:
+    ///     target: Clipboard target ("clipboard", "primary", "secondary", "cutbuffer0")
+    ///     operation: Operation type ("set", "query", "clear")
+    ///     content: Optional content (for set operations)
+    ///     is_remote: Whether this is from a remote session
+    fn record_clipboard_sync(
+        &mut self,
+        target: &str,
+        operation: &str,
+        content: Option<String>,
+        is_remote: bool,
+    ) -> PyResult<()> {
+        use crate::terminal::{ClipboardOperation, ClipboardTarget};
+
+        let target = match target.to_lowercase().as_str() {
+            "clipboard" => ClipboardTarget::Clipboard,
+            "primary" => ClipboardTarget::Primary,
+            "secondary" => ClipboardTarget::Secondary,
+            "cutbuffer0" => ClipboardTarget::CutBuffer0,
+            _ => return Err(PyValueError::new_err("Invalid clipboard target")),
+        };
+
+        let operation = match operation.to_lowercase().as_str() {
+            "set" => ClipboardOperation::Set,
+            "query" => ClipboardOperation::Query,
+            "clear" => ClipboardOperation::Clear,
+            _ => return Err(PyValueError::new_err("Invalid clipboard operation")),
+        };
+
+        self.inner
+            .record_clipboard_sync(target, operation, content, is_remote);
+        Ok(())
+    }
+
+    /// Get clipboard sync events
+    ///
+    /// Returns:
+    ///     List of PyClipboardSyncEvent
+    fn get_clipboard_sync_events(&self) -> PyResult<Vec<super::types::PyClipboardSyncEvent>> {
+        Ok(self
+            .inner
+            .get_clipboard_sync_events()
+            .iter()
+            .map(super::types::PyClipboardSyncEvent::from)
+            .collect())
+    }
+
+    /// Get clipboard sync history for a target
+    ///
+    /// Args:
+    ///     target: Clipboard target ("clipboard", "primary", "secondary", "cutbuffer0")
+    ///
+    /// Returns:
+    ///     List of PyClipboardHistoryEntry or None
+    fn get_clipboard_sync_history(
+        &self,
+        target: &str,
+    ) -> PyResult<Option<Vec<super::types::PyClipboardHistoryEntry>>> {
+        use crate::terminal::ClipboardTarget;
+
+        let target = match target.to_lowercase().as_str() {
+            "clipboard" => ClipboardTarget::Clipboard,
+            "primary" => ClipboardTarget::Primary,
+            "secondary" => ClipboardTarget::Secondary,
+            "cutbuffer0" => ClipboardTarget::CutBuffer0,
+            _ => return Err(PyValueError::new_err("Invalid clipboard target")),
+        };
+
+        Ok(self
+            .inner
+            .get_clipboard_sync_history(target)
+            .map(|entries| {
+                entries
+                    .iter()
+                    .map(super::types::PyClipboardHistoryEntry::from)
+                    .collect()
+            }))
+    }
+
+    /// Clear clipboard sync events
+    fn clear_clipboard_sync_events(&mut self) -> PyResult<()> {
+        self.inner.clear_clipboard_sync_events();
+        Ok(())
+    }
+
+    /// Set remote session ID
+    ///
+    /// Args:
+    ///     session_id: Optional session identifier
+    fn set_remote_session_id(&mut self, session_id: Option<String>) -> PyResult<()> {
+        self.inner.set_remote_session_id(session_id);
+        Ok(())
+    }
+
+    /// Get remote session ID
+    ///
+    /// Returns:
+    ///     Optional session identifier
+    fn remote_session_id(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.remote_session_id().map(String::from))
+    }
+
+    /// Set maximum clipboard sync history
+    ///
+    /// Args:
+    ///     max: Maximum number of entries per target
+    fn set_max_clipboard_sync_history(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_clipboard_sync_history(max);
+        Ok(())
+    }
+
+    // === Feature 31: Shell Integration++ ===
+
+    /// Start tracking a command execution
+    ///
+    /// Args:
+    ///     command: Command being executed
+    fn start_command_execution(&mut self, command: String) -> PyResult<()> {
+        self.inner.start_command_execution(command);
+        Ok(())
+    }
+
+    /// End tracking the current command execution
+    ///
+    /// Args:
+    ///     exit_code: Exit code of the command
+    fn end_command_execution(&mut self, exit_code: i32) -> PyResult<()> {
+        self.inner.end_command_execution(exit_code);
+        Ok(())
+    }
+
+    /// Get command execution history
+    ///
+    /// Returns:
+    ///     List of PyCommandExecution
+    fn get_command_history(&self) -> PyResult<Vec<super::types::PyCommandExecution>> {
+        Ok(self
+            .inner
+            .get_command_history()
+            .iter()
+            .map(super::types::PyCommandExecution::from)
+            .collect())
+    }
+
+    /// Get current executing command
+    ///
+    /// Returns:
+    ///     Optional PyCommandExecution
+    fn get_current_command(&self) -> PyResult<Option<super::types::PyCommandExecution>> {
+        Ok(self
+            .inner
+            .get_current_command()
+            .map(super::types::PyCommandExecution::from))
+    }
+
+    /// Record a CWD change
+    ///
+    /// Args:
+    ///     new_cwd: New working directory
+    fn record_cwd_change(&mut self, new_cwd: String) -> PyResult<()> {
+        self.inner.record_cwd_change(new_cwd);
+        Ok(())
+    }
+
+    /// Get CWD change history
+    ///
+    /// Returns:
+    ///     List of PyCwdChange
+    fn get_cwd_changes(&self) -> PyResult<Vec<super::types::PyCwdChange>> {
+        Ok(self
+            .inner
+            .get_cwd_changes()
+            .iter()
+            .map(super::types::PyCwdChange::from)
+            .collect())
+    }
+
+    /// Get shell integration statistics
+    ///
+    /// Returns:
+    ///     PyShellIntegrationStats
+    fn get_shell_integration_stats(&self) -> PyResult<super::types::PyShellIntegrationStats> {
+        let stats = self.inner.get_shell_integration_stats();
+        Ok(super::types::PyShellIntegrationStats::from(&stats))
+    }
+
+    /// Clear command execution history
+    fn clear_command_history(&mut self) -> PyResult<()> {
+        self.inner.clear_command_history();
+        Ok(())
+    }
+
+    /// Clear CWD change history
+    fn clear_cwd_history(&mut self) -> PyResult<()> {
+        self.inner.clear_cwd_history();
+        Ok(())
+    }
+
+    /// Set maximum command history size
+    ///
+    /// Args:
+    ///     max: Maximum number of command entries
+    fn set_max_command_history(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_command_history(max);
+        Ok(())
+    }
+
+    /// Set maximum CWD history size
+    ///
+    /// Args:
+    ///     max: Maximum number of CWD change entries
+    fn set_max_cwd_history(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_cwd_history(max);
+        Ok(())
+    }
 }
 
 /// Helper function to parse clipboard slot from string

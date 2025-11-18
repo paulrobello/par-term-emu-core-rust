@@ -63,14 +63,15 @@ pub use python_bindings::{
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
-    PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV,
-    PyColorPalette, PyComplianceReport, PyComplianceTest, PyCursorStyle, PyDamageRegion,
+    PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyClipboardHistoryEntry,
+    PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
+    PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
     PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
     PyPaneState, PyPerformanceMetrics, PyProfilingData, PyPtyTerminal, PyRegexMatch,
     PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PySnapshotDiff, PyTerminal,
-    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -147,6 +148,11 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBenchmarkSuite>()?;
     m.add_class::<PyComplianceTest>()?;
     m.add_class::<PyComplianceReport>()?;
+    m.add_class::<PyClipboardSyncEvent>()?;
+    m.add_class::<PyClipboardHistoryEntry>()?;
+    m.add_class::<PyCommandExecution>()?;
+    m.add_class::<PyShellIntegrationStats>()?;
+    m.add_class::<PyCwdChange>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;

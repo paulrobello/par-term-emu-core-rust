@@ -1947,6 +1947,226 @@ impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
     }
 }
 
+// === Feature 30: OSC 52 Clipboard Sync ===
+
+/// Clipboard sync event
+#[pyclass(name = "ClipboardSyncEvent")]
+#[derive(Clone)]
+pub struct PyClipboardSyncEvent {
+    #[pyo3(get)]
+    pub target: String,
+    #[pyo3(get)]
+    pub operation: String,
+    #[pyo3(get)]
+    pub content: Option<String>,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub is_remote: bool,
+}
+
+#[pymethods]
+impl PyClipboardSyncEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "ClipboardSyncEvent(target={}, operation={}, is_remote={})",
+            self.target, self.operation, self.is_remote
+        )
+    }
+}
+
+impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
+    fn from(event: &crate::terminal::ClipboardSyncEvent) -> Self {
+        use crate::terminal::{ClipboardOperation, ClipboardTarget};
+
+        let target = match event.target {
+            ClipboardTarget::Clipboard => "clipboard",
+            ClipboardTarget::Primary => "primary",
+            ClipboardTarget::Secondary => "secondary",
+            ClipboardTarget::CutBuffer0 => "cutbuffer0",
+        }
+        .to_string();
+
+        let operation = match event.operation {
+            ClipboardOperation::Set => "set",
+            ClipboardOperation::Query => "query",
+            ClipboardOperation::Clear => "clear",
+        }
+        .to_string();
+
+        PyClipboardSyncEvent {
+            target,
+            operation,
+            content: event.content.clone(),
+            timestamp: event.timestamp,
+            is_remote: event.is_remote,
+        }
+    }
+}
+
+/// Clipboard history entry
+#[pyclass(name = "ClipboardHistoryEntry")]
+#[derive(Clone)]
+pub struct PyClipboardHistoryEntry {
+    #[pyo3(get)]
+    pub target: String,
+    #[pyo3(get)]
+    pub content: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub source: Option<String>,
+}
+
+#[pymethods]
+impl PyClipboardHistoryEntry {
+    fn __repr__(&self) -> String {
+        format!(
+            "ClipboardHistoryEntry(target={}, content_len={}, timestamp={})",
+            self.target,
+            self.content.len(),
+            self.timestamp
+        )
+    }
+}
+
+impl From<&crate::terminal::ClipboardHistoryEntry> for PyClipboardHistoryEntry {
+    fn from(entry: &crate::terminal::ClipboardHistoryEntry) -> Self {
+        use crate::terminal::ClipboardTarget;
+
+        let target = match entry.target {
+            ClipboardTarget::Clipboard => "clipboard",
+            ClipboardTarget::Primary => "primary",
+            ClipboardTarget::Secondary => "secondary",
+            ClipboardTarget::CutBuffer0 => "cutbuffer0",
+        }
+        .to_string();
+
+        PyClipboardHistoryEntry {
+            target,
+            content: entry.content.clone(),
+            timestamp: entry.timestamp,
+            source: entry.source.clone(),
+        }
+    }
+}
+
+// === Feature 31: Shell Integration++ ===
+
+/// Command execution record
+#[pyclass(name = "CommandExecution")]
+#[derive(Clone)]
+pub struct PyCommandExecution {
+    #[pyo3(get)]
+    pub command: String,
+    #[pyo3(get)]
+    pub cwd: Option<String>,
+    #[pyo3(get)]
+    pub start_time: u64,
+    #[pyo3(get)]
+    pub end_time: Option<u64>,
+    #[pyo3(get)]
+    pub exit_code: Option<i32>,
+    #[pyo3(get)]
+    pub duration_ms: Option<u64>,
+    #[pyo3(get)]
+    pub success: Option<bool>,
+}
+
+#[pymethods]
+impl PyCommandExecution {
+    fn __repr__(&self) -> String {
+        format!(
+            "CommandExecution(command={:?}, exit_code={:?}, duration={:?}ms)",
+            self.command, self.exit_code, self.duration_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
+    fn from(cmd: &crate::terminal::CommandExecution) -> Self {
+        PyCommandExecution {
+            command: cmd.command.clone(),
+            cwd: cmd.cwd.clone(),
+            start_time: cmd.start_time,
+            end_time: cmd.end_time,
+            exit_code: cmd.exit_code,
+            duration_ms: cmd.duration_ms,
+            success: cmd.success,
+        }
+    }
+}
+
+/// Shell integration statistics
+#[pyclass(name = "ShellIntegrationStats")]
+#[derive(Clone)]
+pub struct PyShellIntegrationStats {
+    #[pyo3(get)]
+    pub total_commands: usize,
+    #[pyo3(get)]
+    pub successful_commands: usize,
+    #[pyo3(get)]
+    pub failed_commands: usize,
+    #[pyo3(get)]
+    pub avg_duration_ms: f64,
+    #[pyo3(get)]
+    pub total_duration_ms: u64,
+}
+
+#[pymethods]
+impl PyShellIntegrationStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "ShellIntegrationStats(total={}, success={}, failed={}, avg_ms={:.1})",
+            self.total_commands, self.successful_commands, self.failed_commands, self.avg_duration_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::ShellIntegrationStats> for PyShellIntegrationStats {
+    fn from(stats: &crate::terminal::ShellIntegrationStats) -> Self {
+        PyShellIntegrationStats {
+            total_commands: stats.total_commands,
+            successful_commands: stats.successful_commands,
+            failed_commands: stats.failed_commands,
+            avg_duration_ms: stats.avg_duration_ms,
+            total_duration_ms: stats.total_duration_ms,
+        }
+    }
+}
+
+/// CWD change notification
+#[pyclass(name = "CwdChange")]
+#[derive(Clone)]
+pub struct PyCwdChange {
+    #[pyo3(get)]
+    pub old_cwd: Option<String>,
+    #[pyo3(get)]
+    pub new_cwd: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyCwdChange {
+    fn __repr__(&self) -> String {
+        format!(
+            "CwdChange(old={:?}, new={:?})",
+            self.old_cwd, self.new_cwd
+        )
+    }
+}
+
+impl From<&crate::terminal::CwdChange> for PyCwdChange {
+    fn from(change: &crate::terminal::CwdChange) -> Self {
+        PyCwdChange {
+            old_cwd: change.old_cwd.clone(),
+            new_cwd: change.new_cwd.clone(),
+            timestamp: change.timestamp,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

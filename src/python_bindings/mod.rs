@@ -27,11 +27,12 @@ pub use pty::PyPtyTerminal;
 pub use terminal::PyTerminal;
 pub use types::{
     PyAttributes, PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry,
-    PyColorHSL, PyColorHSV, PyColorPalette, PyComplianceReport, PyComplianceTest,
-    PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
-    PyImageFormat, PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent,
-    PyMousePosition, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyRegexMatch,
-    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PySnapshotDiff, PyTmuxNotification,
-    PyWindowLayout,
+    PyClipboardHistoryEntry, PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette,
+    PyCommandExecution, PyComplianceReport, PyComplianceTest, PyCwdChange, PyDamageRegion,
+    PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
+    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
+    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyRegexMatch, PyRenderingHint,
+    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyTmuxNotification, PyWindowLayout,
 };
