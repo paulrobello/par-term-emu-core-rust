@@ -503,6 +503,130 @@ pub struct SnapshotDiff {
     pub unchanged: usize,
 }
 
+// === Feature 15: Regex Search in Scrollback ===
+
+/// Regex match with position and captured groups
+#[derive(Debug, Clone)]
+pub struct RegexMatch {
+    /// Row where match starts
+    pub row: usize,
+    /// Column where match starts
+    pub col: usize,
+    /// Row where match ends
+    pub end_row: usize,
+    /// Column where match ends
+    pub end_col: usize,
+    /// Matched text
+    pub text: String,
+    /// Capture groups (if any)
+    pub captures: Vec<String>,
+}
+
+/// Options for regex search
+#[derive(Debug, Clone)]
+pub struct RegexSearchOptions {
+    /// Case insensitive search
+    pub case_insensitive: bool,
+    /// Multiline mode (^ and $ match line boundaries)
+    pub multiline: bool,
+    /// Include scrollback in search
+    pub include_scrollback: bool,
+    /// Maximum number of matches to return (0 = unlimited)
+    pub max_matches: usize,
+    /// Search backwards from end
+    pub reverse: bool,
+}
+
+impl Default for RegexSearchOptions {
+    fn default() -> Self {
+        Self {
+            case_insensitive: false,
+            multiline: true,
+            include_scrollback: true,
+            max_matches: 0,
+            reverse: false,
+        }
+    }
+}
+
+// === Feature 13: Terminal Multiplexing Helpers ===
+
+/// Pane state for session management
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PaneState {
+    /// Pane identifier
+    pub id: String,
+    /// Pane title
+    pub title: String,
+    /// Terminal dimensions (cols, rows)
+    pub size: (usize, usize),
+    /// Position in layout (x, y)
+    pub position: (usize, usize),
+    /// Working directory
+    pub cwd: Option<String>,
+    /// Environment variables
+    pub env: std::collections::HashMap<String, String>,
+    /// Screen content snapshot
+    pub content: Vec<String>,
+    /// Cursor position
+    pub cursor: (usize, usize),
+    /// Is alternate screen active
+    pub alt_screen: bool,
+    /// Scrollback position
+    pub scroll_offset: usize,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Last activity timestamp
+    pub last_activity: u64,
+}
+
+/// Layout direction for panes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LayoutDirection {
+    /// Horizontal split (side by side)
+    Horizontal,
+    /// Vertical split (top and bottom)
+    Vertical,
+}
+
+/// Window layout configuration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WindowLayout {
+    /// Layout identifier
+    pub id: String,
+    /// Layout name
+    pub name: String,
+    /// Split direction
+    pub direction: LayoutDirection,
+    /// Pane IDs in this layout
+    pub panes: Vec<String>,
+    /// Relative sizes (percentages)
+    pub sizes: Vec<u8>,
+    /// Active pane index
+    pub active_pane: usize,
+}
+
+/// Complete session state
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionState {
+    /// Session identifier
+    pub id: String,
+    /// Session name
+    pub name: String,
+    /// All panes in the session
+    pub panes: Vec<PaneState>,
+    /// All layouts in the session
+    pub layouts: Vec<WindowLayout>,
+    /// Active layout index
+    pub active_layout: usize,
+    /// Session metadata
+    pub metadata: std::collections::HashMap<String, String>,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Last saved timestamp
+    pub last_saved: u64,
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -720,6 +844,12 @@ pub struct Terminal {
     profiling_data: Option<ProfilingData>,
     /// Profiling enabled flag
     profiling_enabled: bool,
+    /// Regex search matches cache
+    regex_matches: Vec<RegexMatch>,
+    /// Current regex search pattern
+    current_regex_pattern: Option<String>,
+    /// Current pane state (for multiplexing)
+    pane_state: Option<PaneState>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1002,6 +1132,11 @@ impl Terminal {
             // Performance profiling
             profiling_data: None,
             profiling_enabled: false,
+            // Regex search
+            regex_matches: Vec::new(),
+            current_regex_pattern: None,
+            // Multiplexing
+            pane_state: None,
         }
     }
 
@@ -3667,6 +3802,293 @@ impl Terminal {
         if let Some(ref mut data) = self.profiling_data {
             data.peak_memory = data.peak_memory.max(current_bytes);
         }
+    }
+
+    // === Feature 15: Regex Search in Scrollback ===
+
+    /// Perform regex search on terminal content
+    pub fn regex_search(&mut self, pattern: &str, options: RegexSearchOptions) -> Result<Vec<RegexMatch>, String> {
+        // Build regex with options
+        let mut regex_pattern = pattern.to_string();
+        if options.case_insensitive {
+            regex_pattern = format!("(?i){}", regex_pattern);
+        }
+        if options.multiline {
+            regex_pattern = format!("(?m){}", regex_pattern);
+        }
+
+        let re = regex::Regex::new(&regex_pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+
+        let mut matches = Vec::new();
+        let grid = self.active_grid();
+
+        // Collect all lines to search
+        let mut all_lines = Vec::new();
+        let mut line_offsets = Vec::new(); // Track which row each line corresponds to
+
+        // Include scrollback if requested
+        if options.include_scrollback {
+            for i in 0..grid.scrollback_len() {
+                if let Some(line) = grid.scrollback_line(i) {
+                    let text = cells_to_text(line);
+                    line_offsets.push(i);
+                    all_lines.push(text);
+                }
+            }
+        }
+
+        // Add visible screen lines
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let text = cells_to_text(line);
+                line_offsets.push(grid.scrollback_len() + row);
+                all_lines.push(text);
+            }
+        }
+
+        // Search through lines
+        for (line_idx, line) in all_lines.iter().enumerate() {
+            for cap in re.captures_iter(line) {
+                let m = cap.get(0).unwrap();
+                let captures: Vec<String> = cap.iter()
+                    .skip(1)
+                    .filter_map(|c| c.map(|m| m.as_str().to_string()))
+                    .collect();
+
+                matches.push(RegexMatch {
+                    row: line_offsets[line_idx],
+                    col: m.start(),
+                    end_row: line_offsets[line_idx],
+                    end_col: m.end(),
+                    text: m.as_str().to_string(),
+                    captures,
+                });
+
+                if options.max_matches > 0 && matches.len() >= options.max_matches {
+                    break;
+                }
+            }
+
+            if options.max_matches > 0 && matches.len() >= options.max_matches {
+                break;
+            }
+        }
+
+        if options.reverse {
+            matches.reverse();
+        }
+
+        // Cache the results
+        self.regex_matches = matches.clone();
+        self.current_regex_pattern = Some(pattern.to_string());
+
+        Ok(matches)
+    }
+
+    /// Get cached regex matches
+    pub fn get_regex_matches(&self) -> Vec<RegexMatch> {
+        self.regex_matches.clone()
+    }
+
+    /// Get the current regex search pattern
+    pub fn get_current_regex_pattern(&self) -> Option<String> {
+        self.current_regex_pattern.clone()
+    }
+
+    /// Clear regex search cache
+    pub fn clear_regex_matches(&mut self) {
+        self.regex_matches.clear();
+        self.current_regex_pattern = None;
+    }
+
+    /// Find next regex match from a given position
+    pub fn next_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
+        self.regex_matches.iter()
+            .find(|m| m.row > from_row || (m.row == from_row && m.col > from_col))
+            .cloned()
+    }
+
+    /// Find previous regex match from a given position
+    pub fn prev_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
+        self.regex_matches.iter()
+            .rev()
+            .find(|m| m.row < from_row || (m.row == from_row && m.col < from_col))
+            .cloned()
+    }
+
+    // === Feature 13: Terminal Multiplexing Helpers ===
+
+    /// Capture current pane state
+    pub fn capture_pane_state(&self, id: String, cwd: Option<String>) -> PaneState {
+        let grid = self.active_grid();
+        let rows = grid.rows();
+
+        // Capture screen content
+        let mut content = Vec::with_capacity(rows);
+        for row in 0..rows {
+            if let Some(line) = grid.row(row) {
+                content.push(cells_to_text(line));
+            } else {
+                content.push(String::new());
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        PaneState {
+            id,
+            title: self.title.clone(),
+            size: (grid.cols(), grid.rows()),
+            position: (0, 0), // Position should be set by layout manager
+            cwd,
+            env: std::collections::HashMap::new(), // Env vars should be provided externally
+            content,
+            cursor: (self.cursor.col, self.cursor.row),
+            alt_screen: self.alt_screen_active,
+            scroll_offset: 0, // Should be provided by scroll state
+            created_at: now,
+            last_activity: now,
+        }
+    }
+
+    /// Restore pane state (partial - restores what's possible)
+    pub fn restore_pane_state(&mut self, state: &PaneState) -> Result<(), String> {
+        // Verify size matches
+        let (cols, rows) = {
+            let grid = self.active_grid();
+            (grid.cols(), grid.rows())
+        };
+
+        if cols != state.size.0 || rows != state.size.1 {
+            return Err(format!(
+                "Size mismatch: terminal is {}x{} but state is {}x{}",
+                cols, rows, state.size.0, state.size.1
+            ));
+        }
+
+        // Restore title
+        self.title = state.title.clone();
+
+        // Restore cursor position (bounds checked)
+        if state.cursor.0 < cols && state.cursor.1 < rows {
+            self.cursor.col = state.cursor.0;
+            self.cursor.row = state.cursor.1;
+        }
+
+        // Switch to alternate screen if needed
+        if state.alt_screen && !self.alt_screen_active {
+            self.alt_screen_active = true;
+        } else if !state.alt_screen && self.alt_screen_active {
+            self.alt_screen_active = false;
+        }
+
+        // Note: Content restoration would require writing to grid cells
+        // which is complex and may interfere with running processes
+        // This is left for higher-level implementation
+
+        Ok(())
+    }
+
+    /// Store current pane state internally
+    pub fn set_pane_state(&mut self, state: PaneState) {
+        self.pane_state = Some(state);
+    }
+
+    /// Get stored pane state
+    pub fn get_pane_state(&self) -> Option<PaneState> {
+        self.pane_state.clone()
+    }
+
+    /// Clear stored pane state
+    pub fn clear_pane_state(&mut self) {
+        self.pane_state = None;
+    }
+
+    /// Create a window layout from pane IDs
+    pub fn create_window_layout(
+        id: String,
+        name: String,
+        direction: LayoutDirection,
+        panes: Vec<String>,
+        sizes: Vec<u8>,
+        active_pane: usize,
+    ) -> Result<WindowLayout, String> {
+        // Validate inputs
+        if panes.is_empty() {
+            return Err("Layout must contain at least one pane".to_string());
+        }
+        if panes.len() != sizes.len() {
+            return Err("Number of panes must match number of sizes".to_string());
+        }
+        if active_pane >= panes.len() {
+            return Err("Active pane index out of bounds".to_string());
+        }
+
+        // Validate sizes sum to 100%
+        let total: u32 = sizes.iter().map(|&s| s as u32).sum();
+        if total != 100 {
+            return Err(format!("Sizes must sum to 100%, got {}", total));
+        }
+
+        Ok(WindowLayout {
+            id,
+            name,
+            direction,
+            panes,
+            sizes,
+            active_pane,
+        })
+    }
+
+    /// Create a session state
+    pub fn create_session_state(
+        id: String,
+        name: String,
+        panes: Vec<PaneState>,
+        layouts: Vec<WindowLayout>,
+        active_layout: usize,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Result<SessionState, String> {
+        if panes.is_empty() {
+            return Err("Session must contain at least one pane".to_string());
+        }
+        if layouts.is_empty() {
+            return Err("Session must contain at least one layout".to_string());
+        }
+        if active_layout >= layouts.len() {
+            return Err("Active layout index out of bounds".to_string());
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Ok(SessionState {
+            id,
+            name,
+            panes,
+            layouts,
+            active_layout,
+            metadata,
+            created_at: now,
+            last_saved: now,
+        })
+    }
+
+    /// Serialize session state to JSON
+    pub fn serialize_session(state: &SessionState) -> Result<String, String> {
+        serde_json::to_string_pretty(state)
+            .map_err(|e| format!("Failed to serialize session: {}", e))
+    }
+
+    /// Deserialize session state from JSON
+    pub fn deserialize_session(json: &str) -> Result<SessionState, String> {
+        serde_json::from_str(json)
+            .map_err(|e| format!("Failed to deserialize session: {}", e))
     }
 
 }

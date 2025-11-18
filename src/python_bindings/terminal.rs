@@ -2864,6 +2864,270 @@ impl PyTerminal {
         let diff = crate::terminal::diff_screen_lines(&old_strings, &new_strings);
         Ok(super::types::PySnapshotDiff::from(&diff))
     }
+
+    // === Feature 15: Regex Search ===
+
+    /// Perform regex search on terminal content
+    #[pyo3(signature = (pattern, case_insensitive=false, multiline=true, include_scrollback=true, max_matches=0, reverse=false))]
+    fn regex_search(
+        &mut self,
+        pattern: &str,
+        case_insensitive: bool,
+        multiline: bool,
+        include_scrollback: bool,
+        max_matches: usize,
+        reverse: bool,
+    ) -> PyResult<Vec<super::types::PyRegexMatch>> {
+        use crate::terminal::RegexSearchOptions;
+
+        let options = RegexSearchOptions {
+            case_insensitive,
+            multiline,
+            include_scrollback,
+            max_matches,
+            reverse,
+        };
+
+        let matches = self.inner.regex_search(pattern, options)
+            .map_err(PyValueError::new_err)?;
+
+        Ok(matches.iter().map(super::types::PyRegexMatch::from).collect())
+    }
+
+    /// Get cached regex matches
+    fn get_regex_matches(&self) -> PyResult<Vec<super::types::PyRegexMatch>> {
+        Ok(self.inner.get_regex_matches().iter().map(super::types::PyRegexMatch::from).collect())
+    }
+
+    /// Get current regex search pattern
+    fn get_current_regex_pattern(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.get_current_regex_pattern())
+    }
+
+    /// Clear regex search cache
+    fn clear_regex_matches(&mut self) -> PyResult<()> {
+        self.inner.clear_regex_matches();
+        Ok(())
+    }
+
+    /// Find next regex match from a position
+    fn next_regex_match(&self, from_row: usize, from_col: usize) -> PyResult<Option<super::types::PyRegexMatch>> {
+        Ok(self.inner.next_regex_match(from_row, from_col).map(|m| super::types::PyRegexMatch::from(&m)))
+    }
+
+    /// Find previous regex match from a position
+    fn prev_regex_match(&self, from_row: usize, from_col: usize) -> PyResult<Option<super::types::PyRegexMatch>> {
+        Ok(self.inner.prev_regex_match(from_row, from_col).map(|m| super::types::PyRegexMatch::from(&m)))
+    }
+
+    // === Feature 13: Terminal Multiplexing ===
+
+    /// Capture current pane state
+    #[pyo3(signature = (id, cwd=None))]
+    fn capture_pane_state(&self, id: String, cwd: Option<String>) -> PyResult<super::types::PyPaneState> {
+        let state = self.inner.capture_pane_state(id, cwd);
+        Ok(super::types::PyPaneState::from(&state))
+    }
+
+    /// Restore pane state
+    fn restore_pane_state(&mut self, state: &super::types::PyPaneState) -> PyResult<()> {
+        // Convert Python state to Rust state
+        use crate::terminal::PaneState;
+
+        let rust_state = PaneState {
+            id: state.id.clone(),
+            title: state.title.clone(),
+            size: state.size,
+            position: state.position,
+            cwd: state.cwd.clone(),
+            env: std::collections::HashMap::new(), // Not exposed in Python for now
+            content: state.content.clone(),
+            cursor: state.cursor,
+            alt_screen: state.alt_screen,
+            scroll_offset: state.scroll_offset,
+            created_at: state.created_at,
+            last_activity: state.last_activity,
+        };
+
+        self.inner.restore_pane_state(&rust_state)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Set pane state
+    fn set_pane_state(&mut self, state: &super::types::PyPaneState) -> PyResult<()> {
+        // Convert Python state to Rust state
+        use crate::terminal::PaneState;
+
+        let rust_state = PaneState {
+            id: state.id.clone(),
+            title: state.title.clone(),
+            size: state.size,
+            position: state.position,
+            cwd: state.cwd.clone(),
+            env: std::collections::HashMap::new(),
+            content: state.content.clone(),
+            cursor: state.cursor,
+            alt_screen: state.alt_screen,
+            scroll_offset: state.scroll_offset,
+            created_at: state.created_at,
+            last_activity: state.last_activity,
+        };
+
+        self.inner.set_pane_state(rust_state);
+        Ok(())
+    }
+
+    /// Get pane state
+    fn get_pane_state(&self) -> PyResult<Option<super::types::PyPaneState>> {
+        Ok(self.inner.get_pane_state().map(|s| super::types::PyPaneState::from(&s)))
+    }
+
+    /// Clear pane state
+    fn clear_pane_state(&mut self) -> PyResult<()> {
+        self.inner.clear_pane_state();
+        Ok(())
+    }
+
+    /// Create window layout (static method)
+    #[staticmethod]
+    fn create_window_layout(
+        id: String,
+        name: String,
+        direction: &str,
+        panes: Vec<String>,
+        sizes: Vec<u8>,
+        active_pane: usize,
+    ) -> PyResult<super::types::PyWindowLayout> {
+        use crate::terminal::{LayoutDirection, Terminal};
+
+        let dir = match direction.to_lowercase().as_str() {
+            "horizontal" => LayoutDirection::Horizontal,
+            "vertical" => LayoutDirection::Vertical,
+            _ => return Err(PyValueError::new_err("Invalid direction (use 'horizontal' or 'vertical')")),
+        };
+
+        let layout = Terminal::create_window_layout(id, name, dir, panes, sizes, active_pane)
+            .map_err(PyValueError::new_err)?;
+
+        Ok(super::types::PyWindowLayout::from(&layout))
+    }
+
+    /// Create session state (static method)
+    #[staticmethod]
+    fn create_session_state(
+        id: String,
+        name: String,
+        panes: Vec<super::types::PyPaneState>,
+        layouts: Vec<super::types::PyWindowLayout>,
+        active_layout: usize,
+    ) -> PyResult<super::types::PySessionState> {
+        use crate::terminal::{PaneState, WindowLayout, LayoutDirection, Terminal};
+
+        // Convert Python panes to Rust panes
+        let rust_panes: Vec<PaneState> = panes.iter().map(|p| PaneState {
+            id: p.id.clone(),
+            title: p.title.clone(),
+            size: p.size,
+            position: p.position,
+            cwd: p.cwd.clone(),
+            env: std::collections::HashMap::new(),
+            content: p.content.clone(),
+            cursor: p.cursor,
+            alt_screen: p.alt_screen,
+            scroll_offset: p.scroll_offset,
+            created_at: p.created_at,
+            last_activity: p.last_activity,
+        }).collect();
+
+        // Convert Python layouts to Rust layouts
+        let rust_layouts: Vec<WindowLayout> = layouts.iter().map(|l| {
+            let direction = match l.direction.as_str() {
+                "horizontal" => LayoutDirection::Horizontal,
+                _ => LayoutDirection::Vertical,
+            };
+            WindowLayout {
+                id: l.id.clone(),
+                name: l.name.clone(),
+                direction,
+                panes: l.panes.clone(),
+                sizes: l.sizes.clone(),
+                active_pane: l.active_pane,
+            }
+        }).collect();
+
+        let session = Terminal::create_session_state(
+            id,
+            name,
+            rust_panes,
+            rust_layouts,
+            active_layout,
+            std::collections::HashMap::new(),
+        ).map_err(PyValueError::new_err)?;
+
+        Ok(super::types::PySessionState::from(&session))
+    }
+
+    /// Serialize session to JSON (static method)
+    #[staticmethod]
+    fn serialize_session(session: &super::types::PySessionState) -> PyResult<String> {
+        use crate::terminal::{PaneState, WindowLayout, SessionState, LayoutDirection, Terminal};
+
+        // Convert to Rust types
+        let rust_panes: Vec<PaneState> = session.panes.iter().map(|p| PaneState {
+            id: p.id.clone(),
+            title: p.title.clone(),
+            size: p.size,
+            position: p.position,
+            cwd: p.cwd.clone(),
+            env: std::collections::HashMap::new(),
+            content: p.content.clone(),
+            cursor: p.cursor,
+            alt_screen: p.alt_screen,
+            scroll_offset: p.scroll_offset,
+            created_at: p.created_at,
+            last_activity: p.last_activity,
+        }).collect();
+
+        let rust_layouts: Vec<WindowLayout> = session.layouts.iter().map(|l| {
+            let direction = match l.direction.as_str() {
+                "horizontal" => LayoutDirection::Horizontal,
+                _ => LayoutDirection::Vertical,
+            };
+            WindowLayout {
+                id: l.id.clone(),
+                name: l.name.clone(),
+                direction,
+                panes: l.panes.clone(),
+                sizes: l.sizes.clone(),
+                active_pane: l.active_pane,
+            }
+        }).collect();
+
+        let rust_session = SessionState {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            panes: rust_panes,
+            layouts: rust_layouts,
+            active_layout: session.active_layout,
+            metadata: std::collections::HashMap::new(),
+            created_at: session.created_at,
+            last_saved: session.last_saved,
+        };
+
+        Terminal::serialize_session(&rust_session)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Deserialize session from JSON (static method)
+    #[staticmethod]
+    fn deserialize_session(json: &str) -> PyResult<super::types::PySessionState> {
+        use crate::terminal::Terminal;
+
+        let session = Terminal::deserialize_session(json)
+            .map_err(PyValueError::new_err)?;
+
+        Ok(super::types::PySessionState::from(&session))
+    }
 }
 
 /// Helper function to parse clipboard slot from string

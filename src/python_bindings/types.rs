@@ -1404,6 +1404,191 @@ impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
     }
 }
 
+// === Feature 15: Regex Search ===
+
+/// Regex match
+#[pyclass(name = "RegexMatch")]
+#[derive(Clone)]
+pub struct PyRegexMatch {
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub end_row: usize,
+    #[pyo3(get)]
+    pub end_col: usize,
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub captures: Vec<String>,
+}
+
+#[pymethods]
+impl PyRegexMatch {
+    fn __repr__(&self) -> String {
+        format!("RegexMatch(row={}, col={}, text={:?})",
+                self.row, self.col, self.text)
+    }
+}
+
+impl From<&crate::terminal::RegexMatch> for PyRegexMatch {
+    fn from(m: &crate::terminal::RegexMatch) -> Self {
+        PyRegexMatch {
+            row: m.row,
+            col: m.col,
+            end_row: m.end_row,
+            end_col: m.end_col,
+            text: m.text.clone(),
+            captures: m.captures.clone(),
+        }
+    }
+}
+
+// === Feature 13: Multiplexing ===
+
+/// Pane state
+#[pyclass(name = "PaneState")]
+#[derive(Clone)]
+pub struct PyPaneState {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub title: String,
+    #[pyo3(get)]
+    pub size: (usize, usize),
+    #[pyo3(get)]
+    pub position: (usize, usize),
+    #[pyo3(get)]
+    pub cwd: Option<String>,
+    #[pyo3(get)]
+    pub content: Vec<String>,
+    #[pyo3(get)]
+    pub cursor: (usize, usize),
+    #[pyo3(get)]
+    pub alt_screen: bool,
+    #[pyo3(get)]
+    pub scroll_offset: usize,
+    #[pyo3(get)]
+    pub created_at: u64,
+    #[pyo3(get)]
+    pub last_activity: u64,
+}
+
+#[pymethods]
+impl PyPaneState {
+    fn __repr__(&self) -> String {
+        format!("PaneState(id={}, title={}, size={}x{})",
+                self.id, self.title, self.size.0, self.size.1)
+    }
+}
+
+impl From<&crate::terminal::PaneState> for PyPaneState {
+    fn from(state: &crate::terminal::PaneState) -> Self {
+        PyPaneState {
+            id: state.id.clone(),
+            title: state.title.clone(),
+            size: state.size,
+            position: state.position,
+            cwd: state.cwd.clone(),
+            content: state.content.clone(),
+            cursor: state.cursor,
+            alt_screen: state.alt_screen,
+            scroll_offset: state.scroll_offset,
+            created_at: state.created_at,
+            last_activity: state.last_activity,
+        }
+    }
+}
+
+/// Window layout
+#[pyclass(name = "WindowLayout")]
+#[derive(Clone)]
+pub struct PyWindowLayout {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub direction: String,
+    #[pyo3(get)]
+    pub panes: Vec<String>,
+    #[pyo3(get)]
+    pub sizes: Vec<u8>,
+    #[pyo3(get)]
+    pub active_pane: usize,
+}
+
+#[pymethods]
+impl PyWindowLayout {
+    fn __repr__(&self) -> String {
+        format!("WindowLayout(id={}, name={}, panes={})",
+                self.id, self.name, self.panes.len())
+    }
+}
+
+impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
+    fn from(layout: &crate::terminal::WindowLayout) -> Self {
+        use crate::terminal::LayoutDirection;
+
+        let direction = match layout.direction {
+            LayoutDirection::Horizontal => "horizontal",
+            LayoutDirection::Vertical => "vertical",
+        }.to_string();
+
+        PyWindowLayout {
+            id: layout.id.clone(),
+            name: layout.name.clone(),
+            direction,
+            panes: layout.panes.clone(),
+            sizes: layout.sizes.clone(),
+            active_pane: layout.active_pane,
+        }
+    }
+}
+
+/// Session state
+#[pyclass(name = "SessionState")]
+#[derive(Clone)]
+pub struct PySessionState {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub panes: Vec<PyPaneState>,
+    #[pyo3(get)]
+    pub layouts: Vec<PyWindowLayout>,
+    #[pyo3(get)]
+    pub active_layout: usize,
+    #[pyo3(get)]
+    pub created_at: u64,
+    #[pyo3(get)]
+    pub last_saved: u64,
+}
+
+#[pymethods]
+impl PySessionState {
+    fn __repr__(&self) -> String {
+        format!("SessionState(id={}, name={}, panes={}, layouts={})",
+                self.id, self.name, self.panes.len(), self.layouts.len())
+    }
+}
+
+impl From<&crate::terminal::SessionState> for PySessionState {
+    fn from(session: &crate::terminal::SessionState) -> Self {
+        PySessionState {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            panes: session.panes.iter().map(PyPaneState::from).collect(),
+            layouts: session.layouts.iter().map(PyWindowLayout::from).collect(),
+            active_layout: session.active_layout,
+            created_at: session.created_at,
+            last_saved: session.last_saved,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

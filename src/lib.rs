@@ -65,10 +65,11 @@ pub use python_bindings::{
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
     PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette, PyCursorStyle,
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
-    PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPerformanceMetrics,
-    PyProfilingData, PyPtyTerminal, PyRenderingHint, PyScreenSnapshot, PySearchMatch,
-    PySelection, PySelectionMode, PyShellIntegration, PyScrollbackStats, PySnapshotDiff,
-    PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPaneState, PyPerformanceMetrics,
+    PyProfilingData, PyPtyTerminal, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
+    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
+    PyScrollbackStats, PySnapshotDiff, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -134,6 +135,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyProfilingData>()?;
     m.add_class::<PyLineDiff>()?;
     m.add_class::<PySnapshotDiff>()?;
+    m.add_class::<PyRegexMatch>()?;
+    m.add_class::<PyPaneState>()?;
+    m.add_class::<PyWindowLayout>()?;
+    m.add_class::<PySessionState>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
