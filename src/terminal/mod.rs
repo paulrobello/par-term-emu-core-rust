@@ -201,6 +201,12 @@ pub struct Terminal {
     smart_cursor_color: bool,
     /// Attribute change extent mode (DECSACE) - 0/1: stream, 2: rectangle (default)
     attribute_change_extent: u8,
+    /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
+    conformance_level: crate::conformance_level::ConformanceLevel,
+    /// Warning bell volume (0=off, 1-8=volume levels) - VT520 DECSWBV
+    warning_bell_volume: u8,
+    /// Margin bell volume (0=off, 1-8=volume levels) - VT520 DECSMBV
+    margin_bell_volume: u8,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -315,6 +321,11 @@ impl Terminal {
             smart_cursor_color: false,
             // VT420 attribute change extent mode - default to rectangle (2)
             attribute_change_extent: 2,
+            // VT520 conformance level - default to VT520 for maximum compatibility
+            conformance_level: crate::conformance_level::ConformanceLevel::default(),
+            // VT520 bell volume controls - default to moderate volume (4)
+            warning_bell_volume: 4,
+            margin_bell_volume: 4,
         }
     }
 
@@ -349,6 +360,21 @@ impl Terminal {
     /// Get the cursor
     pub fn cursor(&self) -> &Cursor {
         &self.cursor
+    }
+
+    /// Get the current conformance level
+    pub fn conformance_level(&self) -> crate::conformance_level::ConformanceLevel {
+        self.conformance_level
+    }
+
+    /// Get the warning bell volume (0=off, 1-8=volume levels)
+    pub fn warning_bell_volume(&self) -> u8 {
+        self.warning_bell_volume
+    }
+
+    /// Get the margin bell volume (0=off, 1-8=volume levels)
+    pub fn margin_bell_volume(&self) -> u8 {
+        self.margin_bell_volume
     }
 
     /// Get terminal dimensions (of the ACTIVE screen)

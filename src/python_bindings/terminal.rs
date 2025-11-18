@@ -367,6 +367,99 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get current terminal conformance level
+    ///
+    /// Returns:
+    ///     Conformance level as integer (1=VT100, 2=VT220, 3=VT320, 4=VT420, 5=VT520)
+    fn conformance_level(&self) -> PyResult<u8> {
+        Ok(self.inner.conformance_level().level())
+    }
+
+    /// Get conformance level name
+    ///
+    /// Returns:
+    ///     String name of conformance level ("VT100", "VT220", "VT320", "VT420", "VT520")
+    fn conformance_level_name(&self) -> PyResult<String> {
+        Ok(self.inner.conformance_level().to_string())
+    }
+
+    /// Set terminal conformance level
+    ///
+    /// Args:
+    ///     level: Conformance level (1 or 61=VT100, 2 or 62=VT220, 3 or 63=VT320, 4 or 64=VT420, 5 or 65=VT520)
+    ///     c1_mode: 8-bit control mode (0=7-bit, 1 or 2=8-bit, default: 2)
+    ///
+    /// Sends: CSI level ; c1_mode " p
+    #[pyo3(signature = (level, c1_mode=2))]
+    fn set_conformance_level(&mut self, level: u16, c1_mode: u8) -> PyResult<()> {
+        // Validate level parameter
+        let valid_levels = [1, 2, 3, 4, 5, 61, 62, 63, 64, 65];
+        if !valid_levels.contains(&level) {
+            return Err(PyValueError::new_err(format!(
+                "Invalid conformance level: {}. Valid values: 1-5 or 61-65",
+                level
+            )));
+        }
+
+        let sequence = format!("\x1b[{};{}\"p", level, c1_mode);
+        self.inner.process(sequence.as_bytes());
+        Ok(())
+    }
+
+    /// Get warning bell volume
+    ///
+    /// Returns:
+    ///     Volume level (0=off, 1-8=volume levels)
+    fn warning_bell_volume(&self) -> PyResult<u8> {
+        Ok(self.inner.warning_bell_volume())
+    }
+
+    /// Set warning bell volume (VT520)
+    ///
+    /// Args:
+    ///     volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
+    ///
+    /// Sends: CSI volume SP t
+    fn set_warning_bell_volume(&mut self, volume: u8) -> PyResult<()> {
+        if volume > 8 {
+            return Err(PyValueError::new_err(format!(
+                "Invalid volume: {}. Valid range: 0-8",
+                volume
+            )));
+        }
+
+        let sequence = format!("\x1b[{} t", volume);
+        self.inner.process(sequence.as_bytes());
+        Ok(())
+    }
+
+    /// Get margin bell volume
+    ///
+    /// Returns:
+    ///     Volume level (0=off, 1-8=volume levels)
+    fn margin_bell_volume(&self) -> PyResult<u8> {
+        Ok(self.inner.margin_bell_volume())
+    }
+
+    /// Set margin bell volume (VT520)
+    ///
+    /// Args:
+    ///     volume: Volume level (0=off, 1=low, 2-4=medium levels, 5-8=high levels)
+    ///
+    /// Sends: CSI volume SP u
+    fn set_margin_bell_volume(&mut self, volume: u8) -> PyResult<()> {
+        if volume > 8 {
+            return Err(PyValueError::new_err(format!(
+                "Invalid volume: {}. Valid range: 0-8",
+                volume
+            )));
+        }
+
+        let sequence = format!("\x1b[{} u", volume);
+        self.inner.process(sequence.as_bytes());
+        Ok(())
+    }
+
     /// Query Kitty Keyboard Protocol flags (sends CSI ? u)
     ///
     /// Returns:
