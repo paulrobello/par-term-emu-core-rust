@@ -1788,4 +1788,78 @@ impl PyTerminal {
         stats.insert("dropped_graphics".to_string(), dropped_graphics);
         Ok(stats)
     }
+
+    /// Enable or disable tmux control mode
+    ///
+    /// When enabled, incoming data is parsed for tmux control protocol messages
+    /// instead of being processed as raw terminal output. This allows the terminal
+    /// to act as a tmux control mode client.
+    ///
+    /// Args:
+    ///     enabled: True to enable control mode, False to disable
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_tmux_control_mode(True)
+    ///     # Now the terminal will parse tmux control protocol messages
+    ///     ```
+    fn set_tmux_control_mode(&mut self, enabled: bool) -> PyResult<()> {
+        self.inner.set_tmux_control_mode(enabled);
+        Ok(())
+    }
+
+    /// Check if tmux control mode is enabled
+    ///
+    /// Returns:
+    ///     True if control mode is enabled, False otherwise
+    fn is_tmux_control_mode(&self) -> PyResult<bool> {
+        Ok(self.inner.is_tmux_control_mode())
+    }
+
+    /// Get tmux control protocol notifications
+    ///
+    /// Returns a list of all pending tmux control protocol notifications.
+    /// This does not consume the notifications. Use drain_tmux_notifications()
+    /// to consume them.
+    ///
+    /// Returns:
+    ///     List of TmuxNotification objects
+    fn get_tmux_notifications(&self) -> PyResult<Vec<super::types::PyTmuxNotification>> {
+        Ok(self
+            .inner
+            .tmux_notifications()
+            .iter()
+            .map(|n| n.into())
+            .collect())
+    }
+
+    /// Drain and return tmux control protocol notifications
+    ///
+    /// Returns all pending notifications and clears the notification buffer.
+    ///
+    /// Returns:
+    ///     List of TmuxNotification objects
+    fn drain_tmux_notifications(&mut self) -> PyResult<Vec<super::types::PyTmuxNotification>> {
+        Ok(self
+            .inner
+            .drain_tmux_notifications()
+            .iter()
+            .map(|n| n.into())
+            .collect())
+    }
+
+    /// Check if there are pending tmux control protocol notifications
+    ///
+    /// Returns:
+    ///     True if there are pending notifications, False otherwise
+    fn has_tmux_notifications(&self) -> PyResult<bool> {
+        Ok(self.inner.has_tmux_notifications())
+    }
+
+    /// Clear the tmux control protocol notifications buffer
+    fn clear_tmux_notifications(&mut self) -> PyResult<()> {
+        self.inner.clear_tmux_notifications();
+        Ok(())
+    }
 }

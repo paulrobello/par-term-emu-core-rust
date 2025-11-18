@@ -25,4 +25,6 @@ pub use color_utils::{
 pub use enums::{PyCursorStyle, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
 pub use terminal::PyTerminal;
-pub use types::{PyAttributes, PyGraphic, PyScreenSnapshot, PyShellIntegration};
+pub use types::{
+    PyAttributes, PyGraphic, PyScreenSnapshot, PyShellIntegration, PyTmuxNotification,
+};

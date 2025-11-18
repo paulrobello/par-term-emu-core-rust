@@ -207,6 +207,10 @@ pub struct Terminal {
     warning_bell_volume: u8,
     /// Margin bell volume (0=off, 1-8=volume levels) - VT520 DECSMBV
     margin_bell_volume: u8,
+    /// Tmux control protocol parser
+    tmux_parser: crate::tmux_control::TmuxControlParser,
+    /// Tmux control protocol notifications buffer
+    tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -326,6 +330,9 @@ impl Terminal {
             // VT520 bell volume controls - default to moderate volume (4)
             warning_bell_volume: 4,
             margin_bell_volume: 4,
+            // Tmux control protocol - default to disabled
+            tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
+            tmux_notifications: Vec::new(),
         }
     }
 
@@ -823,6 +830,29 @@ impl Terminal {
     pub fn process(&mut self, data: &[u8]) {
         debug::log_vt_input(data);
 
+        // If tmux control mode is enabled, parse data through tmux control parser
+        if self.tmux_parser.is_control_mode() {
+            let notifications = self.tmux_parser.parse(data);
+            for notification in notifications {
+                match notification {
+                    crate::tmux_control::TmuxNotification::TerminalOutput { data } => {
+                        // Process terminal output through VTE parser
+                        self.process_vte_data(&data);
+                    }
+                    _ => {
+                        // Store other notifications for retrieval
+                        self.tmux_notifications.push(notification);
+                    }
+                }
+            }
+            return;
+        }
+
+        self.process_vte_data(data);
+    }
+
+    /// Process data through the VTE parser
+    fn process_vte_data(&mut self, data: &[u8]) {
         // If synchronized updates mode is enabled, we need special handling
         if self.synchronized_updates {
             // Check if this data contains the disable sequence (CSI ? 2026 l)
@@ -1471,6 +1501,44 @@ impl Terminal {
     /// Get the URL for a hyperlink ID
     pub fn get_hyperlink_url(&self, id: u32) -> Option<String> {
         self.hyperlinks.get(&id).cloned()
+    }
+
+    /// Enable or disable tmux control mode
+    ///
+    /// When enabled, incoming data is parsed for tmux control protocol messages
+    /// instead of being processed as raw terminal output.
+    pub fn set_tmux_control_mode(&mut self, enabled: bool) {
+        self.tmux_parser.set_control_mode(enabled);
+    }
+
+    /// Check if tmux control mode is enabled
+    pub fn is_tmux_control_mode(&self) -> bool {
+        self.tmux_parser.is_control_mode()
+    }
+
+    /// Get tmux control protocol notifications
+    ///
+    /// Returns a reference to the notifications buffer.
+    /// Use drain_tmux_notifications() to consume the notifications.
+    pub fn tmux_notifications(&self) -> &[crate::tmux_control::TmuxNotification] {
+        &self.tmux_notifications
+    }
+
+    /// Drain and return tmux control protocol notifications
+    ///
+    /// This consumes the notifications buffer, leaving it empty.
+    pub fn drain_tmux_notifications(&mut self) -> Vec<crate::tmux_control::TmuxNotification> {
+        std::mem::take(&mut self.tmux_notifications)
+    }
+
+    /// Check if there are pending tmux control protocol notifications
+    pub fn has_tmux_notifications(&self) -> bool {
+        !self.tmux_notifications.is_empty()
+    }
+
+    /// Clear the tmux control protocol notifications buffer
+    pub fn clear_tmux_notifications(&mut self) {
+        self.tmux_notifications.clear();
     }
 }
 // VTE Perform trait implementation - delegates to sequence handlers
