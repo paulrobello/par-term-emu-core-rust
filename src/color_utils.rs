@@ -642,7 +642,7 @@ mod tests {
         // Mid-gray should be in grayscale ramp (232-255)
         let gray = Color::Rgb(128, 128, 128);
         let index = gray.to_ansi_256();
-        assert!(index >= 232 && index <= 255);
+        assert!(index >= 232);
     }
 
     #[test]
@@ -650,17 +650,17 @@ mod tests {
         // Pure red should map to color cube
         let red = Color::Rgb(255, 0, 0);
         let index = red.to_ansi_256();
-        assert!(index >= 16 && index <= 231);
+        assert!((16..=231).contains(&index));
 
         // Pure green should map to color cube
         let green = Color::Rgb(0, 255, 0);
         let index = green.to_ansi_256();
-        assert!(index >= 16 && index <= 231);
+        assert!((16..=231).contains(&index));
 
         // Pure blue should map to color cube
         let blue = Color::Rgb(0, 0, 255);
         let index = blue.to_ansi_256();
-        assert!(index >= 16 && index <= 231);
+        assert!((16..=231).contains(&index));
     }
 
     #[test]
@@ -816,7 +816,7 @@ mod tests {
         let (h, _, _) = shifted.to_hsl();
 
         // Should be in valid range
-        assert!(h >= 0.0 && h < 360.0);
+        assert!((0.0..360.0).contains(&h));
     }
 
     #[test]

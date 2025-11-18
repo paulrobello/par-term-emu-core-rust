@@ -1894,14 +1894,15 @@ mod tests {
         for i in 0..5 {
             grid.scroll_up(1);
             if i % 2 == 0 {
-                grid.scrollback_wrapped[grid.scrollback_lines.saturating_sub(1).min(grid.max_scrollback - 1)] = true;
+                grid.scrollback_wrapped[grid
+                    .scrollback_lines
+                    .saturating_sub(1)
+                    .min(grid.max_scrollback - 1)] = true;
             }
         }
 
-        // Test wrapped state retrieval
-        let wrapped = grid.is_scrollback_wrapped(0);
-        // Just ensure it doesn't panic with circular buffer
-        assert!(wrapped == true || wrapped == false);
+        // Test wrapped state retrieval - just ensure it doesn't panic with circular buffer
+        let _wrapped = grid.is_scrollback_wrapped(0);
     }
 
     #[test]

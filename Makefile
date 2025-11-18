@@ -135,7 +135,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:

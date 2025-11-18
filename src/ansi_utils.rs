@@ -280,10 +280,7 @@ mod tests {
         // OSC with ST terminator
         assert_eq!(strip_ansi("\x1b]0;Title\x1b\\text"), "text");
         // Multiple sequences
-        assert_eq!(
-            strip_ansi("\x1b]0;Title\x07\x1b[31mred\x1b[0m"),
-            "red"
-        );
+        assert_eq!(strip_ansi("\x1b]0;Title\x07\x1b[31mred\x1b[0m"), "red");
     }
 
     #[test]
@@ -309,8 +306,7 @@ mod tests {
     #[test]
     fn test_generate_sgr_all_attributes() {
         let seq = generate_sgr(
-            false, true, true, true, true, true, true, true, true,
-            None, None,
+            false, true, true, true, true, true, true, true, true, None, None,
         );
         assert!(seq.contains("1")); // bold
         assert!(seq.contains("2")); // dim
@@ -325,8 +321,7 @@ mod tests {
     #[test]
     fn test_generate_sgr_reset() {
         let seq = generate_sgr(
-            true, false, false, false, false, false, false, false, false,
-            None, None,
+            true, false, false, false, false, false, false, false, false, None, None,
         );
         assert_eq!(seq, "\x1b[0m");
     }
@@ -334,8 +329,7 @@ mod tests {
     #[test]
     fn test_generate_sgr_empty() {
         let seq = generate_sgr(
-            false, false, false, false, false, false, false, false, false,
-            None, None,
+            false, false, false, false, false, false, false, false, false, None, None,
         );
         assert_eq!(seq, "");
     }
@@ -345,7 +339,15 @@ mod tests {
         use crate::color::NamedColor;
 
         let seq = generate_sgr(
-            false, false, false, false, false, false, false, false, false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
             Some(Color::Named(NamedColor::Red)),
             Some(Color::Named(NamedColor::Blue)),
         );
@@ -356,7 +358,15 @@ mod tests {
     #[test]
     fn test_generate_sgr_indexed_colors() {
         let seq = generate_sgr(
-            false, false, false, false, false, false, false, false, false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
             Some(Color::Indexed(42)),
             Some(Color::Indexed(99)),
         );
