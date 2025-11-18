@@ -628,4 +628,264 @@ mod tests {
         let brightness = perceived_brightness_rgb(255, 0, 0);
         assert!((brightness - 0.30).abs() < 0.01);
     }
+
+    #[test]
+    fn test_to_ansi_256_grayscale() {
+        // Black should map to grayscale start (16)
+        let black = Color::Rgb(0, 0, 0);
+        assert_eq!(black.to_ansi_256(), 16);
+
+        // White should map to near end of color cube (231)
+        let white = Color::Rgb(255, 255, 255);
+        assert_eq!(white.to_ansi_256(), 231);
+
+        // Mid-gray should be in grayscale ramp (232-255)
+        let gray = Color::Rgb(128, 128, 128);
+        let index = gray.to_ansi_256();
+        assert!(index >= 232 && index <= 255);
+    }
+
+    #[test]
+    fn test_to_ansi_256_color_cube() {
+        // Pure red should map to color cube
+        let red = Color::Rgb(255, 0, 0);
+        let index = red.to_ansi_256();
+        assert!(index >= 16 && index <= 231);
+
+        // Pure green should map to color cube
+        let green = Color::Rgb(0, 255, 0);
+        let index = green.to_ansi_256();
+        assert!(index >= 16 && index <= 231);
+
+        // Pure blue should map to color cube
+        let blue = Color::Rgb(0, 0, 255);
+        let index = blue.to_ansi_256();
+        assert!(index >= 16 && index <= 231);
+    }
+
+    #[test]
+    fn test_to_ansi_256_specific_values() {
+        // Color cube formula: 16 + 36*r + 6*g + b
+        // (5, 5, 5) -> 16 + 36*5 + 6*5 + 5 = 16 + 180 + 30 + 5 = 231
+        let white_cube = Color::Rgb(255, 255, 255);
+        assert_eq!(white_cube.to_ansi_256(), 231);
+
+        // (0, 0, 0) -> grayscale
+        let black = Color::Rgb(0, 0, 0);
+        assert_eq!(black.to_ansi_256(), 16);
+    }
+
+    #[test]
+    fn test_meets_wcag_aa() {
+        // Black on white should meet AA
+        let black = Color::Rgb(0, 0, 0);
+        let white = Color::Rgb(255, 255, 255);
+        assert!(black.meets_wcag_aa(&white));
+
+        // Light gray on white should NOT meet AA
+        let light_gray = Color::Rgb(200, 200, 200);
+        assert!(!light_gray.meets_wcag_aa(&white));
+
+        // Dark gray on black should NOT meet AA
+        let dark_gray = Color::Rgb(50, 50, 50);
+        assert!(!dark_gray.meets_wcag_aa(&black));
+    }
+
+    #[test]
+    fn test_meets_wcag_aaa() {
+        // Black on white should meet AAA
+        let black = Color::Rgb(0, 0, 0);
+        let white = Color::Rgb(255, 255, 255);
+        assert!(black.meets_wcag_aaa(&white));
+
+        // Medium gray on white might not meet AAA
+        let medium_gray = Color::Rgb(150, 150, 150);
+        let meets_aaa = medium_gray.meets_wcag_aaa(&white);
+        // AAA requires 7:1, which is stricter
+        assert!(!meets_aaa);
+    }
+
+    #[test]
+    fn test_mix_colors() {
+        let red = Color::Rgb(255, 0, 0);
+        let blue = Color::Rgb(0, 0, 255);
+
+        // 0.0 ratio = all red
+        let result = red.mix(&blue, 0.0);
+        assert_eq!(result.to_rgb(), (255, 0, 0));
+
+        // 1.0 ratio = all blue
+        let result = red.mix(&blue, 1.0);
+        assert_eq!(result.to_rgb(), (0, 0, 255));
+
+        // 0.5 ratio = purple
+        let result = red.mix(&blue, 0.5);
+        let (r, g, b) = result.to_rgb();
+        assert!(r > 100 && r < 150);
+        assert_eq!(g, 0);
+        assert!(b > 100 && b < 150);
+    }
+
+    #[test]
+    fn test_mix_colors_clamping() {
+        let red = Color::Rgb(255, 0, 0);
+        let blue = Color::Rgb(0, 0, 255);
+
+        // Ratio > 1.0 should clamp to 1.0
+        let result = red.mix(&blue, 1.5);
+        assert_eq!(result.to_rgb(), (0, 0, 255));
+
+        // Ratio < 0.0 should clamp to 0.0
+        let result = red.mix(&blue, -0.5);
+        assert_eq!(result.to_rgb(), (255, 0, 0));
+    }
+
+    #[test]
+    fn test_adjust_saturation_increase() {
+        // Desaturated red
+        let color = Color::Rgb(200, 150, 150);
+        let (_, original_s, _) = color.to_hsl();
+
+        // Increase saturation
+        let saturated = color.adjust_saturation(20.0);
+        let (_, new_s, _) = saturated.to_hsl();
+
+        assert!(new_s > original_s);
+    }
+
+    #[test]
+    fn test_adjust_saturation_decrease() {
+        // Pure red
+        let red = Color::Rgb(255, 0, 0);
+        let (_, original_s, _) = red.to_hsl();
+
+        // Decrease saturation
+        let desaturated = red.adjust_saturation(-20.0);
+        let (_, new_s, _) = desaturated.to_hsl();
+
+        assert!(new_s < original_s);
+    }
+
+    #[test]
+    fn test_adjust_saturation_clamping() {
+        let color = Color::Rgb(200, 100, 100);
+
+        // Over-saturate (should clamp to 100)
+        let over = color.adjust_saturation(200.0);
+        let (_, s, _) = over.to_hsl();
+        assert!((s - 100.0).abs() < 1.0);
+
+        // Under-saturate (should clamp to 0 - grayscale)
+        let under = color.adjust_saturation(-200.0);
+        let (_, s, _) = under.to_hsl();
+        assert!(s < 1.0);
+    }
+
+    #[test]
+    fn test_adjust_hue_basic() {
+        let red = Color::Rgb(255, 0, 0);
+        let (original_h, _, _) = red.to_hsl();
+
+        // Shift hue by 60 degrees
+        let shifted = red.adjust_hue(60.0);
+        let (new_h, _, _) = shifted.to_hsl();
+
+        let expected_h = (original_h + 60.0) % 360.0;
+        assert!((new_h - expected_h).abs() < 2.0);
+    }
+
+    #[test]
+    fn test_adjust_hue_wrapping() {
+        let red = Color::Rgb(255, 0, 0);
+
+        // Shift by more than 360 degrees - should wrap
+        let shifted = red.adjust_hue(400.0);
+        let (h, _, _) = shifted.to_hsl();
+
+        // 400 % 360 = 40
+        let expected_h = 40.0;
+        assert!((h - expected_h).abs() < 2.0);
+    }
+
+    #[test]
+    fn test_adjust_hue_negative() {
+        let red = Color::Rgb(255, 0, 0);
+
+        // Negative shift should work (wraps around)
+        let shifted = red.adjust_hue(-60.0);
+        let (h, _, _) = shifted.to_hsl();
+
+        // Should be in valid range
+        assert!(h >= 0.0 && h < 360.0);
+    }
+
+    #[test]
+    fn test_from_hex_invalid_length() {
+        assert!(Color::from_hex("#FF").is_none());
+        assert!(Color::from_hex("#FFFF").is_none());
+        assert!(Color::from_hex("#FF0000FF").is_none());
+    }
+
+    #[test]
+    fn test_from_hex_invalid_characters() {
+        assert!(Color::from_hex("#GGGGGG").is_none());
+        assert!(Color::from_hex("#12345G").is_none());
+        assert!(Color::from_hex("#ZZZZZZ").is_none());
+    }
+
+    #[test]
+    fn test_from_hex_without_hash() {
+        let color = Color::from_hex("FF0000").unwrap();
+        assert_eq!(color.to_rgb(), (255, 0, 0));
+    }
+
+    #[test]
+    fn test_from_hex_lowercase() {
+        let color = Color::from_hex("#ff8040").unwrap();
+        assert_eq!(color.to_rgb(), (255, 128, 64));
+    }
+
+    #[test]
+    fn test_luminance_calculation() {
+        // Black should have luminance ~0
+        let black = Color::Rgb(0, 0, 0);
+        assert!(black.luminance() < 0.01);
+
+        // White should have luminance ~1
+        let white = Color::Rgb(255, 255, 255);
+        assert!(white.luminance() > 0.9);
+
+        // Red should have lower luminance than green (green is more visible)
+        let red = Color::Rgb(255, 0, 0);
+        let green = Color::Rgb(0, 255, 0);
+        assert!(green.luminance() > red.luminance());
+    }
+
+    #[test]
+    fn test_adjust_brightness_normalized_edge_cases() {
+        // Test brightening pure black
+        let (r, g, b) = adjust_brightness_normalized(0.0, 0.0, 0.0, 0.5);
+        assert!(r > 0.4 && r < 0.6);
+        assert!(g > 0.4 && g < 0.6);
+        assert!(b > 0.4 && b < 0.6);
+
+        // Test dimming pure white
+        let (r, g, b) = adjust_brightness_normalized(1.0, 1.0, 1.0, 0.5);
+        assert!(r > 0.4 && r < 0.6);
+        assert!(g > 0.4 && g < 0.6);
+        assert!(b > 0.4 && b < 0.6);
+    }
+
+    #[test]
+    fn test_hsl_roundtrip_edge_cases() {
+        // Test grayscale colors
+        let gray = Color::Rgb(128, 128, 128);
+        let (h, s, l) = gray.to_hsl();
+        let back = Color::from_hsl(h, s, l);
+        let (r, g, b) = back.to_rgb();
+        // Grayscale should have saturation ~0
+        assert!(s < 1.0);
+        assert!((r as i16 - g as i16).abs() < 2);
+        assert!((g as i16 - b as i16).abs() < 2);
+    }
 }
