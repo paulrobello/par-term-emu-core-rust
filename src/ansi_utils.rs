@@ -260,4 +260,162 @@ mod tests {
         assert!(matches!(parse_color("red"), Some(Color::Named(_))));
         assert!(parse_color("invalid").is_none());
     }
+
+    #[test]
+    fn test_generate_clear_screen() {
+        let seq = generate_clear_screen();
+        assert_eq!(seq, "\x1b[2J");
+    }
+
+    #[test]
+    fn test_generate_clear_line() {
+        let seq = generate_clear_line();
+        assert_eq!(seq, "\x1b[2K");
+    }
+
+    #[test]
+    fn test_strip_ansi_osc_sequences() {
+        // OSC with BEL terminator
+        assert_eq!(strip_ansi("\x1b]0;Title\x07text"), "text");
+        // OSC with ST terminator
+        assert_eq!(strip_ansi("\x1b]0;Title\x1b\\text"), "text");
+        // Multiple sequences
+        assert_eq!(
+            strip_ansi("\x1b]0;Title\x07\x1b[31mred\x1b[0m"),
+            "red"
+        );
+    }
+
+    #[test]
+    fn test_strip_ansi_mixed_content() {
+        // Mix of text and various ANSI sequences
+        assert_eq!(
+            strip_ansi("before\x1b[1mbold\x1b[0mafter"),
+            "beforeboldafter"
+        );
+        assert_eq!(strip_ansi("\x1b[31m\x1b[1m\x1b[0m"), "");
+    }
+
+    #[test]
+    fn test_measure_text_width_edge_cases() {
+        // Empty string
+        assert_eq!(measure_text_width(""), 0);
+        // Only ANSI codes
+        assert_eq!(measure_text_width("\x1b[31m\x1b[0m"), 0);
+        // Mixed wide and narrow chars
+        assert_eq!(measure_text_width("a中b"), 4); // 1 + 2 + 1 = 4
+    }
+
+    #[test]
+    fn test_generate_sgr_all_attributes() {
+        let seq = generate_sgr(
+            false, true, true, true, true, true, true, true, true,
+            None, None,
+        );
+        assert!(seq.contains("1")); // bold
+        assert!(seq.contains("2")); // dim
+        assert!(seq.contains("3")); // italic
+        assert!(seq.contains("4")); // underline
+        assert!(seq.contains("5")); // blink
+        assert!(seq.contains("7")); // reverse
+        assert!(seq.contains("8")); // hidden
+        assert!(seq.contains("9")); // strikethrough
+    }
+
+    #[test]
+    fn test_generate_sgr_reset() {
+        let seq = generate_sgr(
+            true, false, false, false, false, false, false, false, false,
+            None, None,
+        );
+        assert_eq!(seq, "\x1b[0m");
+    }
+
+    #[test]
+    fn test_generate_sgr_empty() {
+        let seq = generate_sgr(
+            false, false, false, false, false, false, false, false, false,
+            None, None,
+        );
+        assert_eq!(seq, "");
+    }
+
+    #[test]
+    fn test_generate_sgr_named_colors() {
+        use crate::color::NamedColor;
+
+        let seq = generate_sgr(
+            false, false, false, false, false, false, false, false, false,
+            Some(Color::Named(NamedColor::Red)),
+            Some(Color::Named(NamedColor::Blue)),
+        );
+        assert!(seq.contains("31")); // red foreground
+        assert!(seq.contains("44")); // blue background
+    }
+
+    #[test]
+    fn test_generate_sgr_indexed_colors() {
+        let seq = generate_sgr(
+            false, false, false, false, false, false, false, false, false,
+            Some(Color::Indexed(42)),
+            Some(Color::Indexed(99)),
+        );
+        assert!(seq.contains("38;5;42")); // indexed foreground
+        assert!(seq.contains("48;5;99")); // indexed background
+    }
+
+    #[test]
+    fn test_parse_color_hex_case_insensitive() {
+        assert!(matches!(
+            parse_color("#ff0000"),
+            Some(Color::Rgb(255, 0, 0))
+        ));
+        assert!(matches!(
+            parse_color("#FF0000"),
+            Some(Color::Rgb(255, 0, 0))
+        ));
+        assert!(matches!(
+            parse_color("#Ff0000"),
+            Some(Color::Rgb(255, 0, 0))
+        ));
+    }
+
+    #[test]
+    fn test_parse_color_rgb_with_spaces() {
+        assert!(matches!(
+            parse_color("rgb( 255 , 0 , 0 )"),
+            Some(Color::Rgb(255, 0, 0))
+        ));
+        assert!(matches!(
+            parse_color("rgb(255,0,0)"),
+            Some(Color::Rgb(255, 0, 0))
+        ));
+    }
+
+    #[test]
+    fn test_parse_color_named_variations() {
+        assert!(matches!(parse_color("red"), Some(Color::Named(_))));
+        assert!(matches!(parse_color("RED"), Some(Color::Named(_))));
+        assert!(matches!(parse_color("Red"), Some(Color::Named(_))));
+        assert!(matches!(parse_color("gray"), Some(Color::Named(_))));
+        assert!(matches!(parse_color("grey"), Some(Color::Named(_))));
+        assert!(matches!(parse_color("bright_black"), Some(Color::Named(_))));
+    }
+
+    #[test]
+    fn test_parse_color_invalid_formats() {
+        assert!(parse_color("").is_none());
+        assert!(parse_color("   ").is_none());
+        assert!(parse_color("#GGGGGG").is_none());
+        assert!(parse_color("#FF00").is_none()); // Too short
+        assert!(parse_color("rgb(256, 0, 0)").is_none()); // Out of range
+        assert!(parse_color("rgb(1, 2)").is_none()); // Missing component
+        assert!(parse_color("unknown_color").is_none());
+    }
+
+    #[test]
+    fn test_generate_cursor_move_large_values() {
+        assert_eq!(generate_cursor_move(99, 199), "\x1b[100;200H");
+        assert_eq!(generate_cursor_move(0, 0), "\x1b[1;1H");
+    }
 }
