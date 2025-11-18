@@ -1,11 +1,13 @@
 //! A comprehensive terminal emulator library in Rust with Python bindings
 //!
-//! This library provides full VT100/VT220/VT320 terminal emulation with iTerm2 feature parity:
+//! This library provides full VT100/VT220/VT320/VT420/VT520 terminal emulation with iTerm2 feature parity:
 //!
 //! ## VT Compatibility Features
 //! - **VT100**: Basic ANSI escape sequences, cursor control, colors
 //! - **VT220**: Line/character editing (IL, DL, ICH, DCH, ECH)
 //! - **VT320**: Extended features and modes
+//! - **VT420**: Rectangle operations, character protection, left/right margins
+//! - **VT520**: Conformance level control, bell volume control
 //!
 //! ## Color Support
 //! - Basic 16 ANSI colors
@@ -36,6 +38,7 @@ pub mod ansi_utils;
 pub mod cell;
 pub mod color;
 pub mod color_utils;
+pub mod conformance_level;
 pub mod cursor;
 pub mod debug;
 pub mod grid;

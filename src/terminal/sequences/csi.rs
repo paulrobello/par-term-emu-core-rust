@@ -595,14 +595,28 @@ impl Terminal {
                 }
             }
             'u' => {
-                // Kitty keyboard protocol uses CSI with intermediates
-                // CSI = flags ; mode u → Set keyboard mode
-                // CSI ? u → Query keyboard capabilities
-                // CSI > flags u → Push flags to stack
-                // CSI < number u → Pop from stack
+                // DECSMBV (VT520), Kitty keyboard protocol, or restore cursor
+                // CSI Ps SP u → Set Margin-Bell Volume (VT520)
+                // CSI = flags ; mode u → Set keyboard mode (Kitty)
+                // CSI ? u → Query keyboard capabilities (Kitty)
+                // CSI > flags u → Push flags to stack (Kitty)
+                // CSI < number u → Pop from stack (Kitty)
                 // CSI u (no intermediates) → Restore cursor position (ANSI.SYS variant)
 
-                if intermediates.contains(&b'=') {
+                if intermediates.contains(&b' ') {
+                    // DECSMBV - Set Margin-Bell Volume (VT520)
+                    // CSI Ps SP u
+                    // Ps = 0: off, 1: low, 2-4: medium levels, 5-8: high levels
+                    let volume = params
+                        .iter()
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(0) as u8;
+
+                    // Clamp to valid range 0-8
+                    self.margin_bell_volume = volume.min(8);
+                } else if intermediates.contains(&b'=') {
                     // CSI = flags ; mode u → Set keyboard mode
                     let flags = params
                         .iter()
@@ -950,17 +964,13 @@ impl Terminal {
                     self.push_response(b"\x1b[>82;10000;0c");
                 } else {
                     // Primary DA: ESC [ c or ESC [ 0 c
-                    // Response: ESC [ ? 1 ; 2 c (VT100 with Advanced Video Option)
-                    // Or: ESC [ ? 62 ; 1 ; 4 ; 6 ; 9 ; 15 ; 22 c (VT220 with features)
-                    // Using VT220 response for better compatibility:
-                    // 62 = VT220
-                    // 1 = 132 columns
-                    // 4 = Sixel graphics
-                    // 6 = Selective erase
-                    // 9 = National replacement character sets
-                    // 15 = Technical character set
-                    // 22 = ANSI color
-                    self.push_response(b"\x1b[?62;1;4;6;9;15;22c");
+                    // Response varies based on conformance level:
+                    // ESC [ ? {id} ; {features} c where:
+                    // id: 1=VT100, 62=VT220, 63=VT320, 64=VT420, 65=VT520
+                    // features: 1=132cols, 4=Sixel, 6=Selective erase, 9=NRC, 15=Technical, 22=ANSI color
+                    let da_id = self.conformance_level.da_identifier();
+                    let response = format!("\x1b[?{};1;4;6;9;15;22c", da_id);
+                    self.push_response(response.as_bytes());
                 }
             }
             'p' => {
@@ -1095,6 +1105,27 @@ impl Terminal {
 
                     let response = format!("\x1b[?{};{}$y", mode, state);
                     self.push_response(response.as_bytes());
+                } else if intermediates.contains(&b'"') && !private {
+                    // DECSCL - Set Conformance Level (VT520)
+                    // CSI Pl ; Pc " p
+                    // Pl = conformance level (61-65 or 1-5)
+                    // Pc = 8-bit control mode (0=7-bit, 1 or 2=8-bit)
+                    let params_list: Vec<u16> = params
+                        .iter()
+                        .filter_map(|p| p.first().copied())
+                        .collect();
+
+                    if let Some(&level_param) = params_list.first() {
+                        if let Some(new_level) =
+                            crate::conformance_level::ConformanceLevel::from_decscl_param(
+                                level_param,
+                            )
+                        {
+                            self.conformance_level = new_level;
+                            // Note: Second parameter (8-bit mode) is parsed but not enforced
+                            // as modern terminals generally support 8-bit controls regardless
+                        }
+                    }
                 }
             }
             'x' => {
@@ -1374,8 +1405,21 @@ impl Terminal {
                 }
             }
             't' => {
-                // Check for DECRARA first (VT420)
-                if intermediates.contains(&b'$') {
+                // Check for DECSWBV first (VT520)
+                if intermediates.contains(&b' ') {
+                    // DECSWBV - Set Warning-Bell Volume (VT520)
+                    // CSI Ps SP t
+                    // Ps = 0: off, 1: low, 2-4: medium levels, 5-8: high levels
+                    let volume = params
+                        .iter()
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(0) as u8;
+
+                    // Clamp to valid range 0-8
+                    self.warning_bell_volume = volume.min(8);
+                } else if intermediates.contains(&b'$') {
                     // DECRARA - Reverse Attributes in Rectangular Area (VT420)
                     // CSI Pt ; Pl ; Pb ; Pr ; Ps $ t
                     // Reverse specified attributes in rectangle

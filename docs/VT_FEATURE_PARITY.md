@@ -1,6 +1,6 @@
 # VT Feature Parity
 
-This document provides a comprehensive reference for VT100/VT220/VT320/VT420 terminal sequence support in par-term-emu-core-rust.
+This document provides a comprehensive reference for VT100/VT220/VT320/VT420/VT520 terminal sequence support in par-term-emu-core-rust.
 
 ## Table of Contents
 
@@ -25,6 +25,7 @@ par-term-emu-core-rust implements extensive VT terminal compatibility:
 - ✅ **VT220** - Full support including editing sequences
 - ✅ **VT320** - Full support
 - ✅ **VT420** - Rectangle operations supported
+- ✅ **VT520** - Conformance level control, bell volume control
 - ✅ **xterm** - Modern extensions (256-color, true color, mouse, etc.)
 - ✅ **Modern protocols** - Kitty keyboard, synchronized updates, OSC 133
 
@@ -367,10 +368,18 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 
 `CSI c` or `CSI 0 c` - Request terminal identity
 
-**Response:** `CSI ? 62 ; 1 ; 4 ; 6 ; 9 ; 15 ; 22 c`
+**Response:** Varies based on conformance level (see DECSCL)
 
-**Meaning:**
+**Default Response (VT520):** `CSI ? 65 ; 1 ; 4 ; 6 ; 9 ; 15 ; 22 c`
+
+**Terminal IDs:**
+- `1` - VT100
 - `62` - VT220
+- `63` - VT320
+- `64` - VT420
+- `65` - VT520 (default)
+
+**Feature Codes:**
 - `1` - 132 columns
 - `4` - Sixel graphics
 - `6` - Selective erase
@@ -481,6 +490,89 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 - Flags control event reporting and key disambiguation
 
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
+
+### VT520 Conformance Level Control
+
+#### DECSCL - Set Conformance Level
+
+`CSI Pl ; Pc " p` - Set terminal conformance level
+
+**Parameters:**
+- `Pl` - Conformance level:
+  - `1` or `61` - VT100
+  - `2` or `62` - VT220
+  - `3` or `63` - VT320
+  - `4` or `64` - VT420
+  - `5` or `65` - VT520 (default)
+- `Pc` - 8-bit control mode:
+  - `0` - 7-bit controls
+  - `1` or `2` - 8-bit controls (default: 2)
+
+**Notes:**
+- Changes the terminal's conformance level, affecting which sequences are recognized
+- The 8-bit control mode parameter is parsed but not enforced (modern terminals support 8-bit regardless)
+- Device Attributes (DA) response reflects the current conformance level
+- Default conformance level is VT520
+
+**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
+
+**Example:**
+```
+CSI 62 ; 2 " p    # Set to VT220 with 8-bit controls
+CSI 5 " p         # Set to VT520 (short form)
+CSI 65 " p        # Set to VT520 (long form)
+```
+
+#### DECSWBV - Set Warning-Bell Volume
+
+`CSI Ps SP t` - Set warning bell volume (VT520)
+
+**Parameters:**
+- `Ps` - Volume level:
+  - `0` - Off
+  - `1` - Low
+  - `2-4` - Medium levels
+  - `5-8` - High levels
+
+**Notes:**
+- Controls the volume of the warning bell
+- Values above 8 are clamped to 8
+- Default volume is 4 (moderate)
+
+**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
+
+**Example:**
+```
+CSI 0 SP t    # Turn off warning bell
+CSI 4 SP t    # Set to medium volume
+CSI 8 SP t    # Set to maximum volume
+```
+
+#### DECSMBV - Set Margin-Bell Volume
+
+`CSI Ps SP u` - Set margin bell volume (VT520)
+
+**Parameters:**
+- `Ps` - Volume level:
+  - `0` - Off
+  - `1` - Low
+  - `2-4` - Medium levels
+  - `5-8` - High levels
+
+**Notes:**
+- Controls the volume of the margin bell
+- Values above 8 are clamped to 8
+- Default volume is 4 (moderate)
+- Independent from warning bell volume
+
+**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
+
+**Example:**
+```
+CSI 0 SP u    # Turn off margin bell
+CSI 4 SP u    # Set to medium volume
+CSI 8 SP u    # Set to maximum volume
+```
 
 ### Left/Right Margins
 
@@ -833,6 +925,14 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 | Attribute change extent | ✅ Full | DECSACE (stream/rectangle mode) |
 | Left/Right margins | ✅ Full | DECLRMM, DECSLRM |
 | Character protection | ✅ Full | DECSCA (CSI ? Ps " q), SPA/EPA (ESC V/W), selective erase |
+
+### VT520 Compatibility
+
+| Feature Category | Support | Notes |
+|------------------|---------|-------|
+| Conformance level control | ✅ Full | DECSCL (set level), DA response varies by level |
+| Bell volume control | ✅ Full | DECSWBV (warning bell), DECSMBV (margin bell) |
+| Device Attributes | ✅ Full | Reports VT520 (id=65) by default |
 
 ### xterm Compatibility
 
