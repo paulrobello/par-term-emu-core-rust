@@ -252,6 +252,506 @@ impl From<&crate::sixel::SixelGraphic> for PyGraphic {
     }
 }
 
+/// Tmux control protocol notification
+#[pyclass(name = "TmuxNotification")]
+#[derive(Clone)]
+pub struct PyTmuxNotification {
+    /// Notification type (e.g., "output", "window-add", "session-changed")
+    #[pyo3(get)]
+    pub notification_type: String,
+
+    /// Pane ID (for notifications that involve a pane)
+    #[pyo3(get)]
+    pub pane_id: Option<String>,
+
+    /// Window ID (for notifications that involve a window)
+    #[pyo3(get)]
+    pub window_id: Option<String>,
+
+    /// Session ID (for notifications that involve a session)
+    #[pyo3(get)]
+    pub session_id: Option<String>,
+
+    /// Name (for window/session rename notifications)
+    #[pyo3(get)]
+    pub name: Option<String>,
+
+    /// Client name (for client-related notifications)
+    #[pyo3(get)]
+    pub client: Option<String>,
+
+    /// Output data (for output notifications, as bytes)
+    #[pyo3(get)]
+    pub data: Option<Vec<u8>>,
+
+    /// Timestamp (for begin/end/error notifications)
+    #[pyo3(get)]
+    pub timestamp: Option<u64>,
+
+    /// Command number (for begin/end/error notifications)
+    #[pyo3(get)]
+    pub command_number: Option<u32>,
+
+    /// Flags (for begin/end/error notifications)
+    #[pyo3(get)]
+    pub flags: Option<String>,
+
+    /// Delay in milliseconds (for extended-output notifications)
+    #[pyo3(get)]
+    pub delay_ms: Option<u64>,
+
+    /// Subscription name (for subscription-changed notifications)
+    #[pyo3(get)]
+    pub subscription_name: Option<String>,
+
+    /// Subscription value (for subscription-changed notifications)
+    #[pyo3(get)]
+    pub value: Option<String>,
+
+    /// Raw line (for unknown notifications)
+    #[pyo3(get)]
+    pub raw_line: Option<String>,
+}
+
+#[pymethods]
+impl PyTmuxNotification {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!("TmuxNotification(type={})", self.notification_type))
+    }
+}
+
+impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
+    fn from(notif: &crate::tmux_control::TmuxNotification) -> Self {
+        use crate::tmux_control::TmuxNotification;
+
+        match notif {
+            TmuxNotification::Begin {
+                timestamp,
+                command_number,
+                flags,
+            } => PyTmuxNotification {
+                notification_type: "begin".to_string(),
+                timestamp: Some(*timestamp),
+                command_number: Some(*command_number),
+                flags: Some(flags.clone()),
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::End {
+                timestamp,
+                command_number,
+                flags,
+            } => PyTmuxNotification {
+                notification_type: "end".to_string(),
+                timestamp: Some(*timestamp),
+                command_number: Some(*command_number),
+                flags: Some(flags.clone()),
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::Error {
+                timestamp,
+                command_number,
+                flags,
+            } => PyTmuxNotification {
+                notification_type: "error".to_string(),
+                timestamp: Some(*timestamp),
+                command_number: Some(*command_number),
+                flags: Some(flags.clone()),
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::Output { pane_id, data } => PyTmuxNotification {
+                notification_type: "output".to_string(),
+                pane_id: Some(pane_id.clone()),
+                data: Some(data.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::PaneModeChanged { pane_id } => PyTmuxNotification {
+                notification_type: "pane-mode-changed".to_string(),
+                pane_id: Some(pane_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::WindowPaneChanged { window_id, pane_id } => PyTmuxNotification {
+                notification_type: "window-pane-changed".to_string(),
+                window_id: Some(window_id.clone()),
+                pane_id: Some(pane_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::WindowClose { window_id } => PyTmuxNotification {
+                notification_type: "window-close".to_string(),
+                window_id: Some(window_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::UnlinkedWindowClose { window_id } => PyTmuxNotification {
+                notification_type: "unlinked-window-close".to_string(),
+                window_id: Some(window_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::WindowAdd { window_id } => PyTmuxNotification {
+                notification_type: "window-add".to_string(),
+                window_id: Some(window_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::UnlinkedWindowAdd { window_id } => PyTmuxNotification {
+                notification_type: "unlinked-window-add".to_string(),
+                window_id: Some(window_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::WindowRenamed { window_id, name } => PyTmuxNotification {
+                notification_type: "window-renamed".to_string(),
+                window_id: Some(window_id.clone()),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::UnlinkedWindowRenamed { window_id, name } => PyTmuxNotification {
+                notification_type: "unlinked-window-renamed".to_string(),
+                window_id: Some(window_id.clone()),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::SessionChanged { session_id, name } => PyTmuxNotification {
+                notification_type: "session-changed".to_string(),
+                session_id: Some(session_id.clone()),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::ClientSessionChanged {
+                client,
+                session_id,
+                name,
+            } => PyTmuxNotification {
+                notification_type: "client-session-changed".to_string(),
+                client: Some(client.clone()),
+                session_id: Some(session_id.clone()),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::SessionRenamed { session_id, name } => PyTmuxNotification {
+                notification_type: "session-renamed".to_string(),
+                session_id: Some(session_id.clone()),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::SessionsChanged => PyTmuxNotification {
+                notification_type: "sessions-changed".to_string(),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::SessionWindowChanged {
+                session_id,
+                window_id,
+            } => PyTmuxNotification {
+                notification_type: "session-window-changed".to_string(),
+                session_id: Some(session_id.clone()),
+                window_id: Some(window_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::ClientDetached { client } => PyTmuxNotification {
+                notification_type: "client-detached".to_string(),
+                client: Some(client.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::Exit => PyTmuxNotification {
+                notification_type: "exit".to_string(),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::Pause { pane_id } => PyTmuxNotification {
+                notification_type: "pause".to_string(),
+                pane_id: Some(pane_id.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::ExtendedOutput {
+                pane_id,
+                delay_ms,
+                data,
+            } => PyTmuxNotification {
+                notification_type: "extended-output".to_string(),
+                pane_id: Some(pane_id.clone()),
+                delay_ms: Some(*delay_ms),
+                data: Some(data.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::Continue => PyTmuxNotification {
+                notification_type: "continue".to_string(),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::SubscriptionChanged { name, value } => PyTmuxNotification {
+                notification_type: "subscription-changed".to_string(),
+                subscription_name: Some(name.clone()),
+                value: Some(value.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                raw_line: None,
+            },
+            TmuxNotification::Unknown { line } => PyTmuxNotification {
+                notification_type: "unknown".to_string(),
+                raw_line: Some(line.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+            },
+            TmuxNotification::TerminalOutput { data } => PyTmuxNotification {
+                notification_type: "terminal-output".to_string(),
+                data: Some(data.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

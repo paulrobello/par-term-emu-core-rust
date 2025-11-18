@@ -1110,10 +1110,8 @@ impl Terminal {
                     // CSI Pl ; Pc " p
                     // Pl = conformance level (61-65 or 1-5)
                     // Pc = 8-bit control mode (0=7-bit, 1 or 2=8-bit)
-                    let params_list: Vec<u16> = params
-                        .iter()
-                        .filter_map(|p| p.first().copied())
-                        .collect();
+                    let params_list: Vec<u16> =
+                        params.iter().filter_map(|p| p.first().copied()).collect();
 
                     if let Some(&level_param) = params_list.first() {
                         if let Some(new_level) =

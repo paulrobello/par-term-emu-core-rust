@@ -134,6 +134,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
   - Shell integration (OSC 133)
   - Sixel graphics (DCS format with half-block rendering)
   - Kitty Keyboard Protocol (progressive enhancement for keyboard handling)
+  - Tmux Control Protocol (tmux -C / -CC support for control mode integration)
 - **Scrollback Buffer**: Configurable history of scrolled lines
 - **Terminal Resizing**: Dynamic size adjustment
 - **Unicode Support**: Full Unicode including emoji and wide characters

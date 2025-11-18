@@ -52,6 +52,7 @@ pub mod shell_integration;
 pub mod sixel;
 pub mod terminal;
 pub mod text_utils;
+pub mod tmux_control;
 
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
 use pyo3::prelude::*;
@@ -63,7 +64,7 @@ pub use python_bindings::{
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
     PyCursorStyle, PyGraphic, PyPtyTerminal, PyScreenSnapshot, PyShellIntegration, PyTerminal,
-    PyUnderlineStyle,
+    PyTmuxNotification, PyUnderlineStyle,
 };
 
 /// Convert PtyError to PyErr
@@ -105,6 +106,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScreenSnapshot>()?;
     m.add_class::<PyShellIntegration>()?;
     m.add_class::<PyGraphic>()?;
+    m.add_class::<PyTmuxNotification>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;
 
