@@ -752,6 +752,139 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
     }
 }
 
+/// Search match result
+#[pyclass(name = "SearchMatch")]
+#[derive(Clone)]
+pub struct PySearchMatch {
+    /// Row index (negative for scrollback, 0+ for visible screen)
+    #[pyo3(get)]
+    pub row: isize,
+    /// Column index
+    #[pyo3(get)]
+    pub col: usize,
+    /// Length of the match
+    #[pyo3(get)]
+    pub length: usize,
+    /// Matched text
+    #[pyo3(get)]
+    pub text: String,
+}
+
+#[pymethods]
+impl PySearchMatch {
+    fn __repr__(&self) -> String {
+        format!("SearchMatch(row={}, col={}, length={}, text={:?})",
+                self.row, self.col, self.length, self.text)
+    }
+}
+
+/// Detected semantic item
+#[pyclass(name = "DetectedItem")]
+#[derive(Clone)]
+pub struct PyDetectedItem {
+    /// Item type: "url", "filepath", "git_hash", "ip", or "email"
+    #[pyo3(get)]
+    pub item_type: String,
+    /// The detected text
+    #[pyo3(get)]
+    pub text: String,
+    /// Row index
+    #[pyo3(get)]
+    pub row: usize,
+    /// Column index
+    #[pyo3(get)]
+    pub col: usize,
+    /// Optional line number (for file paths like "file.txt:123")
+    #[pyo3(get)]
+    pub line_number: Option<usize>,
+}
+
+#[pymethods]
+impl PyDetectedItem {
+    fn __repr__(&self) -> String {
+        format!("DetectedItem(type={}, text={:?}, row={}, col={})",
+                self.item_type, self.text, self.row, self.col)
+    }
+}
+
+/// Selection mode
+#[pyclass(name = "SelectionMode")]
+#[derive(Clone)]
+pub enum PySelectionMode {
+    Character,
+    Line,
+    Block,
+}
+
+/// Selection state
+#[pyclass(name = "Selection")]
+#[derive(Clone)]
+pub struct PySelection {
+    /// Start position (col, row)
+    #[pyo3(get)]
+    pub start: (usize, usize),
+    /// End position (col, row)
+    #[pyo3(get)]
+    pub end: (usize, usize),
+    /// Selection mode
+    #[pyo3(get)]
+    pub mode: String,
+}
+
+#[pymethods]
+impl PySelection {
+    fn __repr__(&self) -> String {
+        format!("Selection(start={:?}, end={:?}, mode={})",
+                self.start, self.end, self.mode)
+    }
+}
+
+/// Scrollback statistics
+#[pyclass(name = "ScrollbackStats")]
+#[derive(Clone)]
+pub struct PyScrollbackStats {
+    /// Total number of scrollback lines
+    #[pyo3(get)]
+    pub total_lines: usize,
+    /// Estimated memory usage in bytes
+    #[pyo3(get)]
+    pub memory_bytes: usize,
+    /// Whether the scrollback buffer has wrapped (cycled)
+    #[pyo3(get)]
+    pub has_wrapped: bool,
+}
+
+#[pymethods]
+impl PyScrollbackStats {
+    fn __repr__(&self) -> String {
+        format!("ScrollbackStats(total_lines={}, memory_bytes={}, has_wrapped={})",
+                self.total_lines, self.memory_bytes, self.has_wrapped)
+    }
+}
+
+/// Bookmark
+#[pyclass(name = "Bookmark")]
+#[derive(Clone)]
+pub struct PyBookmark {
+    /// Bookmark ID
+    #[pyo3(get)]
+    pub id: usize,
+    /// Row index (negative for scrollback, 0+ for visible screen)
+    #[pyo3(get)]
+    pub row: isize,
+    /// Bookmark label
+    #[pyo3(get)]
+    pub label: String,
+}
+
+#[pymethods]
+impl PyBookmark {
+    fn __repr__(&self) -> String {
+        format!("Bookmark(id={}, row={}, label={:?})",
+                self.id, self.row, self.label)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

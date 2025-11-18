@@ -2095,4 +2095,316 @@ impl PyTerminal {
         self.inner.erase_rectangle(top, left, bottom, right);
         Ok(())
     }
+
+    // === Search Methods ===
+
+    /// Search for text in the visible screen
+    ///
+    /// Args:
+    ///     query: Text to search for
+    ///     case_sensitive: Whether the search should be case-sensitive
+    ///
+    /// Returns:
+    ///     List of SearchMatch objects with position and matched text
+    #[pyo3(signature = (query, case_sensitive=false))]
+    fn search(&self, query: &str, case_sensitive: bool) -> PyResult<Vec<super::types::PySearchMatch>> {
+        let matches = self.inner.search(query, case_sensitive);
+        Ok(matches.iter().map(|m| super::types::PySearchMatch {
+            row: m.row,
+            col: m.col,
+            length: m.length,
+            text: m.text.clone(),
+        }).collect())
+    }
+
+    /// Search for text in the scrollback buffer
+    ///
+    /// Args:
+    ///     query: Text to search for
+    ///     case_sensitive: Whether the search should be case-sensitive
+    ///     max_lines: Maximum number of scrollback lines to search (None = all)
+    ///
+    /// Returns:
+    ///     List of SearchMatch objects with negative row indices for scrollback
+    #[pyo3(signature = (query, case_sensitive=false, max_lines=None))]
+    fn search_scrollback(&self, query: &str, case_sensitive: bool, max_lines: Option<usize>)
+        -> PyResult<Vec<super::types::PySearchMatch>> {
+        let matches = self.inner.search_scrollback(query, case_sensitive, max_lines);
+        Ok(matches.iter().map(|m| super::types::PySearchMatch {
+            row: m.row,
+            col: m.col,
+            length: m.length,
+            text: m.text.clone(),
+        }).collect())
+    }
+
+    // === Content Detection Methods ===
+
+    /// Detect URLs in the visible screen
+    ///
+    /// Returns:
+    ///     List of DetectedItem objects for URLs
+    fn detect_urls(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
+        use crate::terminal::DetectedItem;
+        let items = self.inner.detect_urls();
+        Ok(items.iter().map(|item| match item {
+            DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
+                item_type: "url".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: None,
+            },
+            _ => unreachable!(),
+        }).collect())
+    }
+
+    /// Detect file paths in the visible screen
+    ///
+    /// Returns:
+    ///     List of DetectedItem objects for file paths
+    fn detect_file_paths(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
+        use crate::terminal::DetectedItem;
+        let items = self.inner.detect_file_paths();
+        Ok(items.iter().map(|item| match item {
+            DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
+                item_type: "filepath".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: *line_num,
+            },
+            _ => unreachable!(),
+        }).collect())
+    }
+
+    /// Detect semantic items (URLs, file paths, git hashes, IPs, emails)
+    ///
+    /// Returns:
+    ///     List of all detected semantic items
+    fn detect_semantic_items(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
+        use crate::terminal::DetectedItem;
+        let items = self.inner.detect_semantic_items();
+        Ok(items.iter().map(|item| match item {
+            DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
+                item_type: "url".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: None,
+            },
+            DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
+                item_type: "filepath".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: *line_num,
+            },
+            DetectedItem::GitHash(text, row, col) => super::types::PyDetectedItem {
+                item_type: "git_hash".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: None,
+            },
+            DetectedItem::IpAddress(text, row, col) => super::types::PyDetectedItem {
+                item_type: "ip".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: None,
+            },
+            DetectedItem::Email(text, row, col) => super::types::PyDetectedItem {
+                item_type: "email".to_string(),
+                text: text.clone(),
+                row: *row,
+                col: *col,
+                line_number: None,
+            },
+        }).collect())
+    }
+
+    // === Selection Management ===
+
+    /// Set the current selection
+    ///
+    /// Args:
+    ///     start: Start position (col, row) tuple
+    ///     end: End position (col, row) tuple
+    ///     mode: Selection mode: "character", "line", or "block"
+    fn set_selection(&mut self, start: (usize, usize), end: (usize, usize), mode: &str)
+        -> PyResult<()> {
+        use crate::terminal::SelectionMode;
+        let sel_mode = match mode {
+            "character" => SelectionMode::Character,
+            "line" => SelectionMode::Line,
+            "block" => SelectionMode::Block,
+            _ => return Err(PyValueError::new_err("Invalid selection mode")),
+        };
+        self.inner.set_selection(start, end, sel_mode);
+        Ok(())
+    }
+
+    /// Get the current selection
+    ///
+    /// Returns:
+    ///     Selection object or None if no selection
+    fn get_selection(&self) -> PyResult<Option<super::types::PySelection>> {
+        if let Some(sel) = self.inner.get_selection() {
+            let mode_str = match sel.mode {
+                crate::terminal::SelectionMode::Character => "character",
+                crate::terminal::SelectionMode::Line => "line",
+                crate::terminal::SelectionMode::Block => "block",
+            };
+            Ok(Some(super::types::PySelection {
+                start: sel.start,
+                end: sel.end,
+                mode: mode_str.to_string(),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the text content of the current selection
+    ///
+    /// Returns:
+    ///     Selected text as string, or None if no selection
+    fn get_selected_text(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.get_selected_text())
+    }
+
+    /// Select the word at the given position
+    ///
+    /// Args:
+    ///     col: Column index
+    ///     row: Row index
+    fn select_word_at(&mut self, col: usize, row: usize) -> PyResult<()> {
+        self.inner.select_word_at(col, row);
+        Ok(())
+    }
+
+    /// Select the entire line at the given row
+    ///
+    /// Args:
+    ///     row: Row index
+    fn select_line(&mut self, row: usize) -> PyResult<()> {
+        self.inner.select_line(row);
+        Ok(())
+    }
+
+    /// Clear the current selection
+    fn clear_selection(&mut self) -> PyResult<()> {
+        self.inner.clear_selection();
+        Ok(())
+    }
+
+    // === Text Extraction ===
+
+    /// Get text lines around a specific row (with context)
+    ///
+    /// Args:
+    ///     row: Center row (0-based)
+    ///     context_before: Number of lines before the row
+    ///     context_after: Number of lines after the row
+    ///
+    /// Returns:
+    ///     List of text lines
+    fn get_line_context(&self, row: usize, context_before: usize, context_after: usize)
+        -> PyResult<Vec<String>> {
+        Ok(self.inner.get_line_context(row, context_before, context_after))
+    }
+
+    /// Get the paragraph at the given position
+    ///
+    /// A paragraph is defined as consecutive non-empty lines.
+    ///
+    /// Args:
+    ///     row: Row index
+    ///
+    /// Returns:
+    ///     Paragraph text as string
+    fn get_paragraph_at(&self, row: usize) -> PyResult<String> {
+        Ok(self.inner.get_paragraph_at(row))
+    }
+
+    // === Scrollback Operations ===
+
+    /// Export scrollback to various formats
+    ///
+    /// Args:
+    ///     format: Export format: "plain", "html", or "ansi"
+    ///     max_lines: Maximum number of scrollback lines to export (None = all)
+    ///
+    /// Returns:
+    ///     Exported content as string
+    #[pyo3(signature = (format="plain", max_lines=None))]
+    fn export_scrollback(&self, format: &str, max_lines: Option<usize>) -> PyResult<String> {
+        use crate::terminal::ExportFormat;
+        let export_format = match format {
+            "plain" => ExportFormat::Plain,
+            "html" => ExportFormat::Html,
+            "ansi" => ExportFormat::Ansi,
+            _ => return Err(PyValueError::new_err("Invalid export format")),
+        };
+        Ok(self.inner.export_scrollback(export_format, max_lines))
+    }
+
+    /// Get scrollback statistics
+    ///
+    /// Returns:
+    ///     ScrollbackStats object with total lines, memory usage, and wrap status
+    fn scrollback_stats(&self) -> PyResult<super::types::PyScrollbackStats> {
+        let stats = self.inner.scrollback_stats();
+        Ok(super::types::PyScrollbackStats {
+            total_lines: stats.total_lines,
+            memory_bytes: stats.memory_bytes,
+            has_wrapped: stats.has_wrapped,
+        })
+    }
+
+    // === Bookmark Methods ===
+
+    /// Add a bookmark at the given scrollback row
+    ///
+    /// Args:
+    ///     row: Row index (negative for scrollback, 0+ for visible screen)
+    ///     label: Optional label for the bookmark
+    ///
+    /// Returns:
+    ///     Bookmark ID
+    #[pyo3(signature = (row, label=None))]
+    fn add_bookmark(&mut self, row: isize, label: Option<String>) -> PyResult<usize> {
+        Ok(self.inner.add_bookmark(row, label))
+    }
+
+    /// Get all bookmarks
+    ///
+    /// Returns:
+    ///     List of Bookmark objects
+    fn get_bookmarks(&self) -> PyResult<Vec<super::types::PyBookmark>> {
+        let bookmarks = self.inner.get_bookmarks();
+        Ok(bookmarks.iter().map(|b| super::types::PyBookmark {
+            id: b.id,
+            row: b.row,
+            label: b.label.clone(),
+        }).collect())
+    }
+
+    /// Remove a bookmark by ID
+    ///
+    /// Args:
+    ///     id: Bookmark ID
+    ///
+    /// Returns:
+    ///     True if bookmark was removed, False if not found
+    fn remove_bookmark(&mut self, id: usize) -> PyResult<bool> {
+        Ok(self.inner.remove_bookmark(id))
+    }
+
+    /// Clear all bookmarks
+    fn clear_bookmarks(&mut self) -> PyResult<()> {
+        self.inner.clear_bookmarks();
+        Ok(())
+    }
 }

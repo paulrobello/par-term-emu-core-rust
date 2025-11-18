@@ -71,6 +71,89 @@ pub struct HyperlinkInfo {
     pub id: Option<String>,
 }
 
+/// Search match result
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    /// Row index (negative values are scrollback, 0+ are visible screen)
+    pub row: isize,
+    /// Column where match starts (0-indexed)
+    pub col: usize,
+    /// Length of the match in characters
+    pub length: usize,
+    /// Matched text
+    pub text: String,
+}
+
+/// Detected content item (URL, file path, etc.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectedItem {
+    /// URL with position (url, col, row)
+    Url(String, usize, usize),
+    /// File path with position and optional line number (path, col, row, line_number)
+    FilePath(String, usize, usize, Option<usize>),
+    /// Git hash (7-40 chars) with position (hash, col, row)
+    GitHash(String, usize, usize),
+    /// IP address with position (ip, col, row)
+    IpAddress(String, usize, usize),
+    /// Email address with position (email, col, row)
+    Email(String, usize, usize),
+}
+
+/// Selection mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    /// Character-by-character selection
+    Character,
+    /// Line-by-line selection
+    Line,
+    /// Rectangular block selection
+    Block,
+}
+
+/// Selection state
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    /// Start position (col, row)
+    pub start: (usize, usize),
+    /// End position (col, row)
+    pub end: (usize, usize),
+    /// Selection mode
+    pub mode: SelectionMode,
+}
+
+/// Export format for scrollback
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// Plain text (stripped of all formatting)
+    Plain,
+    /// HTML with colors and styles
+    Html,
+    /// Raw ANSI escape sequences preserved
+    Ansi,
+}
+
+/// Scrollback statistics
+#[derive(Debug, Clone)]
+pub struct ScrollbackStats {
+    /// Total lines in scrollback
+    pub total_lines: usize,
+    /// Estimated memory usage in bytes
+    pub memory_bytes: usize,
+    /// Whether scrollback has wrapped around
+    pub has_wrapped: bool,
+}
+
+/// Bookmark in scrollback
+#[derive(Debug, Clone)]
+pub struct Bookmark {
+    /// Unique bookmark ID
+    pub id: usize,
+    /// Row position (negative = scrollback)
+    pub row: isize,
+    /// User-defined label
+    pub label: String,
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -258,6 +341,12 @@ pub struct Terminal {
     bell_events: Vec<BellEvent>,
     /// Terminal events buffer
     terminal_events: Vec<TerminalEvent>,
+    /// Current selection state
+    selection: Option<Selection>,
+    /// Bookmarks for quick navigation
+    bookmarks: Vec<Bookmark>,
+    /// Next available bookmark ID
+    next_bookmark_id: usize,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -271,6 +360,29 @@ impl std::fmt::Debug for Terminal {
             .field("parser", &"<Parser>")
             .finish()
     }
+}
+
+/// Helper function to convert cells to text
+fn cells_to_text(cells: &[Cell]) -> String {
+    cells
+        .iter()
+        .filter(|c| !c.flags.wide_char_spacer())
+        .map(|c| c.c)
+        .collect()
+}
+
+/// Helper function to escape HTML special characters
+fn html_escape(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '<' => "&lt;".to_string(),
+            '>' => "&gt;".to_string(),
+            '&' => "&amp;".to_string(),
+            '"' => "&quot;".to_string(),
+            '\'' => "&#39;".to_string(),
+            _ => c.to_string(),
+        })
+        .collect()
 }
 
 impl Terminal {
@@ -384,6 +496,10 @@ impl Terminal {
             dirty_rows: HashSet::new(),
             bell_events: Vec::new(),
             terminal_events: Vec::new(),
+            // Selection and bookmarks
+            selection: None,
+            bookmarks: Vec::new(),
+            next_bookmark_id: 0,
         }
     }
 
@@ -1957,6 +2073,546 @@ impl Terminal {
     /// Clear the tmux control protocol notifications buffer
     pub fn clear_tmux_notifications(&mut self) {
         self.tmux_notifications.clear();
+    }
+
+    // === Search Methods ===
+
+    /// Search for text in the visible screen area
+    ///
+    /// Returns a vector of SearchMatch results containing position and matched text.
+    /// Row indices are 0-based, with 0 being the top row of the visible screen.
+    ///
+    /// # Arguments
+    /// * `query` - The text to search for
+    /// * `case_sensitive` - Whether the search should be case-sensitive
+    pub fn search(&self, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
+        let mut matches = Vec::new();
+        if query.is_empty() {
+            return matches;
+        }
+
+        let grid = self.active_grid();
+        let search_query = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+                let search_text = if case_sensitive {
+                    line_text.clone()
+                } else {
+                    line_text.to_lowercase()
+                };
+
+                let mut start_col = 0;
+                while let Some(pos) = search_text[start_col..].find(&search_query) {
+                    let col = start_col + pos;
+                    matches.push(SearchMatch {
+                        row: row as isize,
+                        col,
+                        length: query.len(),
+                        text: line_text[col..col + query.len()].to_string(),
+                    });
+                    start_col = col + 1;
+                }
+            }
+        }
+
+        matches
+    }
+
+    /// Search for text in the scrollback buffer
+    ///
+    /// Returns matches with negative row indices (e.g., -1 is the most recent scrollback line).
+    /// Row -1 is the line just above the visible screen.
+    ///
+    /// # Arguments
+    /// * `query` - The text to search for
+    /// * `case_sensitive` - Whether the search should be case-sensitive
+    /// * `max_lines` - Maximum number of scrollback lines to search (None = search all)
+    pub fn search_scrollback(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        max_lines: Option<usize>,
+    ) -> Vec<SearchMatch> {
+        let mut matches = Vec::new();
+        if query.is_empty() {
+            return matches;
+        }
+
+        let search_query = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+
+        let scrollback_len = self.grid.scrollback_len();
+        let lines_to_search = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+
+        for i in 0..lines_to_search {
+            if let Some(line) = self.grid.scrollback_line(i) {
+                let line_text = cells_to_text(line);
+                let search_text = if case_sensitive {
+                    line_text.clone()
+                } else {
+                    line_text.to_lowercase()
+                };
+
+                let mut start_col = 0;
+                while let Some(pos) = search_text[start_col..].find(&search_query) {
+                    let col = start_col + pos;
+                    matches.push(SearchMatch {
+                        row: -((i + 1) as isize), // Negative indices for scrollback
+                        col,
+                        length: query.len(),
+                        text: line_text[col..col + query.len()].to_string(),
+                    });
+                    start_col = col + 1;
+                }
+            }
+        }
+
+        matches
+    }
+
+    // === Content Detection Methods ===
+
+    /// Detect URLs in the visible screen
+    ///
+    /// Returns a vector of detected URLs with their positions.
+    pub fn detect_urls(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        // Simple URL pattern: looks for http://, https://, ftp://, etc.
+        let url_prefixes = ["http://", "https://", "ftp://", "ftps://"];
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                for prefix in &url_prefixes {
+                    let mut start_col = 0;
+                    while let Some(pos) = line_text[start_col..].to_lowercase().find(prefix) {
+                        let col = start_col + pos;
+                        // Find end of URL (space, newline, or end of line)
+                        let end = line_text[col..]
+                            .find(|c: char| c.is_whitespace())
+                            .map(|p| col + p)
+                            .unwrap_or(line_text.len());
+
+                        if end > col {
+                            let url = line_text[col..end].to_string();
+                            items.push(DetectedItem::Url(url, row, col));
+                        }
+                        start_col = end.max(col + 1);
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    /// Detect file paths in the visible screen
+    ///
+    /// Returns a vector of detected file paths with their positions.
+    /// Optionally includes line numbers if detected (e.g., "file.txt:123").
+    pub fn detect_file_paths(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                // Simple detection: paths starting with / or ./ or ../
+                let path_patterns = ["/", "./", "../"];
+
+                for pattern in &path_patterns {
+                    let mut start_col = 0;
+                    while let Some(pos) = line_text[start_col..].find(pattern) {
+                        let col = start_col + pos;
+                        // Find end of path (whitespace or common delimiters)
+                        let end = line_text[col..]
+                            .find(|c: char| c.is_whitespace() || c == ':' || c == ',' || c == ')')
+                            .map(|p| col + p)
+                            .unwrap_or(line_text.len());
+
+                        if end > col {
+                            let path_str = line_text[col..end].to_string();
+
+                            // Check for line number suffix (e.g., ":123")
+                            let line_num = if end < line_text.len() && line_text.chars().nth(end) == Some(':') {
+                                let num_start = end + 1;
+                                let num_end = line_text[num_start..]
+                                    .find(|c: char| !c.is_numeric())
+                                    .map(|p| num_start + p)
+                                    .unwrap_or(line_text.len());
+
+                                if num_end > num_start {
+                                    line_text[num_start..num_end].parse().ok()
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            items.push(DetectedItem::FilePath(path_str, row, col, line_num));
+                        }
+                        start_col = end.max(col + 1);
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    /// Detect semantic items (URLs, file paths, git hashes, IPs, emails)
+    ///
+    /// Returns all detected items in the visible screen.
+    pub fn detect_semantic_items(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                // Git hash pattern (40 hex chars)
+                for (i, window) in line_text.as_bytes().windows(40).enumerate() {
+                    if window.iter().all(|&b| b.is_ascii_hexdigit()) {
+                        let hash = String::from_utf8_lossy(window).to_string();
+                        items.push(DetectedItem::GitHash(hash, row, i));
+                    }
+                }
+
+                // IP address pattern (simple v4)
+                let ip_parts: Vec<&str> = line_text.split(|c: char| !c.is_numeric() && c != '.').collect();
+                for part in ip_parts.iter() {
+                    let nums: Vec<&str> = part.split('.').collect();
+                    if nums.len() == 4 && nums.iter().all(|n| n.parse::<u8>().is_ok()) {
+                        if let Some(col) = line_text.find(part) {
+                            items.push(DetectedItem::IpAddress(part.to_string(), row, col));
+                        }
+                    }
+                }
+
+                // Email pattern (simple)
+                if let Some(at_pos) = line_text.find('@') {
+                    // Find start of email
+                    let start = line_text[..at_pos]
+                        .rfind(|c: char| c.is_whitespace())
+                        .map(|p| p + 1)
+                        .unwrap_or(0);
+
+                    // Find end of email
+                    let end = line_text[at_pos..]
+                        .find(|c: char| c.is_whitespace())
+                        .map(|p| at_pos + p)
+                        .unwrap_or(line_text.len());
+
+                    if end > start && line_text[start..end].contains('@') {
+                        items.push(DetectedItem::Email(line_text[start..end].to_string(), row, start));
+                    }
+                }
+            }
+        }
+
+        // Also add URLs and file paths
+        items.extend(self.detect_urls());
+        items.extend(self.detect_file_paths());
+
+        items
+    }
+
+    // === Selection Management ===
+
+    /// Set the current selection
+    pub fn set_selection(&mut self, start: (usize, usize), end: (usize, usize), mode: SelectionMode) {
+        self.selection = Some(Selection { start, end, mode });
+    }
+
+    /// Get the current selection
+    pub fn get_selection(&self) -> Option<Selection> {
+        self.selection.clone()
+    }
+
+    /// Get the text content of the current selection
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        let grid = self.active_grid();
+
+        let (start_row, start_col) = (sel.start.1.min(sel.end.1), sel.start.0.min(sel.end.0));
+        let (end_row, end_col) = (sel.start.1.max(sel.end.1), sel.start.0.max(sel.end.0));
+
+        match sel.mode {
+            SelectionMode::Character => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        let line_text = cells_to_text(line);
+                        let row_start = if row == start_row { start_col } else { 0 };
+                        let row_end = if row == end_row {
+                            end_col.min(line_text.len())
+                        } else {
+                            line_text.len()
+                        };
+
+                        if row_start < line_text.len() {
+                            text.push_str(&line_text[row_start..row_end]);
+                            if row < end_row {
+                                text.push('\n');
+                            }
+                        }
+                    }
+                }
+                Some(text)
+            }
+            SelectionMode::Line => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        text.push_str(&cells_to_text(line));
+                        if row < end_row {
+                            text.push('\n');
+                        }
+                    }
+                }
+                Some(text)
+            }
+            SelectionMode::Block => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        let line_text = cells_to_text(line);
+                        let row_text = if start_col < line_text.len() {
+                            &line_text[start_col..end_col.min(line_text.len())]
+                        } else {
+                            ""
+                        };
+                        text.push_str(row_text);
+                        if row < end_row {
+                            text.push('\n');
+                        }
+                    }
+                }
+                Some(text)
+            }
+        }
+    }
+
+    /// Select the word at the given position
+    pub fn select_word_at(&mut self, col: usize, row: usize) {
+        if let Some(word) = self.get_word_at(col, row, None) {
+            // Find word boundaries
+            let grid = self.active_grid();
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+                if let Some(word_start) = line_text.find(&word) {
+                    let word_end = word_start + word.len();
+                    self.selection = Some(Selection {
+                        start: (word_start, row),
+                        end: (word_end, row),
+                        mode: SelectionMode::Character,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Select the entire line at the given row
+    pub fn select_line(&mut self, row: usize) {
+        let grid = self.active_grid();
+        let cols = grid.cols();
+        self.selection = Some(Selection {
+            start: (0, row),
+            end: (cols, row),
+            mode: SelectionMode::Line,
+        });
+    }
+
+    /// Clear the current selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    // === Text Extraction ===
+
+    /// Get text lines around a specific row (with context)
+    ///
+    /// # Arguments
+    /// * `row` - The center row (0-based)
+    /// * `context_before` - Number of lines before the row
+    /// * `context_after` - Number of lines after the row
+    ///
+    /// Returns a vector of text lines.
+    pub fn get_line_context(&self, row: usize, context_before: usize, context_after: usize) -> Vec<String> {
+        let grid = self.active_grid();
+        let mut lines = Vec::new();
+
+        let start_row = row.saturating_sub(context_before);
+        let end_row = (row + context_after).min(grid.rows() - 1);
+
+        for r in start_row..=end_row {
+            if let Some(line) = grid.row(r) {
+                lines.push(cells_to_text(line));
+            }
+        }
+
+        lines
+    }
+
+    /// Get the paragraph at the given position
+    ///
+    /// A paragraph is defined as consecutive non-empty lines.
+    pub fn get_paragraph_at(&self, row: usize) -> String {
+        let grid = self.active_grid();
+        let mut lines = Vec::new();
+
+        // Find start of paragraph (search backwards)
+        let mut start_row = row;
+        while start_row > 0 {
+            if let Some(line) = grid.row(start_row - 1) {
+                let text = cells_to_text(line).trim().to_string();
+                if text.is_empty() {
+                    break;
+                }
+                start_row -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Find end of paragraph (search forwards)
+        let mut end_row = row;
+        while end_row < grid.rows() - 1 {
+            if let Some(line) = grid.row(end_row + 1) {
+                let text = cells_to_text(line).trim().to_string();
+                if text.is_empty() {
+                    break;
+                }
+                end_row += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Collect paragraph lines
+        for r in start_row..=end_row {
+            if let Some(line) = grid.row(r) {
+                lines.push(cells_to_text(line));
+            }
+        }
+
+        lines.join("\n")
+    }
+
+    // === Scrollback Operations ===
+
+    /// Export scrollback to various formats
+    ///
+    /// # Arguments
+    /// * `format` - Export format (Plain, Html, Ansi)
+    /// * `max_lines` - Maximum number of scrollback lines to export (None = all)
+    ///
+    /// Returns the exported content as a string.
+    pub fn export_scrollback(&self, format: ExportFormat, max_lines: Option<usize>) -> String {
+        let scrollback_len = self.grid.scrollback_len();
+        let lines_to_export = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+
+        match format {
+            ExportFormat::Plain => {
+                let mut output = String::new();
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        output.push_str(&cells_to_text(line));
+                        output.push('\n');
+                    }
+                }
+                output
+            }
+            ExportFormat::Html => {
+                let mut output = String::from("<pre>\n");
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        let text = cells_to_text(line);
+                        output.push_str(&html_escape(&text));
+                        output.push('\n');
+                    }
+                }
+                output.push_str("</pre>");
+                output
+            }
+            ExportFormat::Ansi => {
+                // For ANSI export, we'd need to preserve colors/attributes
+                // For now, just export as plain text
+                self.export_scrollback(ExportFormat::Plain, max_lines)
+            }
+        }
+    }
+
+    /// Get scrollback statistics
+    pub fn scrollback_stats(&self) -> ScrollbackStats {
+        let total_lines = self.grid.scrollback_len();
+        let memory_bytes = total_lines * self.grid.cols() * std::mem::size_of::<Cell>();
+        // Scrollback has wrapped if we've filled the buffer
+        let has_wrapped = total_lines >= self.grid.max_scrollback();
+
+        ScrollbackStats {
+            total_lines,
+            memory_bytes,
+            has_wrapped,
+        }
+    }
+
+    // === Bookmark Methods ===
+
+    /// Add a bookmark at the given scrollback row
+    ///
+    /// # Arguments
+    /// * `row` - Row index (negative for scrollback, 0+ for visible screen)
+    /// * `label` - Optional label for the bookmark
+    ///
+    /// Returns the bookmark ID.
+    pub fn add_bookmark(&mut self, row: isize, label: Option<String>) -> usize {
+        let id = self.next_bookmark_id;
+        self.next_bookmark_id += 1;
+
+        let bookmark = Bookmark {
+            id,
+            row,
+            label: label.unwrap_or_else(|| format!("Bookmark {}", id)),
+        };
+
+        self.bookmarks.push(bookmark);
+        id
+    }
+
+    /// Get all bookmarks
+    pub fn get_bookmarks(&self) -> Vec<Bookmark> {
+        self.bookmarks.clone()
+    }
+
+    /// Remove a bookmark by ID
+    pub fn remove_bookmark(&mut self, id: usize) -> bool {
+        if let Some(pos) = self.bookmarks.iter().position(|b| b.id == id) {
+            self.bookmarks.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear all bookmarks
+    pub fn clear_bookmarks(&mut self) {
+        self.bookmarks.clear();
     }
 }
 // VTE Perform trait implementation - delegates to sequence handlers
