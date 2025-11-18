@@ -67,8 +67,8 @@ pub use python_bindings::{
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
     PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPaneState, PyPerformanceMetrics,
     PyProfilingData, PyPtyTerminal, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
-    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
-    PyScrollbackStats, PySnapshotDiff, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode, PySessionState,
+    PyShellIntegration, PySnapshotDiff, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
     PyWindowLayout,
 };
 

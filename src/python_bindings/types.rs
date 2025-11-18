@@ -773,8 +773,10 @@ pub struct PySearchMatch {
 #[pymethods]
 impl PySearchMatch {
     fn __repr__(&self) -> String {
-        format!("SearchMatch(row={}, col={}, length={}, text={:?})",
-                self.row, self.col, self.length, self.text)
+        format!(
+            "SearchMatch(row={}, col={}, length={}, text={:?})",
+            self.row, self.col, self.length, self.text
+        )
     }
 }
 
@@ -802,8 +804,10 @@ pub struct PyDetectedItem {
 #[pymethods]
 impl PyDetectedItem {
     fn __repr__(&self) -> String {
-        format!("DetectedItem(type={}, text={:?}, row={}, col={})",
-                self.item_type, self.text, self.row, self.col)
+        format!(
+            "DetectedItem(type={}, text={:?}, row={}, col={})",
+            self.item_type, self.text, self.row, self.col
+        )
     }
 }
 
@@ -834,8 +838,10 @@ pub struct PySelection {
 #[pymethods]
 impl PySelection {
     fn __repr__(&self) -> String {
-        format!("Selection(start={:?}, end={:?}, mode={})",
-                self.start, self.end, self.mode)
+        format!(
+            "Selection(start={:?}, end={:?}, mode={})",
+            self.start, self.end, self.mode
+        )
     }
 }
 
@@ -857,8 +863,10 @@ pub struct PyScrollbackStats {
 #[pymethods]
 impl PyScrollbackStats {
     fn __repr__(&self) -> String {
-        format!("ScrollbackStats(total_lines={}, memory_bytes={}, has_wrapped={})",
-                self.total_lines, self.memory_bytes, self.has_wrapped)
+        format!(
+            "ScrollbackStats(total_lines={}, memory_bytes={}, has_wrapped={})",
+            self.total_lines, self.memory_bytes, self.has_wrapped
+        )
     }
 }
 
@@ -880,8 +888,10 @@ pub struct PyBookmark {
 #[pymethods]
 impl PyBookmark {
     fn __repr__(&self) -> String {
-        format!("Bookmark(id={}, row={}, label={:?})",
-                self.id, self.row, self.label)
+        format!(
+            "Bookmark(id={}, row={}, label={:?})",
+            self.id, self.row, self.label
+        )
     }
 }
 
@@ -912,13 +922,16 @@ pub struct PyPerformanceMetrics {
 #[pymethods]
 impl PyPerformanceMetrics {
     fn __repr__(&self) -> String {
-        format!("PerformanceMetrics(frames={}, cells={}, fps={:.1})",
-                self.frames_rendered, self.cells_updated,
-                if self.total_processing_us > 0 {
-                    1_000_000.0 * self.frames_rendered as f64 / self.total_processing_us as f64
-                } else {
-                    0.0
-                })
+        format!(
+            "PerformanceMetrics(frames={}, cells={}, fps={:.1})",
+            self.frames_rendered,
+            self.cells_updated,
+            if self.total_processing_us > 0 {
+                1_000_000.0 * self.frames_rendered as f64 / self.total_processing_us as f64
+            } else {
+                0.0
+            }
+        )
     }
 }
 
@@ -939,8 +952,10 @@ pub struct PyFrameTiming {
 #[pymethods]
 impl PyFrameTiming {
     fn __repr__(&self) -> String {
-        format!("FrameTiming(frame={}, time={}us, cells={})",
-                self.frame_number, self.processing_us, self.cells_updated)
+        format!(
+            "FrameTiming(frame={}, time={}us, cells={})",
+            self.frame_number, self.processing_us, self.cells_updated
+        )
     }
 }
 
@@ -966,7 +981,10 @@ impl PyColorHSV {
     }
 
     fn __repr__(&self) -> String {
-        format!("ColorHSV(h={:.1}, s={:.2}, v={:.2})", self.h, self.s, self.v)
+        format!(
+            "ColorHSV(h={:.1}, s={:.2}, v={:.2})",
+            self.h, self.s, self.v
+        )
     }
 }
 
@@ -990,7 +1008,10 @@ impl PyColorHSL {
     }
 
     fn __repr__(&self) -> String {
-        format!("ColorHSL(h={:.1}, s={:.2}, l={:.2})", self.h, self.s, self.l)
+        format!(
+            "ColorHSL(h={:.1}, s={:.2}, l={:.2})",
+            self.h, self.s, self.l
+        )
     }
 }
 
@@ -1009,7 +1030,11 @@ pub struct PyColorPalette {
 #[pymethods]
 impl PyColorPalette {
     fn __repr__(&self) -> String {
-        format!("ColorPalette(mode={}, colors={})", self.mode, self.colors.len())
+        format!(
+            "ColorPalette(mode={}, colors={})",
+            self.mode,
+            self.colors.len()
+        )
     }
 }
 
@@ -1032,8 +1057,13 @@ pub struct PyJoinedLines {
 #[pymethods]
 impl PyJoinedLines {
     fn __repr__(&self) -> String {
-        format!("JoinedLines(rows={}-{}, lines={}, len={})",
-                self.start_row, self.end_row, self.lines_joined, self.text.len())
+        format!(
+            "JoinedLines(rows={}-{}, lines={}, len={})",
+            self.start_row,
+            self.end_row,
+            self.lines_joined,
+            self.text.len()
+        )
     }
 }
 
@@ -1054,8 +1084,11 @@ pub struct PyClipboardEntry {
 #[pymethods]
 impl PyClipboardEntry {
     fn __repr__(&self) -> String {
-        format!("ClipboardEntry(len={}, timestamp={})",
-                self.content.len(), self.timestamp)
+        format!(
+            "ClipboardEntry(len={}, timestamp={})",
+            self.content.len(),
+            self.timestamp
+        )
     }
 }
 
@@ -1086,14 +1119,16 @@ pub struct PyMouseEvent {
 #[pymethods]
 impl PyMouseEvent {
     fn __repr__(&self) -> String {
-        format!("MouseEvent(type={}, button={}, pos=({}, {}), timestamp={})",
-                self.event_type, self.button, self.col, self.row, self.timestamp)
+        format!(
+            "MouseEvent(type={}, button={}, pos=({}, {}), timestamp={})",
+            self.event_type, self.button, self.col, self.row, self.timestamp
+        )
     }
 }
 
 impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
     fn from(event: &crate::terminal::MouseEventRecord) -> Self {
-        use crate::terminal::{MouseEventType, MouseButton};
+        use crate::terminal::{MouseButton, MouseEventType};
 
         let event_type = match event.event_type {
             MouseEventType::Press => "press",
@@ -1102,14 +1137,16 @@ impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
             MouseEventType::Drag => "drag",
             MouseEventType::ScrollUp => "scrollup",
             MouseEventType::ScrollDown => "scrolldown",
-        }.to_string();
+        }
+        .to_string();
 
         let button = match event.button {
             MouseButton::Left => "left",
             MouseButton::Middle => "middle",
             MouseButton::Right => "right",
             MouseButton::None => "none",
-        }.to_string();
+        }
+        .to_string();
 
         PyMouseEvent {
             event_type,
@@ -1139,8 +1176,10 @@ pub struct PyMousePosition {
 #[pymethods]
 impl PyMousePosition {
     fn __repr__(&self) -> String {
-        format!("MousePosition(col={}, row={}, timestamp={})",
-                self.col, self.row, self.timestamp)
+        format!(
+            "MousePosition(col={}, row={}, timestamp={})",
+            self.col, self.row, self.timestamp
+        )
     }
 }
 
@@ -1173,8 +1212,10 @@ pub struct PyDamageRegion {
 #[pymethods]
 impl PyDamageRegion {
     fn __repr__(&self) -> String {
-        format!("DamageRegion(left={}, top={}, right={}, bottom={})",
-                self.left, self.top, self.right, self.bottom)
+        format!(
+            "DamageRegion(left={}, top={}, right={}, bottom={})",
+            self.left, self.top, self.right, self.bottom
+        )
     }
 }
 
@@ -1206,28 +1247,32 @@ pub struct PyRenderingHint {
 #[pymethods]
 impl PyRenderingHint {
     fn __repr__(&self) -> String {
-        format!("RenderingHint(layer={}, animation={}, priority={})",
-                self.layer, self.animation, self.priority)
+        format!(
+            "RenderingHint(layer={}, animation={}, priority={})",
+            self.layer, self.animation, self.priority
+        )
     }
 }
 
 impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
     fn from(hint: &crate::terminal::RenderingHint) -> Self {
-        use crate::terminal::{ZLayer, AnimationHint};
+        use crate::terminal::{AnimationHint, ZLayer};
 
         let layer = match hint.layer {
             ZLayer::Background => "background",
             ZLayer::Normal => "normal",
             ZLayer::Overlay => "overlay",
             ZLayer::Cursor => "cursor",
-        }.to_string();
+        }
+        .to_string();
 
         let animation = match hint.animation {
             AnimationHint::None => "none",
             AnimationHint::SmoothScroll => "smoothscroll",
             AnimationHint::Fade => "fade",
             AnimationHint::CursorBlink => "cursorblink",
-        }.to_string();
+        }
+        .to_string();
 
         PyRenderingHint {
             damage: PyDamageRegion::from(&hint.damage),
@@ -1257,8 +1302,10 @@ pub struct PyEscapeSequenceProfile {
 #[pymethods]
 impl PyEscapeSequenceProfile {
     fn __repr__(&self) -> String {
-        format!("EscapeSequenceProfile(count={}, avg_us={}, peak_us={})",
-                self.count, self.avg_time_us, self.peak_time_us)
+        format!(
+            "EscapeSequenceProfile(count={}, avg_us={}, peak_us={})",
+            self.count, self.avg_time_us, self.peak_time_us
+        )
     }
 }
 
@@ -1290,8 +1337,12 @@ pub struct PyProfilingData {
 #[pymethods]
 impl PyProfilingData {
     fn __repr__(&self) -> String {
-        format!("ProfilingData(categories={}, allocations={}, peak_memory={})",
-                self.categories.len(), self.allocations, self.peak_memory)
+        format!(
+            "ProfilingData(categories={}, allocations={}, peak_memory={})",
+            self.categories.len(),
+            self.allocations,
+            self.peak_memory
+        )
     }
 }
 
@@ -1308,7 +1359,8 @@ impl From<&crate::terminal::ProfilingData> for PyProfilingData {
                 ProfileCategory::DCS => "dcs",
                 ProfileCategory::Print => "print",
                 ProfileCategory::Control => "control",
-            }.to_string();
+            }
+            .to_string();
             categories.insert(key, PyEscapeSequenceProfile::from(profile));
         }
 
@@ -1342,8 +1394,10 @@ pub struct PyLineDiff {
 #[pymethods]
 impl PyLineDiff {
     fn __repr__(&self) -> String {
-        format!("LineDiff(type={}, old_row={:?}, new_row={:?})",
-                self.change_type, self.old_row, self.new_row)
+        format!(
+            "LineDiff(type={}, old_row={:?}, new_row={:?})",
+            self.change_type, self.old_row, self.new_row
+        )
     }
 }
 
@@ -1356,7 +1410,8 @@ impl From<&crate::terminal::LineDiff> for PyLineDiff {
             DiffChangeType::Removed => "removed",
             DiffChangeType::Modified => "modified",
             DiffChangeType::Unchanged => "unchanged",
-        }.to_string();
+        }
+        .to_string();
 
         PyLineDiff {
             change_type,
@@ -1387,8 +1442,10 @@ pub struct PySnapshotDiff {
 #[pymethods]
 impl PySnapshotDiff {
     fn __repr__(&self) -> String {
-        format!("SnapshotDiff(added={}, removed={}, modified={}, unchanged={})",
-                self.added, self.removed, self.modified, self.unchanged)
+        format!(
+            "SnapshotDiff(added={}, removed={}, modified={}, unchanged={})",
+            self.added, self.removed, self.modified, self.unchanged
+        )
     }
 }
 
@@ -1427,8 +1484,10 @@ pub struct PyRegexMatch {
 #[pymethods]
 impl PyRegexMatch {
     fn __repr__(&self) -> String {
-        format!("RegexMatch(row={}, col={}, text={:?})",
-                self.row, self.col, self.text)
+        format!(
+            "RegexMatch(row={}, col={}, text={:?})",
+            self.row, self.col, self.text
+        )
     }
 }
 
@@ -1478,8 +1537,10 @@ pub struct PyPaneState {
 #[pymethods]
 impl PyPaneState {
     fn __repr__(&self) -> String {
-        format!("PaneState(id={}, title={}, size={}x{})",
-                self.id, self.title, self.size.0, self.size.1)
+        format!(
+            "PaneState(id={}, title={}, size={}x{})",
+            self.id, self.title, self.size.0, self.size.1
+        )
     }
 }
 
@@ -1522,8 +1583,12 @@ pub struct PyWindowLayout {
 #[pymethods]
 impl PyWindowLayout {
     fn __repr__(&self) -> String {
-        format!("WindowLayout(id={}, name={}, panes={})",
-                self.id, self.name, self.panes.len())
+        format!(
+            "WindowLayout(id={}, name={}, panes={})",
+            self.id,
+            self.name,
+            self.panes.len()
+        )
     }
 }
 
@@ -1534,7 +1599,8 @@ impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
         let direction = match layout.direction {
             LayoutDirection::Horizontal => "horizontal",
             LayoutDirection::Vertical => "vertical",
-        }.to_string();
+        }
+        .to_string();
 
         PyWindowLayout {
             id: layout.id.clone(),
@@ -1570,8 +1636,13 @@ pub struct PySessionState {
 #[pymethods]
 impl PySessionState {
     fn __repr__(&self) -> String {
-        format!("SessionState(id={}, name={}, panes={}, layouts={})",
-                self.id, self.name, self.panes.len(), self.layouts.len())
+        format!(
+            "SessionState(id={}, name={}, panes={}, layouts={})",
+            self.id,
+            self.name,
+            self.panes.len(),
+            self.layouts.len()
+        )
     }
 }
 

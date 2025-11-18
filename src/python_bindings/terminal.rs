@@ -1587,14 +1587,26 @@ impl PyTerminal {
             stats.estimated_memory_bytes,
         );
         result.insert("hyperlink_count".to_string(), stats.hyperlink_count);
-        result.insert("hyperlink_memory_bytes".to_string(), stats.hyperlink_memory_bytes);
+        result.insert(
+            "hyperlink_memory_bytes".to_string(),
+            stats.hyperlink_memory_bytes,
+        );
         result.insert("color_stack_depth".to_string(), stats.color_stack_depth);
         result.insert("title_stack_depth".to_string(), stats.title_stack_depth);
-        result.insert("keyboard_stack_depth".to_string(), stats.keyboard_stack_depth);
-        result.insert("response_buffer_size".to_string(), stats.response_buffer_size);
+        result.insert(
+            "keyboard_stack_depth".to_string(),
+            stats.keyboard_stack_depth,
+        );
+        result.insert(
+            "response_buffer_size".to_string(),
+            stats.response_buffer_size,
+        );
         result.insert("dirty_row_count".to_string(), stats.dirty_row_count);
         result.insert("pending_bell_events".to_string(), stats.pending_bell_events);
-        result.insert("pending_terminal_events".to_string(), stats.pending_terminal_events);
+        result.insert(
+            "pending_terminal_events".to_string(),
+            stats.pending_terminal_events,
+        );
         Ok(result)
     }
 
@@ -1908,11 +1920,16 @@ impl PyTerminal {
     /// Each event is a string: 'visual', 'warning:<volume>', or 'margin:<volume>'
     fn drain_bell_events(&mut self) -> PyResult<Vec<String>> {
         use crate::terminal::BellEvent;
-        Ok(self.inner.drain_bell_events().iter().map(|e| match e {
-            BellEvent::VisualBell => "visual".to_string(),
-            BellEvent::WarningBell(vol) => format!("warning:{}", vol),
-            BellEvent::MarginBell(vol) => format!("margin:{}", vol),
-        }).collect())
+        Ok(self
+            .inner
+            .drain_bell_events()
+            .iter()
+            .map(|e| match e {
+                BellEvent::VisualBell => "visual".to_string(),
+                BellEvent::WarningBell(vol) => format!("warning:{}", vol),
+                BellEvent::MarginBell(vol) => format!("margin:{}", vol),
+            })
+            .collect())
     }
 
     /// Drain all pending terminal events
@@ -1922,55 +1939,58 @@ impl PyTerminal {
     fn poll_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
         use crate::terminal::TerminalEvent;
         let events = self.inner.poll_events();
-        Ok(events.iter().map(|e| {
-            let mut map = HashMap::new();
-            match e {
-                TerminalEvent::BellRang(bell) => {
-                    map.insert("type".to_string(), "bell".to_string());
-                    match bell {
-                        crate::terminal::BellEvent::VisualBell => {
-                            map.insert("bell_type".to_string(), "visual".to_string());
-                        }
-                        crate::terminal::BellEvent::WarningBell(vol) => {
-                            map.insert("bell_type".to_string(), "warning".to_string());
-                            map.insert("volume".to_string(), vol.to_string());
-                        }
-                        crate::terminal::BellEvent::MarginBell(vol) => {
-                            map.insert("bell_type".to_string(), "margin".to_string());
-                            map.insert("volume".to_string(), vol.to_string());
+        Ok(events
+            .iter()
+            .map(|e| {
+                let mut map = HashMap::new();
+                match e {
+                    TerminalEvent::BellRang(bell) => {
+                        map.insert("type".to_string(), "bell".to_string());
+                        match bell {
+                            crate::terminal::BellEvent::VisualBell => {
+                                map.insert("bell_type".to_string(), "visual".to_string());
+                            }
+                            crate::terminal::BellEvent::WarningBell(vol) => {
+                                map.insert("bell_type".to_string(), "warning".to_string());
+                                map.insert("volume".to_string(), vol.to_string());
+                            }
+                            crate::terminal::BellEvent::MarginBell(vol) => {
+                                map.insert("bell_type".to_string(), "margin".to_string());
+                                map.insert("volume".to_string(), vol.to_string());
+                            }
                         }
                     }
+                    TerminalEvent::TitleChanged(title) => {
+                        map.insert("type".to_string(), "title_changed".to_string());
+                        map.insert("title".to_string(), title.clone());
+                    }
+                    TerminalEvent::SizeChanged(cols, rows) => {
+                        map.insert("type".to_string(), "size_changed".to_string());
+                        map.insert("cols".to_string(), cols.to_string());
+                        map.insert("rows".to_string(), rows.to_string());
+                    }
+                    TerminalEvent::ModeChanged(mode, enabled) => {
+                        map.insert("type".to_string(), "mode_changed".to_string());
+                        map.insert("mode".to_string(), mode.clone());
+                        map.insert("enabled".to_string(), enabled.to_string());
+                    }
+                    TerminalEvent::GraphicsAdded(row) => {
+                        map.insert("type".to_string(), "graphics_added".to_string());
+                        map.insert("row".to_string(), row.to_string());
+                    }
+                    TerminalEvent::HyperlinkAdded(url) => {
+                        map.insert("type".to_string(), "hyperlink_added".to_string());
+                        map.insert("url".to_string(), url.clone());
+                    }
+                    TerminalEvent::DirtyRegion(first, last) => {
+                        map.insert("type".to_string(), "dirty_region".to_string());
+                        map.insert("first_row".to_string(), first.to_string());
+                        map.insert("last_row".to_string(), last.to_string());
+                    }
                 }
-                TerminalEvent::TitleChanged(title) => {
-                    map.insert("type".to_string(), "title_changed".to_string());
-                    map.insert("title".to_string(), title.clone());
-                }
-                TerminalEvent::SizeChanged(cols, rows) => {
-                    map.insert("type".to_string(), "size_changed".to_string());
-                    map.insert("cols".to_string(), cols.to_string());
-                    map.insert("rows".to_string(), rows.to_string());
-                }
-                TerminalEvent::ModeChanged(mode, enabled) => {
-                    map.insert("type".to_string(), "mode_changed".to_string());
-                    map.insert("mode".to_string(), mode.clone());
-                    map.insert("enabled".to_string(), enabled.to_string());
-                }
-                TerminalEvent::GraphicsAdded(row) => {
-                    map.insert("type".to_string(), "graphics_added".to_string());
-                    map.insert("row".to_string(), row.to_string());
-                }
-                TerminalEvent::HyperlinkAdded(url) => {
-                    map.insert("type".to_string(), "hyperlink_added".to_string());
-                    map.insert("url".to_string(), url.clone());
-                }
-                TerminalEvent::DirtyRegion(first, last) => {
-                    map.insert("type".to_string(), "dirty_region".to_string());
-                    map.insert("first_row".to_string(), first.to_string());
-                    map.insert("last_row".to_string(), last.to_string());
-                }
-            }
-            map
-        }).collect())
+                map
+            })
+            .collect())
     }
 
     /// Get auto-wrap mode (DECAWM)
@@ -2025,10 +2045,13 @@ impl PyTerminal {
     fn get_ansi_palette(&self) -> PyResult<Vec<(u8, u8, u8)>> {
         use crate::color::Color;
         let palette = self.inner.get_ansi_palette();
-        Ok(palette.iter().map(|c| match c {
-            Color::Rgb(r, g, b) => (*r, *g, *b),
-            _ => (0, 0, 0), // Fallback for non-RGB colors
-        }).collect())
+        Ok(palette
+            .iter()
+            .map(|c| match c {
+                Color::Rgb(r, g, b) => (*r, *g, *b),
+                _ => (0, 0, 0), // Fallback for non-RGB colors
+            })
+            .collect())
     }
 
     /// Get all tab stop positions
@@ -2058,40 +2081,63 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of dictionaries with 'url' (string), 'positions' (list of (col, row) tuples), and optional 'id' (string)
+    #[allow(clippy::type_complexity)]
     fn get_all_hyperlinks(&self) -> PyResult<Vec<(String, Vec<(usize, usize)>, Option<String>)>> {
         let links = self.inner.get_all_hyperlinks();
-        Ok(links.iter().map(|link| {
-            (link.url.clone(), link.positions.clone(), link.id.clone())
-        }).collect())
+        Ok(links
+            .iter()
+            .map(|link| (link.url.clone(), link.positions.clone(), link.id.clone()))
+            .collect())
     }
 
     /// Get a rectangular region of the screen
     ///
     /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive.
     /// Returns list of rows, where each row is a list of Cell dictionaries.
-    fn get_rectangle(&self, top: usize, left: usize, bottom: usize, right: usize)
-        -> PyResult<Vec<Vec<HashMap<String, String>>>> {
+    fn get_rectangle(
+        &self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> PyResult<Vec<Vec<HashMap<String, String>>>> {
         let cells = self.inner.get_rectangle(top, left, bottom, right);
-        Ok(cells.iter().map(|row| {
-            row.iter().map(|cell| {
-                let mut map = HashMap::new();
-                map.insert("char".to_string(), cell.c.to_string());
-                map.insert("width".to_string(), cell.width.to_string());
-                map
-            }).collect()
-        }).collect())
+        Ok(cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| {
+                        let mut map = HashMap::new();
+                        map.insert("char".to_string(), cell.c.to_string());
+                        map.insert("width".to_string(), cell.width.to_string());
+                        map
+                    })
+                    .collect()
+            })
+            .collect())
     }
 
     /// Fill a rectangle with a character
-    fn fill_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize, ch: char)
-        -> PyResult<()> {
+    fn fill_rectangle(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+        ch: char,
+    ) -> PyResult<()> {
         self.inner.fill_rectangle(top, left, bottom, right, ch);
         Ok(())
     }
 
     /// Erase a rectangle
-    fn erase_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize)
-        -> PyResult<()> {
+    fn erase_rectangle(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> PyResult<()> {
         self.inner.erase_rectangle(top, left, bottom, right);
         Ok(())
     }
@@ -2107,14 +2153,21 @@ impl PyTerminal {
     /// Returns:
     ///     List of SearchMatch objects with position and matched text
     #[pyo3(signature = (query, case_sensitive=false))]
-    fn search(&self, query: &str, case_sensitive: bool) -> PyResult<Vec<super::types::PySearchMatch>> {
+    fn search(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+    ) -> PyResult<Vec<super::types::PySearchMatch>> {
         let matches = self.inner.search(query, case_sensitive);
-        Ok(matches.iter().map(|m| super::types::PySearchMatch {
-            row: m.row,
-            col: m.col,
-            length: m.length,
-            text: m.text.clone(),
-        }).collect())
+        Ok(matches
+            .iter()
+            .map(|m| super::types::PySearchMatch {
+                row: m.row,
+                col: m.col,
+                length: m.length,
+                text: m.text.clone(),
+            })
+            .collect())
     }
 
     /// Search for text in the scrollback buffer
@@ -2127,15 +2180,24 @@ impl PyTerminal {
     /// Returns:
     ///     List of SearchMatch objects with negative row indices for scrollback
     #[pyo3(signature = (query, case_sensitive=false, max_lines=None))]
-    fn search_scrollback(&self, query: &str, case_sensitive: bool, max_lines: Option<usize>)
-        -> PyResult<Vec<super::types::PySearchMatch>> {
-        let matches = self.inner.search_scrollback(query, case_sensitive, max_lines);
-        Ok(matches.iter().map(|m| super::types::PySearchMatch {
-            row: m.row,
-            col: m.col,
-            length: m.length,
-            text: m.text.clone(),
-        }).collect())
+    fn search_scrollback(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        max_lines: Option<usize>,
+    ) -> PyResult<Vec<super::types::PySearchMatch>> {
+        let matches = self
+            .inner
+            .search_scrollback(query, case_sensitive, max_lines);
+        Ok(matches
+            .iter()
+            .map(|m| super::types::PySearchMatch {
+                row: m.row,
+                col: m.col,
+                length: m.length,
+                text: m.text.clone(),
+            })
+            .collect())
     }
 
     // === Content Detection Methods ===
@@ -2147,16 +2209,19 @@ impl PyTerminal {
     fn detect_urls(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
         use crate::terminal::DetectedItem;
         let items = self.inner.detect_urls();
-        Ok(items.iter().map(|item| match item {
-            DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
-                item_type: "url".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: None,
-            },
-            _ => unreachable!(),
-        }).collect())
+        Ok(items
+            .iter()
+            .map(|item| match item {
+                DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
+                    item_type: "url".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: None,
+                },
+                _ => unreachable!(),
+            })
+            .collect())
     }
 
     /// Detect file paths in the visible screen
@@ -2166,16 +2231,19 @@ impl PyTerminal {
     fn detect_file_paths(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
         use crate::terminal::DetectedItem;
         let items = self.inner.detect_file_paths();
-        Ok(items.iter().map(|item| match item {
-            DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
-                item_type: "filepath".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: *line_num,
-            },
-            _ => unreachable!(),
-        }).collect())
+        Ok(items
+            .iter()
+            .map(|item| match item {
+                DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
+                    item_type: "filepath".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: *line_num,
+                },
+                _ => unreachable!(),
+            })
+            .collect())
     }
 
     /// Detect semantic items (URLs, file paths, git hashes, IPs, emails)
@@ -2185,43 +2253,46 @@ impl PyTerminal {
     fn detect_semantic_items(&self) -> PyResult<Vec<super::types::PyDetectedItem>> {
         use crate::terminal::DetectedItem;
         let items = self.inner.detect_semantic_items();
-        Ok(items.iter().map(|item| match item {
-            DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
-                item_type: "url".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: None,
-            },
-            DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
-                item_type: "filepath".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: *line_num,
-            },
-            DetectedItem::GitHash(text, row, col) => super::types::PyDetectedItem {
-                item_type: "git_hash".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: None,
-            },
-            DetectedItem::IpAddress(text, row, col) => super::types::PyDetectedItem {
-                item_type: "ip".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: None,
-            },
-            DetectedItem::Email(text, row, col) => super::types::PyDetectedItem {
-                item_type: "email".to_string(),
-                text: text.clone(),
-                row: *row,
-                col: *col,
-                line_number: None,
-            },
-        }).collect())
+        Ok(items
+            .iter()
+            .map(|item| match item {
+                DetectedItem::Url(text, row, col) => super::types::PyDetectedItem {
+                    item_type: "url".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: None,
+                },
+                DetectedItem::FilePath(text, row, col, line_num) => super::types::PyDetectedItem {
+                    item_type: "filepath".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: *line_num,
+                },
+                DetectedItem::GitHash(text, row, col) => super::types::PyDetectedItem {
+                    item_type: "git_hash".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: None,
+                },
+                DetectedItem::IpAddress(text, row, col) => super::types::PyDetectedItem {
+                    item_type: "ip".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: None,
+                },
+                DetectedItem::Email(text, row, col) => super::types::PyDetectedItem {
+                    item_type: "email".to_string(),
+                    text: text.clone(),
+                    row: *row,
+                    col: *col,
+                    line_number: None,
+                },
+            })
+            .collect())
     }
 
     // === Selection Management ===
@@ -2232,8 +2303,12 @@ impl PyTerminal {
     ///     start: Start position (col, row) tuple
     ///     end: End position (col, row) tuple
     ///     mode: Selection mode: "character", "line", or "block"
-    fn set_selection(&mut self, start: (usize, usize), end: (usize, usize), mode: &str)
-        -> PyResult<()> {
+    fn set_selection(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        mode: &str,
+    ) -> PyResult<()> {
         use crate::terminal::SelectionMode;
         let sel_mode = match mode {
             "character" => SelectionMode::Character,
@@ -2310,9 +2385,15 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of text lines
-    fn get_line_context(&self, row: usize, context_before: usize, context_after: usize)
-        -> PyResult<Vec<String>> {
-        Ok(self.inner.get_line_context(row, context_before, context_after))
+    fn get_line_context(
+        &self,
+        row: usize,
+        context_before: usize,
+        context_after: usize,
+    ) -> PyResult<Vec<String>> {
+        Ok(self
+            .inner
+            .get_line_context(row, context_before, context_after))
     }
 
     /// Get the paragraph at the given position
@@ -2384,11 +2465,14 @@ impl PyTerminal {
     ///     List of Bookmark objects
     fn get_bookmarks(&self) -> PyResult<Vec<super::types::PyBookmark>> {
         let bookmarks = self.inner.get_bookmarks();
-        Ok(bookmarks.iter().map(|b| super::types::PyBookmark {
-            id: b.id,
-            row: b.row,
-            label: b.label.clone(),
-        }).collect())
+        Ok(bookmarks
+            .iter()
+            .map(|b| super::types::PyBookmark {
+                id: b.id,
+                row: b.row,
+                label: b.label.clone(),
+            })
+            .collect())
     }
 
     /// Remove a bookmark by ID
@@ -2432,21 +2516,33 @@ impl PyTerminal {
     }
 
     /// Record a frame timing
-    fn record_frame_timing(&mut self, processing_us: u64, cells_updated: usize, bytes_processed: usize) -> PyResult<()> {
-        self.inner.record_frame_timing(processing_us, cells_updated, bytes_processed);
+    fn record_frame_timing(
+        &mut self,
+        processing_us: u64,
+        cells_updated: usize,
+        bytes_processed: usize,
+    ) -> PyResult<()> {
+        self.inner
+            .record_frame_timing(processing_us, cells_updated, bytes_processed);
         Ok(())
     }
 
     /// Get recent frame timings
     #[pyo3(signature = (count=None))]
-    fn get_frame_timings(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyFrameTiming>> {
+    fn get_frame_timings(
+        &self,
+        count: Option<usize>,
+    ) -> PyResult<Vec<super::types::PyFrameTiming>> {
         let timings = self.inner.get_frame_timings(count);
-        Ok(timings.iter().map(|t| super::types::PyFrameTiming {
-            frame_number: t.frame_number,
-            processing_us: t.processing_us,
-            cells_updated: t.cells_updated,
-            bytes_processed: t.bytes_processed,
-        }).collect())
+        Ok(timings
+            .iter()
+            .map(|t| super::types::PyFrameTiming {
+                frame_number: t.frame_number,
+                processing_us: t.processing_us,
+                cells_updated: t.cells_updated,
+                bytes_processed: t.bytes_processed,
+            })
+            .collect())
     }
 
     /// Get average frame time in microseconds
@@ -2464,7 +2560,11 @@ impl PyTerminal {
     /// Convert RGB to HSV
     fn rgb_to_hsv_color(&self, r: u8, g: u8, b: u8) -> PyResult<super::types::PyColorHSV> {
         let hsv = self.inner.rgb_to_hsv_color(r, g, b);
-        Ok(super::types::PyColorHSV { h: hsv.h, s: hsv.s, v: hsv.v })
+        Ok(super::types::PyColorHSV {
+            h: hsv.h,
+            s: hsv.s,
+            v: hsv.v,
+        })
     }
 
     /// Convert HSV to RGB
@@ -2476,7 +2576,11 @@ impl PyTerminal {
     /// Convert RGB to HSL
     fn rgb_to_hsl_color(&self, r: u8, g: u8, b: u8) -> PyResult<super::types::PyColorHSL> {
         let hsl = self.inner.rgb_to_hsl_color(r, g, b);
-        Ok(super::types::PyColorHSL { h: hsl.h, s: hsl.s, l: hsl.l })
+        Ok(super::types::PyColorHSL {
+            h: hsl.h,
+            s: hsl.s,
+            l: hsl.l,
+        })
     }
 
     /// Convert HSL to RGB
@@ -2490,7 +2594,13 @@ impl PyTerminal {
     /// Args:
     ///     r, g, b: Base color RGB values
     ///     mode: Theme mode (complementary, analogous, triadic, tetradic, split_complementary, monochromatic)
-    fn generate_color_palette(&self, r: u8, g: u8, b: u8, mode: &str) -> PyResult<super::types::PyColorPalette> {
+    fn generate_color_palette(
+        &self,
+        r: u8,
+        g: u8,
+        b: u8,
+        mode: &str,
+    ) -> PyResult<super::types::PyColorPalette> {
         use crate::terminal::ThemeMode;
         let theme_mode = match mode {
             "complementary" => ThemeMode::Complementary,
@@ -2518,7 +2628,10 @@ impl PyTerminal {
     // === Feature 9: Line Wrapping Utilities ===
 
     /// Join wrapped lines starting from a given row
-    fn join_wrapped_lines(&self, start_row: usize) -> PyResult<Option<super::types::PyJoinedLines>> {
+    fn join_wrapped_lines(
+        &self,
+        start_row: usize,
+    ) -> PyResult<Option<super::types::PyJoinedLines>> {
         if let Some(joined) = self.inner.join_wrapped_lines(start_row) {
             Ok(Some(super::types::PyJoinedLines {
                 text: joined.text,
@@ -2545,9 +2658,15 @@ impl PyTerminal {
 
     /// Add content to clipboard history
     #[pyo3(signature = (slot, content, label=None))]
-    fn add_to_clipboard_history(&mut self, slot: &str, content: String, label: Option<String>) -> PyResult<()> {
+    fn add_to_clipboard_history(
+        &mut self,
+        slot: &str,
+        content: String,
+        label: Option<String>,
+    ) -> PyResult<()> {
         let clipboard_slot = parse_clipboard_slot(slot)?;
-        self.inner.add_to_clipboard_history(clipboard_slot, content, label);
+        self.inner
+            .add_to_clipboard_history(clipboard_slot, content, label);
         Ok(())
     }
 
@@ -2555,11 +2674,14 @@ impl PyTerminal {
     fn get_clipboard_history(&self, slot: &str) -> PyResult<Vec<super::types::PyClipboardEntry>> {
         let clipboard_slot = parse_clipboard_slot(slot)?;
         let history = self.inner.get_clipboard_history(clipboard_slot);
-        Ok(history.iter().map(|e| super::types::PyClipboardEntry {
-            content: e.content.clone(),
-            timestamp: e.timestamp,
-            label: e.label.clone(),
-        }).collect())
+        Ok(history
+            .iter()
+            .map(|e| super::types::PyClipboardEntry {
+                content: e.content.clone(),
+                timestamp: e.timestamp,
+                label: e.label.clone(),
+            })
+            .collect())
     }
 
     /// Get the most recent clipboard entry
@@ -2606,19 +2728,27 @@ impl PyTerminal {
 
     /// Search clipboard history
     #[pyo3(signature = (query, slot=None))]
-    fn search_clipboard_history(&self, query: &str, slot: Option<String>) -> PyResult<Vec<super::types::PyClipboardEntry>> {
+    fn search_clipboard_history(
+        &self,
+        query: &str,
+        slot: Option<String>,
+    ) -> PyResult<Vec<super::types::PyClipboardEntry>> {
         let clipboard_slot = slot.as_ref().map(|s| parse_clipboard_slot(s)).transpose()?;
         let results = self.inner.search_clipboard_history(query, clipboard_slot);
-        Ok(results.iter().map(|e| super::types::PyClipboardEntry {
-            content: e.content.clone(),
-            timestamp: e.timestamp,
-            label: e.label.clone(),
-        }).collect())
+        Ok(results
+            .iter()
+            .map(|e| super::types::PyClipboardEntry {
+                content: e.content.clone(),
+                timestamp: e.timestamp,
+                label: e.label.clone(),
+            })
+            .collect())
     }
 
     // === Feature 17: Advanced Mouse Support ===
 
     /// Record a mouse event
+    #[allow(clippy::too_many_arguments)]
     fn record_mouse_event(
         &mut self,
         event_type: &str,
@@ -2630,7 +2760,7 @@ impl PyTerminal {
         modifiers: u8,
         timestamp: u64,
     ) -> PyResult<()> {
-        use crate::terminal::{MouseEventRecord, MouseEventType, MouseButton};
+        use crate::terminal::{MouseButton, MouseEventRecord, MouseEventType};
 
         let event_type = match event_type.to_lowercase().as_str() {
             "press" => MouseEventType::Press,
@@ -2669,19 +2799,31 @@ impl PyTerminal {
     #[pyo3(signature = (count=None))]
     fn get_mouse_events(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyMouseEvent>> {
         let events = self.inner.get_mouse_events(count);
-        Ok(events.iter().map(super::types::PyMouseEvent::from).collect())
+        Ok(events
+            .iter()
+            .map(super::types::PyMouseEvent::from)
+            .collect())
     }
 
     /// Get mouse positions
     #[pyo3(signature = (count=None))]
-    fn get_mouse_positions(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyMousePosition>> {
+    fn get_mouse_positions(
+        &self,
+        count: Option<usize>,
+    ) -> PyResult<Vec<super::types::PyMousePosition>> {
         let positions = self.inner.get_mouse_positions(count);
-        Ok(positions.iter().map(super::types::PyMousePosition::from).collect())
+        Ok(positions
+            .iter()
+            .map(super::types::PyMousePosition::from)
+            .collect())
     }
 
     /// Get last mouse position
     fn get_last_mouse_position(&self) -> PyResult<Option<super::types::PyMousePosition>> {
-        Ok(self.inner.get_last_mouse_position().map(|p| super::types::PyMousePosition::from(&p)))
+        Ok(self
+            .inner
+            .get_last_mouse_position()
+            .map(|p| super::types::PyMousePosition::from(&p)))
     }
 
     /// Clear mouse history
@@ -2704,7 +2846,13 @@ impl PyTerminal {
     // === Feature 19: Custom Rendering Hints ===
 
     /// Add a damage region
-    fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) -> PyResult<()> {
+    fn add_damage_region(
+        &mut self,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+    ) -> PyResult<()> {
         self.inner.add_damage_region(left, top, right, bottom);
         Ok(())
     }
@@ -2712,7 +2860,10 @@ impl PyTerminal {
     /// Get damage regions
     fn get_damage_regions(&self) -> PyResult<Vec<super::types::PyDamageRegion>> {
         let regions = self.inner.get_damage_regions();
-        Ok(regions.iter().map(super::types::PyDamageRegion::from).collect())
+        Ok(regions
+            .iter()
+            .map(super::types::PyDamageRegion::from)
+            .collect())
     }
 
     /// Merge overlapping damage regions
@@ -2728,6 +2879,7 @@ impl PyTerminal {
     }
 
     /// Add a rendering hint
+    #[allow(clippy::too_many_arguments)]
     fn add_rendering_hint(
         &mut self,
         left: usize,
@@ -2738,9 +2890,14 @@ impl PyTerminal {
         animation: &str,
         priority: &str,
     ) -> PyResult<()> {
-        use crate::terminal::{DamageRegion, ZLayer, AnimationHint, UpdatePriority};
+        use crate::terminal::{AnimationHint, DamageRegion, UpdatePriority, ZLayer};
 
-        let damage = DamageRegion { left, top, right, bottom };
+        let damage = DamageRegion {
+            left,
+            top,
+            right,
+            bottom,
+        };
 
         let layer = match layer.to_lowercase().as_str() {
             "background" => ZLayer::Background,
@@ -2766,15 +2923,22 @@ impl PyTerminal {
             _ => return Err(PyValueError::new_err("Invalid priority")),
         };
 
-        self.inner.add_rendering_hint(damage, layer, animation, priority);
+        self.inner
+            .add_rendering_hint(damage, layer, animation, priority);
         Ok(())
     }
 
     /// Get rendering hints
     #[pyo3(signature = (sort_by_priority=false))]
-    fn get_rendering_hints(&self, sort_by_priority: bool) -> PyResult<Vec<super::types::PyRenderingHint>> {
+    fn get_rendering_hints(
+        &self,
+        sort_by_priority: bool,
+    ) -> PyResult<Vec<super::types::PyRenderingHint>> {
         let hints = self.inner.get_rendering_hints(sort_by_priority);
-        Ok(hints.iter().map(super::types::PyRenderingHint::from).collect())
+        Ok(hints
+            .iter()
+            .map(super::types::PyRenderingHint::from)
+            .collect())
     }
 
     /// Clear rendering hints
@@ -2804,7 +2968,10 @@ impl PyTerminal {
 
     /// Get profiling data
     fn get_profiling_data(&self) -> PyResult<Option<super::types::PyProfilingData>> {
-        Ok(self.inner.get_profiling_data().map(|d| super::types::PyProfilingData::from(&d)))
+        Ok(self
+            .inner
+            .get_profiling_data()
+            .map(|d| super::types::PyProfilingData::from(&d)))
     }
 
     /// Reset profiling data
@@ -2852,13 +3019,17 @@ impl PyTerminal {
         new: &super::types::PyScreenSnapshot,
     ) -> PyResult<super::types::PySnapshotDiff> {
         // Convert lines to strings for comparison
-        let old_strings: Vec<String> = old.lines.iter().map(|line| {
-            line.iter().map(|(c, _, _, _)| *c).collect()
-        }).collect();
+        let old_strings: Vec<String> = old
+            .lines
+            .iter()
+            .map(|line| line.iter().map(|(c, _, _, _)| *c).collect())
+            .collect();
 
-        let new_strings: Vec<String> = new.lines.iter().map(|line| {
-            line.iter().map(|(c, _, _, _)| *c).collect()
-        }).collect();
+        let new_strings: Vec<String> = new
+            .lines
+            .iter()
+            .map(|line| line.iter().map(|(c, _, _, _)| *c).collect())
+            .collect();
 
         // Call Rust implementation
         let diff = crate::terminal::diff_screen_lines(&old_strings, &new_strings);
@@ -2888,15 +3059,25 @@ impl PyTerminal {
             reverse,
         };
 
-        let matches = self.inner.regex_search(pattern, options)
+        let matches = self
+            .inner
+            .regex_search(pattern, options)
             .map_err(PyValueError::new_err)?;
 
-        Ok(matches.iter().map(super::types::PyRegexMatch::from).collect())
+        Ok(matches
+            .iter()
+            .map(super::types::PyRegexMatch::from)
+            .collect())
     }
 
     /// Get cached regex matches
     fn get_regex_matches(&self) -> PyResult<Vec<super::types::PyRegexMatch>> {
-        Ok(self.inner.get_regex_matches().iter().map(super::types::PyRegexMatch::from).collect())
+        Ok(self
+            .inner
+            .get_regex_matches()
+            .iter()
+            .map(super::types::PyRegexMatch::from)
+            .collect())
     }
 
     /// Get current regex search pattern
@@ -2911,20 +3092,38 @@ impl PyTerminal {
     }
 
     /// Find next regex match from a position
-    fn next_regex_match(&self, from_row: usize, from_col: usize) -> PyResult<Option<super::types::PyRegexMatch>> {
-        Ok(self.inner.next_regex_match(from_row, from_col).map(|m| super::types::PyRegexMatch::from(&m)))
+    fn next_regex_match(
+        &self,
+        from_row: usize,
+        from_col: usize,
+    ) -> PyResult<Option<super::types::PyRegexMatch>> {
+        Ok(self
+            .inner
+            .next_regex_match(from_row, from_col)
+            .map(|m| super::types::PyRegexMatch::from(&m)))
     }
 
     /// Find previous regex match from a position
-    fn prev_regex_match(&self, from_row: usize, from_col: usize) -> PyResult<Option<super::types::PyRegexMatch>> {
-        Ok(self.inner.prev_regex_match(from_row, from_col).map(|m| super::types::PyRegexMatch::from(&m)))
+    fn prev_regex_match(
+        &self,
+        from_row: usize,
+        from_col: usize,
+    ) -> PyResult<Option<super::types::PyRegexMatch>> {
+        Ok(self
+            .inner
+            .prev_regex_match(from_row, from_col)
+            .map(|m| super::types::PyRegexMatch::from(&m)))
     }
 
     // === Feature 13: Terminal Multiplexing ===
 
     /// Capture current pane state
     #[pyo3(signature = (id, cwd=None))]
-    fn capture_pane_state(&self, id: String, cwd: Option<String>) -> PyResult<super::types::PyPaneState> {
+    fn capture_pane_state(
+        &self,
+        id: String,
+        cwd: Option<String>,
+    ) -> PyResult<super::types::PyPaneState> {
         let state = self.inner.capture_pane_state(id, cwd);
         Ok(super::types::PyPaneState::from(&state))
     }
@@ -2949,7 +3148,8 @@ impl PyTerminal {
             last_activity: state.last_activity,
         };
 
-        self.inner.restore_pane_state(&rust_state)
+        self.inner
+            .restore_pane_state(&rust_state)
             .map_err(PyValueError::new_err)
     }
 
@@ -2979,7 +3179,10 @@ impl PyTerminal {
 
     /// Get pane state
     fn get_pane_state(&self) -> PyResult<Option<super::types::PyPaneState>> {
-        Ok(self.inner.get_pane_state().map(|s| super::types::PyPaneState::from(&s)))
+        Ok(self
+            .inner
+            .get_pane_state()
+            .map(|s| super::types::PyPaneState::from(&s)))
     }
 
     /// Clear pane state
@@ -3003,7 +3206,11 @@ impl PyTerminal {
         let dir = match direction.to_lowercase().as_str() {
             "horizontal" => LayoutDirection::Horizontal,
             "vertical" => LayoutDirection::Vertical,
-            _ => return Err(PyValueError::new_err("Invalid direction (use 'horizontal' or 'vertical')")),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "Invalid direction (use 'horizontal' or 'vertical')",
+                ))
+            }
         };
 
         let layout = Terminal::create_window_layout(id, name, dir, panes, sizes, active_pane)
@@ -3021,39 +3228,45 @@ impl PyTerminal {
         layouts: Vec<super::types::PyWindowLayout>,
         active_layout: usize,
     ) -> PyResult<super::types::PySessionState> {
-        use crate::terminal::{PaneState, WindowLayout, LayoutDirection, Terminal};
+        use crate::terminal::{LayoutDirection, PaneState, Terminal, WindowLayout};
 
         // Convert Python panes to Rust panes
-        let rust_panes: Vec<PaneState> = panes.iter().map(|p| PaneState {
-            id: p.id.clone(),
-            title: p.title.clone(),
-            size: p.size,
-            position: p.position,
-            cwd: p.cwd.clone(),
-            env: std::collections::HashMap::new(),
-            content: p.content.clone(),
-            cursor: p.cursor,
-            alt_screen: p.alt_screen,
-            scroll_offset: p.scroll_offset,
-            created_at: p.created_at,
-            last_activity: p.last_activity,
-        }).collect();
+        let rust_panes: Vec<PaneState> = panes
+            .iter()
+            .map(|p| PaneState {
+                id: p.id.clone(),
+                title: p.title.clone(),
+                size: p.size,
+                position: p.position,
+                cwd: p.cwd.clone(),
+                env: std::collections::HashMap::new(),
+                content: p.content.clone(),
+                cursor: p.cursor,
+                alt_screen: p.alt_screen,
+                scroll_offset: p.scroll_offset,
+                created_at: p.created_at,
+                last_activity: p.last_activity,
+            })
+            .collect();
 
         // Convert Python layouts to Rust layouts
-        let rust_layouts: Vec<WindowLayout> = layouts.iter().map(|l| {
-            let direction = match l.direction.as_str() {
-                "horizontal" => LayoutDirection::Horizontal,
-                _ => LayoutDirection::Vertical,
-            };
-            WindowLayout {
-                id: l.id.clone(),
-                name: l.name.clone(),
-                direction,
-                panes: l.panes.clone(),
-                sizes: l.sizes.clone(),
-                active_pane: l.active_pane,
-            }
-        }).collect();
+        let rust_layouts: Vec<WindowLayout> = layouts
+            .iter()
+            .map(|l| {
+                let direction = match l.direction.as_str() {
+                    "horizontal" => LayoutDirection::Horizontal,
+                    _ => LayoutDirection::Vertical,
+                };
+                WindowLayout {
+                    id: l.id.clone(),
+                    name: l.name.clone(),
+                    direction,
+                    panes: l.panes.clone(),
+                    sizes: l.sizes.clone(),
+                    active_pane: l.active_pane,
+                }
+            })
+            .collect();
 
         let session = Terminal::create_session_state(
             id,
@@ -3062,7 +3275,8 @@ impl PyTerminal {
             rust_layouts,
             active_layout,
             std::collections::HashMap::new(),
-        ).map_err(PyValueError::new_err)?;
+        )
+        .map_err(PyValueError::new_err)?;
 
         Ok(super::types::PySessionState::from(&session))
     }
@@ -3070,38 +3284,46 @@ impl PyTerminal {
     /// Serialize session to JSON (static method)
     #[staticmethod]
     fn serialize_session(session: &super::types::PySessionState) -> PyResult<String> {
-        use crate::terminal::{PaneState, WindowLayout, SessionState, LayoutDirection, Terminal};
+        use crate::terminal::{LayoutDirection, PaneState, SessionState, Terminal, WindowLayout};
 
         // Convert to Rust types
-        let rust_panes: Vec<PaneState> = session.panes.iter().map(|p| PaneState {
-            id: p.id.clone(),
-            title: p.title.clone(),
-            size: p.size,
-            position: p.position,
-            cwd: p.cwd.clone(),
-            env: std::collections::HashMap::new(),
-            content: p.content.clone(),
-            cursor: p.cursor,
-            alt_screen: p.alt_screen,
-            scroll_offset: p.scroll_offset,
-            created_at: p.created_at,
-            last_activity: p.last_activity,
-        }).collect();
+        let rust_panes: Vec<PaneState> = session
+            .panes
+            .iter()
+            .map(|p| PaneState {
+                id: p.id.clone(),
+                title: p.title.clone(),
+                size: p.size,
+                position: p.position,
+                cwd: p.cwd.clone(),
+                env: std::collections::HashMap::new(),
+                content: p.content.clone(),
+                cursor: p.cursor,
+                alt_screen: p.alt_screen,
+                scroll_offset: p.scroll_offset,
+                created_at: p.created_at,
+                last_activity: p.last_activity,
+            })
+            .collect();
 
-        let rust_layouts: Vec<WindowLayout> = session.layouts.iter().map(|l| {
-            let direction = match l.direction.as_str() {
-                "horizontal" => LayoutDirection::Horizontal,
-                _ => LayoutDirection::Vertical,
-            };
-            WindowLayout {
-                id: l.id.clone(),
-                name: l.name.clone(),
-                direction,
-                panes: l.panes.clone(),
-                sizes: l.sizes.clone(),
-                active_pane: l.active_pane,
-            }
-        }).collect();
+        let rust_layouts: Vec<WindowLayout> = session
+            .layouts
+            .iter()
+            .map(|l| {
+                let direction = match l.direction.as_str() {
+                    "horizontal" => LayoutDirection::Horizontal,
+                    _ => LayoutDirection::Vertical,
+                };
+                WindowLayout {
+                    id: l.id.clone(),
+                    name: l.name.clone(),
+                    direction,
+                    panes: l.panes.clone(),
+                    sizes: l.sizes.clone(),
+                    active_pane: l.active_pane,
+                }
+            })
+            .collect();
 
         let rust_session = SessionState {
             id: session.id.clone(),
@@ -3114,8 +3336,7 @@ impl PyTerminal {
             last_saved: session.last_saved,
         };
 
-        Terminal::serialize_session(&rust_session)
-            .map_err(PyValueError::new_err)
+        Terminal::serialize_session(&rust_session).map_err(PyValueError::new_err)
     }
 
     /// Deserialize session from JSON (static method)
@@ -3123,8 +3344,7 @@ impl PyTerminal {
     fn deserialize_session(json: &str) -> PyResult<super::types::PySessionState> {
         use crate::terminal::Terminal;
 
-        let session = Terminal::deserialize_session(json)
-            .map_err(PyValueError::new_err)?;
+        let session = Terminal::deserialize_session(json).map_err(PyValueError::new_err)?;
 
         Ok(super::types::PySessionState::from(&session))
     }
@@ -3145,7 +3365,9 @@ fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::ClipboardSlot> 
                     }
                 }
             }
-            Err(PyValueError::new_err("Invalid custom clipboard slot (use custom0-custom9)"))
+            Err(PyValueError::new_err(
+                "Invalid custom clipboard slot (use custom0-custom9)",
+            ))
         }
         _ => Err(PyValueError::new_err("Invalid clipboard slot")),
     }

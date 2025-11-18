@@ -1895,7 +1895,13 @@ impl Terminal {
     /// Get a rectangular region of cells
     ///
     /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive
-    pub fn get_rectangle(&self, top: usize, left: usize, bottom: usize, right: usize) -> Vec<Vec<Cell>> {
+    pub fn get_rectangle(
+        &self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> Vec<Vec<Cell>> {
         let (cols, rows) = self.size();
         let bottom = bottom.min(rows.saturating_sub(1));
         let right = right.min(cols.saturating_sub(1));
@@ -1926,7 +1932,14 @@ impl Terminal {
     /// Fill a rectangle with a character
     ///
     /// Fills the rectangle bounded by (top, left) to (bottom, right) inclusive with the given character
-    pub fn fill_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize, ch: char) {
+    pub fn fill_rectangle(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+        ch: char,
+    ) {
         let (cols, rows) = self.size();
         let bottom = bottom.min(rows.saturating_sub(1));
         let right = right.min(cols.saturating_sub(1));
@@ -2319,7 +2332,9 @@ impl Terminal {
 
         // Calculate hyperlink memory
         let hyperlink_count = self.hyperlinks.len();
-        let hyperlink_memory: usize = self.hyperlinks.values()
+        let hyperlink_memory: usize = self
+            .hyperlinks
+            .values()
             .map(|url| url.len() + std::mem::size_of::<u32>() + std::mem::size_of::<String>())
             .sum();
 
@@ -2884,7 +2899,9 @@ impl Terminal {
                             let path_str = line_text[col..end].to_string();
 
                             // Check for line number suffix (e.g., ":123")
-                            let line_num = if end < line_text.len() && line_text.chars().nth(end) == Some(':') {
+                            let line_num = if end < line_text.len()
+                                && line_text.chars().nth(end) == Some(':')
+                            {
                                 let num_start = end + 1;
                                 let num_end = line_text[num_start..]
                                     .find(|c: char| !c.is_numeric())
@@ -2931,7 +2948,9 @@ impl Terminal {
                 }
 
                 // IP address pattern (simple v4)
-                let ip_parts: Vec<&str> = line_text.split(|c: char| !c.is_numeric() && c != '.').collect();
+                let ip_parts: Vec<&str> = line_text
+                    .split(|c: char| !c.is_numeric() && c != '.')
+                    .collect();
                 for part in ip_parts.iter() {
                     let nums: Vec<&str> = part.split('.').collect();
                     if nums.len() == 4 && nums.iter().all(|n| n.parse::<u8>().is_ok()) {
@@ -2956,7 +2975,11 @@ impl Terminal {
                         .unwrap_or(line_text.len());
 
                     if end > start && line_text[start..end].contains('@') {
-                        items.push(DetectedItem::Email(line_text[start..end].to_string(), row, start));
+                        items.push(DetectedItem::Email(
+                            line_text[start..end].to_string(),
+                            row,
+                            start,
+                        ));
                     }
                 }
             }
@@ -2972,7 +2995,12 @@ impl Terminal {
     // === Selection Management ===
 
     /// Set the current selection
-    pub fn set_selection(&mut self, start: (usize, usize), end: (usize, usize), mode: SelectionMode) {
+    pub fn set_selection(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        mode: SelectionMode,
+    ) {
         self.selection = Some(Selection { start, end, mode });
     }
 
@@ -3090,7 +3118,12 @@ impl Terminal {
     /// * `context_after` - Number of lines after the row
     ///
     /// Returns a vector of text lines.
-    pub fn get_line_context(&self, row: usize, context_before: usize, context_after: usize) -> Vec<String> {
+    pub fn get_line_context(
+        &self,
+        row: usize,
+        context_before: usize,
+        context_after: usize,
+    ) -> Vec<String> {
         let grid = self.active_grid();
         let mut lines = Vec::new();
 
@@ -3266,7 +3299,12 @@ impl Terminal {
     }
 
     /// Record a frame timing
-    pub fn record_frame_timing(&mut self, processing_us: u64, cells_updated: usize, bytes_processed: usize) {
+    pub fn record_frame_timing(
+        &mut self,
+        processing_us: u64,
+        cells_updated: usize,
+        bytes_processed: usize,
+    ) {
         self.perf_metrics.frames_rendered += 1;
         self.perf_metrics.cells_updated += cells_updated as u64;
         self.perf_metrics.bytes_processed += bytes_processed as u64;
@@ -3293,7 +3331,9 @@ impl Terminal {
 
     /// Get recent frame timings
     pub fn get_frame_timings(&self, count: Option<usize>) -> Vec<FrameTiming> {
-        let count = count.unwrap_or(self.frame_timings.len()).min(self.frame_timings.len());
+        let count = count
+            .unwrap_or(self.frame_timings.len())
+            .min(self.frame_timings.len());
         self.frame_timings[self.frame_timings.len() - count..].to_vec()
     }
 
@@ -3354,36 +3394,75 @@ impl Terminal {
             ThemeMode::Analogous => {
                 let angle = 30.0;
                 vec![
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + angle) % 360.0, ..hsl }),
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 360.0 - angle) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + angle) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 360.0 - angle) % 360.0,
+                        ..hsl
+                    }),
                 ]
             }
             ThemeMode::Triadic => {
                 vec![
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 120.0) % 360.0, ..hsl }),
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 240.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 120.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 240.0) % 360.0,
+                        ..hsl
+                    }),
                 ]
             }
             ThemeMode::Tetradic => {
                 vec![
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 90.0) % 360.0, ..hsl }),
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 180.0) % 360.0, ..hsl }),
-                    hsl_to_rgb(ColorHSL { h: (hsl.h + 270.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 90.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 180.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 270.0) % 360.0,
+                        ..hsl
+                    }),
                 ]
             }
             ThemeMode::SplitComplementary => {
                 let comp_h = (hsl.h + 180.0) % 360.0;
                 vec![
-                    hsl_to_rgb(ColorHSL { h: (comp_h + 30.0) % 360.0, ..hsl }),
-                    hsl_to_rgb(ColorHSL { h: (comp_h + 360.0 - 30.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (comp_h + 30.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (comp_h + 360.0 - 30.0) % 360.0,
+                        ..hsl
+                    }),
                 ]
             }
             ThemeMode::Monochromatic => {
                 vec![
-                    hsl_to_rgb(ColorHSL { l: (hsl.l + 0.2).min(1.0), ..hsl }),
-                    hsl_to_rgb(ColorHSL { l: (hsl.l - 0.2).max(0.0), ..hsl }),
-                    hsl_to_rgb(ColorHSL { l: (hsl.l + 0.4).min(1.0), ..hsl }),
-                    hsl_to_rgb(ColorHSL { l: (hsl.l - 0.4).max(0.0), ..hsl }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l + 0.2).min(1.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l - 0.2).max(0.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l + 0.4).min(1.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l - 0.4).max(0.0),
+                        ..hsl
+                    }),
                 ]
             }
         };
@@ -3472,7 +3551,12 @@ impl Terminal {
     // === Feature 10: Clipboard Integration ===
 
     /// Add content to clipboard history
-    pub fn add_to_clipboard_history(&mut self, slot: ClipboardSlot, content: String, label: Option<String>) {
+    pub fn add_to_clipboard_history(
+        &mut self,
+        slot: ClipboardSlot,
+        content: String,
+        label: Option<String>,
+    ) {
         let entry = ClipboardEntry {
             content,
             timestamp: get_timestamp_us(),
@@ -3490,7 +3574,10 @@ impl Terminal {
 
     /// Get clipboard history for a slot
     pub fn get_clipboard_history(&self, slot: ClipboardSlot) -> Vec<ClipboardEntry> {
-        self.clipboard_history.get(&slot).cloned().unwrap_or_default()
+        self.clipboard_history
+            .get(&slot)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Get the most recent clipboard entry for a slot
@@ -3533,7 +3620,11 @@ impl Terminal {
     }
 
     /// Search clipboard history
-    pub fn search_clipboard_history(&self, query: &str, slot: Option<ClipboardSlot>) -> Vec<ClipboardEntry> {
+    pub fn search_clipboard_history(
+        &self,
+        query: &str,
+        slot: Option<ClipboardSlot>,
+    ) -> Vec<ClipboardEntry> {
         let query_lower = query.to_lowercase();
 
         if let Some(slot) = slot {
@@ -3580,17 +3671,25 @@ impl Terminal {
 
         // Limit history size
         if self.mouse_events.len() > self.max_mouse_history {
-            self.mouse_events.drain(0..self.mouse_events.len() - self.max_mouse_history);
+            self.mouse_events
+                .drain(0..self.mouse_events.len() - self.max_mouse_history);
         }
         if self.mouse_positions.len() > self.max_mouse_history {
-            self.mouse_positions.drain(0..self.mouse_positions.len() - self.max_mouse_history);
+            self.mouse_positions
+                .drain(0..self.mouse_positions.len() - self.max_mouse_history);
         }
     }
 
     /// Get mouse events, optionally limited to most recent N
     pub fn get_mouse_events(&self, count: Option<usize>) -> Vec<MouseEventRecord> {
         if let Some(n) = count {
-            self.mouse_events.iter().rev().take(n).rev().cloned().collect()
+            self.mouse_events
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect()
         } else {
             self.mouse_events.clone()
         }
@@ -3599,7 +3698,13 @@ impl Terminal {
     /// Get mouse positions, optionally limited to most recent N
     pub fn get_mouse_positions(&self, count: Option<usize>) -> Vec<MousePosition> {
         if let Some(n) = count {
-            self.mouse_positions.iter().rev().take(n).rev().cloned().collect()
+            self.mouse_positions
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect()
         } else {
             self.mouse_positions.clone()
         }
@@ -3624,7 +3729,8 @@ impl Terminal {
             self.mouse_events.drain(0..self.mouse_events.len() - max);
         }
         if self.mouse_positions.len() > max {
-            self.mouse_positions.drain(0..self.mouse_positions.len() - max);
+            self.mouse_positions
+                .drain(0..self.mouse_positions.len() - max);
         }
     }
 
@@ -3637,7 +3743,12 @@ impl Terminal {
 
     /// Add a damage region to track screen area changes
     pub fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) {
-        let region = DamageRegion { left, top, right, bottom };
+        let region = DamageRegion {
+            left,
+            top,
+            right,
+            bottom,
+        };
         self.damage_regions.push(region);
     }
 
@@ -3767,12 +3878,15 @@ impl Terminal {
         }
 
         if let Some(ref mut data) = self.profiling_data {
-            let profile = data.categories.entry(category).or_insert(EscapeSequenceProfile {
-                count: 0,
-                total_time_us: 0,
-                peak_time_us: 0,
-                avg_time_us: 0,
-            });
+            let profile = data
+                .categories
+                .entry(category)
+                .or_insert(EscapeSequenceProfile {
+                    count: 0,
+                    total_time_us: 0,
+                    peak_time_us: 0,
+                    avg_time_us: 0,
+                });
 
             profile.count += 1;
             profile.total_time_us += time_us;
@@ -3807,7 +3921,11 @@ impl Terminal {
     // === Feature 15: Regex Search in Scrollback ===
 
     /// Perform regex search on terminal content
-    pub fn regex_search(&mut self, pattern: &str, options: RegexSearchOptions) -> Result<Vec<RegexMatch>, String> {
+    pub fn regex_search(
+        &mut self,
+        pattern: &str,
+        options: RegexSearchOptions,
+    ) -> Result<Vec<RegexMatch>, String> {
         // Build regex with options
         let mut regex_pattern = pattern.to_string();
         if options.case_insensitive {
@@ -3850,7 +3968,8 @@ impl Terminal {
         for (line_idx, line) in all_lines.iter().enumerate() {
             for cap in re.captures_iter(line) {
                 let m = cap.get(0).unwrap();
-                let captures: Vec<String> = cap.iter()
+                let captures: Vec<String> = cap
+                    .iter()
                     .skip(1)
                     .filter_map(|c| c.map(|m| m.as_str().to_string()))
                     .collect();
@@ -3903,14 +4022,16 @@ impl Terminal {
 
     /// Find next regex match from a given position
     pub fn next_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
-        self.regex_matches.iter()
+        self.regex_matches
+            .iter()
             .find(|m| m.row > from_row || (m.row == from_row && m.col > from_col))
             .cloned()
     }
 
     /// Find previous regex match from a given position
     pub fn prev_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
-        self.regex_matches.iter()
+        self.regex_matches
+            .iter()
             .rev()
             .find(|m| m.row < from_row || (m.row == from_row && m.col < from_col))
             .cloned()
@@ -4087,10 +4208,8 @@ impl Terminal {
 
     /// Deserialize session state from JSON
     pub fn deserialize_session(json: &str) -> Result<SessionState, String> {
-        serde_json::from_str(json)
-            .map_err(|e| format!("Failed to deserialize session: {}", e))
+        serde_json::from_str(json).map_err(|e| format!("Failed to deserialize session: {}", e))
     }
-
 }
 
 // === Feature 14: Snapshot Diffing - Helper Function ===
