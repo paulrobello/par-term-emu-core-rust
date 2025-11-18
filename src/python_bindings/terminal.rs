@@ -2407,4 +2407,233 @@ impl PyTerminal {
         self.inner.clear_bookmarks();
         Ok(())
     }
+
+    // === Feature 7: Performance Metrics ===
+
+    /// Get current performance metrics
+    fn get_performance_metrics(&self) -> PyResult<super::types::PyPerformanceMetrics> {
+        let m = self.inner.get_performance_metrics();
+        Ok(super::types::PyPerformanceMetrics {
+            frames_rendered: m.frames_rendered,
+            cells_updated: m.cells_updated,
+            bytes_processed: m.bytes_processed,
+            total_processing_us: m.total_processing_us,
+            peak_frame_us: m.peak_frame_us,
+            scroll_count: m.scroll_count,
+            wrap_count: m.wrap_count,
+            escape_sequences: m.escape_sequences,
+        })
+    }
+
+    /// Reset performance metrics
+    fn reset_performance_metrics(&mut self) -> PyResult<()> {
+        self.inner.reset_performance_metrics();
+        Ok(())
+    }
+
+    /// Record a frame timing
+    fn record_frame_timing(&mut self, processing_us: u64, cells_updated: usize, bytes_processed: usize) -> PyResult<()> {
+        self.inner.record_frame_timing(processing_us, cells_updated, bytes_processed);
+        Ok(())
+    }
+
+    /// Get recent frame timings
+    #[pyo3(signature = (count=None))]
+    fn get_frame_timings(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyFrameTiming>> {
+        let timings = self.inner.get_frame_timings(count);
+        Ok(timings.iter().map(|t| super::types::PyFrameTiming {
+            frame_number: t.frame_number,
+            processing_us: t.processing_us,
+            cells_updated: t.cells_updated,
+            bytes_processed: t.bytes_processed,
+        }).collect())
+    }
+
+    /// Get average frame time in microseconds
+    fn get_average_frame_time(&self) -> PyResult<u64> {
+        Ok(self.inner.get_average_frame_time())
+    }
+
+    /// Get frames per second
+    fn get_fps(&self) -> PyResult<f64> {
+        Ok(self.inner.get_fps())
+    }
+
+    // === Feature 8: Advanced Color Operations ===
+
+    /// Convert RGB to HSV
+    fn rgb_to_hsv_color(&self, r: u8, g: u8, b: u8) -> PyResult<super::types::PyColorHSV> {
+        let hsv = self.inner.rgb_to_hsv_color(r, g, b);
+        Ok(super::types::PyColorHSV { h: hsv.h, s: hsv.s, v: hsv.v })
+    }
+
+    /// Convert HSV to RGB
+    fn hsv_to_rgb_color(&self, h: f32, s: f32, v: f32) -> PyResult<(u8, u8, u8)> {
+        let hsv = crate::terminal::ColorHSV { h, s, v };
+        Ok(self.inner.hsv_to_rgb_color(hsv))
+    }
+
+    /// Convert RGB to HSL
+    fn rgb_to_hsl_color(&self, r: u8, g: u8, b: u8) -> PyResult<super::types::PyColorHSL> {
+        let hsl = self.inner.rgb_to_hsl_color(r, g, b);
+        Ok(super::types::PyColorHSL { h: hsl.h, s: hsl.s, l: hsl.l })
+    }
+
+    /// Convert HSL to RGB
+    fn hsl_to_rgb_color(&self, h: f32, s: f32, l: f32) -> PyResult<(u8, u8, u8)> {
+        let hsl = crate::terminal::ColorHSL { h, s, l };
+        Ok(self.inner.hsl_to_rgb_color(hsl))
+    }
+
+    /// Generate a color palette
+    ///
+    /// Args:
+    ///     r, g, b: Base color RGB values
+    ///     mode: Theme mode (complementary, analogous, triadic, tetradic, split_complementary, monochromatic)
+    fn generate_color_palette(&self, r: u8, g: u8, b: u8, mode: &str) -> PyResult<super::types::PyColorPalette> {
+        use crate::terminal::ThemeMode;
+        let theme_mode = match mode {
+            "complementary" => ThemeMode::Complementary,
+            "analogous" => ThemeMode::Analogous,
+            "triadic" => ThemeMode::Triadic,
+            "tetradic" => ThemeMode::Tetradic,
+            "split_complementary" => ThemeMode::SplitComplementary,
+            "monochromatic" => ThemeMode::Monochromatic,
+            _ => return Err(PyValueError::new_err("Invalid theme mode")),
+        };
+
+        let palette = self.inner.generate_color_palette(r, g, b, theme_mode);
+        Ok(super::types::PyColorPalette {
+            base: palette.base,
+            colors: palette.colors,
+            mode: mode.to_string(),
+        })
+    }
+
+    /// Calculate color distance
+    fn color_distance(&self, r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> PyResult<f64> {
+        Ok(self.inner.color_distance(r1, g1, b1, r2, g2, b2))
+    }
+
+    // === Feature 9: Line Wrapping Utilities ===
+
+    /// Join wrapped lines starting from a given row
+    fn join_wrapped_lines(&self, start_row: usize) -> PyResult<Option<super::types::PyJoinedLines>> {
+        if let Some(joined) = self.inner.join_wrapped_lines(start_row) {
+            Ok(Some(super::types::PyJoinedLines {
+                text: joined.text,
+                start_row: joined.start_row,
+                end_row: joined.end_row,
+                lines_joined: joined.lines_joined,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get all logical lines (unwrapped)
+    fn get_logical_lines(&self) -> PyResult<Vec<String>> {
+        Ok(self.inner.get_logical_lines())
+    }
+
+    /// Check if a row starts a new logical line
+    fn is_line_start(&self, row: usize) -> PyResult<bool> {
+        Ok(self.inner.is_line_start(row))
+    }
+
+    // === Feature 10: Clipboard Integration ===
+
+    /// Add content to clipboard history
+    #[pyo3(signature = (slot, content, label=None))]
+    fn add_to_clipboard_history(&mut self, slot: &str, content: String, label: Option<String>) -> PyResult<()> {
+        let clipboard_slot = parse_clipboard_slot(slot)?;
+        self.inner.add_to_clipboard_history(clipboard_slot, content, label);
+        Ok(())
+    }
+
+    /// Get clipboard history for a slot
+    fn get_clipboard_history(&self, slot: &str) -> PyResult<Vec<super::types::PyClipboardEntry>> {
+        let clipboard_slot = parse_clipboard_slot(slot)?;
+        let history = self.inner.get_clipboard_history(clipboard_slot);
+        Ok(history.iter().map(|e| super::types::PyClipboardEntry {
+            content: e.content.clone(),
+            timestamp: e.timestamp,
+            label: e.label.clone(),
+        }).collect())
+    }
+
+    /// Get the most recent clipboard entry
+    fn get_latest_clipboard(&self, slot: &str) -> PyResult<Option<super::types::PyClipboardEntry>> {
+        let clipboard_slot = parse_clipboard_slot(slot)?;
+        if let Some(entry) = self.inner.get_latest_clipboard(clipboard_slot) {
+            Ok(Some(super::types::PyClipboardEntry {
+                content: entry.content,
+                timestamp: entry.timestamp,
+                label: entry.label,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Clear clipboard history for a slot
+    fn clear_clipboard_history(&mut self, slot: &str) -> PyResult<()> {
+        let clipboard_slot = parse_clipboard_slot(slot)?;
+        self.inner.clear_clipboard_history(clipboard_slot);
+        Ok(())
+    }
+
+    /// Clear all clipboard history
+    fn clear_all_clipboard_history(&mut self) -> PyResult<()> {
+        self.inner.clear_all_clipboard_history();
+        Ok(())
+    }
+
+    /// Set clipboard content with slot
+    #[pyo3(signature = (content, slot=None))]
+    fn set_clipboard_with_slot(&mut self, content: String, slot: Option<String>) -> PyResult<()> {
+        let clipboard_slot = slot.as_ref().map(|s| parse_clipboard_slot(s)).transpose()?;
+        self.inner.set_clipboard_with_slot(content, clipboard_slot);
+        Ok(())
+    }
+
+    /// Get clipboard content from slot
+    #[pyo3(signature = (slot=None))]
+    fn get_clipboard_from_slot(&self, slot: Option<String>) -> PyResult<Option<String>> {
+        let clipboard_slot = slot.as_ref().map(|s| parse_clipboard_slot(s)).transpose()?;
+        Ok(self.inner.get_clipboard_from_slot(clipboard_slot))
+    }
+
+    /// Search clipboard history
+    #[pyo3(signature = (query, slot=None))]
+    fn search_clipboard_history(&self, query: &str, slot: Option<String>) -> PyResult<Vec<super::types::PyClipboardEntry>> {
+        let clipboard_slot = slot.as_ref().map(|s| parse_clipboard_slot(s)).transpose()?;
+        let results = self.inner.search_clipboard_history(query, clipboard_slot);
+        Ok(results.iter().map(|e| super::types::PyClipboardEntry {
+            content: e.content.clone(),
+            timestamp: e.timestamp,
+            label: e.label.clone(),
+        }).collect())
+    }
+}
+
+/// Helper function to parse clipboard slot from string
+fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::ClipboardSlot> {
+    use crate::terminal::ClipboardSlot;
+    match slot.to_lowercase().as_str() {
+        "primary" => Ok(ClipboardSlot::Primary),
+        "clipboard" => Ok(ClipboardSlot::Clipboard),
+        "selection" => Ok(ClipboardSlot::Selection),
+        s if s.starts_with("custom") => {
+            if let Some(num_str) = s.strip_prefix("custom") {
+                if let Ok(num) = num_str.parse::<u8>() {
+                    if num <= 9 {
+                        return Ok(ClipboardSlot::Custom(num));
+                    }
+                }
+            }
+            Err(PyValueError::new_err("Invalid custom clipboard slot (use custom0-custom9)"))
+        }
+        _ => Err(PyValueError::new_err("Invalid clipboard slot")),
+    }
 }

@@ -154,6 +154,146 @@ pub struct Bookmark {
     pub label: String,
 }
 
+// === Feature 7: Performance Metrics ===
+
+/// Performance metrics for tracking terminal rendering performance
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceMetrics {
+    /// Total number of frames rendered
+    pub frames_rendered: u64,
+    /// Total number of cells updated
+    pub cells_updated: u64,
+    /// Total number of bytes processed
+    pub bytes_processed: u64,
+    /// Total processing time in microseconds
+    pub total_processing_us: u64,
+    /// Peak processing time for a single frame in microseconds
+    pub peak_frame_us: u64,
+    /// Number of scrolls performed
+    pub scroll_count: u64,
+    /// Number of line wraps
+    pub wrap_count: u64,
+    /// Number of escape sequences processed
+    pub escape_sequences: u64,
+}
+
+/// Frame timing information
+#[derive(Debug, Clone)]
+pub struct FrameTiming {
+    /// Frame number
+    pub frame_number: u64,
+    /// Processing time in microseconds
+    pub processing_us: u64,
+    /// Number of cells updated this frame
+    pub cells_updated: usize,
+    /// Number of bytes processed this frame
+    pub bytes_processed: usize,
+}
+
+// === Feature 8: Advanced Color Operations ===
+
+/// HSV color representation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorHSV {
+    /// Hue (0-360 degrees)
+    pub h: f32,
+    /// Saturation (0.0-1.0)
+    pub s: f32,
+    /// Value/Brightness (0.0-1.0)
+    pub v: f32,
+}
+
+/// HSL color representation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorHSL {
+    /// Hue (0-360 degrees)
+    pub h: f32,
+    /// Saturation (0.0-1.0)
+    pub s: f32,
+    /// Lightness (0.0-1.0)
+    pub l: f32,
+}
+
+/// Color theme generation mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    /// Complementary color (opposite on color wheel)
+    Complementary,
+    /// Analogous colors (adjacent on color wheel)
+    Analogous,
+    /// Triadic colors (evenly spaced on color wheel)
+    Triadic,
+    /// Tetradic/square colors
+    Tetradic,
+    /// Split complementary
+    SplitComplementary,
+    /// Monochromatic (varying lightness)
+    Monochromatic,
+}
+
+/// Generated color palette
+#[derive(Debug, Clone)]
+pub struct ColorPalette {
+    /// Base color
+    pub base: (u8, u8, u8),
+    /// Generated colors based on theme mode
+    pub colors: Vec<(u8, u8, u8)>,
+    /// Theme mode used
+    pub mode: ThemeMode,
+}
+
+// === Feature 9: Line Wrapping Utilities ===
+
+/// Line join result
+#[derive(Debug, Clone)]
+pub struct JoinedLines {
+    /// The joined text
+    pub text: String,
+    /// Start row of joined section
+    pub start_row: usize,
+    /// End row of joined section (inclusive)
+    pub end_row: usize,
+    /// Number of lines joined
+    pub lines_joined: usize,
+}
+
+/// Reflow statistics
+#[derive(Debug, Clone)]
+pub struct ReflowStats {
+    /// Number of lines before reflow
+    pub lines_before: usize,
+    /// Number of lines after reflow
+    pub lines_after: usize,
+    /// Number of wrap points changed
+    pub wraps_changed: usize,
+}
+
+// === Feature 10: Clipboard Integration ===
+
+/// Clipboard entry with history
+#[derive(Debug, Clone)]
+pub struct ClipboardEntry {
+    /// Clipboard content
+    pub content: String,
+    /// Timestamp when added (microseconds since epoch)
+    pub timestamp: u64,
+    /// Optional label/description
+    pub label: Option<String>,
+}
+
+/// Clipboard slot identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClipboardSlot {
+    /// Primary clipboard (OSC 52 default)
+    Primary,
+    /// System clipboard
+    Clipboard,
+    /// Selection clipboard (X11)
+    Selection,
+    /// Custom numbered slot (0-9)
+    Custom(u8),
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -347,6 +487,16 @@ pub struct Terminal {
     bookmarks: Vec<Bookmark>,
     /// Next available bookmark ID
     next_bookmark_id: usize,
+    /// Performance metrics tracking
+    perf_metrics: PerformanceMetrics,
+    /// Frame timing history (last N frames)
+    frame_timings: Vec<FrameTiming>,
+    /// Maximum frame timings to keep
+    max_frame_timings: usize,
+    /// Clipboard history (multiple slots)
+    clipboard_history: std::collections::HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
+    /// Maximum clipboard history entries per slot
+    max_clipboard_history: usize,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -383,6 +533,118 @@ fn html_escape(s: &str) -> String {
             _ => c.to_string(),
         })
         .collect()
+}
+
+/// Convert RGB to HSV
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> ColorHSV {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+    let v = max;
+
+    ColorHSV { h, s, v }
+}
+
+/// Convert HSV to RGB
+fn hsv_to_rgb(hsv: ColorHSV) -> (u8, u8, u8) {
+    let c = hsv.v * hsv.s;
+    let x = c * (1.0 - ((hsv.h / 60.0) % 2.0 - 1.0).abs());
+    let m = hsv.v - c;
+
+    let (r, g, b) = match hsv.h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
+
+/// Convert RGB to HSL
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> ColorHSL {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let l = (max + min) / 2.0;
+
+    let s = if delta == 0.0 {
+        0.0
+    } else {
+        delta / (1.0 - (2.0 * l - 1.0).abs())
+    };
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+
+    let h = if h < 0.0 { h + 360.0 } else { h };
+
+    ColorHSL { h, s, l }
+}
+
+/// Convert HSL to RGB
+fn hsl_to_rgb(hsl: ColorHSL) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * hsl.l - 1.0).abs()) * hsl.s;
+    let x = c * (1.0 - ((hsl.h / 60.0) % 2.0 - 1.0).abs());
+    let m = hsl.l - c / 2.0;
+
+    let (r, g, b) = match hsl.h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
+
+/// Get current timestamp in microseconds
+fn get_timestamp_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
 }
 
 impl Terminal {
@@ -500,6 +762,13 @@ impl Terminal {
             selection: None,
             bookmarks: Vec::new(),
             next_bookmark_id: 0,
+            // Performance metrics
+            perf_metrics: PerformanceMetrics::default(),
+            frame_timings: Vec::new(),
+            max_frame_timings: 100, // Keep last 100 frames
+            // Clipboard integration
+            clipboard_history: std::collections::HashMap::new(),
+            max_clipboard_history: 50, // Keep last 50 entries per slot
         }
     }
 
@@ -2613,6 +2882,317 @@ impl Terminal {
     /// Clear all bookmarks
     pub fn clear_bookmarks(&mut self) {
         self.bookmarks.clear();
+    }
+
+    // === Feature 7: Performance Metrics ===
+
+    /// Get current performance metrics
+    pub fn get_performance_metrics(&self) -> PerformanceMetrics {
+        self.perf_metrics.clone()
+    }
+
+    /// Reset performance metrics
+    pub fn reset_performance_metrics(&mut self) {
+        self.perf_metrics = PerformanceMetrics::default();
+        self.frame_timings.clear();
+    }
+
+    /// Record a frame timing
+    pub fn record_frame_timing(&mut self, processing_us: u64, cells_updated: usize, bytes_processed: usize) {
+        self.perf_metrics.frames_rendered += 1;
+        self.perf_metrics.cells_updated += cells_updated as u64;
+        self.perf_metrics.bytes_processed += bytes_processed as u64;
+        self.perf_metrics.total_processing_us += processing_us;
+
+        if processing_us > self.perf_metrics.peak_frame_us {
+            self.perf_metrics.peak_frame_us = processing_us;
+        }
+
+        let frame_timing = FrameTiming {
+            frame_number: self.perf_metrics.frames_rendered,
+            processing_us,
+            cells_updated,
+            bytes_processed,
+        };
+
+        self.frame_timings.push(frame_timing);
+
+        // Keep only last N frames
+        if self.frame_timings.len() > self.max_frame_timings {
+            self.frame_timings.remove(0);
+        }
+    }
+
+    /// Get recent frame timings
+    pub fn get_frame_timings(&self, count: Option<usize>) -> Vec<FrameTiming> {
+        let count = count.unwrap_or(self.frame_timings.len()).min(self.frame_timings.len());
+        self.frame_timings[self.frame_timings.len() - count..].to_vec()
+    }
+
+    /// Get average frame time in microseconds
+    pub fn get_average_frame_time(&self) -> u64 {
+        if self.perf_metrics.frames_rendered == 0 {
+            0
+        } else {
+            self.perf_metrics.total_processing_us / self.perf_metrics.frames_rendered
+        }
+    }
+
+    /// Get frames per second (based on average frame time)
+    pub fn get_fps(&self) -> f64 {
+        let avg_time = self.get_average_frame_time();
+        if avg_time == 0 {
+            0.0
+        } else {
+            1_000_000.0 / avg_time as f64
+        }
+    }
+
+    // === Feature 8: Advanced Color Operations ===
+
+    /// Convert RGB color to HSV
+    pub fn rgb_to_hsv_color(&self, r: u8, g: u8, b: u8) -> ColorHSV {
+        rgb_to_hsv(r, g, b)
+    }
+
+    /// Convert HSV color to RGB
+    pub fn hsv_to_rgb_color(&self, hsv: ColorHSV) -> (u8, u8, u8) {
+        hsv_to_rgb(hsv)
+    }
+
+    /// Convert RGB color to HSL
+    pub fn rgb_to_hsl_color(&self, r: u8, g: u8, b: u8) -> ColorHSL {
+        rgb_to_hsl(r, g, b)
+    }
+
+    /// Convert HSL color to RGB
+    pub fn hsl_to_rgb_color(&self, hsl: ColorHSL) -> (u8, u8, u8) {
+        hsl_to_rgb(hsl)
+    }
+
+    /// Generate a color palette based on a base color and theme mode
+    pub fn generate_color_palette(&self, r: u8, g: u8, b: u8, mode: ThemeMode) -> ColorPalette {
+        let hsl = rgb_to_hsl(r, g, b);
+
+        let colors = match mode {
+            ThemeMode::Complementary => {
+                let comp_hsl = ColorHSL {
+                    h: (hsl.h + 180.0) % 360.0,
+                    s: hsl.s,
+                    l: hsl.l,
+                };
+                vec![hsl_to_rgb(comp_hsl)]
+            }
+            ThemeMode::Analogous => {
+                let angle = 30.0;
+                vec![
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + angle) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 360.0 - angle) % 360.0, ..hsl }),
+                ]
+            }
+            ThemeMode::Triadic => {
+                vec![
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 120.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 240.0) % 360.0, ..hsl }),
+                ]
+            }
+            ThemeMode::Tetradic => {
+                vec![
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 90.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 180.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL { h: (hsl.h + 270.0) % 360.0, ..hsl }),
+                ]
+            }
+            ThemeMode::SplitComplementary => {
+                let comp_h = (hsl.h + 180.0) % 360.0;
+                vec![
+                    hsl_to_rgb(ColorHSL { h: (comp_h + 30.0) % 360.0, ..hsl }),
+                    hsl_to_rgb(ColorHSL { h: (comp_h + 360.0 - 30.0) % 360.0, ..hsl }),
+                ]
+            }
+            ThemeMode::Monochromatic => {
+                vec![
+                    hsl_to_rgb(ColorHSL { l: (hsl.l + 0.2).min(1.0), ..hsl }),
+                    hsl_to_rgb(ColorHSL { l: (hsl.l - 0.2).max(0.0), ..hsl }),
+                    hsl_to_rgb(ColorHSL { l: (hsl.l + 0.4).min(1.0), ..hsl }),
+                    hsl_to_rgb(ColorHSL { l: (hsl.l - 0.4).max(0.0), ..hsl }),
+                ]
+            }
+        };
+
+        ColorPalette {
+            base: (r, g, b),
+            colors,
+            mode,
+        }
+    }
+
+    /// Calculate color distance (Euclidean distance in RGB space)
+    pub fn color_distance(&self, r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f64 {
+        let dr = r1 as f64 - r2 as f64;
+        let dg = g1 as f64 - g2 as f64;
+        let db = b1 as f64 - b2 as f64;
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    // === Feature 9: Line Wrapping Utilities ===
+
+    /// Join wrapped lines starting from a given row
+    ///
+    /// Unwraps soft-wrapped lines into a single logical line.
+    pub fn join_wrapped_lines(&self, start_row: usize) -> Option<JoinedLines> {
+        let grid = self.active_grid();
+        if start_row >= grid.rows() {
+            return None;
+        }
+
+        let mut lines = Vec::new();
+        let mut current_row = start_row;
+
+        // Collect the first line
+        if let Some(line) = grid.row(current_row) {
+            lines.push(cells_to_text(line));
+        } else {
+            return None;
+        }
+
+        // Follow wrapped lines
+        while current_row < grid.rows() - 1 && grid.is_line_wrapped(current_row) {
+            current_row += 1;
+            if let Some(line) = grid.row(current_row) {
+                lines.push(cells_to_text(line));
+            } else {
+                break;
+            }
+        }
+
+        Some(JoinedLines {
+            text: lines.join(""),
+            start_row,
+            end_row: current_row,
+            lines_joined: lines.len(),
+        })
+    }
+
+    /// Get all logical lines (unwrapped) in the visible screen
+    pub fn get_logical_lines(&self) -> Vec<String> {
+        let grid = self.active_grid();
+        let mut logical_lines = Vec::new();
+        let mut row = 0;
+
+        while row < grid.rows() {
+            if let Some(joined) = self.join_wrapped_lines(row) {
+                logical_lines.push(joined.text);
+                row = joined.end_row + 1;
+            } else {
+                row += 1;
+            }
+        }
+
+        logical_lines
+    }
+
+    /// Check if a row starts a new logical line (not a continuation)
+    pub fn is_line_start(&self, row: usize) -> bool {
+        if row == 0 {
+            return true;
+        }
+        let grid = self.active_grid();
+        !grid.is_line_wrapped(row.saturating_sub(1))
+    }
+
+    // === Feature 10: Clipboard Integration ===
+
+    /// Add content to clipboard history
+    pub fn add_to_clipboard_history(&mut self, slot: ClipboardSlot, content: String, label: Option<String>) {
+        let entry = ClipboardEntry {
+            content,
+            timestamp: get_timestamp_us(),
+            label,
+        };
+
+        let history = self.clipboard_history.entry(slot).or_default();
+        history.push(entry);
+
+        // Keep only last N entries
+        if history.len() > self.max_clipboard_history {
+            history.remove(0);
+        }
+    }
+
+    /// Get clipboard history for a slot
+    pub fn get_clipboard_history(&self, slot: ClipboardSlot) -> Vec<ClipboardEntry> {
+        self.clipboard_history.get(&slot).cloned().unwrap_or_default()
+    }
+
+    /// Get the most recent clipboard entry for a slot
+    pub fn get_latest_clipboard(&self, slot: ClipboardSlot) -> Option<ClipboardEntry> {
+        self.clipboard_history.get(&slot)?.last().cloned()
+    }
+
+    /// Clear clipboard history for a slot
+    pub fn clear_clipboard_history(&mut self, slot: ClipboardSlot) {
+        self.clipboard_history.remove(&slot);
+    }
+
+    /// Clear all clipboard history
+    pub fn clear_all_clipboard_history(&mut self) {
+        self.clipboard_history.clear();
+    }
+
+    /// Set clipboard content with slot (convenience method that also adds to history)
+    pub fn set_clipboard_with_slot(&mut self, content: String, slot: Option<ClipboardSlot>) {
+        let slot = slot.unwrap_or(ClipboardSlot::Primary);
+
+        // Update the current clipboard_content field
+        self.clipboard_content = Some(content.clone());
+
+        // Add to history
+        self.add_to_clipboard_history(slot, content, None);
+    }
+
+    /// Get clipboard content from history or current clipboard
+    pub fn get_clipboard_from_slot(&self, slot: Option<ClipboardSlot>) -> Option<String> {
+        let slot = slot.unwrap_or(ClipboardSlot::Primary);
+
+        // Try history first
+        if let Some(entry) = self.get_latest_clipboard(slot) {
+            return Some(entry.content);
+        }
+
+        // Fall back to current clipboard_content
+        self.clipboard_content.clone()
+    }
+
+    /// Search clipboard history
+    pub fn search_clipboard_history(&self, query: &str, slot: Option<ClipboardSlot>) -> Vec<ClipboardEntry> {
+        let query_lower = query.to_lowercase();
+
+        if let Some(slot) = slot {
+            // Search specific slot
+            self.clipboard_history
+                .get(&slot)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|e| e.content.to_lowercase().contains(&query_lower))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            // Search all slots
+            let mut results = Vec::new();
+            for entries in self.clipboard_history.values() {
+                for entry in entries {
+                    if entry.content.to_lowercase().contains(&query_lower) {
+                        results.push(entry.clone());
+                    }
+                }
+            }
+            results.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+            results
+        }
     }
 }
 // VTE Perform trait implementation - delegates to sequence handlers

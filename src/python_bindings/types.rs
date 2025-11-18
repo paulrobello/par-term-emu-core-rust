@@ -885,6 +885,180 @@ impl PyBookmark {
     }
 }
 
+// === Feature 7: Performance Metrics ===
+
+/// Performance metrics
+#[pyclass(name = "PerformanceMetrics")]
+#[derive(Clone)]
+pub struct PyPerformanceMetrics {
+    #[pyo3(get)]
+    pub frames_rendered: u64,
+    #[pyo3(get)]
+    pub cells_updated: u64,
+    #[pyo3(get)]
+    pub bytes_processed: u64,
+    #[pyo3(get)]
+    pub total_processing_us: u64,
+    #[pyo3(get)]
+    pub peak_frame_us: u64,
+    #[pyo3(get)]
+    pub scroll_count: u64,
+    #[pyo3(get)]
+    pub wrap_count: u64,
+    #[pyo3(get)]
+    pub escape_sequences: u64,
+}
+
+#[pymethods]
+impl PyPerformanceMetrics {
+    fn __repr__(&self) -> String {
+        format!("PerformanceMetrics(frames={}, cells={}, fps={:.1})",
+                self.frames_rendered, self.cells_updated,
+                if self.total_processing_us > 0 {
+                    1_000_000.0 * self.frames_rendered as f64 / self.total_processing_us as f64
+                } else {
+                    0.0
+                })
+    }
+}
+
+/// Frame timing
+#[pyclass(name = "FrameTiming")]
+#[derive(Clone)]
+pub struct PyFrameTiming {
+    #[pyo3(get)]
+    pub frame_number: u64,
+    #[pyo3(get)]
+    pub processing_us: u64,
+    #[pyo3(get)]
+    pub cells_updated: usize,
+    #[pyo3(get)]
+    pub bytes_processed: usize,
+}
+
+#[pymethods]
+impl PyFrameTiming {
+    fn __repr__(&self) -> String {
+        format!("FrameTiming(frame={}, time={}us, cells={})",
+                self.frame_number, self.processing_us, self.cells_updated)
+    }
+}
+
+// === Feature 8: Advanced Color Operations ===
+
+/// HSV color
+#[pyclass(name = "ColorHSV")]
+#[derive(Clone)]
+pub struct PyColorHSV {
+    #[pyo3(get)]
+    pub h: f32,
+    #[pyo3(get)]
+    pub s: f32,
+    #[pyo3(get)]
+    pub v: f32,
+}
+
+#[pymethods]
+impl PyColorHSV {
+    #[new]
+    fn new(h: f32, s: f32, v: f32) -> Self {
+        Self { h, s, v }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ColorHSV(h={:.1}, s={:.2}, v={:.2})", self.h, self.s, self.v)
+    }
+}
+
+/// HSL color
+#[pyclass(name = "ColorHSL")]
+#[derive(Clone)]
+pub struct PyColorHSL {
+    #[pyo3(get)]
+    pub h: f32,
+    #[pyo3(get)]
+    pub s: f32,
+    #[pyo3(get)]
+    pub l: f32,
+}
+
+#[pymethods]
+impl PyColorHSL {
+    #[new]
+    fn new(h: f32, s: f32, l: f32) -> Self {
+        Self { h, s, l }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ColorHSL(h={:.1}, s={:.2}, l={:.2})", self.h, self.s, self.l)
+    }
+}
+
+/// Color palette
+#[pyclass(name = "ColorPalette")]
+#[derive(Clone)]
+pub struct PyColorPalette {
+    #[pyo3(get)]
+    pub base: (u8, u8, u8),
+    #[pyo3(get)]
+    pub colors: Vec<(u8, u8, u8)>,
+    #[pyo3(get)]
+    pub mode: String,
+}
+
+#[pymethods]
+impl PyColorPalette {
+    fn __repr__(&self) -> String {
+        format!("ColorPalette(mode={}, colors={})", self.mode, self.colors.len())
+    }
+}
+
+// === Feature 9: Line Wrapping Utilities ===
+
+/// Joined lines result
+#[pyclass(name = "JoinedLines")]
+#[derive(Clone)]
+pub struct PyJoinedLines {
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub start_row: usize,
+    #[pyo3(get)]
+    pub end_row: usize,
+    #[pyo3(get)]
+    pub lines_joined: usize,
+}
+
+#[pymethods]
+impl PyJoinedLines {
+    fn __repr__(&self) -> String {
+        format!("JoinedLines(rows={}-{}, lines={}, len={})",
+                self.start_row, self.end_row, self.lines_joined, self.text.len())
+    }
+}
+
+// === Feature 10: Clipboard Integration ===
+
+/// Clipboard entry
+#[pyclass(name = "ClipboardEntry")]
+#[derive(Clone)]
+pub struct PyClipboardEntry {
+    #[pyo3(get)]
+    pub content: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub label: Option<String>,
+}
+
+#[pymethods]
+impl PyClipboardEntry {
+    fn __repr__(&self) -> String {
+        format!("ClipboardEntry(len={}, timestamp={})",
+                self.content.len(), self.timestamp)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

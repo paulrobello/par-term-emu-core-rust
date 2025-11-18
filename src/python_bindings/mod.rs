@@ -26,6 +26,8 @@ pub use enums::{PyCursorStyle, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
 pub use terminal::PyTerminal;
 pub use types::{
-    PyAttributes, PyBookmark, PyDetectedItem, PyGraphic, PyScreenSnapshot, PySearchMatch,
-    PySelection, PySelectionMode, PyShellIntegration, PyScrollbackStats, PyTmuxNotification,
+    PyAttributes, PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette,
+    PyDetectedItem, PyFrameTiming, PyGraphic, PyJoinedLines, PyPerformanceMetrics,
+    PyScreenSnapshot, PySearchMatch, PySelection, PySelectionMode, PyShellIntegration,
+    PyScrollbackStats, PyTmuxNotification,
 };

@@ -63,9 +63,10 @@ pub use python_bindings::{
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
-    PyBookmark, PyCursorStyle, PyDetectedItem, PyGraphic, PyPtyTerminal, PyScreenSnapshot,
-    PySearchMatch, PySelection, PySelectionMode, PyShellIntegration, PyScrollbackStats,
-    PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette, PyCursorStyle,
+    PyDetectedItem, PyFrameTiming, PyGraphic, PyJoinedLines, PyPerformanceMetrics,
+    PyPtyTerminal, PyScreenSnapshot, PySearchMatch, PySelection, PySelectionMode,
+    PyShellIntegration, PyScrollbackStats, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
 };
 
 /// Convert PtyError to PyErr
@@ -116,6 +117,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySelectionMode>()?;
     m.add_class::<PyScrollbackStats>()?;
     m.add_class::<PyBookmark>()?;
+    m.add_class::<PyPerformanceMetrics>()?;
+    m.add_class::<PyFrameTiming>()?;
+    m.add_class::<PyColorHSV>()?;
+    m.add_class::<PyColorHSL>()?;
+    m.add_class::<PyColorPalette>()?;
+    m.add_class::<PyJoinedLines>()?;
+    m.add_class::<PyClipboardEntry>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
