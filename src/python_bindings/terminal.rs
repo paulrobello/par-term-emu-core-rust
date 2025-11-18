@@ -3801,6 +3801,280 @@ impl PyTerminal {
         self.inner.set_max_cwd_history(max);
         Ok(())
     }
+
+    // === Feature 37: Terminal Notifications ===
+
+    /// Get notification configuration
+    ///
+    /// Returns:
+    ///     NotificationConfig: Current notification settings
+    fn get_notification_config(&self) -> PyResult<super::types::PyNotificationConfig> {
+        Ok(super::types::PyNotificationConfig::from(
+            self.inner.get_notification_config(),
+        ))
+    }
+
+    /// Set notification configuration
+    ///
+    /// Args:
+    ///     config: NotificationConfig object with settings
+    fn set_notification_config(
+        &mut self,
+        config: &super::types::PyNotificationConfig,
+    ) -> PyResult<()> {
+        self.inner
+            .set_notification_config(crate::terminal::NotificationConfig::from(config));
+        Ok(())
+    }
+
+    /// Trigger a notification
+    ///
+    /// Args:
+    ///     trigger: Trigger type ("Bell", "Activity", "Silence", "Custom(id)")
+    ///     alert: Alert type ("Desktop", "Sound(volume)", "Visual")
+    ///     message: Optional message string
+    fn trigger_notification(
+        &mut self,
+        trigger: &str,
+        alert: &str,
+        message: Option<String>,
+    ) -> PyResult<()> {
+        use crate::terminal::{NotificationAlert, NotificationTrigger};
+
+        let trigger_parsed = if trigger.to_lowercase() == "bell" {
+            NotificationTrigger::Bell
+        } else if trigger.to_lowercase() == "activity" {
+            NotificationTrigger::Activity
+        } else if trigger.to_lowercase() == "silence" {
+            NotificationTrigger::Silence
+        } else if trigger.starts_with("Custom(") && trigger.ends_with(')') {
+            let id_str = &trigger[7..trigger.len() - 1];
+            let id: u32 = id_str
+                .parse()
+                .map_err(|_| PyValueError::new_err("Invalid custom trigger ID"))?;
+            NotificationTrigger::Custom(id)
+        } else {
+            return Err(PyValueError::new_err(
+                "Invalid trigger type (use 'Bell', 'Activity', 'Silence', or 'Custom(id)')",
+            ));
+        };
+
+        let alert_parsed = if alert.to_lowercase() == "desktop" {
+            NotificationAlert::Desktop
+        } else if alert.starts_with("Sound(") && alert.ends_with(')') {
+            let vol_str = &alert[6..alert.len() - 1];
+            let vol: u8 = vol_str
+                .parse()
+                .map_err(|_| PyValueError::new_err("Invalid sound volume"))?;
+            NotificationAlert::Sound(vol)
+        } else if alert.to_lowercase() == "visual" {
+            NotificationAlert::Visual
+        } else {
+            return Err(PyValueError::new_err(
+                "Invalid alert type (use 'Desktop', 'Sound(volume)', or 'Visual')",
+            ));
+        };
+
+        self.inner
+            .trigger_notification(trigger_parsed, alert_parsed, message);
+        Ok(())
+    }
+
+    /// Get notification events
+    ///
+    /// Returns:
+    ///     List of NotificationEvent objects
+    fn get_notification_events(&self) -> PyResult<Vec<super::types::PyNotificationEvent>> {
+        Ok(self
+            .inner
+            .get_notification_events()
+            .iter()
+            .map(super::types::PyNotificationEvent::from)
+            .collect())
+    }
+
+    /// Clear notification events
+    fn clear_notification_events(&mut self) -> PyResult<()> {
+        self.inner.clear_notification_events();
+        Ok(())
+    }
+
+    /// Mark a notification as delivered
+    ///
+    /// Args:
+    ///     index: Index of the notification event
+    fn mark_notification_delivered(&mut self, index: usize) -> PyResult<()> {
+        self.inner.mark_notification_delivered(index);
+        Ok(())
+    }
+
+    /// Update activity timestamp
+    fn update_activity(&mut self) -> PyResult<()> {
+        self.inner.update_activity();
+        Ok(())
+    }
+
+    /// Check for silence and trigger notification if needed
+    fn check_silence(&mut self) -> PyResult<()> {
+        self.inner.check_silence();
+        Ok(())
+    }
+
+    /// Check for activity and trigger notification if needed
+    fn check_activity(&mut self) -> PyResult<()> {
+        self.inner.check_activity();
+        Ok(())
+    }
+
+    /// Register a custom notification trigger
+    ///
+    /// Args:
+    ///     id: Trigger ID
+    ///     message: Message for the trigger
+    fn register_custom_trigger(&mut self, id: u32, message: String) -> PyResult<()> {
+        self.inner.register_custom_trigger(id, message);
+        Ok(())
+    }
+
+    /// Trigger a custom notification
+    ///
+    /// Args:
+    ///     id: Trigger ID
+    ///     alert: Alert type ("Desktop", "Sound(volume)", "Visual")
+    fn trigger_custom_notification(&mut self, id: u32, alert: &str) -> PyResult<()> {
+        use crate::terminal::NotificationAlert;
+
+        let alert_parsed = if alert.to_lowercase() == "desktop" {
+            NotificationAlert::Desktop
+        } else if alert.starts_with("Sound(") && alert.ends_with(')') {
+            let vol_str = &alert[6..alert.len() - 1];
+            let vol: u8 = vol_str
+                .parse()
+                .map_err(|_| PyValueError::new_err("Invalid sound volume"))?;
+            NotificationAlert::Sound(vol)
+        } else if alert.to_lowercase() == "visual" {
+            NotificationAlert::Visual
+        } else {
+            return Err(PyValueError::new_err(
+                "Invalid alert type (use 'Desktop', 'Sound(volume)', or 'Visual')",
+            ));
+        };
+
+        self.inner.trigger_custom_notification(id, alert_parsed);
+        Ok(())
+    }
+
+    /// Handle bell event with notification
+    fn handle_bell_notification(&mut self) -> PyResult<()> {
+        self.inner.handle_bell_notification();
+        Ok(())
+    }
+
+    // === Feature 24: Terminal Replay/Recording ===
+
+    /// Start recording a terminal session
+    ///
+    /// Args:
+    ///     title: Optional session title
+    fn start_recording(&mut self, title: Option<String>) -> PyResult<()> {
+        self.inner.start_recording(title);
+        Ok(())
+    }
+
+    /// Stop recording and return the session
+    ///
+    /// Returns:
+    ///     RecordingSession object if recording was active, None otherwise
+    fn stop_recording(&mut self) -> PyResult<Option<super::types::PyRecordingSession>> {
+        Ok(self
+            .inner
+            .stop_recording()
+            .as_ref()
+            .map(super::types::PyRecordingSession::from))
+    }
+
+    /// Record output data
+    ///
+    /// Args:
+    ///     data: Output data bytes
+    fn record_output(&mut self, data: &[u8]) -> PyResult<()> {
+        self.inner.record_output(data);
+        Ok(())
+    }
+
+    /// Record input data
+    ///
+    /// Args:
+    ///     data: Input data bytes
+    fn record_input(&mut self, data: &[u8]) -> PyResult<()> {
+        self.inner.record_input(data);
+        Ok(())
+    }
+
+    /// Record terminal resize
+    ///
+    /// Args:
+    ///     cols: Number of columns
+    ///     rows: Number of rows
+    fn record_resize(&mut self, cols: usize, rows: usize) -> PyResult<()> {
+        self.inner.record_resize(cols, rows);
+        Ok(())
+    }
+
+    /// Add a marker/bookmark to the recording
+    ///
+    /// Args:
+    ///     label: Marker label
+    fn record_marker(&mut self, label: String) -> PyResult<()> {
+        self.inner.record_marker(label);
+        Ok(())
+    }
+
+    /// Get current recording session
+    ///
+    /// Returns:
+    ///     RecordingSession object if recording is active, None otherwise
+    fn get_recording_session(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
+        Ok(self
+            .inner
+            .get_recording_session()
+            .map(super::types::PyRecordingSession::from))
+    }
+
+    /// Check if currently recording
+    ///
+    /// Returns:
+    ///     True if recording is active
+    fn is_recording(&self) -> PyResult<bool> {
+        Ok(self.inner.is_recording())
+    }
+
+    /// Export recording to asciicast v2 format
+    ///
+    /// Args:
+    ///     session: RecordingSession from stop_recording()
+    ///
+    /// Returns:
+    ///     Asciicast format string
+    fn export_asciicast(&self, _py: Python) -> PyResult<String> {
+        if let Some(session) = self.inner.get_recording_session() {
+            Ok(self.inner.export_asciicast(session))
+        } else {
+            Err(PyValueError::new_err("No active recording session"))
+        }
+    }
+
+    /// Export recording to JSON format
+    ///
+    /// Returns:
+    ///     JSON format string
+    fn export_json(&self, _py: Python) -> PyResult<String> {
+        if let Some(session) = self.inner.get_recording_session() {
+            Ok(self.inner.export_json(session))
+        } else {
+            Err(PyValueError::new_err("No active recording session"))
+        }
+    }
 }
 
 /// Helper function to parse clipboard slot from string

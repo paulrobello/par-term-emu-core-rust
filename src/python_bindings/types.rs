@@ -2167,6 +2167,236 @@ impl From<&crate::terminal::CwdChange> for PyCwdChange {
     }
 }
 
+// === Feature 37: Terminal Notifications ===
+
+/// Notification event
+#[pyclass(name = "NotificationEvent")]
+#[derive(Clone)]
+pub struct PyNotificationEvent {
+    #[pyo3(get)]
+    pub trigger: String,
+    #[pyo3(get)]
+    pub alert: String,
+    #[pyo3(get)]
+    pub message: Option<String>,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub delivered: bool,
+}
+
+#[pymethods]
+impl PyNotificationEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "NotificationEvent(trigger={}, alert={}, delivered={})",
+            self.trigger, self.alert, self.delivered
+        )
+    }
+}
+
+impl From<&crate::terminal::NotificationEvent> for PyNotificationEvent {
+    fn from(event: &crate::terminal::NotificationEvent) -> Self {
+        let trigger = match event.trigger {
+            crate::terminal::NotificationTrigger::Bell => "Bell".to_string(),
+            crate::terminal::NotificationTrigger::Activity => "Activity".to_string(),
+            crate::terminal::NotificationTrigger::Silence => "Silence".to_string(),
+            crate::terminal::NotificationTrigger::Custom(id) => format!("Custom({})", id),
+        };
+
+        let alert = match event.alert {
+            crate::terminal::NotificationAlert::Desktop => "Desktop".to_string(),
+            crate::terminal::NotificationAlert::Sound(vol) => format!("Sound({})", vol),
+            crate::terminal::NotificationAlert::Visual => "Visual".to_string(),
+        };
+
+        PyNotificationEvent {
+            trigger,
+            alert,
+            message: event.message.clone(),
+            timestamp: event.timestamp,
+            delivered: event.delivered,
+        }
+    }
+}
+
+/// Notification configuration
+#[pyclass(name = "NotificationConfig")]
+#[derive(Clone)]
+pub struct PyNotificationConfig {
+    #[pyo3(get, set)]
+    pub bell_desktop: bool,
+    #[pyo3(get, set)]
+    pub bell_sound: u8,
+    #[pyo3(get, set)]
+    pub bell_visual: bool,
+    #[pyo3(get, set)]
+    pub activity_enabled: bool,
+    #[pyo3(get, set)]
+    pub activity_threshold: u64,
+    #[pyo3(get, set)]
+    pub silence_enabled: bool,
+    #[pyo3(get, set)]
+    pub silence_threshold: u64,
+}
+
+#[pymethods]
+impl PyNotificationConfig {
+    #[new]
+    fn new() -> Self {
+        PyNotificationConfig::default()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NotificationConfig(bell_desktop={}, bell_visual={}, activity={}, silence={})",
+            self.bell_desktop, self.bell_visual, self.activity_enabled, self.silence_enabled
+        )
+    }
+}
+
+impl Default for PyNotificationConfig {
+    fn default() -> Self {
+        let config = crate::terminal::NotificationConfig::default();
+        PyNotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+impl From<&crate::terminal::NotificationConfig> for PyNotificationConfig {
+    fn from(config: &crate::terminal::NotificationConfig) -> Self {
+        PyNotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
+    fn from(config: &PyNotificationConfig) -> Self {
+        crate::terminal::NotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+// === Feature 24: Terminal Replay/Recording ===
+
+/// Recording event
+#[pyclass(name = "RecordingEvent")]
+#[derive(Clone)]
+pub struct PyRecordingEvent {
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub event_type: String,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+    #[pyo3(get)]
+    pub metadata: Option<(usize, usize)>,
+}
+
+#[pymethods]
+impl PyRecordingEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "RecordingEvent(type={}, timestamp={}ms, data_len={})",
+            self.event_type,
+            self.timestamp,
+            self.data.len()
+        )
+    }
+
+    /// Get event data as string
+    fn get_data_str(&self) -> String {
+        String::from_utf8_lossy(&self.data).to_string()
+    }
+}
+
+impl From<&crate::terminal::RecordingEvent> for PyRecordingEvent {
+    fn from(event: &crate::terminal::RecordingEvent) -> Self {
+        let event_type = match event.event_type {
+            crate::terminal::RecordingEventType::Input => "Input".to_string(),
+            crate::terminal::RecordingEventType::Output => "Output".to_string(),
+            crate::terminal::RecordingEventType::Resize => "Resize".to_string(),
+            crate::terminal::RecordingEventType::Marker => "Marker".to_string(),
+        };
+
+        PyRecordingEvent {
+            timestamp: event.timestamp,
+            event_type,
+            data: event.data.clone(),
+            metadata: event.metadata,
+        }
+    }
+}
+
+/// Recording session
+#[pyclass(name = "RecordingSession")]
+#[derive(Clone)]
+pub struct PyRecordingSession {
+    #[pyo3(get)]
+    pub start_time: u64,
+    #[pyo3(get)]
+    pub initial_size: (usize, usize),
+    #[pyo3(get)]
+    pub duration: u64,
+    #[pyo3(get)]
+    pub title: Option<String>,
+    #[pyo3(get)]
+    pub event_count: usize,
+}
+
+#[pymethods]
+impl PyRecordingSession {
+    fn __repr__(&self) -> String {
+        format!(
+            "RecordingSession(duration={}ms, size={:?}, events={})",
+            self.duration, self.initial_size, self.event_count
+        )
+    }
+
+    /// Get recording size (cols, rows)
+    fn get_size(&self) -> (usize, usize) {
+        self.initial_size
+    }
+
+    /// Get duration in seconds
+    fn get_duration_seconds(&self) -> f64 {
+        self.duration as f64 / 1000.0
+    }
+}
+
+impl From<&crate::terminal::RecordingSession> for PyRecordingSession {
+    fn from(session: &crate::terminal::RecordingSession) -> Self {
+        PyRecordingSession {
+            start_time: session.start_time,
+            initial_size: session.initial_size,
+            duration: session.duration,
+            title: session.title.clone(),
+            event_count: session.events.len(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

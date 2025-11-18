@@ -894,6 +894,149 @@ pub struct CwdChange {
     pub timestamp: u64,
 }
 
+// === Feature 37: Terminal Notifications ===
+
+/// Notification trigger type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NotificationTrigger {
+    /// Terminal bell rang
+    Bell,
+    /// Terminal activity detected
+    Activity,
+    /// Silence detected (no activity for duration)
+    Silence,
+    /// Custom trigger with ID
+    Custom(u32),
+}
+
+/// Notification alert type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationAlert {
+    /// Desktop/system notification
+    Desktop,
+    /// Sound alert with volume (0-100)
+    Sound(u8),
+    /// Visual alert (flash, border, etc.)
+    Visual,
+}
+
+/// Notification event record
+#[derive(Debug, Clone)]
+pub struct NotificationEvent {
+    /// What triggered the notification
+    pub trigger: NotificationTrigger,
+    /// Type of alert
+    pub alert: NotificationAlert,
+    /// Optional message
+    pub message: Option<String>,
+    /// Timestamp when event occurred
+    pub timestamp: u64,
+    /// Whether notification was delivered
+    pub delivered: bool,
+}
+
+/// Notification configuration
+#[derive(Debug, Clone)]
+pub struct NotificationConfig {
+    /// Enable desktop notifications on bell
+    pub bell_desktop: bool,
+    /// Enable sound on bell (0 = disabled, 1-100 = volume)
+    pub bell_sound: u8,
+    /// Enable visual alert on bell
+    pub bell_visual: bool,
+    /// Enable notifications on activity
+    pub activity_enabled: bool,
+    /// Activity threshold (seconds of inactivity before triggering)
+    pub activity_threshold: u64,
+    /// Enable notifications on silence
+    pub silence_enabled: bool,
+    /// Silence threshold (seconds of activity before silence notification)
+    pub silence_threshold: u64,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            bell_desktop: false,
+            bell_sound: 0,
+            bell_visual: true,
+            activity_enabled: false,
+            activity_threshold: 10,
+            silence_enabled: false,
+            silence_threshold: 300,
+        }
+    }
+}
+
+// === Feature 24: Terminal Replay/Recording ===
+
+/// Recording format type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingFormat {
+    /// Asciicast v2 format (asciinema)
+    Asciicast,
+    /// JSON with timing data
+    Json,
+    /// Raw TTY data
+    Tty,
+}
+
+/// Recording event type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingEventType {
+    /// Input data
+    Input,
+    /// Output data
+    Output,
+    /// Terminal resize
+    Resize,
+    /// Marker/bookmark
+    Marker,
+}
+
+/// Recording event
+#[derive(Debug, Clone)]
+pub struct RecordingEvent {
+    /// Timestamp (milliseconds since recording start)
+    pub timestamp: u64,
+    /// Event type
+    pub event_type: RecordingEventType,
+    /// Event data
+    pub data: Vec<u8>,
+    /// Metadata (for resize: cols, rows)
+    pub metadata: Option<(usize, usize)>,
+}
+
+/// Recording session
+#[derive(Debug, Clone)]
+pub struct RecordingSession {
+    /// Session start time (UNIX epoch milliseconds)
+    pub start_time: u64,
+    /// Initial terminal size (cols, rows)
+    pub initial_size: (usize, usize),
+    /// Terminal environment info
+    pub env: HashMap<String, String>,
+    /// All recorded events
+    pub events: Vec<RecordingEvent>,
+    /// Total duration (milliseconds)
+    pub duration: u64,
+    /// Session title/name
+    pub title: Option<String>,
+}
+
+/// Export format for recordings
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingExportFormat {
+    /// SVG animation
+    Svg,
+    /// Animated GIF
+    Gif,
+    /// Video (MP4)
+    Video,
+    /// HTML with embedded player
+    Html,
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -1143,6 +1286,26 @@ pub struct Terminal {
     max_command_history: usize,
     /// Maximum CWD change history
     max_cwd_history: usize,
+
+    // === Feature 37: Terminal Notifications ===
+    /// Notification configuration
+    notification_config: NotificationConfig,
+    /// Notification events log
+    notification_events: Vec<NotificationEvent>,
+    /// Last activity timestamp (for silence detection)
+    last_activity_time: u64,
+    /// Last silence check timestamp
+    last_silence_check: u64,
+    /// Custom notification triggers (ID -> message)
+    custom_triggers: HashMap<u32, String>,
+
+    // === Feature 24: Terminal Replay/Recording ===
+    /// Current recording session
+    recording_session: Option<RecordingSession>,
+    /// Recording active flag
+    is_recording: bool,
+    /// Recording start timestamp (for relative timing)
+    recording_start_time: u64,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1446,6 +1609,18 @@ impl Terminal {
             cwd_changes: Vec::new(),
             max_command_history: 100, // Keep last 100 commands
             max_cwd_history: 50, // Keep last 50 CWD changes
+
+            // Terminal Notifications
+            notification_config: NotificationConfig::default(),
+            notification_events: Vec::new(),
+            last_activity_time: 0,
+            last_silence_check: 0,
+            custom_triggers: HashMap::new(),
+
+            // Terminal Replay/Recording
+            recording_session: None,
+            is_recording: false,
+            recording_start_time: 0,
         }
     }
 
@@ -5114,6 +5289,346 @@ impl Terminal {
         if self.cwd_changes.len() > max {
             self.cwd_changes.drain(0..self.cwd_changes.len() - max);
         }
+    }
+
+    // === Feature 37: Terminal Notifications ===
+
+    /// Get notification configuration
+    pub fn get_notification_config(&self) -> &NotificationConfig {
+        &self.notification_config
+    }
+
+    /// Set notification configuration
+    pub fn set_notification_config(&mut self, config: NotificationConfig) {
+        self.notification_config = config;
+    }
+
+    /// Trigger a notification
+    pub fn trigger_notification(
+        &mut self,
+        trigger: NotificationTrigger,
+        alert: NotificationAlert,
+        message: Option<String>,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let event = NotificationEvent {
+            trigger,
+            alert,
+            message,
+            timestamp,
+            delivered: false, // Will be set by external notification handler
+        };
+
+        self.notification_events.push(event);
+    }
+
+    /// Get notification events
+    pub fn get_notification_events(&self) -> &[NotificationEvent] {
+        &self.notification_events
+    }
+
+    /// Clear notification events
+    pub fn clear_notification_events(&mut self) {
+        self.notification_events.clear();
+    }
+
+    /// Mark notification as delivered
+    pub fn mark_notification_delivered(&mut self, index: usize) {
+        if let Some(event) = self.notification_events.get_mut(index) {
+            event.delivered = true;
+        }
+    }
+
+    /// Update activity timestamp (call on terminal input/output)
+    pub fn update_activity(&mut self) {
+        self.last_activity_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+    }
+
+    /// Check for silence and trigger notification if needed
+    pub fn check_silence(&mut self) {
+        if !self.notification_config.silence_enabled {
+            return;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Check if enough time has passed since last silence check
+        if now.saturating_sub(self.last_silence_check)
+            < self.notification_config.silence_threshold * 1000
+        {
+            return;
+        }
+
+        self.last_silence_check = now;
+
+        // Check if activity has occurred recently
+        let silence_duration = now.saturating_sub(self.last_activity_time);
+        if silence_duration >= self.notification_config.silence_threshold * 1000 {
+            self.trigger_notification(NotificationTrigger::Silence, NotificationAlert::Desktop, None);
+        }
+    }
+
+    /// Check for activity and trigger notification if needed
+    pub fn check_activity(&mut self) {
+        if !self.notification_config.activity_enabled {
+            return;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let time_since_activity = now.saturating_sub(self.last_activity_time);
+
+        // If there was a period of inactivity and now there's activity
+        if time_since_activity >= self.notification_config.activity_threshold * 1000 {
+            self.trigger_notification(NotificationTrigger::Activity, NotificationAlert::Desktop, None);
+        }
+    }
+
+    /// Register a custom notification trigger
+    pub fn register_custom_trigger(&mut self, id: u32, message: String) {
+        self.custom_triggers.insert(id, message);
+    }
+
+    /// Trigger a custom notification
+    pub fn trigger_custom_notification(&mut self, id: u32, alert: NotificationAlert) {
+        let message = self.custom_triggers.get(&id).cloned();
+        self.trigger_notification(NotificationTrigger::Custom(id), alert, message);
+    }
+
+    /// Handle bell event with notification
+    pub fn handle_bell_notification(&mut self) {
+        // Copy config values to avoid borrow checker issues
+        let bell_desktop = self.notification_config.bell_desktop;
+        let bell_sound = self.notification_config.bell_sound;
+        let bell_visual = self.notification_config.bell_visual;
+
+        if bell_desktop {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Desktop,
+                Some("Terminal bell".to_string()),
+            );
+        }
+
+        if bell_sound > 0 {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Sound(bell_sound),
+                None,
+            );
+        }
+
+        if bell_visual {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Visual,
+                None,
+            );
+        }
+    }
+
+    // === Feature 24: Terminal Replay/Recording ===
+
+    /// Start recording a terminal session
+    pub fn start_recording(&mut self, title: Option<String>) {
+        if self.is_recording {
+            return; // Already recording
+        }
+
+        let start_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let initial_size = (self.grid.cols(), self.grid.rows());
+
+        let mut env = HashMap::new();
+        // Add some basic terminal info
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("COLS".to_string(), initial_size.0.to_string());
+        env.insert("ROWS".to_string(), initial_size.1.to_string());
+
+        self.recording_session = Some(RecordingSession {
+            start_time,
+            initial_size,
+            env,
+            events: Vec::new(),
+            duration: 0,
+            title,
+        });
+
+        self.is_recording = true;
+        self.recording_start_time = start_time;
+    }
+
+    /// Stop recording
+    pub fn stop_recording(&mut self) -> Option<RecordingSession> {
+        if !self.is_recording {
+            return None;
+        }
+
+        self.is_recording = false;
+
+        if let Some(mut session) = self.recording_session.take() {
+            let end_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            session.duration = end_time.saturating_sub(session.start_time);
+            Some(session)
+        } else {
+            None
+        }
+    }
+
+    /// Record an event during recording
+    pub fn record_event(
+        &mut self,
+        event_type: RecordingEventType,
+        data: Vec<u8>,
+        metadata: Option<(usize, usize)>,
+    ) {
+        if !self.is_recording {
+            return;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let relative_timestamp = timestamp.saturating_sub(self.recording_start_time);
+
+        if let Some(session) = &mut self.recording_session {
+            session.events.push(RecordingEvent {
+                timestamp: relative_timestamp,
+                event_type,
+                data,
+                metadata,
+            });
+        }
+    }
+
+    /// Record output data
+    pub fn record_output(&mut self, data: &[u8]) {
+        self.record_event(RecordingEventType::Output, data.to_vec(), None);
+    }
+
+    /// Record input data
+    pub fn record_input(&mut self, data: &[u8]) {
+        self.record_event(RecordingEventType::Input, data.to_vec(), None);
+    }
+
+    /// Record terminal resize
+    pub fn record_resize(&mut self, cols: usize, rows: usize) {
+        self.record_event(
+            RecordingEventType::Resize,
+            Vec::new(),
+            Some((cols, rows)),
+        );
+    }
+
+    /// Add a marker/bookmark to the recording
+    pub fn record_marker(&mut self, label: String) {
+        self.record_event(RecordingEventType::Marker, label.into_bytes(), None);
+    }
+
+    /// Get current recording session
+    pub fn get_recording_session(&self) -> Option<&RecordingSession> {
+        self.recording_session.as_ref()
+    }
+
+    /// Check if currently recording
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
+    /// Export recording to asciicast v2 format
+    pub fn export_asciicast(&self, session: &RecordingSession) -> String {
+        use std::fmt::Write;
+
+        let mut output = String::new();
+
+        // Header
+        let header = serde_json::json!({
+            "version": 2,
+            "width": session.initial_size.0,
+            "height": session.initial_size.1,
+            "timestamp": session.start_time / 1000,
+            "title": session.title.as_deref().unwrap_or("Terminal Recording"),
+            "env": session.env,
+        });
+
+        writeln!(output, "{}", header).ok();
+
+        // Events
+        for event in &session.events {
+            match event.event_type {
+                RecordingEventType::Output => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let data = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "o", data]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+                RecordingEventType::Input => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let data = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "i", data]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+                RecordingEventType::Resize => {
+                    if let Some((cols, rows)) = event.metadata {
+                        let time = event.timestamp as f64 / 1000.0;
+                        let event_json = serde_json::json!([time, "r", format!("{}x{}", cols, rows)]);
+                        writeln!(output, "{}", event_json).ok();
+                    }
+                }
+                RecordingEventType::Marker => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let label = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "m", label]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Export recording to JSON format
+    pub fn export_json(&self, session: &RecordingSession) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "session": {
+                "start_time": session.start_time,
+                "duration": session.duration,
+                "initial_size": session.initial_size,
+                "title": session.title,
+                "env": session.env,
+            },
+            "events": session.events.iter().map(|e| {
+                serde_json::json!({
+                    "timestamp": e.timestamp,
+                    "type": format!("{:?}", e.event_type),
+                    "data": String::from_utf8_lossy(&e.data),
+                    "metadata": e.metadata,
+                })
+            }).collect::<Vec<_>>(),
+        }))
+        .unwrap_or_default()
     }
 }
 

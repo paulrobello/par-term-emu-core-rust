@@ -68,10 +68,11 @@ pub use python_bindings::{
     PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
     PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
-    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyPtyTerminal, PyRegexMatch,
-    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
-    PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData,
+    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
+    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyTerminal,
+    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -153,6 +154,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyCommandExecution>()?;
     m.add_class::<PyShellIntegrationStats>()?;
     m.add_class::<PyCwdChange>()?;
+    m.add_class::<PyNotificationEvent>()?;
+    m.add_class::<PyNotificationConfig>()?;
+    m.add_class::<PyRecordingEvent>()?;
+    m.add_class::<PyRecordingSession>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
