@@ -1586,6 +1586,15 @@ impl PyTerminal {
             "estimated_memory_bytes".to_string(),
             stats.estimated_memory_bytes,
         );
+        result.insert("hyperlink_count".to_string(), stats.hyperlink_count);
+        result.insert("hyperlink_memory_bytes".to_string(), stats.hyperlink_memory_bytes);
+        result.insert("color_stack_depth".to_string(), stats.color_stack_depth);
+        result.insert("title_stack_depth".to_string(), stats.title_stack_depth);
+        result.insert("keyboard_stack_depth".to_string(), stats.keyboard_stack_depth);
+        result.insert("response_buffer_size".to_string(), stats.response_buffer_size);
+        result.insert("dirty_row_count".to_string(), stats.dirty_row_count);
+        result.insert("pending_bell_events".to_string(), stats.pending_bell_events);
+        result.insert("pending_terminal_events".to_string(), stats.pending_terminal_events);
         Ok(result)
     }
 
@@ -1860,6 +1869,230 @@ impl PyTerminal {
     /// Clear the tmux control protocol notifications buffer
     fn clear_tmux_notifications(&mut self) -> PyResult<()> {
         self.inner.clear_tmux_notifications();
+        Ok(())
+    }
+
+    // ========== TUI App Support Methods ==========
+
+    /// Get all dirty row numbers
+    ///
+    /// Returns a sorted list of 0-indexed row numbers that have been modified
+    /// since the last mark_clean() call.
+    fn get_dirty_rows(&self) -> PyResult<Vec<usize>> {
+        Ok(self.inner.get_dirty_rows())
+    }
+
+    /// Get the dirty region bounds
+    ///
+    /// Returns:
+    ///     Tuple of (first_row, last_row) inclusive, or None if no rows are dirty
+    fn get_dirty_region(&self) -> PyResult<Option<(usize, usize)>> {
+        Ok(self.inner.get_dirty_region())
+    }
+
+    /// Mark all rows as clean (clear dirty tracking)
+    fn mark_clean(&mut self) -> PyResult<()> {
+        self.inner.mark_clean();
+        Ok(())
+    }
+
+    /// Mark a specific row as dirty
+    fn mark_row_dirty(&mut self, row: usize) -> PyResult<()> {
+        self.inner.mark_row_dirty(row);
+        Ok(())
+    }
+
+    /// Drain all pending bell events
+    ///
+    /// Returns and clears the buffer of bell events.
+    /// Each event is a string: 'visual', 'warning:<volume>', or 'margin:<volume>'
+    fn drain_bell_events(&mut self) -> PyResult<Vec<String>> {
+        use crate::terminal::BellEvent;
+        Ok(self.inner.drain_bell_events().iter().map(|e| match e {
+            BellEvent::VisualBell => "visual".to_string(),
+            BellEvent::WarningBell(vol) => format!("warning:{}", vol),
+            BellEvent::MarginBell(vol) => format!("margin:{}", vol),
+        }).collect())
+    }
+
+    /// Drain all pending terminal events
+    ///
+    /// Returns and clears the buffer of terminal events.
+    /// Events are returned as dictionaries with 'type' and additional fields.
+    fn poll_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
+        use crate::terminal::TerminalEvent;
+        let events = self.inner.poll_events();
+        Ok(events.iter().map(|e| {
+            let mut map = HashMap::new();
+            match e {
+                TerminalEvent::BellRang(bell) => {
+                    map.insert("type".to_string(), "bell".to_string());
+                    match bell {
+                        crate::terminal::BellEvent::VisualBell => {
+                            map.insert("bell_type".to_string(), "visual".to_string());
+                        }
+                        crate::terminal::BellEvent::WarningBell(vol) => {
+                            map.insert("bell_type".to_string(), "warning".to_string());
+                            map.insert("volume".to_string(), vol.to_string());
+                        }
+                        crate::terminal::BellEvent::MarginBell(vol) => {
+                            map.insert("bell_type".to_string(), "margin".to_string());
+                            map.insert("volume".to_string(), vol.to_string());
+                        }
+                    }
+                }
+                TerminalEvent::TitleChanged(title) => {
+                    map.insert("type".to_string(), "title_changed".to_string());
+                    map.insert("title".to_string(), title.clone());
+                }
+                TerminalEvent::SizeChanged(cols, rows) => {
+                    map.insert("type".to_string(), "size_changed".to_string());
+                    map.insert("cols".to_string(), cols.to_string());
+                    map.insert("rows".to_string(), rows.to_string());
+                }
+                TerminalEvent::ModeChanged(mode, enabled) => {
+                    map.insert("type".to_string(), "mode_changed".to_string());
+                    map.insert("mode".to_string(), mode.clone());
+                    map.insert("enabled".to_string(), enabled.to_string());
+                }
+                TerminalEvent::GraphicsAdded(row) => {
+                    map.insert("type".to_string(), "graphics_added".to_string());
+                    map.insert("row".to_string(), row.to_string());
+                }
+                TerminalEvent::HyperlinkAdded(url) => {
+                    map.insert("type".to_string(), "hyperlink_added".to_string());
+                    map.insert("url".to_string(), url.clone());
+                }
+                TerminalEvent::DirtyRegion(first, last) => {
+                    map.insert("type".to_string(), "dirty_region".to_string());
+                    map.insert("first_row".to_string(), first.to_string());
+                    map.insert("last_row".to_string(), last.to_string());
+                }
+            }
+            map
+        }).collect())
+    }
+
+    /// Get auto-wrap mode (DECAWM)
+    fn auto_wrap_mode(&self) -> PyResult<bool> {
+        Ok(self.inner.auto_wrap_mode())
+    }
+
+    /// Get origin mode (DECOM)
+    fn origin_mode(&self) -> PyResult<bool> {
+        Ok(self.inner.origin_mode())
+    }
+
+    /// Get application cursor mode
+    fn application_cursor(&self) -> PyResult<bool> {
+        Ok(self.inner.application_cursor())
+    }
+
+    /// Get current scroll region
+    ///
+    /// Returns:
+    ///     Tuple of (top, bottom) - 0-indexed, inclusive
+    fn scroll_region(&self) -> PyResult<(usize, usize)> {
+        Ok(self.inner.scroll_region())
+    }
+
+    /// Get left/right margins if enabled
+    ///
+    /// Returns:
+    ///     Tuple of (left, right) if DECLRMM is enabled, None otherwise
+    fn left_right_margins(&self) -> PyResult<Option<(usize, usize)>> {
+        Ok(self.inner.left_right_margins())
+    }
+
+    /// Get an ANSI palette color by index (0-15)
+    fn get_ansi_color(&self, index: u8) -> PyResult<Option<(u8, u8, u8)>> {
+        use crate::color::Color;
+        if let Some(color) = self.inner.get_ansi_color(index) {
+            match color {
+                Color::Rgb(r, g, b) => Ok(Some((r, g, b))),
+                Color::Named(_) => Ok(None), // Named colors don't have RGB values
+                Color::Indexed(_) => Ok(None),
+            }
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the entire ANSI color palette (colors 0-15)
+    ///
+    /// Returns:
+    ///     List of 16 RGB tuples (r, g, b)
+    fn get_ansi_palette(&self) -> PyResult<Vec<(u8, u8, u8)>> {
+        use crate::color::Color;
+        let palette = self.inner.get_ansi_palette();
+        Ok(palette.iter().map(|c| match c {
+            Color::Rgb(r, g, b) => (*r, *g, *b),
+            _ => (0, 0, 0), // Fallback for non-RGB colors
+        }).collect())
+    }
+
+    /// Get all tab stop positions
+    fn get_tab_stops(&self) -> PyResult<Vec<usize>> {
+        Ok(self.inner.get_tab_stops())
+    }
+
+    /// Set a tab stop at the specified column
+    fn set_tab_stop(&mut self, col: usize) -> PyResult<()> {
+        self.inner.set_tab_stop(col);
+        Ok(())
+    }
+
+    /// Clear a tab stop at the specified column
+    fn clear_tab_stop(&mut self, col: usize) -> PyResult<()> {
+        self.inner.clear_tab_stop(col);
+        Ok(())
+    }
+
+    /// Clear all tab stops
+    fn clear_all_tab_stops(&mut self) -> PyResult<()> {
+        self.inner.clear_all_tab_stops();
+        Ok(())
+    }
+
+    /// Get all hyperlinks with their positions
+    ///
+    /// Returns:
+    ///     List of dictionaries with 'url' (string), 'positions' (list of (col, row) tuples), and optional 'id' (string)
+    fn get_all_hyperlinks(&self) -> PyResult<Vec<(String, Vec<(usize, usize)>, Option<String>)>> {
+        let links = self.inner.get_all_hyperlinks();
+        Ok(links.iter().map(|link| {
+            (link.url.clone(), link.positions.clone(), link.id.clone())
+        }).collect())
+    }
+
+    /// Get a rectangular region of the screen
+    ///
+    /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive.
+    /// Returns list of rows, where each row is a list of Cell dictionaries.
+    fn get_rectangle(&self, top: usize, left: usize, bottom: usize, right: usize)
+        -> PyResult<Vec<Vec<HashMap<String, String>>>> {
+        let cells = self.inner.get_rectangle(top, left, bottom, right);
+        Ok(cells.iter().map(|row| {
+            row.iter().map(|cell| {
+                let mut map = HashMap::new();
+                map.insert("char".to_string(), cell.c.to_string());
+                map.insert("width".to_string(), cell.width.to_string());
+                map
+            }).collect()
+        }).collect())
+    }
+
+    /// Fill a rectangle with a character
+    fn fill_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize, ch: char)
+        -> PyResult<()> {
+        self.inner.fill_rectangle(top, left, bottom, right, ch);
+        Ok(())
+    }
+
+    /// Erase a rectangle
+    fn erase_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize)
+        -> PyResult<()> {
+        self.inner.erase_rectangle(top, left, bottom, right);
         Ok(())
     }
 }

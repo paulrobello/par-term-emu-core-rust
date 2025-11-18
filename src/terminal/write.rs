@@ -63,6 +63,10 @@ impl Terminal {
                     self.active_grid_mut().scroll_region_up(1, top, bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, top, bottom);
+                    // Mark all rows in scroll region as dirty
+                    for row in top..=bottom {
+                        self.mark_row_dirty(row);
+                    }
                     // Cursor stays at scroll_region_bottom per VT spec
                 } else {
                     // Not at scroll region bottom, or outside region - just move cursor down
@@ -117,6 +121,7 @@ impl Terminal {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
+            self.mark_row_dirty(current_row);
 
             // Move to left margin or column 0
             self.cursor.col = if self.use_lr_margins {
@@ -147,6 +152,7 @@ impl Terminal {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
+            self.mark_row_dirty(current_row);
 
             // Wrap to left margin if DECLRMM is enabled
             self.cursor.col = if self.use_lr_margins {
@@ -203,6 +209,8 @@ impl Terminal {
         }
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
+        // Mark row as dirty for rendering
+        self.mark_row_dirty(cursor_row);
 
         // Advance cursor by character width
         self.cursor.col += char_width;
@@ -225,6 +233,7 @@ impl Terminal {
             let spacer_col = self.cursor.col - 1;
             let spacer_row = self.cursor.row;
             self.active_grid_mut().set(spacer_col, spacer_row, spacer);
+            // Spacer is on same row, already marked dirty above
         }
 
         // Handle delayed autowrap for width-1 characters

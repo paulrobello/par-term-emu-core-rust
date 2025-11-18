@@ -19,7 +19,7 @@ mod write;
 pub use notification::Notification;
 
 // Imports
-use crate::cell::CellFlags;
+use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
 use crate::cursor::Cursor;
 use crate::debug;
@@ -27,8 +27,49 @@ use crate::grid::Grid;
 use crate::mouse::{MouseEncoding, MouseEvent, MouseMode};
 use crate::shell_integration::ShellIntegration;
 use crate::sixel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use vte::{Params, Perform};
+
+/// Bell event type
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BellEvent {
+    /// Standard visual bell
+    VisualBell,
+    /// Warning bell with volume (0-8, where 0 is off)
+    WarningBell(u8),
+    /// Margin bell with volume (0-8, where 0 is off)
+    MarginBell(u8),
+}
+
+/// Terminal change event
+#[derive(Debug, Clone, PartialEq)]
+pub enum TerminalEvent {
+    /// Bell event occurred
+    BellRang(BellEvent),
+    /// Terminal title changed
+    TitleChanged(String),
+    /// Terminal was resized
+    SizeChanged(usize, usize),
+    /// A terminal mode changed
+    ModeChanged(String, bool),
+    /// Graphics added at row
+    GraphicsAdded(usize),
+    /// Hyperlink added
+    HyperlinkAdded(String),
+    /// Dirty region (first_row, last_row)
+    DirtyRegion(usize, usize),
+}
+
+/// Hyperlink information with all its locations
+#[derive(Debug, Clone)]
+pub struct HyperlinkInfo {
+    /// The URL of the hyperlink
+    pub url: String,
+    /// All (col, row) positions where this link appears
+    pub positions: Vec<(usize, usize)>,
+    /// Optional hyperlink ID from OSC 8
+    pub id: Option<String>,
+}
 
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
@@ -211,6 +252,12 @@ pub struct Terminal {
     tmux_parser: crate::tmux_control::TmuxControlParser,
     /// Tmux control protocol notifications buffer
     tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
+    /// Dirty rows tracking (0-indexed row numbers that have changed)
+    dirty_rows: HashSet<usize>,
+    /// Bell events buffer
+    bell_events: Vec<BellEvent>,
+    /// Terminal events buffer
+    terminal_events: Vec<TerminalEvent>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -333,6 +380,10 @@ impl Terminal {
             // Tmux control protocol - default to disabled
             tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
             tmux_notifications: Vec::new(),
+            // Event tracking
+            dirty_rows: HashSet::new(),
+            bell_events: Vec::new(),
+            terminal_events: Vec::new(),
         }
     }
 
@@ -826,6 +877,351 @@ impl Terminal {
         self.bell_count
     }
 
+    /// Drain all pending bell events
+    ///
+    /// Returns and clears the buffer of bell events that have occurred since the last drain.
+    /// This is more efficient than polling bell_count() for event-driven applications.
+    pub fn drain_bell_events(&mut self) -> Vec<BellEvent> {
+        std::mem::take(&mut self.bell_events)
+    }
+
+    /// Drain all pending terminal events
+    ///
+    /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
+    pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
+        std::mem::take(&mut self.terminal_events)
+    }
+
+    // ========== Dirty Region Tracking ==========
+
+    /// Get all dirty row numbers
+    ///
+    /// Returns a vector of 0-indexed row numbers that have been modified since the last mark_clean()
+    pub fn get_dirty_rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = self.dirty_rows.iter().copied().collect();
+        rows.sort_unstable();
+        rows
+    }
+
+    /// Get the dirty region bounds (first and last dirty row)
+    ///
+    /// Returns None if no rows are dirty, otherwise (first_row, last_row) inclusive
+    pub fn get_dirty_region(&self) -> Option<(usize, usize)> {
+        if self.dirty_rows.is_empty() {
+            None
+        } else {
+            let min = *self.dirty_rows.iter().min().unwrap();
+            let max = *self.dirty_rows.iter().max().unwrap();
+            Some((min, max))
+        }
+    }
+
+    /// Mark all rows as clean (clear dirty tracking)
+    pub fn mark_clean(&mut self) {
+        self.dirty_rows.clear();
+    }
+
+    /// Mark a specific row as dirty
+    ///
+    /// This is called internally when content changes, but can also be called manually
+    pub fn mark_row_dirty(&mut self, row: usize) {
+        let (_cols, rows) = self.size();
+        if row < rows {
+            self.dirty_rows.insert(row);
+        }
+    }
+
+    // ========== Mode Introspection ==========
+
+    /// Get auto-wrap mode (DECAWM)
+    ///
+    /// When true, cursor automatically wraps to next line when reaching right margin
+    pub fn auto_wrap_mode(&self) -> bool {
+        self.auto_wrap
+    }
+
+    /// Get origin mode (DECOM)
+    ///
+    /// When true, cursor addressing is relative to scroll region instead of absolute
+    pub fn origin_mode(&self) -> bool {
+        self.origin_mode
+    }
+
+    /// Get application cursor mode
+    ///
+    /// When true, arrow keys send application sequences (ESC O A-D) instead of ANSI (ESC [ A-D)
+    pub fn application_cursor(&self) -> bool {
+        self.application_cursor
+    }
+
+    /// Get current scroll region (top, bottom) - 0-indexed, inclusive
+    pub fn scroll_region(&self) -> (usize, usize) {
+        (self.scroll_region_top, self.scroll_region_bottom)
+    }
+
+    /// Get left/right margins if enabled (left, right) - 0-indexed, inclusive
+    ///
+    /// Returns None if DECLRMM is disabled, otherwise Some((left, right))
+    pub fn left_right_margins(&self) -> Option<(usize, usize)> {
+        if self.use_lr_margins {
+            Some((self.left_margin, self.right_margin))
+        } else {
+            None
+        }
+    }
+
+    // ========== Palette Access ==========
+
+    /// Get an ANSI palette color by index (0-15)
+    ///
+    /// Returns None if index is out of range
+    pub fn get_ansi_color(&self, index: u8) -> Option<Color> {
+        if (index as usize) < self.ansi_palette.len() {
+            Some(self.ansi_palette[index as usize])
+        } else {
+            None
+        }
+    }
+
+    /// Get the entire ANSI color palette (colors 0-15)
+    pub fn get_ansi_palette(&self) -> [Color; 16] {
+        self.ansi_palette
+    }
+
+    /// Get the default foreground color
+    pub fn get_default_fg(&self) -> Color {
+        self.default_fg
+    }
+
+    /// Get the default background color
+    pub fn get_default_bg(&self) -> Color {
+        self.default_bg
+    }
+
+    /// Get the cursor color
+    pub fn get_cursor_color(&self) -> Color {
+        self.cursor_color
+    }
+
+    /// Get the cursor guide color (iTerm2)
+    pub fn get_cursor_guide_color(&self) -> Color {
+        self.cursor_guide_color
+    }
+
+    /// Get the hyperlink/URL color (iTerm2)
+    pub fn get_link_color(&self) -> Color {
+        self.link_color
+    }
+
+    /// Get the selection background color (iTerm2)
+    pub fn get_selection_bg_color(&self) -> Color {
+        self.selection_bg_color
+    }
+
+    /// Get the selection foreground color (iTerm2)
+    pub fn get_selection_fg_color(&self) -> Color {
+        self.selection_fg_color
+    }
+
+    // ========== Tab Stop Access ==========
+
+    /// Get all tab stop positions
+    ///
+    /// Returns a vector of column numbers (0-indexed) where tab stops are set
+    pub fn get_tab_stops(&self) -> Vec<usize> {
+        self.tab_stops
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &is_set)| if is_set { Some(i) } else { None })
+            .collect()
+    }
+
+    /// Set a tab stop at the specified column
+    pub fn set_tab_stop(&mut self, col: usize) {
+        if col < self.tab_stops.len() {
+            self.tab_stops[col] = true;
+        }
+    }
+
+    /// Clear a tab stop at the specified column
+    pub fn clear_tab_stop(&mut self, col: usize) {
+        if col < self.tab_stops.len() {
+            self.tab_stops[col] = false;
+        }
+    }
+
+    /// Clear all tab stops
+    pub fn clear_all_tab_stops(&mut self) {
+        for stop in &mut self.tab_stops {
+            *stop = false;
+        }
+    }
+
+    // ========== Hyperlink Enumeration ==========
+
+    /// Get all hyperlinks with their positions
+    ///
+    /// Returns a vector of HyperlinkInfo containing URL and all screen positions
+    pub fn get_all_hyperlinks(&self) -> Vec<HyperlinkInfo> {
+        let mut hyperlink_map: HashMap<u32, HyperlinkInfo> = HashMap::new();
+        let (cols, rows) = self.size();
+
+        // Scan visible screen for hyperlinks
+        for row in 0..rows {
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    if let Some(link_id) = cell.flags.hyperlink_id {
+                        if let Some(url) = self.hyperlinks.get(&link_id) {
+                            hyperlink_map
+                                .entry(link_id)
+                                .or_insert_with(|| HyperlinkInfo {
+                                    url: url.clone(),
+                                    positions: Vec::new(),
+                                    id: None, // We don't store the OSC 8 ID separately
+                                })
+                                .positions
+                                .push((col, row));
+                        }
+                    }
+                }
+            }
+        }
+
+        hyperlink_map.into_values().collect()
+    }
+
+    // ========== Bulk Read Operations ==========
+
+    /// Get all cells in the visible region
+    ///
+    /// Returns a 2D vector of cells [row][col]
+    pub fn get_visible_region(&self) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let mut result = Vec::with_capacity(rows);
+
+        for row in 0..rows {
+            let mut row_cells = Vec::with_capacity(cols);
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    /// Get a range of rows
+    ///
+    /// Returns cells for rows [start..end) - start is inclusive, end is exclusive
+    pub fn get_row_range(&self, start: usize, end: usize) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let end = end.min(rows);
+        let start = start.min(end);
+
+        let mut result = Vec::with_capacity(end - start);
+
+        for row in start..end {
+            let mut row_cells = Vec::with_capacity(cols);
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    /// Get a rectangular region of cells
+    ///
+    /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive
+    pub fn get_rectangle(&self, top: usize, left: usize, bottom: usize, right: usize) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+        let top = top.min(bottom);
+        let left = left.min(right);
+
+        let height = bottom - top + 1;
+        let width = right - left + 1;
+        let mut result = Vec::with_capacity(height);
+
+        for row in top..=bottom {
+            let mut row_cells = Vec::with_capacity(width);
+            for col in left..=right {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    // ========== Rectangle Operations ==========
+
+    /// Fill a rectangle with a character
+    ///
+    /// Fills the rectangle bounded by (top, left) to (bottom, right) inclusive with the given character
+    pub fn fill_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize, ch: char) {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+
+        for row in top..=bottom {
+            for col in left..=right {
+                if row < rows && col < cols {
+                    let cell = Cell {
+                        c: ch,
+                        fg: self.fg,
+                        bg: self.bg,
+                        underline_color: self.underline_color,
+                        flags: self.flags,
+                        width: 1,
+                    };
+                    self.active_grid_mut().set(col, row, cell);
+                    self.mark_row_dirty(row);
+                }
+            }
+        }
+    }
+
+    /// Erase a rectangle
+    ///
+    /// Clears the rectangle bounded by (top, left) to (bottom, right) inclusive
+    pub fn erase_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize) {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+
+        for row in top..=bottom {
+            for col in left..=right {
+                if row < rows && col < cols {
+                    let cell = Cell {
+                        c: ' ',
+                        fg: self.default_fg,
+                        bg: self.default_bg,
+                        underline_color: None,
+                        flags: CellFlags::default(),
+                        width: 1,
+                    };
+                    self.active_grid_mut().set(col, row, cell);
+                    self.mark_row_dirty(row);
+                }
+            }
+        }
+    }
+
     /// Process input data
     pub fn process(&mut self, data: &[u8]) {
         debug::log_vt_input(data);
@@ -1168,6 +1564,19 @@ impl Terminal {
         let cell_size = std::mem::size_of::<crate::cell::Cell>();
         let estimated_memory = total_cells * cell_size;
 
+        // Calculate hyperlink memory
+        let hyperlink_count = self.hyperlinks.len();
+        let hyperlink_memory: usize = self.hyperlinks.values()
+            .map(|url| url.len() + std::mem::size_of::<u32>() + std::mem::size_of::<String>())
+            .sum();
+
+        // Get stack depths
+        let keyboard_stack_depth = if self.alt_screen_active {
+            self.keyboard_stack_alt.len()
+        } else {
+            self.keyboard_stack.len()
+        };
+
         TerminalStats {
             cols,
             rows,
@@ -1176,6 +1585,15 @@ impl Terminal {
             non_whitespace_lines,
             graphics_count,
             estimated_memory_bytes: estimated_memory,
+            hyperlink_count,
+            hyperlink_memory_bytes: hyperlink_memory,
+            color_stack_depth: self.color_stack.len(),
+            title_stack_depth: self.title_stack.len(),
+            keyboard_stack_depth,
+            response_buffer_size: self.response_buffer.len(),
+            dirty_row_count: self.dirty_rows.len(),
+            pending_bell_events: self.bell_events.len(),
+            pending_terminal_events: self.terminal_events.len(),
         }
     }
 
@@ -1558,6 +1976,14 @@ impl Perform for Terminal {
             b'\x07' => {
                 // Bell - increment counter for visual bell support
                 self.bell_count = self.bell_count.wrapping_add(1);
+                // Add bell event based on volume settings
+                let event = if self.warning_bell_volume > 0 {
+                    BellEvent::WarningBell(self.warning_bell_volume)
+                } else {
+                    BellEvent::VisualBell
+                };
+                self.bell_events.push(event.clone());
+                self.terminal_events.push(TerminalEvent::BellRang(event));
             }
             _ => {}
         }
@@ -1603,6 +2029,24 @@ pub struct TerminalStats {
     pub graphics_count: usize,
     /// Estimated memory usage in bytes
     pub estimated_memory_bytes: usize,
+    /// Number of hyperlinks stored
+    pub hyperlink_count: usize,
+    /// Estimated memory used by hyperlink storage (bytes)
+    pub hyperlink_memory_bytes: usize,
+    /// Color stack depth
+    pub color_stack_depth: usize,
+    /// Title stack depth
+    pub title_stack_depth: usize,
+    /// Keyboard flag stack depth (active screen)
+    pub keyboard_stack_depth: usize,
+    /// Response buffer size (bytes)
+    pub response_buffer_size: usize,
+    /// Number of dirty rows
+    pub dirty_row_count: usize,
+    /// Pending bell events count
+    pub pending_bell_events: usize,
+    /// Pending terminal events count
+    pub pending_terminal_events: usize,
 }
 
 #[cfg(test)]
