@@ -144,6 +144,110 @@ term.process_str("\x1b[1;31mThis appears regular red (bold)\x1b[0m\n")
 
 **Note**: Bold brightening only affects ANSI colors 0-7, not 256-color or RGB colors. When creating snapshots with `create_snapshot()` or taking screenshots with `screenshot()` / `screenshot_to_file()`, the bold brightening setting is automatically applied to the captured colors.
 
+## Minimum Contrast Adjustment (iTerm2-Compatible)
+
+The minimum contrast feature automatically adjusts text colors to ensure readability against backgrounds, using the same algorithm as iTerm2.
+
+### Overview
+
+- **Algorithm**: Uses NTSC perceived brightness formula (30% red, 59% green, 11% blue)
+- **Hue Preservation**: Adjusts brightness while maintaining the original color hue
+- **Range**: 0.0-1.0 where 0.0 = disabled (default), 0.5 = moderate, 1.0 = maximum
+- **Default**: 0.0 (disabled, matches iTerm2's default)
+
+### Usage in Screenshots
+
+The minimum contrast adjustment is available as a parameter in screenshot methods:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Add some low-contrast content
+term.process_str("\x1b[38;2;64;64;64m")  # Dark gray text
+term.process_str("\x1b[48;2;0;0;0m")      # Black background
+term.process_str("This text has poor contrast\n")
+
+# Screenshot WITHOUT minimum contrast (default)
+term.screenshot_to_file("low_contrast.png")
+
+# Screenshot WITH minimum contrast adjustment
+term.screenshot_to_file(
+    "readable.png",
+    minimum_contrast=0.5  # Recommended value for readability
+)
+
+# The adjusted screenshot will automatically lighten the dark gray
+# text to ensure at least 0.5 brightness difference from the background
+```
+
+### Color Utility Functions
+
+For advanced color manipulation, the library provides standalone functions:
+
+```python
+from par_term_emu_core_rust import (
+    perceived_brightness_rgb,
+    adjust_contrast_rgb,
+)
+
+# Calculate perceived brightness (NTSC formula)
+brightness = perceived_brightness_rgb(128, 128, 128)  # Returns 0.502
+
+# Adjust colors for minimum contrast
+fg = (64, 64, 64)   # Dark gray
+bg = (0, 0, 0)       # Black
+adjusted = adjust_contrast_rgb(fg, bg, 0.5)  # Returns (128, 128, 128)
+
+# Verify the contrast
+fg_brightness = perceived_brightness_rgb(*adjusted)
+bg_brightness = perceived_brightness_rgb(*bg)
+contrast = abs(fg_brightness - bg_brightness)  # Should be >= 0.5
+```
+
+### Additional Color Utilities
+
+The library provides comprehensive color manipulation functions:
+
+```python
+from par_term_emu_core_rust import (
+    # Brightness adjustments
+    lighten_rgb, darken_rgb,
+
+    # WCAG accessibility
+    color_luminance, contrast_ratio,
+    meets_wcag_aa, meets_wcag_aaa,
+
+    # Color space conversions
+    rgb_to_hsl, hsl_to_rgb,
+    rgb_to_hex, hex_to_rgb,
+    rgb_to_ansi_256,
+
+    # Color manipulation
+    mix_colors, complementary_color,
+    adjust_saturation, adjust_hue,
+)
+
+# Example: Check WCAG compliance
+ratio = contrast_ratio((0, 0, 0), (255, 255, 255))  # 21.0:1
+meets_aa = meets_wcag_aa((0, 0, 0), (255, 255, 255))  # True
+```
+
+See the [Color Utilities](#color-utilities) section in the main README for complete documentation.
+
+### How It Works
+
+The minimum contrast algorithm:
+
+1. **Calculate brightness** using NTSC formula for both foreground and background
+2. **Check contrast** - if difference >= minimum_contrast, return original color
+3. **Determine direction** - lighten or darken based on which color is brighter
+4. **Adjust brightness** using parametric interpolation toward white (1,1,1) or black (0,0,0)
+5. **Preserve hue** by interpolating all RGB components proportionally
+
+This ensures text remains readable while preserving the visual intent of the original colors.
+
 ## Alternate Screen Buffer
 
 The alternate screen buffer allows applications to use a separate screen without affecting the primary buffer. This is commonly used by full-screen applications like vim, less, and tmux.

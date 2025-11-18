@@ -55,8 +55,12 @@ use pyo3::prelude::*;
 
 // Re-export Python bindings for convenience
 pub use python_bindings::{
-    PyAttributes, PyCursorStyle, PyGraphic, PyPtyTerminal, PyScreenSnapshot, PyShellIntegration,
-    PyTerminal, PyUnderlineStyle,
+    py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_color_luminance,
+    py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
+    py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
+    py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
+    PyCursorStyle, PyGraphic, PyPtyTerminal, PyScreenSnapshot, PyShellIntegration, PyTerminal,
+    PyUnderlineStyle,
 };
 
 /// Convert PtyError to PyErr
@@ -91,6 +95,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SIXEL_PIXELS", "pixels")?;
     m.add("SIXEL_HALFBLOCKS", "halfblocks")?;
 
+    // Classes
     m.add_class::<PyTerminal>()?;
     m.add_class::<PyPtyTerminal>()?;
     m.add_class::<PyAttributes>()?;
@@ -99,5 +104,26 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyGraphic>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;
+
+    // Color utility functions
+    m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_adjust_contrast_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_lighten_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_darken_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_color_luminance, m)?)?;
+    m.add_function(wrap_pyfunction!(py_is_dark_color, m)?)?;
+    m.add_function(wrap_pyfunction!(py_contrast_ratio, m)?)?;
+    m.add_function(wrap_pyfunction!(py_meets_wcag_aa, m)?)?;
+    m.add_function(wrap_pyfunction!(py_meets_wcag_aaa, m)?)?;
+    m.add_function(wrap_pyfunction!(py_mix_colors, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rgb_to_hsl, m)?)?;
+    m.add_function(wrap_pyfunction!(py_hsl_to_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_adjust_saturation, m)?)?;
+    m.add_function(wrap_pyfunction!(py_adjust_hue, m)?)?;
+    m.add_function(wrap_pyfunction!(py_complementary_color, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rgb_to_hex, m)?)?;
+    m.add_function(wrap_pyfunction!(py_hex_to_rgb, m)?)?;
+    m.add_function(wrap_pyfunction!(py_rgb_to_ansi_256, m)?)?;
+
     Ok(())
 }

@@ -61,3 +61,4 @@ make checkall    # All quality checks (run before commits)
 - never push unless the user requests it
 - always run `make checkall` and fix all isues before pushing
 - always add tests and update documentation for new features
+- always ensure the python bindings are in sync with method signatures

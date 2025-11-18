@@ -107,6 +107,7 @@ impl PyTerminal {
     ///     link_color: RGB tuple for link color. Default: None (use theme color)
     ///     bold_color: RGB tuple for bold text. Default: None (use theme color)
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0, iTerm2-compatible). Default: 0.0 (disabled)
     ///
     /// Returns:
     ///     Bytes of the image in the specified format
@@ -123,7 +124,8 @@ impl PyTerminal {
         scrollback_offset = 0,
         link_color = None,
         bold_color = None,
-        use_bold_color = None
+        use_bold_color = None,
+        minimum_contrast = 0.0
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot(
@@ -141,6 +143,7 @@ impl PyTerminal {
         link_color: Option<(u8, u8, u8)>,
         bold_color: Option<(u8, u8, u8)>,
         use_bold_color: Option<bool>,
+        minimum_contrast: f64,
     ) -> PyResult<Vec<u8>> {
         use crate::screenshot::{ImageFormat, ScreenshotConfig};
 
@@ -170,6 +173,7 @@ impl PyTerminal {
             link_color,
             bold_color,
             use_bold_color: use_bold_color.unwrap_or(false),
+            minimum_contrast: minimum_contrast.clamp(0.0, 1.0),
             ..Default::default()
         };
 
@@ -197,6 +201,7 @@ impl PyTerminal {
     ///     link_color: RGB tuple for link color. Default: None (use theme color)
     ///     bold_color: RGB tuple for bold text. Default: None (use theme color)
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0, iTerm2-compatible). Default: 0.0 (disabled)
     ///
     /// Returns:
     ///     None
@@ -214,7 +219,8 @@ impl PyTerminal {
         scrollback_offset = 0,
         link_color = None,
         bold_color = None,
-        use_bold_color = None
+        use_bold_color = None,
+        minimum_contrast = 0.0
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot_to_file(
@@ -233,6 +239,7 @@ impl PyTerminal {
         link_color: Option<(u8, u8, u8)>,
         bold_color: Option<(u8, u8, u8)>,
         use_bold_color: Option<bool>,
+        minimum_contrast: f64,
     ) -> PyResult<()> {
         use std::path::Path;
 
@@ -255,6 +262,7 @@ impl PyTerminal {
             link_color,
             bold_color,
             use_bold_color,
+            minimum_contrast,
         )?;
 
         std::fs::write(path, bytes)

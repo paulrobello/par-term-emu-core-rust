@@ -147,7 +147,12 @@ Features:
 
 **Utility Modules**
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
-- `color_utils.rs` - Color conversion and manipulation utilities
+- `color_utils.rs` - Advanced color manipulation and conversion utilities
+  - Minimum contrast adjustment (iTerm2-compatible)
+  - Perceived brightness calculation (NTSC formula)
+  - Color space conversions (RGB, HSL)
+  - WCAG contrast ratio calculations
+  - Bold brightening support for enhanced readability
 - `text_utils.rs` - Text processing and Unicode handling
   - Word boundary detection with configurable word characters
   - Default word characters: `"/-+\\~_."` (iTerm2-compatible)
@@ -298,6 +303,7 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
 - `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic)
 - `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle)
 - `conversions.rs` - Type conversions and parsing utilities
+- `color_utils.rs` - Python bindings for color manipulation utilities
 
 The main Python module is defined in `src/lib.rs`, which exports the `_native` module.
 
@@ -369,9 +375,9 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 676 unit and integration tests
-- **Python tests:** 267 tests across multiple test modules (34 skipped in CI)
-- **Total:** 943 tests ensuring comprehensive coverage
+- **Rust tests:** 699 unit and integration tests
+- **Python tests:** Comprehensive test suite across multiple test modules (PTY tests excluded in CI)
+- **Total:** Comprehensive coverage ensuring reliability
 
 ### Rust Tests
 
@@ -630,39 +636,43 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3`: 0.27.1 - Python bindings
-- `vte`: 0.15.0 - ANSI parser
-- `unicode-width`: 0.2.2 - Character width calculation
-- `portable-pty`: 0.9.0 - PTY support
-- `base64`: 0.22.1 - Base64 encoding/decoding
-- `bitflags`: 2.10.0 - Bit flag management
+- `pyo3` - Python bindings
+- `vte` - ANSI parser
+- `unicode-width` - Character width calculation
+- `portable-pty` - PTY support
+- `base64` - Base64 encoding/decoding
+- `bitflags` - Bit flag management
 
 **Screenshot/rendering support:**
-- `image`: 0.25.8 - Image encoding/decoding (PNG, JPEG, BMP)
-- `swash`: 0.2.6 - Pure Rust font rendering and text shaping with color emoji support
+- `image` - Image encoding/decoding (PNG, JPEG, BMP)
+- `swash` - Pure Rust font rendering and text shaping with color emoji support
 
 **Development dependencies:**
-- `proptest`: 1.9.0 - Property-based testing framework
+- `proptest` - Property-based testing framework
 
 **Platform-specific:**
-- `libc`: 0.2.177 - Unix system calls (Unix only)
+- `libc` - Unix system calls (Unix only)
+
+> **📝 Note:** See `Cargo.toml` for specific version requirements
 
 ### Python
 
 **Build and development tools:**
-- `maturin`: >=1.10.1 - Build system for PyO3 bindings
-- `uv`: Latest - Fast Python package installer and resolver
+- `maturin` - Build system for PyO3 bindings
+- `uv` - Fast Python package installer and resolver
 
 **Testing:**
-- `pytest`: >=9.0.1 - Testing framework
-- `pytest-timeout`: >=2.4.0 - Test timeout protection
+- `pytest` - Testing framework
+- `pytest-timeout` - Test timeout protection
 
 **Code quality:**
-- `ruff`: >=0.14.5 - Linting and formatting
-- `pyright`: >=1.1.407 - Static type checking
-- `pre-commit`: >=4.4.0 - Git hook management
+- `ruff` - Linting and formatting
+- `pyright` - Static type checking
+- `pre-commit` - Git hook management
 
-**Python version requirements:** 3.12, 3.13, or 3.14
+**Python version requirements:** 3.12+
+
+> **📝 Note:** See `pyproject.toml` for specific version requirements
 
 > **Note**: This is a core library. For a full-featured TUI application built on this library, see the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
 
@@ -675,14 +685,16 @@ The project uses conditional PyO3 feature compilation to support both production
 **Cargo.toml features:**
 ```toml
 [dependencies]
-pyo3 = "0.27.1"
+pyo3 = { version = "..." }
 
 [dev-dependencies]
-pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
+pyo3 = { version = "...", features = ["auto-initialize"] }
 
 [features]
 default = ["pyo3/extension-module"]
 ```
+
+> **📝 Note:** See `Cargo.toml` for current PyO3 version
 
 **Build commands:**
 - **Development build:** `maturin develop --release` (uses `extension-module` feature)

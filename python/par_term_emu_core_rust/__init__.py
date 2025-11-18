@@ -26,9 +26,28 @@ from ._native import (
     ShellIntegration,
     Terminal,
     UnderlineStyle,
+    # Color utility functions
+    adjust_contrast_rgb,
+    adjust_hue,
+    adjust_saturation,
+    color_luminance,
+    complementary_color,
+    contrast_ratio,
+    darken_rgb,
+    hex_to_rgb,
+    hsl_to_rgb,
+    is_dark_color,
+    lighten_rgb,
+    meets_wcag_aa,
+    meets_wcag_aaa,
+    mix_colors,
+    perceived_brightness_rgb,
+    rgb_to_ansi_256,
+    rgb_to_hex,
+    rgb_to_hsl,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "Attributes",
     "CursorStyle",
@@ -38,4 +57,23 @@ __all__ = [
     "ShellIntegration",
     "Terminal",
     "UnderlineStyle",
+    # Color utility functions
+    "adjust_contrast_rgb",
+    "adjust_hue",
+    "adjust_saturation",
+    "color_luminance",
+    "complementary_color",
+    "contrast_ratio",
+    "darken_rgb",
+    "hex_to_rgb",
+    "hsl_to_rgb",
+    "is_dark_color",
+    "lighten_rgb",
+    "meets_wcag_aa",
+    "meets_wcag_aaa",
+    "mix_colors",
+    "perceived_brightness_rgb",
+    "rgb_to_ansi_256",
+    "rgb_to_hex",
+    "rgb_to_hsl",
 ]

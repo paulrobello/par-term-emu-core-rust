@@ -75,6 +75,12 @@ pub struct ScreenshotConfig {
     pub use_bold_color: bool,
     /// Enable bold brightening (bold text with ANSI colors 0-7 uses bright variants 8-15)
     pub bold_brightening: bool,
+
+    // Contrast settings
+    /// Minimum contrast adjustment (0.0-1.0, iTerm2-compatible)
+    /// 0.0 = disabled (default, matches iTerm2), 0.5 = moderate, 1.0 = maximum
+    /// Automatically adjusts text colors to maintain readability against backgrounds
+    pub minimum_contrast: f64,
 }
 
 impl Default for ScreenshotConfig {
@@ -98,6 +104,7 @@ impl Default for ScreenshotConfig {
             bold_color: None,
             use_bold_color: false,
             bold_brightening: false,
+            minimum_contrast: 0.0, // Disabled by default (matches iTerm2)
         }
     }
 }
@@ -177,6 +184,13 @@ impl ScreenshotConfig {
     /// Enable/disable bold brightening
     pub fn with_bold_brightening(mut self, enabled: bool) -> Self {
         self.bold_brightening = enabled;
+        self
+    }
+
+    /// Set minimum contrast adjustment (0.0-1.0)
+    /// 0.0 = disabled, 0.5 = moderate, 1.0 = maximum
+    pub fn with_minimum_contrast(mut self, contrast: f64) -> Self {
+        self.minimum_contrast = contrast.clamp(0.0, 1.0);
         self
     }
 }
@@ -398,5 +412,30 @@ mod tests {
 
         let config = ScreenshotConfig::new().with_bold_brightening(false);
         assert!(!config.bold_brightening);
+    }
+
+    #[test]
+    fn test_default_minimum_contrast() {
+        let config = ScreenshotConfig::default();
+        assert_eq!(config.minimum_contrast, 0.0);
+    }
+
+    #[test]
+    fn test_with_minimum_contrast() {
+        let config = ScreenshotConfig::new().with_minimum_contrast(0.5);
+        assert_eq!(config.minimum_contrast, 0.5);
+
+        let config = ScreenshotConfig::new().with_minimum_contrast(1.0);
+        assert_eq!(config.minimum_contrast, 1.0);
+    }
+
+    #[test]
+    fn test_with_minimum_contrast_clamping() {
+        // Values should be clamped to [0.0, 1.0]
+        let config = ScreenshotConfig::new().with_minimum_contrast(1.5);
+        assert_eq!(config.minimum_contrast, 1.0);
+
+        let config = ScreenshotConfig::new().with_minimum_contrast(-0.5);
+        assert_eq!(config.minimum_contrast, 0.0);
     }
 }

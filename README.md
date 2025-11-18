@@ -7,11 +7,29 @@
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/par_term_emu_core_rust)
 ![PyPI - License](https://img.shields.io/pypi/l/par_term_emu_core_rust)
 
-## What's New in 0.5.0
+## What's New in 0.6.0
 
-### Bold Brightening Support
+### Comprehensive Color Utilities API
 
-Version 0.5.0 adds configurable bold brightening for improved terminal compatibility:
+Version 0.6.0 adds a complete suite of color manipulation functions with Python bindings:
+
+- **18 New Python Functions**: Complete color utility API for terminal applications
+  - `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
+  - `lighten_rgb()`, `darken_rgb()`
+  - `color_luminance()`, `is_dark_color()`, `contrast_ratio()`
+  - `meets_wcag_aa()`, `meets_wcag_aaa()`
+  - `mix_colors()`, `complementary_color()`
+  - `rgb_to_hsl()`, `hsl_to_rgb()`, `rgb_to_hex()`, `hex_to_rgb()`
+  - `rgb_to_ansi_256()`, `adjust_saturation()`, `adjust_hue()`
+- **Color Space Support**: RGB, HSL, Hex, and ANSI 256-color conversions
+- **WCAG Accessibility**: Built-in compliance checks (AA/AAA standards)
+- **Advanced Manipulation**: Saturation, hue adjustment, color mixing, complementary colors
+- **iTerm2 Compatibility**: Same NTSC brightness formula and contrast adjustment algorithms
+- **Fast Native Code**: Rust implementation for optimal performance
+
+### Bold Brightening Support (from 0.5.0)
+
+Configurable bold brightening for improved terminal compatibility:
 
 - **New `set_bold_brightening()` Method**: Enable/disable bold text brightening for ANSI colors 0-7
 - **iTerm2 Compatibility**: Matches iTerm2's "Use Bright Bold" setting behavior
@@ -19,11 +37,23 @@ Version 0.5.0 adds configurable bold brightening for improved terminal compatibi
 - **Snapshot Integration**: `create_snapshot()` automatically applies bold brightening when enabled
 - **Comprehensive Documentation**: New section in `docs/ADVANCED_FEATURES.md` with examples
 
+### Minimum Contrast Adjustment (iTerm2-Compatible)
+
+New automatic contrast adjustment feature ensures text readability:
+
+- **NTSC Perceived Brightness**: Uses the same NTSC formula as iTerm2 (30% red, 59% green, 11% blue)
+- **Hue Preservation**: Adjusts brightness while preserving color hue using parametric interpolation
+- **Configurable Threshold**: Set minimum contrast from 0.0 (disabled) to 1.0 (maximum)
+- **Screenshot Integration**: Apply via `minimum_contrast` parameter in screenshot methods
+- **Python & Rust APIs**: Helper functions `perceived_brightness_rgb()` and `adjust_contrast_rgb()`
+- **Automatic Direction Selection**: Intelligently chooses to lighten or darken text for optimal contrast
+
 ### Enhanced Color Configuration
 
 - **Bold Brightening API**: Programmatic control over bold color rendering
+- **Minimum Contrast Adjustment**: iTerm2-compatible automatic contrast adjustment for improved readability
 - **Snapshot Accuracy**: Screen snapshots now correctly reflect bold brightening state
-- **Backward Compatible**: Feature is opt-in and doesn't affect existing code
+- **Backward Compatible**: Features are opt-in and don't affect existing code
 
 ## Description
 
@@ -33,7 +63,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## Table of Contents
 
-- [What's New in 0.5.0](#whats-new-in-050)
+- [What's New in 0.6.0](#whats-new-in-060)
 - [Description](#description)
 - [Technology](#technology)
 - [Prerequisites](#prerequisites)
@@ -141,6 +171,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 - **Flag Emoji Support**: Proper rendering of flag emojis (🇺🇸 🇨🇳 🇯🇵) via text shaping
 - **Cursor Rendering**: Capture cursor position with 3 styles (Block, Underline, Bar) and custom colors
 - **Sixel Graphics**: Inline graphics rendering with full alpha blending support
+- **Minimum Contrast Adjustment**: iTerm2-compatible automatic contrast adjustment ensures text readability on any background
 - **Configurable**: Custom fonts, sizes, padding, and quality settings
 - **Full Styling**: Preserves all colors, text attributes, and decorations
 - **Wide Character Support**: Renders CJK characters and emoji correctly
@@ -490,6 +521,12 @@ term.screenshot_to_file(
     use_bold_color=True           # Apply custom bold color
 )
 
+# Enable minimum contrast adjustment (iTerm2-compatible)
+term.screenshot_to_file(
+    "output.png",
+    minimum_contrast=0.5          # Auto-adjust text colors for readability (0.0-1.0)
+)                                 # 0.0 = disabled (iTerm2 default), 0.5 = moderate, 1.0 = maximum
+
 # Specify custom font (for raster formats)
 term.screenshot_to_file(
     "output.png",
@@ -508,6 +545,75 @@ term.screenshot_to_file(
 #### TUI Integration
 
 > **Note**: TUI integration features are available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust), which includes screenshot hotkeys and other interactive features.
+
+### Color Utilities
+
+Comprehensive color manipulation functions for terminal applications:
+
+```python
+from par_term_emu_core_rust import (
+    # Brightness and contrast
+    perceived_brightness_rgb, adjust_contrast_rgb,
+
+    # Basic adjustments
+    lighten_rgb, darken_rgb,
+
+    # Accessibility (WCAG)
+    color_luminance, is_dark_color, contrast_ratio,
+    meets_wcag_aa, meets_wcag_aaa,
+
+    # Color mixing and manipulation
+    mix_colors, complementary_color,
+
+    # Color space conversions
+    rgb_to_hsl, hsl_to_rgb, rgb_to_hex, hex_to_rgb,
+    rgb_to_ansi_256,
+
+    # Advanced adjustments
+    adjust_saturation, adjust_hue
+)
+
+# iTerm2-compatible contrast adjustment
+adjusted = adjust_contrast_rgb((64, 64, 64), (0, 0, 0), 0.5)
+print(f"Adjusted for readability: {adjusted}")  # (128, 128, 128)
+
+# Calculate perceived brightness (NTSC formula)
+brightness = perceived_brightness_rgb(128, 128, 128)
+print(f"Brightness: {brightness:.2f}")  # 0.50
+
+# WCAG accessibility checks
+ratio = contrast_ratio((0, 0, 0), (255, 255, 255))
+print(f"Contrast ratio: {ratio:.1f}:1")  # 21.0:1
+print(f"Meets WCAG AA: {meets_wcag_aa((0, 0, 0), (255, 255, 255))}")  # True
+
+# Color manipulation
+lightened = lighten_rgb((128, 64, 32), 0.5)  # Lighten by 50%
+darkened = darken_rgb((200, 150, 100), 0.3)  # Darken by 30%
+mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)  # Purple
+
+# Color space conversions
+h, s, l = rgb_to_hsl((255, 0, 0))  # Red to HSL
+rgb = hsl_to_rgb(120, 100, 50)  # Green from HSL
+hex_str = rgb_to_hex((255, 128, 64))  # "#FF8040"
+rgb = hex_to_rgb("#FF8040")  # (255, 128, 64)
+
+# Advanced color theory
+saturated = adjust_saturation((200, 100, 100), 50)  # +50% saturation
+shifted = adjust_hue((255, 0, 0), 120)  # Red -> Green (120° shift)
+complement = complementary_color((255, 0, 0))  # Cyan
+
+# Terminal palette conversion
+ansi_idx = rgb_to_ansi_256((255, 0, 0))  # Find nearest ANSI 256 color
+```
+
+**Key Features:**
+- **iTerm2-Compatible Algorithms**: Same NTSC brightness formula (30% red, 59% green, 11% blue) and contrast adjustment
+- **WCAG Compliance**: Built-in accessibility checks (AA/AAA standards with 4.5:1 and 7:1 ratios)
+- **Color Space Support**: RGB, HSL, Hex (#RRGGBB), and ANSI 256-color palette
+- **Hue Preservation**: Brightness adjustments use parametric interpolation to maintain color hue
+- **Color Theory**: Complementary colors, hue shifting, saturation adjustment
+- **Accessibility Testing**: Luminance calculation, dark color detection, contrast ratio checking
+- **Fast Native Code**: Rust implementation for optimal performance with Python bindings
 
 ### Text Extraction & Smart Selection
 
@@ -761,6 +867,40 @@ These methods can be called on the class itself (e.g., `Terminal.strip_ansi(text
 - `Terminal.strip_ansi(text: str) -> str`: Remove all ANSI escape sequences from text
 - `Terminal.measure_text_width(text: str) -> int`: Measure display width accounting for wide characters and ANSI codes
 - `Terminal.parse_color(color_string: str) -> tuple[int, int, int] | None`: Parse color from hex (#RRGGBB), rgb(r,g,b), or name
+
+### Color Utilities Module
+
+Comprehensive color manipulation functions available as standalone module functions:
+
+#### Brightness and Contrast
+- `perceived_brightness_rgb(r: int, g: int, b: int) -> float`: Calculate perceived brightness (0.0-1.0) using NTSC formula (30% red, 59% green, 11% blue)
+- `adjust_contrast_rgb(fg: tuple[int, int, int], bg: tuple[int, int, int], min_contrast: float) -> tuple[int, int, int]`: Adjust foreground color for minimum contrast ratio (0.0-1.0), preserving hue
+
+#### Basic Adjustments
+- `lighten_rgb(rgb: tuple[int, int, int], amount: float) -> tuple[int, int, int]`: Lighten color by percentage (0.0-1.0)
+- `darken_rgb(rgb: tuple[int, int, int], amount: float) -> tuple[int, int, int]`: Darken color by percentage (0.0-1.0)
+
+#### Accessibility (WCAG)
+- `color_luminance(rgb: tuple[int, int, int]) -> float`: Calculate relative luminance (0.0-1.0) per WCAG formula
+- `is_dark_color(rgb: tuple[int, int, int]) -> bool`: Check if color is dark (luminance < 0.5)
+- `contrast_ratio(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float`: Calculate WCAG contrast ratio (1.0-21.0)
+- `meets_wcag_aa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AA standard (4.5:1)
+- `meets_wcag_aaa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AAA standard (7:1)
+
+#### Color Mixing and Manipulation
+- `mix_colors(color1: tuple[int, int, int], color2: tuple[int, int, int], ratio: float) -> tuple[int, int, int]`: Mix two colors (ratio: 0.0=color1, 1.0=color2)
+- `complementary_color(rgb: tuple[int, int, int]) -> tuple[int, int, int]`: Get complementary color (opposite on color wheel)
+
+#### Color Space Conversions
+- `rgb_to_hsl(rgb: tuple[int, int, int]) -> tuple[int, int, int]`: Convert RGB to HSL (H: 0-360, S: 0-100, L: 0-100)
+- `hsl_to_rgb(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
+- `rgb_to_hex(rgb: tuple[int, int, int]) -> str`: Convert RGB to hex string (#RRGGBB)
+- `hex_to_rgb(hex_str: str) -> tuple[int, int, int]`: Convert hex string to RGB
+- `rgb_to_ansi_256(rgb: tuple[int, int, int]) -> int`: Find nearest ANSI 256-color palette index (0-255)
+
+#### Advanced Adjustments
+- `adjust_saturation(rgb: tuple[int, int, int], amount: int) -> tuple[int, int, int]`: Adjust saturation by amount (-100 to +100)
+- `adjust_hue(rgb: tuple[int, int, int], degrees: int) -> tuple[int, int, int]`: Shift hue by degrees (0-360)
 
 ### PtyTerminal Class
 
@@ -1200,13 +1340,25 @@ The library consists of several key components:
 
 ## Version History
 
-### 0.5.0 (2025-01-17)
+### 0.6.0 (Current)
+- **Comprehensive Color Utilities API**: 18 new Python functions for color manipulation
+  - Brightness and contrast: `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
+  - Basic adjustments: `lighten_rgb()`, `darken_rgb()`
+  - WCAG accessibility: `color_luminance()`, `is_dark_color()`, `contrast_ratio()`, `meets_wcag_aa()`, `meets_wcag_aaa()`
+  - Color mixing: `mix_colors()`, `complementary_color()`
+  - Color space conversions: `rgb_to_hsl()`, `hsl_to_rgb()`, `rgb_to_hex()`, `hex_to_rgb()`, `rgb_to_ansi_256()`
+  - Advanced adjustments: `adjust_saturation()`, `adjust_hue()`
+- **iTerm2 Compatibility**: Matching NTSC brightness formula and contrast adjustment algorithms
+- **Python Bindings**: All color utilities exposed via `par_term_emu_core_rust` module
+- **Fast Native Implementation**: Rust-based for optimal performance
+
+### 0.5.0
 - Added `set_bold_brightening()` method for configurable bold color brightening
 - Enhanced `create_snapshot()` to automatically apply bold brightening when enabled
 - Bold brightening converts ANSI colors 0-7 to bright variants 8-15 for bold text
 - Matches iTerm2's "Use Bright Bold" setting for improved terminal compatibility
 
-### 0.4.0 (2025-01-15)
+### 0.4.0
 - Initial stable release with comprehensive VT100/VT220/VT320/VT420 support
 - Full PTY support with process lifecycle management
 - Sixel graphics rendering with configurable limits

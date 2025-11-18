@@ -229,6 +229,12 @@ impl Renderer {
             fg_rgb = (fg_rgb.0 / 2, fg_rgb.1 / 2, fg_rgb.2 / 2);
         }
 
+        // Apply minimum contrast adjustment if enabled
+        if self.config.minimum_contrast > 0.0 {
+            fg_rgb =
+                crate::color_utils::adjust_contrast_rgb(fg_rgb, bg, self.config.minimum_contrast);
+        }
+
         (fg_rgb, bg)
     }
 
@@ -1055,6 +1061,7 @@ mod tests {
             bold_color: None,
             use_bold_color: false,
             bold_brightening: false,
+            minimum_contrast: 0.0,
             quality: 90,
             format: crate::screenshot::config::ImageFormat::Png,
         }
