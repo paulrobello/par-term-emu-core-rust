@@ -27,7 +27,8 @@ pub use pty::PyPtyTerminal;
 pub use terminal::PyTerminal;
 pub use types::{
     PyAttributes, PyBookmark, PyClipboardEntry, PyColorHSL, PyColorHSV, PyColorPalette,
-    PyDetectedItem, PyFrameTiming, PyGraphic, PyJoinedLines, PyPerformanceMetrics,
-    PyScreenSnapshot, PySearchMatch, PySelection, PySelectionMode, PyShellIntegration,
-    PyScrollbackStats, PyTmuxNotification,
+    PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
+    PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition, PyPerformanceMetrics,
+    PyProfilingData, PyRenderingHint, PyScreenSnapshot, PySearchMatch, PySelection,
+    PySelectionMode, PyShellIntegration, PyScrollbackStats, PySnapshotDiff, PyTmuxNotification,
 };

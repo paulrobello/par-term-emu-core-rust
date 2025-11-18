@@ -2615,6 +2615,255 @@ impl PyTerminal {
             label: e.label.clone(),
         }).collect())
     }
+
+    // === Feature 17: Advanced Mouse Support ===
+
+    /// Record a mouse event
+    fn record_mouse_event(
+        &mut self,
+        event_type: &str,
+        button: &str,
+        col: usize,
+        row: usize,
+        pixel_x: Option<u16>,
+        pixel_y: Option<u16>,
+        modifiers: u8,
+        timestamp: u64,
+    ) -> PyResult<()> {
+        use crate::terminal::{MouseEventRecord, MouseEventType, MouseButton};
+
+        let event_type = match event_type.to_lowercase().as_str() {
+            "press" => MouseEventType::Press,
+            "release" => MouseEventType::Release,
+            "move" => MouseEventType::Move,
+            "drag" => MouseEventType::Drag,
+            "scrollup" => MouseEventType::ScrollUp,
+            "scrolldown" => MouseEventType::ScrollDown,
+            _ => return Err(PyValueError::new_err("Invalid mouse event type")),
+        };
+
+        let button = match button.to_lowercase().as_str() {
+            "left" => MouseButton::Left,
+            "middle" => MouseButton::Middle,
+            "right" => MouseButton::Right,
+            "none" => MouseButton::None,
+            _ => return Err(PyValueError::new_err("Invalid mouse button")),
+        };
+
+        let event = MouseEventRecord {
+            event_type,
+            button,
+            col,
+            row,
+            pixel_x,
+            pixel_y,
+            modifiers,
+            timestamp,
+        };
+
+        self.inner.record_mouse_event(event);
+        Ok(())
+    }
+
+    /// Get mouse events
+    #[pyo3(signature = (count=None))]
+    fn get_mouse_events(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyMouseEvent>> {
+        let events = self.inner.get_mouse_events(count);
+        Ok(events.iter().map(super::types::PyMouseEvent::from).collect())
+    }
+
+    /// Get mouse positions
+    #[pyo3(signature = (count=None))]
+    fn get_mouse_positions(&self, count: Option<usize>) -> PyResult<Vec<super::types::PyMousePosition>> {
+        let positions = self.inner.get_mouse_positions(count);
+        Ok(positions.iter().map(super::types::PyMousePosition::from).collect())
+    }
+
+    /// Get last mouse position
+    fn get_last_mouse_position(&self) -> PyResult<Option<super::types::PyMousePosition>> {
+        Ok(self.inner.get_last_mouse_position().map(|p| super::types::PyMousePosition::from(&p)))
+    }
+
+    /// Clear mouse history
+    fn clear_mouse_history(&mut self) -> PyResult<()> {
+        self.inner.clear_mouse_history();
+        Ok(())
+    }
+
+    /// Set maximum mouse history size
+    fn set_max_mouse_history(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_mouse_history(max);
+        Ok(())
+    }
+
+    /// Get maximum mouse history size
+    fn get_max_mouse_history(&self) -> PyResult<usize> {
+        Ok(self.inner.get_max_mouse_history())
+    }
+
+    // === Feature 19: Custom Rendering Hints ===
+
+    /// Add a damage region
+    fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) -> PyResult<()> {
+        self.inner.add_damage_region(left, top, right, bottom);
+        Ok(())
+    }
+
+    /// Get damage regions
+    fn get_damage_regions(&self) -> PyResult<Vec<super::types::PyDamageRegion>> {
+        let regions = self.inner.get_damage_regions();
+        Ok(regions.iter().map(super::types::PyDamageRegion::from).collect())
+    }
+
+    /// Merge overlapping damage regions
+    fn merge_damage_regions(&mut self) -> PyResult<()> {
+        self.inner.merge_damage_regions();
+        Ok(())
+    }
+
+    /// Clear damage regions
+    fn clear_damage_regions(&mut self) -> PyResult<()> {
+        self.inner.clear_damage_regions();
+        Ok(())
+    }
+
+    /// Add a rendering hint
+    fn add_rendering_hint(
+        &mut self,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+        layer: &str,
+        animation: &str,
+        priority: &str,
+    ) -> PyResult<()> {
+        use crate::terminal::{DamageRegion, ZLayer, AnimationHint, UpdatePriority};
+
+        let damage = DamageRegion { left, top, right, bottom };
+
+        let layer = match layer.to_lowercase().as_str() {
+            "background" => ZLayer::Background,
+            "normal" => ZLayer::Normal,
+            "overlay" => ZLayer::Overlay,
+            "cursor" => ZLayer::Cursor,
+            _ => return Err(PyValueError::new_err("Invalid layer")),
+        };
+
+        let animation = match animation.to_lowercase().as_str() {
+            "none" => AnimationHint::None,
+            "smoothscroll" => AnimationHint::SmoothScroll,
+            "fade" => AnimationHint::Fade,
+            "cursorblink" => AnimationHint::CursorBlink,
+            _ => return Err(PyValueError::new_err("Invalid animation hint")),
+        };
+
+        let priority = match priority.to_lowercase().as_str() {
+            "low" => UpdatePriority::Low,
+            "normal" => UpdatePriority::Normal,
+            "high" => UpdatePriority::High,
+            "critical" => UpdatePriority::Critical,
+            _ => return Err(PyValueError::new_err("Invalid priority")),
+        };
+
+        self.inner.add_rendering_hint(damage, layer, animation, priority);
+        Ok(())
+    }
+
+    /// Get rendering hints
+    #[pyo3(signature = (sort_by_priority=false))]
+    fn get_rendering_hints(&self, sort_by_priority: bool) -> PyResult<Vec<super::types::PyRenderingHint>> {
+        let hints = self.inner.get_rendering_hints(sort_by_priority);
+        Ok(hints.iter().map(super::types::PyRenderingHint::from).collect())
+    }
+
+    /// Clear rendering hints
+    fn clear_rendering_hints(&mut self) -> PyResult<()> {
+        self.inner.clear_rendering_hints();
+        Ok(())
+    }
+
+    // === Feature 16: Performance Profiling ===
+
+    /// Enable performance profiling
+    fn enable_profiling(&mut self) -> PyResult<()> {
+        self.inner.enable_profiling();
+        Ok(())
+    }
+
+    /// Disable performance profiling
+    fn disable_profiling(&mut self) -> PyResult<()> {
+        self.inner.disable_profiling();
+        Ok(())
+    }
+
+    /// Check if profiling is enabled
+    fn is_profiling_enabled(&self) -> PyResult<bool> {
+        Ok(self.inner.is_profiling_enabled())
+    }
+
+    /// Get profiling data
+    fn get_profiling_data(&self) -> PyResult<Option<super::types::PyProfilingData>> {
+        Ok(self.inner.get_profiling_data().map(|d| super::types::PyProfilingData::from(&d)))
+    }
+
+    /// Reset profiling data
+    fn reset_profiling_data(&mut self) -> PyResult<()> {
+        self.inner.reset_profiling_data();
+        Ok(())
+    }
+
+    /// Record an escape sequence execution
+    fn record_escape_sequence(&mut self, category: &str, time_us: u64) -> PyResult<()> {
+        use crate::terminal::ProfileCategory;
+
+        let category = match category.to_lowercase().as_str() {
+            "csi" => ProfileCategory::CSI,
+            "osc" => ProfileCategory::OSC,
+            "esc" => ProfileCategory::ESC,
+            "dcs" => ProfileCategory::DCS,
+            "print" => ProfileCategory::Print,
+            "control" => ProfileCategory::Control,
+            _ => return Err(PyValueError::new_err("Invalid profile category")),
+        };
+
+        self.inner.record_escape_sequence(category, time_us);
+        Ok(())
+    }
+
+    /// Record memory allocation
+    fn record_allocation(&mut self, bytes: u64) -> PyResult<()> {
+        self.inner.record_allocation(bytes);
+        Ok(())
+    }
+
+    /// Update peak memory usage
+    fn update_peak_memory(&mut self, current_bytes: usize) -> PyResult<()> {
+        self.inner.update_peak_memory(current_bytes);
+        Ok(())
+    }
+
+    // === Feature 14: Snapshot Diffing ===
+
+    /// Compare two snapshots and return differences
+    fn diff_snapshots(
+        &self,
+        old: &super::types::PyScreenSnapshot,
+        new: &super::types::PyScreenSnapshot,
+    ) -> PyResult<super::types::PySnapshotDiff> {
+        // Convert lines to strings for comparison
+        let old_strings: Vec<String> = old.lines.iter().map(|line| {
+            line.iter().map(|(c, _, _, _)| *c).collect()
+        }).collect();
+
+        let new_strings: Vec<String> = new.lines.iter().map(|line| {
+            line.iter().map(|(c, _, _, _)| *c).collect()
+        }).collect();
+
+        // Call Rust implementation
+        let diff = crate::terminal::diff_screen_lines(&old_strings, &new_strings);
+        Ok(super::types::PySnapshotDiff::from(&diff))
+    }
 }
 
 /// Helper function to parse clipboard slot from string

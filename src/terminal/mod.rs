@@ -294,6 +294,215 @@ pub enum ClipboardSlot {
     Custom(u8),
 }
 
+// === Feature 17: Advanced Mouse Support ===
+
+/// Mouse event type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventType {
+    /// Mouse button press
+    Press,
+    /// Mouse button release
+    Release,
+    /// Mouse movement (with or without button held)
+    Move,
+    /// Mouse drag (move with button held)
+    Drag,
+    /// Mouse scroll up
+    ScrollUp,
+    /// Mouse scroll down
+    ScrollDown,
+}
+
+/// Mouse button
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    None,
+}
+
+/// Mouse event record with position and metadata
+#[derive(Debug, Clone)]
+pub struct MouseEventRecord {
+    /// Event type
+    pub event_type: MouseEventType,
+    /// Mouse button involved
+    pub button: MouseButton,
+    /// Column position (0-indexed)
+    pub col: usize,
+    /// Row position (0-indexed)
+    pub row: usize,
+    /// Pixel position (for SGR 1016)
+    pub pixel_x: Option<u16>,
+    pub pixel_y: Option<u16>,
+    /// Modifier keys (shift, alt, ctrl)
+    pub modifiers: u8,
+    /// Timestamp in microseconds
+    pub timestamp: u64,
+}
+
+/// Mouse position history entry
+#[derive(Debug, Clone)]
+pub struct MousePosition {
+    pub col: usize,
+    pub row: usize,
+    pub timestamp: u64,
+}
+
+// === Feature 19: Custom Rendering Hints ===
+
+/// Damage region for incremental rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageRegion {
+    /// Top-left column
+    pub left: usize,
+    /// Top-left row
+    pub top: usize,
+    /// Bottom-right column (exclusive)
+    pub right: usize,
+    /// Bottom-right row (exclusive)
+    pub bottom: usize,
+}
+
+/// Z-order layer for rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZLayer {
+    /// Background layer
+    Background = 0,
+    /// Normal content
+    Normal = 1,
+    /// Overlays (e.g., selections)
+    Overlay = 2,
+    /// Cursor and UI elements
+    Cursor = 3,
+}
+
+/// Animation hint for smooth transitions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationHint {
+    /// No animation
+    None,
+    /// Smooth scroll
+    SmoothScroll,
+    /// Fade in/out
+    Fade,
+    /// Cursor blink
+    CursorBlink,
+}
+
+/// Priority for partial updates
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UpdatePriority {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    Critical = 3,
+}
+
+/// Rendering hint for optimization
+#[derive(Debug, Clone)]
+pub struct RenderingHint {
+    /// Damaged region that needs redrawing
+    pub damage: DamageRegion,
+    /// Z-order layer
+    pub layer: ZLayer,
+    /// Animation hint
+    pub animation: AnimationHint,
+    /// Update priority
+    pub priority: UpdatePriority,
+}
+
+// === Feature 16: Performance Profiling ===
+
+/// Profiling data for escape sequences
+#[derive(Debug, Clone, Default)]
+pub struct EscapeSequenceProfile {
+    /// Total count of this sequence type
+    pub count: u64,
+    /// Total time spent processing (microseconds)
+    pub total_time_us: u64,
+    /// Peak processing time (microseconds)
+    pub peak_time_us: u64,
+    /// Average processing time (microseconds)
+    pub avg_time_us: u64,
+}
+
+/// Profiling category
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProfileCategory {
+    /// CSI sequences
+    CSI,
+    /// OSC sequences
+    OSC,
+    /// ESC sequences
+    ESC,
+    /// DCS sequences
+    DCS,
+    /// Plain text printing
+    Print,
+    /// Control characters
+    Control,
+}
+
+/// Complete profiling data
+#[derive(Debug, Clone, Default)]
+pub struct ProfilingData {
+    /// Per-category profiling
+    pub categories: std::collections::HashMap<ProfileCategory, EscapeSequenceProfile>,
+    /// Memory allocations tracked
+    pub allocations: u64,
+    /// Total bytes allocated
+    pub bytes_allocated: u64,
+    /// Peak memory usage
+    pub peak_memory: usize,
+}
+
+// === Feature 14: Snapshot Diffing ===
+
+/// Type of change in a diff
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffChangeType {
+    /// Line added
+    Added,
+    /// Line removed
+    Removed,
+    /// Line modified
+    Modified,
+    /// Line unchanged
+    Unchanged,
+}
+
+/// A single line diff
+#[derive(Debug, Clone)]
+pub struct LineDiff {
+    /// Type of change
+    pub change_type: DiffChangeType,
+    /// Row number in old snapshot
+    pub old_row: Option<usize>,
+    /// Row number in new snapshot
+    pub new_row: Option<usize>,
+    /// Old line content
+    pub old_content: Option<String>,
+    /// New line content
+    pub new_content: Option<String>,
+}
+
+/// Complete diff between two snapshots
+#[derive(Debug, Clone)]
+pub struct SnapshotDiff {
+    /// List of line diffs
+    pub diffs: Vec<LineDiff>,
+    /// Number of lines added
+    pub added: usize,
+    /// Number of lines removed
+    pub removed: usize,
+    /// Number of lines modified
+    pub modified: usize,
+    /// Number of lines unchanged
+    pub unchanged: usize,
+}
+
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
 #[inline]
@@ -497,6 +706,20 @@ pub struct Terminal {
     clipboard_history: std::collections::HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     /// Maximum clipboard history entries per slot
     max_clipboard_history: usize,
+    /// Mouse event history
+    mouse_events: Vec<MouseEventRecord>,
+    /// Mouse position history
+    mouse_positions: Vec<MousePosition>,
+    /// Maximum mouse history entries
+    max_mouse_history: usize,
+    /// Current rendering hints
+    rendering_hints: Vec<RenderingHint>,
+    /// Damage regions accumulated
+    damage_regions: Vec<DamageRegion>,
+    /// Profiling data (when enabled)
+    profiling_data: Option<ProfilingData>,
+    /// Profiling enabled flag
+    profiling_enabled: bool,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -769,6 +992,16 @@ impl Terminal {
             // Clipboard integration
             clipboard_history: std::collections::HashMap::new(),
             max_clipboard_history: 50, // Keep last 50 entries per slot
+            // Mouse tracking
+            mouse_events: Vec::new(),
+            mouse_positions: Vec::new(),
+            max_mouse_history: 100, // Keep last 100 mouse events
+            // Rendering hints
+            rendering_hints: Vec::new(),
+            damage_regions: Vec::new(),
+            // Performance profiling
+            profiling_data: None,
+            profiling_enabled: false,
         }
     }
 
@@ -3193,6 +3426,321 @@ impl Terminal {
             results.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
             results
         }
+    }
+
+    // === Feature 17: Advanced Mouse Support ===
+
+    /// Record a mouse event in the history
+    pub fn record_mouse_event(&mut self, event: MouseEventRecord) {
+        // Record position
+        let position = MousePosition {
+            col: event.col,
+            row: event.row,
+            timestamp: event.timestamp,
+        };
+        self.mouse_positions.push(position);
+
+        // Record event
+        self.mouse_events.push(event);
+
+        // Limit history size
+        if self.mouse_events.len() > self.max_mouse_history {
+            self.mouse_events.drain(0..self.mouse_events.len() - self.max_mouse_history);
+        }
+        if self.mouse_positions.len() > self.max_mouse_history {
+            self.mouse_positions.drain(0..self.mouse_positions.len() - self.max_mouse_history);
+        }
+    }
+
+    /// Get mouse events, optionally limited to most recent N
+    pub fn get_mouse_events(&self, count: Option<usize>) -> Vec<MouseEventRecord> {
+        if let Some(n) = count {
+            self.mouse_events.iter().rev().take(n).rev().cloned().collect()
+        } else {
+            self.mouse_events.clone()
+        }
+    }
+
+    /// Get mouse positions, optionally limited to most recent N
+    pub fn get_mouse_positions(&self, count: Option<usize>) -> Vec<MousePosition> {
+        if let Some(n) = count {
+            self.mouse_positions.iter().rev().take(n).rev().cloned().collect()
+        } else {
+            self.mouse_positions.clone()
+        }
+    }
+
+    /// Get the last recorded mouse position
+    pub fn get_last_mouse_position(&self) -> Option<MousePosition> {
+        self.mouse_positions.last().cloned()
+    }
+
+    /// Clear mouse event and position history
+    pub fn clear_mouse_history(&mut self) {
+        self.mouse_events.clear();
+        self.mouse_positions.clear();
+    }
+
+    /// Set maximum mouse history size
+    pub fn set_max_mouse_history(&mut self, max: usize) {
+        self.max_mouse_history = max;
+        // Trim existing history if needed
+        if self.mouse_events.len() > max {
+            self.mouse_events.drain(0..self.mouse_events.len() - max);
+        }
+        if self.mouse_positions.len() > max {
+            self.mouse_positions.drain(0..self.mouse_positions.len() - max);
+        }
+    }
+
+    /// Get maximum mouse history size
+    pub fn get_max_mouse_history(&self) -> usize {
+        self.max_mouse_history
+    }
+
+    // === Feature 19: Custom Rendering Hints ===
+
+    /// Add a damage region to track screen area changes
+    pub fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) {
+        let region = DamageRegion { left, top, right, bottom };
+        self.damage_regions.push(region);
+    }
+
+    /// Get all current damage regions
+    pub fn get_damage_regions(&self) -> Vec<DamageRegion> {
+        self.damage_regions.clone()
+    }
+
+    /// Merge overlapping damage regions to reduce count
+    pub fn merge_damage_regions(&mut self) {
+        if self.damage_regions.len() < 2 {
+            return;
+        }
+
+        let mut merged = Vec::new();
+        let mut regions = self.damage_regions.clone();
+        regions.sort_by_key(|r| (r.top, r.left));
+
+        let mut current = regions[0];
+
+        for region in regions.iter().skip(1) {
+            // Check if regions overlap or are adjacent
+            if region.left <= current.right + 1
+                && region.top <= current.bottom + 1
+                && region.right >= current.left.saturating_sub(1)
+                && region.bottom >= current.top.saturating_sub(1)
+            {
+                // Merge
+                current = DamageRegion {
+                    left: current.left.min(region.left),
+                    top: current.top.min(region.top),
+                    right: current.right.max(region.right),
+                    bottom: current.bottom.max(region.bottom),
+                };
+            } else {
+                merged.push(current);
+                current = *region;
+            }
+        }
+        merged.push(current);
+
+        self.damage_regions = merged;
+    }
+
+    /// Clear all damage regions
+    pub fn clear_damage_regions(&mut self) {
+        self.damage_regions.clear();
+    }
+
+    /// Add a rendering hint
+    pub fn add_rendering_hint(
+        &mut self,
+        damage: DamageRegion,
+        layer: ZLayer,
+        animation: AnimationHint,
+        priority: UpdatePriority,
+    ) {
+        let hint = RenderingHint {
+            damage,
+            layer,
+            animation,
+            priority,
+        };
+        self.rendering_hints.push(hint);
+    }
+
+    /// Get all rendering hints, optionally sorted by priority
+    pub fn get_rendering_hints(&self, sort_by_priority: bool) -> Vec<RenderingHint> {
+        if sort_by_priority {
+            let mut hints = self.rendering_hints.clone();
+            hints.sort_by_key(|h| std::cmp::Reverse(h.priority as u8));
+            hints
+        } else {
+            self.rendering_hints.clone()
+        }
+    }
+
+    /// Clear all rendering hints
+    pub fn clear_rendering_hints(&mut self) {
+        self.rendering_hints.clear();
+    }
+
+    // === Feature 16: Performance Profiling ===
+
+    /// Enable performance profiling
+    pub fn enable_profiling(&mut self) {
+        self.profiling_enabled = true;
+        if self.profiling_data.is_none() {
+            self.profiling_data = Some(ProfilingData {
+                categories: std::collections::HashMap::new(),
+                allocations: 0,
+                bytes_allocated: 0,
+                peak_memory: 0,
+            });
+        }
+    }
+
+    /// Disable performance profiling
+    pub fn disable_profiling(&mut self) {
+        self.profiling_enabled = false;
+    }
+
+    /// Check if profiling is enabled
+    pub fn is_profiling_enabled(&self) -> bool {
+        self.profiling_enabled
+    }
+
+    /// Get current profiling data
+    pub fn get_profiling_data(&self) -> Option<ProfilingData> {
+        self.profiling_data.clone()
+    }
+
+    /// Reset profiling data
+    pub fn reset_profiling_data(&mut self) {
+        if let Some(ref mut data) = self.profiling_data {
+            data.categories.clear();
+            data.allocations = 0;
+            data.bytes_allocated = 0;
+            data.peak_memory = 0;
+        }
+    }
+
+    /// Record an escape sequence execution for profiling
+    pub fn record_escape_sequence(&mut self, category: ProfileCategory, time_us: u64) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            let profile = data.categories.entry(category).or_insert(EscapeSequenceProfile {
+                count: 0,
+                total_time_us: 0,
+                peak_time_us: 0,
+                avg_time_us: 0,
+            });
+
+            profile.count += 1;
+            profile.total_time_us += time_us;
+            profile.peak_time_us = profile.peak_time_us.max(time_us);
+            profile.avg_time_us = profile.total_time_us / profile.count;
+        }
+    }
+
+    /// Record memory allocation for profiling
+    pub fn record_allocation(&mut self, bytes: u64) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            data.allocations += 1;
+            data.bytes_allocated += bytes;
+        }
+    }
+
+    /// Update peak memory usage
+    pub fn update_peak_memory(&mut self, current_bytes: usize) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            data.peak_memory = data.peak_memory.max(current_bytes);
+        }
+    }
+
+}
+
+// === Feature 14: Snapshot Diffing - Helper Function ===
+
+/// Compare two sets of screen lines and return the differences
+pub fn diff_screen_lines(old_lines: &[String], new_lines: &[String]) -> SnapshotDiff {
+    let mut diffs = Vec::new();
+    let mut added = 0;
+    let mut removed = 0;
+    let mut modified = 0;
+    let mut unchanged = 0;
+
+    let max_rows = old_lines.len().max(new_lines.len());
+
+    for row in 0..max_rows {
+        let old_line = old_lines.get(row);
+        let new_line = new_lines.get(row);
+
+        match (old_line, new_line) {
+            (Some(old_content), Some(new_content)) => {
+                if old_content == new_content {
+                    unchanged += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Unchanged,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                } else {
+                    modified += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Modified,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                }
+            }
+            (None, Some(new_content)) => {
+                added += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Added,
+                    old_row: None,
+                    new_row: Some(row),
+                    old_content: None,
+                    new_content: Some(new_content.clone()),
+                });
+            }
+            (Some(old_content), None) => {
+                removed += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Removed,
+                    old_row: Some(row),
+                    new_row: None,
+                    old_content: Some(old_content.clone()),
+                    new_content: None,
+                });
+            }
+            (None, None) => {
+                // This shouldn't happen
+            }
+        }
+    }
+
+    SnapshotDiff {
+        diffs,
+        added,
+        removed,
+        modified,
+        unchanged,
     }
 }
 // VTE Perform trait implementation - delegates to sequence handlers

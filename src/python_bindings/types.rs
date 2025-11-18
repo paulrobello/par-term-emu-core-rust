@@ -1059,6 +1059,351 @@ impl PyClipboardEntry {
     }
 }
 
+// === Feature 17: Advanced Mouse Support ===
+
+/// Mouse event
+#[pyclass(name = "MouseEvent")]
+#[derive(Clone)]
+pub struct PyMouseEvent {
+    #[pyo3(get)]
+    pub event_type: String,
+    #[pyo3(get)]
+    pub button: String,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub pixel_x: Option<u16>,
+    #[pyo3(get)]
+    pub pixel_y: Option<u16>,
+    #[pyo3(get)]
+    pub modifiers: u8,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyMouseEvent {
+    fn __repr__(&self) -> String {
+        format!("MouseEvent(type={}, button={}, pos=({}, {}), timestamp={})",
+                self.event_type, self.button, self.col, self.row, self.timestamp)
+    }
+}
+
+impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
+    fn from(event: &crate::terminal::MouseEventRecord) -> Self {
+        use crate::terminal::{MouseEventType, MouseButton};
+
+        let event_type = match event.event_type {
+            MouseEventType::Press => "press",
+            MouseEventType::Release => "release",
+            MouseEventType::Move => "move",
+            MouseEventType::Drag => "drag",
+            MouseEventType::ScrollUp => "scrollup",
+            MouseEventType::ScrollDown => "scrolldown",
+        }.to_string();
+
+        let button = match event.button {
+            MouseButton::Left => "left",
+            MouseButton::Middle => "middle",
+            MouseButton::Right => "right",
+            MouseButton::None => "none",
+        }.to_string();
+
+        PyMouseEvent {
+            event_type,
+            button,
+            col: event.col,
+            row: event.row,
+            pixel_x: event.pixel_x,
+            pixel_y: event.pixel_y,
+            modifiers: event.modifiers,
+            timestamp: event.timestamp,
+        }
+    }
+}
+
+/// Mouse position
+#[pyclass(name = "MousePosition")]
+#[derive(Clone)]
+pub struct PyMousePosition {
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyMousePosition {
+    fn __repr__(&self) -> String {
+        format!("MousePosition(col={}, row={}, timestamp={})",
+                self.col, self.row, self.timestamp)
+    }
+}
+
+impl From<&crate::terminal::MousePosition> for PyMousePosition {
+    fn from(pos: &crate::terminal::MousePosition) -> Self {
+        PyMousePosition {
+            col: pos.col,
+            row: pos.row,
+            timestamp: pos.timestamp,
+        }
+    }
+}
+
+// === Feature 19: Custom Rendering Hints ===
+
+/// Damage region
+#[pyclass(name = "DamageRegion")]
+#[derive(Clone)]
+pub struct PyDamageRegion {
+    #[pyo3(get)]
+    pub left: usize,
+    #[pyo3(get)]
+    pub top: usize,
+    #[pyo3(get)]
+    pub right: usize,
+    #[pyo3(get)]
+    pub bottom: usize,
+}
+
+#[pymethods]
+impl PyDamageRegion {
+    fn __repr__(&self) -> String {
+        format!("DamageRegion(left={}, top={}, right={}, bottom={})",
+                self.left, self.top, self.right, self.bottom)
+    }
+}
+
+impl From<&crate::terminal::DamageRegion> for PyDamageRegion {
+    fn from(region: &crate::terminal::DamageRegion) -> Self {
+        PyDamageRegion {
+            left: region.left,
+            top: region.top,
+            right: region.right,
+            bottom: region.bottom,
+        }
+    }
+}
+
+/// Rendering hint
+#[pyclass(name = "RenderingHint")]
+#[derive(Clone)]
+pub struct PyRenderingHint {
+    #[pyo3(get)]
+    pub damage: PyDamageRegion,
+    #[pyo3(get)]
+    pub layer: String,
+    #[pyo3(get)]
+    pub animation: String,
+    #[pyo3(get)]
+    pub priority: u8,
+}
+
+#[pymethods]
+impl PyRenderingHint {
+    fn __repr__(&self) -> String {
+        format!("RenderingHint(layer={}, animation={}, priority={})",
+                self.layer, self.animation, self.priority)
+    }
+}
+
+impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
+    fn from(hint: &crate::terminal::RenderingHint) -> Self {
+        use crate::terminal::{ZLayer, AnimationHint};
+
+        let layer = match hint.layer {
+            ZLayer::Background => "background",
+            ZLayer::Normal => "normal",
+            ZLayer::Overlay => "overlay",
+            ZLayer::Cursor => "cursor",
+        }.to_string();
+
+        let animation = match hint.animation {
+            AnimationHint::None => "none",
+            AnimationHint::SmoothScroll => "smoothscroll",
+            AnimationHint::Fade => "fade",
+            AnimationHint::CursorBlink => "cursorblink",
+        }.to_string();
+
+        PyRenderingHint {
+            damage: PyDamageRegion::from(&hint.damage),
+            layer,
+            animation,
+            priority: hint.priority as u8,
+        }
+    }
+}
+
+// === Feature 16: Performance Profiling ===
+
+/// Escape sequence profile
+#[pyclass(name = "EscapeSequenceProfile")]
+#[derive(Clone)]
+pub struct PyEscapeSequenceProfile {
+    #[pyo3(get)]
+    pub count: u64,
+    #[pyo3(get)]
+    pub total_time_us: u64,
+    #[pyo3(get)]
+    pub peak_time_us: u64,
+    #[pyo3(get)]
+    pub avg_time_us: u64,
+}
+
+#[pymethods]
+impl PyEscapeSequenceProfile {
+    fn __repr__(&self) -> String {
+        format!("EscapeSequenceProfile(count={}, avg_us={}, peak_us={})",
+                self.count, self.avg_time_us, self.peak_time_us)
+    }
+}
+
+impl From<&crate::terminal::EscapeSequenceProfile> for PyEscapeSequenceProfile {
+    fn from(profile: &crate::terminal::EscapeSequenceProfile) -> Self {
+        PyEscapeSequenceProfile {
+            count: profile.count,
+            total_time_us: profile.total_time_us,
+            peak_time_us: profile.peak_time_us,
+            avg_time_us: profile.avg_time_us,
+        }
+    }
+}
+
+/// Profiling data
+#[pyclass(name = "ProfilingData")]
+#[derive(Clone)]
+pub struct PyProfilingData {
+    #[pyo3(get)]
+    pub categories: std::collections::HashMap<String, PyEscapeSequenceProfile>,
+    #[pyo3(get)]
+    pub allocations: u64,
+    #[pyo3(get)]
+    pub bytes_allocated: u64,
+    #[pyo3(get)]
+    pub peak_memory: usize,
+}
+
+#[pymethods]
+impl PyProfilingData {
+    fn __repr__(&self) -> String {
+        format!("ProfilingData(categories={}, allocations={}, peak_memory={})",
+                self.categories.len(), self.allocations, self.peak_memory)
+    }
+}
+
+impl From<&crate::terminal::ProfilingData> for PyProfilingData {
+    fn from(data: &crate::terminal::ProfilingData) -> Self {
+        use crate::terminal::ProfileCategory;
+
+        let mut categories = std::collections::HashMap::new();
+        for (cat, profile) in &data.categories {
+            let key = match cat {
+                ProfileCategory::CSI => "csi",
+                ProfileCategory::OSC => "osc",
+                ProfileCategory::ESC => "esc",
+                ProfileCategory::DCS => "dcs",
+                ProfileCategory::Print => "print",
+                ProfileCategory::Control => "control",
+            }.to_string();
+            categories.insert(key, PyEscapeSequenceProfile::from(profile));
+        }
+
+        PyProfilingData {
+            categories,
+            allocations: data.allocations,
+            bytes_allocated: data.bytes_allocated,
+            peak_memory: data.peak_memory,
+        }
+    }
+}
+
+// === Feature 14: Snapshot Diffing ===
+
+/// Line diff
+#[pyclass(name = "LineDiff")]
+#[derive(Clone)]
+pub struct PyLineDiff {
+    #[pyo3(get)]
+    pub change_type: String,
+    #[pyo3(get)]
+    pub old_row: Option<usize>,
+    #[pyo3(get)]
+    pub new_row: Option<usize>,
+    #[pyo3(get)]
+    pub old_content: Option<String>,
+    #[pyo3(get)]
+    pub new_content: Option<String>,
+}
+
+#[pymethods]
+impl PyLineDiff {
+    fn __repr__(&self) -> String {
+        format!("LineDiff(type={}, old_row={:?}, new_row={:?})",
+                self.change_type, self.old_row, self.new_row)
+    }
+}
+
+impl From<&crate::terminal::LineDiff> for PyLineDiff {
+    fn from(diff: &crate::terminal::LineDiff) -> Self {
+        use crate::terminal::DiffChangeType;
+
+        let change_type = match diff.change_type {
+            DiffChangeType::Added => "added",
+            DiffChangeType::Removed => "removed",
+            DiffChangeType::Modified => "modified",
+            DiffChangeType::Unchanged => "unchanged",
+        }.to_string();
+
+        PyLineDiff {
+            change_type,
+            old_row: diff.old_row,
+            new_row: diff.new_row,
+            old_content: diff.old_content.clone(),
+            new_content: diff.new_content.clone(),
+        }
+    }
+}
+
+/// Snapshot diff
+#[pyclass(name = "SnapshotDiff")]
+#[derive(Clone)]
+pub struct PySnapshotDiff {
+    #[pyo3(get)]
+    pub diffs: Vec<PyLineDiff>,
+    #[pyo3(get)]
+    pub added: usize,
+    #[pyo3(get)]
+    pub removed: usize,
+    #[pyo3(get)]
+    pub modified: usize,
+    #[pyo3(get)]
+    pub unchanged: usize,
+}
+
+#[pymethods]
+impl PySnapshotDiff {
+    fn __repr__(&self) -> String {
+        format!("SnapshotDiff(added={}, removed={}, modified={}, unchanged={})",
+                self.added, self.removed, self.modified, self.unchanged)
+    }
+}
+
+impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
+    fn from(diff: &crate::terminal::SnapshotDiff) -> Self {
+        PySnapshotDiff {
+            diffs: diff.diffs.iter().map(PyLineDiff::from).collect(),
+            added: diff.added,
+            removed: diff.removed,
+            modified: diff.modified,
+            unchanged: diff.unchanged,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
