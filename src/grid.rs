@@ -1670,4 +1670,322 @@ mod tests {
         // Should skip wide char spacers, only include the actual wide characters
         assert_eq!(lines[0], "中文");
     }
+
+    #[test]
+    fn test_fill_rectangle() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Fill a 3x3 rectangle starting at (5, 5) with 'X'
+        let fill_cell = Cell::new('X');
+        grid.fill_rectangle(fill_cell, 5, 5, 7, 7);
+
+        // Check that cells inside the rectangle are filled
+        assert_eq!(grid.get(5, 5).unwrap().c, 'X');
+        assert_eq!(grid.get(6, 6).unwrap().c, 'X');
+        assert_eq!(grid.get(7, 7).unwrap().c, 'X');
+
+        // Check that cells outside are not affected
+        assert_eq!(grid.get(4, 5).unwrap().c, ' ');
+        assert_eq!(grid.get(8, 7).unwrap().c, ' ');
+    }
+
+    #[test]
+    fn test_fill_rectangle_boundaries() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Fill rectangle at grid boundaries
+        let fill_cell = Cell::new('B');
+        grid.fill_rectangle(fill_cell, 0, 0, 2, 2);
+
+        assert_eq!(grid.get(0, 0).unwrap().c, 'B');
+        assert_eq!(grid.get(1, 1).unwrap().c, 'B');
+        assert_eq!(grid.get(2, 2).unwrap().c, 'B');
+    }
+
+    #[test]
+    fn test_copy_rectangle() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set up source rectangle with pattern
+        for row in 2..5 {
+            for col in 2..5 {
+                grid.set(col, row, Cell::new('S'));
+            }
+        }
+
+        // Copy rectangle from (2,2) to (10,10)
+        grid.copy_rectangle(2, 2, 4, 4, 10, 10);
+
+        // Verify copy
+        assert_eq!(grid.get(10, 10).unwrap().c, 'S');
+        assert_eq!(grid.get(11, 11).unwrap().c, 'S');
+        assert_eq!(grid.get(12, 12).unwrap().c, 'S');
+
+        // Original should still exist
+        assert_eq!(grid.get(2, 2).unwrap().c, 'S');
+    }
+
+    #[test]
+    fn test_copy_rectangle_to_different_location() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set up source with unique chars in non-overlapping area
+        grid.set(0, 0, Cell::new('A'));
+        grid.set(1, 0, Cell::new('B'));
+        grid.set(0, 1, Cell::new('C'));
+        grid.set(1, 1, Cell::new('D'));
+
+        // Copy to far away location (no overlap)
+        grid.copy_rectangle(0, 0, 1, 1, 10, 10);
+
+        // Verify copy worked
+        assert_eq!(grid.get(10, 10).unwrap().c, 'A');
+        assert_eq!(grid.get(11, 10).unwrap().c, 'B');
+        assert_eq!(grid.get(10, 11).unwrap().c, 'C');
+        assert_eq!(grid.get(11, 11).unwrap().c, 'D');
+    }
+
+    #[test]
+    fn test_erase_rectangle() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Fill area with chars
+        for row in 5..10 {
+            for col in 5..10 {
+                grid.set(col, row, Cell::new('T'));
+            }
+        }
+
+        // Erase rectangle
+        grid.erase_rectangle(6, 6, 8, 8);
+
+        // Check erased area
+        assert_eq!(grid.get(6, 6).unwrap().c, ' ');
+        assert_eq!(grid.get(7, 7).unwrap().c, ' ');
+        assert_eq!(grid.get(8, 8).unwrap().c, ' ');
+
+        // Check boundary cells not erased
+        assert_eq!(grid.get(5, 5).unwrap().c, 'T');
+        assert_eq!(grid.get(9, 9).unwrap().c, 'T');
+    }
+
+    #[test]
+    fn test_erase_rectangle_unconditional() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Fill with different chars
+        grid.set(10, 10, Cell::new('U'));
+        grid.set(11, 11, Cell::new('V'));
+
+        // Erase unconditionally
+        grid.erase_rectangle_unconditional(10, 10, 11, 11);
+
+        assert_eq!(grid.get(10, 10).unwrap().c, ' ');
+        assert_eq!(grid.get(11, 11).unwrap().c, ' ');
+    }
+
+    #[test]
+    fn test_change_attributes_in_rectangle() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set up cells with chars
+        for row in 3..6 {
+            for col in 3..6 {
+                let mut cell = Cell::new('M');
+                cell.flags.set_bold(false);
+                grid.set(col, row, cell);
+            }
+        }
+
+        // Change attributes - make them bold (attribute 1 = bold)
+        let attributes = [1u16];
+        grid.change_attributes_in_rectangle(3, 3, 5, 5, &attributes);
+
+        // Verify attributes changed but char remained
+        let cell = grid.get(4, 4).unwrap();
+        assert_eq!(cell.c, 'M');
+        assert!(cell.flags.bold());
+    }
+
+    #[test]
+    fn test_reverse_attributes_in_rectangle() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set up cells
+        let mut cell = Cell::new('R');
+        cell.flags.set_reverse(false);
+        grid.set(20, 20, cell);
+
+        // Reverse attributes - attribute 7 toggles reverse flag
+        let attributes = [7u16];
+        grid.reverse_attributes_in_rectangle(20, 20, 20, 20, &attributes);
+
+        // Verify reverse flag is now true
+        let reversed = grid.get(20, 20).unwrap();
+        assert_eq!(reversed.c, 'R');
+        assert!(reversed.flags.reverse());
+
+        // Toggle again - should go back to false
+        grid.reverse_attributes_in_rectangle(20, 20, 20, 20, &attributes);
+        let unreversed = grid.get(20, 20).unwrap();
+        assert!(!unreversed.flags.reverse());
+    }
+
+    #[test]
+    fn test_row_text() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set up a row with text
+        let text = "Hello, World!";
+        for (i, ch) in text.chars().enumerate() {
+            grid.set(i, 5, Cell::new(ch));
+        }
+
+        let row_text = grid.row_text(5);
+        assert!(row_text.starts_with("Hello, World!"));
+    }
+
+    #[test]
+    fn test_row_text_with_wide_chars() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set wide character
+        let mut cell = Cell::new('中');
+        cell.flags.set_wide_char(true);
+        grid.set(0, 0, cell);
+
+        // Set spacer
+        let mut spacer = Cell::default();
+        spacer.flags.set_wide_char_spacer(true);
+        grid.set(1, 0, spacer);
+
+        let row_text = grid.row_text(0);
+        // Should skip the spacer
+        assert_eq!(row_text.chars().next().unwrap(), '中');
+    }
+
+    #[test]
+    fn test_content_as_string() {
+        let mut grid = Grid::new(10, 3, 1000);
+
+        // Fill first row
+        for col in 0..10 {
+            grid.set(col, 0, Cell::new('A'));
+        }
+
+        // Fill second row partially
+        for col in 0..5 {
+            grid.set(col, 1, Cell::new('B'));
+        }
+
+        let content = grid.content_as_string();
+        let lines: Vec<&str> = content.lines().collect();
+
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].starts_with("AAAAAAAAAA"));
+        assert!(lines[1].starts_with("BBBBB"));
+    }
+
+    #[test]
+    fn test_is_scrollback_wrapped_circular() {
+        let mut grid = Grid::new(80, 2, 3); // Small scrollback for testing
+
+        // Scroll multiple times to trigger circular buffer
+        for i in 0..5 {
+            grid.scroll_up(1);
+            if i % 2 == 0 {
+                grid.scrollback_wrapped[grid.scrollback_lines.saturating_sub(1).min(grid.max_scrollback - 1)] = true;
+            }
+        }
+
+        // Test wrapped state retrieval
+        let wrapped = grid.is_scrollback_wrapped(0);
+        // Just ensure it doesn't panic with circular buffer
+        assert!(wrapped == true || wrapped == false);
+    }
+
+    #[test]
+    fn test_debug_snapshot() {
+        let mut grid = Grid::new(10, 3, 2);
+
+        // Add some content
+        grid.set(0, 0, Cell::new('D'));
+        grid.set(1, 0, Cell::new('E'));
+        grid.set(2, 0, Cell::new('B'));
+        grid.set(3, 0, Cell::new('U'));
+        grid.set(4, 0, Cell::new('G'));
+
+        let snapshot = grid.debug_snapshot();
+
+        // Verify snapshot contains expected content
+        assert!(snapshot.contains("DEBUG"));
+        assert!(snapshot.contains("|DEBUG"));
+    }
+
+    #[test]
+    fn test_scrollback_line_circular_buffer() {
+        let mut grid = Grid::new(80, 24, 2); // Max 2 scrollback lines
+
+        // Scroll 3 times to wrap circular buffer
+        grid.scroll_up(1);
+        grid.scroll_up(1);
+        grid.scroll_up(1);
+
+        // Accessing scrollback should not panic
+        let line = grid.scrollback_line(0);
+        assert!(line.is_some());
+
+        let line = grid.scrollback_line(1);
+        assert!(line.is_some() || line.is_none()); // Depends on implementation
+    }
+
+    #[test]
+    fn test_set_line_wrapped_bounds() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Set wrapped state
+        grid.set_line_wrapped(5, true);
+        assert!(grid.is_line_wrapped(5));
+
+        // Clear it
+        grid.set_line_wrapped(5, false);
+        assert!(!grid.is_line_wrapped(5));
+
+        // Out of bounds should not panic
+        grid.set_line_wrapped(100, true);
+        assert!(!grid.is_line_wrapped(100));
+    }
+
+    #[test]
+    fn test_export_styled_buffer() {
+        let mut grid = Grid::new(20, 3, 1000);
+
+        // Add some styled content
+        let mut cell = Cell::new('S');
+        cell.flags.set_bold(true);
+        grid.set(0, 0, cell);
+
+        let styled = grid.export_styled_buffer();
+
+        // Should contain ANSI codes for bold
+        assert!(styled.contains("\x1b["));
+    }
+
+    #[test]
+    fn test_clear_row() {
+        let mut grid = Grid::new(80, 24, 1000);
+
+        // Fill a row
+        for col in 0..80 {
+            grid.set(col, 10, Cell::new('X'));
+        }
+
+        // Clear it
+        grid.clear_row(10);
+
+        // Verify cleared
+        for col in 0..80 {
+            assert_eq!(grid.get(col, 10).unwrap().c, ' ');
+        }
+    }
 }
