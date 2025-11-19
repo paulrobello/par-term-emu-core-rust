@@ -3130,6 +3130,12 @@ impl Terminal {
             config.bold_color = Some(self.bold_color.to_rgb());
         }
         config.use_bold_color = self.use_bold_color;
+        config.bold_brightening = self.bold_brightening;
+
+        // Use terminal's default background if not specified
+        if config.background_color.is_none() {
+            config.background_color = Some(self.default_bg.to_rgb());
+        }
 
         let grid = self.grid_with_scrollback(scrollback_offset);
         let cursor = if config.render_cursor && scrollback_offset == 0 {
@@ -3173,6 +3179,12 @@ impl Terminal {
             config.bold_color = Some(self.bold_color.to_rgb());
         }
         config.use_bold_color = self.use_bold_color;
+        config.bold_brightening = self.bold_brightening;
+
+        // Use terminal's default background if not specified
+        if config.background_color.is_none() {
+            config.background_color = Some(self.default_bg.to_rgb());
+        }
 
         let grid = self.grid_with_scrollback(scrollback_offset);
         let cursor = if config.render_cursor && scrollback_offset == 0 {

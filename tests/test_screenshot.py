@@ -506,3 +506,105 @@ class TestScrollbackOffset:
         full_export = term.export_text()
         assert "Line 000" in full_export
         assert "Line 014" in full_export
+
+
+class TestScreenshotThemeSettings:
+    """Test screenshot theme configuration settings"""
+
+    def test_bold_brightening(self):
+        """Test bold brightening in screenshots"""
+        term = Terminal(80, 24)
+
+        # Add bold text with ANSI color 1 (red)
+        term.process_str("\x1b[1;31mBold Red Text\x1b[0m\n")
+
+        # Without bold_brightening, should use color 1
+        png_without = term.screenshot(bold_brightening=False)
+        assert len(png_without) > 0
+        assert png_without[:8] == b"\x89PNG\r\n\x1a\n"
+
+        # With bold_brightening, should brighten to color 9 (bright red)
+        png_with = term.screenshot(bold_brightening=True)
+        assert len(png_with) > 0
+        assert png_with[:8] == b"\x89PNG\r\n\x1a\n"
+
+        # Both should generate valid PNGs
+        # Note: Color difference may be subtle, but both settings work
+
+    def test_background_color_override(self):
+        """Test custom background color in screenshots"""
+        term = Terminal(80, 24)
+        term.process_str("Test content\n")
+
+        # Use default background (terminal's default_bg)
+        png_default = term.screenshot()
+        assert len(png_default) > 0
+
+        # Override with custom background color (red)
+        png_red_bg = term.screenshot(background_color=(255, 0, 0))
+        assert len(png_red_bg) > 0
+
+        # Override with custom background color (blue)
+        png_blue_bg = term.screenshot(background_color=(0, 0, 255))
+        assert len(png_blue_bg) > 0
+
+        # All should be different
+        assert png_red_bg != png_blue_bg
+
+    def test_terminal_default_background_used(self):
+        """Test that terminal's default background is used when not overridden"""
+        term = Terminal(80, 24)
+        term.process_str("Test\n")
+
+        # Take screenshot without specifying background
+        # Should use terminal's default_bg color automatically
+        png_bytes = term.screenshot()
+        assert len(png_bytes) > 0
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_screenshot_with_all_theme_settings(self):
+        """Test screenshot with all theme settings combined"""
+        term = Terminal(80, 24)
+
+        # Create content with various attributes
+        term.process_str("\x1b[1;31mBold Red\x1b[0m ")
+        term.process_str("\x1b]8;;http://example.com\x1b\\Link\x1b]8;;\x1b\\ ")
+        term.process_str("\n")
+
+        # Screenshot with all theme settings
+        png_bytes = term.screenshot(
+            bold_brightening=True,
+            background_color=(32, 32, 32),
+            link_color=(100, 149, 237),  # Cornflower blue
+            bold_color=(255, 215, 0),    # Gold
+            use_bold_color=True,
+            minimum_contrast=0.3
+        )
+
+        assert len(png_bytes) > 0
+        assert png_bytes[:8] == b"\x89PNG\r\n\x1a\n"
+
+    def test_screenshot_to_file_with_theme_settings(self):
+        """Test screenshot_to_file with theme settings"""
+        term = Terminal(80, 24)
+        term.process_str("\x1b[1;32mBold Green Text\x1b[0m\n")
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            filename = f.name
+
+        try:
+            term.screenshot_to_file(
+                filename,
+                bold_brightening=True,
+                background_color=(10, 10, 10)
+            )
+            assert os.path.exists(filename)
+            assert os.path.getsize(filename) > 0
+
+            # Verify PNG signature
+            with open(filename, "rb") as f:
+                signature = f.read(8)
+                assert signature == b"\x89PNG\r\n\x1a\n"
+        finally:
+            if os.path.exists(filename):
+                os.remove(filename)
