@@ -191,6 +191,65 @@ def demo_custom_configuration():
 
     return True
 
+def demo_theme_configuration():
+    """Demo theme configuration options"""
+    print("\n" + "=" * 60)
+    print("Demo 6: Theme Configuration")
+    print("=" * 60)
+
+    term = Terminal(80, 24)
+    term.process_str("\x1b[1;36mTheme Configuration Demo\x1b[0m\n\n")
+
+    # Create content with bold ANSI colors to show bold_brightening
+    term.process_str("Bold Brightening Test:\n")
+    term.process_str("\x1b[1;31m● Bold Red\x1b[0m ")
+    term.process_str("\x1b[1;32m● Bold Green\x1b[0m ")
+    term.process_str("\x1b[1;33m● Bold Yellow\x1b[0m ")
+    term.process_str("\x1b[1;34m● Bold Blue\x1b[0m\n\n")
+
+    # Add some hyperlinks
+    term.process_str("Links: ")
+    term.process_str("\x1b]8;;https://github.com\x1b\\GitHub\x1b]8;;\x1b\\ ")
+    term.process_str("\x1b]8;;https://python.org\x1b\\Python\x1b]8;;\x1b\\\n\n")
+
+    # Show background color options
+    term.process_str("Screenshot with different backgrounds below:\n")
+
+    configs = [
+        ("demo_theme_default.png", {
+            "bold_brightening": True,  # Auto brightens bold ANSI 0-7 to 8-15
+        }),
+        ("demo_theme_dark.png", {
+            "bold_brightening": True,
+            "background_color": (30, 30, 30),  # Dark gray background
+            "link_color": (100, 149, 237),     # Cornflower blue links
+        }),
+        ("demo_theme_light.png", {
+            "bold_brightening": False,
+            "background_color": (240, 240, 240),  # Light gray background
+            "link_color": (0, 0, 238),            # Blue links
+            "bold_color": (180, 0, 0),            # Dark red for bold
+            "use_bold_color": True,               # Use custom bold color
+        }),
+    ]
+
+    for filename, config in configs:
+        try:
+            term.screenshot_to_file(filename, **config)
+            desc_parts = []
+            if "bold_brightening" in config:
+                desc_parts.append(f"bold_bright={config['bold_brightening']}")
+            if "background_color" in config:
+                desc_parts.append(f"bg={config['background_color']}")
+            if "link_color" in config:
+                desc_parts.append(f"links={config['link_color']}")
+            desc = ", ".join(desc_parts) if desc_parts else "default"
+            print(f"✓ Saved: {filename:30s} ({desc})")
+        except Exception as e:
+            print(f"✗ Failed: {filename:30s} {e}")
+
+    return True
+
 def cleanup_demo_files():
     """Clean up demo files"""
     demo_files = [
@@ -203,6 +262,9 @@ def cleanup_demo_files():
         "demo_config_default.png",
         "demo_config_large.png",
         "demo_config_small.png",
+        "demo_theme_default.png",
+        "demo_theme_dark.png",
+        "demo_theme_light.png",
     ]
 
     removed = 0
@@ -231,6 +293,7 @@ def main():
         ("Unicode Support", demo_unicode_support),
         ("Format Comparison", demo_format_comparison),
         ("Custom Configuration", demo_custom_configuration),
+        ("Theme Configuration", demo_theme_configuration),
     ]
 
     results = {}
