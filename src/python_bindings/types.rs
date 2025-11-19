@@ -1916,7 +1916,10 @@ impl PyComplianceReport {
     fn __repr__(&self) -> String {
         format!(
             "ComplianceReport(level={}, passed={}/{}, compliance={:.1}%)",
-            self.level, self.passed, self.passed + self.failed, self.compliance_percent
+            self.level,
+            self.passed,
+            self.passed + self.failed,
+            self.compliance_percent
         )
     }
 }
@@ -2118,7 +2121,10 @@ impl PyShellIntegrationStats {
     fn __repr__(&self) -> String {
         format!(
             "ShellIntegrationStats(total={}, success={}, failed={}, avg_ms={:.1})",
-            self.total_commands, self.successful_commands, self.failed_commands, self.avg_duration_ms
+            self.total_commands,
+            self.successful_commands,
+            self.failed_commands,
+            self.avg_duration_ms
         )
     }
 }
@@ -2150,10 +2156,7 @@ pub struct PyCwdChange {
 #[pymethods]
 impl PyCwdChange {
     fn __repr__(&self) -> String {
-        format!(
-            "CwdChange(old={:?}, new={:?})",
-            self.old_cwd, self.new_cwd
-        )
+        format!("CwdChange(old={:?}, new={:?})", self.old_cwd, self.new_cwd)
     }
 }
 
@@ -2353,16 +2356,7 @@ impl From<&crate::terminal::RecordingEvent> for PyRecordingEvent {
 #[pyclass(name = "RecordingSession")]
 #[derive(Clone)]
 pub struct PyRecordingSession {
-    #[pyo3(get)]
-    pub start_time: u64,
-    #[pyo3(get)]
-    pub initial_size: (usize, usize),
-    #[pyo3(get)]
-    pub duration: u64,
-    #[pyo3(get)]
-    pub title: Option<String>,
-    #[pyo3(get)]
-    pub event_count: usize,
+    pub(crate) inner: crate::terminal::RecordingSession,
 }
 
 #[pymethods]
@@ -2370,30 +2364,59 @@ impl PyRecordingSession {
     fn __repr__(&self) -> String {
         format!(
             "RecordingSession(duration={}ms, size={:?}, events={})",
-            self.duration, self.initial_size, self.event_count
+            self.inner.duration,
+            self.inner.initial_size,
+            self.inner.events.len()
         )
     }
 
     /// Get recording size (cols, rows)
     fn get_size(&self) -> (usize, usize) {
-        self.initial_size
+        self.inner.initial_size
     }
 
     /// Get duration in seconds
     fn get_duration_seconds(&self) -> f64 {
-        self.duration as f64 / 1000.0
+        self.inner.duration as f64 / 1000.0
+    }
+
+    #[getter]
+    fn start_time(&self) -> u64 {
+        self.inner.start_time
+    }
+
+    #[getter]
+    fn initial_size(&self) -> (usize, usize) {
+        self.inner.initial_size
+    }
+
+    #[getter]
+    fn duration(&self) -> u64 {
+        self.inner.duration
+    }
+
+    #[getter]
+    fn title(&self) -> Option<String> {
+        self.inner.title.clone()
+    }
+
+    #[getter]
+    fn event_count(&self) -> usize {
+        self.inner.events.len()
     }
 }
 
 impl From<&crate::terminal::RecordingSession> for PyRecordingSession {
     fn from(session: &crate::terminal::RecordingSession) -> Self {
         PyRecordingSession {
-            start_time: session.start_time,
-            initial_size: session.initial_size,
-            duration: session.duration,
-            title: session.title.clone(),
-            event_count: session.events.len(),
+            inner: session.clone(),
         }
+    }
+}
+
+impl From<crate::terminal::RecordingSession> for PyRecordingSession {
+    fn from(session: crate::terminal::RecordingSession) -> Self {
+        PyRecordingSession { inner: session }
     }
 }
 

@@ -1561,7 +1561,7 @@ final_session = term.stop_recording()
 
 ```python
 # Export to asciicast v2 format (asciinema compatible)
-asciicast = term.export_asciicast()
+asciicast = term.export_asciicast(session=final_session)
 with open("session.cast", "w") as f:
     f.write(asciicast)
 
@@ -1569,7 +1569,7 @@ with open("session.cast", "w") as f:
 # $ asciinema play session.cast
 
 # Export to JSON format
-json_data = term.export_json()
+json_data = term.export_json(session=final_session)
 with open("session.json", "w") as f:
     f.write(json_data)
 ```
@@ -1602,7 +1602,7 @@ with PtyTerminal(80, 24) as pty:
     # Stop and export
     session = pty.stop_recording()
     if session:
-        asciicast = pty.export_asciicast()
+        asciicast = pty.export_asciicast(session=session)
         with open("shell.cast", "w") as f:
             f.write(asciicast)
 ```

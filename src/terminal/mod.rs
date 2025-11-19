@@ -30,6 +30,35 @@ use crate::sixel;
 use std::collections::{HashMap, HashSet};
 use vte::{Params, Perform};
 
+const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
+const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
+const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
+const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
+
+#[inline]
+fn unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
+    if max_bytes == 0 {
+        content.clear();
+        return;
+    }
+
+    if content.len() > max_bytes {
+        let suffix_len = CLIPBOARD_TRUNCATION_SUFFIX.len();
+        let keep = max_bytes.saturating_sub(suffix_len);
+        content.truncate(keep);
+        if suffix_len <= max_bytes {
+            content.push_str(CLIPBOARD_TRUNCATION_SUFFIX);
+        }
+    }
+}
+
 /// Bell event type
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BellEvent {
@@ -1272,6 +1301,10 @@ pub struct Terminal {
     clipboard_sync_history: std::collections::HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
     /// Maximum clipboard sync history entries per target
     max_clipboard_sync_history: usize,
+    /// Maximum clipboard sync events retained for diagnostics
+    max_clipboard_sync_events: usize,
+    /// Maximum bytes of clipboard content to persist per event/history entry
+    max_clipboard_event_bytes: usize,
     /// Remote session identifier for clipboard sync
     remote_session_id: Option<String>,
 
@@ -1296,6 +1329,8 @@ pub struct Terminal {
     last_activity_time: u64,
     /// Last silence check timestamp
     last_silence_check: u64,
+    /// Maximum OSC 9/777 notifications retained
+    max_notifications: usize,
     /// Custom notification triggers (ID -> message)
     custom_triggers: HashMap<u32, String>,
 
@@ -1470,6 +1505,7 @@ impl Terminal {
         for i in (0..cols).step_by(8) {
             tab_stops[i] = true;
         }
+        let now = unix_millis();
 
         Self {
             grid: Grid::new(cols, rows, scrollback),
@@ -1601,6 +1637,8 @@ impl Terminal {
             clipboard_sync_events: Vec::new(),
             clipboard_sync_history: std::collections::HashMap::new(),
             max_clipboard_sync_history: 50, // Keep last 50 entries per target
+            max_clipboard_sync_events: DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS,
+            max_clipboard_event_bytes: DEFAULT_MAX_CLIPBOARD_EVENT_BYTES,
             remote_session_id: None,
 
             // Shell Integration++
@@ -1608,13 +1646,14 @@ impl Terminal {
             current_command: None,
             cwd_changes: Vec::new(),
             max_command_history: 100, // Keep last 100 commands
-            max_cwd_history: 50, // Keep last 50 CWD changes
+            max_cwd_history: 50,      // Keep last 50 CWD changes
 
             // Terminal Notifications
             notification_config: NotificationConfig::default(),
             notification_events: Vec::new(),
-            last_activity_time: 0,
-            last_silence_check: 0,
+            last_activity_time: now,
+            last_silence_check: now,
+            max_notifications: DEFAULT_MAX_NOTIFICATIONS,
             custom_triggers: HashMap::new(),
 
             // Terminal Replay/Recording
@@ -1745,6 +1784,8 @@ impl Terminal {
         self.cursor.row = self.cursor.row.min(active_rows.saturating_sub(1));
         self.alt_cursor.col = self.alt_cursor.col.min(active_cols.saturating_sub(1));
         self.alt_cursor.row = self.alt_cursor.row.min(active_rows.saturating_sub(1));
+
+        self.record_resize(cols, rows);
     }
 
     /// Get the title
@@ -2102,6 +2143,35 @@ impl Terminal {
     /// Check if there are pending notifications
     pub fn has_notifications(&self) -> bool {
         !self.notifications.is_empty()
+    }
+
+    fn enqueue_notification(&mut self, notification: Notification) {
+        if self.max_notifications == 0 {
+            return;
+        }
+
+        if self.notifications.len() >= self.max_notifications {
+            let excess = self.notifications.len() + 1 - self.max_notifications;
+            self.notifications.drain(0..excess);
+        }
+
+        self.notifications.push(notification);
+    }
+
+    /// Set maximum OSC 9/777 notifications retained (0 disables buffering)
+    pub fn set_max_notifications(&mut self, max: usize) {
+        self.max_notifications = max;
+        if max == 0 {
+            self.notifications.clear();
+        } else if self.notifications.len() > max {
+            let excess = self.notifications.len() - max;
+            self.notifications.drain(0..excess);
+        }
+    }
+
+    /// Get maximum OSC 9/777 notifications retained
+    pub fn max_notifications(&self) -> usize {
+        self.max_notifications
     }
 
     /// Get the current bell count
@@ -2475,6 +2545,7 @@ impl Terminal {
     /// Process input data
     pub fn process(&mut self, data: &[u8]) {
         debug::log_vt_input(data);
+        self.update_activity();
 
         // If tmux control mode is enabled, parse data through tmux control parser
         if self.tmux_parser.is_control_mode() {
@@ -4703,7 +4774,8 @@ impl Terminal {
 
         // Limit number of stored images
         if self.inline_images.len() > self.max_inline_images {
-            self.inline_images.drain(0..self.inline_images.len() - self.max_inline_images);
+            self.inline_images
+                .drain(0..self.inline_images.len() - self.max_inline_images);
         }
     }
 
@@ -4724,9 +4796,8 @@ impl Terminal {
     /// Delete image by ID
     pub fn delete_image(&mut self, id: &str) -> bool {
         let before_len = self.inline_images.len();
-        self.inline_images.retain(|img| {
-            img.id.as_ref().map_or(true, |img_id| img_id != id)
-        });
+        self.inline_images
+            .retain(|img| img.id.as_ref().map_or(true, |img_id| img_id != id));
         self.inline_images.len() < before_len
     }
 
@@ -4786,7 +4857,11 @@ impl Terminal {
             avg_time_us: avg_time,
             min_time_us: min_time,
             max_time_us: max_time,
-            ops_per_sec: if avg_time > 0 { 1_000_000.0 / avg_time as f64 } else { 0.0 },
+            ops_per_sec: if avg_time > 0 {
+                1_000_000.0 / avg_time as f64
+            } else {
+                0.0
+            },
             memory_bytes: None,
         }
     }
@@ -4840,9 +4915,9 @@ impl Terminal {
             let iter_start = std::time::Instant::now();
 
             // Perform grid operations: write char, move cursor, scroll
-            self.process(b"X");  // Write a character
-            self.process(b"\x1b[H");  // Move cursor to home
-            self.grid.scroll_up(1);  // Scroll up by 1 line
+            self.process(b"X"); // Write a character
+            self.process(b"\x1b[H"); // Move cursor to home
+            self.grid.scroll_up(1); // Scroll up by 1 line
 
             let iter_time = iter_start.elapsed().as_micros() as u64;
             min_time = min_time.min(iter_time);
@@ -4860,7 +4935,11 @@ impl Terminal {
             avg_time_us: avg_time,
             min_time_us: min_time,
             max_time_us: max_time,
-            ops_per_sec: if avg_time > 0 { 1_000_000.0 / avg_time as f64 } else { 0.0 },
+            ops_per_sec: if avg_time > 0 {
+                1_000_000.0 / avg_time as f64
+            } else {
+                0.0
+            },
             memory_bytes: None,
         }
     }
@@ -4938,32 +5017,36 @@ impl Terminal {
         tests.push(ComplianceTest {
             name: "Cursor positioning".to_string(),
             category: "VT100".to_string(),
-            passed: result == (5, 5),  // 0-indexed
+            passed: result == (5, 5), // 0-indexed
             expected: "(5, 5)".to_string(),
             actual: format!("{:?}", result),
             notes: None,
         });
 
         // Test clear screen - CSI 2 J
-        self.process(b"X");  // Write a character
-        self.process(b"\x1b[2J");  // Clear screen
+        self.process(b"X"); // Write a character
+        self.process(b"\x1b[2J"); // Clear screen
         let rows = self.grid.rows();
         let is_clear = (0..rows.min(3)).all(|row_idx| {
-            self.grid.row(row_idx).map_or(true, |row| {
-                row.iter().take(10).all(|cell| cell.c == ' ')
-            })
+            self.grid
+                .row(row_idx)
+                .map_or(true, |row| row.iter().take(10).all(|cell| cell.c == ' '))
         });
         tests.push(ComplianceTest {
             name: "Clear screen".to_string(),
             category: "VT100".to_string(),
             passed: is_clear,
             expected: "All spaces".to_string(),
-            actual: if is_clear { "Clear".to_string() } else { "Not clear".to_string() },
+            actual: if is_clear {
+                "Clear".to_string()
+            } else {
+                "Not clear".to_string()
+            },
             notes: None,
         });
 
         // Test SGR attributes - CSI 1 m (bold)
-        self.process(b"\x1b[1m");  // Set bold
+        self.process(b"\x1b[1m"); // Set bold
         let bold = self.flags.bold();
         tests.push(ComplianceTest {
             name: "SGR bold attribute".to_string(),
@@ -4982,7 +5065,7 @@ impl Terminal {
         let mut tests = Vec::new();
 
         // Test insert lines - CSI L
-        self.process(b"\x1b[1L");  // Insert 1 line
+        self.process(b"\x1b[1L"); // Insert 1 line
         tests.push(ComplianceTest {
             name: "Insert lines".to_string(),
             category: "VT220".to_string(),
@@ -4993,9 +5076,9 @@ impl Terminal {
         });
 
         // Test delete characters - CSI P
-        self.process(b"ABC");  // Write some characters
-        self.process(b"\x1b[H");  // Move to home
-        self.process(b"\x1b[1P");  // Delete 1 character
+        self.process(b"ABC"); // Write some characters
+        self.process(b"\x1b[H"); // Move to home
+        self.process(b"\x1b[1P"); // Delete 1 character
         tests.push(ComplianceTest {
             name: "Delete characters".to_string(),
             category: "VT220".to_string(),
@@ -5013,7 +5096,7 @@ impl Terminal {
         let mut tests = Vec::new();
 
         // Test color support - CSI 38 ; 5 ; n m (set foreground to color n)
-        self.process(b"\x1b[38;5;1m");  // Set foreground to color 1 (red)
+        self.process(b"\x1b[38;5;1m"); // Set foreground to color 1 (red)
         tests.push(ComplianceTest {
             name: "Indexed colors".to_string(),
             category: "VT320".to_string(),
@@ -5032,8 +5115,15 @@ impl Terminal {
         output.push_str("=== Terminal Compliance Report ===\n");
         output.push_str(&format!("Terminal: {}\n", report.terminal_info));
         output.push_str(&format!("Level: {:?}\n", report.level));
-        output.push_str(&format!("Passed: {}/{}\n", report.passed, report.passed + report.failed));
-        output.push_str(&format!("Compliance: {:.1}%\n\n", report.compliance_percent));
+        output.push_str(&format!(
+            "Passed: {}/{}\n",
+            report.passed,
+            report.passed + report.failed
+        ));
+        output.push_str(&format!(
+            "Compliance: {:.1}%\n\n",
+            report.compliance_percent
+        ));
 
         for test in &report.tests {
             let status = if test.passed { "✓" } else { "✗" };
@@ -5057,30 +5147,36 @@ impl Terminal {
         &mut self,
         target: ClipboardTarget,
         operation: ClipboardOperation,
-        content: Option<String>,
+        mut content: Option<String>,
         is_remote: bool,
     ) {
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
+        if let Some(ref mut text) = content {
+            sanitize_clipboard_content(text, self.max_clipboard_event_bytes);
+        }
 
-        let event = ClipboardSyncEvent {
-            target,
-            operation,
-            content: content.clone(),
-            timestamp,
-            is_remote,
-        };
+        if self.max_clipboard_sync_events > 0 {
+            let event = ClipboardSyncEvent {
+                target,
+                operation,
+                content: content.clone(),
+                timestamp: unix_millis(),
+                is_remote,
+            };
 
-        self.clipboard_sync_events.push(event);
+            self.clipboard_sync_events.push(event);
+
+            if self.clipboard_sync_events.len() > self.max_clipboard_sync_events {
+                let excess = self.clipboard_sync_events.len() - self.max_clipboard_sync_events;
+                self.clipboard_sync_events.drain(0..excess);
+            }
+        }
 
         // Add to history if it's a Set operation
         if let (ClipboardOperation::Set, Some(content)) = (operation, content) {
             let entry = ClipboardHistoryEntry {
                 target,
                 content,
-                timestamp,
+                timestamp: unix_millis(),
                 source: self.remote_session_id.clone(),
             };
 
@@ -5096,7 +5192,6 @@ impl Terminal {
                 }
             }
         }
-
     }
 
     /// Get clipboard sync events
@@ -5117,6 +5212,55 @@ impl Terminal {
     /// Clear clipboard sync events
     pub fn clear_clipboard_sync_events(&mut self) {
         self.clipboard_sync_events.clear();
+    }
+
+    /// Set maximum clipboard sync events retained (0 disables buffering)
+    pub fn set_max_clipboard_sync_events(&mut self, max: usize) {
+        self.max_clipboard_sync_events = max;
+        if max == 0 {
+            self.clipboard_sync_events.clear();
+        } else if self.clipboard_sync_events.len() > max {
+            let excess = self.clipboard_sync_events.len() - max;
+            self.clipboard_sync_events.drain(0..excess);
+        }
+    }
+
+    /// Get maximum clipboard sync events retained
+    pub fn max_clipboard_sync_events(&self) -> usize {
+        self.max_clipboard_sync_events
+    }
+
+    /// Set maximum bytes cached per clipboard event (0 clears content)
+    pub fn set_max_clipboard_event_bytes(&mut self, max_bytes: usize) {
+        self.max_clipboard_event_bytes = max_bytes;
+        if max_bytes == 0 {
+            for event in &mut self.clipboard_sync_events {
+                if let Some(ref mut content) = event.content {
+                    content.clear();
+                }
+            }
+            for entries in self.clipboard_sync_history.values_mut() {
+                for entry in entries {
+                    entry.content.clear();
+                }
+            }
+        } else {
+            for event in &mut self.clipboard_sync_events {
+                if let Some(ref mut content) = event.content {
+                    sanitize_clipboard_content(content, max_bytes);
+                }
+            }
+            for entries in self.clipboard_sync_history.values_mut() {
+                for entry in entries {
+                    sanitize_clipboard_content(&mut entry.content, max_bytes);
+                }
+            }
+        }
+    }
+
+    /// Get maximum bytes cached per clipboard event
+    pub fn max_clipboard_event_bytes(&self) -> usize {
+        self.max_clipboard_event_bytes
     }
 
     /// Set remote session ID
@@ -5157,7 +5301,6 @@ impl Terminal {
             duration_ms: None,
             success: None,
         });
-
     }
 
     /// End tracking the current command execution
@@ -5180,7 +5323,6 @@ impl Terminal {
                 self.command_history
                     .drain(0..self.command_history.len() - self.max_command_history);
             }
-
         }
     }
 
@@ -5374,7 +5516,11 @@ impl Terminal {
         // Check if activity has occurred recently
         let silence_duration = now.saturating_sub(self.last_activity_time);
         if silence_duration >= self.notification_config.silence_threshold * 1000 {
-            self.trigger_notification(NotificationTrigger::Silence, NotificationAlert::Desktop, None);
+            self.trigger_notification(
+                NotificationTrigger::Silence,
+                NotificationAlert::Desktop,
+                None,
+            );
         }
     }
 
@@ -5393,7 +5539,11 @@ impl Terminal {
 
         // If there was a period of inactivity and now there's activity
         if time_since_activity >= self.notification_config.activity_threshold * 1000 {
-            self.trigger_notification(NotificationTrigger::Activity, NotificationAlert::Desktop, None);
+            self.trigger_notification(
+                NotificationTrigger::Activity,
+                NotificationAlert::Desktop,
+                None,
+            );
         }
     }
 
@@ -5432,11 +5582,7 @@ impl Terminal {
         }
 
         if bell_visual {
-            self.trigger_notification(
-                NotificationTrigger::Bell,
-                NotificationAlert::Visual,
-                None,
-            );
+            self.trigger_notification(NotificationTrigger::Bell, NotificationAlert::Visual, None);
         }
     }
 
@@ -5535,11 +5681,7 @@ impl Terminal {
 
     /// Record terminal resize
     pub fn record_resize(&mut self, cols: usize, rows: usize) {
-        self.record_event(
-            RecordingEventType::Resize,
-            Vec::new(),
-            Some((cols, rows)),
-        );
+        self.record_event(RecordingEventType::Resize, Vec::new(), Some((cols, rows)));
     }
 
     /// Add a marker/bookmark to the recording
@@ -5593,7 +5735,7 @@ impl Terminal {
                 RecordingEventType::Resize => {
                     if let Some((cols, rows)) = event.metadata {
                         let time = event.timestamp as f64 / 1000.0;
-                        let event_json = serde_json::json!([time, "r", format!("{}x{}", cols, rows)]);
+                        let event_json = serde_json::json!([time, "r", cols, rows]);
                         writeln!(output, "{}", event_json).ok();
                     }
                 }

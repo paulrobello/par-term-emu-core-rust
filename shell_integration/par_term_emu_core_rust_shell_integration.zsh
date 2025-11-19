@@ -13,7 +13,7 @@
 #
 # Usage:
 #   Add to your ~/.zshrc:
-#     source ~/.par_term_emu_core_rust_shell_integration.zsh
+#     source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh"
 
 if [[ -o interactive ]]; then
   if [ "${ITERM_ENABLE_SHELL_INTEGRATION_WITH_TMUX-}""$TERM" != "tmux-256color" -a \

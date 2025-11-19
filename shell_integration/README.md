@@ -29,16 +29,18 @@ cd shell_integration
 Add to `~/.bashrc` or `~/.bash_profile`:
 
 ```bash
-if [ -f "$HOME/.par_term_emu_shell_integration.bash" ]; then
-  source "$HOME/.par_term_emu_shell_integration.bash"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash" ]; then
+  source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash"
 fi
 ```
 
-Then copy the integration script:
+Then copy the integration script into the XDG config directory:
 
 ```bash
-cp par_term_emu_shell_integration.bash ~/.par_term_emu_shell_integration.bash
-source ~/.par_term_emu_shell_integration.bash
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust"
+mkdir -p "$CONFIG_DIR"
+cp par_term_emu_shell_integration.bash "$CONFIG_DIR/shell_integration.bash"
+source "$CONFIG_DIR/shell_integration.bash"
 ```
 
 #### Zsh
@@ -46,16 +48,18 @@ source ~/.par_term_emu_shell_integration.bash
 Add to `~/.zshrc`:
 
 ```zsh
-if [ -f "${ZDOTDIR:-$HOME}/.par_term_emu_shell_integration.zsh" ]; then
-  source "${ZDOTDIR:-$HOME}/.par_term_emu_shell_integration.zsh"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh" ]; then
+  source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh"
 fi
 ```
 
 Then copy the integration script:
 
 ```bash
-cp par_term_emu_shell_integration.zsh ~/.par_term_emu_shell_integration.zsh
-source ~/.par_term_emu_shell_integration.zsh
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust"
+mkdir -p "$CONFIG_DIR"
+cp par_term_emu_shell_integration.zsh "$CONFIG_DIR/shell_integration.zsh"
+source "$CONFIG_DIR/shell_integration.zsh"
 ```
 
 #### Fish
@@ -63,16 +67,25 @@ source ~/.par_term_emu_shell_integration.zsh
 Add to `~/.config/fish/config.fish`:
 
 ```fish
-if test -f "$HOME/.par_term_emu_shell_integration.fish"
-  source "$HOME/.par_term_emu_shell_integration.fish"
+set -l __par_term_emu_config_dir (begin
+    if set -q XDG_CONFIG_HOME
+        echo $XDG_CONFIG_HOME
+    else
+        echo $HOME/.config
+    end
+end)/par-term-emu-core-rust
+if test -f "$__par_term_emu_config_dir/shell_integration.fish"
+  source "$__par_term_emu_config_dir/shell_integration.fish"
 end
 ```
 
 Then copy the integration script:
 
 ```bash
-cp par_term_emu_shell_integration.fish ~/.par_term_emu_shell_integration.fish
-source ~/.par_term_emu_shell_integration.fish
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust"
+mkdir -p "$CONFIG_DIR"
+cp par_term_emu_shell_integration.fish "$CONFIG_DIR/shell_integration.fish"
+source "$CONFIG_DIR/shell_integration.fish"
 ```
 
 ## Advanced Usage

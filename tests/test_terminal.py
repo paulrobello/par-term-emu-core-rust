@@ -786,6 +786,7 @@ def test_strikethrough_attribute():
 def test_da_primary():
     """Test Primary Device Attributes (DA) query"""
     term = Terminal(80, 24)
+    term.process(b'\x1b[62"p')  # Force VT220 for predictable response
     term.process(b"\x1b[c")  # Send Primary DA query
 
     # Check that we got a response
@@ -802,6 +803,7 @@ def test_da_primary():
 def test_da_primary_with_param():
     """Test Primary DA with parameter 0"""
     term = Terminal(80, 24)
+    term.process(b'\x1b[62"p')
     term.process(b"\x1b[0c")
 
     response = term.drain_responses()
@@ -971,6 +973,7 @@ def test_decrqm_unrecognized_mode():
 def test_multiple_queries():
     """Test multiple device queries in sequence"""
     term = Terminal(80, 24)
+    term.process(b'\x1b[62"p')
 
     # Send multiple queries
     term.process(b"\x1b[5n")  # Operating status

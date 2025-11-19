@@ -32,6 +32,11 @@ type printf > /dev/null 2>&1 || die "Shell integration requires the printf binar
 # Get script directory (where integration scripts are located)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
+# Resolve XDG config directory for installed snippets
+XDG_CONFIG_HOME_DEFAULT="${XDG_CONFIG_HOME:-$HOME/.config}"
+APP_CONFIG_DIR="${XDG_CONFIG_HOME_DEFAULT}/par-term-emu-core-rust"
+mkdir -p "$APP_CONFIG_DIR"
+
 # Show help if requested
 if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
   cat <<EOF
@@ -70,7 +75,7 @@ function install_bash() {
     DOTFILE="${HOME}/.profile"
   fi
 
-  INSTALL_FILE="${HOME}/.par_term_emu_core_rust_shell_integration.bash"
+  INSTALL_FILE="${APP_CONFIG_DIR}/shell_integration.bash"
   SOURCE_FILE="${SCRIPT_DIR}/par_term_emu_core_rust_shell_integration.bash"
 
   # Copy integration script
@@ -85,8 +90,8 @@ function install_bash() {
     cat >> "$DOTFILE" <<'EOF'
 
 # par-term-emu-core-rust shell integration
-if [ -f "$HOME/.par_term_emu_core_rust_shell_integration.bash" ]; then
-  source "$HOME/.par_term_emu_core_rust_shell_integration.bash"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash" ]; then
+  source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash"
 fi
 EOF
   fi
@@ -106,7 +111,7 @@ function install_zsh() {
   fi
 
   DOTFILE="${DOTDIR}/.zshrc"
-  INSTALL_FILE="${DOTDIR}/.par_term_emu_core_rust_shell_integration.zsh"
+  INSTALL_FILE="${APP_CONFIG_DIR}/shell_integration.zsh"
   SOURCE_FILE="${SCRIPT_DIR}/par_term_emu_core_rust_shell_integration.zsh"
 
   # Copy integration script
@@ -121,8 +126,8 @@ function install_zsh() {
     cat >> "$DOTFILE" <<'EOF'
 
 # par-term-emu-core-rust shell integration
-if [ -f "${ZDOTDIR:-$HOME}/.par_term_emu_core_rust_shell_integration.zsh" ]; then
-  source "${ZDOTDIR:-$HOME}/.par_term_emu_core_rust_shell_integration.zsh"
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh" ]; then
+  source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh"
 fi
 EOF
   fi
@@ -154,7 +159,7 @@ function install_fish() {
   mkdir -p "$FISH_CONFIG_DIR"
 
   DOTFILE="${FISH_CONFIG_DIR}/config.fish"
-  INSTALL_FILE="${HOME}/.par_term_emu_core_rust_shell_integration.fish"
+  INSTALL_FILE="${APP_CONFIG_DIR}/shell_integration.fish"
   SOURCE_FILE="${SCRIPT_DIR}/par_term_emu_core_rust_shell_integration.fish"
 
   # Copy integration script
@@ -169,8 +174,15 @@ function install_fish() {
     cat >> "$DOTFILE" <<'EOF'
 
 # par-term-emu-core-rust shell integration
-if test -f "$HOME/.par_term_emu_core_rust_shell_integration.fish"
-  source "$HOME/.par_term_emu_core_rust_shell_integration.fish"
+set -l __par_term_emu_config_dir (begin
+    if set -q XDG_CONFIG_HOME
+        echo $XDG_CONFIG_HOME
+    else
+        echo $HOME/.config
+    end
+end)/par-term-emu-core-rust
+if test -f "$__par_term_emu_config_dir/shell_integration.fish"
+    source "$__par_term_emu_config_dir/shell_integration.fish"
 end
 EOF
   fi
@@ -183,6 +195,9 @@ function uninstall_shell() {
   info "Uninstalling shell integration..."
 
   # Remove integration files
+  rm -f "${APP_CONFIG_DIR}/shell_integration.bash"
+  rm -f "${APP_CONFIG_DIR}/shell_integration.zsh"
+  rm -f "${APP_CONFIG_DIR}/shell_integration.fish"
   rm -f "${HOME}/.par_term_emu_core_rust_shell_integration.bash"
   rm -f "${HOME}/.par_term_emu_core_rust_shell_integration.zsh"
   rm -f "${HOME}/.par_term_emu_core_rust_shell_integration.fish"

@@ -13,7 +13,8 @@
 #
 # Usage:
 #   Add to your ~/.config/fish/config.fish:
-#     source ~/.par_term_emu_core_rust_shell_integration.fish
+#     set -l _pte_dir (begin; if set -q XDG_CONFIG_HOME; echo $XDG_CONFIG_HOME; else; echo $HOME/.config; end; end)/par-term-emu-core-rust
+#     source "$_pte_dir/shell_integration.fish"
 #
 # Requires: Fish 2.3 or later
 

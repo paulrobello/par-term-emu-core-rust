@@ -13,7 +13,7 @@
 #
 # Usage:
 #   Add to your ~/.bashrc or ~/.bash_profile:
-#     source ~/.par_term_emu_core_rust_shell_integration.bash
+#     source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash"
 
 # Only install if:
 # - Running in interactive mode

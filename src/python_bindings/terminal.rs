@@ -3401,7 +3401,10 @@ impl PyTerminal {
     ///     List of PyInlineImage at the position
     fn get_images_at(&self, col: usize, row: usize) -> PyResult<Vec<super::types::PyInlineImage>> {
         let images = self.inner.get_images_at(col, row);
-        Ok(images.iter().map(super::types::PyInlineImage::from).collect())
+        Ok(images
+            .iter()
+            .map(super::types::PyInlineImage::from)
+            .collect())
     }
 
     /// Get all inline images
@@ -3410,7 +3413,10 @@ impl PyTerminal {
     ///     List of all PyInlineImage
     fn get_all_images(&self) -> PyResult<Vec<super::types::PyInlineImage>> {
         let images = self.inner.get_all_images();
-        Ok(images.iter().map(super::types::PyInlineImage::from).collect())
+        Ok(images
+            .iter()
+            .map(super::types::PyInlineImage::from)
+            .collect())
     }
 
     /// Delete image by ID
@@ -3462,7 +3468,10 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     PyBenchmarkResult with timing statistics
-    fn benchmark_rendering(&mut self, iterations: u64) -> PyResult<super::types::PyBenchmarkResult> {
+    fn benchmark_rendering(
+        &mut self,
+        iterations: u64,
+    ) -> PyResult<super::types::PyBenchmarkResult> {
         let result = self.inner.benchmark_rendering(iterations);
         Ok(super::types::PyBenchmarkResult::from(&result))
     }
@@ -3503,7 +3512,10 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     PyBenchmarkSuite with all benchmark results
-    fn run_benchmark_suite(&mut self, suite_name: String) -> PyResult<super::types::PyBenchmarkSuite> {
+    fn run_benchmark_suite(
+        &mut self,
+        suite_name: String,
+    ) -> PyResult<super::types::PyBenchmarkSuite> {
         let suite = self.inner.run_benchmark_suite(suite_name);
         Ok(super::types::PyBenchmarkSuite::from(&suite))
     }
@@ -3669,6 +3681,28 @@ impl PyTerminal {
     fn clear_clipboard_sync_events(&mut self) -> PyResult<()> {
         self.inner.clear_clipboard_sync_events();
         Ok(())
+    }
+
+    /// Set maximum clipboard sync events retained (0 disables buffering)
+    fn set_max_clipboard_sync_events(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_clipboard_sync_events(max);
+        Ok(())
+    }
+
+    /// Get maximum clipboard sync events retained
+    fn get_max_clipboard_sync_events(&self) -> PyResult<usize> {
+        Ok(self.inner.max_clipboard_sync_events())
+    }
+
+    /// Set maximum bytes cached per clipboard sync event (0 clears content)
+    fn set_max_clipboard_event_bytes(&mut self, max_bytes: usize) -> PyResult<()> {
+        self.inner.set_max_clipboard_event_bytes(max_bytes);
+        Ok(())
+    }
+
+    /// Get maximum bytes cached per clipboard sync event
+    fn get_max_clipboard_event_bytes(&self) -> PyResult<usize> {
+        Ok(self.inner.max_clipboard_event_bytes())
     }
 
     /// Set remote session ID
@@ -3899,6 +3933,17 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Set maximum number of OSC 9/777 notifications to retain (0 disables buffering)
+    fn set_max_notifications(&mut self, max: usize) -> PyResult<()> {
+        self.inner.set_max_notifications(max);
+        Ok(())
+    }
+
+    /// Get maximum retained OSC 9/777 notifications
+    fn get_max_notifications(&self) -> PyResult<usize> {
+        Ok(self.inner.max_notifications())
+    }
+
     /// Mark a notification as delivered
     ///
     /// Args:
@@ -3989,7 +4034,6 @@ impl PyTerminal {
         Ok(self
             .inner
             .stop_recording()
-            .as_ref()
             .map(super::types::PyRecordingSession::from))
     }
 
@@ -4056,11 +4100,20 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Asciicast format string
-    fn export_asciicast(&self, _py: Python) -> PyResult<String> {
-        if let Some(session) = self.inner.get_recording_session() {
-            Ok(self.inner.export_asciicast(session))
+    #[pyo3(signature = (session=None))]
+    fn export_asciicast(
+        &self,
+        session: Option<&super::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            Ok(self.inner.export_asciicast(&session.inner))
+        } else if let Some(active) = self.inner.get_recording_session() {
+            Ok(self.inner.export_asciicast(active))
         } else {
-            Err(PyValueError::new_err("No active recording session"))
+            Err(PyValueError::new_err(
+                "No active recording session (pass session=stop_recording())",
+            ))
         }
     }
 
@@ -4068,11 +4121,20 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     JSON format string
-    fn export_json(&self, _py: Python) -> PyResult<String> {
-        if let Some(session) = self.inner.get_recording_session() {
-            Ok(self.inner.export_json(session))
+    #[pyo3(signature = (session=None))]
+    fn export_json(
+        &self,
+        session: Option<&super::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            Ok(self.inner.export_json(&session.inner))
+        } else if let Some(active) = self.inner.get_recording_session() {
+            Ok(self.inner.export_json(active))
         } else {
-            Err(PyValueError::new_err("No active recording session"))
+            Err(PyValueError::new_err(
+                "No active recording session (pass session=stop_recording())",
+            ))
         }
     }
 }

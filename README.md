@@ -262,9 +262,9 @@ cd shell_integration
 
 After installation, restart your shell or run:
 ```bash
-source ~/.par_term_emu_core_rust_shell_integration.bash  # for bash
-source ~/.par_term_emu_core_rust_shell_integration.zsh   # for zsh
-source ~/.par_term_emu_core_rust_shell_integration.fish  # for fish
+source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash"  # bash
+source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh"   # zsh
+source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.fish"  # fish
 ```
 
 See [shell_integration/README.md](shell_integration/README.md) for detailed information, advanced usage, and customization options.
@@ -824,8 +824,25 @@ term.check_activity()  # Check if activity occurred after inactivity
 # Clear notification events
 term.clear_notification_events()
 
+# Clamp OSC 9/777 backlog (older notifications get dropped once the cap is hit)
+term.set_max_notifications(64)
+print(f"Notification buffer: {term.get_max_notifications()} entries")
+
 # Handle bell events with configured notifications
 term.handle_bell_notification()  # Triggers configured bell alerts
+```
+
+### Clipboard Sync Controls
+
+Limit how much clipboard data is preserved for diagnostics to avoid leaking large or sensitive payloads:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+term.set_max_clipboard_sync_events(64)  # Drop oldest events past 64
+term.set_max_clipboard_event_bytes(2048)  # Truncate payloads above 2 KiB
+print(term.get_max_clipboard_sync_events(), term.get_max_clipboard_event_bytes())
 ```
 
 ### Session Recording and Replay
@@ -875,12 +892,12 @@ if final_session:
     print(f"Total events: {final_session.event_count}")
 
     # Export to asciicast v2 format (asciinema compatible)
-    asciicast = term.export_asciicast()
+    asciicast = term.export_asciicast(session=final_session)
     with open("session.cast", "w") as f:
         f.write(asciicast)
 
     # Export to JSON format
-    json_export = term.export_json()
+    json_export = term.export_json(session=final_session)
     with open("session.json", "w") as f:
         f.write(json_export)
 
@@ -905,7 +922,7 @@ with PtyTerminal(80, 24) as pty:
     session = pty.stop_recording()
     if session:
         # Save asciicast for playback with asciinema
-        asciicast = pty.export_asciicast()
+        asciicast = pty.export_asciicast(session=session)
         with open("shell_session.cast", "w") as f:
             f.write(asciicast)
 ```

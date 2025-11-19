@@ -215,7 +215,7 @@ impl Terminal {
                         if let Ok(message) = std::str::from_utf8(params[1]) {
                             let notification =
                                 Notification::new(String::new(), message.to_string());
-                            self.notifications.push(notification);
+                            self.enqueue_notification(notification);
                         }
                     }
                 }
@@ -231,7 +231,7 @@ impl Terminal {
                                 ) {
                                     let notification =
                                         Notification::new(title.to_string(), message.to_string());
-                                    self.notifications.push(notification);
+                                    self.enqueue_notification(notification);
                                 }
                             }
                         }
