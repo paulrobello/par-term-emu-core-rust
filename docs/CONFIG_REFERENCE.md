@@ -12,8 +12,10 @@ This document covers the **terminal core configuration** (Rust library internals
 - [Terminal Modes](#terminal-modes)
 - [Core Mouse Configuration](#core-mouse-configuration)
 - [Core Security Settings](#core-security-settings)
+- [Sixel Resource Limits](#sixel-resource-limits)
 - [Keyboard Protocol](#keyboard-protocol)
 - [Color Configuration](#color-configuration)
+- [Terminal Notification Configuration](#terminal-notification-configuration)
 - [Configuration Validation](#configuration-validation)
 - [Configuration Best Practices](#configuration-best-practices)
 - [Common Configuration Patterns](#common-configuration-patterns)
@@ -53,7 +55,7 @@ These parameters must be provided when creating a new Terminal instance.
 
 **Python Example:**
 ```python
-from par_term_emu import Terminal
+from par_term_emu_core_rust import Terminal
 
 # Create 80x24 terminal with default scrollback
 term = Terminal(cols=80, rows=24)
@@ -128,6 +130,12 @@ These modes control terminal behavior and are typically set via escape sequences
 | Insert Mode | `CSI 4 h/l` (IRM) | `false` | Insert vs replace mode for character input |
 | Line Feed Mode | `CSI 20 h/l` (LNM) | `false` | LF does CR+LF (true) vs LF only (false) |
 | Character Protection | `CSI 0/1 " q` (DECSCA) | `false` | Mark characters as protected from erasure |
+| Attribute Change Extent | `CSI Ps * x` (DECSACE) | `2` | 0/1: stream mode, 2: rectangle mode (default) |
+
+**Notes:**
+- DECSACE controls how SGR attributes apply in rectangular operations
+- Stream mode (0/1): attributes change affects character stream
+- Rectangle mode (2): attributes apply only within rectangle bounds
 
 ### Screen Modes
 
@@ -150,6 +158,32 @@ These modes control terminal behavior and are typically set via escape sequences
 |------|-------------|---------|-------------|
 | Bracketed Paste | `CSI ? 2004 h/l` | `false` | Wrap pasted content in escape sequences |
 | Synchronized Updates | `CSI ? 2026 h/l` | `false` | Batch screen updates for flicker-free rendering |
+
+### Advanced VT Settings
+
+These settings control VT conformance and terminal bell behavior:
+
+| Setting | Type | Default | VT Sequence | Description |
+|---------|------|---------|-------------|-------------|
+| Conformance Level | `u16` | VT520 | `CSI 6x ; y " p` | VT100/VT220/VT320/VT420/VT520 conformance level |
+| Warning Bell Volume | `u8` | 4 | `CSI Ps SP t` (DECSWBV) | Volume for warning bells (0=off, 1-8=volume) |
+| Margin Bell Volume | `u8` | 4 | `CSI Ps SP u` (DECSMBV) | Volume for margin bells (0=off, 1-8=volume) |
+
+**Python API:**
+```python
+# Set conformance level
+term.set_conformance_level(level=520, c1_mode=0)  # VT520, 7-bit C1 controls
+
+# Configure bell volumes
+term.set_warning_bell_volume(5)  # Medium volume
+term.set_margin_bell_volume(3)   # Low volume
+```
+
+**Notes:**
+- Conformance level affects which VT features are available
+- Higher levels include features from lower levels
+- C1 mode: 0 = 7-bit, 1 = 8-bit control characters
+- Bell volumes are legacy VT features, separate from NotificationConfig
 
 ---
 
@@ -341,20 +375,102 @@ Additional color configuration options for iTerm2 feature parity:
 
 Control whether custom colors are used instead of defaults:
 
-| Flag | Type | Default | Description |
-|------|------|---------|-------------|
-| `use_bold_color` | `bool` | `false` | Use custom bold color instead of bright variant |
-| `use_underline_color` | `bool` | `false` | Use custom underline color (SGR 58) |
-| `use_cursor_guide` | `bool` | `false` | Show cursor guide (column/row highlight) |
-| `use_selected_text_color` | `bool` | `false` | Use custom selection text color |
-| `smart_cursor_color` | `bool` | `false` | Auto-adjust cursor color based on background |
-| `bold_brightening` | `bool` | `true` | Bold ANSI colors 0-7 brighten to 8-15 |
+| Flag | Type | Default | Python API | Description |
+|------|------|---------|------------|-------------|
+| `use_bold_color` | `bool` | `false` | `set_use_bold_color(bool)` | Use custom bold color instead of bright variant |
+| `use_underline_color` | `bool` | `false` | `set_use_underline_color(bool)` | Use custom underline color (SGR 58) |
+| `use_cursor_guide` | `bool` | `false` | Not exposed | Show cursor guide (column/row highlight) |
+| `use_selected_text_color` | `bool` | `false` | Not exposed | Use custom selection text color |
+| `smart_cursor_color` | `bool` | `false` | Not exposed | Auto-adjust cursor color based on background |
+| `bold_brightening` | `bool` | `true` | Not exposed (Rust only) | Bold ANSI colors 0-7 brighten to 8-15 |
 
 **Notes:**
 - These settings provide feature parity with iTerm2's color configuration
 - Colors can be queried via OSC sequences (10, 11, 12, etc.)
 - Custom colors only apply when corresponding `use_*` flags are enabled
 - Bold brightening is a legacy feature for ANSI color compatibility
+- Some flags (`use_cursor_guide`, `use_selected_text_color`, `smart_cursor_color`, `bold_brightening`) are currently only accessible via Rust API
+
+---
+
+## Terminal Notification Configuration
+
+Terminal supports comprehensive notification features for various events. This configuration is separate from the notification content itself (OSC 9/777 sequences).
+
+### NotificationConfig Structure
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `bell_desktop` | `bool` | `false` | Enable desktop notifications on bell (BEL/\x07) |
+| `bell_sound` | `u8` | `0` | Bell sound volume (0 = disabled, 1-100 = volume level) |
+| `bell_visual` | `bool` | `true` | Enable visual alert on bell (flash screen) |
+| `activity_enabled` | `bool` | `false` | Enable notifications when terminal becomes active after inactivity |
+| `activity_threshold` | `u64` | `10` | Activity threshold in seconds (inactivity before triggering) |
+| `silence_enabled` | `bool` | `false` | Enable notifications when terminal becomes silent after activity |
+| `silence_threshold` | `u64` | `300` | Silence threshold in seconds (activity before silence notification) |
+
+### Python API
+
+```python
+# Get current notification configuration
+config = term.get_notification_config()
+print(f"Bell desktop: {config.bell_desktop}")
+print(f"Bell sound: {config.bell_sound}")
+
+# Set notification configuration
+from par_term_emu_core_rust._native import NotificationConfig
+config = NotificationConfig(
+    bell_desktop=True,
+    bell_sound=50,
+    bell_visual=True,
+    activity_enabled=True,
+    activity_threshold=30,
+    silence_enabled=True,
+    silence_threshold=600
+)
+term.set_notification_config(config)
+
+# Manually trigger notifications
+term.trigger_notification("Bell", "Desktop", "Custom bell message")
+term.trigger_notification("Activity", "Sound(75)", None)
+
+# Register and trigger custom notifications
+term.register_custom_trigger(1, "Build completed")
+term.trigger_custom_notification(1, "Desktop")
+
+# Monitor notification events
+events = term.get_notification_events()
+for event in events:
+    print(f"Trigger: {event.trigger}, Alert: {event.alert}")
+
+# Clear notification history
+term.clear_notification_events()
+
+# Configure max retained OSC 9/777 notifications
+term.set_max_notifications(100)
+max_notifs = term.get_max_notifications()
+```
+
+### Notification Types
+
+**Triggers:**
+- `Bell` - Terminal bell (BEL/\x07)
+- `Activity` - Terminal becomes active after inactivity period
+- `Silence` - Terminal becomes silent after activity period
+- `Custom(id)` - User-defined custom triggers
+
+**Alerts:**
+- `Desktop` - System desktop notification
+- `Sound(volume)` - Audio notification with volume (0-100)
+- `Visual` - Visual flash/alert in terminal
+
+### Usage Notes
+
+- Notification configuration is checked on each event (bell, activity check, silence check)
+- Activity/silence detection requires manual polling via `check_activity()` / `check_silence()`
+- Desktop notifications require OS support and permissions
+- Visual alerts are always enabled by default for accessibility
+- Custom triggers allow application-specific notifications
 
 ---
 

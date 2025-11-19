@@ -150,7 +150,7 @@ Features:
 - `color_utils.rs` - Advanced color manipulation and conversion utilities
   - Minimum contrast adjustment (iTerm2-compatible)
   - Perceived brightness calculation (NTSC formula)
-  - Color space conversions (RGB, HSL)
+  - Color space conversions (RGB, HSL, HSV)
   - WCAG contrast ratio calculations
   - Bold brightening support for enhanced readability
 - `text_utils.rs` - Text processing and Unicode handling
@@ -165,6 +165,13 @@ Features:
   - Color preservation (foreground, background, attributes)
   - Monospace font stack: Monaco, Menlo, Ubuntu Mono, Consolas, monospace
 - `debug.rs` - Debug utilities and logging helpers
+- `conformance_level.rs` - VT terminal conformance level support
+  - VT100/VT220/VT320/VT420/VT520 level definitions
+  - Feature compatibility management
+- `tmux_control.rs` - Tmux control protocol support
+  - Control mode protocol parsing (`tmux -C`)
+  - Asynchronous notification handling
+  - Pane output management
 
 **PTY Support**
 - `pty_session.rs` - PTY session management with portable-pty
@@ -300,12 +307,12 @@ graph TD
 The Python bindings are organized in `src/python_bindings/` with multiple submodules:
 - `terminal.rs` - PyTerminal struct and its implementation
 - `pty.rs` - PyPtyTerminal struct and its implementation (PTY support)
-- `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic)
-- `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle)
+- `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more)
+- `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode)
 - `conversions.rs` - Type conversions and parsing utilities
-- `color_utils.rs` - Python bindings for color manipulation utilities
+- `color_utils.rs` - Python bindings for color manipulation utilities (contrast adjustment, color space conversions, WCAG compliance)
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module.
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 60+ classes and 18 color utility functions.
 
 ```rust
 #[pyclass(name = "Terminal")]
@@ -375,8 +382,8 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 699 unit and integration tests
-- **Python tests:** Comprehensive test suite across multiple test modules (PTY tests excluded in CI)
+- **Rust tests:** 809 unit and integration tests
+- **Python tests:** 168+ test functions across 10 test modules (PTY tests excluded in CI)
 - **Total:** Comprehensive coverage ensuring reliability
 
 ### Rust Tests
@@ -636,43 +643,48 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3` - Python bindings
-- `vte` - ANSI parser
-- `unicode-width` - Character width calculation
-- `portable-pty` - PTY support
-- `base64` - Base64 encoding/decoding
-- `bitflags` - Bit flag management
+- `pyo3` (0.27.1) - Python bindings
+- `vte` (0.15.0) - ANSI parser
+- `unicode-width` (0.2.2) - Character width calculation
+- `portable-pty` (0.9.0) - PTY support
+- `base64` (0.22.1) - Base64 encoding/decoding
+- `bitflags` (2.10.0) - Bit flag management
+- `regex` (1.11.1) - Regular expression support
+- `serde` (1.0) + `serde_json` (1.0) - Serialization support
 
 **Screenshot/rendering support:**
-- `image` - Image encoding/decoding (PNG, JPEG, BMP)
-- `swash` - Pure Rust font rendering and text shaping with color emoji support
+- `image` (0.25.9) - Image encoding/decoding (PNG, JPEG, BMP)
+- `swash` (0.2.6) - Pure Rust font rendering and text shaping with color emoji support
 
 **Development dependencies:**
-- `proptest` - Property-based testing framework
+- `proptest` (1.9.0) - Property-based testing framework
 
 **Platform-specific:**
-- `libc` - Unix system calls (Unix only)
+- `libc` (0.2.177) - Unix system calls (Unix only)
 
-> **📝 Note:** See `Cargo.toml` for specific version requirements
+> **📝 Note:** See `Cargo.toml` for current version requirements
 
 ### Python
 
 **Build and development tools:**
-- `maturin` - Build system for PyO3 bindings
+- `maturin` (>=1.10.1) - Build system for PyO3 bindings
 - `uv` - Fast Python package installer and resolver
 
 **Testing:**
-- `pytest` - Testing framework
-- `pytest-timeout` - Test timeout protection
+- `pytest` (>=9.0.1) - Testing framework
+- `pytest-timeout` (>=2.4.0) - Test timeout protection
 
 **Code quality:**
-- `ruff` - Linting and formatting
-- `pyright` - Static type checking
-- `pre-commit` - Git hook management
+- `ruff` (>=0.14.5) - Linting and formatting
+- `pyright` (>=1.1.407) - Static type checking
+- `pre-commit` (>=4.4.0) - Git hook management
+
+**Optional dependencies:**
+- `pillow` (>=12.0.0) - Image processing for sixel examples and screenshot features
 
 **Python version requirements:** 3.12+
 
-> **📝 Note:** See `pyproject.toml` for specific version requirements
+> **📝 Note:** See `pyproject.toml` for current version requirements
 
 > **Note**: This is a core library. For a full-featured TUI application built on this library, see the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/)), which uses the Textual framework.
 
@@ -685,16 +697,14 @@ The project uses conditional PyO3 feature compilation to support both production
 **Cargo.toml features:**
 ```toml
 [dependencies]
-pyo3 = { version = "..." }
+pyo3 = "0.27.1"
 
 [dev-dependencies]
-pyo3 = { version = "...", features = ["auto-initialize"] }
+pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
 
 [features]
 default = ["pyo3/extension-module"]
 ```
-
-> **📝 Note:** See `Cargo.toml` for current PyO3 version
 
 **Build commands:**
 - **Development build:** `maturin develop --release` (uses `extension-module` feature)

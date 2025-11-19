@@ -1,10 +1,10 @@
 # Font Support for Screenshots
 
-The screenshot functionality includes an **embedded JetBrains Mono font**, so no font installation is required for basic usage. The library automatically works out-of-the-box on all platforms.
+The screenshot functionality includes **two embedded fonts**, so no font installation is required for basic usage. The library automatically works out-of-the-box on all platforms without any external dependencies.
 
 ## Table of Contents
 - [Overview](#overview)
-- [Embedded Font (Default)](#embedded-font-default)
+- [Embedded Fonts (Default)](#embedded-fonts-default)
 - [Emoji & CJK Fallback Fonts](#emoji--cjk-fallback-fonts)
 - [Installation Options (Optional)](#installation-options-optional)
   - [Option 1: Install System Fonts](#option-1-install-system-fonts-recommended-for-emojicjk)
@@ -16,80 +16,119 @@ The screenshot functionality includes an **embedded JetBrains Mono font**, so no
 
 ## Overview
 
-**No installation required!** Screenshots work immediately with the embedded font.
+**No installation required!** Screenshots work immediately with two embedded fonts that provide comprehensive character coverage.
 
-However, you may want to install additional fonts for:
-- **Emoji rendering**: System emoji fonts provide better color emoji support
-- **CJK characters**: System CJK fonts provide comprehensive character coverage
+However, you may want to install additional system fonts for:
+- **Color emoji**: System emoji fonts provide better color emoji support (embedded emoji are monochrome)
+- **Extended CJK**: System CJK fonts provide comprehensive East Asian character coverage
 - **Custom styling**: Use your preferred monospace font
 
-## Embedded Font (Default)
+## Embedded Fonts (Default)
 
-**JetBrains Mono Regular** (OFL-1.1 license, ~274 KB) is bundled with the library and provides:
+The library includes two embedded fonts that work without any external dependencies:
+
+### 1. JetBrains Mono Regular (Main Font)
+**License**: OFL-1.1 (SIL Open Font License)
+**Size**: ~274 KB
+
+Features:
 - Programming ligatures (=>, !=, >=, etc.)
 - Full box drawing character support (┌─┐│└┘)
-- Excellent Unicode coverage
+- Excellent Unicode coverage for Latin, Cyrillic, Greek
 - Clean, modern design optimized for code
 
-The embedded font is used automatically when no `font_path` is specified:
+### 2. Noto Emoji Regular (Emoji Fallback)
+**License**: OFL-1.1 (SIL Open Font License)
+**Size**: ~419 KB
+
+Features:
+- Universal emoji coverage (all Unicode emoji)
+- Monochrome outline rendering (grayscale)
+- Automatic fallback when system color emoji fonts are not available
+- Works on all platforms without additional dependencies
+
+Both fonts are used automatically when no `font_path` is specified:
 
 ```python
-term.screenshot()  # Uses embedded JetBrains Mono - no setup needed!
+term.screenshot()  # Uses embedded JetBrains Mono + Noto Emoji - no setup needed!
 ```
 
 ## Emoji & CJK Fallback Fonts
 
-The library uses a smart fallback system to render all characters correctly:
+The library uses a smart multi-tier fallback system to render all characters correctly:
 
 ```mermaid
 graph TD
     Start[Render Character]
-    CheckChar{Character Type?}
+    TryMain[Try Main Font<br/>JetBrains Mono or custom]
+    CheckSuccess{Glyph Found?}
 
-    Main[Use Main Font<br/>JetBrains Mono or font_path]
-    EmojiSearch[Search System Emoji Fonts]
-    CJKSearch[Search System CJK Fonts]
-    EmojiFallback[Embedded Noto Emoji<br/>Monochrome]
+    CheckType{Character Type?}
+    TrySystemEmoji[Try System Emoji Fonts<br/>Apple/Segoe/Noto Color]
+    TryEmbeddedEmoji[Use Embedded Noto Emoji<br/>Monochrome]
+    TryCJK[Try System CJK Fonts<br/>Arial Unicode/PingFang/MS Gothic]
     Tofu[Render as Tofu Box □]
+    Success[Render Glyph]
 
-    Start --> CheckChar
-    CheckChar -->|Regular ASCII| Main
-    CheckChar -->|Emoji 😀| EmojiSearch
-    CheckChar -->|CJK 中文| CJKSearch
+    Start --> TryMain
+    TryMain --> CheckSuccess
+    CheckSuccess -->|Yes| Success
+    CheckSuccess -->|No or Empty Bitmap| CheckType
 
-    EmojiSearch -->|Found| Main
-    EmojiSearch -->|Not Found| EmojiFallback
+    CheckType -->|Emoji 😀| TrySystemEmoji
+    CheckType -->|CJK 中文| TryCJK
+    CheckType -->|Other| Success
 
-    CJKSearch -->|Found| Main
-    CJKSearch -->|Not Found| Tofu
+    TrySystemEmoji -->|Found| Success
+    TrySystemEmoji -->|Not Found| TryEmbeddedEmoji
+    TryEmbeddedEmoji --> Success
+
+    TryCJK -->|Found| Success
+    TryCJK -->|Not Found| Tofu
+    Tofu --> Success
 
     style Start fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
-    style Main fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style EmojiSearch fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style CJKSearch fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
-    style EmojiFallback fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style TryMain fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style TrySystemEmoji fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style TryCJK fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style TryEmbeddedEmoji fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Success fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Tofu fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
-    style CheckChar fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style CheckSuccess fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style CheckType fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
-For emoji and CJK characters, the library automatically searches for system fonts in this order:
+### Font Fallback Chain
 
-**Emoji fonts** (for color emoji):
-- macOS: Apple Color Emoji, Arial Unicode
-- Linux: NotoColorEmoji, NotoEmoji, DejaVuSans
-- Windows: Segoe UI Emoji, Segoe UI Symbol
-- Embedded fallback: Noto Emoji Regular (monochrome, ~419 KB)
+**For Emoji Characters** (automatic fallback chain):
+1. **Main font** (JetBrains Mono or custom `font_path`)
+2. **System color emoji fonts**:
+   - macOS: Apple Color Emoji, Arial Unicode
+   - Linux: NotoColorEmoji, NotoEmoji, DejaVuSans
+   - Windows: Segoe UI Emoji, Segoe UI Symbol
+3. **Embedded Noto Emoji** (monochrome, always available)
 
-**CJK fonts** (for Chinese, Japanese, Korean):
-- macOS: Arial Unicode, PingFang, Hiragino Sans GB, AppleSDGothicNeo
-- Linux: NotoSansCJK, DejaVuSans
-- Windows: MS Gothic, MS YaHei, Malgun Gothic
+**For CJK Characters** (Chinese, Japanese, Korean):
+1. **Main font** (JetBrains Mono or custom `font_path`)
+2. **System CJK fonts** (loaded in priority order):
+   - macOS: Arial Unicode, PingFang, Hiragino Sans GB, AppleSDGothicNeo
+   - Linux: NotoSansCJK, DejaVuSans
+   - Windows: MS Gothic, MS YaHei, Malgun Gothic
+3. **Tofu box (□)** if no font has the glyph
 
-If system fonts aren't available, emoji/CJK characters will render using the embedded fallback fonts or as tofu boxes (□).
+### Behavior Summary
+
+- **Regular text**: Always uses main font (embedded JetBrains Mono or custom)
+- **Emoji**: System color fonts preferred, falls back to embedded monochrome
+- **CJK**: System fonts preferred for comprehensive coverage
+- **No system fonts needed**: Works out-of-the-box with embedded fonts
 
 ## Installation Options (Optional)
 
-Installation is **optional** - the embedded font works great! Only install additional fonts if you need better emoji/CJK support or want to use a custom font.
+Installation is **optional** - the embedded fonts work great! Only install additional system fonts if you need:
+- Color emoji rendering (embedded emoji are monochrome)
+- Extensive CJK character coverage
+- A custom monospace font for your screenshots
 
 ### Option 1: Install System Fonts (Recommended for Emoji/CJK)
 
@@ -155,15 +194,17 @@ term.screenshot(font_path="~/.local/share/fonts/Hack-Regular.ttf")
 
 ### Option 3: Specify a Custom Font
 
-You can use any TTF/OTF monospace font by specifying its path:
+You can use any TTF/OTF monospace font by specifying its path. When you provide a custom font, it replaces JetBrains Mono as the main font, but emoji/CJK fallback still works:
 
 ```python
-# Use a custom font
+# Use a custom font (replaces JetBrains Mono)
 term.screenshot(font_path="/path/to/your/font.ttf")
 
-# Or use embedded default (JetBrains Mono)
+# Use embedded defaults (JetBrains Mono + Noto Emoji)
 term.screenshot()  # No font_path needed!
 ```
+
+**Note**: Custom fonts are used for the main text, but emoji and CJK characters will still fall back to system fonts or the embedded Noto Emoji font as needed.
 
 ### Option 4: Download Fonts Manually
 
@@ -182,12 +223,12 @@ term.screenshot(font_path="/path/to/downloaded/font.ttf")
 
 ## Docker/Container Environments
 
-**No setup required!** The embedded JetBrains Mono font works in Docker containers out-of-the-box.
+**No setup required!** The embedded fonts (JetBrains Mono + Noto Emoji) work in Docker containers out-of-the-box without any external dependencies.
 
-For better emoji/CJK support in containers, optionally install system fonts:
+For better color emoji and extended CJK support in containers, optionally install system fonts:
 
 ```dockerfile
-# Optional: Add emoji and CJK fonts for better character coverage
+# Optional: Add color emoji and CJK fonts for enhanced character coverage
 RUN apt-get update && \
     apt-get install -y \
         fonts-noto-color-emoji \
@@ -198,21 +239,34 @@ RUN apt-get update && \
 RUN apt-get update && apt-get install -y fonts-dejavu-core && rm -rf /var/lib/apt/lists/*
 ```
 
-The library will work with or without these fonts - they only improve emoji/CJK rendering.
+**Benefits of adding system fonts in containers:**
+- Color emoji instead of monochrome (Noto Color Emoji vs embedded Noto Emoji)
+- More comprehensive CJK character coverage
+- The library works perfectly without them - embedded fonts handle all basic needs
 
 ## Troubleshooting
 
 ### Screenshots work without any font installation
 
-The library includes an embedded JetBrains Mono font. You should **never** see a "No system monospace font found" error. If you do, please file a bug report!
+The library includes two embedded fonts (JetBrains Mono + Noto Emoji). You should **never** see a "No system monospace font found" error. If you do, please file a bug report!
 
-### Emoji or CJK characters appear as boxes (□)
+### Emoji appear as monochrome/grayscale instead of color
 
-This is normal if you don't have system emoji/CJK fonts installed. Solutions:
+This is expected behavior when system color emoji fonts are not installed:
+- The embedded Noto Emoji font provides monochrome (grayscale) emoji rendering
+- For color emoji, install system fonts (see [Option 1](#option-1-install-system-fonts-recommended-for-emojicjk))
 
-1. **Install system fonts** (see [Option 1](#option-1-install-system-fonts-recommended-for-emojicjk) above)
-2. **Accept the limitation** - The embedded Noto Emoji fallback provides monochrome emoji
-3. **Use a comprehensive font** - Specify a font with good emoji/CJK coverage via `font_path`
+**On macOS/Windows**: System color emoji fonts are pre-installed, so you should see color emoji automatically.
+
+**On Linux**: Install `fonts-noto-color-emoji` for color emoji support.
+
+### CJK characters appear as boxes (□)
+
+This happens when neither the main font nor system CJK fonts have the required glyph:
+
+1. **Install system fonts** (see [Option 1](#option-1-install-system-fonts-recommended-for-emojicjk) above) - Recommended
+2. **Use a comprehensive font** - Specify a font with good CJK coverage via `font_path` (e.g., Arial Unicode)
+3. **Accept the limitation** - Some obscure CJK characters may not render without proper fonts
 
 ### Check available fonts
 
@@ -227,10 +281,20 @@ ls /System/Library/Fonts/
 fc-list | grep -i "noto\|emoji\|cjk"
 ```
 
-### Font priority order
+### Font rendering priority
 
-The library searches for fonts in this order:
+The library uses this priority order for rendering characters:
 
-1. **Main text font**: `font_path` parameter → Embedded JetBrains Mono
-2. **Emoji fallback**: System color emoji fonts → Embedded Noto Emoji (monochrome)
-3. **CJK fallback**: System CJK fonts → Main font (may show tofu boxes)
+**Main text (ASCII, Latin, Cyrillic, Greek, box-drawing)**:
+1. Custom `font_path` (if specified)
+2. Embedded JetBrains Mono (default)
+
+**Emoji characters** (🎉 😀 🚀):
+1. Custom `font_path` (if it contains emoji glyphs)
+2. System color emoji fonts (Apple Color Emoji, Noto Color Emoji, Segoe UI Emoji)
+3. Embedded Noto Emoji (monochrome, always available)
+
+**CJK characters** (中文, 日本語, 한글):
+1. Custom `font_path` (if it contains CJK glyphs)
+2. System CJK fonts (Arial Unicode, PingFang, Noto Sans CJK, MS Gothic)
+3. Tofu box (□) if no font has the glyph

@@ -7,9 +7,20 @@
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/par_term_emu_core_rust)
 ![PyPI - License](https://img.shields.io/pypi/l/par_term_emu_core_rust)
 
-## What's New in 0.6.0
+## What's New in 0.7.0
 
-### Terminal Notifications (Feature 37)
+### Enhanced Configuration and Buffer Controls
+
+Version 0.7.0 adds configurable limits for system resources and improves XDG compliance:
+
+- **Notification Buffer Limits**: Control OSC 9/777 notification backlog with `set_max_notifications()`
+- **Clipboard Sync Controls**: Limit clipboard event history and payload sizes to prevent memory leaks
+  - `set_max_clipboard_sync_events()`: Cap clipboard event history
+  - `set_max_clipboard_event_bytes()`: Truncate large clipboard payloads
+- **XDG Base Directory Compliance**: Shell integration now follows XDG standards
+- **Improved Session Export**: Enhanced `export_asciicast()` and `export_json()` with explicit session parameters
+
+### Terminal Notifications
 
 Advanced notification system for terminal events:
 
@@ -21,7 +32,7 @@ Advanced notification system for terminal events:
 - **Custom Triggers**: Register and trigger custom notifications with IDs
 - **Full Python API**: Complete control over notifications from Python
 
-### Session Recording and Replay (Feature 24)
+### Session Recording and Replay
 
 Record and replay terminal sessions with timing information:
 
@@ -1471,7 +1482,7 @@ See the `examples/` directory for complete usage examples:
 
 **Important**: When using PTY functionality, follow security best practices to prevent command injection and other vulnerabilities.
 
-See [SECURITY.md](docs/SECURITY.md) for detailed security guidelines including:
+See [docs/SECURITY.md](docs/SECURITY.md) for detailed security guidelines including:
 - Command injection prevention
 - Environment variable security
 - Input validation
@@ -1522,7 +1533,16 @@ The library consists of several key components:
 
 ## Version History
 
-### 0.6.0 (Current)
+### 0.7.0 (Current)
+- **Buffer Controls**: Configurable limits for notification and clipboard sync buffers
+  - `set_max_notifications()` / `get_max_notifications()`: Limit OSC 9/777 notification backlog
+  - `set_max_clipboard_sync_events()` / `get_max_clipboard_sync_events()`: Limit clipboard event history
+  - `set_max_clipboard_event_bytes()` / `get_max_clipboard_event_bytes()`: Truncate large clipboard payloads
+- **XDG Compliance**: Shell integration migrated to XDG Base Directory specification
+- **Improved Export APIs**: Enhanced `export_asciicast()` and `export_json()` with explicit session parameter
+- **Documentation Updates**: Comprehensive documentation for all new features and buffer controls
+
+### 0.6.0
 - **Comprehensive Color Utilities API**: 18 new Python functions for color manipulation
   - Brightness and contrast: `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
   - Basic adjustments: `lighten_rgb()`, `darken_rgb()`

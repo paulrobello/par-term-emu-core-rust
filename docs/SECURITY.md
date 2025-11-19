@@ -1,6 +1,6 @@
 # Security Considerations for PTY Usage
 
-This document outlines security considerations when using the PTY functionality in par-term-emu.
+This document outlines security considerations when using the PTY functionality in par-term-emu-core-rust.
 
 ## API Overview
 
@@ -21,14 +21,15 @@ term.spawn(
 - All path arguments (`cwd`, values in `args`) should be validated to prevent directory traversal
 - Command must be absolute path (e.g., `/bin/bash`) or findable in `PATH`
 - The system automatically drops `COLUMNS` and `LINES` from inherited environment to prevent resize issues
-- Set `PAR_TERM_REPLY_XTWINOPS=0` to suppress XTWINOPS (CSI t) query responses for security
+- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS (CSI t) query responses
 
 **Convenience Methods:**
 - `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` or platform default)
-- `PtyTerminal.get_default_shell()` - Returns the default shell path for current platform
+- `PtyTerminal.get_default_shell()` - Static method that returns the default shell path for current platform
 
 ## Table of Contents
 
+- [Security Architecture](#security-architecture)
 - [Command Injection Prevention](#command-injection-prevention)
   - [DO: Use Command + Args Array Format](#do-use-command--args-array-format)
   - [DON'T: Concatenate User Input into Commands](#dont-concatenate-user-input-into-commands)
@@ -45,6 +46,8 @@ term.spawn(
 - [Process Management Security](#process-management-security)
   - [Resource Limits](#resource-limits)
   - [Multiple Session Limits](#multiple-session-limits)
+- [Terminal Query Response Security](#terminal-query-response-security)
+  - [XTWINOPS Query Response Control](#xtwinops-query-response-control)
 - [Input Validation](#input-validation)
   - [Keyboard Input Sanitization](#keyboard-input-sanitization)
 - [Terminal Size Validation](#terminal-size-validation)
@@ -53,8 +56,70 @@ term.spawn(
 - [Logging and Audit](#logging-and-audit)
   - [Log Security Events](#log-security-events)
 - [Summary of Best Practices](#summary-of-best-practices)
+  - [Context Manager Pattern](#context-manager-pattern)
 - [Security Checklist](#security-checklist)
 - [Reporting Security Issues](#reporting-security-issues)
+
+## Security Architecture
+
+The PTY system implements multiple security layers to protect against common attack vectors:
+
+```mermaid
+graph TB
+    User[User Application]
+    PTY[PtyTerminal]
+    Validate[Input Validation]
+    EnvFilter[Environment Filter]
+    PtyPair[PTY Pair Master/Slave]
+    ChildProc[Child Process]
+    ReaderThread[Reader Thread]
+    Terminal[Terminal Emulator]
+
+    User -->|spawn command, args, env, cwd| Validate
+    Validate -->|Validated inputs| EnvFilter
+    EnvFilter -->|Filtered env COLUMNS/LINES dropped| PTY
+    PTY -->|Creates| PtyPair
+    PtyPair -->|Spawns| ChildProc
+    PTY -->|Starts| ReaderThread
+    ReaderThread -->|Reads output| PtyPair
+    ReaderThread -->|Process & filter XTWINOPS| Terminal
+    User -->|write input| PTY
+    PTY -->|Validated bytes| PtyPair
+    PtyPair -->|Input| ChildProc
+
+    style User fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Validate fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style EnvFilter fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style PTY fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style PtyPair fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style ChildProc fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    style ReaderThread fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style Terminal fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+```
+
+### Security Boundaries
+
+**Input Validation Layer**:
+- Command injection prevention via args array
+- Path traversal detection for `cwd` and file arguments
+- Environment variable filtering and validation
+- Terminal size bounds checking
+
+**Environment Isolation**:
+- Automatic filtering of `COLUMNS` and `LINES` to prevent resize bugs
+- Selective environment variable inheritance
+- Sensitive variable removal (credentials, API keys)
+
+**Process Isolation**:
+- PTY provides process isolation from parent
+- Resource limits via timeouts and session limits
+- Non-root execution recommended
+- Automatic cleanup via Drop trait and context managers
+
+**Query Response Filtering**:
+- Configurable XTWINOPS response filtering
+- Prevention of information leakage via terminal queries
+- Support for nested TUI applications
 
 ## Command Injection Prevention
 
@@ -147,8 +212,9 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 **Automatic Environment Filtering**:
 - The system automatically drops `COLUMNS` and `LINES` environment variables (if present in parent) to prevent terminal size conflicts
 - These variables are static and don't update on resize, causing issues with terminal-aware applications
+- Many libraries (e.g., Python's `shutil.get_terminal_size()`) and some TUIs prioritize these env vars over `ioctl(TIOCGWINSZ)`, leaving them stuck at the parent terminal's size
 - Applications should query terminal size via `ioctl(TIOCGWINSZ)` instead
-- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtySession` to suppress XTWINOPS query responses (prevents shell echo visibility with ECHOCTL)
+- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS query responses (prevents shell echo visibility with ECHOCTL)
 
 ### Secure Environment Practices
 
@@ -311,15 +377,18 @@ term = PtyTerminal(80, 24)
 safe_spawn_shell(term)
 ```
 
-**Alternative**: Use the convenience method with default shell detection:
+**Alternative**: Use the static method with default shell detection:
 ```python
 from par_term_emu_core_rust import PtyTerminal
 
-# Uses PtyTerminal.get_default_shell() which defaults to safe values
+# Get default shell using static method
 # On Unix: $SHELL or /bin/bash
-# On Windows: PowerShell or cmd.exe
+# On Windows: $COMSPEC (PowerShell) or cmd.exe
+default_shell = PtyTerminal.get_default_shell()
+print(f"Using shell: {default_shell}")
+
 term = PtyTerminal(80, 24)
-term.spawn_shell()
+term.spawn_shell()  # Convenience method that uses get_default_shell() internally
 ```
 
 ## Process Management Security
@@ -383,9 +452,9 @@ class SessionManager:
 
 ## Terminal Query Response Security
 
-### XTWINOPS Query Filtering
+### XTWINOPS Query Response Control
 
-The terminal emulator automatically responds to certain terminal queries (e.g., XTWINOPS CSI t sequences) to support nested TUI applications. However, when shells have `ECHOCTL` enabled, these responses can become visible in the terminal output, creating visual noise.
+The terminal emulator automatically responds to certain terminal queries (XTWINOPS CSI t sequences) to support nested TUI applications like vim, tmux, and htop. However, when shells have `ECHOCTL` enabled, these responses can become visible in the terminal output, creating visual noise.
 
 **Security Control**: Set the `PAR_TERM_REPLY_XTWINOPS` environment variable to control this behavior:
 
@@ -405,10 +474,14 @@ term.spawn_shell()
 
 **When to Disable**:
 - Shell environment has `ECHOCTL` enabled (common in some configurations)
-- Security-sensitive environments where terminal query responses could leak information
+- Security-sensitive environments where terminal query responses could leak information (e.g., terminal dimensions)
 - Testing scenarios where query responses interfere with output validation
 
-**Note**: This setting is cached when `PtySession` is created. Changing the environment variable after session creation has no effect.
+**Technical Details**:
+- This setting is cached when `PtyTerminal` is created by reading the environment variable
+- Changing the environment variable after terminal creation has no effect
+- The filtering is implemented in the PTY reader thread and removes CSI sequences ending with 't' when disabled
+- Device query responses are still written back to the PTY master for nested applications to receive
 
 ## Input Validation
 
@@ -550,8 +623,27 @@ secure_spawn(
 6. ✅ **Limit resources** - Constrain terminal size, number of sessions, process runtime
 7. ✅ **Run as non-root** - Use least-privilege principle
 8. ✅ **Log security events** - Audit all PTY operations
-9. ✅ **Handle cleanup properly** - Always kill processes when done (use context managers)
+9. ✅ **Handle cleanup properly** - Always kill processes when done (use context managers or explicit kill())
 10. ✅ **Validate terminal sizes** - Prevent resource exhaustion via extreme dimensions
+
+### Context Manager Pattern
+
+`PtyTerminal` supports the context manager protocol for automatic cleanup:
+
+```python
+from par_term_emu_core_rust import PtyTerminal
+
+# Automatically kills process when exiting the context
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell()
+    term.write_str("echo 'Hello World'\n")
+    # Process is automatically killed when exiting the 'with' block
+```
+
+**Benefits**:
+- Guaranteed process cleanup even if exceptions occur
+- No resource leaks from zombie processes
+- Cleaner, more Pythonic code
 
 ## Security Checklist
 
@@ -572,4 +664,11 @@ Before deploying PTY functionality:
 
 ## Reporting Security Issues
 
-If you discover a security vulnerability in par-term-emu, please report it to the maintainers privately before public disclosure.
+If you discover a security vulnerability in par-term-emu-core-rust, please report it to the maintainers privately before public disclosure. Create a security advisory on GitHub or contact the maintainers directly.
+
+## Related Documentation
+
+- [README.md](../README.md) - Project overview and API documentation
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture and component design
+- [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced terminal features and capabilities
+- [Shell Integration README](../shell_integration/README.md) - Shell integration setup and usage

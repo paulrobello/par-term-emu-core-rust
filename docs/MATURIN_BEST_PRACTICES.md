@@ -2,6 +2,18 @@
 
 This document analyzes our project's compliance with [Maturin](https://github.com/PyO3/maturin) best practices for building and distributing Rust/Python packages.
 
+## Table of Contents
+- [Current Configuration Summary](#current-configuration-summary)
+- [Implemented Improvements](#-implemented-improvements-2025-01-15)
+- [Platform Coverage Matrix](#platform-coverage-matrix)
+- [Manylinux Compatibility](#manylinux-compatibility)
+- [Distribution Workflow Best Practices](#distribution-workflow-best-practices)
+- [Cargo Profile Optimization](#cargo-profile-optimization)
+- [Recommendations Summary](#recommendations-summary)
+- [Compliance Scorecard](#compliance-scorecard)
+- [Conclusion](#conclusion)
+- [References](#references)
+
 ## Current Configuration Summary
 
 ### ✅ Following Best Practices
@@ -34,6 +46,9 @@ build-backend = "maturin"
 features = ["pyo3/extension-module"]
 python-source = "python"
 module-name = "par_term_emu_core_rust._native"
+
+[dependency-groups]
+dev = ["maturin>=1.10.1", ...]
 ```
 
 **Status**: ✅ **Compliant**
@@ -172,7 +187,9 @@ windows:
         args: --release --out dist --interpreter python${{ matrix.python-version }}
         sccache: 'true'
     - name: Run tests (skip PTY tests on Windows)
-      run: pytest tests/ -v --timeout=5 --timeout-method=thread -k "not pty"
+      run: |
+        .venv\Scripts\activate
+        pytest tests/ -v --timeout=5 --timeout-method=thread -k "not pty"
 ```
 
 **Solution Applied**:
@@ -236,14 +253,14 @@ Keep `manylinux: auto` - it provides:
 ## Distribution Workflow Best Practices
 
 ### Current Workflow
-1. ✅ Build wheels for multiple Python versions (3.11, 3.12, 3.13)
+1. ✅ Build wheels for multiple Python versions (3.12, 3.13, 3.14)
 2. ✅ Build platform-specific wheels (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64)
 3. ✅ Build source distribution (sdist)
 4. ✅ QEMU-based ARM64 cross-compilation
 5. ✅ Platform-specific test strategies (PTY tests excluded on Windows)
 6. ✅ TestPyPI pre-release testing workflow
 7. ✅ PyPI trusted publishing (OIDC)
-8. ✅ Sigstore signing (in release.yml)
+8. ✅ Sigstore signing (in deployment.yml)
 
 ### Following Official Recommendations
 - ✅ Using `maturin build` + `uv publish` pattern

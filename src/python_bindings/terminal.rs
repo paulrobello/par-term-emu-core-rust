@@ -95,7 +95,7 @@ impl PyTerminal {
     ///
     /// Args:
     ///     format: Image format ("png", "jpeg", "svg", "bmp"). Default: "png"
-    ///     font_path: Path to TTF/OTF font file. Default: None (use system font)
+    ///     font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
     ///     font_size: Font size in pixels. Default: 14.0
     ///     include_scrollback: Include scrollback buffer. Default: False
     ///     padding: Padding around content in pixels. Default: 10
@@ -111,6 +111,10 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     Bytes of the image in the specified format
+    ///
+    /// Note:
+    ///     Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+    ///     System emoji/CJK fonts are automatically used as fallback when available.
     #[pyo3(signature = (
         format = "png",
         font_path = None,
@@ -189,7 +193,7 @@ impl PyTerminal {
     /// Args:
     ///     path: Output file path
     ///     format: Image format (optional, auto-detected from extension)
-    ///     font_path: Path to TTF/OTF font file (optional)
+    ///     font_path: Path to TTF/OTF font file. Default: None (use embedded JetBrains Mono)
     ///     font_size: Font size in pixels. Default: 14.0
     ///     include_scrollback: Include scrollback buffer. Default: False
     ///     padding: Padding around content in pixels. Default: 10
@@ -205,6 +209,10 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     None
+    ///
+    /// Note:
+    ///     Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
+    ///     System emoji/CJK fonts are automatically used as fallback when available.
     #[pyo3(signature = (
         path,
         format = None,

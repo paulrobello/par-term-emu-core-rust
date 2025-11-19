@@ -32,7 +32,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ### Rust
 
-You need Rust 1.75 or later (currently tested with Rust 1.91+). Install it from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (currently tested with Rust 1.91). Install it from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -40,7 +40,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Python
 
-You need Python 3.12 or later. Check your version:
+You need Python 3.12 or later (supports Python 3.12, 3.13, and 3.14). Check your version:
 
 ```bash
 python --version
@@ -131,8 +131,8 @@ make watch
 ## Running Tests
 
 The project includes comprehensive test coverage:
-- **676 Rust unit tests** across 37 modules
-- **267 Python integration tests** in 10 test files
+- **809 Rust unit tests** (including all modules and features)
+- **271 Python integration tests** in 10 test files
 - Tests cover: VT sequences, grid operations, PTY sessions, screenshots, and Python bindings
 
 ### Rust Tests
@@ -167,12 +167,9 @@ uv run pytest tests/ -v
 ```
 
 **Test configuration:**
-- Default timeout: 5 seconds per test (10 seconds for slow tests)
-- Some PTY tests are excluded in CI (may hang in automated environments):
-  - `test_pty.py` - Basic PTY operations
-  - `test_ioctl_size.py` - IOCTL size operations
-  - `test_pty_resize_sigwinch.py` - Signal handling
-  - `test_nested_shell_resize.py` - Complex PTY interactions
+- Default timeout: 5 seconds per test
+- Pytest configuration in `pyproject.toml` includes timeout settings and warning filters
+- Some PTY tests may need special handling in CI environments due to signal handling
 
 ### Code Quality Checks
 
@@ -235,7 +232,13 @@ uv run python examples/pty_shell.py
 # ... and many more in the examples/ directory
 ```
 
-> **📝 Note:** The project includes 32 example scripts demonstrating various features including basic terminal operations, PTY sessions, Sixel graphics, mouse tracking, hyperlinks, notifications, shell integration, and more. See the `examples/` directory for the complete list.
+> **📝 Note:** The project includes 32 example scripts demonstrating various features including:
+> - **Basic Terminal**: colors, cursor movement, scrollback, text attributes, rectangle operations
+> - **PTY/Shell**: basic PTY, shell sessions, resize, custom environments, multiple PTYs, event loops
+> - **Graphics**: Sixel display and rendering
+> - **Advanced Features**: mouse tracking, hyperlinks, notifications, shell integration, bracketed paste, synchronized updates
+> - **Testing**: underline styles, keyboard protocols, clipboard (OSC 52), TUI integration
+> See the `examples/` directory for the complete list.
 
 ## Cross-Compilation
 
@@ -294,7 +297,7 @@ uv run maturin publish
 
 ## Troubleshooting
 
-### Error: "cannot find -lpython3.13"
+### Error: "cannot find -lpython3.x"
 
 Make sure Python development headers are installed:
 
@@ -310,7 +313,8 @@ sudo dnf install python3-devel
 
 **macOS:**
 ```bash
-brew install python@3.12
+# Python 3.12, 3.13, or 3.14
+brew install python@3.14
 ```
 
 ### Error: "uv: command not found"
@@ -383,9 +387,11 @@ docker rm builder
 ## See Also
 
 - [README.md](../README.md) - Project overview and API reference
+- [QUICKSTART.md](../QUICKSTART.md) - Quick start guide for new users
 - [CLAUDE.md](../CLAUDE.md) - Project development guide for contributors
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture and design
 - [CROSS_PLATFORM.md](CROSS_PLATFORM.md) - Cross-platform build instructions
 - [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Configuration file reference
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
+- [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features documentation
 - [Sister Project: par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) - Full-featured TUI application

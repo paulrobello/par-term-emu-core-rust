@@ -123,11 +123,11 @@ The screenshot module searches for emoji fonts in this priority order:
 ### Embedded Font Implementation
 
 **Current State:**
-- ✅ JetBrains Mono (274KB) - Embedded for text rendering
-- ✅ Noto Emoji (419KB) - Embedded for universal emoji support
+- ✅ JetBrains Mono (~268KB) - Embedded for text rendering
+- ✅ Noto Emoji (~409KB) - Embedded for universal emoji support
 
 **Implemented: Noto Emoji (Monochrome)**
-- **Size**: 419KB (manageable)
+- **Size**: ~409KB (manageable)
 - **Coverage**: All Unicode emoji
 - **Quality**: Decent grayscale styling
 - **Benefit**: Works on all platforms without system fonts

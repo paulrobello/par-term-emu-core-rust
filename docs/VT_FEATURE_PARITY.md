@@ -39,7 +39,14 @@ The terminal implementation uses a modular structure:
 - `csi.rs` - CSI sequence handler (`csi_dispatch_impl()`)
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
 - `osc.rs` - OSC sequence handler (`osc_dispatch_impl()`)
-- `dcs.rs` - DCS sequence handler (`dcs_hook()` / `dcs_unhook()`)
+- `dcs.rs` - DCS sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
+
+**Core components:**
+- `src/terminal/mod.rs` - Terminal core and VTE callbacks
+- `src/terminal/write.rs` - Character writing and text handling
+- `src/grid.rs` - Screen buffer and cell grid
+- `src/sixel.rs` - Sixel graphics parser
+- `src/conformance_level.rs` - VT conformance level management
 
 ---
 
@@ -328,7 +335,8 @@ CSI 49 m    - Default background
 - Commonly used for protecting status lines or menu headers from accidental erasure
 
 **Implementation:**
-- DECSCA handler in `src/terminal/sequences/csi.rs`
+- DECSCA handler in `src/terminal/sequences/csi.rs` (CSI ? Ps " q)
+- SPA/EPA handlers in `src/terminal/sequences/esc.rs` (ESC V/W)
 - Character printing applies guarded flag in `src/terminal/write.rs`
 - Grid selective erase method `erase_rectangle()` in `src/grid.rs`
 - Grid unconditional erase method `erase_rectangle_unconditional()` in `src/grid.rs`
@@ -428,6 +436,8 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 
 **Supported Modes:** 1, 6, 7, 25, 47, 69, 1000, 1002, 1003, 1004, 1005, 1006, 1015, 1047, 1048, 1049, 2004, 2026
 
+**Note:** Mode query returns state: 0 (not recognized), 1 (set), 2 (reset), 3 (permanently set), 4 (permanently reset)
+
 #### Terminal Parameters (DECREQTPARM)
 
 `CSI x` or `CSI 0 x` or `CSI 1 x` - Request terminal parameters
@@ -514,7 +524,9 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 - Device Attributes (DA) response reflects the current conformance level
 - Default conformance level is VT520
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
+**Implementation:**
+- Handler in `src/terminal/sequences/csi.rs`
+- Conformance level types in `src/conformance_level.rs`
 
 **Example:**
 ```
@@ -522,6 +534,8 @@ CSI 62 ; 2 " p    # Set to VT220 with 8-bit controls
 CSI 5 " p         # Set to VT520 (short form)
 CSI 65 " p        # Set to VT520 (long form)
 ```
+
+**See Also:** `src/conformance_level.rs` for feature-level support checking
 
 #### DECSWBV - Set Warning-Bell Volume
 
@@ -786,7 +800,9 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 `DCS Pa ; Pb ; Ph q ... ST`
 
-**Implementation:** `dcs_hook()` / `dcs_unhook()` in `src/terminal/sequences/dcs.rs`
+**Implementation:**
+- DCS handlers in `src/terminal/sequences/dcs.rs` (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
+- Sixel parser in `src/sixel.rs`
 
 **Raster Attributes:**
 - `Pa` - Pixel aspect ratio
@@ -816,17 +832,14 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - Half-block rendering fallback for terminals without Sixel support
 
 **Resource Limits:**
-- Sixel graphics are subject to per-terminal limits to prevent pathological
-  memory usage:
-  - Default: 1024x1024 pixels, max repeat count 10_000, max 256 graphics.
-  - Hard ceilings: 4096x4096 pixels, repeat count ≤ 10_000, max 1024 graphics.
+- Sixel graphics are subject to per-terminal limits to prevent pathological memory usage:
+  - Default: 1024x1024 pixels, max repeat count 10,000, max 256 graphics
+  - Hard ceilings: 4096x4096 pixels, repeat count ≤ 10,000, max 1024 graphics
 - Limits can be tuned via:
-  - Rust: `Terminal::set_sixel_limits(max_width, max_height, max_repeat)`.
-  - Python: `Terminal.set_sixel_limits(...)` and `PtyTerminal.set_sixel_limits(...)`.
+  - Rust: `Terminal::set_sixel_limits(max_width, max_height, max_repeat)` and `Terminal::set_max_sixel_graphics(max_count)`
+  - Python: `Terminal.set_sixel_limits(...)` and `Terminal.set_max_sixel_graphics(...)`
 
 **Security:** Can be blocked via `disable_insecure_sequences`
-
-**Implementation:** Sixel rendering in `src/sixel.rs` and DCS handlers in `src/terminal/sequences/dcs.rs`
 
 ---
 
@@ -846,7 +859,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 ### Wide Character Support
 
-**Implementation:** Character width detection in `src/terminal/write.rs`
+**Implementation:** Character width detection and printing in `src/terminal/write.rs`
 
 **Features:**
 - Detects wide characters (East Asian Width property)
@@ -861,7 +874,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 ### Auto-Wrap Mode (DECAWM)
 
-**Implementation:** Character printing logic in `src/terminal/write.rs`
+**Implementation:** Character printing and line wrapping logic in `src/terminal/write.rs`
 
 **Behavior:**
 - When enabled (default): Characters at right margin wrap to next line
@@ -871,7 +884,7 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 ### Insert Mode (IRM)
 
-**Implementation:** Character insertion logic in `src/terminal/write.rs`
+**Implementation:** Character insertion and replacement logic in `src/terminal/write.rs`
 
 **Behavior:**
 - When enabled: New characters shift existing characters right
@@ -880,7 +893,10 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
 ### Tab Stops
 
-**Implementation:** Tab handling in character printing (`src/terminal/write.rs`), HTS in `esc_dispatch_impl()` (`src/terminal/sequences/esc.rs`), TBC in `csi_dispatch_impl()` (`src/terminal/sequences/csi.rs`)
+**Implementation:**
+- Tab handling in character printing (`src/terminal/write.rs`)
+- HTS (Set Tab Stop) in `esc_dispatch_impl()` (`src/terminal/sequences/esc.rs`)
+- TBC (Tab Clear), CHT (Forward Tab), CBT (Backward Tab) in `csi_dispatch_impl()` (`src/terminal/sequences/csi.rs`)
 
 **Behavior:**
 - Default tab stops every 8 columns (columns 8, 16, 24, ...)
@@ -1089,13 +1105,15 @@ To validate VT compatibility, test with:
   - Sequence handlers: `src/terminal/sequences/` (csi.rs, esc.rs, osc.rs, dcs.rs)
   - Character writing: `src/terminal/write.rs`
   - Screen buffer: `src/grid.rs`
+  - Sixel graphics: `src/sixel.rs`
+  - Conformance levels: `src/conformance_level.rs`
   - Python bindings: `src/python_bindings/`
 
 ---
 
 ## See Also
 
-- [config_checklist.md](config_checklist.md) - Configuration options reference
-- [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features guide
-- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture
-- [README.md](../README.md) - Project overview
+- [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features guide (OSC 52, OSC 133, Sixel, etc.)
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design
+- [README.md](../README.md) - Project overview and API documentation
+- [DOCUMENTATION_STYLE_GUIDE.md](DOCUMENTATION_STYLE_GUIDE.md) - Documentation standards
