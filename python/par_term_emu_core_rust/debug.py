@@ -242,7 +242,7 @@ class LogTimer:
         self.category = category
         self.operation = operation
         self.level = level
-        self.start_time = None
+        self.start_time: float | None = None
 
     def __enter__(self):
         if is_enabled(self.level):

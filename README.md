@@ -9,6 +9,30 @@
 
 ## What's New in 0.6.0
 
+### Terminal Notifications (Feature 37)
+
+Advanced notification system for terminal events:
+
+- **Multiple Trigger Types**: Bell, Activity, Silence, and Custom triggers
+- **Alert Options**: Desktop notifications, sound alerts (with volume control), visual alerts
+- **Configurable Settings**: Fine-tune notification behavior per trigger type
+- **Activity Detection**: Automatic detection of terminal activity and silence periods
+- **Event Logging**: Track all notification events with timestamps
+- **Custom Triggers**: Register and trigger custom notifications with IDs
+- **Full Python API**: Complete control over notifications from Python
+
+### Session Recording and Replay (Feature 24)
+
+Record and replay terminal sessions with timing information:
+
+- **Session Recording**: Capture all terminal input/output with precise timing
+- **Multiple Event Types**: Record input, output, resize events, and custom markers
+- **Export Formats**: Export to asciicast v2 (asciinema) or JSON formats
+- **Session Metadata**: Capture environment variables and terminal configuration
+- **Playback Ready**: Compatible with asciinema player and custom players
+- **Markers/Bookmarks**: Add named markers during recording for navigation
+- **Full Python API**: Start/stop recording, export sessions programmatically
+
 ### Comprehensive Color Utilities API
 
 Version 0.6.0 adds a complete suite of color manipulation functions with Python bindings:
@@ -744,6 +768,146 @@ rgb = Terminal.parse_color("#FF5733")  # (255, 87, 51)
 rgb = Terminal.parse_color("rgb(255, 87, 51)")  # (255, 87, 51)
 rgb = Terminal.parse_color("red")  # (180, 60, 42) - iTerm2 red
 rgb = Terminal.parse_color("invalid")  # None
+```
+
+### Terminal Notifications
+
+Configure and handle terminal notifications for various events:
+
+```python
+from par_term_emu_core_rust import Terminal, NotificationConfig
+
+term = Terminal(80, 24)
+
+# Get current notification configuration
+config = term.get_notification_config()
+print(f"Bell notifications: {config.bell_desktop}")
+
+# Configure notification settings
+config.bell_desktop = True  # Enable desktop notifications on bell
+config.bell_sound = 50  # Enable sound at 50% volume
+config.bell_visual = True  # Enable visual alert
+config.activity_enabled = True  # Enable activity notifications
+config.activity_threshold = 10  # Trigger after 10 seconds of inactivity
+config.silence_enabled = True  # Enable silence notifications
+config.silence_threshold = 300  # Trigger after 5 minutes of silence
+
+# Apply configuration
+term.set_notification_config(config)
+
+# Manually trigger notifications
+term.trigger_notification("Bell", "Desktop", "Custom bell message")
+term.trigger_notification("Activity", "Sound(75)", None)
+term.trigger_notification("Silence", "Visual", None)
+
+# Register and trigger custom notifications
+term.register_custom_trigger(1, "Custom event occurred")
+term.trigger_custom_notification(1, "Desktop")
+
+# Get notification events
+events = term.get_notification_events()
+for event in events:
+    print(f"Trigger: {event.trigger}, Alert: {event.alert}")
+    print(f"Message: {event.message}, Delivered: {event.delivered}")
+
+# Mark notifications as delivered
+for i in range(len(events)):
+    term.mark_notification_delivered(i)
+
+# Update activity tracking
+term.update_activity()  # Call when terminal has activity
+
+# Check for silence/activity periodically
+term.check_silence()  # Check if silence threshold exceeded
+term.check_activity()  # Check if activity occurred after inactivity
+
+# Clear notification events
+term.clear_notification_events()
+
+# Handle bell events with configured notifications
+term.handle_bell_notification()  # Triggers configured bell alerts
+```
+
+### Session Recording and Replay
+
+Record terminal sessions with timing information for playback:
+
+```python
+from par_term_emu_core_rust import Terminal
+import time
+
+term = Terminal(80, 24)
+
+# Start recording a session
+term.start_recording(title="My Terminal Session")
+
+# Record some terminal activity
+term.process_str("echo 'Hello, World!'\n")
+term.record_output(b"Hello, World!\n")
+term.record_input(b"ls -la\n")
+
+# Add markers for important moments
+term.record_marker("Before directory listing")
+
+# Simulate more activity
+time.sleep(0.1)
+term.process_str("cd /tmp\n")
+term.record_output(b"$ cd /tmp\n")
+
+# Record terminal resize events
+term.record_resize(100, 30)
+
+# Check if recording is active
+if term.is_recording():
+    print("Recording in progress...")
+
+# Get current session info
+session = term.get_recording_session()
+if session:
+    print(f"Recording started at: {session.start_time}")
+    print(f"Terminal size: {session.initial_size}")
+    print(f"Events recorded: {session.event_count}")
+
+# Stop recording and get the session
+final_session = term.stop_recording()
+if final_session:
+    print(f"Recording duration: {final_session.get_duration_seconds():.2f}s")
+    print(f"Total events: {final_session.event_count}")
+
+    # Export to asciicast v2 format (asciinema compatible)
+    asciicast = term.export_asciicast()
+    with open("session.cast", "w") as f:
+        f.write(asciicast)
+
+    # Export to JSON format
+    json_export = term.export_json()
+    with open("session.json", "w") as f:
+        f.write(json_export)
+
+# PTY session recording example
+from par_term_emu_core_rust import PtyTerminal
+
+with PtyTerminal(80, 24) as pty:
+    pty.start_recording(title="Shell Session")
+    pty.spawn_shell()
+
+    # Record shell commands
+    pty.write_str("echo 'Recording this session'\n")
+    time.sleep(0.5)
+
+    pty.write_str("ls -la\n")
+    time.sleep(0.5)
+
+    # Add marker at key point
+    pty.record_marker("After ls command")
+
+    # Stop and export
+    session = pty.stop_recording()
+    if session:
+        # Save asciicast for playback with asciinema
+        asciicast = pty.export_asciicast()
+        with open("shell_session.cast", "w") as f:
+            f.write(asciicast)
 ```
 
 ## API Reference

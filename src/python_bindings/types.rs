@@ -752,6 +752,1651 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
     }
 }
 
+/// Search match result
+#[pyclass(name = "SearchMatch")]
+#[derive(Clone)]
+pub struct PySearchMatch {
+    /// Row index (negative for scrollback, 0+ for visible screen)
+    #[pyo3(get)]
+    pub row: isize,
+    /// Column index
+    #[pyo3(get)]
+    pub col: usize,
+    /// Length of the match
+    #[pyo3(get)]
+    pub length: usize,
+    /// Matched text
+    #[pyo3(get)]
+    pub text: String,
+}
+
+#[pymethods]
+impl PySearchMatch {
+    fn __repr__(&self) -> String {
+        format!(
+            "SearchMatch(row={}, col={}, length={}, text={:?})",
+            self.row, self.col, self.length, self.text
+        )
+    }
+}
+
+/// Detected semantic item
+#[pyclass(name = "DetectedItem")]
+#[derive(Clone)]
+pub struct PyDetectedItem {
+    /// Item type: "url", "filepath", "git_hash", "ip", or "email"
+    #[pyo3(get)]
+    pub item_type: String,
+    /// The detected text
+    #[pyo3(get)]
+    pub text: String,
+    /// Row index
+    #[pyo3(get)]
+    pub row: usize,
+    /// Column index
+    #[pyo3(get)]
+    pub col: usize,
+    /// Optional line number (for file paths like "file.txt:123")
+    #[pyo3(get)]
+    pub line_number: Option<usize>,
+}
+
+#[pymethods]
+impl PyDetectedItem {
+    fn __repr__(&self) -> String {
+        format!(
+            "DetectedItem(type={}, text={:?}, row={}, col={})",
+            self.item_type, self.text, self.row, self.col
+        )
+    }
+}
+
+/// Selection mode
+#[pyclass(name = "SelectionMode")]
+#[derive(Clone)]
+pub enum PySelectionMode {
+    Character,
+    Line,
+    Block,
+}
+
+/// Selection state
+#[pyclass(name = "Selection")]
+#[derive(Clone)]
+pub struct PySelection {
+    /// Start position (col, row)
+    #[pyo3(get)]
+    pub start: (usize, usize),
+    /// End position (col, row)
+    #[pyo3(get)]
+    pub end: (usize, usize),
+    /// Selection mode
+    #[pyo3(get)]
+    pub mode: String,
+}
+
+#[pymethods]
+impl PySelection {
+    fn __repr__(&self) -> String {
+        format!(
+            "Selection(start={:?}, end={:?}, mode={})",
+            self.start, self.end, self.mode
+        )
+    }
+}
+
+/// Scrollback statistics
+#[pyclass(name = "ScrollbackStats")]
+#[derive(Clone)]
+pub struct PyScrollbackStats {
+    /// Total number of scrollback lines
+    #[pyo3(get)]
+    pub total_lines: usize,
+    /// Estimated memory usage in bytes
+    #[pyo3(get)]
+    pub memory_bytes: usize,
+    /// Whether the scrollback buffer has wrapped (cycled)
+    #[pyo3(get)]
+    pub has_wrapped: bool,
+}
+
+#[pymethods]
+impl PyScrollbackStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "ScrollbackStats(total_lines={}, memory_bytes={}, has_wrapped={})",
+            self.total_lines, self.memory_bytes, self.has_wrapped
+        )
+    }
+}
+
+/// Bookmark
+#[pyclass(name = "Bookmark")]
+#[derive(Clone)]
+pub struct PyBookmark {
+    /// Bookmark ID
+    #[pyo3(get)]
+    pub id: usize,
+    /// Row index (negative for scrollback, 0+ for visible screen)
+    #[pyo3(get)]
+    pub row: isize,
+    /// Bookmark label
+    #[pyo3(get)]
+    pub label: String,
+}
+
+#[pymethods]
+impl PyBookmark {
+    fn __repr__(&self) -> String {
+        format!(
+            "Bookmark(id={}, row={}, label={:?})",
+            self.id, self.row, self.label
+        )
+    }
+}
+
+// === Feature 7: Performance Metrics ===
+
+/// Performance metrics
+#[pyclass(name = "PerformanceMetrics")]
+#[derive(Clone)]
+pub struct PyPerformanceMetrics {
+    #[pyo3(get)]
+    pub frames_rendered: u64,
+    #[pyo3(get)]
+    pub cells_updated: u64,
+    #[pyo3(get)]
+    pub bytes_processed: u64,
+    #[pyo3(get)]
+    pub total_processing_us: u64,
+    #[pyo3(get)]
+    pub peak_frame_us: u64,
+    #[pyo3(get)]
+    pub scroll_count: u64,
+    #[pyo3(get)]
+    pub wrap_count: u64,
+    #[pyo3(get)]
+    pub escape_sequences: u64,
+}
+
+#[pymethods]
+impl PyPerformanceMetrics {
+    fn __repr__(&self) -> String {
+        format!(
+            "PerformanceMetrics(frames={}, cells={}, fps={:.1})",
+            self.frames_rendered,
+            self.cells_updated,
+            if self.total_processing_us > 0 {
+                1_000_000.0 * self.frames_rendered as f64 / self.total_processing_us as f64
+            } else {
+                0.0
+            }
+        )
+    }
+}
+
+/// Frame timing
+#[pyclass(name = "FrameTiming")]
+#[derive(Clone)]
+pub struct PyFrameTiming {
+    #[pyo3(get)]
+    pub frame_number: u64,
+    #[pyo3(get)]
+    pub processing_us: u64,
+    #[pyo3(get)]
+    pub cells_updated: usize,
+    #[pyo3(get)]
+    pub bytes_processed: usize,
+}
+
+#[pymethods]
+impl PyFrameTiming {
+    fn __repr__(&self) -> String {
+        format!(
+            "FrameTiming(frame={}, time={}us, cells={})",
+            self.frame_number, self.processing_us, self.cells_updated
+        )
+    }
+}
+
+// === Feature 8: Advanced Color Operations ===
+
+/// HSV color
+#[pyclass(name = "ColorHSV")]
+#[derive(Clone)]
+pub struct PyColorHSV {
+    #[pyo3(get)]
+    pub h: f32,
+    #[pyo3(get)]
+    pub s: f32,
+    #[pyo3(get)]
+    pub v: f32,
+}
+
+#[pymethods]
+impl PyColorHSV {
+    #[new]
+    fn new(h: f32, s: f32, v: f32) -> Self {
+        Self { h, s, v }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ColorHSV(h={:.1}, s={:.2}, v={:.2})",
+            self.h, self.s, self.v
+        )
+    }
+}
+
+/// HSL color
+#[pyclass(name = "ColorHSL")]
+#[derive(Clone)]
+pub struct PyColorHSL {
+    #[pyo3(get)]
+    pub h: f32,
+    #[pyo3(get)]
+    pub s: f32,
+    #[pyo3(get)]
+    pub l: f32,
+}
+
+#[pymethods]
+impl PyColorHSL {
+    #[new]
+    fn new(h: f32, s: f32, l: f32) -> Self {
+        Self { h, s, l }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ColorHSL(h={:.1}, s={:.2}, l={:.2})",
+            self.h, self.s, self.l
+        )
+    }
+}
+
+/// Color palette
+#[pyclass(name = "ColorPalette")]
+#[derive(Clone)]
+pub struct PyColorPalette {
+    #[pyo3(get)]
+    pub base: (u8, u8, u8),
+    #[pyo3(get)]
+    pub colors: Vec<(u8, u8, u8)>,
+    #[pyo3(get)]
+    pub mode: String,
+}
+
+#[pymethods]
+impl PyColorPalette {
+    fn __repr__(&self) -> String {
+        format!(
+            "ColorPalette(mode={}, colors={})",
+            self.mode,
+            self.colors.len()
+        )
+    }
+}
+
+// === Feature 9: Line Wrapping Utilities ===
+
+/// Joined lines result
+#[pyclass(name = "JoinedLines")]
+#[derive(Clone)]
+pub struct PyJoinedLines {
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub start_row: usize,
+    #[pyo3(get)]
+    pub end_row: usize,
+    #[pyo3(get)]
+    pub lines_joined: usize,
+}
+
+#[pymethods]
+impl PyJoinedLines {
+    fn __repr__(&self) -> String {
+        format!(
+            "JoinedLines(rows={}-{}, lines={}, len={})",
+            self.start_row,
+            self.end_row,
+            self.lines_joined,
+            self.text.len()
+        )
+    }
+}
+
+// === Feature 10: Clipboard Integration ===
+
+/// Clipboard entry
+#[pyclass(name = "ClipboardEntry")]
+#[derive(Clone)]
+pub struct PyClipboardEntry {
+    #[pyo3(get)]
+    pub content: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub label: Option<String>,
+}
+
+#[pymethods]
+impl PyClipboardEntry {
+    fn __repr__(&self) -> String {
+        format!(
+            "ClipboardEntry(len={}, timestamp={})",
+            self.content.len(),
+            self.timestamp
+        )
+    }
+}
+
+// === Feature 17: Advanced Mouse Support ===
+
+/// Mouse event
+#[pyclass(name = "MouseEvent")]
+#[derive(Clone)]
+pub struct PyMouseEvent {
+    #[pyo3(get)]
+    pub event_type: String,
+    #[pyo3(get)]
+    pub button: String,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub pixel_x: Option<u16>,
+    #[pyo3(get)]
+    pub pixel_y: Option<u16>,
+    #[pyo3(get)]
+    pub modifiers: u8,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyMouseEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "MouseEvent(type={}, button={}, pos=({}, {}), timestamp={})",
+            self.event_type, self.button, self.col, self.row, self.timestamp
+        )
+    }
+}
+
+impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
+    fn from(event: &crate::terminal::MouseEventRecord) -> Self {
+        use crate::terminal::{MouseButton, MouseEventType};
+
+        let event_type = match event.event_type {
+            MouseEventType::Press => "press",
+            MouseEventType::Release => "release",
+            MouseEventType::Move => "move",
+            MouseEventType::Drag => "drag",
+            MouseEventType::ScrollUp => "scrollup",
+            MouseEventType::ScrollDown => "scrolldown",
+        }
+        .to_string();
+
+        let button = match event.button {
+            MouseButton::Left => "left",
+            MouseButton::Middle => "middle",
+            MouseButton::Right => "right",
+            MouseButton::None => "none",
+        }
+        .to_string();
+
+        PyMouseEvent {
+            event_type,
+            button,
+            col: event.col,
+            row: event.row,
+            pixel_x: event.pixel_x,
+            pixel_y: event.pixel_y,
+            modifiers: event.modifiers,
+            timestamp: event.timestamp,
+        }
+    }
+}
+
+/// Mouse position
+#[pyclass(name = "MousePosition")]
+#[derive(Clone)]
+pub struct PyMousePosition {
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyMousePosition {
+    fn __repr__(&self) -> String {
+        format!(
+            "MousePosition(col={}, row={}, timestamp={})",
+            self.col, self.row, self.timestamp
+        )
+    }
+}
+
+impl From<&crate::terminal::MousePosition> for PyMousePosition {
+    fn from(pos: &crate::terminal::MousePosition) -> Self {
+        PyMousePosition {
+            col: pos.col,
+            row: pos.row,
+            timestamp: pos.timestamp,
+        }
+    }
+}
+
+// === Feature 19: Custom Rendering Hints ===
+
+/// Damage region
+#[pyclass(name = "DamageRegion")]
+#[derive(Clone)]
+pub struct PyDamageRegion {
+    #[pyo3(get)]
+    pub left: usize,
+    #[pyo3(get)]
+    pub top: usize,
+    #[pyo3(get)]
+    pub right: usize,
+    #[pyo3(get)]
+    pub bottom: usize,
+}
+
+#[pymethods]
+impl PyDamageRegion {
+    fn __repr__(&self) -> String {
+        format!(
+            "DamageRegion(left={}, top={}, right={}, bottom={})",
+            self.left, self.top, self.right, self.bottom
+        )
+    }
+}
+
+impl From<&crate::terminal::DamageRegion> for PyDamageRegion {
+    fn from(region: &crate::terminal::DamageRegion) -> Self {
+        PyDamageRegion {
+            left: region.left,
+            top: region.top,
+            right: region.right,
+            bottom: region.bottom,
+        }
+    }
+}
+
+/// Rendering hint
+#[pyclass(name = "RenderingHint")]
+#[derive(Clone)]
+pub struct PyRenderingHint {
+    #[pyo3(get)]
+    pub damage: PyDamageRegion,
+    #[pyo3(get)]
+    pub layer: String,
+    #[pyo3(get)]
+    pub animation: String,
+    #[pyo3(get)]
+    pub priority: u8,
+}
+
+#[pymethods]
+impl PyRenderingHint {
+    fn __repr__(&self) -> String {
+        format!(
+            "RenderingHint(layer={}, animation={}, priority={})",
+            self.layer, self.animation, self.priority
+        )
+    }
+}
+
+impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
+    fn from(hint: &crate::terminal::RenderingHint) -> Self {
+        use crate::terminal::{AnimationHint, ZLayer};
+
+        let layer = match hint.layer {
+            ZLayer::Background => "background",
+            ZLayer::Normal => "normal",
+            ZLayer::Overlay => "overlay",
+            ZLayer::Cursor => "cursor",
+        }
+        .to_string();
+
+        let animation = match hint.animation {
+            AnimationHint::None => "none",
+            AnimationHint::SmoothScroll => "smoothscroll",
+            AnimationHint::Fade => "fade",
+            AnimationHint::CursorBlink => "cursorblink",
+        }
+        .to_string();
+
+        PyRenderingHint {
+            damage: PyDamageRegion::from(&hint.damage),
+            layer,
+            animation,
+            priority: hint.priority as u8,
+        }
+    }
+}
+
+// === Feature 16: Performance Profiling ===
+
+/// Escape sequence profile
+#[pyclass(name = "EscapeSequenceProfile")]
+#[derive(Clone)]
+pub struct PyEscapeSequenceProfile {
+    #[pyo3(get)]
+    pub count: u64,
+    #[pyo3(get)]
+    pub total_time_us: u64,
+    #[pyo3(get)]
+    pub peak_time_us: u64,
+    #[pyo3(get)]
+    pub avg_time_us: u64,
+}
+
+#[pymethods]
+impl PyEscapeSequenceProfile {
+    fn __repr__(&self) -> String {
+        format!(
+            "EscapeSequenceProfile(count={}, avg_us={}, peak_us={})",
+            self.count, self.avg_time_us, self.peak_time_us
+        )
+    }
+}
+
+impl From<&crate::terminal::EscapeSequenceProfile> for PyEscapeSequenceProfile {
+    fn from(profile: &crate::terminal::EscapeSequenceProfile) -> Self {
+        PyEscapeSequenceProfile {
+            count: profile.count,
+            total_time_us: profile.total_time_us,
+            peak_time_us: profile.peak_time_us,
+            avg_time_us: profile.avg_time_us,
+        }
+    }
+}
+
+/// Profiling data
+#[pyclass(name = "ProfilingData")]
+#[derive(Clone)]
+pub struct PyProfilingData {
+    #[pyo3(get)]
+    pub categories: std::collections::HashMap<String, PyEscapeSequenceProfile>,
+    #[pyo3(get)]
+    pub allocations: u64,
+    #[pyo3(get)]
+    pub bytes_allocated: u64,
+    #[pyo3(get)]
+    pub peak_memory: usize,
+}
+
+#[pymethods]
+impl PyProfilingData {
+    fn __repr__(&self) -> String {
+        format!(
+            "ProfilingData(categories={}, allocations={}, peak_memory={})",
+            self.categories.len(),
+            self.allocations,
+            self.peak_memory
+        )
+    }
+}
+
+impl From<&crate::terminal::ProfilingData> for PyProfilingData {
+    fn from(data: &crate::terminal::ProfilingData) -> Self {
+        use crate::terminal::ProfileCategory;
+
+        let mut categories = std::collections::HashMap::new();
+        for (cat, profile) in &data.categories {
+            let key = match cat {
+                ProfileCategory::CSI => "csi",
+                ProfileCategory::OSC => "osc",
+                ProfileCategory::ESC => "esc",
+                ProfileCategory::DCS => "dcs",
+                ProfileCategory::Print => "print",
+                ProfileCategory::Control => "control",
+            }
+            .to_string();
+            categories.insert(key, PyEscapeSequenceProfile::from(profile));
+        }
+
+        PyProfilingData {
+            categories,
+            allocations: data.allocations,
+            bytes_allocated: data.bytes_allocated,
+            peak_memory: data.peak_memory,
+        }
+    }
+}
+
+// === Feature 14: Snapshot Diffing ===
+
+/// Line diff
+#[pyclass(name = "LineDiff")]
+#[derive(Clone)]
+pub struct PyLineDiff {
+    #[pyo3(get)]
+    pub change_type: String,
+    #[pyo3(get)]
+    pub old_row: Option<usize>,
+    #[pyo3(get)]
+    pub new_row: Option<usize>,
+    #[pyo3(get)]
+    pub old_content: Option<String>,
+    #[pyo3(get)]
+    pub new_content: Option<String>,
+}
+
+#[pymethods]
+impl PyLineDiff {
+    fn __repr__(&self) -> String {
+        format!(
+            "LineDiff(type={}, old_row={:?}, new_row={:?})",
+            self.change_type, self.old_row, self.new_row
+        )
+    }
+}
+
+impl From<&crate::terminal::LineDiff> for PyLineDiff {
+    fn from(diff: &crate::terminal::LineDiff) -> Self {
+        use crate::terminal::DiffChangeType;
+
+        let change_type = match diff.change_type {
+            DiffChangeType::Added => "added",
+            DiffChangeType::Removed => "removed",
+            DiffChangeType::Modified => "modified",
+            DiffChangeType::Unchanged => "unchanged",
+        }
+        .to_string();
+
+        PyLineDiff {
+            change_type,
+            old_row: diff.old_row,
+            new_row: diff.new_row,
+            old_content: diff.old_content.clone(),
+            new_content: diff.new_content.clone(),
+        }
+    }
+}
+
+/// Snapshot diff
+#[pyclass(name = "SnapshotDiff")]
+#[derive(Clone)]
+pub struct PySnapshotDiff {
+    #[pyo3(get)]
+    pub diffs: Vec<PyLineDiff>,
+    #[pyo3(get)]
+    pub added: usize,
+    #[pyo3(get)]
+    pub removed: usize,
+    #[pyo3(get)]
+    pub modified: usize,
+    #[pyo3(get)]
+    pub unchanged: usize,
+}
+
+#[pymethods]
+impl PySnapshotDiff {
+    fn __repr__(&self) -> String {
+        format!(
+            "SnapshotDiff(added={}, removed={}, modified={}, unchanged={})",
+            self.added, self.removed, self.modified, self.unchanged
+        )
+    }
+}
+
+impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
+    fn from(diff: &crate::terminal::SnapshotDiff) -> Self {
+        PySnapshotDiff {
+            diffs: diff.diffs.iter().map(PyLineDiff::from).collect(),
+            added: diff.added,
+            removed: diff.removed,
+            modified: diff.modified,
+            unchanged: diff.unchanged,
+        }
+    }
+}
+
+// === Feature 15: Regex Search ===
+
+/// Regex match
+#[pyclass(name = "RegexMatch")]
+#[derive(Clone)]
+pub struct PyRegexMatch {
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub end_row: usize,
+    #[pyo3(get)]
+    pub end_col: usize,
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub captures: Vec<String>,
+}
+
+#[pymethods]
+impl PyRegexMatch {
+    fn __repr__(&self) -> String {
+        format!(
+            "RegexMatch(row={}, col={}, text={:?})",
+            self.row, self.col, self.text
+        )
+    }
+}
+
+impl From<&crate::terminal::RegexMatch> for PyRegexMatch {
+    fn from(m: &crate::terminal::RegexMatch) -> Self {
+        PyRegexMatch {
+            row: m.row,
+            col: m.col,
+            end_row: m.end_row,
+            end_col: m.end_col,
+            text: m.text.clone(),
+            captures: m.captures.clone(),
+        }
+    }
+}
+
+// === Feature 13: Multiplexing ===
+
+/// Pane state
+#[pyclass(name = "PaneState")]
+#[derive(Clone)]
+pub struct PyPaneState {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub title: String,
+    #[pyo3(get)]
+    pub size: (usize, usize),
+    #[pyo3(get)]
+    pub position: (usize, usize),
+    #[pyo3(get)]
+    pub cwd: Option<String>,
+    #[pyo3(get)]
+    pub content: Vec<String>,
+    #[pyo3(get)]
+    pub cursor: (usize, usize),
+    #[pyo3(get)]
+    pub alt_screen: bool,
+    #[pyo3(get)]
+    pub scroll_offset: usize,
+    #[pyo3(get)]
+    pub created_at: u64,
+    #[pyo3(get)]
+    pub last_activity: u64,
+}
+
+#[pymethods]
+impl PyPaneState {
+    fn __repr__(&self) -> String {
+        format!(
+            "PaneState(id={}, title={}, size={}x{})",
+            self.id, self.title, self.size.0, self.size.1
+        )
+    }
+}
+
+impl From<&crate::terminal::PaneState> for PyPaneState {
+    fn from(state: &crate::terminal::PaneState) -> Self {
+        PyPaneState {
+            id: state.id.clone(),
+            title: state.title.clone(),
+            size: state.size,
+            position: state.position,
+            cwd: state.cwd.clone(),
+            content: state.content.clone(),
+            cursor: state.cursor,
+            alt_screen: state.alt_screen,
+            scroll_offset: state.scroll_offset,
+            created_at: state.created_at,
+            last_activity: state.last_activity,
+        }
+    }
+}
+
+/// Window layout
+#[pyclass(name = "WindowLayout")]
+#[derive(Clone)]
+pub struct PyWindowLayout {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub direction: String,
+    #[pyo3(get)]
+    pub panes: Vec<String>,
+    #[pyo3(get)]
+    pub sizes: Vec<u8>,
+    #[pyo3(get)]
+    pub active_pane: usize,
+}
+
+#[pymethods]
+impl PyWindowLayout {
+    fn __repr__(&self) -> String {
+        format!(
+            "WindowLayout(id={}, name={}, panes={})",
+            self.id,
+            self.name,
+            self.panes.len()
+        )
+    }
+}
+
+impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
+    fn from(layout: &crate::terminal::WindowLayout) -> Self {
+        use crate::terminal::LayoutDirection;
+
+        let direction = match layout.direction {
+            LayoutDirection::Horizontal => "horizontal",
+            LayoutDirection::Vertical => "vertical",
+        }
+        .to_string();
+
+        PyWindowLayout {
+            id: layout.id.clone(),
+            name: layout.name.clone(),
+            direction,
+            panes: layout.panes.clone(),
+            sizes: layout.sizes.clone(),
+            active_pane: layout.active_pane,
+        }
+    }
+}
+
+/// Session state
+#[pyclass(name = "SessionState")]
+#[derive(Clone)]
+pub struct PySessionState {
+    #[pyo3(get)]
+    pub id: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub panes: Vec<PyPaneState>,
+    #[pyo3(get)]
+    pub layouts: Vec<PyWindowLayout>,
+    #[pyo3(get)]
+    pub active_layout: usize,
+    #[pyo3(get)]
+    pub created_at: u64,
+    #[pyo3(get)]
+    pub last_saved: u64,
+}
+
+#[pymethods]
+impl PySessionState {
+    fn __repr__(&self) -> String {
+        format!(
+            "SessionState(id={}, name={}, panes={}, layouts={})",
+            self.id,
+            self.name,
+            self.panes.len(),
+            self.layouts.len()
+        )
+    }
+}
+
+impl From<&crate::terminal::SessionState> for PySessionState {
+    fn from(session: &crate::terminal::SessionState) -> Self {
+        PySessionState {
+            id: session.id.clone(),
+            name: session.name.clone(),
+            panes: session.panes.iter().map(PyPaneState::from).collect(),
+            layouts: session.layouts.iter().map(PyWindowLayout::from).collect(),
+            active_layout: session.active_layout,
+            created_at: session.created_at,
+            last_saved: session.last_saved,
+        }
+    }
+}
+
+// === Feature 21: Image Protocol Support ===
+
+/// Image protocol
+#[pyclass(name = "ImageProtocol")]
+#[derive(Clone)]
+pub enum PyImageProtocol {
+    Sixel,
+    ITerm2,
+    Kitty,
+}
+
+/// Image format
+#[pyclass(name = "ImageFormat")]
+#[derive(Clone)]
+pub enum PyImageFormat {
+    PNG,
+    JPEG,
+    GIF,
+    BMP,
+    RGBA,
+    RGB,
+}
+
+/// Inline image
+#[pyclass(name = "InlineImage")]
+#[derive(Clone)]
+pub struct PyInlineImage {
+    #[pyo3(get)]
+    pub id: Option<String>,
+    #[pyo3(get)]
+    pub protocol: String,
+    #[pyo3(get)]
+    pub format: String,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+    #[pyo3(get)]
+    pub width: u32,
+    #[pyo3(get)]
+    pub height: u32,
+    #[pyo3(get)]
+    pub position: (usize, usize),
+    #[pyo3(get)]
+    pub display_cols: usize,
+    #[pyo3(get)]
+    pub display_rows: usize,
+}
+
+#[pymethods]
+impl PyInlineImage {
+    fn __repr__(&self) -> String {
+        format!(
+            "InlineImage(protocol={}, format={}, size={}x{}, pos={:?})",
+            self.protocol, self.format, self.width, self.height, self.position
+        )
+    }
+}
+
+impl From<&crate::terminal::InlineImage> for PyInlineImage {
+    fn from(img: &crate::terminal::InlineImage) -> Self {
+        use crate::terminal::{ImageFormat, ImageProtocol};
+
+        let protocol = match img.protocol {
+            ImageProtocol::Sixel => "sixel",
+            ImageProtocol::ITerm2 => "iterm2",
+            ImageProtocol::Kitty => "kitty",
+        }
+        .to_string();
+
+        let format = match img.format {
+            ImageFormat::PNG => "png",
+            ImageFormat::JPEG => "jpeg",
+            ImageFormat::GIF => "gif",
+            ImageFormat::BMP => "bmp",
+            ImageFormat::RGBA => "rgba",
+            ImageFormat::RGB => "rgb",
+        }
+        .to_string();
+
+        PyInlineImage {
+            id: img.id.clone(),
+            protocol,
+            format,
+            data: img.data.clone(),
+            width: img.width,
+            height: img.height,
+            position: img.position,
+            display_cols: img.display_cols,
+            display_rows: img.display_rows,
+        }
+    }
+}
+
+// === Feature 28: Benchmarking Suite ===
+
+/// Benchmark result
+#[pyclass(name = "BenchmarkResult")]
+#[derive(Clone)]
+pub struct PyBenchmarkResult {
+    #[pyo3(get)]
+    pub category: String,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub iterations: u64,
+    #[pyo3(get)]
+    pub total_time_us: u64,
+    #[pyo3(get)]
+    pub avg_time_us: u64,
+    #[pyo3(get)]
+    pub min_time_us: u64,
+    #[pyo3(get)]
+    pub max_time_us: u64,
+    #[pyo3(get)]
+    pub ops_per_sec: f64,
+    #[pyo3(get)]
+    pub memory_bytes: Option<usize>,
+}
+
+#[pymethods]
+impl PyBenchmarkResult {
+    fn __repr__(&self) -> String {
+        format!(
+            "BenchmarkResult(category={}, name={}, iterations={}, avg_us={}, ops/sec={:.0})",
+            self.category, self.name, self.iterations, self.avg_time_us, self.ops_per_sec
+        )
+    }
+}
+
+impl From<&crate::terminal::BenchmarkResult> for PyBenchmarkResult {
+    fn from(result: &crate::terminal::BenchmarkResult) -> Self {
+        use crate::terminal::BenchmarkCategory;
+
+        let category = match result.category {
+            BenchmarkCategory::Rendering => "rendering",
+            BenchmarkCategory::Parsing => "parsing",
+            BenchmarkCategory::GridOps => "gridops",
+            BenchmarkCategory::Scrollback => "scrollback",
+            BenchmarkCategory::Memory => "memory",
+            BenchmarkCategory::Throughput => "throughput",
+        }
+        .to_string();
+
+        PyBenchmarkResult {
+            category,
+            name: result.name.clone(),
+            iterations: result.iterations,
+            total_time_us: result.total_time_us,
+            avg_time_us: result.avg_time_us,
+            min_time_us: result.min_time_us,
+            max_time_us: result.max_time_us,
+            ops_per_sec: result.ops_per_sec,
+            memory_bytes: result.memory_bytes,
+        }
+    }
+}
+
+/// Benchmark suite
+#[pyclass(name = "BenchmarkSuite")]
+#[derive(Clone)]
+pub struct PyBenchmarkSuite {
+    #[pyo3(get)]
+    pub results: Vec<PyBenchmarkResult>,
+    #[pyo3(get)]
+    pub total_time_ms: u64,
+    #[pyo3(get)]
+    pub suite_name: String,
+}
+
+#[pymethods]
+impl PyBenchmarkSuite {
+    fn __repr__(&self) -> String {
+        format!(
+            "BenchmarkSuite(name={}, tests={}, time={}ms)",
+            self.suite_name,
+            self.results.len(),
+            self.total_time_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::BenchmarkSuite> for PyBenchmarkSuite {
+    fn from(suite: &crate::terminal::BenchmarkSuite) -> Self {
+        PyBenchmarkSuite {
+            results: suite.results.iter().map(PyBenchmarkResult::from).collect(),
+            total_time_ms: suite.total_time_ms,
+            suite_name: suite.suite_name.clone(),
+        }
+    }
+}
+
+// === Feature 29: Terminal Compliance Testing ===
+
+/// Compliance test
+#[pyclass(name = "ComplianceTest")]
+#[derive(Clone)]
+pub struct PyComplianceTest {
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub category: String,
+    #[pyo3(get)]
+    pub passed: bool,
+    #[pyo3(get)]
+    pub expected: String,
+    #[pyo3(get)]
+    pub actual: String,
+    #[pyo3(get)]
+    pub notes: Option<String>,
+}
+
+#[pymethods]
+impl PyComplianceTest {
+    fn __repr__(&self) -> String {
+        format!(
+            "ComplianceTest(name={}, category={}, passed={})",
+            self.name, self.category, self.passed
+        )
+    }
+}
+
+impl From<&crate::terminal::ComplianceTest> for PyComplianceTest {
+    fn from(test: &crate::terminal::ComplianceTest) -> Self {
+        PyComplianceTest {
+            name: test.name.clone(),
+            category: test.category.clone(),
+            passed: test.passed,
+            expected: test.expected.clone(),
+            actual: test.actual.clone(),
+            notes: test.notes.clone(),
+        }
+    }
+}
+
+/// Compliance report
+#[pyclass(name = "ComplianceReport")]
+#[derive(Clone)]
+pub struct PyComplianceReport {
+    #[pyo3(get)]
+    pub terminal_info: String,
+    #[pyo3(get)]
+    pub level: String,
+    #[pyo3(get)]
+    pub tests: Vec<PyComplianceTest>,
+    #[pyo3(get)]
+    pub passed: usize,
+    #[pyo3(get)]
+    pub failed: usize,
+    #[pyo3(get)]
+    pub compliance_percent: f64,
+}
+
+#[pymethods]
+impl PyComplianceReport {
+    fn __repr__(&self) -> String {
+        format!(
+            "ComplianceReport(level={}, passed={}/{}, compliance={:.1}%)",
+            self.level, self.passed, self.passed + self.failed, self.compliance_percent
+        )
+    }
+}
+
+impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
+    fn from(report: &crate::terminal::ComplianceReport) -> Self {
+        use crate::terminal::ComplianceLevel;
+
+        let level = match report.level {
+            ComplianceLevel::VT52 => "vt52",
+            ComplianceLevel::VT100 => "vt100",
+            ComplianceLevel::VT220 => "vt220",
+            ComplianceLevel::VT320 => "vt320",
+            ComplianceLevel::VT420 => "vt420",
+            ComplianceLevel::VT520 => "vt520",
+            ComplianceLevel::XTerm => "xterm",
+        }
+        .to_string();
+
+        PyComplianceReport {
+            terminal_info: report.terminal_info.clone(),
+            level,
+            tests: report.tests.iter().map(PyComplianceTest::from).collect(),
+            passed: report.passed,
+            failed: report.failed,
+            compliance_percent: report.compliance_percent,
+        }
+    }
+}
+
+// === Feature 30: OSC 52 Clipboard Sync ===
+
+/// Clipboard sync event
+#[pyclass(name = "ClipboardSyncEvent")]
+#[derive(Clone)]
+pub struct PyClipboardSyncEvent {
+    #[pyo3(get)]
+    pub target: String,
+    #[pyo3(get)]
+    pub operation: String,
+    #[pyo3(get)]
+    pub content: Option<String>,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub is_remote: bool,
+}
+
+#[pymethods]
+impl PyClipboardSyncEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "ClipboardSyncEvent(target={}, operation={}, is_remote={})",
+            self.target, self.operation, self.is_remote
+        )
+    }
+}
+
+impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
+    fn from(event: &crate::terminal::ClipboardSyncEvent) -> Self {
+        use crate::terminal::{ClipboardOperation, ClipboardTarget};
+
+        let target = match event.target {
+            ClipboardTarget::Clipboard => "clipboard",
+            ClipboardTarget::Primary => "primary",
+            ClipboardTarget::Secondary => "secondary",
+            ClipboardTarget::CutBuffer0 => "cutbuffer0",
+        }
+        .to_string();
+
+        let operation = match event.operation {
+            ClipboardOperation::Set => "set",
+            ClipboardOperation::Query => "query",
+            ClipboardOperation::Clear => "clear",
+        }
+        .to_string();
+
+        PyClipboardSyncEvent {
+            target,
+            operation,
+            content: event.content.clone(),
+            timestamp: event.timestamp,
+            is_remote: event.is_remote,
+        }
+    }
+}
+
+/// Clipboard history entry
+#[pyclass(name = "ClipboardHistoryEntry")]
+#[derive(Clone)]
+pub struct PyClipboardHistoryEntry {
+    #[pyo3(get)]
+    pub target: String,
+    #[pyo3(get)]
+    pub content: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub source: Option<String>,
+}
+
+#[pymethods]
+impl PyClipboardHistoryEntry {
+    fn __repr__(&self) -> String {
+        format!(
+            "ClipboardHistoryEntry(target={}, content_len={}, timestamp={})",
+            self.target,
+            self.content.len(),
+            self.timestamp
+        )
+    }
+}
+
+impl From<&crate::terminal::ClipboardHistoryEntry> for PyClipboardHistoryEntry {
+    fn from(entry: &crate::terminal::ClipboardHistoryEntry) -> Self {
+        use crate::terminal::ClipboardTarget;
+
+        let target = match entry.target {
+            ClipboardTarget::Clipboard => "clipboard",
+            ClipboardTarget::Primary => "primary",
+            ClipboardTarget::Secondary => "secondary",
+            ClipboardTarget::CutBuffer0 => "cutbuffer0",
+        }
+        .to_string();
+
+        PyClipboardHistoryEntry {
+            target,
+            content: entry.content.clone(),
+            timestamp: entry.timestamp,
+            source: entry.source.clone(),
+        }
+    }
+}
+
+// === Feature 31: Shell Integration++ ===
+
+/// Command execution record
+#[pyclass(name = "CommandExecution")]
+#[derive(Clone)]
+pub struct PyCommandExecution {
+    #[pyo3(get)]
+    pub command: String,
+    #[pyo3(get)]
+    pub cwd: Option<String>,
+    #[pyo3(get)]
+    pub start_time: u64,
+    #[pyo3(get)]
+    pub end_time: Option<u64>,
+    #[pyo3(get)]
+    pub exit_code: Option<i32>,
+    #[pyo3(get)]
+    pub duration_ms: Option<u64>,
+    #[pyo3(get)]
+    pub success: Option<bool>,
+}
+
+#[pymethods]
+impl PyCommandExecution {
+    fn __repr__(&self) -> String {
+        format!(
+            "CommandExecution(command={:?}, exit_code={:?}, duration={:?}ms)",
+            self.command, self.exit_code, self.duration_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
+    fn from(cmd: &crate::terminal::CommandExecution) -> Self {
+        PyCommandExecution {
+            command: cmd.command.clone(),
+            cwd: cmd.cwd.clone(),
+            start_time: cmd.start_time,
+            end_time: cmd.end_time,
+            exit_code: cmd.exit_code,
+            duration_ms: cmd.duration_ms,
+            success: cmd.success,
+        }
+    }
+}
+
+/// Shell integration statistics
+#[pyclass(name = "ShellIntegrationStats")]
+#[derive(Clone)]
+pub struct PyShellIntegrationStats {
+    #[pyo3(get)]
+    pub total_commands: usize,
+    #[pyo3(get)]
+    pub successful_commands: usize,
+    #[pyo3(get)]
+    pub failed_commands: usize,
+    #[pyo3(get)]
+    pub avg_duration_ms: f64,
+    #[pyo3(get)]
+    pub total_duration_ms: u64,
+}
+
+#[pymethods]
+impl PyShellIntegrationStats {
+    fn __repr__(&self) -> String {
+        format!(
+            "ShellIntegrationStats(total={}, success={}, failed={}, avg_ms={:.1})",
+            self.total_commands, self.successful_commands, self.failed_commands, self.avg_duration_ms
+        )
+    }
+}
+
+impl From<&crate::terminal::ShellIntegrationStats> for PyShellIntegrationStats {
+    fn from(stats: &crate::terminal::ShellIntegrationStats) -> Self {
+        PyShellIntegrationStats {
+            total_commands: stats.total_commands,
+            successful_commands: stats.successful_commands,
+            failed_commands: stats.failed_commands,
+            avg_duration_ms: stats.avg_duration_ms,
+            total_duration_ms: stats.total_duration_ms,
+        }
+    }
+}
+
+/// CWD change notification
+#[pyclass(name = "CwdChange")]
+#[derive(Clone)]
+pub struct PyCwdChange {
+    #[pyo3(get)]
+    pub old_cwd: Option<String>,
+    #[pyo3(get)]
+    pub new_cwd: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyCwdChange {
+    fn __repr__(&self) -> String {
+        format!(
+            "CwdChange(old={:?}, new={:?})",
+            self.old_cwd, self.new_cwd
+        )
+    }
+}
+
+impl From<&crate::terminal::CwdChange> for PyCwdChange {
+    fn from(change: &crate::terminal::CwdChange) -> Self {
+        PyCwdChange {
+            old_cwd: change.old_cwd.clone(),
+            new_cwd: change.new_cwd.clone(),
+            timestamp: change.timestamp,
+        }
+    }
+}
+
+// === Feature 37: Terminal Notifications ===
+
+/// Notification event
+#[pyclass(name = "NotificationEvent")]
+#[derive(Clone)]
+pub struct PyNotificationEvent {
+    #[pyo3(get)]
+    pub trigger: String,
+    #[pyo3(get)]
+    pub alert: String,
+    #[pyo3(get)]
+    pub message: Option<String>,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub delivered: bool,
+}
+
+#[pymethods]
+impl PyNotificationEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "NotificationEvent(trigger={}, alert={}, delivered={})",
+            self.trigger, self.alert, self.delivered
+        )
+    }
+}
+
+impl From<&crate::terminal::NotificationEvent> for PyNotificationEvent {
+    fn from(event: &crate::terminal::NotificationEvent) -> Self {
+        let trigger = match event.trigger {
+            crate::terminal::NotificationTrigger::Bell => "Bell".to_string(),
+            crate::terminal::NotificationTrigger::Activity => "Activity".to_string(),
+            crate::terminal::NotificationTrigger::Silence => "Silence".to_string(),
+            crate::terminal::NotificationTrigger::Custom(id) => format!("Custom({})", id),
+        };
+
+        let alert = match event.alert {
+            crate::terminal::NotificationAlert::Desktop => "Desktop".to_string(),
+            crate::terminal::NotificationAlert::Sound(vol) => format!("Sound({})", vol),
+            crate::terminal::NotificationAlert::Visual => "Visual".to_string(),
+        };
+
+        PyNotificationEvent {
+            trigger,
+            alert,
+            message: event.message.clone(),
+            timestamp: event.timestamp,
+            delivered: event.delivered,
+        }
+    }
+}
+
+/// Notification configuration
+#[pyclass(name = "NotificationConfig")]
+#[derive(Clone)]
+pub struct PyNotificationConfig {
+    #[pyo3(get, set)]
+    pub bell_desktop: bool,
+    #[pyo3(get, set)]
+    pub bell_sound: u8,
+    #[pyo3(get, set)]
+    pub bell_visual: bool,
+    #[pyo3(get, set)]
+    pub activity_enabled: bool,
+    #[pyo3(get, set)]
+    pub activity_threshold: u64,
+    #[pyo3(get, set)]
+    pub silence_enabled: bool,
+    #[pyo3(get, set)]
+    pub silence_threshold: u64,
+}
+
+#[pymethods]
+impl PyNotificationConfig {
+    #[new]
+    fn new() -> Self {
+        PyNotificationConfig::default()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "NotificationConfig(bell_desktop={}, bell_visual={}, activity={}, silence={})",
+            self.bell_desktop, self.bell_visual, self.activity_enabled, self.silence_enabled
+        )
+    }
+}
+
+impl Default for PyNotificationConfig {
+    fn default() -> Self {
+        let config = crate::terminal::NotificationConfig::default();
+        PyNotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+impl From<&crate::terminal::NotificationConfig> for PyNotificationConfig {
+    fn from(config: &crate::terminal::NotificationConfig) -> Self {
+        PyNotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
+    fn from(config: &PyNotificationConfig) -> Self {
+        crate::terminal::NotificationConfig {
+            bell_desktop: config.bell_desktop,
+            bell_sound: config.bell_sound,
+            bell_visual: config.bell_visual,
+            activity_enabled: config.activity_enabled,
+            activity_threshold: config.activity_threshold,
+            silence_enabled: config.silence_enabled,
+            silence_threshold: config.silence_threshold,
+        }
+    }
+}
+
+// === Feature 24: Terminal Replay/Recording ===
+
+/// Recording event
+#[pyclass(name = "RecordingEvent")]
+#[derive(Clone)]
+pub struct PyRecordingEvent {
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub event_type: String,
+    #[pyo3(get)]
+    pub data: Vec<u8>,
+    #[pyo3(get)]
+    pub metadata: Option<(usize, usize)>,
+}
+
+#[pymethods]
+impl PyRecordingEvent {
+    fn __repr__(&self) -> String {
+        format!(
+            "RecordingEvent(type={}, timestamp={}ms, data_len={})",
+            self.event_type,
+            self.timestamp,
+            self.data.len()
+        )
+    }
+
+    /// Get event data as string
+    fn get_data_str(&self) -> String {
+        String::from_utf8_lossy(&self.data).to_string()
+    }
+}
+
+impl From<&crate::terminal::RecordingEvent> for PyRecordingEvent {
+    fn from(event: &crate::terminal::RecordingEvent) -> Self {
+        let event_type = match event.event_type {
+            crate::terminal::RecordingEventType::Input => "Input".to_string(),
+            crate::terminal::RecordingEventType::Output => "Output".to_string(),
+            crate::terminal::RecordingEventType::Resize => "Resize".to_string(),
+            crate::terminal::RecordingEventType::Marker => "Marker".to_string(),
+        };
+
+        PyRecordingEvent {
+            timestamp: event.timestamp,
+            event_type,
+            data: event.data.clone(),
+            metadata: event.metadata,
+        }
+    }
+}
+
+/// Recording session
+#[pyclass(name = "RecordingSession")]
+#[derive(Clone)]
+pub struct PyRecordingSession {
+    #[pyo3(get)]
+    pub start_time: u64,
+    #[pyo3(get)]
+    pub initial_size: (usize, usize),
+    #[pyo3(get)]
+    pub duration: u64,
+    #[pyo3(get)]
+    pub title: Option<String>,
+    #[pyo3(get)]
+    pub event_count: usize,
+}
+
+#[pymethods]
+impl PyRecordingSession {
+    fn __repr__(&self) -> String {
+        format!(
+            "RecordingSession(duration={}ms, size={:?}, events={})",
+            self.duration, self.initial_size, self.event_count
+        )
+    }
+
+    /// Get recording size (cols, rows)
+    fn get_size(&self) -> (usize, usize) {
+        self.initial_size
+    }
+
+    /// Get duration in seconds
+    fn get_duration_seconds(&self) -> f64 {
+        self.duration as f64 / 1000.0
+    }
+}
+
+impl From<&crate::terminal::RecordingSession> for PyRecordingSession {
+    fn from(session: &crate::terminal::RecordingSession) -> Self {
+        PyRecordingSession {
+            start_time: session.start_time,
+            initial_size: session.initial_size,
+            duration: session.duration,
+            title: session.title.clone(),
+            event_count: session.events.len(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

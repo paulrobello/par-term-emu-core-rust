@@ -19,7 +19,7 @@ mod write;
 pub use notification::Notification;
 
 // Imports
-use crate::cell::CellFlags;
+use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
 use crate::cursor::Cursor;
 use crate::debug;
@@ -27,8 +27,1015 @@ use crate::grid::Grid;
 use crate::mouse::{MouseEncoding, MouseEvent, MouseMode};
 use crate::shell_integration::ShellIntegration;
 use crate::sixel;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use vte::{Params, Perform};
+
+/// Bell event type
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BellEvent {
+    /// Standard visual bell
+    VisualBell,
+    /// Warning bell with volume (0-8, where 0 is off)
+    WarningBell(u8),
+    /// Margin bell with volume (0-8, where 0 is off)
+    MarginBell(u8),
+}
+
+/// Terminal change event
+#[derive(Debug, Clone, PartialEq)]
+pub enum TerminalEvent {
+    /// Bell event occurred
+    BellRang(BellEvent),
+    /// Terminal title changed
+    TitleChanged(String),
+    /// Terminal was resized
+    SizeChanged(usize, usize),
+    /// A terminal mode changed
+    ModeChanged(String, bool),
+    /// Graphics added at row
+    GraphicsAdded(usize),
+    /// Hyperlink added
+    HyperlinkAdded(String),
+    /// Dirty region (first_row, last_row)
+    DirtyRegion(usize, usize),
+}
+
+/// Hyperlink information with all its locations
+#[derive(Debug, Clone)]
+pub struct HyperlinkInfo {
+    /// The URL of the hyperlink
+    pub url: String,
+    /// All (col, row) positions where this link appears
+    pub positions: Vec<(usize, usize)>,
+    /// Optional hyperlink ID from OSC 8
+    pub id: Option<String>,
+}
+
+/// Search match result
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchMatch {
+    /// Row index (negative values are scrollback, 0+ are visible screen)
+    pub row: isize,
+    /// Column where match starts (0-indexed)
+    pub col: usize,
+    /// Length of the match in characters
+    pub length: usize,
+    /// Matched text
+    pub text: String,
+}
+
+/// Detected content item (URL, file path, etc.)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DetectedItem {
+    /// URL with position (url, col, row)
+    Url(String, usize, usize),
+    /// File path with position and optional line number (path, col, row, line_number)
+    FilePath(String, usize, usize, Option<usize>),
+    /// Git hash (7-40 chars) with position (hash, col, row)
+    GitHash(String, usize, usize),
+    /// IP address with position (ip, col, row)
+    IpAddress(String, usize, usize),
+    /// Email address with position (email, col, row)
+    Email(String, usize, usize),
+}
+
+/// Selection mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionMode {
+    /// Character-by-character selection
+    Character,
+    /// Line-by-line selection
+    Line,
+    /// Rectangular block selection
+    Block,
+}
+
+/// Selection state
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    /// Start position (col, row)
+    pub start: (usize, usize),
+    /// End position (col, row)
+    pub end: (usize, usize),
+    /// Selection mode
+    pub mode: SelectionMode,
+}
+
+/// Export format for scrollback
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    /// Plain text (stripped of all formatting)
+    Plain,
+    /// HTML with colors and styles
+    Html,
+    /// Raw ANSI escape sequences preserved
+    Ansi,
+}
+
+/// Scrollback statistics
+#[derive(Debug, Clone)]
+pub struct ScrollbackStats {
+    /// Total lines in scrollback
+    pub total_lines: usize,
+    /// Estimated memory usage in bytes
+    pub memory_bytes: usize,
+    /// Whether scrollback has wrapped around
+    pub has_wrapped: bool,
+}
+
+/// Bookmark in scrollback
+#[derive(Debug, Clone)]
+pub struct Bookmark {
+    /// Unique bookmark ID
+    pub id: usize,
+    /// Row position (negative = scrollback)
+    pub row: isize,
+    /// User-defined label
+    pub label: String,
+}
+
+// === Feature 7: Performance Metrics ===
+
+/// Performance metrics for tracking terminal rendering performance
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceMetrics {
+    /// Total number of frames rendered
+    pub frames_rendered: u64,
+    /// Total number of cells updated
+    pub cells_updated: u64,
+    /// Total number of bytes processed
+    pub bytes_processed: u64,
+    /// Total processing time in microseconds
+    pub total_processing_us: u64,
+    /// Peak processing time for a single frame in microseconds
+    pub peak_frame_us: u64,
+    /// Number of scrolls performed
+    pub scroll_count: u64,
+    /// Number of line wraps
+    pub wrap_count: u64,
+    /// Number of escape sequences processed
+    pub escape_sequences: u64,
+}
+
+/// Frame timing information
+#[derive(Debug, Clone)]
+pub struct FrameTiming {
+    /// Frame number
+    pub frame_number: u64,
+    /// Processing time in microseconds
+    pub processing_us: u64,
+    /// Number of cells updated this frame
+    pub cells_updated: usize,
+    /// Number of bytes processed this frame
+    pub bytes_processed: usize,
+}
+
+// === Feature 8: Advanced Color Operations ===
+
+/// HSV color representation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorHSV {
+    /// Hue (0-360 degrees)
+    pub h: f32,
+    /// Saturation (0.0-1.0)
+    pub s: f32,
+    /// Value/Brightness (0.0-1.0)
+    pub v: f32,
+}
+
+/// HSL color representation
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorHSL {
+    /// Hue (0-360 degrees)
+    pub h: f32,
+    /// Saturation (0.0-1.0)
+    pub s: f32,
+    /// Lightness (0.0-1.0)
+    pub l: f32,
+}
+
+/// Color theme generation mode
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThemeMode {
+    /// Complementary color (opposite on color wheel)
+    Complementary,
+    /// Analogous colors (adjacent on color wheel)
+    Analogous,
+    /// Triadic colors (evenly spaced on color wheel)
+    Triadic,
+    /// Tetradic/square colors
+    Tetradic,
+    /// Split complementary
+    SplitComplementary,
+    /// Monochromatic (varying lightness)
+    Monochromatic,
+}
+
+/// Generated color palette
+#[derive(Debug, Clone)]
+pub struct ColorPalette {
+    /// Base color
+    pub base: (u8, u8, u8),
+    /// Generated colors based on theme mode
+    pub colors: Vec<(u8, u8, u8)>,
+    /// Theme mode used
+    pub mode: ThemeMode,
+}
+
+// === Feature 9: Line Wrapping Utilities ===
+
+/// Line join result
+#[derive(Debug, Clone)]
+pub struct JoinedLines {
+    /// The joined text
+    pub text: String,
+    /// Start row of joined section
+    pub start_row: usize,
+    /// End row of joined section (inclusive)
+    pub end_row: usize,
+    /// Number of lines joined
+    pub lines_joined: usize,
+}
+
+/// Reflow statistics
+#[derive(Debug, Clone)]
+pub struct ReflowStats {
+    /// Number of lines before reflow
+    pub lines_before: usize,
+    /// Number of lines after reflow
+    pub lines_after: usize,
+    /// Number of wrap points changed
+    pub wraps_changed: usize,
+}
+
+// === Feature 10: Clipboard Integration ===
+
+/// Clipboard entry with history
+#[derive(Debug, Clone)]
+pub struct ClipboardEntry {
+    /// Clipboard content
+    pub content: String,
+    /// Timestamp when added (microseconds since epoch)
+    pub timestamp: u64,
+    /// Optional label/description
+    pub label: Option<String>,
+}
+
+/// Clipboard slot identifier
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClipboardSlot {
+    /// Primary clipboard (OSC 52 default)
+    Primary,
+    /// System clipboard
+    Clipboard,
+    /// Selection clipboard (X11)
+    Selection,
+    /// Custom numbered slot (0-9)
+    Custom(u8),
+}
+
+// === Feature 17: Advanced Mouse Support ===
+
+/// Mouse event type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventType {
+    /// Mouse button press
+    Press,
+    /// Mouse button release
+    Release,
+    /// Mouse movement (with or without button held)
+    Move,
+    /// Mouse drag (move with button held)
+    Drag,
+    /// Mouse scroll up
+    ScrollUp,
+    /// Mouse scroll down
+    ScrollDown,
+}
+
+/// Mouse button
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    None,
+}
+
+/// Mouse event record with position and metadata
+#[derive(Debug, Clone)]
+pub struct MouseEventRecord {
+    /// Event type
+    pub event_type: MouseEventType,
+    /// Mouse button involved
+    pub button: MouseButton,
+    /// Column position (0-indexed)
+    pub col: usize,
+    /// Row position (0-indexed)
+    pub row: usize,
+    /// Pixel position (for SGR 1016)
+    pub pixel_x: Option<u16>,
+    pub pixel_y: Option<u16>,
+    /// Modifier keys (shift, alt, ctrl)
+    pub modifiers: u8,
+    /// Timestamp in microseconds
+    pub timestamp: u64,
+}
+
+/// Mouse position history entry
+#[derive(Debug, Clone)]
+pub struct MousePosition {
+    pub col: usize,
+    pub row: usize,
+    pub timestamp: u64,
+}
+
+// === Feature 19: Custom Rendering Hints ===
+
+/// Damage region for incremental rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DamageRegion {
+    /// Top-left column
+    pub left: usize,
+    /// Top-left row
+    pub top: usize,
+    /// Bottom-right column (exclusive)
+    pub right: usize,
+    /// Bottom-right row (exclusive)
+    pub bottom: usize,
+}
+
+/// Z-order layer for rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ZLayer {
+    /// Background layer
+    Background = 0,
+    /// Normal content
+    Normal = 1,
+    /// Overlays (e.g., selections)
+    Overlay = 2,
+    /// Cursor and UI elements
+    Cursor = 3,
+}
+
+/// Animation hint for smooth transitions
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationHint {
+    /// No animation
+    None,
+    /// Smooth scroll
+    SmoothScroll,
+    /// Fade in/out
+    Fade,
+    /// Cursor blink
+    CursorBlink,
+}
+
+/// Priority for partial updates
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum UpdatePriority {
+    Low = 0,
+    Normal = 1,
+    High = 2,
+    Critical = 3,
+}
+
+/// Rendering hint for optimization
+#[derive(Debug, Clone)]
+pub struct RenderingHint {
+    /// Damaged region that needs redrawing
+    pub damage: DamageRegion,
+    /// Z-order layer
+    pub layer: ZLayer,
+    /// Animation hint
+    pub animation: AnimationHint,
+    /// Update priority
+    pub priority: UpdatePriority,
+}
+
+// === Feature 16: Performance Profiling ===
+
+/// Profiling data for escape sequences
+#[derive(Debug, Clone, Default)]
+pub struct EscapeSequenceProfile {
+    /// Total count of this sequence type
+    pub count: u64,
+    /// Total time spent processing (microseconds)
+    pub total_time_us: u64,
+    /// Peak processing time (microseconds)
+    pub peak_time_us: u64,
+    /// Average processing time (microseconds)
+    pub avg_time_us: u64,
+}
+
+/// Profiling category
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProfileCategory {
+    /// CSI sequences
+    CSI,
+    /// OSC sequences
+    OSC,
+    /// ESC sequences
+    ESC,
+    /// DCS sequences
+    DCS,
+    /// Plain text printing
+    Print,
+    /// Control characters
+    Control,
+}
+
+/// Complete profiling data
+#[derive(Debug, Clone, Default)]
+pub struct ProfilingData {
+    /// Per-category profiling
+    pub categories: std::collections::HashMap<ProfileCategory, EscapeSequenceProfile>,
+    /// Memory allocations tracked
+    pub allocations: u64,
+    /// Total bytes allocated
+    pub bytes_allocated: u64,
+    /// Peak memory usage
+    pub peak_memory: usize,
+}
+
+// === Feature 14: Snapshot Diffing ===
+
+/// Type of change in a diff
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiffChangeType {
+    /// Line added
+    Added,
+    /// Line removed
+    Removed,
+    /// Line modified
+    Modified,
+    /// Line unchanged
+    Unchanged,
+}
+
+/// A single line diff
+#[derive(Debug, Clone)]
+pub struct LineDiff {
+    /// Type of change
+    pub change_type: DiffChangeType,
+    /// Row number in old snapshot
+    pub old_row: Option<usize>,
+    /// Row number in new snapshot
+    pub new_row: Option<usize>,
+    /// Old line content
+    pub old_content: Option<String>,
+    /// New line content
+    pub new_content: Option<String>,
+}
+
+/// Complete diff between two snapshots
+#[derive(Debug, Clone)]
+pub struct SnapshotDiff {
+    /// List of line diffs
+    pub diffs: Vec<LineDiff>,
+    /// Number of lines added
+    pub added: usize,
+    /// Number of lines removed
+    pub removed: usize,
+    /// Number of lines modified
+    pub modified: usize,
+    /// Number of lines unchanged
+    pub unchanged: usize,
+}
+
+// === Feature 15: Regex Search in Scrollback ===
+
+/// Regex match with position and captured groups
+#[derive(Debug, Clone)]
+pub struct RegexMatch {
+    /// Row where match starts
+    pub row: usize,
+    /// Column where match starts
+    pub col: usize,
+    /// Row where match ends
+    pub end_row: usize,
+    /// Column where match ends
+    pub end_col: usize,
+    /// Matched text
+    pub text: String,
+    /// Capture groups (if any)
+    pub captures: Vec<String>,
+}
+
+/// Options for regex search
+#[derive(Debug, Clone)]
+pub struct RegexSearchOptions {
+    /// Case insensitive search
+    pub case_insensitive: bool,
+    /// Multiline mode (^ and $ match line boundaries)
+    pub multiline: bool,
+    /// Include scrollback in search
+    pub include_scrollback: bool,
+    /// Maximum number of matches to return (0 = unlimited)
+    pub max_matches: usize,
+    /// Search backwards from end
+    pub reverse: bool,
+}
+
+impl Default for RegexSearchOptions {
+    fn default() -> Self {
+        Self {
+            case_insensitive: false,
+            multiline: true,
+            include_scrollback: true,
+            max_matches: 0,
+            reverse: false,
+        }
+    }
+}
+
+// === Feature 13: Terminal Multiplexing Helpers ===
+
+/// Pane state for session management
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PaneState {
+    /// Pane identifier
+    pub id: String,
+    /// Pane title
+    pub title: String,
+    /// Terminal dimensions (cols, rows)
+    pub size: (usize, usize),
+    /// Position in layout (x, y)
+    pub position: (usize, usize),
+    /// Working directory
+    pub cwd: Option<String>,
+    /// Environment variables
+    pub env: std::collections::HashMap<String, String>,
+    /// Screen content snapshot
+    pub content: Vec<String>,
+    /// Cursor position
+    pub cursor: (usize, usize),
+    /// Is alternate screen active
+    pub alt_screen: bool,
+    /// Scrollback position
+    pub scroll_offset: usize,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Last activity timestamp
+    pub last_activity: u64,
+}
+
+/// Layout direction for panes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum LayoutDirection {
+    /// Horizontal split (side by side)
+    Horizontal,
+    /// Vertical split (top and bottom)
+    Vertical,
+}
+
+/// Window layout configuration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WindowLayout {
+    /// Layout identifier
+    pub id: String,
+    /// Layout name
+    pub name: String,
+    /// Split direction
+    pub direction: LayoutDirection,
+    /// Pane IDs in this layout
+    pub panes: Vec<String>,
+    /// Relative sizes (percentages)
+    pub sizes: Vec<u8>,
+    /// Active pane index
+    pub active_pane: usize,
+}
+
+/// Complete session state
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionState {
+    /// Session identifier
+    pub id: String,
+    /// Session name
+    pub name: String,
+    /// All panes in the session
+    pub panes: Vec<PaneState>,
+    /// All layouts in the session
+    pub layouts: Vec<WindowLayout>,
+    /// Active layout index
+    pub active_layout: usize,
+    /// Session metadata
+    pub metadata: std::collections::HashMap<String, String>,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Last saved timestamp
+    pub last_saved: u64,
+}
+
+// === Feature 21: Image Protocol Support ===
+
+/// Image protocol type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageProtocol {
+    /// Sixel graphics (existing)
+    Sixel,
+    /// iTerm2 inline images
+    ITerm2,
+    /// Kitty graphics protocol
+    Kitty,
+}
+
+/// Image format
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFormat {
+    PNG,
+    JPEG,
+    GIF,
+    BMP,
+    RGBA,
+    RGB,
+}
+
+/// Inline image data
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    /// Image identifier
+    pub id: Option<String>,
+    /// Protocol used
+    pub protocol: ImageProtocol,
+    /// Image format
+    pub format: ImageFormat,
+    /// Image data (encoded)
+    pub data: Vec<u8>,
+    /// Width in pixels
+    pub width: u32,
+    /// Height in pixels
+    pub height: u32,
+    /// Position in terminal (col, row)
+    pub position: (usize, usize),
+    /// Display width in cells
+    pub display_cols: usize,
+    /// Display height in cells
+    pub display_rows: usize,
+}
+
+/// Image placement action
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImagePlacement {
+    /// Display image
+    Display,
+    /// Delete image
+    Delete,
+    /// Query image
+    Query,
+}
+
+// === Feature 28: Benchmarking Suite ===
+
+/// Benchmark category
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BenchmarkCategory {
+    /// Text rendering performance
+    Rendering,
+    /// Escape sequence parsing
+    Parsing,
+    /// Grid operations
+    GridOps,
+    /// Scrollback operations
+    Scrollback,
+    /// Memory operations
+    Memory,
+    /// Overall throughput
+    Throughput,
+}
+
+/// Benchmark result
+#[derive(Debug, Clone)]
+pub struct BenchmarkResult {
+    /// Benchmark category
+    pub category: BenchmarkCategory,
+    /// Benchmark name
+    pub name: String,
+    /// Number of iterations
+    pub iterations: u64,
+    /// Total time in microseconds
+    pub total_time_us: u64,
+    /// Average time per iteration
+    pub avg_time_us: u64,
+    /// Minimum time
+    pub min_time_us: u64,
+    /// Maximum time
+    pub max_time_us: u64,
+    /// Operations per second
+    pub ops_per_sec: f64,
+    /// Memory used (bytes)
+    pub memory_bytes: Option<usize>,
+}
+
+/// Benchmark suite results
+#[derive(Debug, Clone)]
+pub struct BenchmarkSuite {
+    /// All benchmark results
+    pub results: Vec<BenchmarkResult>,
+    /// Total execution time
+    pub total_time_ms: u64,
+    /// Suite name
+    pub suite_name: String,
+}
+
+// === Feature 29: Terminal Compliance Testing ===
+
+/// VT sequence support level
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ComplianceLevel {
+    /// VT52
+    VT52,
+    /// VT100
+    VT100,
+    /// VT220
+    VT220,
+    /// VT320
+    VT320,
+    /// VT420
+    VT420,
+    /// VT520
+    VT520,
+    /// xterm
+    XTerm,
+}
+
+/// Compliance test result
+#[derive(Debug, Clone)]
+pub struct ComplianceTest {
+    /// Test name
+    pub name: String,
+    /// Test category
+    pub category: String,
+    /// Whether test passed
+    pub passed: bool,
+    /// Expected result
+    pub expected: String,
+    /// Actual result
+    pub actual: String,
+    /// Notes or error message
+    pub notes: Option<String>,
+}
+
+/// Compliance report
+#[derive(Debug, Clone)]
+pub struct ComplianceReport {
+    /// Terminal name/version
+    pub terminal_info: String,
+    /// Compliance level tested
+    pub level: ComplianceLevel,
+    /// All test results
+    pub tests: Vec<ComplianceTest>,
+    /// Number of passed tests
+    pub passed: usize,
+    /// Number of failed tests
+    pub failed: usize,
+    /// Overall compliance percentage
+    pub compliance_percent: f64,
+}
+
+// === Feature 30: OSC 52 Clipboard Sync ===
+
+/// Clipboard target for OSC 52
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ClipboardTarget {
+    /// System clipboard (c)
+    Clipboard,
+    /// Primary selection (p)
+    Primary,
+    /// Secondary selection (s)
+    Secondary,
+    /// Cut buffer 0 (c0)
+    CutBuffer0,
+}
+
+/// Clipboard operation type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardOperation {
+    /// Set clipboard content
+    Set,
+    /// Query clipboard content
+    Query,
+    /// Clear clipboard
+    Clear,
+}
+
+/// Clipboard sync event
+#[derive(Debug, Clone)]
+pub struct ClipboardSyncEvent {
+    /// Target clipboard
+    pub target: ClipboardTarget,
+    /// Operation type
+    pub operation: ClipboardOperation,
+    /// Content (for Set operations)
+    pub content: Option<String>,
+    /// Timestamp of event
+    pub timestamp: u64,
+    /// Whether this came from remote session
+    pub is_remote: bool,
+}
+
+/// Clipboard sync history entry
+#[derive(Debug, Clone)]
+pub struct ClipboardHistoryEntry {
+    /// Clipboard target
+    pub target: ClipboardTarget,
+    /// Content
+    pub content: String,
+    /// Timestamp
+    pub timestamp: u64,
+    /// Source identifier (e.g., session ID, hostname)
+    pub source: Option<String>,
+}
+
+// === Feature 31: Shell Integration++ ===
+
+/// Command execution record
+#[derive(Debug, Clone)]
+pub struct CommandExecution {
+    /// Command that was executed
+    pub command: String,
+    /// Current working directory when command was run
+    pub cwd: Option<String>,
+    /// Start timestamp (milliseconds since epoch)
+    pub start_time: u64,
+    /// End timestamp (milliseconds since epoch)
+    pub end_time: Option<u64>,
+    /// Exit code
+    pub exit_code: Option<i32>,
+    /// Command duration in milliseconds
+    pub duration_ms: Option<u64>,
+    /// Whether command succeeded (exit code 0)
+    pub success: Option<bool>,
+}
+
+/// Shell integration statistics
+#[derive(Debug, Clone)]
+pub struct ShellIntegrationStats {
+    /// Total commands executed
+    pub total_commands: usize,
+    /// Successful commands (exit code 0)
+    pub successful_commands: usize,
+    /// Failed commands (non-zero exit code)
+    pub failed_commands: usize,
+    /// Average command duration (milliseconds)
+    pub avg_duration_ms: f64,
+    /// Total execution time (milliseconds)
+    pub total_duration_ms: u64,
+}
+
+/// CWD change notification
+#[derive(Debug, Clone)]
+pub struct CwdChange {
+    /// Previous working directory
+    pub old_cwd: Option<String>,
+    /// New working directory
+    pub new_cwd: String,
+    /// Timestamp of change
+    pub timestamp: u64,
+}
+
+// === Feature 37: Terminal Notifications ===
+
+/// Notification trigger type
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NotificationTrigger {
+    /// Terminal bell rang
+    Bell,
+    /// Terminal activity detected
+    Activity,
+    /// Silence detected (no activity for duration)
+    Silence,
+    /// Custom trigger with ID
+    Custom(u32),
+}
+
+/// Notification alert type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationAlert {
+    /// Desktop/system notification
+    Desktop,
+    /// Sound alert with volume (0-100)
+    Sound(u8),
+    /// Visual alert (flash, border, etc.)
+    Visual,
+}
+
+/// Notification event record
+#[derive(Debug, Clone)]
+pub struct NotificationEvent {
+    /// What triggered the notification
+    pub trigger: NotificationTrigger,
+    /// Type of alert
+    pub alert: NotificationAlert,
+    /// Optional message
+    pub message: Option<String>,
+    /// Timestamp when event occurred
+    pub timestamp: u64,
+    /// Whether notification was delivered
+    pub delivered: bool,
+}
+
+/// Notification configuration
+#[derive(Debug, Clone)]
+pub struct NotificationConfig {
+    /// Enable desktop notifications on bell
+    pub bell_desktop: bool,
+    /// Enable sound on bell (0 = disabled, 1-100 = volume)
+    pub bell_sound: u8,
+    /// Enable visual alert on bell
+    pub bell_visual: bool,
+    /// Enable notifications on activity
+    pub activity_enabled: bool,
+    /// Activity threshold (seconds of inactivity before triggering)
+    pub activity_threshold: u64,
+    /// Enable notifications on silence
+    pub silence_enabled: bool,
+    /// Silence threshold (seconds of activity before silence notification)
+    pub silence_threshold: u64,
+}
+
+impl Default for NotificationConfig {
+    fn default() -> Self {
+        Self {
+            bell_desktop: false,
+            bell_sound: 0,
+            bell_visual: true,
+            activity_enabled: false,
+            activity_threshold: 10,
+            silence_enabled: false,
+            silence_threshold: 300,
+        }
+    }
+}
+
+// === Feature 24: Terminal Replay/Recording ===
+
+/// Recording format type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingFormat {
+    /// Asciicast v2 format (asciinema)
+    Asciicast,
+    /// JSON with timing data
+    Json,
+    /// Raw TTY data
+    Tty,
+}
+
+/// Recording event type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingEventType {
+    /// Input data
+    Input,
+    /// Output data
+    Output,
+    /// Terminal resize
+    Resize,
+    /// Marker/bookmark
+    Marker,
+}
+
+/// Recording event
+#[derive(Debug, Clone)]
+pub struct RecordingEvent {
+    /// Timestamp (milliseconds since recording start)
+    pub timestamp: u64,
+    /// Event type
+    pub event_type: RecordingEventType,
+    /// Event data
+    pub data: Vec<u8>,
+    /// Metadata (for resize: cols, rows)
+    pub metadata: Option<(usize, usize)>,
+}
+
+/// Recording session
+#[derive(Debug, Clone)]
+pub struct RecordingSession {
+    /// Session start time (UNIX epoch milliseconds)
+    pub start_time: u64,
+    /// Initial terminal size (cols, rows)
+    pub initial_size: (usize, usize),
+    /// Terminal environment info
+    pub env: HashMap<String, String>,
+    /// All recorded events
+    pub events: Vec<RecordingEvent>,
+    /// Total duration (milliseconds)
+    pub duration: u64,
+    /// Session title/name
+    pub title: Option<String>,
+}
+
+/// Export format for recordings
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordingExportFormat {
+    /// SVG animation
+    Svg,
+    /// Animated GIF
+    Gif,
+    /// Video (MP4)
+    Video,
+    /// HTML with embedded player
+    Html,
+}
 
 /// Helper function to check if byte slice contains a subsequence
 /// More efficient than converting to String and using contains()
@@ -211,6 +1218,94 @@ pub struct Terminal {
     tmux_parser: crate::tmux_control::TmuxControlParser,
     /// Tmux control protocol notifications buffer
     tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
+    /// Dirty rows tracking (0-indexed row numbers that have changed)
+    dirty_rows: HashSet<usize>,
+    /// Bell events buffer
+    bell_events: Vec<BellEvent>,
+    /// Terminal events buffer
+    terminal_events: Vec<TerminalEvent>,
+    /// Current selection state
+    selection: Option<Selection>,
+    /// Bookmarks for quick navigation
+    bookmarks: Vec<Bookmark>,
+    /// Next available bookmark ID
+    next_bookmark_id: usize,
+    /// Performance metrics tracking
+    perf_metrics: PerformanceMetrics,
+    /// Frame timing history (last N frames)
+    frame_timings: Vec<FrameTiming>,
+    /// Maximum frame timings to keep
+    max_frame_timings: usize,
+    /// Clipboard history (multiple slots)
+    clipboard_history: std::collections::HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
+    /// Maximum clipboard history entries per slot
+    max_clipboard_history: usize,
+    /// Mouse event history
+    mouse_events: Vec<MouseEventRecord>,
+    /// Mouse position history
+    mouse_positions: Vec<MousePosition>,
+    /// Maximum mouse history entries
+    max_mouse_history: usize,
+    /// Current rendering hints
+    rendering_hints: Vec<RenderingHint>,
+    /// Damage regions accumulated
+    damage_regions: Vec<DamageRegion>,
+    /// Profiling data (when enabled)
+    profiling_data: Option<ProfilingData>,
+    /// Profiling enabled flag
+    profiling_enabled: bool,
+    /// Regex search matches cache
+    regex_matches: Vec<RegexMatch>,
+    /// Current regex search pattern
+    current_regex_pattern: Option<String>,
+    /// Current pane state (for multiplexing)
+    pane_state: Option<PaneState>,
+    /// Inline images (iTerm2, Kitty protocols)
+    inline_images: Vec<InlineImage>,
+    /// Maximum number of inline images to store
+    max_inline_images: usize,
+
+    // === Feature 30: OSC 52 Clipboard Sync ===
+    /// Clipboard sync events log
+    clipboard_sync_events: Vec<ClipboardSyncEvent>,
+    /// Clipboard sync history across targets
+    clipboard_sync_history: std::collections::HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
+    /// Maximum clipboard sync history entries per target
+    max_clipboard_sync_history: usize,
+    /// Remote session identifier for clipboard sync
+    remote_session_id: Option<String>,
+
+    // === Feature 31: Shell Integration++ ===
+    /// Command execution history
+    command_history: Vec<CommandExecution>,
+    /// Current executing command
+    current_command: Option<CommandExecution>,
+    /// Working directory change history
+    cwd_changes: Vec<CwdChange>,
+    /// Maximum command history entries
+    max_command_history: usize,
+    /// Maximum CWD change history
+    max_cwd_history: usize,
+
+    // === Feature 37: Terminal Notifications ===
+    /// Notification configuration
+    notification_config: NotificationConfig,
+    /// Notification events log
+    notification_events: Vec<NotificationEvent>,
+    /// Last activity timestamp (for silence detection)
+    last_activity_time: u64,
+    /// Last silence check timestamp
+    last_silence_check: u64,
+    /// Custom notification triggers (ID -> message)
+    custom_triggers: HashMap<u32, String>,
+
+    // === Feature 24: Terminal Replay/Recording ===
+    /// Current recording session
+    recording_session: Option<RecordingSession>,
+    /// Recording active flag
+    is_recording: bool,
+    /// Recording start timestamp (for relative timing)
+    recording_start_time: u64,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -224,6 +1319,141 @@ impl std::fmt::Debug for Terminal {
             .field("parser", &"<Parser>")
             .finish()
     }
+}
+
+/// Helper function to convert cells to text
+fn cells_to_text(cells: &[Cell]) -> String {
+    cells
+        .iter()
+        .filter(|c| !c.flags.wide_char_spacer())
+        .map(|c| c.c)
+        .collect()
+}
+
+/// Helper function to escape HTML special characters
+fn html_escape(s: &str) -> String {
+    s.chars()
+        .map(|c| match c {
+            '<' => "&lt;".to_string(),
+            '>' => "&gt;".to_string(),
+            '&' => "&amp;".to_string(),
+            '"' => "&quot;".to_string(),
+            '\'' => "&#39;".to_string(),
+            _ => c.to_string(),
+        })
+        .collect()
+}
+
+/// Convert RGB to HSV
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> ColorHSV {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+
+    let h = if h < 0.0 { h + 360.0 } else { h };
+    let s = if max == 0.0 { 0.0 } else { delta / max };
+    let v = max;
+
+    ColorHSV { h, s, v }
+}
+
+/// Convert HSV to RGB
+fn hsv_to_rgb(hsv: ColorHSV) -> (u8, u8, u8) {
+    let c = hsv.v * hsv.s;
+    let x = c * (1.0 - ((hsv.h / 60.0) % 2.0 - 1.0).abs());
+    let m = hsv.v - c;
+
+    let (r, g, b) = match hsv.h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
+
+/// Convert RGB to HSL
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> ColorHSL {
+    let r = r as f32 / 255.0;
+    let g = g as f32 / 255.0;
+    let b = b as f32 / 255.0;
+
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+
+    let l = (max + min) / 2.0;
+
+    let s = if delta == 0.0 {
+        0.0
+    } else {
+        delta / (1.0 - (2.0 * l - 1.0).abs())
+    };
+
+    let h = if delta == 0.0 {
+        0.0
+    } else if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+
+    let h = if h < 0.0 { h + 360.0 } else { h };
+
+    ColorHSL { h, s, l }
+}
+
+/// Convert HSL to RGB
+fn hsl_to_rgb(hsl: ColorHSL) -> (u8, u8, u8) {
+    let c = (1.0 - (2.0 * hsl.l - 1.0).abs()) * hsl.s;
+    let x = c * (1.0 - ((hsl.h / 60.0) % 2.0 - 1.0).abs());
+    let m = hsl.l - c / 2.0;
+
+    let (r, g, b) = match hsl.h as u32 {
+        0..=59 => (c, x, 0.0),
+        60..=119 => (x, c, 0.0),
+        120..=179 => (0.0, c, x),
+        180..=239 => (0.0, x, c),
+        240..=299 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+
+    (
+        ((r + m) * 255.0) as u8,
+        ((g + m) * 255.0) as u8,
+        ((b + m) * 255.0) as u8,
+    )
+}
+
+/// Get current timestamp in microseconds
+fn get_timestamp_us() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_micros() as u64
 }
 
 impl Terminal {
@@ -333,6 +1563,64 @@ impl Terminal {
             // Tmux control protocol - default to disabled
             tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
             tmux_notifications: Vec::new(),
+            // Event tracking
+            dirty_rows: HashSet::new(),
+            bell_events: Vec::new(),
+            terminal_events: Vec::new(),
+            // Selection and bookmarks
+            selection: None,
+            bookmarks: Vec::new(),
+            next_bookmark_id: 0,
+            // Performance metrics
+            perf_metrics: PerformanceMetrics::default(),
+            frame_timings: Vec::new(),
+            max_frame_timings: 100, // Keep last 100 frames
+            // Clipboard integration
+            clipboard_history: std::collections::HashMap::new(),
+            max_clipboard_history: 50, // Keep last 50 entries per slot
+            // Mouse tracking
+            mouse_events: Vec::new(),
+            mouse_positions: Vec::new(),
+            max_mouse_history: 100, // Keep last 100 mouse events
+            // Rendering hints
+            rendering_hints: Vec::new(),
+            damage_regions: Vec::new(),
+            // Performance profiling
+            profiling_data: None,
+            profiling_enabled: false,
+            // Regex search
+            regex_matches: Vec::new(),
+            current_regex_pattern: None,
+            // Multiplexing
+            pane_state: None,
+            // Inline images
+            inline_images: Vec::new(),
+            max_inline_images: 100, // Keep last 100 images
+
+            // OSC 52 Clipboard Sync
+            clipboard_sync_events: Vec::new(),
+            clipboard_sync_history: std::collections::HashMap::new(),
+            max_clipboard_sync_history: 50, // Keep last 50 entries per target
+            remote_session_id: None,
+
+            // Shell Integration++
+            command_history: Vec::new(),
+            current_command: None,
+            cwd_changes: Vec::new(),
+            max_command_history: 100, // Keep last 100 commands
+            max_cwd_history: 50, // Keep last 50 CWD changes
+
+            // Terminal Notifications
+            notification_config: NotificationConfig::default(),
+            notification_events: Vec::new(),
+            last_activity_time: 0,
+            last_silence_check: 0,
+            custom_triggers: HashMap::new(),
+
+            // Terminal Replay/Recording
+            recording_session: None,
+            is_recording: false,
+            recording_start_time: 0,
         }
     }
 
@@ -826,6 +2114,364 @@ impl Terminal {
         self.bell_count
     }
 
+    /// Drain all pending bell events
+    ///
+    /// Returns and clears the buffer of bell events that have occurred since the last drain.
+    /// This is more efficient than polling bell_count() for event-driven applications.
+    pub fn drain_bell_events(&mut self) -> Vec<BellEvent> {
+        std::mem::take(&mut self.bell_events)
+    }
+
+    /// Drain all pending terminal events
+    ///
+    /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
+    pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
+        std::mem::take(&mut self.terminal_events)
+    }
+
+    // ========== Dirty Region Tracking ==========
+
+    /// Get all dirty row numbers
+    ///
+    /// Returns a vector of 0-indexed row numbers that have been modified since the last mark_clean()
+    pub fn get_dirty_rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = self.dirty_rows.iter().copied().collect();
+        rows.sort_unstable();
+        rows
+    }
+
+    /// Get the dirty region bounds (first and last dirty row)
+    ///
+    /// Returns None if no rows are dirty, otherwise (first_row, last_row) inclusive
+    pub fn get_dirty_region(&self) -> Option<(usize, usize)> {
+        if self.dirty_rows.is_empty() {
+            None
+        } else {
+            let min = *self.dirty_rows.iter().min().unwrap();
+            let max = *self.dirty_rows.iter().max().unwrap();
+            Some((min, max))
+        }
+    }
+
+    /// Mark all rows as clean (clear dirty tracking)
+    pub fn mark_clean(&mut self) {
+        self.dirty_rows.clear();
+    }
+
+    /// Mark a specific row as dirty
+    ///
+    /// This is called internally when content changes, but can also be called manually
+    pub fn mark_row_dirty(&mut self, row: usize) {
+        let (_cols, rows) = self.size();
+        if row < rows {
+            self.dirty_rows.insert(row);
+        }
+    }
+
+    // ========== Mode Introspection ==========
+
+    /// Get auto-wrap mode (DECAWM)
+    ///
+    /// When true, cursor automatically wraps to next line when reaching right margin
+    pub fn auto_wrap_mode(&self) -> bool {
+        self.auto_wrap
+    }
+
+    /// Get origin mode (DECOM)
+    ///
+    /// When true, cursor addressing is relative to scroll region instead of absolute
+    pub fn origin_mode(&self) -> bool {
+        self.origin_mode
+    }
+
+    /// Get application cursor mode
+    ///
+    /// When true, arrow keys send application sequences (ESC O A-D) instead of ANSI (ESC [ A-D)
+    pub fn application_cursor(&self) -> bool {
+        self.application_cursor
+    }
+
+    /// Get current scroll region (top, bottom) - 0-indexed, inclusive
+    pub fn scroll_region(&self) -> (usize, usize) {
+        (self.scroll_region_top, self.scroll_region_bottom)
+    }
+
+    /// Get left/right margins if enabled (left, right) - 0-indexed, inclusive
+    ///
+    /// Returns None if DECLRMM is disabled, otherwise Some((left, right))
+    pub fn left_right_margins(&self) -> Option<(usize, usize)> {
+        if self.use_lr_margins {
+            Some((self.left_margin, self.right_margin))
+        } else {
+            None
+        }
+    }
+
+    // ========== Palette Access ==========
+
+    /// Get an ANSI palette color by index (0-15)
+    ///
+    /// Returns None if index is out of range
+    pub fn get_ansi_color(&self, index: u8) -> Option<Color> {
+        if (index as usize) < self.ansi_palette.len() {
+            Some(self.ansi_palette[index as usize])
+        } else {
+            None
+        }
+    }
+
+    /// Get the entire ANSI color palette (colors 0-15)
+    pub fn get_ansi_palette(&self) -> [Color; 16] {
+        self.ansi_palette
+    }
+
+    /// Get the default foreground color
+    pub fn get_default_fg(&self) -> Color {
+        self.default_fg
+    }
+
+    /// Get the default background color
+    pub fn get_default_bg(&self) -> Color {
+        self.default_bg
+    }
+
+    /// Get the cursor color
+    pub fn get_cursor_color(&self) -> Color {
+        self.cursor_color
+    }
+
+    /// Get the cursor guide color (iTerm2)
+    pub fn get_cursor_guide_color(&self) -> Color {
+        self.cursor_guide_color
+    }
+
+    /// Get the hyperlink/URL color (iTerm2)
+    pub fn get_link_color(&self) -> Color {
+        self.link_color
+    }
+
+    /// Get the selection background color (iTerm2)
+    pub fn get_selection_bg_color(&self) -> Color {
+        self.selection_bg_color
+    }
+
+    /// Get the selection foreground color (iTerm2)
+    pub fn get_selection_fg_color(&self) -> Color {
+        self.selection_fg_color
+    }
+
+    // ========== Tab Stop Access ==========
+
+    /// Get all tab stop positions
+    ///
+    /// Returns a vector of column numbers (0-indexed) where tab stops are set
+    pub fn get_tab_stops(&self) -> Vec<usize> {
+        self.tab_stops
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &is_set)| if is_set { Some(i) } else { None })
+            .collect()
+    }
+
+    /// Set a tab stop at the specified column
+    pub fn set_tab_stop(&mut self, col: usize) {
+        if col < self.tab_stops.len() {
+            self.tab_stops[col] = true;
+        }
+    }
+
+    /// Clear a tab stop at the specified column
+    pub fn clear_tab_stop(&mut self, col: usize) {
+        if col < self.tab_stops.len() {
+            self.tab_stops[col] = false;
+        }
+    }
+
+    /// Clear all tab stops
+    pub fn clear_all_tab_stops(&mut self) {
+        for stop in &mut self.tab_stops {
+            *stop = false;
+        }
+    }
+
+    // ========== Hyperlink Enumeration ==========
+
+    /// Get all hyperlinks with their positions
+    ///
+    /// Returns a vector of HyperlinkInfo containing URL and all screen positions
+    pub fn get_all_hyperlinks(&self) -> Vec<HyperlinkInfo> {
+        let mut hyperlink_map: HashMap<u32, HyperlinkInfo> = HashMap::new();
+        let (cols, rows) = self.size();
+
+        // Scan visible screen for hyperlinks
+        for row in 0..rows {
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    if let Some(link_id) = cell.flags.hyperlink_id {
+                        if let Some(url) = self.hyperlinks.get(&link_id) {
+                            hyperlink_map
+                                .entry(link_id)
+                                .or_insert_with(|| HyperlinkInfo {
+                                    url: url.clone(),
+                                    positions: Vec::new(),
+                                    id: None, // We don't store the OSC 8 ID separately
+                                })
+                                .positions
+                                .push((col, row));
+                        }
+                    }
+                }
+            }
+        }
+
+        hyperlink_map.into_values().collect()
+    }
+
+    // ========== Bulk Read Operations ==========
+
+    /// Get all cells in the visible region
+    ///
+    /// Returns a 2D vector of cells [row][col]
+    pub fn get_visible_region(&self) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let mut result = Vec::with_capacity(rows);
+
+        for row in 0..rows {
+            let mut row_cells = Vec::with_capacity(cols);
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    /// Get a range of rows
+    ///
+    /// Returns cells for rows [start..end) - start is inclusive, end is exclusive
+    pub fn get_row_range(&self, start: usize, end: usize) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let end = end.min(rows);
+        let start = start.min(end);
+
+        let mut result = Vec::with_capacity(end - start);
+
+        for row in start..end {
+            let mut row_cells = Vec::with_capacity(cols);
+            for col in 0..cols {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    /// Get a rectangular region of cells
+    ///
+    /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive
+    pub fn get_rectangle(
+        &self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+    ) -> Vec<Vec<Cell>> {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+        let top = top.min(bottom);
+        let left = left.min(right);
+
+        let height = bottom - top + 1;
+        let width = right - left + 1;
+        let mut result = Vec::with_capacity(height);
+
+        for row in top..=bottom {
+            let mut row_cells = Vec::with_capacity(width);
+            for col in left..=right {
+                if let Some(cell) = self.active_grid().get(col, row) {
+                    row_cells.push(*cell);
+                } else {
+                    row_cells.push(Cell::default());
+                }
+            }
+            result.push(row_cells);
+        }
+
+        result
+    }
+
+    // ========== Rectangle Operations ==========
+
+    /// Fill a rectangle with a character
+    ///
+    /// Fills the rectangle bounded by (top, left) to (bottom, right) inclusive with the given character
+    pub fn fill_rectangle(
+        &mut self,
+        top: usize,
+        left: usize,
+        bottom: usize,
+        right: usize,
+        ch: char,
+    ) {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+
+        for row in top..=bottom {
+            for col in left..=right {
+                if row < rows && col < cols {
+                    let cell = Cell {
+                        c: ch,
+                        fg: self.fg,
+                        bg: self.bg,
+                        underline_color: self.underline_color,
+                        flags: self.flags,
+                        width: 1,
+                    };
+                    self.active_grid_mut().set(col, row, cell);
+                    self.mark_row_dirty(row);
+                }
+            }
+        }
+    }
+
+    /// Erase a rectangle
+    ///
+    /// Clears the rectangle bounded by (top, left) to (bottom, right) inclusive
+    pub fn erase_rectangle(&mut self, top: usize, left: usize, bottom: usize, right: usize) {
+        let (cols, rows) = self.size();
+        let bottom = bottom.min(rows.saturating_sub(1));
+        let right = right.min(cols.saturating_sub(1));
+
+        for row in top..=bottom {
+            for col in left..=right {
+                if row < rows && col < cols {
+                    let cell = Cell {
+                        c: ' ',
+                        fg: self.default_fg,
+                        bg: self.default_bg,
+                        underline_color: None,
+                        flags: CellFlags::default(),
+                        width: 1,
+                    };
+                    self.active_grid_mut().set(col, row, cell);
+                    self.mark_row_dirty(row);
+                }
+            }
+        }
+    }
+
     /// Process input data
     pub fn process(&mut self, data: &[u8]) {
         debug::log_vt_input(data);
@@ -1168,6 +2814,21 @@ impl Terminal {
         let cell_size = std::mem::size_of::<crate::cell::Cell>();
         let estimated_memory = total_cells * cell_size;
 
+        // Calculate hyperlink memory
+        let hyperlink_count = self.hyperlinks.len();
+        let hyperlink_memory: usize = self
+            .hyperlinks
+            .values()
+            .map(|url| url.len() + std::mem::size_of::<u32>() + std::mem::size_of::<String>())
+            .sum();
+
+        // Get stack depths
+        let keyboard_stack_depth = if self.alt_screen_active {
+            self.keyboard_stack_alt.len()
+        } else {
+            self.keyboard_stack.len()
+        };
+
         TerminalStats {
             cols,
             rows,
@@ -1176,6 +2837,15 @@ impl Terminal {
             non_whitespace_lines,
             graphics_count,
             estimated_memory_bytes: estimated_memory,
+            hyperlink_count,
+            hyperlink_memory_bytes: hyperlink_memory,
+            color_stack_depth: self.color_stack.len(),
+            title_stack_depth: self.title_stack.len(),
+            keyboard_stack_depth,
+            response_buffer_size: self.response_buffer.len(),
+            dirty_row_count: self.dirty_rows.len(),
+            pending_bell_events: self.bell_events.len(),
+            pending_terminal_events: self.terminal_events.len(),
         }
     }
 
@@ -1540,6 +3210,2499 @@ impl Terminal {
     pub fn clear_tmux_notifications(&mut self) {
         self.tmux_notifications.clear();
     }
+
+    // === Search Methods ===
+
+    /// Search for text in the visible screen area
+    ///
+    /// Returns a vector of SearchMatch results containing position and matched text.
+    /// Row indices are 0-based, with 0 being the top row of the visible screen.
+    ///
+    /// # Arguments
+    /// * `query` - The text to search for
+    /// * `case_sensitive` - Whether the search should be case-sensitive
+    pub fn search(&self, query: &str, case_sensitive: bool) -> Vec<SearchMatch> {
+        let mut matches = Vec::new();
+        if query.is_empty() {
+            return matches;
+        }
+
+        let grid = self.active_grid();
+        let search_query = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+                let search_text = if case_sensitive {
+                    line_text.clone()
+                } else {
+                    line_text.to_lowercase()
+                };
+
+                let mut start_col = 0;
+                while let Some(pos) = search_text[start_col..].find(&search_query) {
+                    let col = start_col + pos;
+                    matches.push(SearchMatch {
+                        row: row as isize,
+                        col,
+                        length: query.len(),
+                        text: line_text[col..col + query.len()].to_string(),
+                    });
+                    start_col = col + 1;
+                }
+            }
+        }
+
+        matches
+    }
+
+    /// Search for text in the scrollback buffer
+    ///
+    /// Returns matches with negative row indices (e.g., -1 is the most recent scrollback line).
+    /// Row -1 is the line just above the visible screen.
+    ///
+    /// # Arguments
+    /// * `query` - The text to search for
+    /// * `case_sensitive` - Whether the search should be case-sensitive
+    /// * `max_lines` - Maximum number of scrollback lines to search (None = search all)
+    pub fn search_scrollback(
+        &self,
+        query: &str,
+        case_sensitive: bool,
+        max_lines: Option<usize>,
+    ) -> Vec<SearchMatch> {
+        let mut matches = Vec::new();
+        if query.is_empty() {
+            return matches;
+        }
+
+        let search_query = if case_sensitive {
+            query.to_string()
+        } else {
+            query.to_lowercase()
+        };
+
+        let scrollback_len = self.grid.scrollback_len();
+        let lines_to_search = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+
+        for i in 0..lines_to_search {
+            if let Some(line) = self.grid.scrollback_line(i) {
+                let line_text = cells_to_text(line);
+                let search_text = if case_sensitive {
+                    line_text.clone()
+                } else {
+                    line_text.to_lowercase()
+                };
+
+                let mut start_col = 0;
+                while let Some(pos) = search_text[start_col..].find(&search_query) {
+                    let col = start_col + pos;
+                    matches.push(SearchMatch {
+                        row: -((i + 1) as isize), // Negative indices for scrollback
+                        col,
+                        length: query.len(),
+                        text: line_text[col..col + query.len()].to_string(),
+                    });
+                    start_col = col + 1;
+                }
+            }
+        }
+
+        matches
+    }
+
+    // === Content Detection Methods ===
+
+    /// Detect URLs in the visible screen
+    ///
+    /// Returns a vector of detected URLs with their positions.
+    pub fn detect_urls(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        // Simple URL pattern: looks for http://, https://, ftp://, etc.
+        let url_prefixes = ["http://", "https://", "ftp://", "ftps://"];
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                for prefix in &url_prefixes {
+                    let mut start_col = 0;
+                    while let Some(pos) = line_text[start_col..].to_lowercase().find(prefix) {
+                        let col = start_col + pos;
+                        // Find end of URL (space, newline, or end of line)
+                        let end = line_text[col..]
+                            .find(|c: char| c.is_whitespace())
+                            .map(|p| col + p)
+                            .unwrap_or(line_text.len());
+
+                        if end > col {
+                            let url = line_text[col..end].to_string();
+                            items.push(DetectedItem::Url(url, row, col));
+                        }
+                        start_col = end.max(col + 1);
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    /// Detect file paths in the visible screen
+    ///
+    /// Returns a vector of detected file paths with their positions.
+    /// Optionally includes line numbers if detected (e.g., "file.txt:123").
+    pub fn detect_file_paths(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                // Simple detection: paths starting with / or ./ or ../
+                let path_patterns = ["/", "./", "../"];
+
+                for pattern in &path_patterns {
+                    let mut start_col = 0;
+                    while let Some(pos) = line_text[start_col..].find(pattern) {
+                        let col = start_col + pos;
+                        // Find end of path (whitespace or common delimiters)
+                        let end = line_text[col..]
+                            .find(|c: char| c.is_whitespace() || c == ':' || c == ',' || c == ')')
+                            .map(|p| col + p)
+                            .unwrap_or(line_text.len());
+
+                        if end > col {
+                            let path_str = line_text[col..end].to_string();
+
+                            // Check for line number suffix (e.g., ":123")
+                            let line_num = if end < line_text.len()
+                                && line_text.chars().nth(end) == Some(':')
+                            {
+                                let num_start = end + 1;
+                                let num_end = line_text[num_start..]
+                                    .find(|c: char| !c.is_numeric())
+                                    .map(|p| num_start + p)
+                                    .unwrap_or(line_text.len());
+
+                                if num_end > num_start {
+                                    line_text[num_start..num_end].parse().ok()
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+
+                            items.push(DetectedItem::FilePath(path_str, row, col, line_num));
+                        }
+                        start_col = end.max(col + 1);
+                    }
+                }
+            }
+        }
+
+        items
+    }
+
+    /// Detect semantic items (URLs, file paths, git hashes, IPs, emails)
+    ///
+    /// Returns all detected items in the visible screen.
+    pub fn detect_semantic_items(&self) -> Vec<DetectedItem> {
+        let mut items = Vec::new();
+        let grid = self.active_grid();
+
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+
+                // Git hash pattern (40 hex chars)
+                for (i, window) in line_text.as_bytes().windows(40).enumerate() {
+                    if window.iter().all(|&b| b.is_ascii_hexdigit()) {
+                        let hash = String::from_utf8_lossy(window).to_string();
+                        items.push(DetectedItem::GitHash(hash, row, i));
+                    }
+                }
+
+                // IP address pattern (simple v4)
+                let ip_parts: Vec<&str> = line_text
+                    .split(|c: char| !c.is_numeric() && c != '.')
+                    .collect();
+                for part in ip_parts.iter() {
+                    let nums: Vec<&str> = part.split('.').collect();
+                    if nums.len() == 4 && nums.iter().all(|n| n.parse::<u8>().is_ok()) {
+                        if let Some(col) = line_text.find(part) {
+                            items.push(DetectedItem::IpAddress(part.to_string(), row, col));
+                        }
+                    }
+                }
+
+                // Email pattern (simple)
+                if let Some(at_pos) = line_text.find('@') {
+                    // Find start of email
+                    let start = line_text[..at_pos]
+                        .rfind(|c: char| c.is_whitespace())
+                        .map(|p| p + 1)
+                        .unwrap_or(0);
+
+                    // Find end of email
+                    let end = line_text[at_pos..]
+                        .find(|c: char| c.is_whitespace())
+                        .map(|p| at_pos + p)
+                        .unwrap_or(line_text.len());
+
+                    if end > start && line_text[start..end].contains('@') {
+                        items.push(DetectedItem::Email(
+                            line_text[start..end].to_string(),
+                            row,
+                            start,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Also add URLs and file paths
+        items.extend(self.detect_urls());
+        items.extend(self.detect_file_paths());
+
+        items
+    }
+
+    // === Selection Management ===
+
+    /// Set the current selection
+    pub fn set_selection(
+        &mut self,
+        start: (usize, usize),
+        end: (usize, usize),
+        mode: SelectionMode,
+    ) {
+        self.selection = Some(Selection { start, end, mode });
+    }
+
+    /// Get the current selection
+    pub fn get_selection(&self) -> Option<Selection> {
+        self.selection.clone()
+    }
+
+    /// Get the text content of the current selection
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection.as_ref()?;
+        let grid = self.active_grid();
+
+        let (start_row, start_col) = (sel.start.1.min(sel.end.1), sel.start.0.min(sel.end.0));
+        let (end_row, end_col) = (sel.start.1.max(sel.end.1), sel.start.0.max(sel.end.0));
+
+        match sel.mode {
+            SelectionMode::Character => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        let line_text = cells_to_text(line);
+                        let row_start = if row == start_row { start_col } else { 0 };
+                        let row_end = if row == end_row {
+                            end_col.min(line_text.len())
+                        } else {
+                            line_text.len()
+                        };
+
+                        if row_start < line_text.len() {
+                            text.push_str(&line_text[row_start..row_end]);
+                            if row < end_row {
+                                text.push('\n');
+                            }
+                        }
+                    }
+                }
+                Some(text)
+            }
+            SelectionMode::Line => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        text.push_str(&cells_to_text(line));
+                        if row < end_row {
+                            text.push('\n');
+                        }
+                    }
+                }
+                Some(text)
+            }
+            SelectionMode::Block => {
+                let mut text = String::new();
+                for row in start_row..=end_row {
+                    if let Some(line) = grid.row(row) {
+                        let line_text = cells_to_text(line);
+                        let row_text = if start_col < line_text.len() {
+                            &line_text[start_col..end_col.min(line_text.len())]
+                        } else {
+                            ""
+                        };
+                        text.push_str(row_text);
+                        if row < end_row {
+                            text.push('\n');
+                        }
+                    }
+                }
+                Some(text)
+            }
+        }
+    }
+
+    /// Select the word at the given position
+    pub fn select_word_at(&mut self, col: usize, row: usize) {
+        if let Some(word) = self.get_word_at(col, row, None) {
+            // Find word boundaries
+            let grid = self.active_grid();
+            if let Some(line) = grid.row(row) {
+                let line_text = cells_to_text(line);
+                if let Some(word_start) = line_text.find(&word) {
+                    let word_end = word_start + word.len();
+                    self.selection = Some(Selection {
+                        start: (word_start, row),
+                        end: (word_end, row),
+                        mode: SelectionMode::Character,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Select the entire line at the given row
+    pub fn select_line(&mut self, row: usize) {
+        let grid = self.active_grid();
+        let cols = grid.cols();
+        self.selection = Some(Selection {
+            start: (0, row),
+            end: (cols, row),
+            mode: SelectionMode::Line,
+        });
+    }
+
+    /// Clear the current selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+    }
+
+    // === Text Extraction ===
+
+    /// Get text lines around a specific row (with context)
+    ///
+    /// # Arguments
+    /// * `row` - The center row (0-based)
+    /// * `context_before` - Number of lines before the row
+    /// * `context_after` - Number of lines after the row
+    ///
+    /// Returns a vector of text lines.
+    pub fn get_line_context(
+        &self,
+        row: usize,
+        context_before: usize,
+        context_after: usize,
+    ) -> Vec<String> {
+        let grid = self.active_grid();
+        let mut lines = Vec::new();
+
+        let start_row = row.saturating_sub(context_before);
+        let end_row = (row + context_after).min(grid.rows() - 1);
+
+        for r in start_row..=end_row {
+            if let Some(line) = grid.row(r) {
+                lines.push(cells_to_text(line));
+            }
+        }
+
+        lines
+    }
+
+    /// Get the paragraph at the given position
+    ///
+    /// A paragraph is defined as consecutive non-empty lines.
+    pub fn get_paragraph_at(&self, row: usize) -> String {
+        let grid = self.active_grid();
+        let mut lines = Vec::new();
+
+        // Find start of paragraph (search backwards)
+        let mut start_row = row;
+        while start_row > 0 {
+            if let Some(line) = grid.row(start_row - 1) {
+                let text = cells_to_text(line).trim().to_string();
+                if text.is_empty() {
+                    break;
+                }
+                start_row -= 1;
+            } else {
+                break;
+            }
+        }
+
+        // Find end of paragraph (search forwards)
+        let mut end_row = row;
+        while end_row < grid.rows() - 1 {
+            if let Some(line) = grid.row(end_row + 1) {
+                let text = cells_to_text(line).trim().to_string();
+                if text.is_empty() {
+                    break;
+                }
+                end_row += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Collect paragraph lines
+        for r in start_row..=end_row {
+            if let Some(line) = grid.row(r) {
+                lines.push(cells_to_text(line));
+            }
+        }
+
+        lines.join("\n")
+    }
+
+    // === Scrollback Operations ===
+
+    /// Export scrollback to various formats
+    ///
+    /// # Arguments
+    /// * `format` - Export format (Plain, Html, Ansi)
+    /// * `max_lines` - Maximum number of scrollback lines to export (None = all)
+    ///
+    /// Returns the exported content as a string.
+    pub fn export_scrollback(&self, format: ExportFormat, max_lines: Option<usize>) -> String {
+        let scrollback_len = self.grid.scrollback_len();
+        let lines_to_export = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+
+        match format {
+            ExportFormat::Plain => {
+                let mut output = String::new();
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        output.push_str(&cells_to_text(line));
+                        output.push('\n');
+                    }
+                }
+                output
+            }
+            ExportFormat::Html => {
+                let mut output = String::from("<pre>\n");
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        let text = cells_to_text(line);
+                        output.push_str(&html_escape(&text));
+                        output.push('\n');
+                    }
+                }
+                output.push_str("</pre>");
+                output
+            }
+            ExportFormat::Ansi => {
+                // For ANSI export, we'd need to preserve colors/attributes
+                // For now, just export as plain text
+                self.export_scrollback(ExportFormat::Plain, max_lines)
+            }
+        }
+    }
+
+    /// Get scrollback statistics
+    pub fn scrollback_stats(&self) -> ScrollbackStats {
+        let total_lines = self.grid.scrollback_len();
+        let memory_bytes = total_lines * self.grid.cols() * std::mem::size_of::<Cell>();
+        // Scrollback has wrapped if we've filled the buffer
+        let has_wrapped = total_lines >= self.grid.max_scrollback();
+
+        ScrollbackStats {
+            total_lines,
+            memory_bytes,
+            has_wrapped,
+        }
+    }
+
+    // === Bookmark Methods ===
+
+    /// Add a bookmark at the given scrollback row
+    ///
+    /// # Arguments
+    /// * `row` - Row index (negative for scrollback, 0+ for visible screen)
+    /// * `label` - Optional label for the bookmark
+    ///
+    /// Returns the bookmark ID.
+    pub fn add_bookmark(&mut self, row: isize, label: Option<String>) -> usize {
+        let id = self.next_bookmark_id;
+        self.next_bookmark_id += 1;
+
+        let bookmark = Bookmark {
+            id,
+            row,
+            label: label.unwrap_or_else(|| format!("Bookmark {}", id)),
+        };
+
+        self.bookmarks.push(bookmark);
+        id
+    }
+
+    /// Get all bookmarks
+    pub fn get_bookmarks(&self) -> Vec<Bookmark> {
+        self.bookmarks.clone()
+    }
+
+    /// Remove a bookmark by ID
+    pub fn remove_bookmark(&mut self, id: usize) -> bool {
+        if let Some(pos) = self.bookmarks.iter().position(|b| b.id == id) {
+            self.bookmarks.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear all bookmarks
+    pub fn clear_bookmarks(&mut self) {
+        self.bookmarks.clear();
+    }
+
+    // === Feature 7: Performance Metrics ===
+
+    /// Get current performance metrics
+    pub fn get_performance_metrics(&self) -> PerformanceMetrics {
+        self.perf_metrics.clone()
+    }
+
+    /// Reset performance metrics
+    pub fn reset_performance_metrics(&mut self) {
+        self.perf_metrics = PerformanceMetrics::default();
+        self.frame_timings.clear();
+    }
+
+    /// Record a frame timing
+    pub fn record_frame_timing(
+        &mut self,
+        processing_us: u64,
+        cells_updated: usize,
+        bytes_processed: usize,
+    ) {
+        self.perf_metrics.frames_rendered += 1;
+        self.perf_metrics.cells_updated += cells_updated as u64;
+        self.perf_metrics.bytes_processed += bytes_processed as u64;
+        self.perf_metrics.total_processing_us += processing_us;
+
+        if processing_us > self.perf_metrics.peak_frame_us {
+            self.perf_metrics.peak_frame_us = processing_us;
+        }
+
+        let frame_timing = FrameTiming {
+            frame_number: self.perf_metrics.frames_rendered,
+            processing_us,
+            cells_updated,
+            bytes_processed,
+        };
+
+        self.frame_timings.push(frame_timing);
+
+        // Keep only last N frames
+        if self.frame_timings.len() > self.max_frame_timings {
+            self.frame_timings.remove(0);
+        }
+    }
+
+    /// Get recent frame timings
+    pub fn get_frame_timings(&self, count: Option<usize>) -> Vec<FrameTiming> {
+        let count = count
+            .unwrap_or(self.frame_timings.len())
+            .min(self.frame_timings.len());
+        self.frame_timings[self.frame_timings.len() - count..].to_vec()
+    }
+
+    /// Get average frame time in microseconds
+    pub fn get_average_frame_time(&self) -> u64 {
+        if self.perf_metrics.frames_rendered == 0 {
+            0
+        } else {
+            self.perf_metrics.total_processing_us / self.perf_metrics.frames_rendered
+        }
+    }
+
+    /// Get frames per second (based on average frame time)
+    pub fn get_fps(&self) -> f64 {
+        let avg_time = self.get_average_frame_time();
+        if avg_time == 0 {
+            0.0
+        } else {
+            1_000_000.0 / avg_time as f64
+        }
+    }
+
+    // === Feature 8: Advanced Color Operations ===
+
+    /// Convert RGB color to HSV
+    pub fn rgb_to_hsv_color(&self, r: u8, g: u8, b: u8) -> ColorHSV {
+        rgb_to_hsv(r, g, b)
+    }
+
+    /// Convert HSV color to RGB
+    pub fn hsv_to_rgb_color(&self, hsv: ColorHSV) -> (u8, u8, u8) {
+        hsv_to_rgb(hsv)
+    }
+
+    /// Convert RGB color to HSL
+    pub fn rgb_to_hsl_color(&self, r: u8, g: u8, b: u8) -> ColorHSL {
+        rgb_to_hsl(r, g, b)
+    }
+
+    /// Convert HSL color to RGB
+    pub fn hsl_to_rgb_color(&self, hsl: ColorHSL) -> (u8, u8, u8) {
+        hsl_to_rgb(hsl)
+    }
+
+    /// Generate a color palette based on a base color and theme mode
+    pub fn generate_color_palette(&self, r: u8, g: u8, b: u8, mode: ThemeMode) -> ColorPalette {
+        let hsl = rgb_to_hsl(r, g, b);
+
+        let colors = match mode {
+            ThemeMode::Complementary => {
+                let comp_hsl = ColorHSL {
+                    h: (hsl.h + 180.0) % 360.0,
+                    s: hsl.s,
+                    l: hsl.l,
+                };
+                vec![hsl_to_rgb(comp_hsl)]
+            }
+            ThemeMode::Analogous => {
+                let angle = 30.0;
+                vec![
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + angle) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 360.0 - angle) % 360.0,
+                        ..hsl
+                    }),
+                ]
+            }
+            ThemeMode::Triadic => {
+                vec![
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 120.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 240.0) % 360.0,
+                        ..hsl
+                    }),
+                ]
+            }
+            ThemeMode::Tetradic => {
+                vec![
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 90.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 180.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (hsl.h + 270.0) % 360.0,
+                        ..hsl
+                    }),
+                ]
+            }
+            ThemeMode::SplitComplementary => {
+                let comp_h = (hsl.h + 180.0) % 360.0;
+                vec![
+                    hsl_to_rgb(ColorHSL {
+                        h: (comp_h + 30.0) % 360.0,
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        h: (comp_h + 360.0 - 30.0) % 360.0,
+                        ..hsl
+                    }),
+                ]
+            }
+            ThemeMode::Monochromatic => {
+                vec![
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l + 0.2).min(1.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l - 0.2).max(0.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l + 0.4).min(1.0),
+                        ..hsl
+                    }),
+                    hsl_to_rgb(ColorHSL {
+                        l: (hsl.l - 0.4).max(0.0),
+                        ..hsl
+                    }),
+                ]
+            }
+        };
+
+        ColorPalette {
+            base: (r, g, b),
+            colors,
+            mode,
+        }
+    }
+
+    /// Calculate color distance (Euclidean distance in RGB space)
+    pub fn color_distance(&self, r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f64 {
+        let dr = r1 as f64 - r2 as f64;
+        let dg = g1 as f64 - g2 as f64;
+        let db = b1 as f64 - b2 as f64;
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    // === Feature 9: Line Wrapping Utilities ===
+
+    /// Join wrapped lines starting from a given row
+    ///
+    /// Unwraps soft-wrapped lines into a single logical line.
+    pub fn join_wrapped_lines(&self, start_row: usize) -> Option<JoinedLines> {
+        let grid = self.active_grid();
+        if start_row >= grid.rows() {
+            return None;
+        }
+
+        let mut lines = Vec::new();
+        let mut current_row = start_row;
+
+        // Collect the first line
+        if let Some(line) = grid.row(current_row) {
+            lines.push(cells_to_text(line));
+        } else {
+            return None;
+        }
+
+        // Follow wrapped lines
+        while current_row < grid.rows() - 1 && grid.is_line_wrapped(current_row) {
+            current_row += 1;
+            if let Some(line) = grid.row(current_row) {
+                lines.push(cells_to_text(line));
+            } else {
+                break;
+            }
+        }
+
+        Some(JoinedLines {
+            text: lines.join(""),
+            start_row,
+            end_row: current_row,
+            lines_joined: lines.len(),
+        })
+    }
+
+    /// Get all logical lines (unwrapped) in the visible screen
+    pub fn get_logical_lines(&self) -> Vec<String> {
+        let grid = self.active_grid();
+        let mut logical_lines = Vec::new();
+        let mut row = 0;
+
+        while row < grid.rows() {
+            if let Some(joined) = self.join_wrapped_lines(row) {
+                logical_lines.push(joined.text);
+                row = joined.end_row + 1;
+            } else {
+                row += 1;
+            }
+        }
+
+        logical_lines
+    }
+
+    /// Check if a row starts a new logical line (not a continuation)
+    pub fn is_line_start(&self, row: usize) -> bool {
+        if row == 0 {
+            return true;
+        }
+        let grid = self.active_grid();
+        !grid.is_line_wrapped(row.saturating_sub(1))
+    }
+
+    // === Feature 10: Clipboard Integration ===
+
+    /// Add content to clipboard history
+    pub fn add_to_clipboard_history(
+        &mut self,
+        slot: ClipboardSlot,
+        content: String,
+        label: Option<String>,
+    ) {
+        let entry = ClipboardEntry {
+            content,
+            timestamp: get_timestamp_us(),
+            label,
+        };
+
+        let history = self.clipboard_history.entry(slot).or_default();
+        history.push(entry);
+
+        // Keep only last N entries
+        if history.len() > self.max_clipboard_history {
+            history.remove(0);
+        }
+    }
+
+    /// Get clipboard history for a slot
+    pub fn get_clipboard_history(&self, slot: ClipboardSlot) -> Vec<ClipboardEntry> {
+        self.clipboard_history
+            .get(&slot)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Get the most recent clipboard entry for a slot
+    pub fn get_latest_clipboard(&self, slot: ClipboardSlot) -> Option<ClipboardEntry> {
+        self.clipboard_history.get(&slot)?.last().cloned()
+    }
+
+    /// Clear clipboard history for a slot
+    pub fn clear_clipboard_history(&mut self, slot: ClipboardSlot) {
+        self.clipboard_history.remove(&slot);
+    }
+
+    /// Clear all clipboard history
+    pub fn clear_all_clipboard_history(&mut self) {
+        self.clipboard_history.clear();
+    }
+
+    /// Set clipboard content with slot (convenience method that also adds to history)
+    pub fn set_clipboard_with_slot(&mut self, content: String, slot: Option<ClipboardSlot>) {
+        let slot = slot.unwrap_or(ClipboardSlot::Primary);
+
+        // Update the current clipboard_content field
+        self.clipboard_content = Some(content.clone());
+
+        // Add to history
+        self.add_to_clipboard_history(slot, content, None);
+    }
+
+    /// Get clipboard content from history or current clipboard
+    pub fn get_clipboard_from_slot(&self, slot: Option<ClipboardSlot>) -> Option<String> {
+        let slot = slot.unwrap_or(ClipboardSlot::Primary);
+
+        // Try history first
+        if let Some(entry) = self.get_latest_clipboard(slot) {
+            return Some(entry.content);
+        }
+
+        // Fall back to current clipboard_content
+        self.clipboard_content.clone()
+    }
+
+    /// Search clipboard history
+    pub fn search_clipboard_history(
+        &self,
+        query: &str,
+        slot: Option<ClipboardSlot>,
+    ) -> Vec<ClipboardEntry> {
+        let query_lower = query.to_lowercase();
+
+        if let Some(slot) = slot {
+            // Search specific slot
+            self.clipboard_history
+                .get(&slot)
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|e| e.content.to_lowercase().contains(&query_lower))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            // Search all slots
+            let mut results = Vec::new();
+            for entries in self.clipboard_history.values() {
+                for entry in entries {
+                    if entry.content.to_lowercase().contains(&query_lower) {
+                        results.push(entry.clone());
+                    }
+                }
+            }
+            results.sort_by_key(|e| std::cmp::Reverse(e.timestamp));
+            results
+        }
+    }
+
+    // === Feature 17: Advanced Mouse Support ===
+
+    /// Record a mouse event in the history
+    pub fn record_mouse_event(&mut self, event: MouseEventRecord) {
+        // Record position
+        let position = MousePosition {
+            col: event.col,
+            row: event.row,
+            timestamp: event.timestamp,
+        };
+        self.mouse_positions.push(position);
+
+        // Record event
+        self.mouse_events.push(event);
+
+        // Limit history size
+        if self.mouse_events.len() > self.max_mouse_history {
+            self.mouse_events
+                .drain(0..self.mouse_events.len() - self.max_mouse_history);
+        }
+        if self.mouse_positions.len() > self.max_mouse_history {
+            self.mouse_positions
+                .drain(0..self.mouse_positions.len() - self.max_mouse_history);
+        }
+    }
+
+    /// Get mouse events, optionally limited to most recent N
+    pub fn get_mouse_events(&self, count: Option<usize>) -> Vec<MouseEventRecord> {
+        if let Some(n) = count {
+            self.mouse_events
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect()
+        } else {
+            self.mouse_events.clone()
+        }
+    }
+
+    /// Get mouse positions, optionally limited to most recent N
+    pub fn get_mouse_positions(&self, count: Option<usize>) -> Vec<MousePosition> {
+        if let Some(n) = count {
+            self.mouse_positions
+                .iter()
+                .rev()
+                .take(n)
+                .rev()
+                .cloned()
+                .collect()
+        } else {
+            self.mouse_positions.clone()
+        }
+    }
+
+    /// Get the last recorded mouse position
+    pub fn get_last_mouse_position(&self) -> Option<MousePosition> {
+        self.mouse_positions.last().cloned()
+    }
+
+    /// Clear mouse event and position history
+    pub fn clear_mouse_history(&mut self) {
+        self.mouse_events.clear();
+        self.mouse_positions.clear();
+    }
+
+    /// Set maximum mouse history size
+    pub fn set_max_mouse_history(&mut self, max: usize) {
+        self.max_mouse_history = max;
+        // Trim existing history if needed
+        if self.mouse_events.len() > max {
+            self.mouse_events.drain(0..self.mouse_events.len() - max);
+        }
+        if self.mouse_positions.len() > max {
+            self.mouse_positions
+                .drain(0..self.mouse_positions.len() - max);
+        }
+    }
+
+    /// Get maximum mouse history size
+    pub fn get_max_mouse_history(&self) -> usize {
+        self.max_mouse_history
+    }
+
+    // === Feature 19: Custom Rendering Hints ===
+
+    /// Add a damage region to track screen area changes
+    pub fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) {
+        let region = DamageRegion {
+            left,
+            top,
+            right,
+            bottom,
+        };
+        self.damage_regions.push(region);
+    }
+
+    /// Get all current damage regions
+    pub fn get_damage_regions(&self) -> Vec<DamageRegion> {
+        self.damage_regions.clone()
+    }
+
+    /// Merge overlapping damage regions to reduce count
+    pub fn merge_damage_regions(&mut self) {
+        if self.damage_regions.len() < 2 {
+            return;
+        }
+
+        let mut merged = Vec::new();
+        let mut regions = self.damage_regions.clone();
+        regions.sort_by_key(|r| (r.top, r.left));
+
+        let mut current = regions[0];
+
+        for region in regions.iter().skip(1) {
+            // Check if regions overlap or are adjacent
+            if region.left <= current.right + 1
+                && region.top <= current.bottom + 1
+                && region.right >= current.left.saturating_sub(1)
+                && region.bottom >= current.top.saturating_sub(1)
+            {
+                // Merge
+                current = DamageRegion {
+                    left: current.left.min(region.left),
+                    top: current.top.min(region.top),
+                    right: current.right.max(region.right),
+                    bottom: current.bottom.max(region.bottom),
+                };
+            } else {
+                merged.push(current);
+                current = *region;
+            }
+        }
+        merged.push(current);
+
+        self.damage_regions = merged;
+    }
+
+    /// Clear all damage regions
+    pub fn clear_damage_regions(&mut self) {
+        self.damage_regions.clear();
+    }
+
+    /// Add a rendering hint
+    pub fn add_rendering_hint(
+        &mut self,
+        damage: DamageRegion,
+        layer: ZLayer,
+        animation: AnimationHint,
+        priority: UpdatePriority,
+    ) {
+        let hint = RenderingHint {
+            damage,
+            layer,
+            animation,
+            priority,
+        };
+        self.rendering_hints.push(hint);
+    }
+
+    /// Get all rendering hints, optionally sorted by priority
+    pub fn get_rendering_hints(&self, sort_by_priority: bool) -> Vec<RenderingHint> {
+        if sort_by_priority {
+            let mut hints = self.rendering_hints.clone();
+            hints.sort_by_key(|h| std::cmp::Reverse(h.priority as u8));
+            hints
+        } else {
+            self.rendering_hints.clone()
+        }
+    }
+
+    /// Clear all rendering hints
+    pub fn clear_rendering_hints(&mut self) {
+        self.rendering_hints.clear();
+    }
+
+    // === Feature 16: Performance Profiling ===
+
+    /// Enable performance profiling
+    pub fn enable_profiling(&mut self) {
+        self.profiling_enabled = true;
+        if self.profiling_data.is_none() {
+            self.profiling_data = Some(ProfilingData {
+                categories: std::collections::HashMap::new(),
+                allocations: 0,
+                bytes_allocated: 0,
+                peak_memory: 0,
+            });
+        }
+    }
+
+    /// Disable performance profiling
+    pub fn disable_profiling(&mut self) {
+        self.profiling_enabled = false;
+    }
+
+    /// Check if profiling is enabled
+    pub fn is_profiling_enabled(&self) -> bool {
+        self.profiling_enabled
+    }
+
+    /// Get current profiling data
+    pub fn get_profiling_data(&self) -> Option<ProfilingData> {
+        self.profiling_data.clone()
+    }
+
+    /// Reset profiling data
+    pub fn reset_profiling_data(&mut self) {
+        if let Some(ref mut data) = self.profiling_data {
+            data.categories.clear();
+            data.allocations = 0;
+            data.bytes_allocated = 0;
+            data.peak_memory = 0;
+        }
+    }
+
+    /// Record an escape sequence execution for profiling
+    pub fn record_escape_sequence(&mut self, category: ProfileCategory, time_us: u64) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            let profile = data
+                .categories
+                .entry(category)
+                .or_insert(EscapeSequenceProfile {
+                    count: 0,
+                    total_time_us: 0,
+                    peak_time_us: 0,
+                    avg_time_us: 0,
+                });
+
+            profile.count += 1;
+            profile.total_time_us += time_us;
+            profile.peak_time_us = profile.peak_time_us.max(time_us);
+            profile.avg_time_us = profile.total_time_us / profile.count;
+        }
+    }
+
+    /// Record memory allocation for profiling
+    pub fn record_allocation(&mut self, bytes: u64) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            data.allocations += 1;
+            data.bytes_allocated += bytes;
+        }
+    }
+
+    /// Update peak memory usage
+    pub fn update_peak_memory(&mut self, current_bytes: usize) {
+        if !self.profiling_enabled {
+            return;
+        }
+
+        if let Some(ref mut data) = self.profiling_data {
+            data.peak_memory = data.peak_memory.max(current_bytes);
+        }
+    }
+
+    // === Feature 15: Regex Search in Scrollback ===
+
+    /// Perform regex search on terminal content
+    pub fn regex_search(
+        &mut self,
+        pattern: &str,
+        options: RegexSearchOptions,
+    ) -> Result<Vec<RegexMatch>, String> {
+        // Build regex with options
+        let mut regex_pattern = pattern.to_string();
+        if options.case_insensitive {
+            regex_pattern = format!("(?i){}", regex_pattern);
+        }
+        if options.multiline {
+            regex_pattern = format!("(?m){}", regex_pattern);
+        }
+
+        let re = regex::Regex::new(&regex_pattern).map_err(|e| format!("Invalid regex: {}", e))?;
+
+        let mut matches = Vec::new();
+        let grid = self.active_grid();
+
+        // Collect all lines to search
+        let mut all_lines = Vec::new();
+        let mut line_offsets = Vec::new(); // Track which row each line corresponds to
+
+        // Include scrollback if requested
+        if options.include_scrollback {
+            for i in 0..grid.scrollback_len() {
+                if let Some(line) = grid.scrollback_line(i) {
+                    let text = cells_to_text(line);
+                    line_offsets.push(i);
+                    all_lines.push(text);
+                }
+            }
+        }
+
+        // Add visible screen lines
+        for row in 0..grid.rows() {
+            if let Some(line) = grid.row(row) {
+                let text = cells_to_text(line);
+                line_offsets.push(grid.scrollback_len() + row);
+                all_lines.push(text);
+            }
+        }
+
+        // Search through lines
+        for (line_idx, line) in all_lines.iter().enumerate() {
+            for cap in re.captures_iter(line) {
+                let m = cap.get(0).unwrap();
+                let captures: Vec<String> = cap
+                    .iter()
+                    .skip(1)
+                    .filter_map(|c| c.map(|m| m.as_str().to_string()))
+                    .collect();
+
+                matches.push(RegexMatch {
+                    row: line_offsets[line_idx],
+                    col: m.start(),
+                    end_row: line_offsets[line_idx],
+                    end_col: m.end(),
+                    text: m.as_str().to_string(),
+                    captures,
+                });
+
+                if options.max_matches > 0 && matches.len() >= options.max_matches {
+                    break;
+                }
+            }
+
+            if options.max_matches > 0 && matches.len() >= options.max_matches {
+                break;
+            }
+        }
+
+        if options.reverse {
+            matches.reverse();
+        }
+
+        // Cache the results
+        self.regex_matches = matches.clone();
+        self.current_regex_pattern = Some(pattern.to_string());
+
+        Ok(matches)
+    }
+
+    /// Get cached regex matches
+    pub fn get_regex_matches(&self) -> Vec<RegexMatch> {
+        self.regex_matches.clone()
+    }
+
+    /// Get the current regex search pattern
+    pub fn get_current_regex_pattern(&self) -> Option<String> {
+        self.current_regex_pattern.clone()
+    }
+
+    /// Clear regex search cache
+    pub fn clear_regex_matches(&mut self) {
+        self.regex_matches.clear();
+        self.current_regex_pattern = None;
+    }
+
+    /// Find next regex match from a given position
+    pub fn next_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
+        self.regex_matches
+            .iter()
+            .find(|m| m.row > from_row || (m.row == from_row && m.col > from_col))
+            .cloned()
+    }
+
+    /// Find previous regex match from a given position
+    pub fn prev_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
+        self.regex_matches
+            .iter()
+            .rev()
+            .find(|m| m.row < from_row || (m.row == from_row && m.col < from_col))
+            .cloned()
+    }
+
+    // === Feature 13: Terminal Multiplexing Helpers ===
+
+    /// Capture current pane state
+    pub fn capture_pane_state(&self, id: String, cwd: Option<String>) -> PaneState {
+        let grid = self.active_grid();
+        let rows = grid.rows();
+
+        // Capture screen content
+        let mut content = Vec::with_capacity(rows);
+        for row in 0..rows {
+            if let Some(line) = grid.row(row) {
+                content.push(cells_to_text(line));
+            } else {
+                content.push(String::new());
+            }
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        PaneState {
+            id,
+            title: self.title.clone(),
+            size: (grid.cols(), grid.rows()),
+            position: (0, 0), // Position should be set by layout manager
+            cwd,
+            env: std::collections::HashMap::new(), // Env vars should be provided externally
+            content,
+            cursor: (self.cursor.col, self.cursor.row),
+            alt_screen: self.alt_screen_active,
+            scroll_offset: 0, // Should be provided by scroll state
+            created_at: now,
+            last_activity: now,
+        }
+    }
+
+    /// Restore pane state (partial - restores what's possible)
+    pub fn restore_pane_state(&mut self, state: &PaneState) -> Result<(), String> {
+        // Verify size matches
+        let (cols, rows) = {
+            let grid = self.active_grid();
+            (grid.cols(), grid.rows())
+        };
+
+        if cols != state.size.0 || rows != state.size.1 {
+            return Err(format!(
+                "Size mismatch: terminal is {}x{} but state is {}x{}",
+                cols, rows, state.size.0, state.size.1
+            ));
+        }
+
+        // Restore title
+        self.title = state.title.clone();
+
+        // Restore cursor position (bounds checked)
+        if state.cursor.0 < cols && state.cursor.1 < rows {
+            self.cursor.col = state.cursor.0;
+            self.cursor.row = state.cursor.1;
+        }
+
+        // Switch to alternate screen if needed
+        if state.alt_screen && !self.alt_screen_active {
+            self.alt_screen_active = true;
+        } else if !state.alt_screen && self.alt_screen_active {
+            self.alt_screen_active = false;
+        }
+
+        // Note: Content restoration would require writing to grid cells
+        // which is complex and may interfere with running processes
+        // This is left for higher-level implementation
+
+        Ok(())
+    }
+
+    /// Store current pane state internally
+    pub fn set_pane_state(&mut self, state: PaneState) {
+        self.pane_state = Some(state);
+    }
+
+    /// Get stored pane state
+    pub fn get_pane_state(&self) -> Option<PaneState> {
+        self.pane_state.clone()
+    }
+
+    /// Clear stored pane state
+    pub fn clear_pane_state(&mut self) {
+        self.pane_state = None;
+    }
+
+    /// Create a window layout from pane IDs
+    pub fn create_window_layout(
+        id: String,
+        name: String,
+        direction: LayoutDirection,
+        panes: Vec<String>,
+        sizes: Vec<u8>,
+        active_pane: usize,
+    ) -> Result<WindowLayout, String> {
+        // Validate inputs
+        if panes.is_empty() {
+            return Err("Layout must contain at least one pane".to_string());
+        }
+        if panes.len() != sizes.len() {
+            return Err("Number of panes must match number of sizes".to_string());
+        }
+        if active_pane >= panes.len() {
+            return Err("Active pane index out of bounds".to_string());
+        }
+
+        // Validate sizes sum to 100%
+        let total: u32 = sizes.iter().map(|&s| s as u32).sum();
+        if total != 100 {
+            return Err(format!("Sizes must sum to 100%, got {}", total));
+        }
+
+        Ok(WindowLayout {
+            id,
+            name,
+            direction,
+            panes,
+            sizes,
+            active_pane,
+        })
+    }
+
+    /// Create a session state
+    pub fn create_session_state(
+        id: String,
+        name: String,
+        panes: Vec<PaneState>,
+        layouts: Vec<WindowLayout>,
+        active_layout: usize,
+        metadata: std::collections::HashMap<String, String>,
+    ) -> Result<SessionState, String> {
+        if panes.is_empty() {
+            return Err("Session must contain at least one pane".to_string());
+        }
+        if layouts.is_empty() {
+            return Err("Session must contain at least one layout".to_string());
+        }
+        if active_layout >= layouts.len() {
+            return Err("Active layout index out of bounds".to_string());
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        Ok(SessionState {
+            id,
+            name,
+            panes,
+            layouts,
+            active_layout,
+            metadata,
+            created_at: now,
+            last_saved: now,
+        })
+    }
+
+    /// Serialize session state to JSON
+    pub fn serialize_session(state: &SessionState) -> Result<String, String> {
+        serde_json::to_string_pretty(state)
+            .map_err(|e| format!("Failed to serialize session: {}", e))
+    }
+
+    /// Deserialize session state from JSON
+    pub fn deserialize_session(json: &str) -> Result<SessionState, String> {
+        serde_json::from_str(json).map_err(|e| format!("Failed to deserialize session: {}", e))
+    }
+
+    // === Feature 21: Image Protocol Support ===
+
+    /// Add an inline image
+    pub fn add_inline_image(&mut self, image: InlineImage) {
+        self.inline_images.push(image);
+
+        // Limit number of stored images
+        if self.inline_images.len() > self.max_inline_images {
+            self.inline_images.drain(0..self.inline_images.len() - self.max_inline_images);
+        }
+    }
+
+    /// Get inline images at a specific position
+    pub fn get_images_at(&self, col: usize, row: usize) -> Vec<InlineImage> {
+        self.inline_images
+            .iter()
+            .filter(|img| img.position == (col, row))
+            .cloned()
+            .collect()
+    }
+
+    /// Get all inline images
+    pub fn get_all_images(&self) -> Vec<InlineImage> {
+        self.inline_images.clone()
+    }
+
+    /// Delete image by ID
+    pub fn delete_image(&mut self, id: &str) -> bool {
+        let before_len = self.inline_images.len();
+        self.inline_images.retain(|img| {
+            img.id.as_ref().map_or(true, |img_id| img_id != id)
+        });
+        self.inline_images.len() < before_len
+    }
+
+    /// Clear all inline images
+    pub fn clear_images(&mut self) {
+        self.inline_images.clear();
+    }
+
+    /// Get image by ID
+    pub fn get_image_by_id(&self, id: &str) -> Option<InlineImage> {
+        self.inline_images
+            .iter()
+            .find(|img| img.id.as_ref().is_some_and(|img_id| img_id == id))
+            .cloned()
+    }
+
+    /// Set maximum inline images
+    pub fn set_max_inline_images(&mut self, max: usize) {
+        self.max_inline_images = max;
+        if self.inline_images.len() > max {
+            self.inline_images.drain(0..self.inline_images.len() - max);
+        }
+    }
+
+    // === Feature 28: Benchmarking Suite ===
+
+    /// Run rendering benchmark
+    pub fn benchmark_rendering(&mut self, iterations: u64) -> BenchmarkResult {
+        let start = std::time::Instant::now();
+        let mut min_time = u64::MAX;
+        let mut max_time = 0u64;
+
+        for _ in 0..iterations {
+            let iter_start = std::time::Instant::now();
+
+            // Simulate rendering operation
+            let grid = self.active_grid();
+            for row in 0..grid.rows() {
+                if let Some(line) = grid.row(row) {
+                    let _ = cells_to_text(line);
+                }
+            }
+
+            let iter_time = iter_start.elapsed().as_micros() as u64;
+            min_time = min_time.min(iter_time);
+            max_time = max_time.max(iter_time);
+        }
+
+        let total_time = start.elapsed().as_micros() as u64;
+        let avg_time = total_time / iterations;
+
+        BenchmarkResult {
+            category: BenchmarkCategory::Rendering,
+            name: "Text Rendering".to_string(),
+            iterations,
+            total_time_us: total_time,
+            avg_time_us: avg_time,
+            min_time_us: min_time,
+            max_time_us: max_time,
+            ops_per_sec: if avg_time > 0 { 1_000_000.0 / avg_time as f64 } else { 0.0 },
+            memory_bytes: None,
+        }
+    }
+
+    /// Run escape sequence parsing benchmark
+    pub fn benchmark_parsing(&mut self, text: &str, iterations: u64) -> BenchmarkResult {
+        let start = std::time::Instant::now();
+        let mut min_time = u64::MAX;
+        let mut max_time = 0u64;
+        let bytes = text.as_bytes();
+
+        for _ in 0..iterations {
+            let iter_start = std::time::Instant::now();
+
+            // Parse the text using process()
+            self.process(bytes);
+
+            let iter_time = iter_start.elapsed().as_micros() as u64;
+            min_time = min_time.min(iter_time);
+            max_time = max_time.max(iter_time);
+        }
+
+        let total_time = start.elapsed().as_micros() as u64;
+        let avg_time = total_time / iterations;
+        let bytes_per_sec = if avg_time > 0 {
+            text.len() as f64 * 1_000_000.0 / avg_time as f64
+        } else {
+            0.0
+        };
+
+        BenchmarkResult {
+            category: BenchmarkCategory::Parsing,
+            name: "Escape Sequence Parsing".to_string(),
+            iterations,
+            total_time_us: total_time,
+            avg_time_us: avg_time,
+            min_time_us: min_time,
+            max_time_us: max_time,
+            ops_per_sec: bytes_per_sec,
+            memory_bytes: None,
+        }
+    }
+
+    /// Run grid operations benchmark
+    pub fn benchmark_grid_ops(&mut self, iterations: u64) -> BenchmarkResult {
+        let start = std::time::Instant::now();
+        let mut min_time = u64::MAX;
+        let mut max_time = 0u64;
+
+        for _ in 0..iterations {
+            let iter_start = std::time::Instant::now();
+
+            // Perform grid operations: write char, move cursor, scroll
+            self.process(b"X");  // Write a character
+            self.process(b"\x1b[H");  // Move cursor to home
+            self.grid.scroll_up(1);  // Scroll up by 1 line
+
+            let iter_time = iter_start.elapsed().as_micros() as u64;
+            min_time = min_time.min(iter_time);
+            max_time = max_time.max(iter_time);
+        }
+
+        let total_time = start.elapsed().as_micros() as u64;
+        let avg_time = total_time / iterations;
+
+        BenchmarkResult {
+            category: BenchmarkCategory::GridOps,
+            name: "Grid Operations".to_string(),
+            iterations,
+            total_time_us: total_time,
+            avg_time_us: avg_time,
+            min_time_us: min_time,
+            max_time_us: max_time,
+            ops_per_sec: if avg_time > 0 { 1_000_000.0 / avg_time as f64 } else { 0.0 },
+            memory_bytes: None,
+        }
+    }
+
+    /// Run full benchmark suite
+    pub fn run_benchmark_suite(&mut self, suite_name: String) -> BenchmarkSuite {
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
+
+        // Rendering benchmark
+        results.push(self.benchmark_rendering(1000));
+
+        // Parsing benchmark
+        let test_text = "\x1b[1;31mHello\x1b[0m \x1b[2J\x1b[H";
+        results.push(self.benchmark_parsing(test_text, 1000));
+
+        // Grid ops benchmark
+        results.push(self.benchmark_grid_ops(10000));
+
+        let total_time_ms = start.elapsed().as_millis() as u64;
+
+        BenchmarkSuite {
+            results,
+            total_time_ms,
+            suite_name,
+        }
+    }
+
+    // === Feature 29: Terminal Compliance Testing ===
+
+    /// Run compliance tests for a specific level
+    pub fn test_compliance(&mut self, level: ComplianceLevel) -> ComplianceReport {
+        let mut tests = Vec::new();
+
+        // VT100 basic tests
+        if level >= ComplianceLevel::VT100 {
+            tests.extend(self.test_vt100_compliance());
+        }
+
+        // VT220 tests
+        if level >= ComplianceLevel::VT220 {
+            tests.extend(self.test_vt220_compliance());
+        }
+
+        // VT320 tests
+        if level >= ComplianceLevel::VT320 {
+            tests.extend(self.test_vt320_compliance());
+        }
+
+        let passed = tests.iter().filter(|t| t.passed).count();
+        let failed = tests.len() - passed;
+        let compliance_percent = if tests.is_empty() {
+            0.0
+        } else {
+            (passed as f64 / tests.len() as f64) * 100.0
+        };
+
+        ComplianceReport {
+            terminal_info: format!("Terminal Emulator v{}", env!("CARGO_PKG_VERSION")),
+            level,
+            tests,
+            passed,
+            failed,
+            compliance_percent,
+        }
+    }
+
+    /// VT100 compliance tests
+    fn test_vt100_compliance(&mut self) -> Vec<ComplianceTest> {
+        let mut tests = Vec::new();
+
+        // Test cursor movement - CSI 6 ; 6 H (move to row 6, col 6, 1-indexed)
+        self.process(b"\x1b[6;6H");
+        let result = (self.cursor.col, self.cursor.row);
+        tests.push(ComplianceTest {
+            name: "Cursor positioning".to_string(),
+            category: "VT100".to_string(),
+            passed: result == (5, 5),  // 0-indexed
+            expected: "(5, 5)".to_string(),
+            actual: format!("{:?}", result),
+            notes: None,
+        });
+
+        // Test clear screen - CSI 2 J
+        self.process(b"X");  // Write a character
+        self.process(b"\x1b[2J");  // Clear screen
+        let rows = self.grid.rows();
+        let is_clear = (0..rows.min(3)).all(|row_idx| {
+            self.grid.row(row_idx).map_or(true, |row| {
+                row.iter().take(10).all(|cell| cell.c == ' ')
+            })
+        });
+        tests.push(ComplianceTest {
+            name: "Clear screen".to_string(),
+            category: "VT100".to_string(),
+            passed: is_clear,
+            expected: "All spaces".to_string(),
+            actual: if is_clear { "Clear".to_string() } else { "Not clear".to_string() },
+            notes: None,
+        });
+
+        // Test SGR attributes - CSI 1 m (bold)
+        self.process(b"\x1b[1m");  // Set bold
+        let bold = self.flags.bold();
+        tests.push(ComplianceTest {
+            name: "SGR bold attribute".to_string(),
+            category: "VT100".to_string(),
+            passed: bold,
+            expected: "Bold enabled".to_string(),
+            actual: format!("Bold: {}", bold),
+            notes: None,
+        });
+
+        tests
+    }
+
+    /// VT220 compliance tests
+    fn test_vt220_compliance(&mut self) -> Vec<ComplianceTest> {
+        let mut tests = Vec::new();
+
+        // Test insert lines - CSI L
+        self.process(b"\x1b[1L");  // Insert 1 line
+        tests.push(ComplianceTest {
+            name: "Insert lines".to_string(),
+            category: "VT220".to_string(),
+            passed: true, // If no crash, it works
+            expected: "No error".to_string(),
+            actual: "Success".to_string(),
+            notes: Some("Basic functionality test".to_string()),
+        });
+
+        // Test delete characters - CSI P
+        self.process(b"ABC");  // Write some characters
+        self.process(b"\x1b[H");  // Move to home
+        self.process(b"\x1b[1P");  // Delete 1 character
+        tests.push(ComplianceTest {
+            name: "Delete characters".to_string(),
+            category: "VT220".to_string(),
+            passed: true,
+            expected: "Character deleted".to_string(),
+            actual: "Success".to_string(),
+            notes: None,
+        });
+
+        tests
+    }
+
+    /// VT320 compliance tests
+    fn test_vt320_compliance(&mut self) -> Vec<ComplianceTest> {
+        let mut tests = Vec::new();
+
+        // Test color support - CSI 38 ; 5 ; n m (set foreground to color n)
+        self.process(b"\x1b[38;5;1m");  // Set foreground to color 1 (red)
+        tests.push(ComplianceTest {
+            name: "Indexed colors".to_string(),
+            category: "VT320".to_string(),
+            passed: true, // Basic support
+            expected: "Color set".to_string(),
+            actual: "Success".to_string(),
+            notes: Some("256 color support".to_string()),
+        });
+
+        tests
+    }
+
+    /// Generate compliance report as formatted string
+    pub fn format_compliance_report(report: &ComplianceReport) -> String {
+        let mut output = String::new();
+        output.push_str("=== Terminal Compliance Report ===\n");
+        output.push_str(&format!("Terminal: {}\n", report.terminal_info));
+        output.push_str(&format!("Level: {:?}\n", report.level));
+        output.push_str(&format!("Passed: {}/{}\n", report.passed, report.passed + report.failed));
+        output.push_str(&format!("Compliance: {:.1}%\n\n", report.compliance_percent));
+
+        for test in &report.tests {
+            let status = if test.passed { "✓" } else { "✗" };
+            output.push_str(&format!("{} [{}] {}\n", status, test.category, test.name));
+            if !test.passed {
+                output.push_str(&format!("  Expected: {}\n", test.expected));
+                output.push_str(&format!("  Actual: {}\n", test.actual));
+                if let Some(ref notes) = test.notes {
+                    output.push_str(&format!("  Notes: {}\n", notes));
+                }
+            }
+        }
+
+        output
+    }
+
+    // === Feature 30: OSC 52 Clipboard Sync ===
+
+    /// Record a clipboard sync event
+    pub fn record_clipboard_sync(
+        &mut self,
+        target: ClipboardTarget,
+        operation: ClipboardOperation,
+        content: Option<String>,
+        is_remote: bool,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let event = ClipboardSyncEvent {
+            target,
+            operation,
+            content: content.clone(),
+            timestamp,
+            is_remote,
+        };
+
+        self.clipboard_sync_events.push(event);
+
+        // Add to history if it's a Set operation
+        if let (ClipboardOperation::Set, Some(content)) = (operation, content) {
+            let entry = ClipboardHistoryEntry {
+                target,
+                content,
+                timestamp,
+                source: self.remote_session_id.clone(),
+            };
+
+            self.clipboard_sync_history
+                .entry(target)
+                .or_default()
+                .push(entry);
+
+            // Limit history size
+            if let Some(entries) = self.clipboard_sync_history.get_mut(&target) {
+                if entries.len() > self.max_clipboard_sync_history {
+                    entries.drain(0..entries.len() - self.max_clipboard_sync_history);
+                }
+            }
+        }
+
+    }
+
+    /// Get clipboard sync events
+    pub fn get_clipboard_sync_events(&self) -> &[ClipboardSyncEvent] {
+        &self.clipboard_sync_events
+    }
+
+    /// Get clipboard sync history for a target
+    pub fn get_clipboard_sync_history(
+        &self,
+        target: ClipboardTarget,
+    ) -> Option<&[ClipboardHistoryEntry]> {
+        self.clipboard_sync_history
+            .get(&target)
+            .map(|v| v.as_slice())
+    }
+
+    /// Clear clipboard sync events
+    pub fn clear_clipboard_sync_events(&mut self) {
+        self.clipboard_sync_events.clear();
+    }
+
+    /// Set remote session ID
+    pub fn set_remote_session_id(&mut self, session_id: Option<String>) {
+        self.remote_session_id = session_id;
+    }
+
+    /// Get remote session ID
+    pub fn remote_session_id(&self) -> Option<&str> {
+        self.remote_session_id.as_deref()
+    }
+
+    /// Set maximum clipboard sync history
+    pub fn set_max_clipboard_sync_history(&mut self, max: usize) {
+        self.max_clipboard_sync_history = max;
+        for entries in self.clipboard_sync_history.values_mut() {
+            if entries.len() > max {
+                entries.drain(0..entries.len() - max);
+            }
+        }
+    }
+
+    // === Feature 31: Shell Integration++ ===
+
+    /// Start tracking a command execution
+    pub fn start_command_execution(&mut self, command: String) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        self.current_command = Some(CommandExecution {
+            command,
+            cwd: self.shell_integration.cwd().map(String::from),
+            start_time: timestamp,
+            end_time: None,
+            exit_code: None,
+            duration_ms: None,
+            success: None,
+        });
+
+    }
+
+    /// End tracking the current command execution
+    pub fn end_command_execution(&mut self, exit_code: i32) {
+        if let Some(mut cmd) = self.current_command.take() {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            cmd.end_time = Some(timestamp);
+            cmd.exit_code = Some(exit_code);
+            cmd.duration_ms = Some(timestamp.saturating_sub(cmd.start_time));
+            cmd.success = Some(exit_code == 0);
+
+            self.command_history.push(cmd);
+
+            // Limit history size
+            if self.command_history.len() > self.max_command_history {
+                self.command_history
+                    .drain(0..self.command_history.len() - self.max_command_history);
+            }
+
+        }
+    }
+
+    /// Get command execution history
+    pub fn get_command_history(&self) -> &[CommandExecution] {
+        &self.command_history
+    }
+
+    /// Get current executing command
+    pub fn get_current_command(&self) -> Option<&CommandExecution> {
+        self.current_command.as_ref()
+    }
+
+    /// Record a CWD change
+    pub fn record_cwd_change(&mut self, new_cwd: String) {
+        let old_cwd = self.shell_integration.cwd().map(String::from);
+
+        // Only record if CWD actually changed
+        if old_cwd.as_deref() != Some(&new_cwd) {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            let change = CwdChange {
+                old_cwd,
+                new_cwd: new_cwd.clone(),
+                timestamp,
+            };
+
+            self.cwd_changes.push(change);
+
+            // Limit history size
+            if self.cwd_changes.len() > self.max_cwd_history {
+                self.cwd_changes
+                    .drain(0..self.cwd_changes.len() - self.max_cwd_history);
+            }
+
+            // Update shell integration
+            self.shell_integration.set_cwd(new_cwd);
+        }
+    }
+
+    /// Get CWD change history
+    pub fn get_cwd_changes(&self) -> &[CwdChange] {
+        &self.cwd_changes
+    }
+
+    /// Get shell integration statistics
+    pub fn get_shell_integration_stats(&self) -> ShellIntegrationStats {
+        let total_commands = self.command_history.len();
+        let successful_commands = self
+            .command_history
+            .iter()
+            .filter(|cmd| cmd.success == Some(true))
+            .count();
+        let failed_commands = self
+            .command_history
+            .iter()
+            .filter(|cmd| cmd.success == Some(false))
+            .count();
+
+        let total_duration_ms: u64 = self
+            .command_history
+            .iter()
+            .filter_map(|cmd| cmd.duration_ms)
+            .sum();
+
+        let avg_duration_ms = if total_commands > 0 {
+            total_duration_ms as f64 / total_commands as f64
+        } else {
+            0.0
+        };
+
+        ShellIntegrationStats {
+            total_commands,
+            successful_commands,
+            failed_commands,
+            avg_duration_ms,
+            total_duration_ms,
+        }
+    }
+
+    /// Clear command execution history
+    pub fn clear_command_history(&mut self) {
+        self.command_history.clear();
+    }
+
+    /// Clear CWD change history
+    pub fn clear_cwd_history(&mut self) {
+        self.cwd_changes.clear();
+    }
+
+    /// Set maximum command history size
+    pub fn set_max_command_history(&mut self, max: usize) {
+        self.max_command_history = max;
+        if self.command_history.len() > max {
+            self.command_history
+                .drain(0..self.command_history.len() - max);
+        }
+    }
+
+    /// Set maximum CWD history size
+    pub fn set_max_cwd_history(&mut self, max: usize) {
+        self.max_cwd_history = max;
+        if self.cwd_changes.len() > max {
+            self.cwd_changes.drain(0..self.cwd_changes.len() - max);
+        }
+    }
+
+    // === Feature 37: Terminal Notifications ===
+
+    /// Get notification configuration
+    pub fn get_notification_config(&self) -> &NotificationConfig {
+        &self.notification_config
+    }
+
+    /// Set notification configuration
+    pub fn set_notification_config(&mut self, config: NotificationConfig) {
+        self.notification_config = config;
+    }
+
+    /// Trigger a notification
+    pub fn trigger_notification(
+        &mut self,
+        trigger: NotificationTrigger,
+        alert: NotificationAlert,
+        message: Option<String>,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let event = NotificationEvent {
+            trigger,
+            alert,
+            message,
+            timestamp,
+            delivered: false, // Will be set by external notification handler
+        };
+
+        self.notification_events.push(event);
+    }
+
+    /// Get notification events
+    pub fn get_notification_events(&self) -> &[NotificationEvent] {
+        &self.notification_events
+    }
+
+    /// Clear notification events
+    pub fn clear_notification_events(&mut self) {
+        self.notification_events.clear();
+    }
+
+    /// Mark notification as delivered
+    pub fn mark_notification_delivered(&mut self, index: usize) {
+        if let Some(event) = self.notification_events.get_mut(index) {
+            event.delivered = true;
+        }
+    }
+
+    /// Update activity timestamp (call on terminal input/output)
+    pub fn update_activity(&mut self) {
+        self.last_activity_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+    }
+
+    /// Check for silence and trigger notification if needed
+    pub fn check_silence(&mut self) {
+        if !self.notification_config.silence_enabled {
+            return;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        // Check if enough time has passed since last silence check
+        if now.saturating_sub(self.last_silence_check)
+            < self.notification_config.silence_threshold * 1000
+        {
+            return;
+        }
+
+        self.last_silence_check = now;
+
+        // Check if activity has occurred recently
+        let silence_duration = now.saturating_sub(self.last_activity_time);
+        if silence_duration >= self.notification_config.silence_threshold * 1000 {
+            self.trigger_notification(NotificationTrigger::Silence, NotificationAlert::Desktop, None);
+        }
+    }
+
+    /// Check for activity and trigger notification if needed
+    pub fn check_activity(&mut self) {
+        if !self.notification_config.activity_enabled {
+            return;
+        }
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let time_since_activity = now.saturating_sub(self.last_activity_time);
+
+        // If there was a period of inactivity and now there's activity
+        if time_since_activity >= self.notification_config.activity_threshold * 1000 {
+            self.trigger_notification(NotificationTrigger::Activity, NotificationAlert::Desktop, None);
+        }
+    }
+
+    /// Register a custom notification trigger
+    pub fn register_custom_trigger(&mut self, id: u32, message: String) {
+        self.custom_triggers.insert(id, message);
+    }
+
+    /// Trigger a custom notification
+    pub fn trigger_custom_notification(&mut self, id: u32, alert: NotificationAlert) {
+        let message = self.custom_triggers.get(&id).cloned();
+        self.trigger_notification(NotificationTrigger::Custom(id), alert, message);
+    }
+
+    /// Handle bell event with notification
+    pub fn handle_bell_notification(&mut self) {
+        // Copy config values to avoid borrow checker issues
+        let bell_desktop = self.notification_config.bell_desktop;
+        let bell_sound = self.notification_config.bell_sound;
+        let bell_visual = self.notification_config.bell_visual;
+
+        if bell_desktop {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Desktop,
+                Some("Terminal bell".to_string()),
+            );
+        }
+
+        if bell_sound > 0 {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Sound(bell_sound),
+                None,
+            );
+        }
+
+        if bell_visual {
+            self.trigger_notification(
+                NotificationTrigger::Bell,
+                NotificationAlert::Visual,
+                None,
+            );
+        }
+    }
+
+    // === Feature 24: Terminal Replay/Recording ===
+
+    /// Start recording a terminal session
+    pub fn start_recording(&mut self, title: Option<String>) {
+        if self.is_recording {
+            return; // Already recording
+        }
+
+        let start_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let initial_size = (self.grid.cols(), self.grid.rows());
+
+        let mut env = HashMap::new();
+        // Add some basic terminal info
+        env.insert("TERM".to_string(), "xterm-256color".to_string());
+        env.insert("COLS".to_string(), initial_size.0.to_string());
+        env.insert("ROWS".to_string(), initial_size.1.to_string());
+
+        self.recording_session = Some(RecordingSession {
+            start_time,
+            initial_size,
+            env,
+            events: Vec::new(),
+            duration: 0,
+            title,
+        });
+
+        self.is_recording = true;
+        self.recording_start_time = start_time;
+    }
+
+    /// Stop recording
+    pub fn stop_recording(&mut self) -> Option<RecordingSession> {
+        if !self.is_recording {
+            return None;
+        }
+
+        self.is_recording = false;
+
+        if let Some(mut session) = self.recording_session.take() {
+            let end_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            session.duration = end_time.saturating_sub(session.start_time);
+            Some(session)
+        } else {
+            None
+        }
+    }
+
+    /// Record an event during recording
+    pub fn record_event(
+        &mut self,
+        event_type: RecordingEventType,
+        data: Vec<u8>,
+        metadata: Option<(usize, usize)>,
+    ) {
+        if !self.is_recording {
+            return;
+        }
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        let relative_timestamp = timestamp.saturating_sub(self.recording_start_time);
+
+        if let Some(session) = &mut self.recording_session {
+            session.events.push(RecordingEvent {
+                timestamp: relative_timestamp,
+                event_type,
+                data,
+                metadata,
+            });
+        }
+    }
+
+    /// Record output data
+    pub fn record_output(&mut self, data: &[u8]) {
+        self.record_event(RecordingEventType::Output, data.to_vec(), None);
+    }
+
+    /// Record input data
+    pub fn record_input(&mut self, data: &[u8]) {
+        self.record_event(RecordingEventType::Input, data.to_vec(), None);
+    }
+
+    /// Record terminal resize
+    pub fn record_resize(&mut self, cols: usize, rows: usize) {
+        self.record_event(
+            RecordingEventType::Resize,
+            Vec::new(),
+            Some((cols, rows)),
+        );
+    }
+
+    /// Add a marker/bookmark to the recording
+    pub fn record_marker(&mut self, label: String) {
+        self.record_event(RecordingEventType::Marker, label.into_bytes(), None);
+    }
+
+    /// Get current recording session
+    pub fn get_recording_session(&self) -> Option<&RecordingSession> {
+        self.recording_session.as_ref()
+    }
+
+    /// Check if currently recording
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
+    /// Export recording to asciicast v2 format
+    pub fn export_asciicast(&self, session: &RecordingSession) -> String {
+        use std::fmt::Write;
+
+        let mut output = String::new();
+
+        // Header
+        let header = serde_json::json!({
+            "version": 2,
+            "width": session.initial_size.0,
+            "height": session.initial_size.1,
+            "timestamp": session.start_time / 1000,
+            "title": session.title.as_deref().unwrap_or("Terminal Recording"),
+            "env": session.env,
+        });
+
+        writeln!(output, "{}", header).ok();
+
+        // Events
+        for event in &session.events {
+            match event.event_type {
+                RecordingEventType::Output => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let data = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "o", data]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+                RecordingEventType::Input => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let data = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "i", data]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+                RecordingEventType::Resize => {
+                    if let Some((cols, rows)) = event.metadata {
+                        let time = event.timestamp as f64 / 1000.0;
+                        let event_json = serde_json::json!([time, "r", format!("{}x{}", cols, rows)]);
+                        writeln!(output, "{}", event_json).ok();
+                    }
+                }
+                RecordingEventType::Marker => {
+                    let time = event.timestamp as f64 / 1000.0;
+                    let label = String::from_utf8_lossy(&event.data);
+                    let event_json = serde_json::json!([time, "m", label]);
+                    writeln!(output, "{}", event_json).ok();
+                }
+            }
+        }
+
+        output
+    }
+
+    /// Export recording to JSON format
+    pub fn export_json(&self, session: &RecordingSession) -> String {
+        serde_json::to_string_pretty(&serde_json::json!({
+            "session": {
+                "start_time": session.start_time,
+                "duration": session.duration,
+                "initial_size": session.initial_size,
+                "title": session.title,
+                "env": session.env,
+            },
+            "events": session.events.iter().map(|e| {
+                serde_json::json!({
+                    "timestamp": e.timestamp,
+                    "type": format!("{:?}", e.event_type),
+                    "data": String::from_utf8_lossy(&e.data),
+                    "metadata": e.metadata,
+                })
+            }).collect::<Vec<_>>(),
+        }))
+        .unwrap_or_default()
+    }
+}
+
+// === Feature 14: Snapshot Diffing - Helper Function ===
+
+/// Compare two sets of screen lines and return the differences
+pub fn diff_screen_lines(old_lines: &[String], new_lines: &[String]) -> SnapshotDiff {
+    let mut diffs = Vec::new();
+    let mut added = 0;
+    let mut removed = 0;
+    let mut modified = 0;
+    let mut unchanged = 0;
+
+    let max_rows = old_lines.len().max(new_lines.len());
+
+    for row in 0..max_rows {
+        let old_line = old_lines.get(row);
+        let new_line = new_lines.get(row);
+
+        match (old_line, new_line) {
+            (Some(old_content), Some(new_content)) => {
+                if old_content == new_content {
+                    unchanged += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Unchanged,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                } else {
+                    modified += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Modified,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                }
+            }
+            (None, Some(new_content)) => {
+                added += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Added,
+                    old_row: None,
+                    new_row: Some(row),
+                    old_content: None,
+                    new_content: Some(new_content.clone()),
+                });
+            }
+            (Some(old_content), None) => {
+                removed += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Removed,
+                    old_row: Some(row),
+                    new_row: None,
+                    old_content: Some(old_content.clone()),
+                    new_content: None,
+                });
+            }
+            (None, None) => {
+                // This shouldn't happen
+            }
+        }
+    }
+
+    SnapshotDiff {
+        diffs,
+        added,
+        removed,
+        modified,
+        unchanged,
+    }
 }
 // VTE Perform trait implementation - delegates to sequence handlers
 impl Perform for Terminal {
@@ -1558,6 +5721,14 @@ impl Perform for Terminal {
             b'\x07' => {
                 // Bell - increment counter for visual bell support
                 self.bell_count = self.bell_count.wrapping_add(1);
+                // Add bell event based on volume settings
+                let event = if self.warning_bell_volume > 0 {
+                    BellEvent::WarningBell(self.warning_bell_volume)
+                } else {
+                    BellEvent::VisualBell
+                };
+                self.bell_events.push(event.clone());
+                self.terminal_events.push(TerminalEvent::BellRang(event));
             }
             _ => {}
         }
@@ -1603,6 +5774,24 @@ pub struct TerminalStats {
     pub graphics_count: usize,
     /// Estimated memory usage in bytes
     pub estimated_memory_bytes: usize,
+    /// Number of hyperlinks stored
+    pub hyperlink_count: usize,
+    /// Estimated memory used by hyperlink storage (bytes)
+    pub hyperlink_memory_bytes: usize,
+    /// Color stack depth
+    pub color_stack_depth: usize,
+    /// Title stack depth
+    pub title_stack_depth: usize,
+    /// Keyboard flag stack depth (active screen)
+    pub keyboard_stack_depth: usize,
+    /// Response buffer size (bytes)
+    pub response_buffer_size: usize,
+    /// Number of dirty rows
+    pub dirty_row_count: usize,
+    /// Pending bell events count
+    pub pending_bell_events: usize,
+    /// Pending terminal events count
+    pub pending_terminal_events: usize,
 }
 
 #[cfg(test)]

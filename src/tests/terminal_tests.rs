@@ -2409,3 +2409,248 @@ fn test_vt520_conformance_level_ordering() {
     assert!(ConformanceLevel::VT320 < ConformanceLevel::VT420);
     assert!(ConformanceLevel::VT420 < ConformanceLevel::VT520);
 }
+
+// ========== Tests for New TUI App Features ==========
+
+#[test]
+fn test_dirty_region_tracking() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Initially no dirty rows
+    assert!(term.get_dirty_rows().is_empty());
+    assert_eq!(term.get_dirty_region(), None);
+    
+    // Write to first row
+    term.process(b"Hello");
+    let dirty = term.get_dirty_rows();
+    assert!(dirty.contains(&0));
+    assert_eq!(term.get_dirty_region(), Some((0, 0)));
+    
+    // Write to another row
+    term.process(b"\n\n");
+    term.process(b"World");
+    let dirty = term.get_dirty_rows();
+    assert!(dirty.len() >= 2);
+    
+    // Mark clean and verify
+    term.mark_clean();
+    assert!(term.get_dirty_rows().is_empty());
+    assert_eq!(term.get_dirty_region(), None);
+    
+    // Manual dirty marking
+    term.mark_row_dirty(10);
+    assert_eq!(term.get_dirty_rows(), vec![10]);
+}
+
+#[test]
+fn test_bell_events() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Initially no bell events
+    assert_eq!(term.drain_bell_events().len(), 0);
+    
+    // Trigger bell
+    term.process(b"\x07");
+    let events = term.drain_bell_events();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], BellEvent::WarningBell(_) | BellEvent::VisualBell));
+    
+    // Drain clears the buffer
+    assert_eq!(term.drain_bell_events().len(), 0);
+    
+    // Multiple bells
+    term.process(b"\x07\x07\x07");
+    assert_eq!(term.drain_bell_events().len(), 3);
+}
+
+#[test]
+fn test_mode_introspection() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Check default modes
+    assert!(term.auto_wrap_mode());
+    assert!(!term.origin_mode());
+    assert!(!term.application_cursor());
+    assert_eq!(term.scroll_region(), (0, 23));
+    assert_eq!(term.left_right_margins(), None);
+    
+    // Enable origin mode
+    term.process(b"\x1b[?6h");
+    assert!(term.origin_mode());
+    
+    // Enable application cursor
+    term.process(b"\x1b[?1h");
+    assert!(term.application_cursor());
+    
+    // Disable auto wrap
+    term.process(b"\x1b[?7l");
+    assert!(!term.auto_wrap_mode());
+    
+    // Set scroll region
+    term.process(b"\x1b[5;20r");
+    assert_eq!(term.scroll_region(), (4, 19)); // 0-indexed
+    
+    // Enable left/right margins
+    term.process(b"\x1b[?69h");
+    term.process(b"\x1b[10;70s");
+    assert!(term.left_right_margins().is_some());
+    let (left, right) = term.left_right_margins().unwrap();
+    assert_eq!(left, 9); // 0-indexed
+    assert_eq!(right, 69); // 0-indexed
+}
+
+#[test]
+fn test_palette_access() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Get default ANSI colors
+    let palette = term.get_ansi_palette();
+    assert_eq!(palette.len(), 16);
+    
+    // Get individual color
+    assert!(term.get_ansi_color(0).is_some());
+    assert!(term.get_ansi_color(15).is_some());
+    assert!(term.get_ansi_color(16).is_none());
+    
+    // Modify a color
+    term.process(b"\x1b]4;1;rgb:ff/00/00\x1b\\");
+    let red = term.get_ansi_color(1).unwrap();
+    assert_eq!(red, Color::Rgb(255, 0, 0));
+    
+    // Get cursor/link colors
+    let _cursor_color = term.get_cursor_color();
+    let _link_color = term.get_link_color();
+    let _sel_bg = term.get_selection_bg_color();
+    let _sel_fg = term.get_selection_fg_color();
+}
+
+#[test]
+fn test_tab_stop_access() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Default tab stops at every 8 columns
+    let stops = term.get_tab_stops();
+    assert!(stops.contains(&0));
+    assert!(stops.contains(&8));
+    assert!(stops.contains(&16));
+    
+    // Clear a tab stop
+    term.clear_tab_stop(8);
+    let stops = term.get_tab_stops();
+    assert!(!stops.contains(&8));
+    assert!(stops.contains(&16));
+    
+    // Set a custom tab stop
+    term.set_tab_stop(5);
+    let stops = term.get_tab_stops();
+    assert!(stops.contains(&5));
+    
+    // Clear all tab stops
+    term.clear_all_tab_stops();
+    assert!(term.get_tab_stops().is_empty());
+}
+
+#[test]
+fn test_hyperlink_enumeration() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Initially no hyperlinks
+    assert_eq!(term.get_all_hyperlinks().len(), 0);
+    
+    // Add a hyperlink
+    term.process(b"\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\");
+    let links = term.get_all_hyperlinks();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].url, "https://example.com");
+    assert!(!links[0].positions.is_empty());
+    
+    // Add another hyperlink
+    term.process(b" \x1b]8;;https://test.com\x1b\\Test\x1b]8;;\x1b\\");
+    let links = term.get_all_hyperlinks();
+    assert_eq!(links.len(), 2);
+}
+
+#[test]
+fn test_bulk_read_operations() {
+    let mut term = Terminal::new(10, 5);
+    term.process(b"12345\n67890\nABCDE");
+    
+    // Get visible region
+    let visible = term.get_visible_region();
+    assert_eq!(visible.len(), 5); // 5 rows
+    assert_eq!(visible[0].len(), 10); // 10 cols
+    
+    // Get row range
+    let rows = term.get_row_range(0, 2);
+    assert_eq!(rows.len(), 2);
+    
+    // Get rectangle
+    let rect = term.get_rectangle(0, 0, 2, 4);
+    assert_eq!(rect.len(), 3); // 3 rows
+    assert_eq!(rect[0].len(), 5); // 5 cols
+}
+
+#[test]
+fn test_rectangle_operations() {
+    let mut term = Terminal::new(20, 10);
+    
+    // Fill rectangle
+    term.fill_rectangle(2, 2, 4, 6, 'X');
+    let visible = term.get_visible_region();
+    assert_eq!(visible[2][2].c, 'X');
+    assert_eq!(visible[3][4].c, 'X');
+    assert_eq!(visible[4][6].c, 'X');
+    
+    // Erase rectangle
+    term.erase_rectangle(2, 2, 4, 6);
+    let visible = term.get_visible_region();
+    assert_eq!(visible[2][2].c, ' ');
+    assert_eq!(visible[3][4].c, ' ');
+}
+
+#[test]
+fn test_enhanced_stats() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"Test");
+    term.process(b"\x1b]8;;https://example.com\x1b\\Link\x1b]8;;\x1b\\");
+    
+    let stats = term.get_stats();
+    assert_eq!(stats.cols, 80);
+    assert_eq!(stats.rows, 24);
+    assert!(stats.hyperlink_count > 0);
+    assert_eq!(stats.color_stack_depth, 0);
+    assert_eq!(stats.title_stack_depth, 0);
+    assert_eq!(stats.keyboard_stack_depth, 0);
+    assert!(stats.dirty_row_count > 0);
+}
+
+#[test]
+fn test_terminal_events() {
+    let mut term = Terminal::new(80, 24);
+    
+    // Initially no events
+    assert_eq!(term.poll_events().len(), 0);
+    
+    // Trigger bell creates event
+    term.process(b"\x07");
+    let events = term.poll_events();
+    assert!(events.iter().any(|e| matches!(e, TerminalEvent::BellRang(_))));
+    
+    // Drain clears events
+    assert_eq!(term.poll_events().len(), 0);
+}
+
+#[test]
+fn test_dirty_tracking_on_scroll() {
+    let mut term = Terminal::new(80, 24);
+    term.mark_clean();
+    
+    // Fill screen and scroll
+    for _ in 0..30 {
+        term.process(b"Line\n");
+    }
+    
+    // Should have dirty rows from scrolling
+    let dirty = term.get_dirty_rows();
+    assert!(!dirty.is_empty());
+}

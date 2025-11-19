@@ -63,8 +63,16 @@ pub use python_bindings::{
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
-    PyCursorStyle, PyGraphic, PyPtyTerminal, PyScreenSnapshot, PyShellIntegration, PyTerminal,
-    PyTmuxNotification, PyUnderlineStyle,
+    PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyClipboardHistoryEntry,
+    PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
+    PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
+    PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
+    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
+    PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData,
+    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
+    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyTerminal,
+    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -109,6 +117,47 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTmuxNotification>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;
+    m.add_class::<PySearchMatch>()?;
+    m.add_class::<PyDetectedItem>()?;
+    m.add_class::<PySelection>()?;
+    m.add_class::<PySelectionMode>()?;
+    m.add_class::<PyScrollbackStats>()?;
+    m.add_class::<PyBookmark>()?;
+    m.add_class::<PyPerformanceMetrics>()?;
+    m.add_class::<PyFrameTiming>()?;
+    m.add_class::<PyColorHSV>()?;
+    m.add_class::<PyColorHSL>()?;
+    m.add_class::<PyColorPalette>()?;
+    m.add_class::<PyJoinedLines>()?;
+    m.add_class::<PyClipboardEntry>()?;
+    m.add_class::<PyMouseEvent>()?;
+    m.add_class::<PyMousePosition>()?;
+    m.add_class::<PyDamageRegion>()?;
+    m.add_class::<PyRenderingHint>()?;
+    m.add_class::<PyEscapeSequenceProfile>()?;
+    m.add_class::<PyProfilingData>()?;
+    m.add_class::<PyLineDiff>()?;
+    m.add_class::<PySnapshotDiff>()?;
+    m.add_class::<PyRegexMatch>()?;
+    m.add_class::<PyPaneState>()?;
+    m.add_class::<PyWindowLayout>()?;
+    m.add_class::<PySessionState>()?;
+    m.add_class::<PyImageProtocol>()?;
+    m.add_class::<PyImageFormat>()?;
+    m.add_class::<PyInlineImage>()?;
+    m.add_class::<PyBenchmarkResult>()?;
+    m.add_class::<PyBenchmarkSuite>()?;
+    m.add_class::<PyComplianceTest>()?;
+    m.add_class::<PyComplianceReport>()?;
+    m.add_class::<PyClipboardSyncEvent>()?;
+    m.add_class::<PyClipboardHistoryEntry>()?;
+    m.add_class::<PyCommandExecution>()?;
+    m.add_class::<PyShellIntegrationStats>()?;
+    m.add_class::<PyCwdChange>()?;
+    m.add_class::<PyNotificationEvent>()?;
+    m.add_class::<PyNotificationConfig>()?;
+    m.add_class::<PyRecordingEvent>()?;
+    m.add_class::<PyRecordingSession>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
