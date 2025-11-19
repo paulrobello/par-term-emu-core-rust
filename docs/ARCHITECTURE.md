@@ -68,6 +68,7 @@ pub struct Cell {
     pub bg: Color,
     pub underline_color: Option<Color>,  // SGR 58/59
     pub flags: CellFlags,
+    pub(crate) width: u8,  // Cached display width (1 or 2)
 }
 ```
 
@@ -79,8 +80,18 @@ Tracks the cursor state:
 
 - Position (col, row)
 - Visibility (shown/hidden)
+- Style (DECSCUSR) - BlinkingBlock, SteadyBlock, BlinkingUnderline, SteadyUnderline, BlinkingBar, SteadyBar
 
 Provides methods for cursor movement and positioning.
+
+```rust
+pub struct Cursor {
+    pub col: usize,
+    pub row: usize,
+    pub visible: bool,
+    pub style: CursorStyle,
+}
+```
 
 ### 4. Grid
 
@@ -150,9 +161,11 @@ Features:
 - `color_utils.rs` - Advanced color manipulation and conversion utilities
   - Minimum contrast adjustment (iTerm2-compatible)
   - Perceived brightness calculation (NTSC formula)
-  - Color space conversions (RGB, HSL, HSV)
+  - Color space conversions (RGB, HSL)
   - WCAG contrast ratio calculations
   - Bold brightening support for enhanced readability
+  - Parametric interpolation for brightness adjustment
+  - Preserves color hue while adjusting brightness
 - `text_utils.rs` - Text processing and Unicode handling
   - Word boundary detection with configurable word characters
   - Default word characters: `"/-+\\~_."` (iTerm2-compatible)
@@ -209,27 +222,31 @@ pub struct Terminal {
     alt_cursor: Cursor,
     saved_cursor: Option<Cursor>,
 
-    // Text attributes
+    // Text attributes and saved state
     fg: Color,
     bg: Color,
     underline_color: Option<Color>,
     flags: CellFlags,
+    saved_fg: Color,
+    saved_bg: Color,
+    saved_underline_color: Option<Color>,
+    saved_flags: CellFlags,
 
-    // Terminal modes
+    // Terminal title and modes
+    title: String,
     mouse_mode: MouseMode,
     mouse_encoding: MouseEncoding,
     focus_tracking: bool,
     bracketed_paste: bool,
     synchronized_updates: bool,
+    update_buffer: Vec<u8>,
     auto_wrap: bool,
     origin_mode: bool,
     application_cursor: bool,
-
-    // Advanced features
-    shell_integration: ShellIntegration,
-    hyperlinks: HashMap<u32, String>,
-    graphics: Vec<SixelGraphic>,
-    keyboard_flags: u16,
+    insert_mode: bool,
+    line_feed_new_line_mode: bool,
+    char_protected: bool,
+    reverse_video: bool,
 
     // Margins and regions
     scroll_region_top: usize,
@@ -237,6 +254,107 @@ pub struct Terminal {
     left_margin: usize,
     right_margin: usize,
     use_lr_margins: bool,
+
+    // Tab stops
+    tab_stops: Vec<bool>,
+
+    // Advanced features
+    shell_integration: ShellIntegration,
+    hyperlinks: HashMap<u32, String>,
+    current_hyperlink_id: Option<u32>,
+    next_hyperlink_id: u32,
+    graphics: Vec<SixelGraphic>,
+    max_sixel_graphics: usize,
+    dropped_sixel_graphics: usize,
+    sixel_limits: sixel::SixelLimits,
+    sixel_parser: Option<sixel::SixelParser>,
+    dcs_buffer: Vec<u8>,
+    dcs_active: bool,
+    dcs_action: Option<char>,
+
+    // Kitty keyboard protocol
+    keyboard_flags: u16,
+    keyboard_stack: Vec<u16>,
+    keyboard_stack_alt: Vec<u16>,
+
+    // Device query responses
+    response_buffer: Vec<u8>,
+
+    // Clipboard management
+    clipboard_content: Option<String>,
+    allow_clipboard_read: bool,
+    clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
+    max_clipboard_history: usize,
+
+    // Color management
+    default_fg: Color,
+    default_bg: Color,
+    cursor_color: Color,
+    ansi_palette: [Color; 16],
+    color_stack: Vec<(Color, Color, Option<Color>)>,
+    link_color: Color,
+    bold_color: Color,
+    cursor_guide_color: Color,
+    badge_color: Color,
+    match_color: Color,
+    selection_bg_color: Color,
+    selection_fg_color: Color,
+    use_bold_color: bool,
+    use_underline_color: bool,
+    use_cursor_guide: bool,
+    use_selected_text_color: bool,
+    smart_cursor_color: bool,
+    bold_brightening: bool,
+
+    // Notifications and events
+    notifications: Vec<Notification>,
+    bell_count: u64,
+    bell_events: Vec<BellEvent>,
+    terminal_events: Vec<TerminalEvent>,
+    dirty_rows: HashSet<usize>,
+
+    // VTE parser and state
+    parser: vte::Parser,
+    pending_wrap: bool,
+
+    // Window/pixel dimensions
+    pixel_width: usize,
+    pixel_height: usize,
+
+    // Window title stack
+    title_stack: Vec<String>,
+
+    // Security and features
+    accept_osc7: bool,
+    disable_insecure_sequences: bool,
+
+    // VT conformance
+    attribute_change_extent: u8,
+    conformance_level: ConformanceLevel,
+    warning_bell_volume: u8,
+    margin_bell_volume: u8,
+
+    // Tmux control protocol
+    tmux_parser: TmuxControlParser,
+    tmux_notifications: Vec<TmuxNotification>,
+
+    // Selection and bookmarks
+    selection: Option<Selection>,
+    bookmarks: Vec<Bookmark>,
+    next_bookmark_id: usize,
+
+    // Performance tracking
+    perf_metrics: PerformanceMetrics,
+    frame_timings: Vec<FrameTiming>,
+    max_frame_timings: usize,
+
+    // Mouse tracking
+    mouse_events: Vec<MouseEventRecord>,
+    mouse_positions: Vec<MousePosition>,
+    max_mouse_history: usize,
+
+    // Rendering hints
+    rendering_hints: Vec<RenderingHint>,
 
     // ... additional state ...
 }
@@ -310,7 +428,16 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
 - `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more)
 - `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode)
 - `conversions.rs` - Type conversions and parsing utilities
-- `color_utils.rs` - Python bindings for color manipulation utilities (contrast adjustment, color space conversions, WCAG compliance)
+- `color_utils.rs` - Python bindings for color manipulation utilities:
+  - Perceived brightness and luminance calculations
+  - Contrast adjustment (iTerm2-compatible)
+  - Color space conversions (RGB ↔ HSL)
+  - WCAG compliance testing (AA/AAA)
+  - Color mixing, lightening, darkening
+  - Saturation and hue adjustment
+  - Complementary color generation
+  - Hex color conversion
+  - ANSI 256-color conversion
 
 The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 60+ classes and 18 color utility functions.
 
@@ -382,8 +509,8 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 809 unit and integration tests
-- **Python tests:** 168+ test functions across 10 test modules (PTY tests excluded in CI)
+- **Rust tests:** 811 unit and integration tests
+- **Python tests:** 168 test functions across 7 test modules (PTY tests excluded in CI)
 - **Total:** Comprehensive coverage ensuring reliability
 
 ### Rust Tests
@@ -401,7 +528,7 @@ All public methods are wrapped with `#[pymethods]` and provide:
 - **API contract tests** validating Python bindings behavior
 - **Example-based tests** covering common use cases
 - **Edge case handling** for error conditions and boundary cases
-- **Timeout protection:** 5-second default per test (10-second for slow tests)
+- **Timeout protection:** 5-second default per test (configured in pyproject.toml)
 - **PTY tests** excluded in CI (hang in automated environments):
   - `test_pty.py`, `test_ioctl_size.py`
   - `test_pty_resize_sigwinch.py`, `test_nested_shell_resize.py`
@@ -464,8 +591,15 @@ The screenshot module provides high-quality rendering of terminal content to var
    - **Features**:
      - Image format selection (PNG, JPEG, BMP, SVG)
      - Font size and padding configuration
-     - Sixel rendering mode options
-     - Quality settings for lossy formats
+     - Sixel rendering mode options (Disabled, Pixels, HalfBlocks)
+     - Quality settings for lossy formats (1-100 for JPEG)
+     - Font multipliers (line height, character width)
+     - Scrollback buffer inclusion
+     - Cursor rendering options
+     - Theme colors (link, bold, cursor guide, badge, match, selection)
+     - Bold brightening and custom bold color support
+     - Minimum contrast adjustment (0.0-1.0, iTerm2-compatible)
+     - Faint text alpha control (dim strength, 0.0-1.0)
 
 2. **Font Cache** (`font_cache.rs`)
    - **Library**: Swash (pure Rust font library)

@@ -154,8 +154,8 @@ The minimum contrast feature automatically adjusts text colors to ensure readabi
 
 - **Algorithm**: Uses NTSC perceived brightness formula (30% red, 59% green, 11% blue)
 - **Hue Preservation**: Adjusts brightness while maintaining the original color hue
-- **Range**: 0.0-1.0 where 0.0 = disabled (default), 0.5 = moderate, 1.0 = maximum
-- **Default**: 0.0 (disabled, matches iTerm2's default)
+- **Range**: 0.0-1.0 where 0.0 = disabled, 0.5 = moderate (default), 1.0 = maximum
+- **Default**: 0.5 (moderate contrast adjustment for improved readability)
 
 ### Usage in Screenshots
 

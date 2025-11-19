@@ -29,7 +29,7 @@ The library includes two embedded fonts that work without any external dependenc
 
 ### 1. JetBrains Mono Regular (Main Font)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~274 KB
+**Size**: ~268 KB
 
 Features:
 - Programming ligatures (=>, !=, >=, etc.)
@@ -39,7 +39,7 @@ Features:
 
 ### 2. Noto Emoji Regular (Emoji Fallback)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~419 KB
+**Size**: ~409 KB
 
 Features:
 - Universal emoji coverage (all Unicode emoji)
@@ -65,9 +65,10 @@ graph TD
 
     CheckType{Character Type?}
     TrySystemEmoji[Try System Emoji Fonts<br/>Apple/Segoe/Noto Color]
-    TryEmbeddedEmoji[Use Embedded Noto Emoji<br/>Monochrome]
-    TryCJK[Try System CJK Fonts<br/>Arial Unicode/PingFang/MS Gothic]
-    Tofu[Render as Tofu Box □]
+    TryEmbeddedEmoji[Try Embedded Noto Emoji<br/>Monochrome]
+    TryCJK[Try System CJK Fonts<br/>All available in priority order]
+    CheckEmojiAfterCJK{Found in<br/>CJK fonts?}
+    FinalFallback[Use Main Font Result<br/>May show as tofu box □]
     Success[Render Glyph]
 
     Start --> TryMain
@@ -77,15 +78,18 @@ graph TD
 
     CheckType -->|Emoji 😀| TrySystemEmoji
     CheckType -->|CJK 中文| TryCJK
-    CheckType -->|Other| Success
+    CheckType -->|Other with<br/>empty bitmap| TrySystemEmoji
 
     TrySystemEmoji -->|Found| Success
     TrySystemEmoji -->|Not Found| TryEmbeddedEmoji
-    TryEmbeddedEmoji --> Success
+    TryEmbeddedEmoji -->|Found| Success
+    TryEmbeddedEmoji -->|Not Found| FinalFallback
 
-    TryCJK -->|Found| Success
-    TryCJK -->|Not Found| Tofu
-    Tofu --> Success
+    TryCJK --> CheckEmojiAfterCJK
+    CheckEmojiAfterCJK -->|Yes| Success
+    CheckEmojiAfterCJK -->|No| TrySystemEmoji
+
+    FinalFallback --> Success
 
     style Start fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
     style TryMain fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
@@ -93,35 +97,40 @@ graph TD
     style TryCJK fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
     style TryEmbeddedEmoji fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
     style Success fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
-    style Tofu fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style FinalFallback fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
     style CheckSuccess fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
     style CheckType fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style CheckEmojiAfterCJK fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
 
 ### Font Fallback Chain
 
 **For Emoji Characters** (automatic fallback chain):
 1. **Main font** (JetBrains Mono or custom `font_path`)
-2. **System color emoji fonts**:
-   - macOS: Apple Color Emoji, Arial Unicode
-   - Linux: NotoColorEmoji, NotoEmoji, DejaVuSans
-   - Windows: Segoe UI Emoji, Segoe UI Symbol
-3. **Embedded Noto Emoji** (monochrome, always available)
+2. **System color emoji fonts** (tries multiple paths in order):
+   - macOS: Apple Color Emoji, Arial Unicode, DejaVu Sans, AppleSDGothicNeo, CJKSymbolsFallback, PingFang, Hiragino Sans GB, Apple Symbols
+   - Linux: NotoColorEmoji, NotoEmoji, NotoSans, NotoSansCJK, DejaVuSans, LiberationSans
+   - Windows: Segoe UI Emoji, Segoe UI Symbol, Arial, MS Gothic, MS YaHei
+3. **Embedded Noto Emoji** (monochrome, always available as final fallback)
 
 **For CJK Characters** (Chinese, Japanese, Korean):
 1. **Main font** (JetBrains Mono or custom `font_path`)
-2. **System CJK fonts** (loaded in priority order):
-   - macOS: Arial Unicode, PingFang, Hiragino Sans GB, AppleSDGothicNeo
-   - Linux: NotoSansCJK, DejaVuSans
-   - Windows: MS Gothic, MS YaHei, Malgun Gothic
-3. **Tofu box (□)** if no font has the glyph
+2. **System CJK fonts** (loads ALL available fonts in priority order for comprehensive coverage):
+   - macOS: Arial Unicode, PingFang, Hiragino Sans GB, AppleSDGothicNeo, Hiragino Kaku Gothic ProN, CJKSymbolsFallback, STHeiti Medium, AppleMyungjo, STSong
+   - Linux: NotoSansCJK, DejaVuSans, LiberationSans
+   - Windows: MS Gothic, MS YaHei, Malgun Gothic, Arial
+3. **System emoji fonts** (as additional fallback, same list as emoji)
+4. **Embedded Noto Emoji** (monochrome, as final fallback)
+5. **Main font result** (may show as tofu box □) if all fallbacks fail
 
 ### Behavior Summary
 
 - **Regular text**: Always uses main font (embedded JetBrains Mono or custom)
-- **Emoji**: System color fonts preferred, falls back to embedded monochrome
-- **CJK**: System fonts preferred for comprehensive coverage
-- **No system fonts needed**: Works out-of-the-box with embedded fonts
+- **Emoji**: Tries system color fonts first, then falls back to embedded monochrome Noto Emoji as final fallback
+- **CJK**: Loads multiple system CJK fonts in priority order, then tries emoji fonts as additional fallback, with embedded Noto Emoji as final fallback before showing tofu boxes (□)
+- **No system fonts needed**: Works out-of-the-box with embedded fonts (JetBrains Mono + Noto Emoji)
+- **Font loading**: System fonts are lazy-loaded only when needed (first emoji/CJK character encountered)
+- **Comprehensive fallback**: The library tries multiple font sources in sequence to maximize glyph coverage
 
 ## Installation Options (Optional)
 
@@ -291,10 +300,14 @@ The library uses this priority order for rendering characters:
 
 **Emoji characters** (🎉 😀 🚀):
 1. Custom `font_path` (if it contains emoji glyphs)
-2. System color emoji fonts (Apple Color Emoji, Noto Color Emoji, Segoe UI Emoji)
-3. Embedded Noto Emoji (monochrome, always available)
+2. System color emoji fonts (loaded in order: see full list above)
+3. Embedded Noto Emoji (monochrome, always available as final fallback)
 
 **CJK characters** (中文, 日本語, 한글):
 1. Custom `font_path` (if it contains CJK glyphs)
-2. System CJK fonts (Arial Unicode, PingFang, Noto Sans CJK, MS Gothic)
-3. Tofu box (□) if no font has the glyph
+2. System CJK fonts (loads ALL available in priority order: see full list above)
+3. System emoji fonts (as additional fallback)
+4. Embedded Noto Emoji (monochrome, as final fallback)
+5. Main font result (may show as tofu box □) if all fallbacks fail
+
+**Note**: The library caches which system font has each CJK character for performance optimization.

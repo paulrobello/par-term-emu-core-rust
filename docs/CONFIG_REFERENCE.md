@@ -15,6 +15,7 @@ This document covers the **terminal core configuration** (Rust library internals
 - [Sixel Resource Limits](#sixel-resource-limits)
 - [Keyboard Protocol](#keyboard-protocol)
 - [Color Configuration](#color-configuration)
+- [Screenshot Configuration](#screenshot-configuration)
 - [Terminal Notification Configuration](#terminal-notification-configuration)
 - [Configuration Validation](#configuration-validation)
 - [Configuration Best Practices](#configuration-best-practices)
@@ -393,6 +394,175 @@ Control whether custom colors are used instead of defaults:
 
 ---
 
+## Screenshot Configuration
+
+**Note**: This section describes the **core library** screenshot API. For TUI application screenshot settings (like `screenshot_directory`, `screenshot_format`, `open_screenshot_after_capture`), see the [par-term-emu-rust project](https://github.com/paulrobello/par-term-emu-rust).
+
+### Overview
+
+The terminal core provides programmatic screenshot capabilities via Python and Rust APIs. Screenshots can be taken in multiple formats with extensive configuration options for fonts, colors, rendering modes, and content selection.
+
+### Supported Formats
+
+| Format | Description | Use Case |
+|--------|-------------|----------|
+| `png` | PNG (lossless raster) | General purpose, default format |
+| `jpeg`/`jpg` | JPEG (lossy raster) | Smaller file size, configurable quality |
+| `bmp` | BMP (uncompressed raster) | Maximum compatibility, large files |
+| `svg` | SVG (vector graphics) | Scalable, text-selectable output |
+
+**Note**: HTML export is available via the separate `export_styled()` method, not the screenshot API.
+
+### Screenshot Configuration Options
+
+#### Font Settings
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `font_path` | `Option<String>` | `None` | Path to custom TTF/OTF font (None = embedded JetBrains Mono) |
+| `font_size` | `f32` | `14.0` | Font size in pixels |
+| `line_height_multiplier` | `f32` | `1.2` | Line height multiplier (1.0 = tight, 1.2 = comfortable) |
+| `char_width_multiplier` | `f32` | `1.0` | Character width multiplier for spacing |
+| `antialiasing` | `bool` | `true` | Enable font antialiasing (raster formats only) |
+
+#### Content Selection
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `include_scrollback` | `bool` | `false` | Include scrollback buffer in screenshot |
+| `scrollback_lines` | `Option<usize>` | `None` | Number of scrollback lines to include (None = all) |
+| `scrollback_offset` | `usize` | `0` | Scroll back N lines from current position for capture |
+
+#### Canvas Settings
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `padding_px` | `u32` | `10` | Padding around content in pixels |
+| `background_color` | `Option<(u8,u8,u8)>` | `None` | Background color RGB (None = use terminal default) |
+
+#### Output Format
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `format` | `str` | `"png"` | Image format ("png", "jpeg"/"jpg", "bmp", "svg") |
+| `quality` | `u8` | `90` | JPEG quality (1-100, only applies to JPEG format) |
+
+#### Cursor Rendering
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `render_cursor` | `bool` | `false` | Render cursor in screenshot |
+| `cursor_color` | `(u8,u8,u8)` | `(255,255,255)` | Cursor color RGB |
+
+#### Sixel Graphics
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sixel_render_mode` | `str` | `"halfblocks"` | Sixel rendering mode ("disabled", "pixels", "halfblocks") |
+
+**Sixel Render Modes:**
+- `disabled` - Don't render Sixel graphics
+- `pixels` - Render as actual pixels (shows real image data)
+- `halfblocks` - Render using half-block characters (matches TUI appearance)
+
+#### Theme Settings
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `link_color` | `Option<(u8,u8,u8)>` | `None` | Hyperlink color RGB (None = use theme) |
+| `bold_color` | `Option<(u8,u8,u8)>` | `None` | Bold text color RGB (None = use theme) |
+| `use_bold_color` | `Option<bool>` | `None` | Use custom bold color (None = use theme setting) |
+| `bold_brightening` | `Option<bool>` | `None` | Bold ANSI colors 0-7 brighten to 8-15 (None = use theme) |
+| `minimum_contrast` | `f64` | `0.5` | Minimum contrast adjustment (0.0-1.0, iTerm2-compatible) |
+| `faint_text_alpha` | `f32` | `0.5` | Alpha multiplier for faint/dim text (0.0-1.0) |
+
+**Minimum Contrast:**
+- `0.0` - Disabled (use colors as-is)
+- `0.5` - Moderate contrast (default, matches iTerm2 • 50%)
+- `1.0` - Maximum contrast (ensures all text is readable)
+
+**Faint Text Alpha:**
+- Controls opacity of faint/dim text (SGR 2)
+- `0.0` - Fully transparent (invisible)
+- `0.5` - 50% opacity (default, matches iTerm2)
+- `1.0` - No dimming (full opacity)
+
+### Python API Examples
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(cols=80, rows=24)
+term.process_str("\x1b[31mRed text\x1b[0m\n")
+
+# Basic screenshot (PNG with defaults)
+png_bytes = term.screenshot()
+
+# JPEG with custom quality
+jpg_bytes = term.screenshot(format="jpeg", quality=85)
+
+# SVG with custom font
+svg_bytes = term.screenshot(
+    format="svg",
+    font_path="/path/to/font.ttf",
+    font_size=16.0
+)
+
+# Screenshot with theme settings
+png_bytes = term.screenshot(
+    bold_brightening=True,
+    background_color=(32, 32, 32),
+    link_color=(100, 149, 237),
+    minimum_contrast=0.7,
+    faint_text_alpha=0.6
+)
+
+# Capture scrollback content
+png_bytes = term.screenshot(
+    include_scrollback=True,
+    scrollback_lines=100  # Last 100 lines from scrollback
+)
+
+# Capture historical view (10 lines back)
+png_bytes = term.screenshot(scrollback_offset=10)
+
+# Save directly to file
+term.screenshot_to_file(
+    "/path/to/output.png",
+    format="png",  # Optional, auto-detected from extension
+    padding=20,
+    font_size=18.0
+)
+
+# Sixel graphics rendering
+png_bytes = term.screenshot(sixel_mode="pixels")  # Show actual image data
+```
+
+### Implementation Details
+
+**Location:**
+- Configuration: `src/screenshot/config.rs` - `ScreenshotConfig` struct
+- Python bindings: `src/python_bindings/terminal.rs` - `screenshot()` and `screenshot_to_file()` methods
+- Renderer: `src/screenshot/renderer.rs` - Core rendering logic
+
+**Font Support:**
+- **Embedded fonts**: JetBrains Mono (primary) + Noto Emoji (monochrome)
+- **System fallback**: Automatically uses system emoji and CJK fonts when available
+- **Custom fonts**: Specify via `font_path` parameter (TTF/OTF formats)
+- **Programming ligatures**: Supported in embedded JetBrains Mono font
+
+**Color Processing:**
+- Minimum contrast uses NTSC perceived brightness formula (30% red, 59% green, 11% blue)
+- Contrast adjustment preserves hue while adjusting brightness
+- iTerm2-compatible implementation for feature parity
+
+**Related Features:**
+- `export_text()` - Export as plain text (strips ANSI codes)
+- `export_styled()` - Export as styled HTML with inline CSS
+- `export_ansi()` - Export with ANSI escape sequences preserved
+
+---
+
 ## Terminal Notification Configuration
 
 Terminal supports comprehensive notification features for various events. This configuration is separate from the notification content itself (OSC 9/777 sequences).
@@ -532,7 +702,9 @@ The terminal validates:
 
 ### For End Users
 
-**Complete Configuration Example** (`~/.config/par-term-emu/config.yaml`):
+**Note**: The following configuration example is for the **TUI application** ([par-term-emu-rust](https://github.com/paulrobello/par-term-emu-rust)), not the core library. Core library configuration is done programmatically via API calls.
+
+**Complete TUI Configuration Example** (`~/.config/par-term-emu/config.yaml`):
 
 ```yaml
 # ~/.config/par-term-emu/config.yaml
@@ -573,7 +745,7 @@ notification_timeout: 5                   # Notification duration (seconds)
 
 # --- Screenshots ---
 screenshot_directory: null                # Auto-detect save directory
-screenshot_format: "png"                  # Format: png, jpeg, bmp, svg, html
+screenshot_format: "png"                  # Format: png, jpeg, bmp, svg
 open_screenshot_after_capture: false      # Auto-open after capture
 
 # --- Shell Behavior ---

@@ -41,7 +41,7 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
     .italic { font-style: italic; }
     .underline { text-decoration: underline; }
     .strikethrough { text-decoration: line-through; }
-    .dim { opacity: 0.6; }
+    .dim { opacity: 0.5; }
 </style>
 "#,
     );
@@ -334,7 +334,7 @@ mod tests {
         assert!(svg.contains(".italic { font-style: italic; }"));
         assert!(svg.contains(".underline { text-decoration: underline; }"));
         assert!(svg.contains(".strikethrough { text-decoration: line-through; }"));
-        assert!(svg.contains(".dim { opacity: 0.6; }"));
+        assert!(svg.contains(".dim { opacity: 0.5; }"));
     }
 
     #[test]

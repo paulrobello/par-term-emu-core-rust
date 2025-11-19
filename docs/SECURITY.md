@@ -10,18 +10,18 @@ The `PtyTerminal.spawn()` method signature:
 term.spawn(
     command: str,                      # Required: command to execute
     args: list[str] | None = None,     # Optional: list of command arguments
-    env: dict[str, str] | None = None, # Optional: environment variables (overrides inherited)
+    env: dict[str, str] | None = None, # Optional: environment variables (merges with inherited)
     cwd: str | None = None             # Optional: working directory
 )
 ```
 
 **Key Points:**
-- `env` parameter **overrides specific keys** in the inherited environment (all parent env vars are inherited by default)
+- `env` parameter **merges with and overrides specific keys** in the inherited environment (all parent env vars are inherited by default, then overridden by keys in `env`)
 - `args` must be a list of strings or None (e.g., `args=["arg1", "arg2"]` or `args=None`)
 - All path arguments (`cwd`, values in `args`) should be validated to prevent directory traversal
 - Command must be absolute path (e.g., `/bin/bash`) or findable in `PATH`
 - The system automatically drops `COLUMNS` and `LINES` from inherited environment to prevent resize issues
-- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS (CSI t) query responses
+- Set `PAR_TERM_REPLY_XTWINOPS=0` **before creating `PtyTerminal`** to suppress XTWINOPS (CSI t) query responses (this setting is cached at terminal creation time)
 
 **Convenience Methods:**
 - `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` or platform default)
@@ -214,7 +214,7 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 - These variables are static and don't update on resize, causing issues with terminal-aware applications
 - Many libraries (e.g., Python's `shutil.get_terminal_size()`) and some TUIs prioritize these env vars over `ioctl(TIOCGWINSZ)`, leaving them stuck at the parent terminal's size
 - Applications should query terminal size via `ioctl(TIOCGWINSZ)` instead
-- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS query responses (prevents shell echo visibility with ECHOCTL)
+- Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS query responses (this setting is cached at terminal creation time; changing it after will have no effect)
 
 ### Secure Environment Practices
 
@@ -222,14 +222,14 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 from par_term_emu_core_rust import PtyTerminal
 
 # GOOD: Explicitly override sensitive environment variables
-# Pass env parameter to override inherited variables with safe values
+# Pass env parameter to merge with inherited environment, overriding specific keys
 safe_overrides = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",  # Controlled PATH
     "HOME": "/home/user",
     "USER": "safeuser",
-    "TERM": "xterm-256color",
-    "COLORTERM": "truecolor",
-    # Clear sensitive variables
+    # Note: TERM and COLORTERM are set automatically to xterm-256color/truecolor
+    # but can be overridden here if needed
+    # Clear sensitive variables by setting to empty string
     "AWS_SECRET_KEY": "",
     "DATABASE_PASSWORD": "",
     "API_TOKEN": "",
@@ -238,8 +238,10 @@ safe_overrides = {
 term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
-# Note: env parameter OVERRIDES specified keys in inherited environment
-# All other parent environment variables are still inherited
+# Environment merge order:
+# 1. Inherit all parent env vars (except COLUMNS/LINES - automatically filtered)
+# 2. Set TERM=xterm-256color and COLORTERM=truecolor
+# 3. Override with keys from env parameter
 # To completely isolate the environment, you must override ALL inherited vars
 ```
 
@@ -289,7 +291,13 @@ term.spawn(
 )
 ```
 
-**Important**: The `env` parameter in `spawn()` **overrides specific keys** in the inherited environment. It does NOT replace the entire environment - all parent environment variables are inherited except those you explicitly override. To create a completely isolated environment, you must explicitly override ALL inherited variables with safe values, or clean the parent's `os.environ` first.
+**Important**: The `env` parameter in `spawn()` **merges with and overrides specific keys** in the inherited environment. The process is:
+1. All parent environment variables are inherited (except `COLUMNS` and `LINES` which are automatically filtered out)
+2. `TERM=xterm-256color` and `COLORTERM=truecolor` are set automatically
+3. Variables specified in `env` override all previous values (including TERM/COLORTERM if specified)
+4. The merged environment is passed to the spawned process
+
+The `env` parameter does NOT replace the entire environment. To create a completely isolated environment, you must explicitly override ALL inherited variables with safe values, or clean the parent's `os.environ` first.
 
 **Security Best Practice**: When using `env` parameter, always explicitly set or clear ALL potentially sensitive environment variables to prevent unintended leakage.
 
@@ -460,17 +468,20 @@ The terminal emulator automatically responds to certain terminal queries (XTWINO
 
 ```python
 import os
+from par_term_emu_core_rust import PtyTerminal
 
 # Disable XTWINOPS responses (prevents visible query echoes)
 os.environ["PAR_TERM_REPLY_XTWINOPS"] = "0"
 
-# Must be set BEFORE creating PtyTerminal
-from par_term_emu_core_rust import PtyTerminal
+# IMPORTANT: Must be set BEFORE creating PtyTerminal
+# The setting is read and cached at terminal creation time
 term = PtyTerminal(80, 24)
 term.spawn_shell()
+
+# Note: Changing os.environ["PAR_TERM_REPLY_XTWINOPS"] after terminal creation has no effect
 ```
 
-**Default Behavior**: XTWINOPS responses are **enabled by default** (`PAR_TERM_REPLY_XTWINOPS=1`) to ensure nested TUI applications work correctly. Only disable if you experience visual artifacts or want to prevent potential information leakage via terminal queries.
+**Default Behavior**: XTWINOPS responses are **enabled by default** (`PAR_TERM_REPLY_XTWINOPS=1` or unset) to ensure nested TUI applications work correctly. Only disable if you experience visual artifacts or want to prevent potential information leakage via terminal queries.
 
 **When to Disable**:
 - Shell environment has `ECHOCTL` enabled (common in some configurations)
@@ -478,10 +489,10 @@ term.spawn_shell()
 - Testing scenarios where query responses interfere with output validation
 
 **Technical Details**:
-- This setting is cached when `PtyTerminal` is created by reading the environment variable
-- Changing the environment variable after terminal creation has no effect
+- This setting is cached when `PtyTerminal` is created by reading `PAR_TERM_REPLY_XTWINOPS` from the environment (checked once at initialization in `PtySession::new()`)
+- Changing the environment variable after terminal creation has no effect on that terminal instance
 - The filtering is implemented in the PTY reader thread and removes CSI sequences ending with 't' when disabled
-- Device query responses are still written back to the PTY master for nested applications to receive
+- Device query responses are still written back to the PTY master for nested applications to receive, but are filtered before being processed by the terminal emulator when `PAR_TERM_REPLY_XTWINOPS=0`
 
 ## Input Validation
 

@@ -576,9 +576,9 @@ class TestScreenshotThemeSettings:
             bold_brightening=True,
             background_color=(32, 32, 32),
             link_color=(100, 149, 237),  # Cornflower blue
-            bold_color=(255, 215, 0),    # Gold
+            bold_color=(255, 215, 0),  # Gold
             use_bold_color=True,
-            minimum_contrast=0.3
+            minimum_contrast=0.3,
         )
 
         assert len(png_bytes) > 0
@@ -594,9 +594,7 @@ class TestScreenshotThemeSettings:
 
         try:
             term.screenshot_to_file(
-                filename,
-                bold_brightening=True,
-                background_color=(10, 10, 10)
+                filename, bold_brightening=True, background_color=(10, 10, 10)
             )
             assert os.path.exists(filename)
             assert os.path.getsize(filename) > 0

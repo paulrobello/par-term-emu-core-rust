@@ -109,7 +109,8 @@ impl PyTerminal {
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
     ///     bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
     ///     background_color: Background color RGB tuple. Default: None (use terminal's default background)
-    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0, iTerm2-compatible). Default: 0.0 (disabled)
+    ///     faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
     ///
     /// Returns:
     ///     Bytes of the image in the specified format
@@ -133,7 +134,8 @@ impl PyTerminal {
         use_bold_color = None,
         bold_brightening = None,
         background_color = None,
-        minimum_contrast = 0.0
+        faint_text_alpha = 0.5,
+        minimum_contrast = 0.5
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot(
@@ -153,6 +155,7 @@ impl PyTerminal {
         use_bold_color: Option<bool>,
         bold_brightening: Option<bool>,
         background_color: Option<(u8, u8, u8)>,
+        faint_text_alpha: Option<f32>,
         minimum_contrast: f64,
     ) -> PyResult<Vec<u8>> {
         use crate::screenshot::{ImageFormat, ScreenshotConfig};
@@ -186,6 +189,7 @@ impl PyTerminal {
             bold_brightening: bold_brightening.unwrap_or(false),
             background_color,
             minimum_contrast: minimum_contrast.clamp(0.0, 1.0),
+            faint_text_alpha: faint_text_alpha.unwrap_or(0.5).clamp(0.0, 1.0),
             ..Default::default()
         };
 
@@ -215,7 +219,8 @@ impl PyTerminal {
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
     ///     bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
     ///     background_color: Background color RGB tuple. Default: None (use terminal's default background)
-    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0, iTerm2-compatible). Default: 0.0 (disabled)
+    ///     faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
     ///
     /// Returns:
     ///     None
@@ -240,7 +245,8 @@ impl PyTerminal {
         use_bold_color = None,
         bold_brightening = None,
         background_color = None,
-        minimum_contrast = 0.0
+        faint_text_alpha = 0.5,
+        minimum_contrast = 0.5
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot_to_file(
@@ -261,6 +267,7 @@ impl PyTerminal {
         use_bold_color: Option<bool>,
         bold_brightening: Option<bool>,
         background_color: Option<(u8, u8, u8)>,
+        faint_text_alpha: Option<f32>,
         minimum_contrast: f64,
     ) -> PyResult<()> {
         use std::path::Path;
@@ -286,6 +293,7 @@ impl PyTerminal {
             use_bold_color,
             bold_brightening,
             background_color,
+            faint_text_alpha,
             minimum_contrast,
         )?;
 

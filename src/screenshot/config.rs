@@ -78,9 +78,13 @@ pub struct ScreenshotConfig {
 
     // Contrast settings
     /// Minimum contrast adjustment (0.0-1.0, iTerm2-compatible)
-    /// 0.0 = disabled (default, matches iTerm2), 0.5 = moderate, 1.0 = maximum
+    /// 0.0 = disabled, 0.5 = moderate, 1.0 = maximum
+    /// Default: 0.5 (moderate contrast for improved readability)
     /// Automatically adjusts text colors to maintain readability against backgrounds
     pub minimum_contrast: f64,
+    /// Alpha multiplier for faint/dim text (0.0 = fully transparent, 1.0 = no dimming)
+    /// Matches iTerm2's "Faint text" slider. Default: 0.5 (50%).
+    pub faint_text_alpha: f32,
 }
 
 impl Default for ScreenshotConfig {
@@ -104,7 +108,8 @@ impl Default for ScreenshotConfig {
             bold_color: None,
             use_bold_color: false,
             bold_brightening: false,
-            minimum_contrast: 0.0, // Disabled by default (matches iTerm2)
+            minimum_contrast: 0.5, // Moderate contrast by default (0.5 = 50% adjustment)
+            faint_text_alpha: 0.5,
         }
     }
 }
@@ -191,6 +196,12 @@ impl ScreenshotConfig {
     /// 0.0 = disabled, 0.5 = moderate, 1.0 = maximum
     pub fn with_minimum_contrast(mut self, contrast: f64) -> Self {
         self.minimum_contrast = contrast.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Set faint text alpha (dim strength)
+    pub fn with_faint_text_alpha(mut self, alpha: f32) -> Self {
+        self.faint_text_alpha = alpha.clamp(0.0, 1.0);
         self
     }
 }
@@ -417,7 +428,7 @@ mod tests {
     #[test]
     fn test_default_minimum_contrast() {
         let config = ScreenshotConfig::default();
-        assert_eq!(config.minimum_contrast, 0.0);
+        assert_eq!(config.minimum_contrast, 0.5);
     }
 
     #[test]
@@ -437,5 +448,23 @@ mod tests {
 
         let config = ScreenshotConfig::new().with_minimum_contrast(-0.5);
         assert_eq!(config.minimum_contrast, 0.0);
+    }
+
+    #[test]
+    fn test_default_faint_text_alpha() {
+        let config = ScreenshotConfig::default();
+        assert!((config.faint_text_alpha - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_with_faint_text_alpha() {
+        let config = ScreenshotConfig::new().with_faint_text_alpha(0.25);
+        assert!((config.faint_text_alpha - 0.25).abs() < f32::EPSILON);
+
+        let config = ScreenshotConfig::new().with_faint_text_alpha(1.5);
+        assert!((config.faint_text_alpha - 1.0).abs() < f32::EPSILON);
+
+        let config = ScreenshotConfig::new().with_faint_text_alpha(-0.5);
+        assert!((config.faint_text_alpha - 0.0).abs() < f32::EPSILON);
     }
 }

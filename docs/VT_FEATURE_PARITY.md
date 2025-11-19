@@ -101,6 +101,20 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 - Affects IL, DL, IND, RI, LF behavior
 - Origin mode makes cursor relative to region
 
+### Color Stack Operations (xterm)
+
+| Sequence | Name | Notes |
+|----------|------|-------|
+| `CSI # P` | XTPUSHCOLORS | Push fg, bg, underline colors to stack |
+| `CSI # Q` | XTPOPCOLORS | Pop colors from stack |
+
+**Notes:**
+- Stack stores foreground, background, and underline colors as a tuple
+- Stack grows dynamically as needed
+- Pop with empty stack leaves colors unchanged
+
+**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs` (actions 'P' and 'Q' with '#' intermediate)
+
 ### Line and Character Editing (VT220)
 
 | Sequence | Name | VT Level | Notes |
@@ -108,7 +122,9 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 | `CSI n L` | IL (Insert Lines) | VT220 | Param 0→1, respects scroll region |
 | `CSI n M` | DL (Delete Lines) | VT220 | Param 0→1, respects scroll region |
 | `CSI n @` | ICH (Insert Characters) | VT220 | Param 0→1, shifts line right |
-| `CSI n P` | DCH (Delete Characters) | VT220 | Param 0→1, shifts line left |
+| `CSI n P` | DCH (Delete Characters) | VT220 | Param 0→1, shifts line left (see note) |
+
+**Note:** `CSI P` without '#' intermediate is DCH. With '#' intermediate (`CSI # P`), it's XTPUSHCOLORS (see Color Stack Operations above).
 
 **Line Editing Behavior:**
 - IL/DL only affect rows within scroll region
@@ -121,8 +137,8 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 |----------|------|----------|-------|
 | `CSI Pc;Pt;Pl;Pb;Pr $ x` | DECFRA (Fill Rectangle) | VT420 | Fill area with character Pc |
 | `CSI Pts;Pls;Pbs;Prs;Pps;Ptd;Pld $ v` | DECCRA (Copy Rectangle) | VT420 | Copy rectangular region |
-| `CSI Pt;Pl;Pb;Pr $ z` | DECERA (Erase Rectangle) | VT420 | Erase rectangular area |
-| `CSI Pt;Pl;Pb;Pr $ {` | DECSERA (Selective Erase) | VT420 | Selective erase rectangle |
+| `CSI Pt;Pl;Pb;Pr $ z` | DECERA (Erase Rectangle) | VT420 | Unconditional erase (ignores protection) |
+| `CSI Pt;Pl;Pb;Pr $ {` | DECSERA (Selective Erase) | VT420 | Selective erase (respects protection) |
 | `CSI Pt;Pl;Pb;Pr;Ps $ r` | DECCARA (Change Attributes) | VT420 | Change attributes in rectangle |
 | `CSI Pt;Pl;Pb;Pr;Ps $ t` | DECRARA (Reverse Attributes) | VT420 | Reverse attributes in rectangle |
 | `CSI Pi;Pg;Pt;Pl;Pb;Pr * y` | DECRQCRA (Request Checksum) | VT420 | Request rectangle checksum |
@@ -217,6 +233,13 @@ CSI 38 ; 2 ; r ; g ; b m    - Set foreground RGB
 CSI 48 ; 2 ; r ; g ; b m    - Set background RGB
 ```
 
+**Underline Color (xterm):**
+```
+CSI 58 ; 2 ; r ; g ; b m    - Set underline color to RGB
+CSI 58 ; 5 ; n m            - Set underline color to palette index n
+CSI 59 m                     - Reset underline color (use foreground)
+```
+
 **Default Colors:**
 ```
 CSI 39 m    - Default foreground
@@ -226,9 +249,11 @@ CSI 49 m    - Default background
 **Implementation:** Extended color parsing in `csi_dispatch()`
 
 **Color Parsing Notes:**
-- Supports both colon (`:`) and semicolon (`;`) separators
+- Supports both colon (`:`) and semicolon (`;`) separators for sub-parameters
 - 256-color palette: 0-15 (standard), 16-231 (6×6×6 cube), 232-255 (grayscale)
 - True color uses 8-bit RGB values (0-255)
+- Underline color (SGR 58) is independent from foreground/background colors
+- When underline color is not set, foreground color is used for underline rendering
 
 ### Mode Setting
 
@@ -456,8 +481,8 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 |----|-----------|----------|-------|
 | 14 | Report pixel size | `CSI 4 ; height ; width t` | Reports terminal pixel dimensions |
 | 18 | Report text size | `CSI 8 ; rows ; cols t` | Reports character grid size |
-| 22 | Push title | None | Push title to stack |
-| 23 | Pop title | None | Pop title from stack |
+| 22 | Push title | None | Push current title to stack |
+| 23 | Pop title | None | Pop title from stack and apply |
 | Other | Ignored | None | Logged but not implemented |
 
 **Notes:**
@@ -491,13 +516,14 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 
 | Sequence | Operation |
 |----------|-----------|
-| `CSI > flags u` | Push flags to stack |
-| `CSI < count u` | Pop flags (count times) |
+| `CSI > flags u` | Push current flags and set new flags |
+| `CSI < count u` | Pop flags (count times, default 1) |
 
 **Notes:**
 - Separate stacks for primary and alternate screens
-- Default stack depth: 256 levels
+- Stack grows dynamically as needed
 - Flags control event reporting and key disambiguation
+- Pop with no saved state leaves flags unchanged
 
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi.rs`
 
@@ -685,6 +711,11 @@ where `ST` is either `ESC \` or `BEL` (`\x07`)
 |----------|-----------|-------|
 | `OSC 0 ; title ST` | Set icon + window title | Sets both simultaneously |
 | `OSC 2 ; title ST` | Set window title | Window title only |
+| `OSC 21 ; title ST` | Push title to stack | Pushes title or current if empty |
+| `OSC 22 ST` | Pop window title from stack | Restores previously pushed title |
+| `OSC 23 ST` | Pop icon title from stack | Same as OSC 22 (no distinction) |
+
+**Note:** Title stack operations are also available via XTWINOPS (CSI 22 t / CSI 23 t).
 
 ### Directory Tracking
 
@@ -750,7 +781,9 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 
 **Response (when querying):** `OSC 52 ; c ; base64_data ST`
 
-### Color Queries
+### Color Queries and Modification
+
+#### Query Colors
 
 | Sequence | Query | Response |
 |----------|-------|----------|
@@ -761,6 +794,24 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 **Format:** 16-bit RGB values (0000-ffff) per component
 
 **Example response:** `OSC 10 ; rgb:ffff/ffff/ffff ST` (white)
+
+#### Set Colors
+
+| Sequence | Operation | Security |
+|----------|-----------|----------|
+| `OSC 4 ; idx ; colorspec ST` | Set ANSI palette color | Requires insecure sequences enabled |
+| `OSC 10 ; colorspec ST` | Set default foreground | Requires insecure sequences enabled |
+| `OSC 11 ; colorspec ST` | Set default background | Requires insecure sequences enabled |
+| `OSC 12 ; colorspec ST` | Set cursor color | Requires insecure sequences enabled |
+| `OSC 104 ST` | Reset all ANSI colors | Requires insecure sequences enabled |
+| `OSC 104 ; idx ST` | Reset specific ANSI color | Requires insecure sequences enabled |
+| `OSC 110 ST` | Reset default foreground | Requires insecure sequences enabled |
+| `OSC 111 ST` | Reset default background | Requires insecure sequences enabled |
+| `OSC 112 ST` | Reset cursor color | Requires insecure sequences enabled |
+
+**Color specification formats:**
+- `rgb:RR/GG/BB` (hex values, case-insensitive)
+- `#RRGGBB` (hex format)
 
 ### Shell Integration (OSC 133)
 

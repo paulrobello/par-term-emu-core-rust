@@ -268,6 +268,10 @@ impl PyPtyTerminal {
     ///     link_color: RGB tuple for link color. Default: None (use theme color)
     ///     bold_color: RGB tuple for bold text. Default: None (use theme color)
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
+    ///     bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+    ///     background_color: Background color RGB tuple. Default: None (use terminal's default background)
+    ///     faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
     ///
     /// Returns:
     ///     Bytes of the image in the specified format
@@ -288,7 +292,11 @@ impl PyPtyTerminal {
         scrollback_offset = 0,
         link_color = None,
         bold_color = None,
-        use_bold_color = None
+        use_bold_color = None,
+        bold_brightening = None,
+        background_color = None,
+        faint_text_alpha = 0.5,
+        minimum_contrast = 0.5
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot(
@@ -306,6 +314,10 @@ impl PyPtyTerminal {
         link_color: Option<(u8, u8, u8)>,
         bold_color: Option<(u8, u8, u8)>,
         use_bold_color: Option<bool>,
+        bold_brightening: Option<bool>,
+        background_color: Option<(u8, u8, u8)>,
+        faint_text_alpha: Option<f32>,
+        minimum_contrast: f64,
     ) -> PyResult<Vec<u8>> {
         use crate::screenshot::{ImageFormat, ScreenshotConfig};
 
@@ -322,12 +334,12 @@ impl PyPtyTerminal {
             }
         };
 
-        // Get bold_brightening setting from terminal
+        // Get theme settings from terminal (used as defaults if not explicitly provided)
         let terminal = self.inner.terminal();
-        let bold_brightening = if let Ok(term) = terminal.lock() {
-            term.bold_brightening()
+        let (term_bold_brightening, term_bg_color) = if let Ok(term) = terminal.lock() {
+            (term.bold_brightening(), term.default_bg().to_rgb())
         } else {
-            false
+            (false, (0, 0, 0))
         };
 
         let config = ScreenshotConfig {
@@ -343,7 +355,10 @@ impl PyPtyTerminal {
             link_color,
             bold_color,
             use_bold_color: use_bold_color.unwrap_or(false),
-            bold_brightening,
+            bold_brightening: bold_brightening.unwrap_or(term_bold_brightening),
+            background_color: background_color.or(Some(term_bg_color)),
+            minimum_contrast: minimum_contrast.clamp(0.0, 1.0),
+            faint_text_alpha: faint_text_alpha.unwrap_or(0.5).clamp(0.0, 1.0),
             ..Default::default()
         };
 
@@ -371,6 +386,10 @@ impl PyPtyTerminal {
     ///     link_color: RGB tuple for link color. Default: None (use theme color)
     ///     bold_color: RGB tuple for bold text. Default: None (use theme color)
     ///     use_bold_color: Use custom bold color. Default: None (use theme setting)
+    ///     bold_brightening: Enable bold brightening (ANSI 0-7 -> 8-15). Default: None (use theme setting)
+    ///     background_color: Background color RGB tuple. Default: None (use terminal's default background)
+    ///     faint_text_alpha: Alpha multiplier for faint/dim text (0.0-1.0). Default: 0.5 (50% dimming)
+    ///     minimum_contrast: Minimum contrast adjustment (0.0-1.0). Default: 0.5 (moderate contrast adjustment)
     ///
     /// Returns:
     ///     None
@@ -392,7 +411,11 @@ impl PyPtyTerminal {
         scrollback_offset = 0,
         link_color = None,
         bold_color = None,
-        use_bold_color = None
+        use_bold_color = None,
+        bold_brightening = None,
+        background_color = None,
+        faint_text_alpha = 0.5,
+        minimum_contrast = 0.5
     ))]
     #[allow(clippy::too_many_arguments)]
     fn screenshot_to_file(
@@ -411,6 +434,10 @@ impl PyPtyTerminal {
         link_color: Option<(u8, u8, u8)>,
         bold_color: Option<(u8, u8, u8)>,
         use_bold_color: Option<bool>,
+        bold_brightening: Option<bool>,
+        background_color: Option<(u8, u8, u8)>,
+        faint_text_alpha: Option<f32>,
+        minimum_contrast: f64,
     ) -> PyResult<()> {
         use std::path::Path;
 
@@ -433,6 +460,10 @@ impl PyPtyTerminal {
             link_color,
             bold_color,
             use_bold_color,
+            bold_brightening,
+            background_color,
+            faint_text_alpha,
+            minimum_contrast,
         )?;
 
         std::fs::write(path, bytes)
@@ -2299,5 +2330,101 @@ impl PyPtyTerminal {
         stats.insert("current_graphics".to_string(), current_graphics);
         stats.insert("dropped_graphics".to_string(), dropped_graphics);
         Ok(stats)
+    }
+
+    /// Start recording terminal session
+    ///
+    /// Args:
+    ///     title: Optional session title (defaults to timestamp)
+    fn start_recording(&self, title: Option<String>) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.start_recording(title);
+        }
+        Ok(())
+    }
+
+    /// Stop recording and return the session
+    ///
+    /// Returns:
+    ///     RecordingSession object if recording was active, None otherwise
+    fn stop_recording(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            Ok(term
+                .stop_recording()
+                .map(super::types::PyRecordingSession::from))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Check if terminal is currently recording
+    ///
+    /// Returns:
+    ///     True if recording is active, False otherwise
+    fn is_recording(&self) -> PyResult<bool> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.is_recording())
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Export recording to asciicast v2 format
+    ///
+    /// Args:
+    ///     session: RecordingSession from stop_recording()
+    ///
+    /// Returns:
+    ///     Asciicast format string
+    fn export_asciicast(
+        &self,
+        session: Option<&super::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            if let Ok(term) = self.inner.terminal().lock() {
+                Ok(term.export_asciicast(&session.inner))
+            } else {
+                Err(PyRuntimeError::new_err("Failed to lock terminal"))
+            }
+        } else if let Ok(term) = self.inner.terminal().lock() {
+            if let Some(active) = term.get_recording_session() {
+                Ok(term.export_asciicast(active))
+            } else {
+                Err(PyValueError::new_err(
+                    "No active recording session (pass session=stop_recording())",
+                ))
+            }
+        } else {
+            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        }
+    }
+
+    /// Export recording to JSON format
+    ///
+    /// Returns:
+    ///     JSON format string
+    fn export_json(
+        &self,
+        session: Option<&super::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            if let Ok(term) = self.inner.terminal().lock() {
+                Ok(term.export_json(&session.inner))
+            } else {
+                Err(PyRuntimeError::new_err("Failed to lock terminal"))
+            }
+        } else if let Ok(term) = self.inner.terminal().lock() {
+            if let Some(active) = term.get_recording_session() {
+                Ok(term.export_json(active))
+            } else {
+                Err(PyValueError::new_err(
+                    "No active recording session (pass session=stop_recording())",
+                ))
+            }
+        } else {
+            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        }
     }
 }

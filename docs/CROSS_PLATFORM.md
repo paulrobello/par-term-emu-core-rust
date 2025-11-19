@@ -21,10 +21,12 @@ par-term-emu officially supports:
 
 #### PTY Support (`src/pty_session.rs`)
 - **Shell Detection**: Platform-specific handling ✅
-  - **Windows**: Uses `%COMSPEC%` environment variable, fallback to `cmd.exe`
+  - **Windows**: Uses `%COMSPEC%` environment variable (typically `cmd.exe`), fallback to `cmd.exe`
   - **Unix**: Uses `$SHELL` environment variable, fallback to `/bin/bash`
 - **Process Spawning**: Uses `portable-pty` crate for cross-platform PTY
 - **Environment Variables**: Properly inherits and sets platform-appropriate variables
+  - Automatically drops `COLUMNS` and `LINES` env vars to prevent resize issues
+  - Sets `TERM=xterm-256color` and `COLORTERM=truecolor` for all platforms
 
 #### Screenshot Module (`src/screenshot/`)
 - **Font Rendering**: Swash (pure Rust) - no C dependencies, works on all platforms
@@ -48,7 +50,7 @@ par-term-emu officially supports:
 
 ### Windows
 **Shell Command Differences:**
-- Default shell: PowerShell or cmd.exe (not bash)
+- Default shell: cmd.exe via `%COMSPEC%` (not bash or PowerShell)
 - Path separators: `\\` instead of `/`
 - Environment variables: `%VARIABLE%` syntax
 - Line endings: CRLF (`\r\n`) vs LF (`\n`)
@@ -238,13 +240,21 @@ pub fn get_default_shell() -> String {
 
 ## CI/CD Configuration
 
-### Recommended GitHub Actions Matrix
+### Current GitHub Actions Implementation ✅
+
+**Full cross-platform CI is implemented** in `.github/workflows/ci.yml`:
+
 ```yaml
 strategy:
   matrix:
     os: [ubuntu-latest, macos-latest, windows-latest]
-    rust: [stable]
+    python-version: ["3.12", "3.13", "3.14"]
 ```
+
+The CI pipeline includes:
+- **Test Job**: Runs on all three platforms with all supported Python versions
+- **Lint Job**: Runs Rust (fmt, clippy) and Python (ruff, pyright) checks
+- **Build Job**: Builds wheels for all platforms
 
 ### Platform-Specific Build Steps
 
@@ -260,6 +270,14 @@ Since the project uses pure Rust (Swash) for font rendering, CI/CD is simple:
   run: cargo test
 
 # No platform-specific setup required!
+```
+
+**Windows-Specific Setup:**
+The CI includes MSVC setup for Windows builds:
+```yaml
+- name: Set up MSVC
+  if: runner.os == 'Windows'
+  uses: ilammy/msvc-dev-cmd@v1
 ```
 
 ## Known Limitations
@@ -282,10 +300,10 @@ Since the project uses pure Rust (Swash) for font rendering, CI/CD is simple:
 
 The following enhancements could further improve cross-platform support:
 
-1. **Feature flag**: Optional NotoColorEmoji embedding (~10-15MB)
+1. **Feature flag**: Optional NotoColorEmoji embedding (~10-15MB) for guaranteed color emoji on all platforms
 2. **Platform-specific tests**: `#[cfg(target_os = "...")]` guards for platform-specific functionality
-3. **Cross-platform CI**: Expanded CI/CD test matrix for Windows and macOS
-4. **Font discovery**: XDG config support for custom font directories
+3. **Font discovery**: XDG config support for custom font directories on Linux
+4. **PowerShell support**: Option to use PowerShell instead of cmd.exe on Windows (currently uses `%COMSPEC%`)
 
 ## Resources
 

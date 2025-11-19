@@ -456,6 +456,64 @@ impl Color {
     }
 }
 
+/// Convert sRGB color to Display P3 color space.
+///
+/// This mimics how iTerm2 renders colors on P3 displays: expand to linear sRGB,
+/// convert through XYZ into the Display P3 primaries, then compress back to sRGB
+/// gamma for raster output. Returning sRGB bytes lets us store to standard image
+/// formats while keeping the perceived saturation boost from P3 monitors.
+#[inline]
+pub fn srgb_to_p3_rgb(r: u8, g: u8, b: u8) -> (u8, u8, u8) {
+    // Normalize to [0,1]
+    let r = r as f64 / 255.0;
+    let g = g as f64 / 255.0;
+    let b = b as f64 / 255.0;
+
+    // sRGB gamma → linear
+    let lr = srgb_to_linear(r);
+    let lg = srgb_to_linear(g);
+    let lb = srgb_to_linear(b);
+
+    // Linear sRGB → XYZ (D65)
+    let x = 0.412_456_4 * lr + 0.357_576_1 * lg + 0.180_437_5 * lb;
+    let y = 0.212_672_9 * lr + 0.715_152_2 * lg + 0.072_175 * lb;
+    let z = 0.019_333_9 * lr + 0.119_192 * lg + 0.950_304_1 * lb;
+
+    // XYZ → Display P3 linear (inverse matrix)
+    let pr = 2.493_496_9 * x - 0.931_383_6 * y - 0.402_710_8 * z;
+    let pg = -0.829_489 * x + 1.762_664_1 * y + 0.023_624_7 * z;
+    let pb = 0.035_845_8 * x - 0.076_172_4 * y + 0.956_884_5 * z;
+
+    // Linear → gamma again (same transfer function as sRGB)
+    let pr = linear_to_srgb(pr);
+    let pg = linear_to_srgb(pg);
+    let pb = linear_to_srgb(pb);
+
+    (
+        (pr.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (pg.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (pb.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
+}
+
+#[inline]
+fn srgb_to_linear(component: f64) -> f64 {
+    if component <= 0.04045 {
+        component / 12.92
+    } else {
+        ((component + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+#[inline]
+fn linear_to_srgb(component: f64) -> f64 {
+    if component <= 0.003_130_8 {
+        component * 12.92
+    } else {
+        1.055 * component.powf(1.0 / 2.4) - 0.055
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

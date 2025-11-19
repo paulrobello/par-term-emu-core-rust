@@ -78,7 +78,7 @@ New automatic contrast adjustment feature ensures text readability:
 
 - **NTSC Perceived Brightness**: Uses the same NTSC formula as iTerm2 (30% red, 59% green, 11% blue)
 - **Hue Preservation**: Adjusts brightness while preserving color hue using parametric interpolation
-- **Configurable Threshold**: Set minimum contrast from 0.0 (disabled) to 1.0 (maximum)
+- **Configurable Threshold**: Set minimum contrast from 0.0 (disabled) to 1.0 (maximum), defaults to 0.5
 - **Screenshot Integration**: Apply via `minimum_contrast` parameter in screenshot methods
 - **Python & Rust APIs**: Helper functions `perceived_brightness_rgb()` and `adjust_contrast_rgb()`
 - **Automatic Direction Selection**: Intelligently chooses to lighten or darken text for optimal contrast
@@ -98,7 +98,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## Table of Contents
 
-- [What's New in 0.6.0](#whats-new-in-060)
+- [What's New in 0.7.0](#whats-new-in-070)
 - [Description](#description)
 - [Technology](#technology)
 - [Prerequisites](#prerequisites)
@@ -561,7 +561,7 @@ term.screenshot_to_file(
 term.screenshot_to_file(
     "output.png",
     minimum_contrast=0.5          # Auto-adjust text colors for readability (0.0-1.0)
-)                                 # 0.0 = disabled (iTerm2 default), 0.5 = moderate, 1.0 = maximum
+)                                 # 0.0 = disabled, 0.5 = moderate (default), 1.0 = maximum
 
 # Specify custom font (for raster formats)
 term.screenshot_to_file(

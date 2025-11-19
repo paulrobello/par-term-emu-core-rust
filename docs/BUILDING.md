@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library.
+This guide explains how to build and install the par-term-emu-core-rust library (version 0.7.0).
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ### Rust
 
-You need Rust 1.75 or later (currently tested with Rust 1.91). Install it from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (currently tested with Rust 1.91.1). Install it from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -40,7 +40,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Python
 
-You need Python 3.12 or later (supports Python 3.12, 3.13, and 3.14). Check your version:
+You need Python 3.12 or later. The project supports Python 3.12, 3.13, and 3.14. Check your version:
 
 ```bash
 python --version
@@ -73,6 +73,13 @@ make setup-venv
 # Build in release mode and install
 make dev
 ```
+
+The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
+- **maturin** (≥1.10.1) - Build tool for PyO3 projects
+- **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework
+- **ruff** (≥0.14.5) - Fast Python linter and formatter
+- **pyright** (≥1.1.407) - Static type checker
+- **pre-commit** (≥4.4.0) - Git hook framework
 
 ### Development Build
 
@@ -111,7 +118,7 @@ The wheel will be created in `target/wheels/`.
 Install it with:
 
 ```bash
-uv pip install target/wheels/par_term_emu-*.whl
+uv pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
 
 ### Auto-rebuild on Changes
@@ -131,8 +138,8 @@ make watch
 ## Running Tests
 
 The project includes comprehensive test coverage:
-- **809 Rust unit tests** (including all modules and features)
-- **271 Python integration tests** in 10 test files
+- **811 Rust unit tests** (including all modules and features)
+- **168 Python integration tests** in 10 test files
 - Tests cover: VT sequences, grid operations, PTY sessions, screenshots, and Python bindings
 
 ### Rust Tests
@@ -150,8 +157,8 @@ make test-rust
 > **⚠️ Important:** The simple `cargo test` command will fail due to PyO3's `extension-module` feature. Tests require the `auto-initialize` feature instead. The Makefile target handles this automatically.
 
 **Why different features?**
-- **Production builds** use `pyo3/extension-module` (tells linker NOT to link against libpython)
-- **Rust tests** use `pyo3/auto-initialize` (initializes Python interpreter for testing)
+- **Production builds** use `pyo3/extension-module` (configured in `pyproject.toml` - tells linker NOT to link against libpython)
+- **Rust tests** use `pyo3/auto-initialize` (configured in `dev-dependencies` - initializes Python interpreter for testing)
 
 ### Python Tests
 
@@ -167,8 +174,8 @@ uv run pytest tests/ -v
 ```
 
 **Test configuration:**
-- Default timeout: 5 seconds per test
-- Pytest configuration in `pyproject.toml` includes timeout settings and warning filters
+- Default timeout: 5 seconds per test (configured in `pyproject.toml`)
+- Pytest warning filters suppress expected PyPtyTerminal unsendable warnings
 - Some PTY tests may need special handling in CI environments due to signal handling
 
 ### Code Quality Checks
@@ -203,6 +210,13 @@ make pre-commit-update
 # Uninstall hooks
 make pre-commit-uninstall
 ```
+
+**Pre-commit hooks include:**
+- **File checks**: Trailing whitespace, end-of-file fixer, YAML/TOML validation, merge conflicts
+- **Rust**: `cargo fmt`, `cargo clippy`, `cargo test` (with PyO3 auto-initialize)
+- **Python**: `ruff format`, `ruff check --fix`, `pyright`, `pytest`
+
+The pytest hook runs `uv sync && maturin develop && uv run pytest tests/ -v` to ensure the package is built before running tests.
 
 > **📝 Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
 
@@ -313,7 +327,7 @@ sudo dnf install python3-devel
 
 **macOS:**
 ```bash
-# Python 3.12, 3.13, or 3.14
+# Python 3.12, 3.13, or 3.14 (any supported version)
 brew install python@3.14
 ```
 
@@ -357,13 +371,12 @@ FROM rust:latest
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     python3 \
-    python3-pip \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.cargo/bin:$PATH"
+ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /build
 COPY . .

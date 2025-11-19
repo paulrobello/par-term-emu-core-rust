@@ -64,7 +64,10 @@ name = "par_term_emu_core_rust"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-pyo3 = { version = "0.27.1", features = ["extension-module"] }
+pyo3 = "0.27.1"
+
+[features]
+default = ["pyo3/extension-module"]
 
 [profile.release]
 opt-level = 3

@@ -77,8 +77,8 @@ impl PtySession {
 
     /// Spawn a shell process (auto-detected from environment)
     ///
-    /// On Unix: Uses $SHELL or defaults to /bin/sh
-    /// On Windows: Uses PowerShell or cmd.exe
+    /// On Unix: Uses $SHELL or defaults to /bin/bash
+    /// On Windows: Uses %COMSPEC% or defaults to cmd.exe
     pub fn spawn_shell(&mut self) -> Result<(), PtyError> {
         let shell = Self::get_default_shell();
         let args: Vec<&str> = Vec::new();
@@ -88,9 +88,9 @@ impl PtySession {
     /// Get the default shell for the current platform
     pub fn get_default_shell() -> String {
         if cfg!(windows) {
-            // Try PowerShell first, fall back to cmd.exe
-            if let Ok(powershell) = std::env::var("COMSPEC") {
-                powershell
+            // Use %COMSPEC% (typically cmd.exe), fall back to cmd.exe
+            if let Ok(comspec) = std::env::var("COMSPEC") {
+                comspec
             } else {
                 "cmd.exe".to_string()
             }
@@ -263,6 +263,8 @@ impl PtySession {
                             let old_gen = update_generation.load(Ordering::SeqCst);
                             let was_alt_screen = term.is_alt_screen_active();
                             term.process(&buffer[..n]);
+                            // Record output for session recording
+                            term.record_output(&buffer[..n]);
                             let is_alt_screen = term.is_alt_screen_active();
 
                             // Check for device query responses and write them back to the PTY
@@ -389,6 +391,12 @@ impl PtySession {
         }
 
         debug::log_pty_write(data);
+
+        // Record input for session recording
+        if let Ok(mut term) = self.terminal.lock() {
+            term.record_input(data);
+        }
+
         if let Some(ref writer) = self.writer {
             let mut w = writer
                 .lock()
@@ -423,6 +431,8 @@ impl PtySession {
         // Resize the terminal
         if let Ok(mut term) = self.terminal.lock() {
             term.resize(cols as usize, rows as usize);
+            // Record resize event for session recording
+            term.record_resize(cols as usize, rows as usize);
         }
 
         // Resize the PTY (sends SIGWINCH to child)

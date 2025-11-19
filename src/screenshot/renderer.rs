@@ -219,14 +219,42 @@ impl Renderer {
             }
         }
 
+        // Apply Display P3 color space conversion + brightness boost
+        // iTerm2's P3 rendering makes colors both more vibrant AND lighter
+        // First apply P3 conversion for saturation
+        fg_rgb = crate::color_utils::srgb_to_p3_rgb(fg_rgb.0, fg_rgb.1, fg_rgb.2);
+
+        // Then boost brightness to match iTerm2's visual appearance
+        // Testing shows ~40% brightness boost needed after P3 conversion
+        let boost = 1.4;
+        fg_rgb = (
+            ((fg_rgb.0 as f32 * boost).min(255.0)) as u8,
+            ((fg_rgb.1 as f32 * boost).min(255.0)) as u8,
+            ((fg_rgb.2 as f32 * boost).min(255.0)) as u8,
+        );
+
         // Handle reverse video
         if cell.flags.reverse() {
             std::mem::swap(&mut fg_rgb, &mut bg);
         }
 
-        // Handle dim (reduce brightness by ~50%)
+        // Handle dim/faint text by blending toward the background using configurable alpha
         if cell.flags.dim() {
-            fg_rgb = (fg_rgb.0 / 2, fg_rgb.1 / 2, fg_rgb.2 / 2);
+            let faint_alpha = self.config.faint_text_alpha.clamp(0.0, 1.0);
+            if faint_alpha < 1.0 {
+                let inv_alpha = 1.0 - faint_alpha;
+                fg_rgb = (
+                    ((fg_rgb.0 as f32 * faint_alpha + bg.0 as f32 * inv_alpha)
+                        .round()
+                        .clamp(0.0, 255.0)) as u8,
+                    ((fg_rgb.1 as f32 * faint_alpha + bg.1 as f32 * inv_alpha)
+                        .round()
+                        .clamp(0.0, 255.0)) as u8,
+                    ((fg_rgb.2 as f32 * faint_alpha + bg.2 as f32 * inv_alpha)
+                        .round()
+                        .clamp(0.0, 255.0)) as u8,
+                );
+            }
         }
 
         // Apply minimum contrast adjustment if enabled
@@ -422,11 +450,17 @@ impl Renderer {
             x as i32 + glyph_xmin
         };
 
-        // For bold text, we render the glyph multiple times with slight offsets
-        // This creates a faux-bold effect without needing a separate bold font
-        let bold_offsets: &[i32] = if bold { &[0, 1] } else { &[0] };
+        // Use a lightweight faux-bold pass (single-pixel horizontal stroke) so glyphs
+        // better match Textual/iTerm rendering when bold brightening is disabled.
+        const REGULAR_OFFSETS: [(i32, i32); 1] = [(0, 0)];
+        const BOLD_OFFSETS: [(i32, i32); 2] = [(0, 0), (1, 0)];
+        let bold_offsets: &[(i32, i32)] = if bold {
+            &BOLD_OFFSETS
+        } else {
+            &REGULAR_OFFSETS
+        };
 
-        for &x_offset in bold_offsets {
+        for &(x_offset, y_offset) in bold_offsets {
             // Blit glyph bitmap onto image based on format
             match glyph_format {
                 BitmapFormat::Grayscale => {
@@ -440,7 +474,7 @@ impl Renderer {
 
                             let alpha = glyph_bitmap[idx];
                             let px = (glyph_left_x + glyph_x as i32 + x_offset) as u32;
-                            let py = (glyph_top_y + glyph_y as i32) as u32;
+                            let py = (glyph_top_y + glyph_y as i32 + y_offset) as u32;
 
                             blend_grayscale_pixel(
                                 image,
@@ -469,7 +503,7 @@ impl Renderer {
                             let alpha = glyph_bitmap[idx + 3];
 
                             let px = (glyph_left_x + glyph_x as i32 + x_offset) as u32;
-                            let py = (glyph_top_y + glyph_y as i32) as u32;
+                            let py = (glyph_top_y + glyph_y as i32 + y_offset) as u32;
 
                             blend_rgba_pixel(
                                 image,
@@ -676,10 +710,15 @@ impl Renderer {
         let glyph_bitmap = glyph.bitmap.clone();
         let glyph_format = glyph.format.clone();
 
-        // For bold text, render multiple times with slight offsets
-        let bold_offsets: &[i32] = if bold { &[0, 1] } else { &[0] };
+        const REGULAR_OFFSETS: [(i32, i32); 1] = [(0, 0)];
+        const BOLD_OFFSETS: [(i32, i32); 2] = [(0, 0), (1, 0)];
+        let bold_offsets: &[(i32, i32)] = if bold {
+            &BOLD_OFFSETS
+        } else {
+            &REGULAR_OFFSETS
+        };
 
-        for &x_offset in bold_offsets {
+        for &(x_offset, y_offset) in bold_offsets {
             // Render glyph bitmap
             match glyph_format {
                 BitmapFormat::Grayscale => {
@@ -693,7 +732,7 @@ impl Renderer {
 
                             let alpha = glyph_bitmap[idx];
                             let px = (glyph_left_x + glyph_x as i32 + x_offset) as u32;
-                            let py = (glyph_top_y + glyph_y as i32) as u32;
+                            let py = (glyph_top_y + glyph_y as i32 + y_offset) as u32;
 
                             blend_grayscale_pixel(
                                 image,
@@ -722,7 +761,7 @@ impl Renderer {
                             let alpha = glyph_bitmap[idx + 3];
 
                             let px = (glyph_left_x + glyph_x as i32 + x_offset) as u32;
-                            let py = (glyph_top_y + glyph_y as i32) as u32;
+                            let py = (glyph_top_y + glyph_y as i32 + y_offset) as u32;
 
                             blend_rgba_pixel(
                                 image,
@@ -1061,7 +1100,8 @@ mod tests {
             bold_color: None,
             use_bold_color: false,
             bold_brightening: false,
-            minimum_contrast: 0.0,
+            minimum_contrast: 0.5,
+            faint_text_alpha: 0.5,
             quality: 90,
             format: crate::screenshot::config::ImageFormat::Png,
         }
