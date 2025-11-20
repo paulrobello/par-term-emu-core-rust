@@ -936,19 +936,15 @@ impl Grid {
 
         let n = n.min(bottom - top + 1);
         let effective_bottom = bottom.min(self.rows - 1);
-
-        // If n is larger than or equal to region size, just clear the region
-        if n > effective_bottom - top {
-            for i in top..=effective_bottom {
-                self.clear_row(i);
-            }
-            return;
-        }
+        let region_size = effective_bottom - top + 1;
 
         // If scrolling the entire screen (top=0, bottom=rows-1), save to scrollback
         // Only save to scrollback if max_scrollback > 0 (alternate screen has no scrollback)
+        // Do this BEFORE clearing, even if n >= region_size
         if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
-            for i in 0..n {
+            // When n >= region_size, save the entire screen to scrollback
+            let lines_to_save = n.min(region_size);
+            for i in 0..lines_to_save {
                 // Calculate source indices directly to avoid temporary allocation
                 let src_start = i * self.cols;
                 let src_end = src_start + self.cols;
@@ -977,7 +973,15 @@ impl Grid {
             }
         }
 
-        // Move lines up within the region
+        // If n >= region_size, just clear the entire region
+        if n >= region_size {
+            for i in top..=effective_bottom {
+                self.clear_row(i);
+            }
+            return;
+        }
+
+        // Otherwise, move lines up within the region
         for i in top..=(effective_bottom - n) {
             let src_start = (i + n) * self.cols;
             let dst_start = i * self.cols;

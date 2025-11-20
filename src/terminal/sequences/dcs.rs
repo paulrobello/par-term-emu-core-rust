@@ -250,7 +250,14 @@ impl Terminal {
 
                         // Adjust the new graphic's position to account for the scroll
                         // The graphic was at cursor.row, which just scrolled up by scroll_amount
-                        graphic.position.1 = graphic.position.1.saturating_sub(scroll_amount);
+                        let original_row = graphic.position.1;
+                        let new_row = original_row.saturating_sub(scroll_amount);
+                        graphic.position.1 = new_row;
+
+                        // If position was clamped to 0, track how many rows scrolled off
+                        if scroll_amount > original_row {
+                            graphic.scroll_offset_rows = scroll_amount - original_row;
+                        }
 
                         self.cursor.row = rows - 1;
                         self.cursor.col = new_cursor_col;
