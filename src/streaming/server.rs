@@ -183,6 +183,8 @@ impl StreamingServer {
 
         while let Some(data) = rx.recv().await {
             if !data.is_empty() {
+                let client_count = self.broadcaster.client_count().await;
+                eprintln!("[Broadcaster] Received {} bytes, broadcasting to {} clients", data.len(), client_count);
                 let msg = ServerMessage::output(data);
                 self.broadcaster.broadcast(msg).await;
             }
