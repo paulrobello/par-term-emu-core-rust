@@ -5,6 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Terminal Streaming Client</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+
+    <!-- Load fonts from CDN for better glyph coverage -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400;1,700&family=Fira+Code:wght@400;700&family=Noto+Sans+Mono:wght@400;700&display=swap" rel="stylesheet">
+
     <style>
         * {
             margin: 0;
@@ -168,8 +174,9 @@
         const term = new Terminal({
             cursorBlink: false,
             fontSize: 14,
-            // Enhanced font stack for wide Unicode support including powerline, emoji, and superscripts
-            fontFamily: "'Cascadia Code', 'Cascadia Code PL', 'FiraCode Nerd Font', 'DejaVu Sans Mono', 'Noto Sans Mono', 'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', 'Symbola', monospace",
+            // Enhanced font stack: web fonts first, then system fonts, then emoji fonts
+            // Order: Programming fonts (loaded via CDN) → System fonts → Emoji fonts → Generic fallback
+            fontFamily: "'JetBrains Mono', 'Fira Code', 'Noto Sans Mono', 'Cascadia Code', 'Cascadia Code PL', 'DejaVu Sans Mono', 'Consolas', 'Courier New', 'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', 'Symbola', monospace",
             // Prevent emoji glyphs from overlapping adjacent characters
             rescaleOverlappingGlyphs: true,
             theme: {
@@ -216,23 +223,32 @@
         // which is not yet published by xterm.js. They will appear as placeholder boxes.
         // See docs/REGIONAL_FLAG_LIMITATION.md for details.
 
-        term.open(document.getElementById('terminal'));
+        // Wait for fonts to load before opening terminal to prevent rendering issues
+        document.fonts.ready.then(() => {
+            console.log('Fonts loaded, opening terminal');
+            term.open(document.getElementById('terminal'));
 
-        // Try to load WebGL renderer for better performance and emoji rendering
-        try {
-            term.loadAddon(webglAddon);
-            console.log('WebGL renderer enabled');
-        } catch (e) {
-            console.warn('WebGL renderer failed to load, using default DOM renderer:', e);
-        }
+            // Try to load WebGL renderer for better performance and emoji rendering
+            try {
+                term.loadAddon(webglAddon);
+                console.log('WebGL renderer enabled');
+            } catch (e) {
+                console.warn('WebGL renderer failed to load, using default DOM renderer:', e);
+            }
 
-        // Handle WebGL context loss
-        webglAddon.onContextLoss((e) => {
-            console.warn('WebGL context lost, disposing addon');
-            webglAddon.dispose();
+            // Handle WebGL context loss
+            webglAddon.onContextLoss((e) => {
+                console.warn('WebGL context lost, disposing addon');
+                webglAddon.dispose();
+            });
+
+            fitAddon.fit();
+        }).catch((err) => {
+            console.error('Font loading failed:', err);
+            // Open terminal anyway with fallback fonts
+            term.open(document.getElementById('terminal'));
+            fitAddon.fit();
         });
-
-        fitAddon.fit();
 
         // Debounce helper for resize events
         function debounce(func, wait) {
