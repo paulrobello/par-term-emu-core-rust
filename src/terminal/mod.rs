@@ -2697,6 +2697,18 @@ impl Terminal {
         self.active_grid().export_styled_buffer()
     }
 
+    /// Export only the visible screen with ANSI styling (excludes scrollback)
+    ///
+    /// This method exports just the current visible terminal screen with ANSI
+    /// escape codes for colors and text attributes, but does NOT include
+    /// scrollback history. Use this for streaming initial snapshots to clients.
+    ///
+    /// # Returns
+    ///     String containing visible screen with ANSI styling
+    pub fn export_visible_screen_styled(&self) -> String {
+        self.active_grid().export_visible_screen_styled()
+    }
+
     // ========== Text Extraction Utilities ==========
 
     /// Get word at the given cursor position

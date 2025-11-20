@@ -174,14 +174,14 @@ impl StreamingServer {
         let mut client = Client::new(ws_stream, self.config.default_read_only);
         let client_id = client.id();
 
-        // Send initial connection message with full styled snapshot
+        // Send initial connection message with visible screen snapshot
         let (cols, rows, initial_screen) = {
             let terminal = self.terminal.lock().unwrap();
             let (cols, rows) = terminal.size();
 
             let initial_screen = if self.config.send_initial_screen {
-                // Export styled content with ANSI codes for colors/formatting
-                Some(terminal.export_styled())
+                // Export only visible screen (no scrollback) with ANSI styling
+                Some(terminal.export_visible_screen_styled())
             } else {
                 None
             };

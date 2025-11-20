@@ -645,6 +645,171 @@ impl Grid {
         result
     }
 
+    /// Export only the visible screen with ANSI styling (excludes scrollback)
+    ///
+    /// This method exports just the current visible terminal screen with ANSI
+    /// escape codes for colors and text attributes. Unlike export_styled_buffer(),
+    /// this does NOT include scrollback history.
+    ///
+    /// # Returns
+    /// String with ANSI-styled visible screen content
+    pub fn export_visible_screen_styled(&self) -> String {
+        use crate::color::{Color, NamedColor};
+
+        // Pre-allocate based on estimated size
+        let estimated_size = self.rows * self.cols * 20;
+        let mut result = String::with_capacity(estimated_size);
+        let mut current_fg = Color::Named(NamedColor::White);
+        let mut current_bg = Color::Named(NamedColor::Black);
+        let mut current_flags = crate::cell::CellFlags::default();
+
+        // Helper to emit SGR sequence for color changes
+        let emit_style =
+            |result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags| {
+                result.push_str("\x1b[0"); // Reset
+
+                // Set foreground color
+                match fg {
+                    Color::Named(nc) => {
+                        let code = match nc {
+                            NamedColor::Black => 30,
+                            NamedColor::Red => 31,
+                            NamedColor::Green => 32,
+                            NamedColor::Yellow => 33,
+                            NamedColor::Blue => 34,
+                            NamedColor::Magenta => 35,
+                            NamedColor::Cyan => 36,
+                            NamedColor::White => 37,
+                            NamedColor::BrightBlack => 90,
+                            NamedColor::BrightRed => 91,
+                            NamedColor::BrightGreen => 92,
+                            NamedColor::BrightYellow => 93,
+                            NamedColor::BrightBlue => 94,
+                            NamedColor::BrightMagenta => 95,
+                            NamedColor::BrightCyan => 96,
+                            NamedColor::BrightWhite => 97,
+                        };
+                        result.push_str(&format!(";{}", code));
+                    }
+                    Color::Indexed(i) => {
+                        result.push_str(&format!(";38;5;{}", i));
+                    }
+                    Color::Rgb(r, g, b) => {
+                        result.push_str(&format!(";38;2;{};{};{}", r, g, b));
+                    }
+                }
+
+                // Set background color
+                match bg {
+                    Color::Named(nc) => {
+                        let code = match nc {
+                            NamedColor::Black => 40,
+                            NamedColor::Red => 41,
+                            NamedColor::Green => 42,
+                            NamedColor::Yellow => 43,
+                            NamedColor::Blue => 44,
+                            NamedColor::Magenta => 45,
+                            NamedColor::Cyan => 46,
+                            NamedColor::White => 47,
+                            NamedColor::BrightBlack => 100,
+                            NamedColor::BrightRed => 101,
+                            NamedColor::BrightGreen => 102,
+                            NamedColor::BrightYellow => 103,
+                            NamedColor::BrightBlue => 104,
+                            NamedColor::BrightMagenta => 105,
+                            NamedColor::BrightCyan => 106,
+                            NamedColor::BrightWhite => 107,
+                        };
+                        result.push_str(&format!(";{}", code));
+                    }
+                    Color::Indexed(i) => {
+                        result.push_str(&format!(";48;5;{}", i));
+                    }
+                    Color::Rgb(r, g, b) => {
+                        result.push_str(&format!(";48;2;{};{};{}", r, g, b));
+                    }
+                }
+
+                // Set text attributes
+                if flags.bold() {
+                    result.push_str(";1");
+                }
+                if flags.dim() {
+                    result.push_str(";2");
+                }
+                if flags.italic() {
+                    result.push_str(";3");
+                }
+                if flags.underline() {
+                    result.push_str(";4");
+                }
+                if flags.blink() {
+                    result.push_str(";5");
+                }
+                if flags.reverse() {
+                    result.push_str(";7");
+                }
+                if flags.hidden() {
+                    result.push_str(";8");
+                }
+                if flags.strikethrough() {
+                    result.push_str(";9");
+                }
+
+                result.push('m');
+            };
+
+        // Export only the visible screen (no scrollback)
+        for row in 0..self.rows {
+            if let Some(row_cells) = self.row(row) {
+                let mut line_text = String::new();
+
+                for cell in row_cells {
+                    if cell.flags.wide_char_spacer() {
+                        continue;
+                    }
+
+                    // Check if style changed
+                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
+                    {
+                        emit_style(&mut line_text, &cell.fg, &cell.bg, &cell.flags);
+                        current_fg = cell.fg;
+                        current_bg = cell.bg;
+                        current_flags = cell.flags;
+                    }
+
+                    line_text.push(cell.c);
+                }
+
+                let trimmed = line_text.trim_end();
+                result.push_str(trimmed);
+
+                // Reset style at end of line if there's content
+                if !trimmed.is_empty() {
+                    result.push_str("\x1b[0m");
+                    current_fg = Color::Named(NamedColor::White);
+                    current_bg = Color::Named(NamedColor::Black);
+                    current_flags = crate::cell::CellFlags::default();
+                }
+
+                // Add newline unless it's the last row
+                if row < self.rows - 1 {
+                    if self.is_line_wrapped(row) {
+                        // Don't add newline for wrapped lines
+                    } else if !trimmed.is_empty() {
+                        result.push('\n');
+                    } else {
+                        result.push('\n');
+                    }
+                } else if !trimmed.is_empty() {
+                    result.push('\n');
+                }
+            }
+        }
+
+        result
+    }
+
     /// Insert n blank lines at row, shifting lines below down (VT220 IL)
     /// Lines that are pushed off the bottom are lost
     pub fn insert_lines(&mut self, row: usize, n: usize, scroll_top: usize, scroll_bottom: usize) {
