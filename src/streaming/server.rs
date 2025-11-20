@@ -204,9 +204,13 @@ impl StreamingServer {
 
         // Get PTY writer if available
         let pty_writer = self.pty_writer.clone();
+        let read_only = client.is_read_only();
 
         // Subscribe to output broadcasts
         let mut output_rx = self.broadcast_tx.subscribe();
+
+        // Clone terminal for screen refresh
+        let terminal_for_refresh = Arc::clone(&self.terminal);
 
         // Handle client input and output in this task
         loop {
@@ -221,6 +225,12 @@ impl StreamingServer {
                         Some(client_msg) => {
                             match client_msg {
                                 crate::streaming::protocol::ClientMessage::Input { data } => {
+                                    // Check if client is allowed to send input
+                                    if read_only {
+                                        // Silently ignore input from read-only clients
+                                        continue;
+                                    }
+
                                     // Write input to PTY if available
                                     if let Some(ref writer) = pty_writer {
                                         if let Ok(mut w) = writer.lock() {
@@ -241,7 +251,27 @@ impl StreamingServer {
                                     // Pings are handled automatically by Client::recv()
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    // TODO: Implement screen refresh
+                                    // Send current screen content to client
+                                    let refresh_msg = {
+                                        if let Ok(terminal) = terminal_for_refresh.lock() {
+                                            let content = terminal.content();
+                                            let (cols, rows) = terminal.size();
+                                            Some(ServerMessage::connected_with_screen(
+                                                cols as u16,
+                                                rows as u16,
+                                                content,
+                                                client_id.to_string()
+                                            ))
+                                        } else {
+                                            None
+                                        }
+                                    };
+
+                                    if let Some(msg) = refresh_msg {
+                                        if let Err(e) = client.send(msg).await {
+                                            eprintln!("Failed to send refresh to client {}: {}", client_id, e);
+                                        }
+                                    }
                                 }
                                 crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
                                     // TODO: Implement subscription handling
