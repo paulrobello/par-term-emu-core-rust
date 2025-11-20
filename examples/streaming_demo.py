@@ -16,7 +16,7 @@ Then open examples/streaming_client.html in your web browser and connect to:
 import argparse
 import sys
 import time
-import threading
+import select
 from pathlib import Path
 
 # Add parent directory to path for development
@@ -30,86 +30,36 @@ except ImportError:
     sys.exit(1)
 
 
-def read_pty_output(pty_terminal, streaming_server, stop_event):
+def process_pty_output(pty_terminal, streaming_server):
     """
     Read output from PTY and forward it to the streaming server.
 
-    This runs in a separate thread and continuously reads from the PTY,
-    forwarding all output to connected web clients.
+    Returns True if the PTY is still running, False otherwise.
     """
-    print("Starting PTY output reader thread...")
+    if not pty_terminal.is_running():
+        return False
 
-    try:
-        while not stop_event.is_set() and pty_terminal.is_running():
-            # Read output from PTY (non-blocking with timeout)
-            output = pty_terminal.read_output(timeout_ms=100)
+    # Read output from PTY (non-blocking with timeout)
+    output = pty_terminal.read_output(timeout_ms=10)
 
-            if output:
-                # Forward output to all connected streaming clients
-                try:
-                    streaming_server.send_output(output)
-                except Exception as e:
-                    print(f"Error sending output to streaming server: {e}")
-
-            # Small sleep to prevent CPU spinning
-            time.sleep(0.01)
-
-    except Exception as e:
-        print(f"PTY reader thread error: {e}")
-    finally:
-        print("PTY reader thread stopped")
-
-
-def handle_user_commands(pty_terminal, streaming_server):
-    """
-    Handle user commands from stdin (for demonstration).
-
-    In a real application, input would come from the web client.
-    """
-    print("\nCommands:")
-    print("  q, quit  - Quit the streaming server")
-    print("  s, stats - Show connection statistics")
-    print("  c, clear - Clear the terminal")
-    print("  b, bell  - Send a bell event")
-    print()
-
-    while True:
+    if output:
+        # Forward output to all connected streaming clients
         try:
-            cmd = input("> ").strip().lower()
-
-            if cmd in ('q', 'quit'):
-                print("Shutting down...")
-                return False
-
-            elif cmd in ('s', 'stats'):
-                client_count = streaming_server.client_count()
-                print(f"Connected clients: {client_count}")
-
-                # Get terminal stats
-                if pty_terminal.is_running():
-                    cols, rows = pty_terminal.get_size()
-                    print(f"Terminal size: {cols}x{rows}")
-
-            elif cmd in ('c', 'clear'):
-                streaming_server.send_output("\x1b[2J\x1b[H")
-                print("Sent clear screen command")
-
-            elif cmd in ('b', 'bell'):
-                streaming_server.send_bell()
-                print("Sent bell event")
-
-            else:
-                print(f"Unknown command: {cmd}")
-
-        except KeyboardInterrupt:
-            print("\nShutting down...")
-            return False
-        except EOFError:
-            return False
+            streaming_server.send_output(output)
         except Exception as e:
-            print(f"Error: {e}")
+            print(f"Error sending output to streaming server: {e}")
 
     return True
+
+
+def print_help():
+    """Print available commands."""
+    print("\nAvailable commands:")
+    print("  Ctrl+C   - Quit the streaming server")
+    print("  s, stats - Show connection statistics (type 's' and press Enter)")
+    print()
+    print("The terminal is running. Connect via the web client to interact.")
+    print()
 
 
 def main():
@@ -168,21 +118,38 @@ def main():
         print(f"Error starting shell: {e}")
         sys.exit(1)
 
-    # Start PTY output reader thread
-    stop_event = threading.Event()
-    reader_thread = threading.Thread(
-        target=read_pty_output,
-        args=(pty_terminal, streaming_server, stop_event),
-        daemon=True
-    )
-    reader_thread.start()
-
     # Wait a moment for shell to start
     time.sleep(0.2)
 
+    print_help()
+
     try:
-        # Main loop - handle user commands
-        handle_user_commands(pty_terminal, streaming_server)
+        # Main event loop - process PTY output and check for stdin input
+        while True:
+            # Process PTY output and forward to streaming server
+            if not process_pty_output(pty_terminal, streaming_server):
+                print("\nPTY process has exited")
+                break
+
+            # Check for stdin input (non-blocking)
+            # Note: select.select doesn't work on Windows for stdin
+            # This is just for demonstration on Unix-like systems
+            if sys.platform != 'win32':
+                ready, _, _ = select.select([sys.stdin], [], [], 0)
+                if ready:
+                    try:
+                        cmd = sys.stdin.readline().strip().lower()
+                        if cmd in ('s', 'stats'):
+                            client_count = streaming_server.client_count()
+                            print(f"Connected clients: {client_count}")
+                            if pty_terminal.is_running():
+                                cols, rows = pty_terminal.get_size()
+                                print(f"Terminal size: {cols}x{rows}")
+                    except:
+                        pass
+
+            # Small sleep to prevent CPU spinning
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\n\nReceived interrupt signal")
@@ -190,7 +157,6 @@ def main():
     finally:
         # Cleanup
         print("\nCleaning up...")
-        stop_event.set()
 
         # Shutdown streaming server
         try:
@@ -205,9 +171,6 @@ def main():
                 time.sleep(0.5)
             except:
                 pass
-
-        # Wait for reader thread
-        reader_thread.join(timeout=2.0)
 
         print("Goodbye!")
 
