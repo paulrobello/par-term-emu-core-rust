@@ -1,7 +1,8 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-python clean install dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
-        pre-commit-run pre-commit-update deploy
+        pre-commit-run pre-commit-update deploy \
+        web-install web-dev web-build web-start web-clean web-open
 
 help:
 	@echo "==================================================================="
@@ -48,6 +49,13 @@ help:
 	@echo "  examples-pty       - Run PTY/shell examples"
 	@echo "  examples-streaming - Run streaming demo (requires streaming feature)"
 	@echo "  examples-all       - Run all examples (basic + PTY)"
+	@echo ""
+	@echo "Web Frontend (Next.js):"
+	@echo "  web-install     - Install web frontend dependencies"
+	@echo "  web-dev         - Start dev server and open in browser"
+	@echo "  web-build       - Build web frontend for production"
+	@echo "  web-start       - Start production server"
+	@echo "  web-clean       - Clean web frontend build artifacts"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  deploy          - Trigger GitHub 'Build and Deploy' workflow"
@@ -318,6 +326,83 @@ examples-all: examples-basic examples-pty
 	@echo "======================================================================"
 
 # ============================================================================
+# Web Frontend (Next.js)
+# ============================================================================
+
+web-install:
+	@echo "======================================================================"
+	@echo "  Installing Web Frontend Dependencies"
+	@echo "======================================================================"
+	@echo ""
+	@if [ ! -d "web-terminal-frontend" ]; then \
+		echo "Error: web-terminal-frontend directory not found!"; \
+		exit 1; \
+	fi
+	cd web-terminal-frontend && npm install
+	@echo ""
+	@echo "Dependencies installed successfully!"
+	@echo ""
+
+web-dev: web-install
+	@echo "======================================================================"
+	@echo "  Starting Web Frontend Development Server"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Dev server will start at http://localhost:3000"
+	@echo "Opening browser in 3 seconds..."
+	@echo ""
+	@echo "Make sure the streaming server is running:"
+	@echo "  make examples-streaming"
+	@echo ""
+	@(sleep 3 && (command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
+	              command -v open > /dev/null && open http://localhost:3000 || \
+	              echo "Please open http://localhost:3000 in your browser")) &
+	cd web-terminal-frontend && npm run dev
+
+web-build: web-install
+	@echo "======================================================================"
+	@echo "  Building Web Frontend for Production"
+	@echo "======================================================================"
+	@echo ""
+	cd web-terminal-frontend && npm run build
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Production build complete!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Start the production server with:"
+	@echo "  make web-start"
+	@echo ""
+
+web-start:
+	@echo "======================================================================"
+	@echo "  Starting Web Frontend Production Server"
+	@echo "======================================================================"
+	@echo ""
+	@if [ ! -d "web-terminal-frontend/.next" ]; then \
+		echo "Error: Production build not found. Run 'make web-build' first."; \
+		exit 1; \
+	fi
+	@echo "Production server will start at http://localhost:3000"
+	@echo "Opening browser in 3 seconds..."
+	@echo ""
+	@(sleep 3 && (command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
+	              command -v open > /dev/null && open http://localhost:3000 || \
+	              echo "Please open http://localhost:3000 in your browser")) &
+	cd web-terminal-frontend && npm run start
+
+web-open:
+	@echo "Opening web frontend in browser..."
+	@(command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
+	  command -v open > /dev/null && open http://localhost:3000 || \
+	  echo "Please open http://localhost:3000 in your browser")
+
+web-clean:
+	@echo "Cleaning web frontend build artifacts..."
+	cd web-terminal-frontend && rm -rf .next node_modules .turbo
+	@echo "Web frontend clean complete!"
+
+# ============================================================================
 # Deployment
 # ============================================================================
 
@@ -354,4 +439,8 @@ clean:
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
 	find . -type f -name "*.so" -delete
+	@if [ -d "web-terminal-frontend" ]; then \
+		echo "Cleaning web frontend..."; \
+		cd web-terminal-frontend && rm -rf .next node_modules .turbo; \
+	fi
 	@echo "Clean complete!"
