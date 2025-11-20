@@ -147,14 +147,10 @@ impl PyStreamingServer {
 
         // Create a callback that forwards PTY output to the streaming server
         let callback = Arc::new(move |data: &[u8]| {
-            // Debug: Log that we're receiving PTY output
-            eprintln!("[Streaming] Callback triggered: {} bytes", data.len());
             // Convert bytes to UTF-8 string (lossy conversion for invalid UTF-8)
             let output = String::from_utf8_lossy(data).to_string();
             // Send to streaming server (non-blocking)
-            if let Err(e) = output_sender.send(output) {
-                eprintln!("[Streaming] Failed to send output: {}", e);
-            }
+            let _ = output_sender.send(output);
         });
 
         // Set the callback on the PTY terminal

@@ -57,7 +57,21 @@ def main():
     print(f"Creating terminal ({args.cols}x{args.rows})...")
     pty_terminal = terminal_core.PtyTerminal(args.cols, args.rows, args.scrollback)
 
-    # Create streaming server
+    # Start shell FIRST (so PTY writer is available for streaming server)
+    print("Starting shell...")
+    try:
+        if args.shell:
+            pty_terminal.spawn(args.shell, [])
+        else:
+            pty_terminal.spawn_shell()
+    except Exception as e:
+        print(f"Error starting shell: {e}")
+        sys.exit(1)
+
+    # Wait a moment for shell to start
+    time.sleep(0.2)
+
+    # Create streaming server (AFTER shell is spawned so PTY writer is available)
     addr = f"{args.host}:{args.port}"
     print(f"Creating streaming server on {addr}...")
 
@@ -87,20 +101,6 @@ def main():
     print(f"\n  1. Open examples/streaming_client.html in your browser")
     print(f"  2. Click 'Connect' to start streaming")
     print(f"\n{'='*60}\n")
-
-    # Start shell
-    print("Starting shell...")
-    try:
-        if args.shell:
-            pty_terminal.spawn(args.shell, [])
-        else:
-            pty_terminal.spawn_shell()
-    except Exception as e:
-        print(f"Error starting shell: {e}")
-        sys.exit(1)
-
-    # Wait a moment for shell to start
-    time.sleep(0.2)
 
     print_help()
 

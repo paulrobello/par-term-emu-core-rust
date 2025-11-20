@@ -36,7 +36,8 @@ pub struct PtySession {
     /// Whether to reply to XTWINOPS queries (cached from env var PAR_TERM_REPLY_XTWINOPS)
     reply_xtwinops: Arc<AtomicBool>,
     /// Optional callback for raw PTY output (for streaming, logging, etc.)
-    output_callback: Option<OutputCallback>,
+    /// Wrapped in Arc<Mutex> so it can be updated after the reader thread starts
+    output_callback: Arc<Mutex<Option<OutputCallback>>>,
 }
 
 impl PtySession {
@@ -70,7 +71,7 @@ impl PtySession {
             rows: rows as u16,
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
-            output_callback: None,
+            output_callback: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -104,12 +105,12 @@ impl PtySession {
     /// }));
     /// ```
     pub fn set_output_callback(&mut self, callback: OutputCallback) {
-        self.output_callback = Some(callback);
+        *self.output_callback.lock().unwrap() = Some(callback);
     }
 
     /// Remove the output callback
     pub fn clear_output_callback(&mut self) {
-        self.output_callback = None;
+        *self.output_callback.lock().unwrap() = None;
     }
 
     /// Get a clone of the PTY writer for external use (e.g., streaming server)
@@ -290,7 +291,7 @@ impl PtySession {
         let running = Arc::clone(&self.running);
         let update_generation = Arc::clone(&self.update_generation);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
-        let output_callback = self.output_callback.clone();
+        let output_callback = Arc::clone(&self.output_callback);
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
@@ -306,8 +307,10 @@ impl PtySession {
                         debug::log_pty_read(n);
 
                         // Call output callback if set (for streaming, logging, etc.)
-                        if let Some(ref callback) = output_callback {
-                            callback(&buffer[..n]);
+                        if let Ok(callback_guard) = output_callback.lock() {
+                            if let Some(ref callback) = *callback_guard {
+                                callback(&buffer[..n]);
+                            }
                         }
 
                         // Process the bytes through the terminal

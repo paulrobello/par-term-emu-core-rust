@@ -198,13 +198,16 @@ impl StreamingServer {
             tokio::select! {
                 // Receive message from client (input from web terminal)
                 msg = client.recv() => {
-                    match msg? {
+                    match msg {
+                        Err(e) => {
+                            return Err(e);
+                        }
+                        Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
                             match client_msg {
                                 crate::streaming::protocol::ClientMessage::Input { data } => {
                                     // Write input to PTY if available
                                     if let Some(ref writer) = pty_writer {
-                                        eprintln!("[Input] Received {} bytes from client, writing to PTY", data.len());
                                         if let Ok(mut w) = writer.lock() {
                                             use std::io::Write;
                                             let _ = w.write_all(data.as_bytes());
@@ -212,19 +215,16 @@ impl StreamingServer {
                                         }
                                     }
                                 }
-                                crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                    eprintln!("[Input] Client requested resize to {}x{}", cols, rows);
+                                crate::streaming::protocol::ClientMessage::Resize { .. } => {
                                     // TODO: Implement resize handling
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
                                     // Pings are handled automatically by Client::recv()
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    eprintln!("[Input] Client requested screen refresh");
                                     // TODO: Implement screen refresh
                                 }
                                 crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
-                                    eprintln!("[Input] Client sent subscribe message (not implemented)");
                                     // TODO: Implement subscription handling
                                 }
                             }
@@ -233,6 +233,7 @@ impl StreamingServer {
                             // Client disconnected
                             println!("Client {} disconnected", client_id);
                             break;
+                        }
                         }
                     }
                 }
@@ -255,8 +256,6 @@ impl StreamingServer {
 
         while let Some(data) = rx.recv().await {
             if !data.is_empty() {
-                let subscriber_count = self.broadcast_tx.receiver_count();
-                eprintln!("[Broadcaster] Received {} bytes, broadcasting to {} clients", data.len(), subscriber_count);
                 let msg = ServerMessage::output(data);
                 // Ignore send errors (means no receivers)
                 let _ = self.broadcast_tx.send(msg);
