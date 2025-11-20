@@ -223,6 +223,42 @@ impl Terminal {
                     // Each terminal row displays 2 pixel rows using Unicode half-blocks
                     let graphic_height_in_rows = graphic_height.div_ceil(2);
 
+                    // After Sixel graphic, cursor should move to left margin of line below graphic
+                    // per VT340 specification - this makes graphics "occupy space"
+                    let new_cursor_col = 0;
+                    let new_cursor_row = self.cursor.row.saturating_add(graphic_height_in_rows);
+
+                    // Calculate if we need to scroll and adjust graphic position accordingly
+                    let (_, rows) = self.size();
+                    if new_cursor_row >= rows {
+                        // If graphic pushed cursor past bottom, scroll up
+                        let scroll_amount = new_cursor_row - rows + 1;
+                        let scroll_top = self.scroll_region_top;
+                        let scroll_bottom = self.scroll_region_bottom;
+
+                        // Scroll the grid and existing graphics (but not the new one we haven't added yet)
+                        self.active_grid_mut().scroll_region_up(
+                            scroll_amount,
+                            scroll_top,
+                            scroll_bottom,
+                        );
+                        self.adjust_graphics_for_scroll_up(
+                            scroll_amount,
+                            scroll_top,
+                            scroll_bottom,
+                        );
+
+                        // Adjust the new graphic's position to account for the scroll
+                        // The graphic was at cursor.row, which just scrolled up by scroll_amount
+                        graphic.position.1 = graphic.position.1.saturating_sub(scroll_amount);
+
+                        self.cursor.row = rows - 1;
+                        self.cursor.col = new_cursor_col;
+                    } else {
+                        self.cursor.row = new_cursor_row;
+                        self.cursor.col = new_cursor_col;
+                    }
+
                     // Enforce per-terminal limit on number of retained graphics.
                     if self.graphics.len() >= self.max_sixel_graphics {
                         // Drop the oldest graphic to make room for the new one.
@@ -234,33 +270,9 @@ impl Terminal {
                             "Dropped oldest graphic due to max_sixel_graphics limit",
                         );
                     }
+
+                    // NOW add the graphic with its correctly adjusted position
                     self.graphics.push(graphic);
-
-                    // After Sixel graphic, cursor should move to left margin of line below graphic
-                    // per VT340 specification - this makes graphics "occupy space"
-                    self.cursor.col = 0;
-                    self.cursor.row = self.cursor.row.saturating_add(graphic_height_in_rows);
-
-                    // Clamp cursor to valid range
-                    let (_, rows) = self.size();
-                    if self.cursor.row >= rows {
-                        // If graphic pushed cursor past bottom, scroll up and place cursor at bottom
-                        let scroll_amount = self.cursor.row - rows + 1;
-                        let scroll_top = self.scroll_region_top;
-                        let scroll_bottom = self.scroll_region_bottom;
-                        self.active_grid_mut().scroll_region_up(
-                            scroll_amount,
-                            scroll_top,
-                            scroll_bottom,
-                        );
-                        // Adjust graphics to scroll with content
-                        self.adjust_graphics_for_scroll_up(
-                            scroll_amount,
-                            scroll_top,
-                            scroll_bottom,
-                        );
-                        self.cursor.row = rows - 1;
-                    }
 
                     debug::log(
                         debug::DebugLevel::Debug,

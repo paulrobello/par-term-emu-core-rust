@@ -2,10 +2,11 @@
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use std::sync::Arc;
 
 #[cfg(feature = "streaming")]
 use crate::streaming::{StreamingConfig, StreamingServer};
+#[cfg(feature = "streaming")]
+use std::sync::Arc;
 
 #[cfg(feature = "streaming")]
 type ResizeReceiver =

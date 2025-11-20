@@ -61,12 +61,7 @@ impl Terminal {
                     // Adjust position (saturating_sub will clamp to 0 if top goes negative)
                     let new_position = graphic_row.saturating_sub(n);
                     // Track how many rows scrolled off if position was clamped to 0
-                    let additional_scroll = if n > graphic_row {
-                        // Graphic's top scrolled off - track the offset
-                        n - graphic_row
-                    } else {
-                        0
-                    };
+                    let additional_scroll = n.saturating_sub(graphic_row);
                     graphic.scroll_offset_rows =
                         graphic.scroll_offset_rows.saturating_add(additional_scroll);
                     graphic.position.1 = new_position;

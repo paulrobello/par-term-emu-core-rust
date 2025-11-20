@@ -1895,7 +1895,7 @@ impl PyPtyTerminal {
         let terminal = self.inner.terminal();
         let graphics = if let Ok(term) = terminal.lock() {
             let graphics = term.graphics();
-            graphics.iter().map(|g| PyGraphic::from(g)).collect()
+            graphics.iter().map(PyGraphic::from).collect()
         } else {
             Vec::new()
         };
@@ -2445,6 +2445,7 @@ impl PyPtyTerminal {
 }
 
 // Rust-only methods (not exposed to Python)
+#[allow(dead_code)] // Used by streaming feature
 impl PyPtyTerminal {
     /// Get a clone of the terminal Arc (for use in streaming server)
     pub(crate) fn get_terminal_arc(
