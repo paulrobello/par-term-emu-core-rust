@@ -1300,6 +1300,15 @@ impl PyTerminal {
         Ok(self.inner.graphics_count())
     }
 
+    /// Get all graphics
+    ///
+    /// Returns:
+    ///     List of all Sixel graphics
+    fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
+        let graphics = self.inner.graphics();
+        Ok(graphics.iter().map(|g| PyGraphic::from(g)).collect())
+    }
+
     /// Clear all graphics
     fn clear_graphics(&mut self) -> PyResult<()> {
         self.inner.clear_graphics();
