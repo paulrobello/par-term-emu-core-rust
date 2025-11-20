@@ -7,8 +7,9 @@
 /// - 3: Debug level (VT sequences, buffer changes)
 /// - 4: Trace level (every operation, buffer snapshots)
 ///
-/// All output goes to par_term_emu_debug_rust.log in the system temp directory
-/// to avoid breaking TUI apps (Unix/macOS: /tmp, Windows: %TEMP%)
+/// All output goes to /tmp/par_term_emu_core_rust_debug_rust.log on Unix/macOS,
+/// or %TEMP%\par_term_emu_core_rust_debug_rust.log on Windows.
+/// This avoids breaking TUI apps by keeping debug output separate from stdout/stderr.
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -53,9 +54,12 @@ impl DebugLogger {
 
         let file = if level != DebugLevel::Off {
             // Rust uses separate log file from Python
-            // Use platform-specific temp directory (cross-platform compatible)
-            // Unix/macOS: /tmp, Windows: %TEMP%
-            let log_path = std::env::temp_dir().join("par_term_emu_debug_rust.log");
+            // Use /tmp on Unix/macOS for consistency with documentation
+            // Use %TEMP% on Windows
+            #[cfg(unix)]
+            let log_path = std::path::PathBuf::from("/tmp/par_term_emu_core_rust_debug_rust.log");
+            #[cfg(windows)]
+            let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log");
 
             match OpenOptions::new()
                 .write(true)
