@@ -1,7 +1,7 @@
 .PHONY: help build build-release test test-rust test-python clean install dev fmt lint check \
         examples examples-basic examples-pty examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
-        pre-commit-run pre-commit-update
+        pre-commit-run pre-commit-update deploy
 
 help:
 	@echo "==================================================================="
@@ -45,6 +45,9 @@ help:
 	@echo "  examples        - Run basic terminal examples"
 	@echo "  examples-pty    - Run PTY/shell examples"
 	@echo "  examples-all    - Run all examples (basic + PTY)"
+	@echo ""
+	@echo "Deployment:"
+	@echo "  deploy          - Trigger GitHub 'Build and Deploy' workflow"
 	@echo ""
 	@echo "Cleanup:"
 	@echo "  clean           - Clean all build artifacts"
@@ -266,6 +269,29 @@ examples-all: examples-basic examples-pty
 	@echo "======================================================================"
 	@echo "  All examples completed!"
 	@echo "======================================================================"
+
+# ============================================================================
+# Deployment
+# ============================================================================
+
+deploy:
+	@echo "======================================================================"
+	@echo "  Triggering GitHub 'Build and Deploy' workflow"
+	@echo "======================================================================"
+	@echo ""
+	@if ! command -v gh > /dev/null; then \
+		echo "Error: GitHub CLI (gh) not found. Install it from:"; \
+		echo "  https://cli.github.com/"; \
+		exit 1; \
+	fi
+	gh workflow run deployment.yml
+	@echo ""
+	@echo "Workflow triggered successfully!"
+	@echo "Monitor progress at:"
+	@echo "  https://github.com/paulrobello/par-term-emu-core-rust/actions"
+	@echo ""
+	@echo "Or use: gh run list --workflow=deployment.yml"
+	@echo ""
 
 # ============================================================================
 # Cleanup
