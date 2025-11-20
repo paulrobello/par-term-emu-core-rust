@@ -168,8 +168,8 @@
         const term = new Terminal({
             cursorBlink: false,
             fontSize: 14,
-            // Use a font stack that includes emoji support
-            fontFamily: "'Cascadia Code', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', monospace",
+            // Enhanced font stack for wide Unicode support including powerline, emoji, and superscripts
+            fontFamily: "'Cascadia Code', 'Cascadia Code PL', 'FiraCode Nerd Font', 'DejaVu Sans Mono', 'Noto Sans Mono', 'Segoe UI Emoji', 'Noto Color Emoji', 'Apple Color Emoji', 'Symbola', monospace",
             // Prevent emoji glyphs from overlapping adjacent characters
             rescaleOverlappingGlyphs: true,
             theme: {
@@ -211,6 +211,10 @@
 
         // Enable Unicode 11 for better emoji width calculation
         term.unicode.activeVersion = '11';
+
+        // Note: Regional indicator flag emojis (🇺🇸, 🇨🇳, etc.) require grapheme cluster support
+        // which is not yet published by xterm.js. They will appear as placeholder boxes.
+        // See docs/REGIONAL_FLAG_LIMITATION.md for details.
 
         term.open(document.getElementById('terminal'));
 
@@ -294,10 +298,17 @@
                     console.log('WebSocket connected');
                     setStatus('connected');
                     disconnectBtn.disabled = false;
-                    term.writeln('\r\n\x1b[32m● Connected to streaming server\x1b[0m\r\n');
 
-                    // Resize terminal to fit container and notify server
-                    setTimeout(() => handleResize(), 100);
+                    // Send resize IMMEDIATELY so initial snapshot has correct dimensions
+                    fitAddon.fit();
+                    const cols = term.cols;
+                    const rows = term.rows;
+                    console.log(`Sending initial resize: ${cols}x${rows}`);
+                    ws.send(JSON.stringify({
+                        type: 'resize',
+                        cols: cols,
+                        rows: rows
+                    }));
                 };
 
                 ws.onmessage = (event) => {
@@ -312,12 +323,13 @@
                                 break;
 
                             case 'connected':
-                                term.resize(msg.cols, msg.rows);
-                                if (msg.initial_screen) {
-                                    term.write(msg.initial_screen);
-                                }
-                                console.log(`Terminal initialized: ${msg.cols}x${msg.rows}`);
                                 console.log(`Session ID: ${msg.session_id}`);
+                                console.log(`Server initial size: ${msg.cols}x${msg.rows}, Client size: ${term.cols}x${term.rows}`);
+                                // Don't use initial_screen - we'll request refresh after resize
+                                // Request a refresh to get screen with correct dimensions
+                                if (ws && ws.readyState === WebSocket.OPEN) {
+                                    ws.send(JSON.stringify({ type: 'request_refresh' }));
+                                }
                                 break;
 
                             case 'resize':
