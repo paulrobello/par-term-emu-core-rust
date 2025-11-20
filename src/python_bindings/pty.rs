@@ -1887,6 +1887,21 @@ impl PyPtyTerminal {
         Ok(count)
     }
 
+    /// Get all graphics
+    ///
+    /// Returns:
+    ///     List of all Sixel graphics
+    fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
+        let terminal = self.inner.terminal();
+        let graphics = if let Ok(term) = terminal.lock() {
+            let graphics = term.graphics();
+            graphics.iter().map(|g| PyGraphic::from(g)).collect()
+        } else {
+            Vec::new()
+        };
+        Ok(graphics)
+    }
+
     /// Clear all graphics
     fn clear_graphics(&mut self) -> PyResult<()> {
         let terminal = self.inner.terminal();
