@@ -344,7 +344,7 @@
                                 // Don't use initial_screen - we'll request refresh after resize
                                 // Request a refresh to get screen with correct dimensions
                                 if (ws && ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({ type: 'request_refresh' }));
+                                    ws.send(JSON.stringify({ type: 'refresh' }));
                                 }
                                 break;
 
