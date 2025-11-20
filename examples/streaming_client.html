@@ -166,10 +166,8 @@
     <script>
         // Initialize xterm.js
         const term = new Terminal({
-            cursorBlink: true,
+            cursorBlink: false,
             fontSize: 14,
-            lineHeight: 0.9,
-            letterSpacing: 0,
             // Use a font stack that includes emoji support
             fontFamily: "'Cascadia Code', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', monospace",
             // Prevent emoji glyphs from overlapping adjacent characters
@@ -281,6 +279,9 @@
                 term.writeln('\r\n\x1b[31mError: Please enter a WebSocket URL\x1b[0m');
                 return;
             }
+
+            // Clear terminal before connecting
+            term.clear();
 
             setStatus('connecting');
             connectBtn.disabled = true;
