@@ -1,0 +1,171 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.8.0] - 2025-11-19
+
+### Fixed
+- **Keyboard Protocol Reset**: Automatically reset Kitty Keyboard Protocol flags when exiting alternate screen buffer
+  - Prevents TUI apps from leaving keyboard in bad state if they fail to disable protocol on exit
+  - Clears both main and alternate keyboard flag stacks
+  - Ensures clean terminal state after TUI app termination
+
+## [0.7.0] - 2024-11-19
+
+### Added
+- **Buffer Controls**: Configurable limits for system resources
+  - `set_max_notifications()` / `get_max_notifications()`: Limit OSC 9/777 notification backlog
+  - `set_max_clipboard_sync_events()` / `get_max_clipboard_sync_events()`: Limit clipboard event history
+  - `set_max_clipboard_event_bytes()` / `get_max_clipboard_event_bytes()`: Truncate large clipboard payloads
+- **XDG Base Directory Compliance**: Shell integration now follows XDG standards
+- **Improved Session Export**: Enhanced `export_asciicast()` and `export_json()` with explicit session parameters
+
+### Changed
+- **Shell Integration**: Migrated to XDG Base Directory specification for better standards compliance
+- **Export APIs**: Session parameter now explicit in export methods for clearer API
+
+### Documentation
+- Comprehensive documentation for all new features and buffer controls
+- Updated examples for new buffer control APIs
+
+## [0.6.0] - 2024-11-15
+
+### Added
+- **Comprehensive Color Utilities API**: 18 new Python functions for color manipulation
+  - Brightness and contrast: `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
+  - Basic adjustments: `lighten_rgb()`, `darken_rgb()`
+  - WCAG accessibility: `color_luminance()`, `is_dark_color()`, `contrast_ratio()`, `meets_wcag_aa()`, `meets_wcag_aaa()`
+  - Color mixing: `mix_colors()`, `complementary_color()`
+  - Color space conversions: `rgb_to_hsl()`, `hsl_to_rgb()`, `rgb_to_hex()`, `hex_to_rgb()`, `rgb_to_ansi_256()`
+  - Advanced adjustments: `adjust_saturation()`, `adjust_hue()`
+- **iTerm2 Compatibility**: Matching NTSC brightness formula and contrast adjustment algorithms
+- **Python Bindings**: All color utilities exposed via `par_term_emu_core_rust` module
+- **Fast Native Implementation**: Rust-based for optimal performance
+
+## [0.5.0] - 2024-11-10
+
+### Added
+- **Bold Brightening Support**: Configurable bold brightening for improved terminal compatibility
+  - `set_bold_brightening()` method: Enable/disable bold text brightening for ANSI colors 0-7
+  - iTerm2 Compatibility: Matches iTerm2's "Use Bright Bold" setting behavior
+  - Automatic Color Conversion: Bold text with ANSI colors 0-7 automatically uses bright variants 8-15
+  - Snapshot Integration: `create_snapshot()` automatically applies bold brightening when enabled
+
+### Changed
+- Enhanced `create_snapshot()` to automatically apply bold brightening when enabled
+
+### Documentation
+- New section in `docs/ADVANCED_FEATURES.md` with bold brightening examples
+
+## [0.4.0] - 2024-11-01
+
+### Added
+- **Session Recording and Replay**: Record terminal sessions with timing information
+  - Multiple event types: input, output, resize, custom markers
+  - Export formats: asciicast v2 (asciinema) and JSON
+  - Session metadata capture
+  - Markers/bookmarks support
+- **Terminal Notifications**: Advanced notification system
+  - Multiple trigger types: Bell, Activity, Silence, Custom
+  - Alert options: Desktop, Sound (with volume), Visual
+  - Configurable settings per trigger type
+  - Activity/silence detection
+  - Event logging with timestamps
+- **Enhanced Screenshot Support**:
+  - Theme configuration options
+  - Custom link and bold colors
+  - Minimum contrast adjustment
+- **Buffer Statistics**: Comprehensive terminal content analysis
+  - `get_stats()`: Detailed terminal metrics
+  - `count_non_whitespace_lines()`: Content line counting
+  - `get_scrollback_usage()`: Scrollback buffer tracking
+
+### Changed
+- Improved screenshot configuration with theme settings
+- Enhanced export functionality for better session capture
+
+## [0.3.0] - 2024-10-20
+
+### Added
+- **Text Extraction Utilities**: Smart word/URL detection, selection boundaries
+  - `get_word_at()`: Extract word at cursor with customizable word characters
+  - `get_url_at()`: Detect and extract URLs
+  - `select_word()`: Get word boundaries for double-click selection
+  - `get_line_unwrapped()`: Get full logical line following wraps
+  - `find_matching_bracket()`: Find matching brackets/parentheses
+  - `select_semantic_region()`: Extract content within delimiters
+- **Content Search**: Find text with case-sensitive/insensitive matching
+  - `find_text()`: Find all occurrences
+  - `find_next()`: Find next occurrence from position
+- **Static Utilities**: Standalone text processing functions
+  - `Terminal.strip_ansi()`: Remove ANSI codes
+  - `Terminal.measure_text_width()`: Measure display width
+  - `Terminal.parse_color()`: Parse color strings
+
+## [0.2.0] - 2024-10-10
+
+### Added
+- **Screenshot Support**: Multiple format support
+  - Formats: PNG, JPEG, BMP, SVG (vector), HTML
+  - Embedded JetBrains Mono font
+  - Programming ligatures support
+  - Box drawing character rendering
+  - Color emoji support with font fallback
+  - Cursor rendering with multiple styles
+  - Sixel graphics rendering
+  - Minimum contrast adjustment
+- **PTY Support**: Interactive shell sessions
+  - Spawn commands and shells
+  - Bidirectional I/O
+  - Process management
+  - Dynamic resizing with SIGWINCH
+  - Environment control
+  - Event loop integration
+  - Context manager support
+  - Cross-platform (Linux, macOS, Windows)
+
+### Changed
+- Improved Unicode handling for wide characters and emoji
+- Enhanced grid rendering for box drawing characters
+
+## [0.1.0] - 2024-10-01
+
+### Added
+- Initial stable release
+- **Core VT Compatibility**: VT100/VT220/VT320/VT420/VT520 support
+- **Rich Color Support**: 16 ANSI, 256-color palette, 24-bit RGB
+- **Text Attributes**: Bold, italic, underline (multiple styles), strikethrough, blink, reverse, dim, hidden
+- **Advanced Cursor Control**: Full VT100 cursor movement
+- **Line/Character Editing**: VT220 insert/delete operations
+- **Rectangle Operations**: VT420 fill/copy/erase/modify rectangular regions
+- **Scrolling Regions**: DECSTBM support
+- **Tab Stops**: Configurable tab stops
+- **Terminal Modes**: Application cursor keys, origin mode, auto wrap, alternate screen
+- **Mouse Support**: Multiple tracking modes and encodings
+- **Modern Features**:
+  - Alternate screen buffer
+  - Bracketed paste mode
+  - Focus tracking
+  - OSC 8 hyperlinks
+  - OSC 52 clipboard operations
+  - OSC 9/777 notifications
+  - Shell integration (OSC 133)
+  - Sixel graphics
+  - Kitty Keyboard Protocol
+  - Tmux Control Protocol
+- **Scrollback Buffer**: Configurable history
+- **Terminal Resizing**: Dynamic size adjustment
+- **Unicode Support**: Full Unicode including emoji and wide characters
+- **Python Integration**: PyO3 bindings for Python 3.12+
+
+[0.8.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/paulrobello/par-term-emu-core-rust/releases/tag/v0.1.0

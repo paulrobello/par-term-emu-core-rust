@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library (version 0.7.0).
+This guide explains how to build and install the par-term-emu-core-rust library (version 0.8.0).
 
 ## Table of Contents
 
@@ -118,7 +118,9 @@ The wheel will be created in `target/wheels/`.
 Install it with:
 
 ```bash
-uv pip install target/wheels/par_term_emu_core_rust-*.whl
+uv add --find-links target/wheels par-term-emu-core-rust
+# or
+pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
 
 ### Auto-rebuild on Changes

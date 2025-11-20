@@ -7,224 +7,109 @@
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/par_term_emu_core_rust)
 ![PyPI - License](https://img.shields.io/pypi/l/par_term_emu_core_rust)
 
-## What's New in 0.7.0
-
-### Enhanced Configuration and Buffer Controls
-
-Version 0.7.0 adds configurable limits for system resources and improves XDG compliance:
-
-- **Notification Buffer Limits**: Control OSC 9/777 notification backlog with `set_max_notifications()`
-- **Clipboard Sync Controls**: Limit clipboard event history and payload sizes to prevent memory leaks
-  - `set_max_clipboard_sync_events()`: Cap clipboard event history
-  - `set_max_clipboard_event_bytes()`: Truncate large clipboard payloads
-- **XDG Base Directory Compliance**: Shell integration now follows XDG standards
-- **Improved Session Export**: Enhanced `export_asciicast()` and `export_json()` with explicit session parameters
-
-### Terminal Notifications
-
-Advanced notification system for terminal events:
-
-- **Multiple Trigger Types**: Bell, Activity, Silence, and Custom triggers
-- **Alert Options**: Desktop notifications, sound alerts (with volume control), visual alerts
-- **Configurable Settings**: Fine-tune notification behavior per trigger type
-- **Activity Detection**: Automatic detection of terminal activity and silence periods
-- **Event Logging**: Track all notification events with timestamps
-- **Custom Triggers**: Register and trigger custom notifications with IDs
-- **Full Python API**: Complete control over notifications from Python
-
-### Session Recording and Replay
-
-Record and replay terminal sessions with timing information:
-
-- **Session Recording**: Capture all terminal input/output with precise timing
-- **Multiple Event Types**: Record input, output, resize events, and custom markers
-- **Export Formats**: Export to asciicast v2 (asciinema) or JSON formats
-- **Session Metadata**: Capture environment variables and terminal configuration
-- **Playback Ready**: Compatible with asciinema player and custom players
-- **Markers/Bookmarks**: Add named markers during recording for navigation
-- **Full Python API**: Start/stop recording, export sessions programmatically
-
-### Comprehensive Color Utilities API
-
-Version 0.6.0 adds a complete suite of color manipulation functions with Python bindings:
-
-- **18 New Python Functions**: Complete color utility API for terminal applications
-  - `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
-  - `lighten_rgb()`, `darken_rgb()`
-  - `color_luminance()`, `is_dark_color()`, `contrast_ratio()`
-  - `meets_wcag_aa()`, `meets_wcag_aaa()`
-  - `mix_colors()`, `complementary_color()`
-  - `rgb_to_hsl()`, `hsl_to_rgb()`, `rgb_to_hex()`, `hex_to_rgb()`
-  - `rgb_to_ansi_256()`, `adjust_saturation()`, `adjust_hue()`
-- **Color Space Support**: RGB, HSL, Hex, and ANSI 256-color conversions
-- **WCAG Accessibility**: Built-in compliance checks (AA/AAA standards)
-- **Advanced Manipulation**: Saturation, hue adjustment, color mixing, complementary colors
-- **iTerm2 Compatibility**: Same NTSC brightness formula and contrast adjustment algorithms
-- **Fast Native Code**: Rust implementation for optimal performance
-
-### Bold Brightening Support (from 0.5.0)
-
-Configurable bold brightening for improved terminal compatibility:
-
-- **New `set_bold_brightening()` Method**: Enable/disable bold text brightening for ANSI colors 0-7
-- **iTerm2 Compatibility**: Matches iTerm2's "Use Bright Bold" setting behavior
-- **Automatic Color Conversion**: Bold text with ANSI colors 0-7 automatically uses bright variants 8-15
-- **Snapshot Integration**: `create_snapshot()` automatically applies bold brightening when enabled
-- **Comprehensive Documentation**: New section in `docs/ADVANCED_FEATURES.md` with examples
-
-### Minimum Contrast Adjustment (iTerm2-Compatible)
-
-New automatic contrast adjustment feature ensures text readability:
-
-- **NTSC Perceived Brightness**: Uses the same NTSC formula as iTerm2 (30% red, 59% green, 11% blue)
-- **Hue Preservation**: Adjusts brightness while preserving color hue using parametric interpolation
-- **Configurable Threshold**: Set minimum contrast from 0.0 (disabled) to 1.0 (maximum), defaults to 0.5
-- **Screenshot Integration**: Apply via `minimum_contrast` parameter in screenshot methods
-- **Python & Rust APIs**: Helper functions `perceived_brightness_rgb()` and `adjust_contrast_rgb()`
-- **Automatic Direction Selection**: Intelligently chooses to lighten or darken text for optimal contrast
-
-### Enhanced Color Configuration
-
-- **Bold Brightening API**: Programmatic control over bold color rendering
-- **Minimum Contrast Adjustment**: iTerm2-compatible automatic contrast adjustment for improved readability
-- **Snapshot Accuracy**: Screen snapshots now correctly reflect bold brightening state
-- **Backward Compatible**: Features are opt-in and don't affect existing code
-
-## Description
-
 A comprehensive terminal emulator library written in Rust with Python bindings for Python 3.12+. Provides VT100/VT220/VT320/VT420/VT520 compatibility with PTY support, matching iTerm2's feature set.
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## Table of Contents
+## What's New in 0.8.0
 
-- [What's New in 0.7.0](#whats-new-in-070)
-- [Description](#description)
-- [Technology](#technology)
-- [Prerequisites](#prerequisites)
-- [Features](#features)
-- [Installation](#installation)
-  - [From Source](#from-source)
-  - [Building a Wheel](#building-a-wheel)
-  - [Terminfo Installation (Optional)](#terminfo-installation-optional)
-  - [Shell Integration (Optional but Recommended)](#shell-integration-optional-but-recommended)
-- [Quick Start](#quick-start)
-  - [PTY Quick Start](#pty-quick-start)
-- [Usage Examples](#usage-examples)
-- [API Reference](#api-reference)
-- [Supported ANSI/VT Sequences](#supported-ansivt-sequences)
-- [Examples](#examples)
-- [TUI Demo Application](#tui-demo-application)
-- [Security](#security)
-- [Running Tests](#running-tests)
-- [Performance](#performance)
-- [Architecture](#architecture)
-- [Contributing](#contributing)
-- [License](#license)
-- [Author](#author)
+- **Keyboard Protocol Reset Fix**: Automatically reset Kitty Keyboard Protocol flags when exiting alternate screen buffer
+  - Prevents TUI apps from leaving keyboard in bad state if they fail to disable protocol on exit
+  - Ensures clean terminal state after TUI app termination
 
-## Technology
-
-- Rust (1.75+)
-- Python (3.12+)
-- PyO3 for Python bindings
-- VTE for ANSI parsing
-- portable-pty for cross-platform PTY support
-
-## Prerequisites
-
-- Rust 1.75 or higher
-- Python 3.12 or higher
-- uv package manager
-- maturin (for building Python wheels)
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## Features
 
-### Core VT Compatibility (iTerm2 Feature Parity)
+### Core Terminal Emulation
 
-- **VT100/VT220/VT320/VT420 Support**: Comprehensive terminal emulation matching iTerm2's capabilities
-- **Rich Color Support**:
-  - Basic 16 ANSI colors
-  - 256-color palette
-  - 24-bit RGB (true color)
-- **Text Attributes**: Bold, italic, underline (with styles: straight, double, curly, dotted, dashed), strikethrough, blink, reverse, dim, and hidden
-- **Advanced Cursor Control**: Full VT100 cursor movement and positioning
-- **Line/Character Editing**: VT220 insert/delete operations (IL, DL, ICH, DCH, ECH)
-- **Rectangle Operations**: VT420 fill/copy/erase/modify rectangular regions (DECFRA, DECCRA, DECSERA, DECERA, DECCARA, DECRARA, DECRQCRA, DECSACE)
-- **Scrolling Regions**: DECSTBM for restricted scrolling areas
-- **Tab Stops**: Configurable tab stops (HTS, TBC, CHT, CBT)
-- **Terminal Modes**:
-  - Application cursor keys (DECCKM)
-  - Origin mode (DECOM)
-  - Auto wrap mode (DECAWM)
-  - Multiple alternate screen variants (47, 1047, 1049)
-- **Mouse Support**: Multiple mouse tracking modes (X10, Normal, Button, Any) and encodings (Default, UTF-8, SGR, URXVT)
-- **Modern Features**:
-  - Alternate screen buffer
-  - Bracketed paste mode
-  - Focus tracking
-  - OSC 8 hyperlinks (full support - clickable in TUI)
-  - OSC 52 clipboard operations (copy/paste over SSH without X11)
-  - OSC 9 / OSC 777 notifications (desktop-style alerts)
-  - Shell integration (OSC 133)
-  - Sixel graphics (DCS format with half-block rendering)
-  - Kitty Keyboard Protocol (progressive enhancement for keyboard handling)
-  - Tmux Control Protocol (tmux -C / -CC support for control mode integration)
-- **Scrollback Buffer**: Configurable history of scrolled lines
-- **Terminal Resizing**: Dynamic size adjustment
-- **Unicode Support**: Full Unicode including emoji and wide characters
-- **High Performance**: Written in Rust for speed and safety
-- **Python Integration**: Easy-to-use Python API via PyO3
+- **VT100/VT220/VT320/VT420/VT520 Support** - Comprehensive terminal emulation matching iTerm2
+- **Rich Color Support** - 16 ANSI colors, 256-color palette, 24-bit RGB (true color)
+- **Text Attributes** - Bold, italic, underline (5 styles), strikethrough, blink, reverse, dim, hidden
+- **Advanced Cursor Control** - Full VT cursor movement and positioning
+- **Line/Character Editing** - VT220 insert/delete operations
+- **Rectangle Operations** - VT420 fill/copy/erase/modify rectangular regions (DECFRA, DECCRA, etc.)
+- **Scrolling Regions** - DECSTBM for restricted scrolling areas
+- **Tab Stops** - Configurable tab stops (HTS, TBC, CHT, CBT)
+- **Unicode Support** - Full Unicode including emoji and wide characters
+
+### Modern Features
+
+- **Alternate Screen Buffer** - Full support with automatic cleanup
+- **Mouse Support** - Multiple tracking modes and encodings (X10, Normal, Button, Any, SGR, URXVT)
+- **Bracketed Paste Mode** - Safe paste handling
+- **Focus Tracking** - Focus in/out events
+- **OSC 8 Hyperlinks** - Clickable URLs in terminal (full TUI support)
+- **OSC 52 Clipboard** - Copy/paste over SSH without X11
+- **OSC 9/777 Notifications** - Desktop-style alerts and notifications
+- **Shell Integration** - OSC 133 (iTerm2/VSCode compatible)
+- **Sixel Graphics** - Inline graphics with half-block rendering
+- **Kitty Keyboard Protocol** - Progressive keyboard enhancement with auto-reset on alternate screen exit
+- **Synchronized Updates (DEC 2026)** - Flicker-free rendering
+- **Tmux Control Protocol** - Control mode integration support
 
 ### PTY Support
 
-- **Interactive Shell Sessions**: Spawn and control shell processes
-- **Bidirectional I/O**: Send input and receive output from running processes
-- **Process Management**: Start, stop, and monitor child processes
-- **Dynamic Resizing**: Resize terminal and send SIGWINCH to child process
-- **Environment Control**: Custom environment variables and working directory
-- **Event Loop Integration**: Non-blocking update detection for efficient event loops
-- **Context Manager Support**: Automatic cleanup with Python `with` statements
-- **Cross-Platform**: Works on Linux, macOS, and Windows via portable-pty
+- **Interactive Shell Sessions** - Spawn and control shell processes
+- **Bidirectional I/O** - Send input and receive output
+- **Process Management** - Start, stop, and monitor child processes
+- **Dynamic Resizing** - Resize with SIGWINCH signal
+- **Environment Control** - Custom environment variables and working directory
+- **Event Loop Integration** - Non-blocking update detection
+- **Cross-Platform** - Linux, macOS, and Windows via portable-pty
+
+### Screenshots and Export
+
+- **Multiple Formats** - PNG, JPEG, BMP, SVG (vector), HTML
+- **Embedded Font** - JetBrains Mono bundled - no installation required
+- **Programming Ligatures** - =>, !=, >=, and other code ligatures
+- **True Font Rendering** - High-quality antialiasing for raster formats
+- **Color Emoji Support** - Full emoji rendering with automatic font fallback
+- **Session Recording** - Record/replay sessions (asciicast v2, JSON)
+- **Export Functions** - Plain text, ANSI styled, HTML export
 
 ### Utility Functions
 
-- **Text Extraction**: Smart word/URL detection, line unwrapping, selection boundaries
-- **Content Search**: Find text with case-sensitive/insensitive matching, "find next" support
-- **Buffer Statistics**: Get detailed metrics (memory usage, cell counts, graphics count)
-- **Static Utilities**: Strip ANSI codes, measure text width, parse colors from strings
+- **Text Extraction** - Smart word/URL detection, selection boundaries, bracket matching
+- **Content Search** - Find text with case-sensitive/insensitive matching
+- **Buffer Statistics** - Memory usage, cell counts, graphics count
+- **Color Utilities** - 18+ color manipulation functions (iTerm2-compatible)
+  - NTSC brightness, contrast adjustment, WCAG accessibility checks
+  - Color space conversions (RGB, HSL, Hex, ANSI 256)
+  - Saturation/hue adjustment, color mixing
 
-### Screenshot Support
+## Documentation
 
-- **Multiple Formats**: PNG, JPEG, BMP, **SVG** (vector graphics!), and **HTML**
-- **Embedded Font**: JetBrains Mono bundled - no font installation required!
-- **Programming Ligatures**: Supports =>, !=, >=, and other code ligatures
-- **Box Drawing**: Perfect rendering of box drawing characters (┌─┐│└┘)
-- **High-Quality Rendering**: True font rendering with antialiasing for raster formats
-- **SVG Vector Output**: Infinitely scalable screenshots with selectable text
-- **HTML Output**: Styled HTML with full color support and text attributes (includes full document or content-only mode)
-- **Color Emoji Support**: Full color emoji rendering with automatic font fallback (NotoColorEmoji, Apple Color Emoji, Segoe UI Emoji)
-- **Flag Emoji Support**: Proper rendering of flag emojis (🇺🇸 🇨🇳 🇯🇵) via text shaping
-- **Cursor Rendering**: Capture cursor position with 3 styles (Block, Underline, Bar) and custom colors
-- **Sixel Graphics**: Inline graphics rendering with full alpha blending support
-- **Minimum Contrast Adjustment**: iTerm2-compatible automatic contrast adjustment ensures text readability on any background
-- **Configurable**: Custom fonts, sizes, padding, and quality settings
-- **Full Styling**: Preserves all colors, text attributes, and decorations
-- **Wide Character Support**: Renders CJK characters and emoji correctly
-- **Python & Rust APIs**: Easy-to-use interfaces for both languages
-- **TUI Integration**: Built-in `Ctrl+Shift+S` hotkey in the TUI application
+- **[API Reference](docs/API_REFERENCE.md)** - Complete Python API documentation
+- **[VT Sequences](docs/VT_SEQUENCES.md)** - Comprehensive ANSI/VT sequence reference
+- **[Advanced Features](docs/ADVANCED_FEATURES.md)** - Detailed feature guides
+- **[Architecture](docs/ARCHITECTURE.md)** - Internal architecture details
+- **[Security](docs/SECURITY.md)** - PTY security best practices
+- **[Building](docs/BUILDING.md)** - Build instructions and requirements
+- **[Configuration Reference](docs/CONFIG_REFERENCE.md)** - Configuration options
+- **[Cross-Platform Notes](docs/CROSS_PLATFORM.md)** - Platform-specific information
+- **[VT Feature Parity](docs/VT_FEATURE_PARITY.md)** - iTerm2 compatibility details
+- **[Fonts](docs/FONTS.md)** - Font configuration and rendering
 
 ## Installation
+
+### From PyPI
+
+```bash
+uv add par-term-emu-core-rust
+# or
+pip install par-term-emu-core-rust
+```
 
 ### From Source
 
 Requires Rust 1.75+ and Python 3.12+:
 
 ```bash
-# Install maturin (build tool) using uv
+# Install maturin (build tool)
 uv tool install maturin
 
-# Build and install the package
+# Build and install
 maturin develop --release
 ```
 
@@ -232,85 +117,73 @@ maturin develop --release
 
 ```bash
 maturin build --release
-uv pip install target/wheels/par_term_emu_core_rust-*.whl
+uv add --find-links target/wheels par-term-emu-core-rust
+# or
+pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
 
-### Terminfo Installation (Optional)
+### Optional Components
 
-For optimal terminal compatibility, you can install the par-term terminfo definition. This allows applications to fully utilize all terminal capabilities (true color, Sixel graphics, etc.):
+#### Terminfo Installation
+
+For optimal terminal compatibility, install the par-term terminfo definition:
 
 ```bash
 # Install for current user
 ./terminfo/install.sh
 
-# Or install system-wide (requires sudo)
+# Or install system-wide
 sudo ./terminfo/install.sh --system
 
-# Then use the terminal type
+# Then use
 export TERM=par-term
 export COLORTERM=truecolor
 ```
 
-See [terminfo/README.md](terminfo/README.md) for detailed information.
+See [terminfo/README.md](terminfo/README.md) for details.
 
-**Note**: If not installed, the terminal defaults to `xterm-256color` compatibility mode, which works well with most applications.
+#### Shell Integration
 
-### Shell Integration (Optional but Recommended)
-
-Shell integration enhances your terminal experience with semantic prompt markers. This enables features like prompt navigation, command status tracking, and smart selection.
+Enhances terminal with semantic prompt markers, command status tracking, and smart selection:
 
 ```bash
-# Install for your current shell (auto-detects bash/zsh/fish)
 cd shell_integration
-./install.sh
-
-# Or install for all available shells
-./install.sh --all
-
-# Or install for a specific shell
-./install.sh bash   # or zsh, or fish
+./install.sh  # Auto-detects bash/zsh/fish
 ```
 
-After installation, restart your shell or run:
-```bash
-source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.bash"  # bash
-source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.zsh"   # zsh
-source "${XDG_CONFIG_HOME:-$HOME/.config}/par-term-emu-core-rust/shell_integration.fish"  # fish
-```
-
-See [shell_integration/README.md](shell_integration/README.md) for detailed information, advanced usage, and customization options.
+See [shell_integration/README.md](shell_integration/README.md) for details.
 
 ## Quick Start
+
+### Basic Terminal Emulation
 
 ```python
 from par_term_emu_core_rust import Terminal
 
-# Create a terminal with 80 columns and 24 rows
+# Create terminal
 term = Terminal(80, 24)
 
-# Process some text with ANSI codes
+# Process ANSI sequences
 term.process_str("Hello, \x1b[31mWorld\x1b[0m!\n")
 term.process_str("\x1b[1;32mBold green text\x1b[0m\n")
 
-# Get the content
+# Get content and cursor position
 print(term.content())
-
-# Check cursor position
 col, row = term.cursor_position()
 print(f"Cursor at: ({col}, {row})")
 ```
 
-### PTY Quick Start
+### PTY (Interactive Shell)
 
 ```python
 from par_term_emu_core_rust import PtyTerminal
 import time
 
-# Create a terminal and spawn a shell
+# Create PTY terminal and spawn shell
 with PtyTerminal(80, 24) as term:
     term.spawn_shell()
 
-    # Send a command
+    # Send commands
     term.write_str("echo 'Hello from shell!'\n")
     time.sleep(0.2)
 
@@ -322,1172 +195,103 @@ with PtyTerminal(80, 24) as term:
 
     # Exit shell
     term.write_str("exit\n")
-# Automatic cleanup on exit
-```
-
-## Usage Examples
-
-### Basic Text Processing
-
-```python
-from par_term_emu_core_rust import Terminal
-
-term = Terminal(80, 24)
-
-# Write plain text
-term.process_str("Hello, Terminal!\n")
-
-# Write bytes
-term.process(b"Binary data\n")
-
-# Get content
-content = term.content()
-print(content)
-```
-
-### Colors and Styling
-
-```python
-term = Terminal(80, 24)
-
-# Basic colors (30-37 for foreground, 40-47 for background)
-term.process_str("\x1b[31mRed text\x1b[0m\n")
-term.process_str("\x1b[42mGreen background\x1b[0m\n")
-
-# Bright colors (90-97, 100-107)
-term.process_str("\x1b[91mBright red\x1b[0m\n")
-
-# 256-color palette
-term.process_str("\x1b[38;5;208mOrange text\x1b[0m\n")
-
-# 24-bit RGB colors
-term.process_str("\x1b[38;2;255;128;0mRGB orange\x1b[0m\n")
-
-# Text attributes
-term.process_str("\x1b[1mBold\x1b[0m ")
-term.process_str("\x1b[3mItalic\x1b[0m ")
-term.process_str("\x1b[4mUnderline\x1b[0m\n")
-```
-
-### Cursor Control
-
-```python
-term = Terminal(80, 24)
-
-# Position cursor at row 5, column 10 (1-indexed)
-term.process_str("\x1b[5;10HHello")
-
-# Move cursor
-term.process_str("\x1b[2A")    # Up 2 rows
-term.process_str("\x1b[3B")    # Down 3 rows
-term.process_str("\x1b[4C")    # Forward 4 columns
-term.process_str("\x1b[5D")    # Back 5 columns
-
-# Hide/show cursor
-term.process_str("\x1b[?25l")  # Hide
-term.process_str("\x1b[?25h")  # Show
-
-# Check cursor state
-visible = term.cursor_visible()
-col, row = term.cursor_position()
-```
-
-### Screen Manipulation
-
-```python
-term = Terminal(80, 24)
-
-term.process_str("Some content\n")
-
-# Clear operations
-term.process_str("\x1b[2J")    # Clear entire screen
-term.process_str("\x1b[K")     # Clear from cursor to end of line
-term.process_str("\x1b[1K")    # Clear from beginning of line to cursor
-term.process_str("\x1b[2K")    # Clear entire line
-
-# Scroll
-term.process_str("\x1b[5S")    # Scroll up 5 lines
-term.process_str("\x1b[5T")    # Scroll down 5 lines
-```
-
-### Scrollback Buffer
-
-```python
-term = Terminal(40, 10, scrollback=1000)
-
-# Write more lines than terminal height
-for i in range(20):
-    term.process_str(f"Line {i}\n")
-
-# Get scrollback
-scrollback = term.scrollback()
-print(f"Scrollback has {len(scrollback)} lines")
-
-for line in scrollback:
-    print(f"Scrolled: {line}")
-```
-
-### Terminal Resizing
-
-```python
-term = Terminal(80, 24)
-
-# Write some content
-term.process_str("Content before resize\n")
-
-# Resize terminal
-term.resize(100, 30)
-
-# Content is preserved
-print(term.size())  # (100, 30)
-```
-
-### Cell Inspection
-
-```python
-term = Terminal(80, 24)
-term.process_str("\x1b[1;31mRed bold text\x1b[0m")
-
-# Get character at position
-char = term.get_char(0, 0)
-print(f"Character: {char}")
-
-# Get colors
-fg_color = term.get_fg_color(0, 0)
-bg_color = term.get_bg_color(0, 0)
-if fg_color:
-    r, g, b = fg_color
-    print(f"Foreground: RGB({r}, {g}, {b})")
-
-# Get attributes
-attrs = term.get_attributes(0, 0)
-if attrs:
-    print(f"Bold: {attrs.bold}")
-    print(f"Italic: {attrs.italic}")
-    print(f"Underline: {attrs.underline}")
-```
-
-### Buffer Export
-
-```python
-term = Terminal(80, 24, scrollback=1000)
-
-# Write multiple lines with styling
-for i in range(50):
-    term.process_str(f"\x1b[1;{31 + i % 7}mLine {i}\x1b[0m\n")
-
-# Export as plain text (no styling)
-plain_text = term.export_text()
-with open("session.txt", "w") as f:
-    f.write(plain_text)
-
-# Export with ANSI styling preserved
-styled_text = term.export_styled()
-with open("session.ansi", "w") as f:
-    f.write(styled_text)
-
-# Export as HTML with full styling
-html_output = term.export_html(include_styles=True)
-with open("session.html", "w") as f:
-    f.write(html_output)  # Full HTML document with styles
-
-# Export HTML content only (for embedding)
-html_content = term.export_html(include_styles=False)
-# Returns just the styled <span> elements, no <html>/<head>/<body>
-
-# Also works with PTY sessions
-with PtyTerminal(80, 24) as pty:
-    pty.spawn_shell()
-    pty.write_str("ls -la\n")
-    time.sleep(0.5)
-
-    # Save entire session (scrollback + screen)
-    session_log = pty.export_styled()
-    with open("pty_session.log", "w") as f:
-        f.write(session_log)
+# Automatic cleanup
 ```
 
 ### Screenshots
 
-Take high-quality screenshots of terminal output with true font rendering:
-
 ```python
-from par_term_emu_core_rust import Terminal
-
 term = Terminal(80, 24)
-
-# Add some colorful content
 term.process_str("\x1b[1;31mHello, World!\x1b[0m\n")
-term.process_str("\x1b[32m✓ Success\x1b[0m\n")
 
-# Take screenshot as PNG bytes (default)
-png_bytes = term.screenshot()
-
-# Save to file (format auto-detected from extension)
+# Save screenshot
 term.screenshot_to_file("output.png")
-
-# Or explicitly specify format
-term.screenshot_to_file("output.jpg", format="jpeg", quality=90)
-
-# SVG format for infinitely scalable vector graphics
-term.screenshot_to_file("output.svg", format="svg")  # Selectable text!
-
-# HTML format for styled terminal output (embeddable or standalone)
-term.screenshot_to_file("output.html", format="html")  # Full HTML document
+term.screenshot_to_file("output.svg", format="svg")  # Vector graphics!
+term.screenshot_to_file("output.html", format="html")  # Styled HTML
 
 # Custom configuration
 term.screenshot_to_file(
     "output.png",
-    font_size=16.0,           # Larger text
-    padding=20,               # More padding around edges
-    include_scrollback=True   # Include scrollback history
-)
-
-# Capture scrolled view (e.g., 10 lines back from current position)
-term.screenshot_to_file(
-    "output.png",
-    scrollback_offset=10      # Capture from 10 lines back
-)
-
-# Customize theme colors
-term.screenshot_to_file(
-    "output.png",
-    link_color=(0, 123, 255),     # Custom hyperlink color
-    bold_color=(255, 255, 0),     # Custom bold text color
-    use_bold_color=True           # Apply custom bold color
-)
-
-# Enable minimum contrast adjustment (iTerm2-compatible)
-term.screenshot_to_file(
-    "output.png",
-    minimum_contrast=0.5          # Auto-adjust text colors for readability (0.0-1.0)
-)                                 # 0.0 = disabled, 0.5 = moderate (default), 1.0 = maximum
-
-# Specify custom font (for raster formats)
-term.screenshot_to_file(
-    "output.png",
-    font_path="/path/to/font.ttf"
+    font_size=16.0,
+    padding=20,
+    include_scrollback=True,
+    minimum_contrast=0.5  # iTerm2-compatible contrast adjustment
 )
 ```
 
-#### Supported Formats
-
-- **PNG**: Lossless, best for text and screenshots (default)
-- **JPEG**: Smaller file size, configurable quality (1-100)
-- **BMP**: Uncompressed, large file size
-- **SVG**: Vector format with infinitely scalable, selectable text - perfect for documentation!
-- **HTML**: Styled HTML output with full color support and text attributes - embeddable or standalone document
-
-#### TUI Integration
-
-> **Note**: TUI integration features are available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust), which includes screenshot hotkeys and other interactive features.
-
 ### Color Utilities
-
-Comprehensive color manipulation functions for terminal applications:
 
 ```python
 from par_term_emu_core_rust import (
-    # Brightness and contrast
     perceived_brightness_rgb, adjust_contrast_rgb,
-
-    # Basic adjustments
-    lighten_rgb, darken_rgb,
-
-    # Accessibility (WCAG)
-    color_luminance, is_dark_color, contrast_ratio,
-    meets_wcag_aa, meets_wcag_aaa,
-
-    # Color mixing and manipulation
-    mix_colors, complementary_color,
-
-    # Color space conversions
-    rgb_to_hsl, hsl_to_rgb, rgb_to_hex, hex_to_rgb,
-    rgb_to_ansi_256,
-
-    # Advanced adjustments
-    adjust_saturation, adjust_hue
+    contrast_ratio, meets_wcag_aa,
+    rgb_to_hex, hex_to_rgb, mix_colors
 )
 
 # iTerm2-compatible contrast adjustment
 adjusted = adjust_contrast_rgb((64, 64, 64), (0, 0, 0), 0.5)
-print(f"Adjusted for readability: {adjusted}")  # (128, 128, 128)
-
-# Calculate perceived brightness (NTSC formula)
-brightness = perceived_brightness_rgb(128, 128, 128)
-print(f"Brightness: {brightness:.2f}")  # 0.50
 
 # WCAG accessibility checks
 ratio = contrast_ratio((0, 0, 0), (255, 255, 255))
-print(f"Contrast ratio: {ratio:.1f}:1")  # 21.0:1
-print(f"Meets WCAG AA: {meets_wcag_aa((0, 0, 0), (255, 255, 255))}")  # True
+print(f"Contrast ratio: {ratio:.1f}:1")
+print(f"Meets WCAG AA: {meets_wcag_aa((0, 0, 0), (255, 255, 255))}")
 
-# Color manipulation
-lightened = lighten_rgb((128, 64, 32), 0.5)  # Lighten by 50%
-darkened = darken_rgb((200, 150, 100), 0.3)  # Darken by 30%
-mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)  # Purple
-
-# Color space conversions
-h, s, l = rgb_to_hsl((255, 0, 0))  # Red to HSL
-rgb = hsl_to_rgb(120, 100, 50)  # Green from HSL
-hex_str = rgb_to_hex((255, 128, 64))  # "#FF8040"
+# Color conversions
+hex_color = rgb_to_hex((255, 128, 64))  # "#FF8040"
 rgb = hex_to_rgb("#FF8040")  # (255, 128, 64)
-
-# Advanced color theory
-saturated = adjust_saturation((200, 100, 100), 50)  # +50% saturation
-shifted = adjust_hue((255, 0, 0), 120)  # Red -> Green (120° shift)
-complement = complementary_color((255, 0, 0))  # Cyan
-
-# Terminal palette conversion
-ansi_idx = rgb_to_ansi_256((255, 0, 0))  # Find nearest ANSI 256 color
+mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)  # Purple
 ```
-
-**Key Features:**
-- **iTerm2-Compatible Algorithms**: Same NTSC brightness formula (30% red, 59% green, 11% blue) and contrast adjustment
-- **WCAG Compliance**: Built-in accessibility checks (AA/AAA standards with 4.5:1 and 7:1 ratios)
-- **Color Space Support**: RGB, HSL, Hex (#RRGGBB), and ANSI 256-color palette
-- **Hue Preservation**: Brightness adjustments use parametric interpolation to maintain color hue
-- **Color Theory**: Complementary colors, hue shifting, saturation adjustment
-- **Accessibility Testing**: Luminance calculation, dark color detection, contrast ratio checking
-- **Fast Native Code**: Rust implementation for optimal performance with Python bindings
-
-### Text Extraction & Smart Selection
-
-Extract words, URLs, and lines with intelligent boundary detection:
-
-```python
-term = Terminal(80, 24)
-term.process_str("Visit https://example.com for more info\n")
-term.process_str("Use snake_case or kebab-case naming\n")
-term.process_str("Function call: foo(bar, {x: 1, y: \"hello\"})\n")
-
-# Extract word at cursor position
-word = term.get_word_at(5, 0)  # "https://example.com"
-
-# Detect and extract URLs
-url = term.get_url_at(10, 0)  # "https://example.com"
-
-# Get word boundaries for double-click selection
-bounds = term.select_word(5, 1)
-if bounds:
-    (start_col, start_row), (end_col, end_row) = bounds
-    print(f"Word spans from ({start_col}, {start_row}) to ({end_col}, {end_row})")
-
-# Custom word characters (default is iTerm2-compatible: "/-+\~_.")
-# For snake_case/identifiers, you might want to include additional chars:
-word = term.get_word_at(4, 1, word_chars="_-")  # "snake_case"
-
-# Get full logical line (following wraps)
-full_line = term.get_line_unwrapped(0)
-
-# Find matching bracket/parenthesis
-term.process_str("if (condition) { action(); }\n")
-match_pos = term.find_matching_bracket(3, 3)  # Click on opening '('
-if match_pos:
-    col, row = match_pos
-    print(f"Matching bracket at ({col}, {row})")  # Position of closing ')'
-
-# Select content within delimiters (semantic selection)
-term.process_str('message = "Hello, World!"\n')
-content = term.select_semantic_region(15, 4, '"')  # Click inside quotes
-print(content)  # "Hello, World!"
-
-# Works with multiple delimiter types
-term.process_str("data = {key: 'value', num: [1, 2, 3]}\n")
-content = term.select_semantic_region(10, 5, "{}[]'\"")  # Click inside braces
-print(content)  # "key: 'value', num: [1, 2, 3]"
-```
-
-### Content Search
-
-Search terminal content with case-sensitive or case-insensitive matching:
-
-```python
-term = Terminal(80, 24)
-for i in range(20):
-    term.process_str(f"Line {i}: Error in module_{i}\n")
-
-# Find all occurrences
-matches = term.find_text("Error", case_sensitive=True)
-print(f"Found {len(matches)} matches: {matches}")  # [(8, 0), (8, 1), ...]
-
-# Case-insensitive search
-matches = term.find_text("error", case_sensitive=False)
-
-# Find next occurrence from position
-next_match = term.find_next("Error", from_col=0, from_row=5)
-if next_match:
-    col, row = next_match
-    print(f"Next match at ({col}, {row})")
-
-# Implement "find next" button
-current_pos = (0, 0)
-while True:
-    match = term.find_next("pattern", current_pos[0], current_pos[1])
-    if not match:
-        break
-    print(f"Match at {match}")
-    current_pos = match
-```
-
-### Buffer Statistics & Analysis
-
-Get comprehensive statistics about terminal content:
-
-```python
-term = Terminal(80, 24, scrollback=10000)
-
-# Get detailed statistics
-stats = term.get_stats()
-print(f"Dimensions: {stats['cols']}x{stats['rows']}")
-print(f"Scrollback: {stats['scrollback_lines']}/{stats['total_cells']} cells")
-print(f"Non-empty lines: {stats['non_whitespace_lines']}")
-print(f"Graphics: {stats['graphics_count']}")
-print(f"Memory: ~{stats['estimated_memory_bytes']} bytes")
-
-# Count content lines (excluding empty lines)
-content_lines = term.count_non_whitespace_lines()
-print(f"Lines with content: {content_lines}")
-
-# Check scrollback usage
-used, capacity = term.get_scrollback_usage()
-print(f"Scrollback: {used}/{capacity} lines ({used/capacity*100:.1f}%)")
-```
-
-### Static Utility Methods
-
-Use standalone utility functions for text processing:
-
-```python
-# Strip ANSI codes from text
-colored = "\x1b[31mRed\x1b[0m text"
-clean = Terminal.strip_ansi(colored)
-print(clean)  # "Red text"
-
-# Measure display width (accounts for wide chars)
-text = "Hello 世界"
-width = Terminal.measure_text_width(text)
-print(f"Display width: {width} columns")  # 11 (5 + 1 + 2 + 2 + 1)
-
-# Handle ANSI codes in width calculation
-text_with_ansi = "\x1b[31mHello\x1b[0m"
-width = Terminal.measure_text_width(text_with_ansi)
-print(f"Width: {width}")  # 5 (ANSI codes don't count)
-
-# Parse colors from various formats
-rgb = Terminal.parse_color("#FF5733")  # (255, 87, 51)
-rgb = Terminal.parse_color("rgb(255, 87, 51)")  # (255, 87, 51)
-rgb = Terminal.parse_color("red")  # (180, 60, 42) - iTerm2 red
-rgb = Terminal.parse_color("invalid")  # None
-```
-
-### Terminal Notifications
-
-Configure and handle terminal notifications for various events:
-
-```python
-from par_term_emu_core_rust import Terminal, NotificationConfig
-
-term = Terminal(80, 24)
-
-# Get current notification configuration
-config = term.get_notification_config()
-print(f"Bell notifications: {config.bell_desktop}")
-
-# Configure notification settings
-config.bell_desktop = True  # Enable desktop notifications on bell
-config.bell_sound = 50  # Enable sound at 50% volume
-config.bell_visual = True  # Enable visual alert
-config.activity_enabled = True  # Enable activity notifications
-config.activity_threshold = 10  # Trigger after 10 seconds of inactivity
-config.silence_enabled = True  # Enable silence notifications
-config.silence_threshold = 300  # Trigger after 5 minutes of silence
-
-# Apply configuration
-term.set_notification_config(config)
-
-# Manually trigger notifications
-term.trigger_notification("Bell", "Desktop", "Custom bell message")
-term.trigger_notification("Activity", "Sound(75)", None)
-term.trigger_notification("Silence", "Visual", None)
-
-# Register and trigger custom notifications
-term.register_custom_trigger(1, "Custom event occurred")
-term.trigger_custom_notification(1, "Desktop")
-
-# Get notification events
-events = term.get_notification_events()
-for event in events:
-    print(f"Trigger: {event.trigger}, Alert: {event.alert}")
-    print(f"Message: {event.message}, Delivered: {event.delivered}")
-
-# Mark notifications as delivered
-for i in range(len(events)):
-    term.mark_notification_delivered(i)
-
-# Update activity tracking
-term.update_activity()  # Call when terminal has activity
-
-# Check for silence/activity periodically
-term.check_silence()  # Check if silence threshold exceeded
-term.check_activity()  # Check if activity occurred after inactivity
-
-# Clear notification events
-term.clear_notification_events()
-
-# Clamp OSC 9/777 backlog (older notifications get dropped once the cap is hit)
-term.set_max_notifications(64)
-print(f"Notification buffer: {term.get_max_notifications()} entries")
-
-# Handle bell events with configured notifications
-term.handle_bell_notification()  # Triggers configured bell alerts
-```
-
-### Clipboard Sync Controls
-
-Limit how much clipboard data is preserved for diagnostics to avoid leaking large or sensitive payloads:
-
-```python
-from par_term_emu_core_rust import Terminal
-
-term = Terminal(80, 24)
-term.set_max_clipboard_sync_events(64)  # Drop oldest events past 64
-term.set_max_clipboard_event_bytes(2048)  # Truncate payloads above 2 KiB
-print(term.get_max_clipboard_sync_events(), term.get_max_clipboard_event_bytes())
-```
-
-### Session Recording and Replay
-
-Record terminal sessions with timing information for playback:
-
-```python
-from par_term_emu_core_rust import Terminal
-import time
-
-term = Terminal(80, 24)
-
-# Start recording a session
-term.start_recording(title="My Terminal Session")
-
-# Record some terminal activity
-term.process_str("echo 'Hello, World!'\n")
-term.record_output(b"Hello, World!\n")
-term.record_input(b"ls -la\n")
-
-# Add markers for important moments
-term.record_marker("Before directory listing")
-
-# Simulate more activity
-time.sleep(0.1)
-term.process_str("cd /tmp\n")
-term.record_output(b"$ cd /tmp\n")
-
-# Record terminal resize events
-term.record_resize(100, 30)
-
-# Check if recording is active
-if term.is_recording():
-    print("Recording in progress...")
-
-# Get current session info
-session = term.get_recording_session()
-if session:
-    print(f"Recording started at: {session.start_time}")
-    print(f"Terminal size: {session.initial_size}")
-    print(f"Events recorded: {session.event_count}")
-
-# Stop recording and get the session
-final_session = term.stop_recording()
-if final_session:
-    print(f"Recording duration: {final_session.get_duration_seconds():.2f}s")
-    print(f"Total events: {final_session.event_count}")
-
-    # Export to asciicast v2 format (asciinema compatible)
-    asciicast = term.export_asciicast(session=final_session)
-    with open("session.cast", "w") as f:
-        f.write(asciicast)
-
-    # Export to JSON format
-    json_export = term.export_json(session=final_session)
-    with open("session.json", "w") as f:
-        f.write(json_export)
-
-# PTY session recording example
-from par_term_emu_core_rust import PtyTerminal
-
-with PtyTerminal(80, 24) as pty:
-    pty.start_recording(title="Shell Session")
-    pty.spawn_shell()
-
-    # Record shell commands
-    pty.write_str("echo 'Recording this session'\n")
-    time.sleep(0.5)
-
-    pty.write_str("ls -la\n")
-    time.sleep(0.5)
-
-    # Add marker at key point
-    pty.record_marker("After ls command")
-
-    # Stop and export
-    session = pty.stop_recording()
-    if session:
-        # Save asciicast for playback with asciinema
-        asciicast = pty.export_asciicast(session=session)
-        with open("shell_session.cast", "w") as f:
-            f.write(asciicast)
-```
-
-## API Reference
-
-### Terminal Class
-
-#### Constructor
-
-```python
-Terminal(cols: int, rows: int, scrollback: int = 10000)
-```
-
-Create a new terminal with specified dimensions.
-
-- `cols`: Number of columns (width)
-- `rows`: Number of rows (height)
-- `scrollback`: Maximum number of scrollback lines (default: 10000)
-
-#### Methods
-
-- `process(data: bytes)`: Process byte data (can contain ANSI sequences)
-- `process_str(text: str)`: Process a string (convenience method)
-- `content() -> str`: Get terminal content as a string
-- `size() -> tuple[int, int]`: Get terminal dimensions (cols, rows)
-- `resize(cols: int, rows: int)`: Resize the terminal
-- `reset()`: Reset terminal to default state
-- `title() -> str`: Get terminal title
-- `cursor_position() -> tuple[int, int]`: Get cursor position (col, row)
-- `cursor_visible() -> bool`: Check if cursor is visible
-- `keyboard_flags() -> int`: Get current Kitty Keyboard Protocol flags
-- `set_keyboard_flags(flags: int, mode: int = 1)`: Set Kitty Keyboard Protocol flags (mode: 0=disable, 1=set, 2=lock)
-- `query_keyboard_flags()`: Query keyboard flags (response in drain_responses())
-- `push_keyboard_flags(flags: int)`: Push flags to stack and set new flags
-- `pop_keyboard_flags(count: int = 1)`: Pop flags from stack
-- `clipboard() -> str | None`: Get clipboard content (OSC 52)
-- `set_clipboard(content: str | None)`: Set clipboard content programmatically
-- `allow_clipboard_read() -> bool`: Check if clipboard read is allowed
-- `set_allow_clipboard_read(allow: bool)`: Set clipboard read permission (security flag)
-- `scrollback() -> list[str]`: Get scrollback buffer as list of strings
-- `scrollback_len() -> int`: Get number of scrollback lines
-- `get_line(row: int) -> str | None`: Get a specific line
-- `get_line_cells(row: int) -> list | None`: Get cells for a specific line with full metadata
-- `get_char(col: int, row: int) -> str | None`: Get character at position
-- `get_fg_color(col: int, row: int) -> tuple[int, int, int] | None`: Get foreground color (RGB)
-- `get_bg_color(col: int, row: int) -> tuple[int, int, int] | None`: Get background color (RGB)
-- `get_underline_color(col: int, row: int) -> tuple[int, int, int] | None`: Get underline color (RGB)
-- `get_attributes(col: int, row: int) -> Attributes | None`: Get text attributes
-- `get_hyperlink(col: int, row: int) -> str | None`: Get hyperlink URL at position (OSC 8)
-- `is_line_wrapped(row: int) -> bool`: Check if line is wrapped from previous line
-- `is_alt_screen_active() -> bool`: Check if alternate screen buffer is active
-- `bracketed_paste() -> bool`: Check if bracketed paste mode is enabled
-- `focus_tracking() -> bool`: Check if focus tracking mode is enabled
-- `mouse_mode() -> str`: Get current mouse tracking mode
-- `insert_mode() -> bool`: Check if insert mode is enabled
-- `line_feed_new_line_mode() -> bool`: Check if line feed/new line mode is enabled
-- `synchronized_updates() -> bool`: Check if synchronized updates mode is enabled (DEC 2026)
-- `cursor_style() -> CursorStyle`: Get cursor style (block, underline, bar)
-- `cursor_color() -> tuple[int, int, int] | None`: Get cursor color (RGB)
-- `default_fg() -> tuple[int, int, int] | None`: Get default foreground color
-- `default_bg() -> tuple[int, int, int] | None`: Get default background color
-- `set_cursor_style(style: CursorStyle)`: Set cursor style
-- `set_cursor_color(r: int, g: int, b: int)`: Set cursor color (RGB)
-- `set_default_fg(r: int, g: int, b: int)`: Set default foreground color
-- `set_default_bg(r: int, g: int, b: int)`: Set default background color
-- `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (when enabled, bold text with ANSI colors 0-7 uses bright variants 8-15, matching iTerm2's "Use Bright Bold" setting)
-- `query_cursor_color()`: Query cursor color (response in drain_responses())
-- `query_default_fg()`: Query default foreground color (response in drain_responses())
-- `query_default_bg()`: Query default background color (response in drain_responses())
-- `current_directory() -> str | None`: Get current working directory (OSC 7)
-- `accept_osc7() -> bool`: Check if OSC 7 (CWD) is accepted
-- `set_accept_osc7(accept: bool)`: Set whether to accept OSC 7 sequences
-- `disable_insecure_sequences() -> bool`: Check if insecure sequences are disabled
-- `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
-- `shell_integration_state() -> ShellIntegration`: Get shell integration state (OSC 133)
-- `get_paste_start() -> tuple[int, int] | None`: Get bracketed paste start position
-- `get_paste_end() -> tuple[int, int] | None`: Get bracketed paste end position
-- `paste(text: str)`: Simulate bracketed paste
-- `get_focus_in_event() -> str`: Get focus-in event sequence
-- `get_focus_out_event() -> str`: Get focus-out event sequence
-- `drain_responses() -> list[str]`: Drain all pending terminal responses (DA, DSR, etc.)
-- `drain_notifications() -> list[tuple[str, str]]`: Drain OSC 9/777 notifications (title, message)
-- `take_notifications() -> list[tuple[str, str]]`: Take notifications without removing
-- `has_pending_responses() -> bool`: Check if responses are pending
-- `has_notifications() -> bool`: Check if notifications are pending
-- `resize_pixels(width_px: int, height_px: int)`: Resize terminal by pixel dimensions
-- `graphics_count() -> int`: Get count of Sixel graphics stored
-- `graphics_at_row(row: int) -> list[Graphic]`: Get Sixel graphics at specific row
-- `clear_graphics()`: Clear all Sixel graphics
-- `create_snapshot() -> ScreenSnapshot`: Create atomic snapshot of current screen state (includes bold brightening if enabled)
-- `flush_synchronized_updates()`: Flush synchronized updates buffer (DEC 2026)
-- `simulate_mouse_event(...)`: Simulate mouse event for testing
-- `export_text() -> str`: Export entire buffer (scrollback + current screen) as plain text without styling
-- `export_styled() -> str`: Export entire buffer (scrollback + current screen) with ANSI styling
-- `export_html(include_styles: bool = True) -> str`: Export current screen as HTML with full styling (full document or content only)
-- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color) -> bytes`: Take screenshot and return image bytes (automatically respects bold_brightening setting)
-- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color)`: Take screenshot and save to file (automatically respects bold_brightening setting)
-
-#### Text Extraction Utilities
-
-- `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor position (default word_chars: "/-+\~_." iTerm2-compatible)
-- `get_url_at(col: int, row: int) -> str | None`: Detect and extract URL at cursor position
-- `get_line_unwrapped(row: int) -> str | None`: Get full logical line following wrapping
-- `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries for smart selection (default word_chars: "/-+\~_." iTerm2-compatible)
-- `find_matching_bracket(col: int, row: int) -> tuple[int, int] | None`: Find matching bracket/parenthesis. Supports (), [], {}, <>. Returns position of matching bracket or None
-- `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters. Supports (), [], {}, <>, "", '', ``. Returns content or None
-
-#### Content Search
-
-- `find_text(pattern: str, case_sensitive: bool = True) -> list[tuple[int, int]]`: Find all occurrences of text in visible screen
-- `find_next(pattern: str, from_col: int, from_row: int, case_sensitive: bool = True) -> tuple[int, int] | None`: Find next occurrence from position
-
-#### Buffer Statistics
-
-- `get_stats() -> dict[str, int]`: Get terminal statistics (cols, rows, scrollback_lines, total_cells, non_whitespace_lines, graphics_count, estimated_memory_bytes)
-- `count_non_whitespace_lines() -> int`: Count lines containing non-whitespace characters
-- `get_scrollback_usage() -> tuple[int, int]`: Get scrollback usage (used_lines, max_capacity)
-
-#### Static Utility Methods
-
-These methods can be called on the class itself (e.g., `Terminal.strip_ansi(text)`):
-
-- `Terminal.strip_ansi(text: str) -> str`: Remove all ANSI escape sequences from text
-- `Terminal.measure_text_width(text: str) -> int`: Measure display width accounting for wide characters and ANSI codes
-- `Terminal.parse_color(color_string: str) -> tuple[int, int, int] | None`: Parse color from hex (#RRGGBB), rgb(r,g,b), or name
-
-### Color Utilities Module
-
-Comprehensive color manipulation functions available as standalone module functions:
-
-#### Brightness and Contrast
-- `perceived_brightness_rgb(r: int, g: int, b: int) -> float`: Calculate perceived brightness (0.0-1.0) using NTSC formula (30% red, 59% green, 11% blue)
-- `adjust_contrast_rgb(fg: tuple[int, int, int], bg: tuple[int, int, int], min_contrast: float) -> tuple[int, int, int]`: Adjust foreground color for minimum contrast ratio (0.0-1.0), preserving hue
-
-#### Basic Adjustments
-- `lighten_rgb(rgb: tuple[int, int, int], amount: float) -> tuple[int, int, int]`: Lighten color by percentage (0.0-1.0)
-- `darken_rgb(rgb: tuple[int, int, int], amount: float) -> tuple[int, int, int]`: Darken color by percentage (0.0-1.0)
-
-#### Accessibility (WCAG)
-- `color_luminance(rgb: tuple[int, int, int]) -> float`: Calculate relative luminance (0.0-1.0) per WCAG formula
-- `is_dark_color(rgb: tuple[int, int, int]) -> bool`: Check if color is dark (luminance < 0.5)
-- `contrast_ratio(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float`: Calculate WCAG contrast ratio (1.0-21.0)
-- `meets_wcag_aa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AA standard (4.5:1)
-- `meets_wcag_aaa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AAA standard (7:1)
-
-#### Color Mixing and Manipulation
-- `mix_colors(color1: tuple[int, int, int], color2: tuple[int, int, int], ratio: float) -> tuple[int, int, int]`: Mix two colors (ratio: 0.0=color1, 1.0=color2)
-- `complementary_color(rgb: tuple[int, int, int]) -> tuple[int, int, int]`: Get complementary color (opposite on color wheel)
-
-#### Color Space Conversions
-- `rgb_to_hsl(rgb: tuple[int, int, int]) -> tuple[int, int, int]`: Convert RGB to HSL (H: 0-360, S: 0-100, L: 0-100)
-- `hsl_to_rgb(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
-- `rgb_to_hex(rgb: tuple[int, int, int]) -> str`: Convert RGB to hex string (#RRGGBB)
-- `hex_to_rgb(hex_str: str) -> tuple[int, int, int]`: Convert hex string to RGB
-- `rgb_to_ansi_256(rgb: tuple[int, int, int]) -> int`: Find nearest ANSI 256-color palette index (0-255)
-
-#### Advanced Adjustments
-- `adjust_saturation(rgb: tuple[int, int, int], amount: int) -> tuple[int, int, int]`: Adjust saturation by amount (-100 to +100)
-- `adjust_hue(rgb: tuple[int, int, int], degrees: int) -> tuple[int, int, int]`: Shift hue by degrees (0-360)
-
-### PtyTerminal Class
-
-A terminal emulator with PTY (pseudo-terminal) support for running interactive shell sessions.
-
-#### Constructor
-
-```python
-PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
-```
-
-Create a new PTY-enabled terminal with specified dimensions.
-
-- `cols`: Number of columns (width)
-- `rows`: Number of rows (height)
-- `scrollback`: Maximum number of scrollback lines (default: 10000)
-
-#### PTY-Specific Methods
-
-- `spawn(cmd: str, args: list[str] = [], env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
-- `spawn_shell(shell: str | None = None)`: Spawn a shell (defaults to /bin/bash)
-- `write(data: bytes)`: Write bytes to the PTY
-- `write_str(text: str)`: Write string to the PTY (convenience method)
-- `is_running() -> bool`: Check if the child process is still running
-- `wait() -> int | None`: Wait for child process to exit and return exit code
-- `try_wait() -> int | None`: Non-blocking check if child has exited
-- `kill()`: Forcefully terminate the child process
-- `update_generation() -> int`: Get current update generation counter
-- `has_updates_since(generation: int) -> bool`: Check if terminal updated since generation
-- `send_resize_pulse()`: Send SIGWINCH to child process after resize
-- `get_default_shell() -> str`: Get the default shell path
-
-**Note**: PtyTerminal inherits all methods from Terminal class listed above.
-
-#### Context Manager Support
-
-```python
-with PtyTerminal(80, 24) as term:
-    term.spawn_shell()
-    term.write_str("echo 'Hello'\n")
-    # Automatic cleanup on exit
-```
-
-### Attributes Class
-
-Represents text attributes for a cell.
-
-#### Properties
-
-- `bold: bool`: Bold text
-- `dim: bool`: Dim text
-- `italic: bool`: Italic text
-- `underline: bool`: Underlined text
-- `blink: bool`: Blinking text
-- `reverse: bool`: Reverse video
-- `hidden: bool`: Hidden text
-- `strikethrough: bool`: Strikethrough text
-
-### CursorStyle Enum
-
-Cursor display styles (DECSCUSR):
-- `CursorStyle.BlinkingBlock`: Blinking block cursor (default)
-- `CursorStyle.SteadyBlock`: Steady block cursor
-- `CursorStyle.BlinkingUnderline`: Blinking underline cursor
-- `CursorStyle.SteadyUnderline`: Steady underline cursor
-- `CursorStyle.BlinkingBar`: Blinking bar/I-beam cursor
-- `CursorStyle.SteadyBar`: Steady bar/I-beam cursor
-
-### UnderlineStyle Enum
-
-Text underline styles:
-- `UnderlineStyle.None_`: No underline
-- `UnderlineStyle.Straight`: Straight underline (default)
-- `UnderlineStyle.Double`: Double underline
-- `UnderlineStyle.Curly`: Curly underline (for spell check)
-- `UnderlineStyle.Dotted`: Dotted underline
-- `UnderlineStyle.Dashed`: Dashed underline
-
-### ShellIntegration Class
-
-Shell integration state (OSC 133 and OSC 7):
-- `in_prompt: bool`: True if currently in prompt (marker A)
-- `in_command_input: bool`: True if currently in command input (marker B)
-- `in_command_output: bool`: True if currently in command output (marker C)
-- `current_command: str | None`: The command that was executed
-- `last_exit_code: int | None`: Exit code from last command (marker D)
-- `cwd: str | None`: Current working directory from OSC 7
-
-### Graphic Class
-
-Sixel graphic metadata:
-- `row: int`: Display row
-- `col: int`: Display column
-- `width: int`: Width in pixels
-- `height: int`: Height in pixels
-- `data: bytes`: Image data
-
-### ScreenSnapshot Class
-
-Immutable snapshot of screen state:
-- `content() -> str`: Get full screen content
-- `cursor_position() -> tuple[int, int]`: Cursor position at snapshot time
-- `size() -> tuple[int, int]`: Terminal dimensions
-
-## Supported ANSI/VT Sequences
-
-This terminal emulator provides comprehensive VT100/VT220/VT320/VT420 compatibility, matching iTerm2's feature set.
-
-### Cursor Movement (VT100)
-
-- `ESC[<n>A`: Cursor up n lines (CUU)
-- `ESC[<n>B`: Cursor down n lines (CUD)
-- `ESC[<n>C`: Cursor forward n columns (CUF)
-- `ESC[<n>D`: Cursor back n columns (CUB)
-- `ESC[<n>E`: Cursor next line (CNL)
-- `ESC[<n>F`: Cursor previous line (CPL)
-- `ESC[<n>G`: Cursor horizontal absolute (CHA)
-- `ESC[<row>;<col>H`: Cursor position (CUP)
-- `ESC[<row>;<col>f`: Cursor position (HVP - alternative)
-- `ESC[<n>d`: Line position absolute (VPA)
-- `ESC[s`: Save cursor position (ANSI.SYS)
-- `ESC[u`: Restore cursor position (ANSI.SYS)
-- `ESC 7`: Save cursor (DECSC)
-- `ESC 8`: Restore cursor (DECRC)
-
-### Display Control (VT100)
-
-- `ESC[<n>J`: Erase in display (ED)
-  - `n=0`: Clear from cursor to end
-  - `n=1`: Clear from beginning to cursor
-  - `n=2`: Clear entire screen
-  - `n=3`: Clear entire screen and scrollback
-- `ESC[<n>K`: Erase in line (EL)
-  - `n=0`: Clear from cursor to end of line
-  - `n=1`: Clear from beginning of line to cursor
-  - `n=2`: Clear entire line
-
-### Line/Character Editing (VT220)
-
-- `ESC[<n>L`: Insert n blank lines (IL)
-- `ESC[<n>M`: Delete n lines (DL)
-- `ESC[<n>@`: Insert n blank characters (ICH)
-- `ESC[<n>P`: Delete n characters (DCH)
-- `ESC[<n>X`: Erase n characters (ECH)
-
-### Rectangle Operations (VT420)
-
-Advanced text editing operations that work on rectangular regions of the screen:
-
-- `ESC[<Pc>;<Pt>;<Pl>;<Pb>;<Pr>$x`: Fill Rectangular Area (DECFRA)
-  - `Pc`: Character code to fill (e.g., 88 for 'X', 42 for '*')
-  - `Pt`: Top row (1-indexed)
-  - `Pl`: Left column (1-indexed)
-  - `Pb`: Bottom row (1-indexed)
-  - `Pr`: Right column (1-indexed)
-  - Fills rectangle with specified character using current text attributes
-
-- `ESC[<Pts>;<Pls>;<Pbs>;<Prs>;<Pps>;<Ptd>;<Pld>;<Ppd>$v`: Copy Rectangular Area (DECCRA)
-  - `Pts`, `Pls`, `Pbs`, `Prs`: Source rectangle (top, left, bottom, right)
-  - `Pps`: Source page (use 1 for current screen)
-  - `Ptd`, `Pld`: Destination position (top, left)
-  - `Ppd`: Destination page (use 1 for current screen)
-  - Copies rectangular region to new location
-
-- `ESC[<Pt>;<Pl>;<Pb>;<Pr>${`: Selective Erase Rectangular Area (DECSERA)
-  - `Pt`: Top row (1-indexed)
-  - `Pl`: Left column (1-indexed)
-  - `Pb`: Bottom row (1-indexed)
-  - `Pr`: Right column (1-indexed)
-  - Selectively erases rectangle (respects character protection attribute)
-
-- `ESC[<Pt>;<Pl>;<Pb>;<Pr>$z`: Erase Rectangular Area (DECERA)
-  - `Pt`: Top row (1-indexed)
-  - `Pl`: Left column (1-indexed)
-  - `Pb`: Bottom row (1-indexed)
-  - `Pr`: Right column (1-indexed)
-  - Unconditionally erases rectangle (ignores protection)
-
-- `ESC[<Pt>;<Pl>;<Pb>;<Pr>;<Ps>$r`: Change Attributes in Rectangular Area (DECCARA)
-  - `Pt`, `Pl`, `Pb`, `Pr`: Rectangle coordinates (top, left, bottom, right)
-  - `Ps`: SGR attributes to apply (0=reset, 1=bold, 4=underline, 5=blink, 7=reverse, 8=hidden)
-  - Changes text attributes in rectangle
-
-- `ESC[<Pt>;<Pl>;<Pb>;<Pr>;<Ps>$t`: Reverse Attributes in Rectangular Area (DECRARA)
-  - `Pt`, `Pl`, `Pb`, `Pr`: Rectangle coordinates (top, left, bottom, right)
-  - `Ps`: Attributes to reverse (0=all, 1=bold, 4=underline, 5=blink, 7=reverse, 8=hidden)
-  - Toggles attributes in rectangle
-
-- `ESC[<Pi>;<Pg>;<Pt>;<Pl>;<Pb>;<Pr>*y`: Request Checksum of Rectangular Area (DECRQCRA)
-  - `Pi`: Request ID
-  - `Pg`: Page number (use 1 for current screen)
-  - `Pt`, `Pl`, `Pb`, `Pr`: Rectangle coordinates
-  - Response: `DCS Pi ! ~ xxxx ST` (16-bit checksum in hex)
-
-- `ESC[<Ps>*x`: Select Attribute Change Extent (DECSACE)
-  - `Ps = 0` or `1`: Stream mode (attributes wrap at line boundaries)
-  - `Ps = 2`: Rectangle mode (strict rectangular boundaries, default)
-  - Affects how DECCARA and DECRARA apply attributes
-
-**Use Cases**: Efficient text manipulation in editors (vim, emacs), drawing box characters, clearing specific screen regions without affecting surrounding content, attribute modification without changing text, verification of screen regions via checksums.
-
-### Scrolling (VT100/VT220)
-
-- `ESC[<n>S`: Scroll up n lines (SU)
-- `ESC[<n>T`: Scroll down n lines (SD)
-- `ESC[<top>;<bottom>r`: Set scrolling region (DECSTBM)
-- `ESC M`: Reverse index (RI) - scroll down at top
-- `ESC D`: Index (IND) - scroll up at bottom
-- `ESC E`: Next line (NEL)
-
-### Colors and Attributes (VT100/ECMA-48)
-
-- `ESC[0m`: Reset all attributes (SGR 0)
-- `ESC[1m`: Bold
-- `ESC[2m`: Dim
-- `ESC[3m`: Italic
-- `ESC[4m`: Underline (basic, defaults to straight)
-- `ESC[4:0m`: No underline (explicit)
-- `ESC[4:1m`: Straight underline (default)
-- `ESC[4:2m`: Double underline
-- `ESC[4:3m`: Curly underline (spell check, errors)
-- `ESC[4:4m`: Dotted underline
-- `ESC[4:5m`: Dashed underline
-- `ESC[5m`: Blink
-- `ESC[7m`: Reverse
-- `ESC[8m`: Hidden
-- `ESC[9m`: Strikethrough
-- `ESC[22m`: Normal intensity (not bold or dim)
-- `ESC[23m`: Not italic
-- `ESC[24m`: Not underlined
-- `ESC[25m`: Not blinking
-- `ESC[27m`: Not reversed
-- `ESC[28m`: Not hidden
-- `ESC[29m`: Not strikethrough
-- `ESC[30-37m`: Foreground colors (basic)
-- `ESC[40-47m`: Background colors (basic)
-- `ESC[90-97m`: Bright foreground colors (aixterm)
-- `ESC[100-107m`: Bright background colors (aixterm)
-- `ESC[38;5;<n>m`: 256-color foreground
-- `ESC[48;5;<n>m`: 256-color background
-- `ESC[38;2;<r>;<g>;<b>m`: RGB/true color foreground
-- `ESC[48;2;<r>;<g>;<b>m`: RGB/true color background
-- `ESC[39m`: Default foreground color
-- `ESC[49m`: Default background color
-
-### Tab Stops (VT100)
-
-- `ESC H`: Set tab stop at current column (HTS)
-- `ESC[<n>g`: Tab clear (TBC)
-  - `n=0`: Clear tab at current column
-  - `n=3`: Clear all tabs
-- `ESC[<n>I`: Cursor forward tabulation (CHT)
-- `ESC[<n>Z`: Cursor backward tabulation (CBT)
-
-### Terminal Modes (DEC Private Modes)
-
-- `ESC[?1h/l`: Application cursor keys (DECCKM)
-- `ESC[?6h/l`: Origin mode (DECOM)
-- `ESC[?7h/l`: Auto wrap mode (DECAWM)
-- `ESC[?25h/l`: Show/hide cursor (DECTCEM)
-- `ESC[?47h/l`: Alternate screen buffer
-- `ESC[?1047h/l`: Alternate screen buffer (alternate)
-- `ESC[?1048h/l`: Save/restore cursor
-- `ESC[?1049h/l`: Save cursor and use alternate screen
-
-### Mouse Support (xterm)
-
-- `ESC[?1000h/l`: Normal mouse tracking
-- `ESC[?1002h/l`: Button event mouse tracking
-- `ESC[?1003h/l`: Any event mouse tracking
-- `ESC[?1005h/l`: UTF-8 mouse encoding
-- `ESC[?1006h/l`: SGR mouse encoding
-- `ESC[?1015h/l`: URXVT mouse encoding
-
-### Advanced Features
-
-- `ESC[?1004h/l`: Focus tracking
-- `ESC[?2004h/l`: Bracketed paste mode
-- `ESC[?2026h/l`: Synchronized updates (DEC 2026) - Batch screen updates for flicker-free rendering
-
-### Kitty Keyboard Protocol
-
-Progressive enhancement for keyboard handling with flags for disambiguation and event reporting:
-
-- `CSI = flags ; mode u`: Set keyboard protocol mode
-  - `flags`: Bitmask (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
-  - `mode`: 0=disable, 1=set, 2=lock, 3=report
-- `CSI ? u`: Query current keyboard flags (response: `CSI ? flags u`)
-- `CSI > flags u`: Push current flags to stack and set new flags
-- `CSI < count u`: Pop flags from stack (count times)
-
-**Note**: Flags are maintained separately for main and alternate screen buffers with independent stacks.
-
-### Device Queries (VT100/VT220)
-
-- `ESC[<n>n`: Device Status Report (DSR)
-- `ESC[c`: Device Attributes (DA)
-
-### OSC Sequences
-
-- `OSC 0;<title>ST`: Set window title (icon + title)
-- `OSC 2;<title>ST`: Set window title
-- `OSC 7;<cwd>ST`: Set current working directory
-- `OSC 8;;<url>ST`: Hyperlinks (iTerm2/VTE compatible) - **Full support with clickable TUI rendering**
-- `OSC 52;c;<data>ST`: Clipboard operations (xterm/iTerm2 compatible) - **Works over SSH without X11!**
-  - `<data>`: base64 encoded text to copy to clipboard
-  - `?`: Query clipboard (requires `set_allow_clipboard_read(true)` for security)
-  - Empty data clears clipboard
-- `OSC 133;<marker>ST`: Shell integration (iTerm2/VSCode)
-  - `A`: Prompt start
-  - `B`: Command start
-  - `C`: Command executed
-  - `D;<exit_code>`: Command finished
-- `OSC 9;<message>ST`: Notifications (iTerm2/ConEmu style) - Send desktop-style notifications
-  - Simple format with message only (no title)
-- `OSC 777;notify;<title>;<message>ST`: Notifications (urxvt style) - Structured notifications
-  - Supports both title and message
-  - Use for desktop notifications, alerts, or completion notices
-
-### Control Characters
-
-- `BEL` (0x07): Bell
-- `BS` (0x08): Backspace
-- `HT` (0x09): Horizontal tab
-- `LF` (0x0A): Line feed
-- `CR` (0x0D): Carriage return
-
-### Reset Sequences
-
-- `ESC c`: Reset to initial state (RIS)
 
 ## Examples
 
-See the `examples/` directory for complete usage examples:
+See the `examples/` directory for comprehensive examples:
 
-### Terminal Emulation Examples
+### Basic Examples
+- `basic_usage_improved.py` - Enhanced basic usage
+- `colors_demo.py` - Color support
+- `cursor_movement.py` - Cursor control
+- `text_attributes.py` - Text styling
+- `unicode_emoji.py` - Unicode/emoji support
 
-#### Basic Examples
-- `basic_usage_improved.py`: Enhanced basic usage with visual output
-- `colors_demo.py`: Color support demonstration
-- `cursor_movement.py`: Cursor control examples
-- `scrollback_demo.py`: Scrollback buffer usage
-- `text_attributes.py`: Text styling examples
-- `unicode_emoji.py`: Unicode and emoji support demonstration
+### Advanced Features
+- `alt_screen.py` - Alternate screen buffer
+- `mouse_tracking.py` - Mouse events
+- `bracketed_paste.py` - Bracketed paste
+- `synchronized_updates.py` - Flicker-free rendering
+- `shell_integration.py` - OSC 133 integration
+- `test_osc52_clipboard.py` - SSH clipboard
+- `test_kitty_keyboard.py` - Kitty keyboard protocol
+- `hyperlink_demo.py` - Clickable URLs
+- `notifications.py` - Desktop notifications
+- `rectangle_operations.py` - VT420 rectangle ops
 
-#### Advanced Features
-- `alt_screen.py`: Alternate screen buffer
-- `mouse_tracking.py`: Mouse event handling
-- `bracketed_paste.py`: Bracketed paste mode demonstration
-- `synchronized_updates.py`: Synchronized updates (DEC 2026) for flicker-free rendering
-- `shell_integration.py`: Shell integration (OSC 133)
-- `test_osc52_clipboard.py`: OSC 52 clipboard operations (SSH clipboard support)
-- `test_kitty_keyboard.py`: Kitty Keyboard Protocol demonstration
-- `test_underline_styles.py`: Underline styles (SGR 4:x) for modern text decoration
-- `notifications.py`: OSC 9 / OSC 777 notification support (desktop-style alerts)
-- `rectangle_operations.py`: VT420 rectangle operations (DECFRA, DECCRA, DECSERA, DECERA, DECCARA, DECRARA, DECRQCRA, DECSACE)
-- `hyperlink_demo.py`: OSC 8 hyperlinks (clickable URLs in terminal)
-
-#### Graphics and Visual
-- `display_image_sixel.py`: Display images using Sixel graphics
-- `test_sixel_simple.py`: Simple Sixel graphics demonstration
-- `test_sixel_display.py`: Advanced Sixel graphics testing
-- `screenshot_demo.py`: Comprehensive screenshot feature demonstration
-
-#### TUI Applications
-- `test_tui_clipboard.py`: TUI clipboard integration demonstration
-- `feature_showcase.py`: Comprehensive feature showcase with TUI
+### Graphics and Export
+- `display_image_sixel.py` - Sixel graphics
+- `screenshot_demo.py` - Screenshot features
+- `feature_showcase.py` - Comprehensive TUI showcase
 
 ### PTY Examples
-- `pty_basic.py`: Basic PTY usage - spawn commands and capture output
-- `pty_shell.py`: Interactive shell sessions
-- `pty_custom_env.py`: Custom environment variables and working directory
-- `pty_resize.py`: Dynamic terminal resizing with SIGWINCH
-- `pty_with_par_term.py`: Using custom par-term terminfo for optimal compatibility
-- `pty_multiple.py`: Managing multiple concurrent PTY sessions
-- `pty_event_loop.py`: Event loop integration with update tracking
-- `pty_mouse_events.py`: Mouse event handling in PTY sessions
+- `pty_basic.py` - Basic PTY usage
+- `pty_shell.py` - Interactive shells
+- `pty_resize.py` - Dynamic resizing
+- `pty_event_loop.py` - Event loop integration
+- `pty_mouse_events.py` - Mouse in PTY
 
 ## TUI Demo Application
 
-> **Note**: A full-featured TUI (Text User Interface) application for this terminal emulator is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust). The TUI provides an interactive terminal application with themes, clipboard integration, and more.
+A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust).
 
-**Installation**: `pip install par-term-emu-tui-rust`
+**Installation:** `uv add par-term-emu-tui-rust` or `pip install par-term-emu-tui-rust`
 
-## Security
+**GitHub:** [https://github.com/paulrobello/par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust)
 
-**Important**: When using PTY functionality, follow security best practices to prevent command injection and other vulnerabilities.
+## Technology
 
-See [docs/SECURITY.md](docs/SECURITY.md) for detailed security guidelines including:
-- Command injection prevention
-- Environment variable security
-- Input validation
-- Resource limits
-- Privilege management
+- **Rust** (1.75+) - Core library implementation
+- **Python** (3.12+) - Python bindings
+- **PyO3** - Zero-cost Python/Rust bindings
+- **VTE** - ANSI sequence parsing
+- **portable-pty** - Cross-platform PTY support
 
 ## Running Tests
 
@@ -1495,117 +299,54 @@ See [docs/SECURITY.md](docs/SECURITY.md) for detailed security guidelines includ
 # Run Rust tests
 cargo test
 
-# Run Python tests (requires pytest)
-uv pip install pytest
+# Run Python tests
+uv sync  # Install dependencies including pytest
 pytest tests/
 ```
 
 ## Performance
 
-The library is implemented in Rust for high performance:
-
 - Zero-copy operations where possible
 - Efficient grid representation
-- Fast ANSI sequence parsing using the `vte` crate
+- Fast ANSI parsing with VTE crate
 - Minimal Python/Rust boundary crossings
 
-## Architecture
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for implementation details.
 
-The library consists of several key components:
+## Security
 
-### Terminal Emulation Core
-- **Cell**: Represents a single terminal cell with character, colors, and attributes
-- **Grid**: Manages the 2D terminal buffer and scrollback
-- **Cursor**: Tracks cursor position and visibility
-- **Color**: Handles various color formats (named, 256-color, RGB)
-- **Terminal**: Main terminal emulator that ties everything together
+When using PTY functionality, follow security best practices to prevent command injection and other vulnerabilities.
 
-### PTY Support
-- **PtySession**: Manages PTY and child process lifecycle
-- **PtyError**: Error types for PTY operations
-- **Reader Thread**: Background thread that processes PTY output
-- **Update Generation**: Efficient change detection for event loops
-
-### Python Bindings
-- **PyTerminal**: Python wrapper for Terminal (ANSI parsing)
-- **PyPtyTerminal**: Python wrapper for PtySession (interactive shells)
-- **PyO3**: Zero-cost bindings between Rust and Python
-
-## Version History
-
-### 0.7.0 (Current)
-- **Buffer Controls**: Configurable limits for notification and clipboard sync buffers
-  - `set_max_notifications()` / `get_max_notifications()`: Limit OSC 9/777 notification backlog
-  - `set_max_clipboard_sync_events()` / `get_max_clipboard_sync_events()`: Limit clipboard event history
-  - `set_max_clipboard_event_bytes()` / `get_max_clipboard_event_bytes()`: Truncate large clipboard payloads
-- **XDG Compliance**: Shell integration migrated to XDG Base Directory specification
-- **Improved Export APIs**: Enhanced `export_asciicast()` and `export_json()` with explicit session parameter
-- **Documentation Updates**: Comprehensive documentation for all new features and buffer controls
-
-### 0.6.0
-- **Comprehensive Color Utilities API**: 18 new Python functions for color manipulation
-  - Brightness and contrast: `perceived_brightness_rgb()`, `adjust_contrast_rgb()`
-  - Basic adjustments: `lighten_rgb()`, `darken_rgb()`
-  - WCAG accessibility: `color_luminance()`, `is_dark_color()`, `contrast_ratio()`, `meets_wcag_aa()`, `meets_wcag_aaa()`
-  - Color mixing: `mix_colors()`, `complementary_color()`
-  - Color space conversions: `rgb_to_hsl()`, `hsl_to_rgb()`, `rgb_to_hex()`, `hex_to_rgb()`, `rgb_to_ansi_256()`
-  - Advanced adjustments: `adjust_saturation()`, `adjust_hue()`
-- **iTerm2 Compatibility**: Matching NTSC brightness formula and contrast adjustment algorithms
-- **Python Bindings**: All color utilities exposed via `par_term_emu_core_rust` module
-- **Fast Native Implementation**: Rust-based for optimal performance
-
-### 0.5.0
-- Added `set_bold_brightening()` method for configurable bold color brightening
-- Enhanced `create_snapshot()` to automatically apply bold brightening when enabled
-- Bold brightening converts ANSI colors 0-7 to bright variants 8-15 for bold text
-- Matches iTerm2's "Use Bright Bold" setting for improved terminal compatibility
-
-### 0.4.0
-- Initial stable release with comprehensive VT100/VT220/VT320/VT420 support
-- Full PTY support with process lifecycle management
-- Sixel graphics rendering with configurable limits
-- Screenshot generation in PNG, JPEG, SVG, and BMP formats
-- Shell integration (OSC 133) support
-- Atomic screen snapshots for TUI applications
+See [docs/SECURITY.md](docs/SECURITY.md) for comprehensive security guidelines.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit issues or pull requests.
+Contributions are welcome! Please submit issues or pull requests on GitHub.
 
 ### Development Setup
 
-1. **Clone the repository and set up the environment:**
-   ```bash
-   git clone https://github.com/paulrobello/par-term-emu-core-rust.git
-   cd par-term-emu-core-rust
-   make setup-venv  # Create virtual environment and install dependencies
-   ```
-
-2. **Install pre-commit hooks (recommended):**
-   ```bash
-   make pre-commit-install
-   ```
-   This will automatically run all quality checks (formatting, linting, type checking, tests) before each commit.
-
-3. **Build and test:**
-   ```bash
-   make dev          # Build the library in development mode
-   make test-python  # Run tests
-   ```
+```bash
+git clone https://github.com/paulrobello/par-term-emu-core-rust.git
+cd par-term-emu-core-rust
+make setup-venv  # Create virtual environment
+make pre-commit-install  # Install pre-commit hooks (recommended)
+make dev  # Build library
+make checkall  # Run all quality checks
+```
 
 ### Code Quality
 
-All contributions must pass the following checks:
-- **Rust formatting**: `cargo fmt`
-- **Rust linting**: `cargo clippy -- -D warnings`
-- **Python formatting**: `make fmt-python`
-- **Python linting**: `make lint-python`
-- **Python type checking**: `pyright`
-- **Python tests**: `make test-python`
+All contributions must pass:
+- Rust formatting (`cargo fmt`)
+- Rust linting (`cargo clippy`)
+- Python formatting (`make fmt-python`)
+- Python linting (`make lint-python`)
+- Type checking (`pyright`)
+- Tests (`make test-python`)
 
-**TIP**: Use `make pre-commit-install` to automate all these checks on every commit!
+**TIP:** Use `make pre-commit-install` to automate all checks on every commit!
 
-For more detailed development instructions, see [CLAUDE.md](CLAUDE.md).
+See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
 
 ## License
 
@@ -1614,3 +355,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## Author
 
 Paul Robello - probello@gmail.com
+
+## Links
+
+- **PyPI:** [https://pypi.org/project/par-term-emu-core-rust/](https://pypi.org/project/par-term-emu-core-rust/)
+- **GitHub:** [https://github.com/paulrobello/par-term-emu-core-rust](https://github.com/paulrobello/par-term-emu-core-rust)
+- **TUI Application:** [https://github.com/paulrobello/par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust)
+- **Documentation:** See [docs/](docs/) directory
+- **Examples:** See [examples/](examples/) directory

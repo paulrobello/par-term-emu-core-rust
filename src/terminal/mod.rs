@@ -1830,6 +1830,10 @@ impl Terminal {
             self.cursor = self.alt_cursor;
             // Save alternate cursor for when we switch back
             self.alt_cursor = alt_cursor;
+            // Reset keyboard protocol flags when exiting alternate screen
+            // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
+            self.keyboard_flags = 0;
+            self.keyboard_stack_alt.clear();
         }
     }
 
