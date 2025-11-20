@@ -58,10 +58,12 @@ impl Terminal {
                 // Graphic is affected by scrolling
                 if graphic_row >= top {
                     // Graphic starts within scroll region - adjust its position
-                    if n > graphic_row {
+                    // Check if the graphic's BOTTOM is still visible after scrolling
+                    if n >= graphic_bottom {
                         // Graphic scrolls completely off top - remove it
                         return false;
                     }
+                    // Adjust position (saturating_sub will clamp to 0 if top goes negative)
                     graphic.position.1 = graphic_row.saturating_sub(n);
                 } else {
                     // Graphic starts above scroll region but extends into it
@@ -357,5 +359,92 @@ mod tests {
         assert_eq!(term.graphics_at_row(5).len(), 1);
         assert_eq!(term.graphics_at_row(6).len(), 1);
         assert_eq!(term.graphics_at_row(7).len(), 0);
+    }
+
+    #[test]
+    fn test_adjust_graphics_for_scroll_up_tall_graphic_bottom_visible() {
+        // Bug fix test: Tall graphics should remain if their bottom is still visible
+        // This reproduces the snake.sixel issue: 450px (225 rows) graphic in 40-row terminal
+        let mut term = Terminal::new(80, 40);
+
+        // Create a tall graphic at row 0, height 450 pixels = 225 terminal rows
+        // Bottom is at row 224
+        term.graphics.push(create_test_graphic(0, 0, 600, 450));
+
+        // Scroll up by 186 rows (simulating cursor advancing from 0 to 225, then scrolling back to fit)
+        // After scroll: top would be at -186 (clamped to 0), bottom at 38 (visible!)
+        term.adjust_graphics_for_scroll_up(186, 0, 39);
+
+        // Graphic should still exist (bottom is visible)
+        assert_eq!(
+            term.graphics.len(),
+            1,
+            "Graphic should remain when bottom is visible"
+        );
+
+        // Position should be clamped to 0
+        assert_eq!(
+            term.graphics[0].position.1, 0,
+            "Position should be clamped to 0"
+        );
+
+        // After clamping to position 0, graphic still has height 225 rows
+        // So it spans rows 0-224, meaning ALL visible terminal rows (0-39) show the graphic
+        assert!(
+            !term.graphics_at_row(0).is_empty(),
+            "Graphic should be visible at row 0"
+        );
+        assert!(
+            !term.graphics_at_row(39).is_empty(),
+            "Graphic should be visible at row 39"
+        );
+
+        // The graphic spans to row 224, so any row >= 225 would not show it
+        // But our terminal only has 40 rows, so we can't test row 225
+        // Instead verify the graphic height is still 225 rows
+        assert_eq!(
+            term.graphics[0].height, 450,
+            "Graphic height should be unchanged"
+        );
+    }
+
+    #[test]
+    fn test_adjust_graphics_for_scroll_up_tall_graphic_completely_off() {
+        // Test that graphics are removed when bottom scrolls completely off
+        let mut term = Terminal::new(80, 40);
+
+        // Create a graphic at row 0, height 40 pixels = 20 terminal rows
+        term.graphics.push(create_test_graphic(0, 0, 100, 40));
+
+        // Scroll up by 25 rows (more than the graphic's height of 20 rows)
+        // Bottom is at row 19, so 25 >= 20 means completely off screen
+        term.adjust_graphics_for_scroll_up(25, 0, 39);
+
+        // Graphic should be removed
+        assert_eq!(
+            term.graphics.len(),
+            0,
+            "Graphic should be removed when bottom scrolls off"
+        );
+    }
+
+    #[test]
+    fn test_adjust_graphics_for_scroll_up_tall_graphic_edge_case() {
+        // Test edge case where scroll amount equals graphic bottom
+        let mut term = Terminal::new(80, 40);
+
+        // Create a graphic at row 0, height 40 pixels = 20 terminal rows
+        // Bottom is at row 19
+        term.graphics.push(create_test_graphic(0, 0, 100, 40));
+
+        // Scroll up by exactly 20 rows (n >= graphic_bottom means remove)
+        term.adjust_graphics_for_scroll_up(20, 0, 39);
+
+        // Graphic should be removed (boundary condition)
+        assert_eq!(
+            term.graphics.len(),
+            0,
+            "Graphic should be removed when n >= bottom"
+        );
     }
 }

@@ -794,11 +794,7 @@ impl Grid {
 
                 // Add newline unless it's the last row
                 if row < self.rows - 1 {
-                    if self.is_line_wrapped(row) {
-                        // Don't add newline for wrapped lines
-                    } else if !trimmed.is_empty() {
-                        result.push('\n');
-                    } else {
+                    if !self.is_line_wrapped(row) {
                         result.push('\n');
                     }
                 } else if !trimmed.is_empty() {

@@ -72,9 +72,8 @@ pub use python_bindings::{
     PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData,
     PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
     PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
-    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
-    PyWindowLayout,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
+    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr

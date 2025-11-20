@@ -1,11 +1,15 @@
 //! Python bindings for terminal streaming
 
-use pyo3::prelude::*;
 use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
 use std::sync::Arc;
 
 #[cfg(feature = "streaming")]
-use crate::streaming::{StreamingServer, StreamingConfig};
+use crate::streaming::{StreamingConfig, StreamingServer};
+
+#[cfg(feature = "streaming")]
+type ResizeReceiver =
+    std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<(u16, u16)>>>;
 
 /// Python wrapper for StreamingConfig
 #[cfg(feature = "streaming")]
@@ -102,7 +106,7 @@ pub struct PyStreamingServer {
     server: Option<Arc<StreamingServer>>,
     runtime: Arc<tokio::runtime::Runtime>,
     addr: String,
-    resize_rx: Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<(u16, u16)>>>>,
+    resize_rx: Option<ResizeReceiver>,
 }
 
 #[cfg(feature = "streaming")]
@@ -121,8 +125,9 @@ impl PyStreamingServer {
         addr: String,
         config: Option<PyStreamingConfig>,
     ) -> PyResult<Self> {
-        let runtime = tokio::runtime::Runtime::new()
-            .map_err(|e| PyRuntimeError::new_err(format!("Failed to create tokio runtime: {}", e)))?;
+        let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+            PyRuntimeError::new_err(format!("Failed to create tokio runtime: {}", e))
+        })?;
 
         // Get the terminal Arc from PyPtyTerminal
         let terminal_arc = pty_terminal.get_terminal_arc();
@@ -233,9 +238,7 @@ impl PyStreamingServer {
             let server = server.clone();
             let runtime = self.runtime.clone();
 
-            Ok(runtime.block_on(async {
-                server.client_count().await
-            }))
+            Ok(runtime.block_on(async { server.client_count().await }))
         } else {
             Ok(0)
         }
@@ -247,7 +250,8 @@ impl PyStreamingServer {
     ///     data: The output data to send (ANSI escape sequences)
     fn send_output(&self, data: String) -> PyResult<()> {
         if let Some(server) = &self.server {
-            server.send_output(data)
+            server
+                .send_output(data)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to send output: {}", e)))
         } else {
             Err(PyRuntimeError::new_err("Server has been stopped"))
@@ -354,7 +358,11 @@ impl PyStreamingServer {
         format!(
             "StreamingServer(addr='{}', clients={})",
             self.addr,
-            if self.server.is_some() { "active" } else { "stopped" }
+            if self.server.is_some() {
+                "active"
+            } else {
+                "stopped"
+            }
         )
     }
 }
@@ -368,9 +376,12 @@ pub struct PyStreamingServer;
 #[pymethods]
 impl PyStreamingServer {
     #[new]
-    fn new(_pty_terminal: &mut crate::python_bindings::pty::PyPtyTerminal, _addr: String) -> PyResult<Self> {
+    fn new(
+        _pty_terminal: &mut crate::python_bindings::pty::PyPtyTerminal,
+        _addr: String,
+    ) -> PyResult<Self> {
         Err(PyRuntimeError::new_err(
-            "Streaming feature not enabled. Rebuild with --features streaming"
+            "Streaming feature not enabled. Rebuild with --features streaming",
         ))
     }
 }
@@ -385,7 +396,7 @@ impl PyStreamingConfig {
     #[new]
     fn new() -> PyResult<Self> {
         Err(PyRuntimeError::new_err(
-            "Streaming feature not enabled. Rebuild with --features streaming"
+            "Streaming feature not enabled. Rebuild with --features streaming",
         ))
     }
 }

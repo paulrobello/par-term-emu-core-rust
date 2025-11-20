@@ -8,7 +8,7 @@ use crate::terminal::Terminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, broadcast};
+use tokio::sync::{broadcast, mpsc};
 use tokio::time;
 use tokio_tungstenite::accept_async;
 
@@ -110,7 +110,9 @@ impl StreamingServer {
     /// Get a clone of the resize receiver
     ///
     /// This can be used by the main thread to poll for resize requests from clients
-    pub fn get_resize_receiver(&self) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
+    pub fn get_resize_receiver(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
         Arc::clone(&self.resize_rx)
     }
 

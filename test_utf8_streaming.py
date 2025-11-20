@@ -2,9 +2,11 @@
 """
 Test UTF-8 character handling in streaming
 """
+
 import asyncio
 import json
 import websockets
+
 
 async def test_utf8():
     uri = "ws://127.0.0.1:8080"
@@ -17,7 +19,9 @@ async def test_utf8():
             # Receive initial connection message
             msg = await websocket.recv()
             data = json.loads(msg)
-            print(f"\n[Initial] Type: {data.get('type')}, Size: {data.get('cols')}x{data.get('rows')}")
+            print(
+                f"\n[Initial] Type: {data.get('type')}, Size: {data.get('cols')}x{data.get('rows')}"
+            )
 
             # Test various UTF-8 characters
             test_commands = [
@@ -34,10 +38,7 @@ async def test_utf8():
                 print(f"\n[Testing] {description}: {cmd}")
 
                 # Send command
-                await websocket.send(json.dumps({
-                    "type": "input",
-                    "data": cmd + "\n"
-                }))
+                await websocket.send(json.dumps({"type": "input", "data": cmd + "\n"}))
 
                 # Collect output for this command
                 outputs = []
@@ -45,28 +46,30 @@ async def test_utf8():
                     try:
                         msg = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                         data = json.loads(msg)
-                        if data.get('type') == 'output':
-                            outputs.append(data.get('data', ''))
+                        if data.get("type") == "output":
+                            outputs.append(data.get("data", ""))
                     except asyncio.TimeoutError:
                         break
 
                 # Print collected output
-                full_output = ''.join(outputs)
+                full_output = "".join(outputs)
                 print(f"[Output] {repr(full_output)}")
 
                 # Check if our test string appears in output
                 test_str = cmd.split("'")[1] if "'" in cmd else cmd
                 if test_str in full_output:
-                    print(f"✅ UTF-8 preserved correctly")
+                    print("✅ UTF-8 preserved correctly")
                 else:
-                    print(f"❌ UTF-8 may be corrupted")
+                    print("❌ UTF-8 may be corrupted")
 
             print("\n[Test complete]")
 
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     asyncio.run(test_utf8())

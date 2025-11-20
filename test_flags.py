@@ -2,9 +2,11 @@
 """
 Test flag emoji rendering
 """
+
 import asyncio
 import json
 import websockets
+
 
 async def test_flags():
     uri = "ws://127.0.0.1:8080"
@@ -34,10 +36,7 @@ async def test_flags():
                 cmd = f"echo 'Flag {name}: {flag} (code: {code})'"
                 print(f"\n[Testing] {name} flag: {flag}")
 
-                await websocket.send(json.dumps({
-                    "type": "input",
-                    "data": cmd + "\n"
-                }))
+                await websocket.send(json.dumps({"type": "input", "data": cmd + "\n"}))
 
                 # Collect output
                 outputs = []
@@ -45,22 +44,22 @@ async def test_flags():
                     try:
                         msg = await asyncio.wait_for(websocket.recv(), timeout=0.1)
                         data = json.loads(msg)
-                        if data.get('type') == 'output':
-                            outputs.append(data.get('data', ''))
+                        if data.get("type") == "output":
+                            outputs.append(data.get("data", ""))
                     except asyncio.TimeoutError:
                         break
 
-                full_output = ''.join(outputs)
+                full_output = "".join(outputs)
 
                 # Show bytes for debugging
-                flag_bytes = flag.encode('utf-8')
+                flag_bytes = flag.encode("utf-8")
                 print(f"  UTF-8 bytes: {flag_bytes.hex()}")
 
                 # Check if flag appears
                 if flag in full_output:
-                    print(f"  ✅ Flag transmitted correctly")
+                    print("  ✅ Flag transmitted correctly")
                 else:
-                    print(f"  ❌ Flag may be corrupted")
+                    print("  ❌ Flag may be corrupted")
                     print(f"  Raw output: {repr(full_output)}")
 
             print("\n[Test complete]")
@@ -68,7 +67,9 @@ async def test_flags():
     except Exception as e:
         print(f"Error: {e}")
         import traceback
+
         traceback.print_exc()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     asyncio.run(test_flags())

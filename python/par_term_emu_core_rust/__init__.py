@@ -50,6 +50,7 @@ from ._native import (
 # Optional streaming support (available when built with --features streaming)
 try:
     from ._native import StreamingConfig, StreamingServer
+
     _has_streaming = True
 except ImportError:
     _has_streaming = False
