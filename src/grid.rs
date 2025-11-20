@@ -772,8 +772,12 @@ impl Grid {
             };
 
         // Export only the visible screen (no scrollback)
+        // Use explicit cursor positioning for each row to avoid newline handling issues
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
+                // Position cursor at beginning of this row (1-indexed for VT100)
+                result.push_str(&format!("\x1b[{};1H", row + 1));
+
                 let mut line_text = String::new();
 
                 for cell in row_cells {
@@ -802,12 +806,6 @@ impl Grid {
                     current_fg = Color::Named(NamedColor::White);
                     current_bg = Color::Named(NamedColor::Black);
                     current_flags = crate::cell::CellFlags::default();
-                }
-
-                // Add newline after each row (except the last)
-                // Don't try to preserve wrapped line state - let xterm.js handle wrapping
-                if row < self.rows - 1 {
-                    result.push('\n');
                 }
             }
         }

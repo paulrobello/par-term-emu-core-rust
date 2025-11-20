@@ -364,6 +364,15 @@
 
                             case 'refresh':
                                 console.log(`Refresh response received: ${msg.cols}x${msg.rows}`);
+                                console.log('=== CLIENT REFRESH DEBUG ===');
+                                console.log(`Client terminal size: ${term.cols}x${term.rows}`);
+                                console.log(`Server snapshot size: ${msg.cols}x${msg.rows}`);
+                                console.log(`Snapshot length: ${msg.screen_content.length} bytes`);
+                                console.log(`Newline count: ${(msg.screen_content.match(/\n/g) || []).length}`);
+                                console.log(`First 200 chars:`, msg.screen_content.substring(0, 200));
+                                console.log(`Snapshot starts with cursor home:`, msg.screen_content.startsWith('\x1b[H'));
+                                console.log('============================');
+
                                 // Fully reset terminal state to prevent wrapping issues
                                 term.reset();
                                 term.write(msg.screen_content);

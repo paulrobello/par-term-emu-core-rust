@@ -259,6 +259,15 @@ impl StreamingServer {
                                         if let Ok(terminal) = terminal_for_refresh.lock() {
                                             let content = terminal.export_visible_screen_styled();
                                             let (cols, rows) = terminal.size();
+
+                                            // Debug: Log snapshot details
+                                            eprintln!("=== REFRESH SNAPSHOT DEBUG ===");
+                                            eprintln!("Terminal size: {}x{}", cols, rows);
+                                            eprintln!("Snapshot length: {} bytes", content.len());
+                                            eprintln!("First 200 chars: {:?}", &content.chars().take(200).collect::<String>());
+                                            eprintln!("Newline count: {}", content.matches('\n').count());
+                                            eprintln!("==============================");
+
                                             Some(ServerMessage::refresh(
                                                 cols as u16,
                                                 rows as u16,
