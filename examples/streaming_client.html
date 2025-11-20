@@ -164,7 +164,8 @@
         const term = new Terminal({
             cursorBlink: true,
             fontSize: 14,
-            fontFamily: "'Cascadia Code', 'Courier New', Courier, monospace",
+            // Use a font stack that includes emoji support
+            fontFamily: "'Cascadia Code', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', monospace",
             theme: {
                 background: '#1e1e1e',
                 foreground: '#d4d4d4',
@@ -186,7 +187,11 @@
                 brightCyan: '#29b8db',
                 brightWhite: '#e5e5e5'
             },
-            allowProposedApi: true
+            allowProposedApi: true,
+            // Unicode handling for emojis and wide characters
+            windowsMode: false,
+            // Allow rendering of Unicode 11+ characters (includes emoji sequences)
+            allowTransparency: false
         });
 
         const fitAddon = new FitAddon.FitAddon();
