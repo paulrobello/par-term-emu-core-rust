@@ -364,8 +364,8 @@
 
                             case 'refresh':
                                 console.log(`Refresh response received: ${msg.cols}x${msg.rows}`);
-                                // Clear terminal and render fresh snapshot
-                                term.clear();
+                                // Fully reset terminal state to prevent wrapping issues
+                                term.reset();
                                 term.write(msg.screen_content);
                                 break;
 
