@@ -110,13 +110,13 @@ impl PyStreamingServer {
     /// Create a new streaming server
     ///
     /// Args:
-    ///     pty_terminal: The PyPtyTerminal instance to stream
+    ///     pty_terminal: The PyPtyTerminal instance to stream (mutable to set callback)
     ///     addr: The address to bind to (e.g., "127.0.0.1:8080")
     ///     config: Optional StreamingConfig for server configuration
     #[new]
     #[pyo3(signature = (pty_terminal, addr, config=None))]
     fn new(
-        pty_terminal: &crate::python_bindings::pty::PyPtyTerminal,
+        pty_terminal: &mut crate::python_bindings::pty::PyPtyTerminal,
         addr: String,
         config: Option<PyStreamingConfig>,
     ) -> PyResult<Self> {
@@ -131,6 +131,20 @@ impl PyStreamingServer {
         } else {
             Arc::new(StreamingServer::new(terminal_arc, addr.clone()))
         };
+
+        // Get the output sender channel from the server
+        let output_sender = server.get_output_sender();
+
+        // Create a callback that forwards PTY output to the streaming server
+        let callback = Arc::new(move |data: &[u8]| {
+            // Convert bytes to UTF-8 string (lossy conversion for invalid UTF-8)
+            let output = String::from_utf8_lossy(data).to_string();
+            // Send to streaming server (non-blocking)
+            let _ = output_sender.send(output);
+        });
+
+        // Set the callback on the PTY terminal
+        pty_terminal.set_output_callback(callback);
 
         Ok(Self {
             server: Some(server),
@@ -282,7 +296,7 @@ pub struct PyStreamingServer;
 #[pymethods]
 impl PyStreamingServer {
     #[new]
-    fn new(_pty_terminal: &crate::python_bindings::pty::PyPtyTerminal, _addr: String) -> PyResult<Self> {
+    fn new(_pty_terminal: &mut crate::python_bindings::pty::PyPtyTerminal, _addr: String) -> PyResult<Self> {
         Err(PyRuntimeError::new_err(
             "Streaming feature not enabled. Rebuild with --features streaming"
         ))

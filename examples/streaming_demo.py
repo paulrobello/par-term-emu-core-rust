@@ -30,42 +30,16 @@ except ImportError:
     sys.exit(1)
 
 
-def send_demo_output(streaming_server):
-    """
-    Send demo output to demonstrate streaming.
-
-    Note: In the current implementation, PtySession processes PTY output
-    internally and doesn't expose the raw ANSI stream. To properly stream
-    PTY output, you would need to add an output callback mechanism to
-    PtySession. For now, this demo sends test data to demonstrate the
-    streaming infrastructure.
-    """
-    demo_text = (
-        "\r\n"
-        "\033[1;32m╔═══════════════════════════════════════════════════╗\033[0m\r\n"
-        "\033[1;32m║\033[0m  Terminal Streaming Demo                       \033[1;32m║\033[0m\r\n"
-        "\033[1;32m║\033[0m  WebSocket streaming is working!               \033[1;32m║\033[0m\r\n"
-        "\033[1;32m║\033[0m                                                 \033[1;32m║\033[0m\r\n"
-        "\033[1;32m║\033[0m  \033[1;33mNote:\033[0m PTY output auto-forwarding requires    \033[1;32m║\033[0m\r\n"
-        "\033[1;32m║\033[0m  adding an output callback to PtySession      \033[1;32m║\033[0m\r\n"
-        "\033[1;32m╚═══════════════════════════════════════════════════╝\033[0m\r\n"
-        "\r\n"
-    )
-
-    try:
-        streaming_server.send_output(demo_text)
-    except Exception as e:
-        print(f"Error sending demo output: {e}")
-
-
 def print_help():
     """Print available commands."""
-    print("\nAvailable commands:")
+    print("\nServer is running!")
+    print("All PTY output is automatically streamed to connected clients.")
+    print()
+    print("Available commands:")
     print("  Ctrl+C   - Quit the streaming server")
     print("  s        - Show connection statistics")
-    print("  d        - Send demo output to connected clients")
     print()
-    print("Connect via the web client to see streaming in action!")
+    print("Connect via the web client and type commands in your shell!")
     print()
 
 
@@ -128,9 +102,6 @@ def main():
     # Wait a moment for shell to start
     time.sleep(0.2)
 
-    # Send initial demo output
-    send_demo_output(streaming_server)
-
     print_help()
 
     try:
@@ -154,9 +125,6 @@ def main():
                             print(f"Connected clients: {client_count}")
                             cols, rows = pty_terminal.get_size()
                             print(f"Terminal size: {cols}x{rows}")
-                        elif cmd == 'd':
-                            send_demo_output(streaming_server)
-                            print("Demo output sent to all connected clients")
                     except Exception as e:
                         print(f"Error: {e}")
 

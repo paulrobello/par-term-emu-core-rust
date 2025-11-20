@@ -10,6 +10,16 @@ use std::sync::{
 };
 use std::thread::{self, JoinHandle};
 
+/// Callback function for PTY output
+///
+/// Called whenever raw data is read from the PTY master, before it's processed
+/// by the terminal. This allows capturing the raw ANSI stream for logging,
+/// recording, or streaming to clients.
+///
+/// # Arguments
+/// * `data` - The raw bytes read from the PTY
+pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
 /// A PTY session that manages a shell process and terminal state
 pub struct PtySession {
     terminal: Arc<Mutex<Terminal>>,
@@ -25,6 +35,8 @@ pub struct PtySession {
     update_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Whether to reply to XTWINOPS queries (cached from env var PAR_TERM_REPLY_XTWINOPS)
     reply_xtwinops: Arc<AtomicBool>,
+    /// Optional callback for raw PTY output (for streaming, logging, etc.)
+    output_callback: Option<OutputCallback>,
 }
 
 impl PtySession {
@@ -58,6 +70,7 @@ impl PtySession {
             rows: rows as u16,
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
+            output_callback: None,
         }
     }
 
@@ -73,6 +86,30 @@ impl PtySession {
     /// Must be called before `spawn()` or `spawn_shell()`
     pub fn set_cwd(&mut self, path: &Path) {
         self.cwd = Some(path.to_string_lossy().to_string());
+    }
+
+    /// Set a callback to be called whenever raw output is received from the PTY
+    ///
+    /// The callback will be called with the raw bytes before they are processed
+    /// by the terminal. This is useful for streaming, logging, or recording.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use std::sync::Arc;
+    ///
+    /// let mut pty = PtySession::new(80, 24, 1000);
+    /// pty.set_output_callback(Arc::new(|data| {
+    ///     println!("Received {} bytes", data.len());
+    /// }));
+    /// ```
+    pub fn set_output_callback(&mut self, callback: OutputCallback) {
+        self.output_callback = Some(callback);
+    }
+
+    /// Remove the output callback
+    pub fn clear_output_callback(&mut self) {
+        self.output_callback = None;
     }
 
     /// Spawn a shell process (auto-detected from environment)
@@ -245,6 +282,7 @@ impl PtySession {
         let running = Arc::clone(&self.running);
         let update_generation = Arc::clone(&self.update_generation);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
+        let output_callback = self.output_callback.clone();
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
@@ -258,6 +296,12 @@ impl PtySession {
                     }
                     Ok(n) => {
                         debug::log_pty_read(n);
+
+                        // Call output callback if set (for streaming, logging, etc.)
+                        if let Some(ref callback) = output_callback {
+                            callback(&buffer[..n]);
+                        }
+
                         // Process the bytes through the terminal
                         if let Ok(mut term) = terminal.lock() {
                             let old_gen = update_generation.load(Ordering::SeqCst);

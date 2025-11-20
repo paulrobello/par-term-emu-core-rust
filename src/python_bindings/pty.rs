@@ -2435,4 +2435,11 @@ impl PyPtyTerminal {
     pub(crate) fn get_terminal_arc(&self) -> std::sync::Arc<std::sync::Mutex<crate::terminal::Terminal>> {
         self.inner.terminal()
     }
+
+    /// Set an output callback on the PtySession
+    ///
+    /// This is used internally to wire up streaming servers
+    pub(crate) fn set_output_callback(&mut self, callback: crate::pty_session::OutputCallback) {
+        self.inner.set_output_callback(callback);
+    }
 }
