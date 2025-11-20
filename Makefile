@@ -1,5 +1,5 @@
-.PHONY: help build build-release test test-rust test-python clean install dev fmt lint check \
-        examples examples-basic examples-pty examples-all setup-venv watch \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-python clean install dev fmt lint check \
+        examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy
 
@@ -18,9 +18,11 @@ help:
 	@echo "  install         - Build and install the package"
 	@echo ""
 	@echo "Building:"
-	@echo "  build           - Build the library in development mode (debug)"
-	@echo "  build-release   - Build the library in development mode (release)"
-	@echo "  watch           - Auto-rebuild on file changes (requires cargo-watch)"
+	@echo "  build            - Build the library in development mode (debug)"
+	@echo "  build-release    - Build the library in development mode (release)"
+	@echo "  build-streaming  - Build with streaming feature (debug)"
+	@echo "  dev-streaming    - Build with streaming feature (release, for dev)"
+	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
 	@echo "Testing:"
 	@echo "  test            - Run all tests (Rust + Python)"
@@ -42,9 +44,10 @@ help:
 	@echo "  pre-commit-update    - Update pre-commit hook versions"
 	@echo ""
 	@echo "Examples:"
-	@echo "  examples        - Run basic terminal examples"
-	@echo "  examples-pty    - Run PTY/shell examples"
-	@echo "  examples-all    - Run all examples (basic + PTY)"
+	@echo "  examples           - Run basic terminal examples"
+	@echo "  examples-pty       - Run PTY/shell examples"
+	@echo "  examples-streaming - Run streaming demo (requires streaming feature)"
+	@echo "  examples-all       - Run all examples (basic + PTY)"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  deploy          - Trigger GitHub 'Build and Deploy' workflow"
@@ -101,6 +104,36 @@ build-release:
 		exit 1; \
 	fi
 	uv run maturin develop --release
+
+build-streaming:
+	@echo "Building library with streaming feature (debug mode)..."
+	@if [ ! -d ".venv" ]; then \
+		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
+		exit 1; \
+	fi
+	uv run maturin develop --features streaming
+
+dev-streaming:
+	@echo "Building library with streaming feature (release mode)..."
+	@if [ ! -d ".venv" ]; then \
+		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
+		exit 1; \
+	fi
+	uv sync
+	uv run maturin develop --release --features streaming
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Streaming feature enabled!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "You can now run the streaming demo:"
+	@echo "  make examples-streaming"
+	@echo ""
+	@echo "Or manually:"
+	@echo "  python examples/streaming_demo.py"
+	@echo ""
+	@echo "Then open examples/streaming_client.html in your browser"
+	@echo ""
 
 watch:
 	@if ! command -v cargo-watch > /dev/null; then \
@@ -263,6 +296,20 @@ examples-pty: dev
 	@echo "======================================================================"
 	@echo "  PTY examples completed!"
 	@echo "======================================================================"
+
+examples-streaming: dev-streaming
+	@echo "======================================================================"
+	@echo "  Running Terminal Streaming Demo"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Starting WebSocket streaming server..."
+	@echo ""
+	@echo "Once the server starts, open examples/streaming_client.html"
+	@echo "in your web browser and connect to ws://localhost:8080"
+	@echo ""
+	@echo "Press Ctrl+C to stop the server"
+	@echo ""
+	uv run python examples/streaming_demo.py
 
 examples-all: examples-basic examples-pty
 	@echo ""

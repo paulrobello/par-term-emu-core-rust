@@ -1,9 +1,35 @@
 # Terminal Streaming Implementation Plan
 
-**Status:** Planning
+**Status:** ✅ Phase 1 MVP Complete
 **Started:** 2025-11-20
 **Last Updated:** 2025-11-20
 **Target:** Real-time web-based terminal streaming with WebSocket + xterm.js
+
+---
+
+## Quick Start
+
+Build with streaming support and run the demo:
+
+```bash
+# Build library with streaming feature (one-time setup)
+make dev-streaming
+
+# Run the streaming demo
+make examples-streaming
+
+# Or manually:
+python examples/streaming_demo.py --port 8080
+
+# Then open examples/streaming_client.html in your browser
+# and connect to ws://localhost:8080
+```
+
+### Build Commands
+
+- `make dev-streaming` - Build with streaming feature (release mode, recommended)
+- `make build-streaming` - Build with streaming feature (debug mode)
+- `cargo build --features streaming` - Manual Rust build
 
 ---
 
