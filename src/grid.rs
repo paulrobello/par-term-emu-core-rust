@@ -792,16 +792,9 @@ impl Grid {
                     current_flags = crate::cell::CellFlags::default();
                 }
 
-                // Add newline unless it's the last row
+                // Add newline after each row (except the last)
+                // Don't try to preserve wrapped line state - let xterm.js handle wrapping
                 if row < self.rows - 1 {
-                    if self.is_line_wrapped(row) {
-                        // Don't add newline for wrapped lines
-                    } else if !trimmed.is_empty() {
-                        result.push('\n');
-                    } else {
-                        result.push('\n');
-                    }
-                } else if !trimmed.is_empty() {
                     result.push('\n');
                 }
             }
