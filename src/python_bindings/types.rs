@@ -198,6 +198,8 @@ pub struct PyGraphic {
     pub width: usize,
     #[pyo3(get)]
     pub height: usize,
+    #[pyo3(get)]
+    pub scroll_offset_rows: usize,
     pixels: Vec<u8>,
 }
 
@@ -247,6 +249,7 @@ impl From<&crate::sixel::SixelGraphic> for PyGraphic {
             position: graphic.position,
             width: graphic.width,
             height: graphic.height,
+            scroll_offset_rows: graphic.scroll_offset_rows,
             pixels: graphic.pixels.clone(),
         }
     }
@@ -2705,6 +2708,7 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            scroll_offset_rows: 0,
             pixels,
         };
 
@@ -2720,6 +2724,7 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            scroll_offset_rows: 0,
             pixels: vec![0; 16], // 2x2 RGBA
         };
 
@@ -2734,6 +2739,7 @@ mod tests {
             position: (5, 10),
             width: 3,
             height: 3,
+            scroll_offset_rows: 0,
             pixels: vec![128; 36], // 3x3 RGBA with all values at 128
         };
 
@@ -2755,6 +2761,7 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 1,
+            scroll_offset_rows: 0,
             pixels: original_pixels.clone(),
         };
 
@@ -2769,6 +2776,7 @@ mod tests {
             position: (10, 20),
             width: 100,
             height: 50,
+            scroll_offset_rows: 0,
             pixels: vec![],
         };
 
@@ -2783,6 +2791,7 @@ mod tests {
             position: (5, 10),
             width: 20,
             height: 30,
+            scroll_offset_rows: 0,
             pixels: vec![1, 2, 3, 4],
         };
 
@@ -2814,6 +2823,7 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            scroll_offset_rows: 0,
             pixels,
         };
 
@@ -2905,6 +2915,7 @@ mod tests {
             position: (0, 0),
             width: 4,
             height: 1,
+            scroll_offset_rows: 0,
             pixels,
         };
 

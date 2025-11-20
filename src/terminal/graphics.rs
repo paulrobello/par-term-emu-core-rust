@@ -64,7 +64,14 @@ impl Terminal {
                         return false;
                     }
                     // Adjust position (saturating_sub will clamp to 0 if top goes negative)
-                    graphic.position.1 = graphic_row.saturating_sub(n);
+                    let new_position = graphic_row.saturating_sub(n);
+                    // Track how many rows scrolled off if position was clamped to 0
+                    if n > graphic_row {
+                        // Graphic's top scrolled off - track the offset
+                        graphic.scroll_offset_rows =
+                            graphic.scroll_offset_rows.saturating_add(n - graphic_row);
+                    }
+                    graphic.position.1 = new_position;
                 } else {
                     // Graphic starts above scroll region but extends into it
                     // Keep it at the same position (only content within region scrolls)
@@ -145,6 +152,7 @@ mod tests {
             palette: HashMap::new(),
             pixels: vec![],
             cell_dimensions: None,
+            scroll_offset_rows: 0,
         }
     }
 
@@ -405,6 +413,12 @@ mod tests {
         assert_eq!(
             term.graphics[0].height, 450,
             "Graphic height should be unchanged"
+        );
+
+        // Verify scroll offset tracks how many rows scrolled off the top
+        assert_eq!(
+            term.graphics[0].scroll_offset_rows, 186,
+            "Should track 186 rows scrolled off"
         );
     }
 

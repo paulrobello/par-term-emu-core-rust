@@ -150,6 +150,9 @@ pub struct SixelGraphic {
     /// Cell dimensions when this graphic was created (width, height) in pixels
     /// Used to properly scale the graphic when rendering in screenshots
     pub cell_dimensions: Option<(u32, u32)>,
+    /// Number of terminal rows that have scrolled off the top
+    /// Used to render the correct portion when graphic is partially scrolled off-screen
+    pub scroll_offset_rows: usize,
 }
 
 impl SixelGraphic {
@@ -162,6 +165,7 @@ impl SixelGraphic {
             pixels,
             palette: HashMap::new(),
             cell_dimensions: None,
+            scroll_offset_rows: 0,
         }
     }
 
