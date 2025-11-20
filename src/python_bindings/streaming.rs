@@ -102,6 +102,7 @@ pub struct PyStreamingServer {
     server: Option<Arc<StreamingServer>>,
     runtime: Arc<tokio::runtime::Runtime>,
     addr: String,
+    resize_rx: Option<std::sync::Arc<tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<(u16, u16)>>>>,
 }
 
 #[cfg(feature = "streaming")]
@@ -140,10 +141,11 @@ impl PyStreamingServer {
             server.set_pty_writer(writer);
         }
 
-        let server = Arc::new(server);
-
-        // Get the output sender channel from the server
+        // Get channels before wrapping server in Arc
         let output_sender = server.get_output_sender();
+        let resize_rx = server.get_resize_receiver();
+
+        let server = Arc::new(server);
 
         // Create a callback that forwards PTY output to the streaming server
         let callback = Arc::new(move |data: &[u8]| {
@@ -160,6 +162,7 @@ impl PyStreamingServer {
             server: Some(server),
             runtime: Arc::new(runtime),
             addr,
+            resize_rx: Some(resize_rx),
         })
     }
 
@@ -229,6 +232,27 @@ impl PyStreamingServer {
             Ok(())
         } else {
             Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Poll for resize requests from clients (non-blocking)
+    ///
+    /// Returns:
+    ///     Optional tuple of (cols, rows) if a resize request is pending, None otherwise
+    ///
+    /// This should be called periodically from the main event loop.
+    /// When a resize is received, call pty_terminal.resize(cols, rows) to apply it.
+    fn poll_resize(&self) -> PyResult<Option<(u16, u16)>> {
+        if let Some(ref resize_rx) = self.resize_rx {
+            let resize_rx = resize_rx.clone();
+            let runtime = self.runtime.clone();
+
+            Ok(runtime.block_on(async {
+                // Try to receive without blocking
+                resize_rx.lock().await.try_recv().ok()
+            }))
+        } else {
+            Ok(None)
         }
     }
 

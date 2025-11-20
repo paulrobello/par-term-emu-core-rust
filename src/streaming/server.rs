@@ -54,6 +54,10 @@ pub struct StreamingServer {
     broadcast_tx: broadcast::Sender<ServerMessage>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
     pty_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
+    /// Channel for sending resize requests to main thread
+    resize_tx: mpsc::UnboundedSender<(u16, u16)>,
+    /// Shared receiver for resize requests (wrapped for thread-safe access from Python)
+    resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
 }
 
 impl StreamingServer {
@@ -72,6 +76,8 @@ impl StreamingServer {
         let (output_tx, output_rx) = mpsc::unbounded_channel();
         // Create broadcast channel for sending output to all clients (buffer 100 messages)
         let (broadcast_tx, _) = broadcast::channel(100);
+        // Create resize request channel
+        let (resize_tx, resize_rx) = mpsc::unbounded_channel();
 
         Self {
             broadcaster,
@@ -82,6 +88,8 @@ impl StreamingServer {
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
             broadcast_tx,
             pty_writer: None,
+            resize_tx,
+            resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
         }
     }
 
@@ -97,6 +105,13 @@ impl StreamingServer {
     /// This can be used to send terminal output to all connected clients
     pub fn get_output_sender(&self) -> mpsc::UnboundedSender<String> {
         self.output_tx.clone()
+    }
+
+    /// Get a clone of the resize receiver
+    ///
+    /// This can be used by the main thread to poll for resize requests from clients
+    pub fn get_resize_receiver(&self) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
+        Arc::clone(&self.resize_rx)
     }
 
     /// Get the current number of connected clients
@@ -216,13 +231,11 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                    // Resize the terminal buffer
-                                    if let Ok(mut term) = self.terminal.lock() {
-                                        term.resize(cols as usize, rows as usize);
-                                    }
-                                    // TODO: Also send SIGWINCH to PTY (requires resize channel or callback)
-                                    // For now, terminal buffer is resized which is sufficient for display
-                                    // The shell won't receive SIGWINCH until this is implemented
+                                    // Send resize request to main thread
+                                    // The main thread will call pty_terminal.resize() which:
+                                    // 1. Resizes the terminal buffer
+                                    // 2. Resizes the PTY (sends SIGWINCH to shell)
+                                    let _ = self.resize_tx.send((cols, rows));
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
                                     // Pings are handled automatically by Client::recv()

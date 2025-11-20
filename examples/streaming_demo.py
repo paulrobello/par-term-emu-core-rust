@@ -105,12 +105,24 @@ def main():
     print_help()
 
     try:
-        # Main event loop - handle user commands
+        # Main event loop - handle user commands and resize requests
         while True:
             # Check if PTY process has exited
             if not pty_terminal.is_running():
                 print("\nPTY process has exited")
                 break
+
+            # Poll for resize requests from clients
+            try:
+                resize_request = streaming_server.poll_resize()
+                if resize_request is not None:
+                    cols, rows = resize_request
+                    print(f"\nResizing terminal to {cols}x{rows}")
+                    pty_terminal.resize(cols, rows)
+                    # Broadcast resize to all clients
+                    streaming_server.send_resize(cols, rows)
+            except Exception as e:
+                print(f"Error handling resize: {e}")
 
             # Check for stdin input (non-blocking)
             # Note: select.select doesn't work on Windows for stdin
