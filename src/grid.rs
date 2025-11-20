@@ -326,6 +326,14 @@ impl Grid {
         self.scrollback_lines
     }
 
+    /// Clear all scrollback content
+    pub fn clear_scrollback(&mut self) {
+        self.scrollback_cells.clear();
+        self.scrollback_wrapped.clear();
+        self.scrollback_lines = 0;
+        self.scrollback_start = 0;
+    }
+
     /// Get the maximum scrollback capacity
     pub fn max_scrollback(&self) -> usize {
         self.max_scrollback

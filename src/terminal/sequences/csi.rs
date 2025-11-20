@@ -139,14 +139,25 @@ impl Terminal {
                     1 => self
                         .active_grid_mut()
                         .clear_screen_above(cursor_col, cursor_row),
-                    2 | 3 => {
+                    2 => {
                         // Clear entire screen - also clear graphics
                         self.active_grid_mut().clear();
                         self.graphics.clear();
                         debug::log(
                             debug::DebugLevel::Debug,
                             "CLEAR",
-                            "Cleared screen and graphics (ED 2/3)",
+                            "Cleared screen and graphics (ED 2)",
+                        );
+                    }
+                    3 => {
+                        // Clear entire screen + scrollback + graphics (xterm extension)
+                        self.active_grid_mut().clear();
+                        self.active_grid_mut().clear_scrollback();
+                        self.graphics.clear();
+                        debug::log(
+                            debug::DebugLevel::Debug,
+                            "CLEAR",
+                            "Cleared screen, scrollback, and graphics (ED 3)",
                         );
                     }
                     _ => {}
