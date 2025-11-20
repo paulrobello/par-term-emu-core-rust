@@ -147,13 +147,51 @@ impl PyStreamingServer {
 
         let server = Arc::new(server);
 
+        // Create UTF-8 decoder state for handling partial sequences
+        // Multi-byte UTF-8 characters may be split across PTY reads
+        let utf8_buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
         // Create a callback that forwards PTY output to the streaming server
-        let callback = Arc::new(move |data: &[u8]| {
-            // Convert bytes to UTF-8 string (lossy conversion for invalid UTF-8)
-            let output = String::from_utf8_lossy(data).to_string();
-            // Send to streaming server (non-blocking)
-            let _ = output_sender.send(output);
-        });
+        let callback = {
+            let utf8_buffer = Arc::clone(&utf8_buffer);
+            Arc::new(move |data: &[u8]| {
+                // Append new data to buffer
+                let mut buffer = utf8_buffer.lock().unwrap();
+                buffer.extend_from_slice(data);
+
+                // Try to convert as much as possible to valid UTF-8
+                match std::str::from_utf8(&buffer) {
+                    Ok(valid_str) => {
+                        // All bytes are valid UTF-8
+                        let output = valid_str.to_string();
+                        buffer.clear();
+                        let _ = output_sender.send(output);
+                    }
+                    Err(error) => {
+                        // Find how much is valid
+                        let valid_up_to = error.valid_up_to();
+
+                        if valid_up_to > 0 {
+                            // Send the valid portion
+                            let valid_str = std::str::from_utf8(&buffer[..valid_up_to]).unwrap();
+                            let output = valid_str.to_string();
+                            let _ = output_sender.send(output);
+
+                            // Keep only the incomplete sequence for next time
+                            buffer.drain(..valid_up_to);
+                        }
+
+                        // If buffer gets too large (>100 bytes of invalid data),
+                        // it's probably not a partial sequence, flush it
+                        if buffer.len() > 100 {
+                            let output = String::from_utf8_lossy(&buffer).to_string();
+                            buffer.clear();
+                            let _ = output_sender.send(output);
+                        }
+                    }
+                }
+            })
+        };
 
         // Set the callback on the PTY terminal
         pty_terminal.set_output_callback(callback);
