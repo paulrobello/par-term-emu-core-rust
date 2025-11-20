@@ -1,6 +1,6 @@
 # Terminal Streaming Implementation Plan
 
-**Status:** ✅ Phase 1 MVP Complete
+**Status:** ✅ Phase 2 PTY Integration Complete
 **Started:** 2025-11-20
 **Last Updated:** 2025-11-20
 **Target:** Real-time web-based terminal streaming with WebSocket + xterm.js
@@ -31,19 +31,36 @@ python examples/streaming_demo.py --port 8080
 - `make build-streaming` - Build with streaming feature (debug mode)
 - `cargo build --features streaming` - Manual Rust build
 
-### Current Limitations
+### How It Works
 
-**PTY Output Streaming:**
-The current demo (`examples/streaming_demo.py`) demonstrates the WebSocket streaming infrastructure but does not automatically forward PTY output to clients. This is because `PtySession` processes PTY output internally via a background thread and does not expose the raw ANSI stream.
+**Automatic PTY Output Streaming:**
+When you create a `StreamingServer`, it automatically sets up an output callback on the `PtySession`. All PTY output is captured in real-time and streamed to connected web clients with zero configuration required.
 
-**What Works:**
-- WebSocket server accepts multiple client connections
-- Manual output can be sent via `send_output()` method
-- Clients receive and render the output correctly
-- All streaming protocol messages (resize, title, bell, etc.) work
+**Features:**
+- ✅ Automatic PTY output capture via callback mechanism
+- ✅ Real-time streaming to multiple WebSocket clients
+- ✅ UTF-8 conversion with lossy handling of invalid sequences
+- ✅ Non-blocking channel-based communication
+- ✅ Thread-safe callback using `Arc<dyn Fn>`
+- ✅ Zero manual intervention required
 
-**For Full PTY Integration:**
-To automatically stream PTY output, `PtySession` would need an output callback mechanism. This is planned for Phase 2. For now, the demo sends test messages to demonstrate the streaming infrastructure works correctly.
+**Example:**
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Create PTY terminal
+pty = terminal_core.PtyTerminal(80, 24, 10000)
+
+# Create streaming server (automatically sets up callback)
+server = terminal_core.StreamingServer(pty, "127.0.0.1:8080")
+
+# Start shell and server
+pty.spawn_shell()
+server.start()
+
+# All shell output now streams to clients automatically!
+# Connect from browser: ws://localhost:8080
+```
 
 ---
 
@@ -1092,8 +1109,12 @@ const WEBSOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 
 ### Phase 2: PTY Integration & Bidirectional (Target: 2 weeks)
 
-- [ ] Add output callback to PtySession for raw ANSI stream capture (2 days)
-- [ ] Wire PTY output callback to StreamingServer (1 day)
+**PTY Output Integration:**
+- [x] Add output callback to PtySession for raw ANSI stream capture
+- [x] Wire PTY output callback to StreamingServer
+- [x] Update streaming demo to use automatic forwarding
+
+**Bidirectional Communication (In Progress):**
 - [ ] Client input handling (3 days)
 - [ ] Input validation and security (2 days)
 - [ ] Read-only vs read-write modes (2 days)
@@ -1101,12 +1122,15 @@ const WEBSOCKET_TIMEOUT: Duration = Duration::from_secs(60);
 - [ ] Terminal resize handling (2 days)
 - [ ] Testing and documentation (3 days)
 
-**Status:** Not started
-**Blockers:** None (Phase 1 complete)
+**Status:** 🚧 Partially Complete (PTY Integration Done)
+**Blockers:** None
 **Notes:**
-- First task is adding PTY output callback to enable automatic streaming
-- This will allow the streaming server to capture and forward all PTY output
-- Callback should be optional to avoid breaking existing PtySession users
+- ✅ PTY output callback successfully implemented
+- ✅ Automatic streaming works with zero configuration
+- ✅ Thread-safe Arc<dyn Fn> callback design
+- ✅ Channel-based non-blocking communication
+- ✅ UTF-8 lossy conversion handles invalid sequences
+- ⏳ Next: Implement client input handling
 
 ---
 
