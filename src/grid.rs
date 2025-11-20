@@ -667,6 +667,10 @@ impl Grid {
         // Pre-allocate based on estimated size
         let estimated_size = self.rows * self.cols * 20;
         let mut result = String::with_capacity(estimated_size);
+
+        // Start with cursor home to ensure content begins at row 0, col 0
+        result.push_str("\x1b[H");
+
         let mut current_fg = Color::Named(NamedColor::White);
         let mut current_bg = Color::Named(NamedColor::Black);
         let mut current_flags = crate::cell::CellFlags::default();
