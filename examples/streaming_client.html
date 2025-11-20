@@ -344,16 +344,17 @@
                             case 'connected':
                                 console.log(`Session ID: ${msg.session_id}`);
                                 console.log(`Server initial size: ${msg.cols}x${msg.rows}, Client size: ${term.cols}x${term.rows}`);
-                                // Don't use initial_screen - we'll request refresh after resize
-                                // Request a refresh to get screen with correct dimensions
-                                if (ws && ws.readyState === WebSocket.OPEN) {
-                                    ws.send(JSON.stringify({ type: 'refresh' }));
-                                }
+                                // We'll request refresh after receiving resize confirmation
                                 break;
 
                             case 'resize':
                                 term.resize(msg.cols, msg.rows);
                                 console.log(`Terminal resized: ${msg.cols}x${msg.rows}`);
+                                // Now that resize is confirmed, request screen refresh
+                                if (ws && ws.readyState === WebSocket.OPEN) {
+                                    console.log('Requesting screen refresh after resize');
+                                    ws.send(JSON.stringify({ type: 'refresh' }));
+                                }
                                 break;
 
                             case 'title':
