@@ -3,9 +3,8 @@
 use crate::streaming::broadcaster::Broadcaster;
 use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
-use crate::streaming::protocol::{ClientMessage, ServerMessage};
+use crate::streaming::protocol::ServerMessage;
 use crate::terminal::Terminal;
-use futures_util::StreamExt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
