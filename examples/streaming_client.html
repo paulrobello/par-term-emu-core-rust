@@ -356,10 +356,9 @@
                                 term.resize(msg.cols, msg.rows);
                                 console.log(`Terminal resized: ${msg.cols}x${msg.rows}`);
                                 // Now that resize is confirmed, request screen refresh
+                                // The refresh will overwrite any temporary content with the correct snapshot
                                 if (ws && ws.readyState === WebSocket.OPEN) {
                                     console.log('Requesting screen refresh after resize');
-                                    // Clear and request fresh snapshot with correct dimensions
-                                    term.clear();
                                     ws.send(JSON.stringify({ type: 'refresh' }));
                                 }
                                 break;
