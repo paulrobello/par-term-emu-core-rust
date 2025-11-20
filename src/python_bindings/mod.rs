@@ -12,6 +12,7 @@ pub mod color_utils;
 pub mod conversions;
 pub mod enums;
 pub mod pty;
+pub mod streaming;
 pub mod terminal;
 pub mod types;
 
@@ -24,6 +25,7 @@ pub use color_utils::{
 };
 pub use enums::{PyCursorStyle, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
+pub use streaming::{PyStreamingConfig, PyStreamingServer};
 pub use terminal::PyTerminal;
 pub use types::{
     PyAttributes, PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry,

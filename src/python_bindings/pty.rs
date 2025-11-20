@@ -2428,3 +2428,11 @@ impl PyPtyTerminal {
         }
     }
 }
+
+// Rust-only methods (not exposed to Python)
+impl PyPtyTerminal {
+    /// Get a clone of the terminal Arc (for use in streaming server)
+    pub(crate) fn get_terminal_arc(&self) -> std::sync::Arc<std::sync::Mutex<crate::terminal::Terminal>> {
+        self.inner.terminal()
+    }
+}

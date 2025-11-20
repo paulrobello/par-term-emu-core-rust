@@ -50,6 +50,7 @@ pub mod python_bindings;
 pub mod screenshot;
 pub mod shell_integration;
 pub mod sixel;
+pub mod streaming;
 pub mod terminal;
 pub mod text_utils;
 pub mod tmux_control;
@@ -71,8 +72,9 @@ pub use python_bindings::{
     PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData,
     PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
     PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyTerminal,
-    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -158,6 +160,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNotificationConfig>()?;
     m.add_class::<PyRecordingEvent>()?;
     m.add_class::<PyRecordingSession>()?;
+    m.add_class::<PyStreamingServer>()?;
+    m.add_class::<PyStreamingConfig>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;

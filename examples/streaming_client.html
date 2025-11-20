@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Terminal Streaming Client</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #header {
+            background: #2d2d30;
+            padding: 10px 20px;
+            border-bottom: 1px solid #3e3e42;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        #header h1 {
+            font-size: 18px;
+            font-weight: normal;
+        }
+
+        #status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            transition: background-color 0.3s;
+        }
+
+        #status-indicator.disconnected {
+            background-color: #f48771;
+        }
+
+        #status-indicator.connecting {
+            background-color: #dcdcaa;
+        }
+
+        #status-indicator.connected {
+            background-color: #6a9955;
+        }
+
+        #status-text {
+            font-size: 14px;
+        }
+
+        #terminal-container {
+            flex: 1;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        #terminal {
+            width: 100%;
+            height: 100%;
+        }
+
+        #controls {
+            background: #2d2d30;
+            padding: 10px 20px;
+            border-top: 1px solid #3e3e42;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        button {
+            background: #0e639c;
+            color: #ffffff;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: background-color 0.2s;
+        }
+
+        button:hover {
+            background: #1177bb;
+        }
+
+        button:active {
+            background: #0d5a8c;
+        }
+
+        button:disabled {
+            background: #3e3e42;
+            color: #858585;
+            cursor: not-allowed;
+        }
+
+        input {
+            background: #3c3c3c;
+            color: #d4d4d4;
+            border: 1px solid #3e3e42;
+            padding: 6px 10px;
+            border-radius: 2px;
+            font-size: 13px;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #0e639c;
+        }
+
+        #stats {
+            margin-left: auto;
+            font-size: 12px;
+            color: #858585;
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <h1>Terminal Streaming Client</h1>
+        <div id="status">
+            <div id="status-indicator" class="disconnected"></div>
+            <span id="status-text">Disconnected</span>
+        </div>
+    </div>
+
+    <div id="terminal-container">
+        <div id="terminal"></div>
+    </div>
+
+    <div id="controls">
+        <input type="text" id="ws-url" placeholder="WebSocket URL" value="ws://localhost:8080" />
+        <button id="connect-btn">Connect</button>
+        <button id="disconnect-btn" disabled>Disconnect</button>
+        <button id="clear-btn">Clear</button>
+        <div id="stats">
+            <span id="bytes-received">0 bytes</span> |
+            <span id="latency">Latency: --ms</span>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-web-links@0.9.0/lib/xterm-addon-web-links.js"></script>
+
+    <script>
+        // Initialize xterm.js
+        const term = new Terminal({
+            cursorBlink: true,
+            fontSize: 14,
+            fontFamily: "'Cascadia Code', 'Courier New', Courier, monospace",
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#d4d4d4',
+                cursor: '#aeafad',
+                black: '#000000',
+                red: '#cd3131',
+                green: '#0dbc79',
+                yellow: '#e5e510',
+                blue: '#2472c8',
+                magenta: '#bc3fbc',
+                cyan: '#11a8cd',
+                white: '#e5e5e5',
+                brightBlack: '#666666',
+                brightRed: '#f14c4c',
+                brightGreen: '#23d18b',
+                brightYellow: '#f5f543',
+                brightBlue: '#3b8eea',
+                brightMagenta: '#d670d6',
+                brightCyan: '#29b8db',
+                brightWhite: '#e5e5e5'
+            },
+            allowProposedApi: true
+        });
+
+        const fitAddon = new FitAddon.FitAddon();
+        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
+
+        term.loadAddon(fitAddon);
+        term.loadAddon(webLinksAddon);
+
+        term.open(document.getElementById('terminal'));
+        fitAddon.fit();
+
+        // WebSocket connection
+        let ws = null;
+        let bytesReceived = 0;
+        let lastPingTime = 0;
+
+        const statusIndicator = document.getElementById('status-indicator');
+        const statusText = document.getElementById('status-text');
+        const wsUrlInput = document.getElementById('ws-url');
+        const connectBtn = document.getElementById('connect-btn');
+        const disconnectBtn = document.getElementById('disconnect-btn');
+        const clearBtn = document.getElementById('clear-btn');
+        const bytesDisplay = document.getElementById('bytes-received');
+        const latencyDisplay = document.getElementById('latency');
+
+        function setStatus(status) {
+            statusIndicator.className = status;
+            const statusMap = {
+                disconnected: 'Disconnected',
+                connecting: 'Connecting...',
+                connected: 'Connected'
+            };
+            statusText.textContent = statusMap[status] || status;
+        }
+
+        function formatBytes(bytes) {
+            if (bytes < 1024) return bytes + ' bytes';
+            if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+            return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+        }
+
+        function connect() {
+            const url = wsUrlInput.value.trim();
+            if (!url) {
+                term.writeln('\r\n\x1b[31mError: Please enter a WebSocket URL\x1b[0m');
+                return;
+            }
+
+            setStatus('connecting');
+            connectBtn.disabled = true;
+            wsUrlInput.disabled = true;
+
+            try {
+                ws = new WebSocket(url);
+
+                ws.onopen = () => {
+                    console.log('WebSocket connected');
+                    setStatus('connected');
+                    disconnectBtn.disabled = false;
+                    term.writeln('\r\n\x1b[32m● Connected to streaming server\x1b[0m\r\n');
+                };
+
+                ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
+                        bytesReceived += event.data.length;
+                        bytesDisplay.textContent = formatBytes(bytesReceived);
+
+                        switch (msg.type) {
+                            case 'output':
+                                term.write(msg.data);
+                                break;
+
+                            case 'connected':
+                                term.resize(msg.cols, msg.rows);
+                                if (msg.initial_screen) {
+                                    term.write(msg.initial_screen);
+                                }
+                                console.log(`Terminal initialized: ${msg.cols}x${msg.rows}`);
+                                console.log(`Session ID: ${msg.session_id}`);
+                                break;
+
+                            case 'resize':
+                                term.resize(msg.cols, msg.rows);
+                                console.log(`Terminal resized: ${msg.cols}x${msg.rows}`);
+                                break;
+
+                            case 'title':
+                                document.title = msg.title + ' - Terminal Streaming';
+                                console.log(`Title changed: ${msg.title}`);
+                                break;
+
+                            case 'cursor':
+                                // Cursor position updates (optional, can be used for optimization)
+                                break;
+
+                            case 'bell':
+                                // Play a beep sound or show visual indication
+                                term.write('\x07');
+                                break;
+
+                            case 'error':
+                                console.error('Server error:', msg.message);
+                                term.writeln(`\r\n\x1b[31mServer error: ${msg.message}\x1b[0m`);
+                                break;
+
+                            case 'shutdown':
+                                console.warn('Server is shutting down:', msg.reason);
+                                term.writeln(`\r\n\x1b[33mServer shutdown: ${msg.reason}\x1b[0m`);
+                                disconnect();
+                                break;
+
+                            default:
+                                console.warn('Unknown message type:', msg.type);
+                        }
+                    } catch (e) {
+                        console.error('Failed to parse message:', e);
+                    }
+                };
+
+                ws.onerror = (error) => {
+                    console.error('WebSocket error:', error);
+                    term.writeln('\r\n\x1b[31m● Connection error\x1b[0m');
+                    setStatus('disconnected');
+                };
+
+                ws.onclose = () => {
+                    console.log('WebSocket disconnected');
+                    setStatus('disconnected');
+                    connectBtn.disabled = false;
+                    disconnectBtn.disabled = true;
+                    wsUrlInput.disabled = false;
+                    term.writeln('\r\n\x1b[33m● Disconnected from server\x1b[0m');
+                };
+
+            } catch (e) {
+                console.error('Failed to connect:', e);
+                term.writeln(`\r\n\x1b[31mError: ${e.message}\x1b[0m`);
+                setStatus('disconnected');
+                connectBtn.disabled = false;
+                wsUrlInput.disabled = false;
+            }
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        // Event handlers
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        clearBtn.addEventListener('click', () => term.clear());
+
+        // Handle terminal input (keyboard)
+        term.onData((data) => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'input',
+                    data: data
+                }));
+            }
+        });
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            fitAddon.fit();
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    type: 'resize',
+                    cols: term.cols,
+                    rows: term.rows
+                }));
+            }
+        });
+
+        // Periodic ping for keepalive
+        setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                lastPingTime = Date.now();
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000); // Every 30 seconds
+
+        // Welcome message
+        term.writeln('\x1b[36m╔═══════════════════════════════════════════════════════════╗\x1b[0m');
+        term.writeln('\x1b[36m║\x1b[0m       \x1b[1;37mTerminal Streaming Client\x1b[0m                          \x1b[36m║\x1b[0m');
+        term.writeln('\x1b[36m╚═══════════════════════════════════════════════════════════╝\x1b[0m');
+        term.writeln('');
+        term.writeln('Enter WebSocket URL and click Connect to start streaming.');
+        term.writeln('');
+    </script>
+</body>
+</html>
