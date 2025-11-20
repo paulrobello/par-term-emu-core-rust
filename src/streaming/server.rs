@@ -8,7 +8,7 @@ use crate::terminal::Terminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, broadcast};
 use tokio::time;
 use tokio_tungstenite::accept_async;
 
@@ -50,6 +50,10 @@ pub struct StreamingServer {
     output_tx: mpsc::UnboundedSender<String>,
     /// Channel for receiving output from terminal
     output_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>,
+    /// Broadcast channel for sending output to all clients
+    broadcast_tx: broadcast::Sender<ServerMessage>,
+    /// PTY writer for sending client input (optional, only set if PTY is available)
+    pty_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
 }
 
 impl StreamingServer {
@@ -66,6 +70,8 @@ impl StreamingServer {
     ) -> Self {
         let broadcaster = Arc::new(Broadcaster::with_max_clients(config.max_clients));
         let (output_tx, output_rx) = mpsc::unbounded_channel();
+        // Create broadcast channel for sending output to all clients (buffer 100 messages)
+        let (broadcast_tx, _) = broadcast::channel(100);
 
         Self {
             broadcaster,
@@ -74,7 +80,16 @@ impl StreamingServer {
             config,
             output_tx,
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
+            broadcast_tx,
+            pty_writer: None,
         }
+    }
+
+    /// Set the PTY writer for handling client input
+    ///
+    /// This should be called before starting the server if PTY input is supported
+    pub fn set_pty_writer(&mut self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
+        self.pty_writer = Some(writer);
     }
 
     /// Get a clone of the output sender channel
@@ -145,14 +160,11 @@ impl StreamingServer {
         let client_id = client.id();
 
         // Send initial connection message
-        // Note: We need to use try_lock or spawn_blocking to avoid holding
-        // std::sync::Mutex across await points
         let (cols, rows, initial_screen) = {
             let terminal = self.terminal.lock().unwrap();
             let (cols, rows) = terminal.size();
 
             let initial_screen = if self.config.send_initial_screen {
-                // Get current screen content
                 Some(terminal.content())
             } else {
                 None
@@ -169,10 +181,70 @@ impl StreamingServer {
 
         client.send(connect_msg).await?;
 
-        // Add client to broadcaster
-        self.broadcaster.add_client(client).await?;
+        // Add client to broadcaster (takes ownership, so we need to change this)
+        // For now, DON'T add to broadcaster - handle everything here
+        // TODO: Refactor broadcaster to allow both sending and receiving per client
 
-        println!("Client {} connected ({} total)", client_id, self.client_count().await);
+        println!("Client {} connected (1 total)", client_id);
+
+        // Get PTY writer if available
+        let pty_writer = self.pty_writer.clone();
+
+        // Subscribe to output broadcasts
+        let mut output_rx = self.broadcast_tx.subscribe();
+
+        // Handle client input and output in this task
+        loop {
+            tokio::select! {
+                // Receive message from client (input from web terminal)
+                msg = client.recv() => {
+                    match msg? {
+                        Some(client_msg) => {
+                            match client_msg {
+                                crate::streaming::protocol::ClientMessage::Input { data } => {
+                                    // Write input to PTY if available
+                                    if let Some(ref writer) = pty_writer {
+                                        eprintln!("[Input] Received {} bytes from client, writing to PTY", data.len());
+                                        if let Ok(mut w) = writer.lock() {
+                                            use std::io::Write;
+                                            let _ = w.write_all(data.as_bytes());
+                                            let _ = w.flush();
+                                        }
+                                    }
+                                }
+                                crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                    eprintln!("[Input] Client requested resize to {}x{}", cols, rows);
+                                    // TODO: Implement resize handling
+                                }
+                                crate::streaming::protocol::ClientMessage::Ping => {
+                                    // Pings are handled automatically by Client::recv()
+                                }
+                                crate::streaming::protocol::ClientMessage::RequestRefresh => {
+                                    eprintln!("[Input] Client requested screen refresh");
+                                    // TODO: Implement screen refresh
+                                }
+                                crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
+                                    eprintln!("[Input] Client sent subscribe message (not implemented)");
+                                    // TODO: Implement subscription handling
+                                }
+                            }
+                        }
+                        None => {
+                            // Client disconnected
+                            println!("Client {} disconnected", client_id);
+                            break;
+                        }
+                    }
+                }
+
+                // Receive output to broadcast to client
+                output_msg = output_rx.recv() => {
+                    if let Ok(msg) = output_msg {
+                        client.send(msg).await?;
+                    }
+                }
+            }
+        }
 
         Ok(())
     }
@@ -183,10 +255,11 @@ impl StreamingServer {
 
         while let Some(data) = rx.recv().await {
             if !data.is_empty() {
-                let client_count = self.broadcaster.client_count().await;
-                eprintln!("[Broadcaster] Received {} bytes, broadcasting to {} clients", data.len(), client_count);
+                let subscriber_count = self.broadcast_tx.receiver_count();
+                eprintln!("[Broadcaster] Received {} bytes, broadcasting to {} clients", data.len(), subscriber_count);
                 let msg = ServerMessage::output(data);
-                self.broadcaster.broadcast(msg).await;
+                // Ignore send errors (means no receivers)
+                let _ = self.broadcast_tx.send(msg);
             }
         }
     }

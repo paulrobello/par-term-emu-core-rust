@@ -126,11 +126,21 @@ impl PyStreamingServer {
         // Get the terminal Arc from PyPtyTerminal
         let terminal_arc = pty_terminal.get_terminal_arc();
 
-        let server = if let Some(cfg) = config {
-            Arc::new(StreamingServer::with_config(terminal_arc, addr.clone(), cfg.inner))
+        // Get the PTY writer for input handling
+        let pty_writer = pty_terminal.get_pty_writer();
+
+        let mut server = if let Some(cfg) = config {
+            StreamingServer::with_config(terminal_arc, addr.clone(), cfg.inner)
         } else {
-            Arc::new(StreamingServer::new(terminal_arc, addr.clone()))
+            StreamingServer::new(terminal_arc, addr.clone())
         };
+
+        // Set the PTY writer if available
+        if let Some(writer) = pty_writer {
+            server.set_pty_writer(writer);
+        }
+
+        let server = Arc::new(server);
 
         // Get the output sender channel from the server
         let output_sender = server.get_output_sender();

@@ -112,6 +112,14 @@ impl PtySession {
         self.output_callback = None;
     }
 
+    /// Get a clone of the PTY writer for external use (e.g., streaming server)
+    ///
+    /// This allows external code to write input to the PTY in a thread-safe way.
+    /// Returns None if the PTY is not running.
+    pub fn get_writer(&self) -> Option<Arc<Mutex<Box<dyn Write + Send>>>> {
+        self.writer.clone()
+    }
+
     /// Spawn a shell process (auto-detected from environment)
     ///
     /// On Unix: Uses $SHELL or defaults to /bin/bash

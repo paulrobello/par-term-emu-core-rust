@@ -2442,4 +2442,11 @@ impl PyPtyTerminal {
     pub(crate) fn set_output_callback(&mut self, callback: crate::pty_session::OutputCallback) {
         self.inner.set_output_callback(callback);
     }
+
+    /// Get the PTY writer for streaming server input handling
+    ///
+    /// Returns a thread-safe writer that can be used to send input to the PTY
+    pub(crate) fn get_pty_writer(&self) -> Option<std::sync::Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>> {
+        self.inner.get_writer()
+    }
 }
