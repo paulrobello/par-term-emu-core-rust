@@ -58,20 +58,25 @@ impl Terminal {
                 // Graphic is affected by scrolling
                 if graphic_row >= top {
                     // Graphic starts within scroll region - adjust its position
-                    // Check if the graphic's BOTTOM is still visible after scrolling
-                    if n >= graphic_bottom {
-                        // Graphic scrolls completely off top - remove it
-                        return false;
-                    }
                     // Adjust position (saturating_sub will clamp to 0 if top goes negative)
                     let new_position = graphic_row.saturating_sub(n);
                     // Track how many rows scrolled off if position was clamped to 0
-                    if n > graphic_row {
+                    let additional_scroll = if n > graphic_row {
                         // Graphic's top scrolled off - track the offset
-                        graphic.scroll_offset_rows =
-                            graphic.scroll_offset_rows.saturating_add(n - graphic_row);
-                    }
+                        n - graphic_row
+                    } else {
+                        0
+                    };
+                    graphic.scroll_offset_rows =
+                        graphic.scroll_offset_rows.saturating_add(additional_scroll);
                     graphic.position.1 = new_position;
+
+                    // Check if the graphic's BOTTOM has scrolled completely off
+                    // Total scrolled = scroll_offset_rows, graphic height = graphic_height_in_rows
+                    if graphic.scroll_offset_rows >= graphic_height_in_rows {
+                        // Entire graphic has scrolled off - remove it
+                        return false;
+                    }
                 } else {
                     // Graphic starts above scroll region but extends into it
                     // Keep it at the same position (only content within region scrolls)
