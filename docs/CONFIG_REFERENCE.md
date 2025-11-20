@@ -588,16 +588,17 @@ print(f"Bell desktop: {config.bell_desktop}")
 print(f"Bell sound: {config.bell_sound}")
 
 # Set notification configuration
+# Note: NotificationConfig must be imported from the private _native module
 from par_term_emu_core_rust._native import NotificationConfig
-config = NotificationConfig(
-    bell_desktop=True,
-    bell_sound=50,
-    bell_visual=True,
-    activity_enabled=True,
-    activity_threshold=30,
-    silence_enabled=True,
-    silence_threshold=600
-)
+
+config = NotificationConfig()
+config.bell_desktop = True
+config.bell_sound = 50
+config.bell_visual = True
+config.activity_enabled = True
+config.activity_threshold = 30
+config.silence_enabled = True
+config.silence_threshold = 600
 term.set_notification_config(config)
 
 # Manually trigger notifications

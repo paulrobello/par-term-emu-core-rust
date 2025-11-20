@@ -7,6 +7,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Overview](#overview)
 - [True Color Support](#true-color-support)
   - [Bold Brightening](#bold-brightening)
+- [Minimum Contrast Adjustment (iTerm2-Compatible)](#minimum-contrast-adjustment-iterm2-compatible)
 - [Alternate Screen Buffer](#alternate-screen-buffer)
 - [Mouse Reporting](#mouse-reporting)
 - [Bracketed Paste Mode](#bracketed-paste-mode)
@@ -29,14 +30,14 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 
 ## Overview
 
-par-term-emu-core-rust provides comprehensive terminal emulation with VT100/VT220/VT320/VT420 compatibility and modern terminal features including true color, alternate screen buffer, mouse support, clipboard operations, hyperlinks, and graphics rendering.
+par-term-emu-core-rust provides comprehensive terminal emulation with VT100/VT220/VT320/VT420/VT520 compatibility and modern terminal features including true color, alternate screen buffer, mouse support, clipboard operations, hyperlinks, and graphics rendering.
 
 ### Feature Architecture
 
 ```mermaid
 graph TB
     subgraph "Core Emulation"
-        VT[VT100/220/320/420]
+        VT[VT100/220/320/420/520]
         Grid[Screen Buffer]
         Cursor[Cursor Control]
         Parser[ANSI Parser]
@@ -745,7 +746,7 @@ term.process_str("\x1b[?2026l")
 
 ## Kitty Keyboard Protocol
 
-Progressive enhancement for keyboard handling with flags for disambiguation and event reporting.
+Progressive enhancement for keyboard handling with flags for disambiguation and event reporting. **Automatically resets when exiting alternate screen buffer** (v0.8.0+) to prevent TUI applications from leaving the keyboard in a bad state.
 
 ### Usage
 
@@ -773,6 +774,8 @@ term.push_keyboard_flags(flags)
 term.pop_keyboard_flags(count=1)
 ```
 
+> **📝 Note:** Keyboard protocol flags are automatically reset when exiting alternate screen buffer. This ensures TUI applications that fail to properly disable the protocol don't leave the terminal in a bad state.
+
 ### Flag Meanings
 
 | Flag | Value | Description |
@@ -791,7 +794,7 @@ term.pop_keyboard_flags(count=1)
 - Full keyboard event handling in TUI apps
 - Game controls in terminal
 
-> **📝 Note:** Flags are maintained separately for main and alternate screen buffers
+> **📝 Note:** Flags are maintained separately for main and alternate screen buffers with independent stacks. Flags automatically reset when exiting alternate screen to prevent TUI apps from leaving keyboard in bad state.
 
 ## Underline Styles
 

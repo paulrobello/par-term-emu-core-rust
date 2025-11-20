@@ -41,10 +41,10 @@ par-term-emu officially supports:
 
 #### Debugging (`src/debug.rs`)
 - **Log File Location**: Cross-platform ✅
-  - **Unix/macOS**: `/tmp/par_term_emu_debug_rust.log`
-  - **Windows**: `%TEMP%\par_term_emu_debug_rust.log`
-- **Implementation**: Uses `std::env::temp_dir()` for platform-appropriate temp directory
-- **Python**: Also uses `tempfile.gettempdir()` for cross-platform compatibility
+  - **Unix/macOS**: `/tmp/par_term_emu_core_rust_debug_rust.log`
+  - **Windows**: `%TEMP%\par_term_emu_core_rust_debug_rust.log`
+- **Implementation**: Uses `/tmp` on Unix/macOS, `std::env::temp_dir()` on Windows
+- **Python**: Also uses `tempfile.gettempdir()` for cross-platform compatibility (`par_term_emu_debug_python.log`)
 
 ## Platform-Specific Considerations
 

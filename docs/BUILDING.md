@@ -32,7 +32,7 @@ This guide explains how to build and install the par-term-emu-core-rust library 
 
 ### Rust
 
-You need Rust 1.75 or later (currently tested with Rust 1.91.1). Install it from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later. The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -40,7 +40,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Python
 
-You need Python 3.12 or later. The project supports Python 3.12, 3.13, and 3.14. Check your version:
+You need Python 3.12 or later. The project officially supports Python 3.12, 3.13, and 3.14. Check your version:
 
 ```bash
 python --version
@@ -75,7 +75,7 @@ make dev
 ```
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
-- **maturin** (≥1.10.1) - Build tool for PyO3 projects
+- **maturin** (≥1.9, <2.0 for build; ≥1.10.1 for dev) - Build tool for PyO3 projects
 - **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework
 - **ruff** (≥0.14.5) - Fast Python linter and formatter
 - **pyright** (≥1.1.407) - Static type checker
@@ -141,7 +141,7 @@ make watch
 
 The project includes comprehensive test coverage:
 - **811 Rust unit tests** (including all modules and features)
-- **168 Python integration tests** in 10 test files
+- **276 Python integration tests** in 10 test files (242 pass, 34 skipped in CI environments)
 - Tests cover: VT sequences, grid operations, PTY sessions, screenshots, and Python bindings
 
 ### Rust Tests

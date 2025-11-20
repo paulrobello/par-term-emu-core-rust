@@ -19,6 +19,7 @@ This terminal emulator provides comprehensive VT100/VT220/VT320/VT420 compatibil
 - [Kitty Keyboard Protocol](#kitty-keyboard-protocol)
 - [Device Queries](#device-queries)
 - [OSC Sequences](#osc-sequences)
+- [DCS Sequences](#dcs-sequences)
 - [Control Characters](#control-characters)
 - [Reset Sequences](#reset-sequences)
 
@@ -159,12 +160,17 @@ Affects how DECCARA and DECRARA apply attributes.
 
 VT100/VT220 scrolling operations.
 
-- `ESC[<n>S` - Scroll up n lines (SU)
-- `ESC[<n>T` - Scroll down n lines (SD)
-- `ESC[<top>;<bottom>r` - Set scrolling region (DECSTBM)
-- `ESC M` - Reverse index (RI) - scroll down at top
-- `ESC D` - Index (IND) - scroll up at bottom
-- `ESC E` - Next line (NEL)
+### CSI Scrolling Commands
+
+- `CSI <n>S` - Scroll up n lines (SU)
+- `CSI <n>T` - Scroll down n lines (SD)
+- `CSI <top>;<bottom>r` - Set scrolling region (DECSTBM)
+
+### ESC Scrolling Commands
+
+- `ESC M` - Reverse index (RI) - Move cursor up one line, scroll down if at top of scroll region
+- `ESC D` - Index (IND) - Move cursor down one line, scroll up if at bottom of scroll region
+- `ESC E` - Next line (NEL) - Move to first column of next line, scroll if at bottom
 
 ## Colors and Attributes
 
@@ -181,6 +187,8 @@ VT100/ECMA-48 text styling sequences.
 - `ESC[7m` - Reverse
 - `ESC[8m` - Hidden
 - `ESC[9m` - Strikethrough
+- `ESC[53m` - Overline
+- `ESC[55m` - Not overlined
 
 ### Underline Styles
 
@@ -214,6 +222,9 @@ VT100/ECMA-48 text styling sequences.
 - `ESC[48;5;<n>m` - 256-color background (0-255)
 - `ESC[38;2;<r>;<g>;<b>m` - RGB/true color foreground
 - `ESC[48;2;<r>;<g>;<b>m` - RGB/true color background
+- `ESC[58;2;<r>;<g>;<b>m` - RGB underline color
+- `ESC[58;5;<n>m` - 256-color underline color
+- `ESC[59m` - Reset underline color (use foreground)
 
 ### Default Colors
 
@@ -243,13 +254,20 @@ DEC Private Mode sequences.
 ### Common Modes
 
 - `?1` - Application cursor keys (DECCKM)
+- `?5` - Reverse video (DECSCNM)
 - `?6` - Origin mode (DECOM)
 - `?7` - Auto wrap mode (DECAWM)
 - `?25` - Show/hide cursor (DECTCEM)
 - `?47` - Alternate screen buffer
+- `?69` - Enable left/right margins (DECLRMM)
 - `?1047` - Alternate screen buffer (alternate)
 - `?1048` - Save/restore cursor
 - `?1049` - Save cursor and use alternate screen
+
+### Standard Modes
+
+- `4` - Insert mode (IRM)
+- `20` - Line feed/new line mode (LNM)
 
 ## Mouse Support
 
@@ -274,6 +292,23 @@ Modern terminal features.
 - `ESC[?1004h/l` - Focus tracking
 - `ESC[?2004h/l` - Bracketed paste mode
 - `ESC[?2026h/l` - Synchronized updates (DEC 2026) - Batch screen updates for flicker-free rendering
+
+### VT520 Features
+
+- `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV) - Ps = 0-8 (0=off, 1=low, 5-8=high)
+- `CSI Ps SP t` - Set Warning-Bell Volume (DECSWBV) - Ps = 0-8 (0=off, 1=low, 5-8=high)
+- `CSI Pl ; Pc " p` - Set Conformance Level (DECSCL) - Pl = 61-65 for VT100-VT520, Pc = 0/1/2 for 8-bit mode
+
+### Character Protection
+
+- `ESC V` - Start Protected Area (SPA)
+- `ESC W` - End Protected Area (EPA)
+- `CSI ? Ps " q` - Select Character Protection Attribute (DECSCA) - Ps = 0/2 (not protected), 1 (protected)
+
+### Color Stack Operations
+
+- `CSI # P` - Push current colors onto stack (XTPUSHCOLORS)
+- `CSI # Q` - Pop colors from stack (XTPOPCOLORS)
 
 ## Kitty Keyboard Protocol
 
@@ -313,8 +348,43 @@ Response: `CSI ? flags u`
 
 VT100/VT220 device information requests.
 
-- `ESC[<n>n` - Device Status Report (DSR)
-- `ESC[c` - Device Attributes (DA)
+### Device Status Report (DSR)
+
+- `CSI 5 n` - Operating status report → Response: `CSI 0 n` (terminal ready)
+- `CSI 6 n` - Cursor position report (CPR) → Response: `CSI row ; col R` (1-indexed)
+
+### Device Attributes (DA)
+
+- `CSI c` or `CSI 0 c` - Primary DA → Response: `CSI ? id ; features c` (id: 1=VT100, 62=VT220, 63=VT320, 64=VT420, 65=VT520)
+- `CSI > c` - Secondary DA → Response: `CSI > 82 ; 10000 ; 0 c` (82='P' for par-term-emu, version 10000)
+
+### DEC Private Mode Request (DECRQM)
+
+- `CSI ? mode $ p` - Request mode status → Response: `CSI ? mode ; state $ y` (state: 0=not recognized, 1=set, 2=reset, 3=permanently set, 4=permanently reset)
+
+### Terminal Parameters (DECREQTPARM)
+
+- `CSI 0 x` or `CSI 1 x` - Request terminal parameters → Response: `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x` (sol=2 if param=0, sol=3 if param=1)
+
+### Window Operations (XTWINOPS)
+
+- `CSI 14 t` - Report text area size in pixels → Response: `CSI 4 ; height ; width t`
+- `CSI 18 t` - Report text area size in characters → Response: `CSI 8 ; rows ; cols t`
+- `CSI 22 t` - Save window title on stack (XTWINOPS)
+- `CSI 23 t` - Restore window title from stack (XTWINOPS)
+
+### Cursor Style (DECSCUSR)
+
+- `CSI 0 SP q` or `CSI 1 SP q` - Blinking block (default)
+- `CSI 2 SP q` - Steady block
+- `CSI 3 SP q` - Blinking underline
+- `CSI 4 SP q` - Steady underline
+- `CSI 5 SP q` - Blinking bar
+- `CSI 6 SP q` - Steady bar
+
+### Left/Right Margins (DECSLRM)
+
+- `CSI Pl ; Pr s` - Set left/right margins (only when DECLRMM ?69 is enabled)
 
 ## OSC Sequences
 
@@ -324,6 +394,9 @@ Operating System Command sequences for advanced features.
 
 - `OSC 0;<title>ST` - Set window title (icon + title)
 - `OSC 2;<title>ST` - Set window title
+- `OSC 21;<title>ST` - Push window title onto stack (XTWINOPS)
+- `OSC 22ST` - Pop window title from stack (XTWINOPS)
+- `OSC 23ST` - Pop icon title from stack (XTWINOPS)
 
 ### Current Working Directory
 
@@ -356,6 +429,28 @@ iTerm2/VSCode compatible shell integration.
 - `C` - Command executed
 - `D;<exit_code>` - Command finished
 
+### Color Palette Operations
+
+- `OSC 4;index;colorspec ST` - Set ANSI color palette entry (index 0-15)
+  - Color spec formats: `rgb:RR/GG/BB` or `#RRGGBB`
+  - Example: `OSC 4;1;rgb:FF/00/00 ST` sets color 1 to red
+- `OSC 104 ST` - Reset all ANSI colors to defaults
+- `OSC 104;index ST` - Reset specific ANSI color to default
+
+### Default Color Operations
+
+- `OSC 10;? ST` - Query default foreground color → Response: `OSC 10;rgb:rrrr/gggg/bbbb ST`
+- `OSC 10;colorspec ST` - Set default foreground color
+- `OSC 110 ST` - Reset default foreground color
+
+- `OSC 11;? ST` - Query default background color → Response: `OSC 11;rgb:rrrr/gggg/bbbb ST`
+- `OSC 11;colorspec ST` - Set default background color
+- `OSC 111 ST` - Reset default background color
+
+- `OSC 12;? ST` - Query cursor color → Response: `OSC 12;rgb:rrrr/gggg/bbbb ST`
+- `OSC 12;colorspec ST` - Set cursor color
+- `OSC 112 ST` - Reset cursor color
+
 ### Notifications
 
 #### iTerm2/ConEmu Style
@@ -370,6 +465,34 @@ Simple format with message only (no title). Send desktop-style notifications.
 
 Structured notifications with both title and message. Use for desktop notifications, alerts, or completion notices.
 
+**Security Note:** Notifications can be disabled using `disable_insecure_sequences` setting.
+
+## DCS Sequences
+
+Device Control String sequences for graphics and advanced features.
+
+### Sixel Graphics
+
+`DCS params q data ST`
+
+Full VT340 Sixel graphics support for inline images.
+
+- Parameters: Aspect ratio, background mode
+- Data includes color definitions, raster attributes, and sixel data
+- **Security Note:** Sixel graphics can be disabled using `disable_insecure_sequences` setting
+- Configurable limits: max pixels, max colors, max graphics retained
+
+**Example:**
+```
+DCS 0 ; 0 q
+"1;1;100;100    # Raster attributes (100x100 pixels)
+#0;2;100;100;100  # Define color 0 as RGB
+#0 ????           # Draw sixel data with color 0
+ST
+```
+
+See [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html) for details.
+
 ## Control Characters
 
 ASCII control characters.
@@ -379,6 +502,7 @@ ASCII control characters.
 - `HT` (0x09) - Horizontal tab
 - `LF` (0x0A) - Line feed
 - `CR` (0x0D) - Carriage return
+- `ESC` (0x1B) - Escape (starts escape sequences)
 
 ## Reset Sequences
 

@@ -340,14 +340,15 @@ safe_spawn_with_cwd(term, "project1", "/bin/bash")  # OK
 
 ### Default Shell Risks
 
-The `spawn_shell()` method uses the `$SHELL` environment variable:
+The `spawn_shell()` method uses the `$SHELL` environment variable on Unix (or `%COMSPEC%` on Windows):
 
 ```python
-# Uses $SHELL from environment (could be manipulated!)
+# Uses $SHELL from environment on Unix (could be manipulated!)
+# Uses %COMSPEC% on Windows (typically cmd.exe)
 term.spawn_shell()
 ```
 
-**Risk**: If an attacker controls `$SHELL`, they can execute arbitrary programs.
+**Risk**: If an attacker controls `$SHELL` (Unix) or `%COMSPEC%` (Windows), they can execute arbitrary programs.
 
 ### Secure Shell Usage
 
@@ -390,8 +391,8 @@ safe_spawn_shell(term)
 from par_term_emu_core_rust import PtyTerminal
 
 # Get default shell using static method
-# On Unix: $SHELL or /bin/bash
-# On Windows: $COMSPEC (PowerShell) or cmd.exe
+# On Unix: $SHELL or /bin/bash (fallback)
+# On Windows: %COMSPEC% or cmd.exe (fallback)
 default_shell = PtyTerminal.get_default_shell()
 print(f"Using shell: {default_shell}")
 

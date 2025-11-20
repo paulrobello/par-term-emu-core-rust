@@ -196,7 +196,6 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 | 4:3 | Curly underline | xterm | Wavy/curly |
 | 4:4 | Dotted underline | xterm | Dotted line |
 | 4:5 | Dashed underline | xterm | Dashed line |
-| 21 | Double underline | VT100 | Alternative syntax |
 
 #### Reset Attributes
 

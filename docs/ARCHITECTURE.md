@@ -11,6 +11,7 @@ This document describes the internal architecture of par-term-emu-core-rust.
   - [3. Cursor](#3-cursor)
   - [4. Grid](#4-grid)
   - [5. Terminal](#5-terminal)
+  - [6. Supporting Modules](#6-supporting-modules)
 - [ANSI Sequence Processing](#ansi-sequence-processing)
 - [Data Flow](#data-flow)
 - [Python Bindings](#python-bindings)
@@ -18,11 +19,16 @@ This document describes the internal architecture of par-term-emu-core-rust.
 - [Performance Considerations](#performance-considerations)
 - [Extension Points](#extension-points)
 - [Testing Strategy](#testing-strategy)
+- [Implemented Features](#implemented-features)
+- [Future Enhancements](#future-enhancements)
+- [Screenshot Module](#screenshot-module)
 - [Dependencies](#dependencies)
 - [Build Process](#build-process)
+- [Continuous Integration](#continuous-integration)
 - [Debugging](#debugging)
 - [Contributing](#contributing)
 - [References](#references)
+- [See Also](#see-also)
 
 ## Overview
 
@@ -356,7 +362,11 @@ pub struct Terminal {
     // Rendering hints
     rendering_hints: Vec<RenderingHint>,
 
-    // ... additional state ...
+    // Damage regions
+    damage_regions: Vec<DamageRegion>,
+
+    // Profiling data
+    profiling: Option<ProfilingData>,
 }
 ```
 
@@ -439,7 +449,7 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
   - Hex color conversion
   - ANSI 256-color conversion
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 60+ classes and 18 color utility functions.
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 50 classes and 18 color utility functions.
 
 ```rust
 #[pyclass(name = "Terminal")]

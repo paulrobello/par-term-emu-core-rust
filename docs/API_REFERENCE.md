@@ -61,6 +61,8 @@ Create a new terminal with specified dimensions.
 #### Clipboard Operations (OSC 52)
 - `clipboard() -> str | None`: Get clipboard content
 - `set_clipboard(content: str | None)`: Set clipboard content programmatically
+- `set_clipboard_with_slot(content: str, slot: str | None = None)`: Set clipboard content for specific slot
+- `get_clipboard_from_slot(slot: str | None = None) -> str | None`: Get clipboard content from specific slot
 - `allow_clipboard_read() -> bool`: Check if clipboard read is allowed
 - `set_allow_clipboard_read(allow: bool)`: Set clipboard read permission (security flag)
 - `set_max_clipboard_sync_events(max: int)`: Limit clipboard event history
@@ -68,9 +70,18 @@ Create a new terminal with specified dimensions.
 - `set_max_clipboard_event_bytes(max: int)`: Truncate large clipboard payloads
 - `get_max_clipboard_event_bytes() -> int`: Get clipboard payload size limit
 
+#### Clipboard History
+- `add_to_clipboard_history(content: str, slot: str = "default", metadata: dict | None = None)`: Add entry to clipboard history
+- `get_clipboard_history(slot: str) -> list[ClipboardEntry]`: Get clipboard history for slot
+- `get_latest_clipboard(slot: str) -> ClipboardEntry | None`: Get most recent clipboard entry for slot
+- `clear_clipboard_history(slot: str)`: Clear history for specific slot
+- `clear_all_clipboard_history()`: Clear all clipboard history
+- `search_clipboard_history(pattern: str, slot: str | None = None, case_sensitive: bool = True) -> list[ClipboardEntry]`: Search clipboard history
+
 #### Scrollback Buffer
 - `scrollback() -> list[str]`: Get scrollback buffer as list of strings
 - `scrollback_len() -> int`: Get number of scrollback lines
+- `scrollback_line(index: int) -> list[tuple[char, tuple[int, int, int], tuple[int, int, int], Attributes]] | None`: Get specific scrollback line with full cell data (index 0 = oldest)
 - `get_scrollback_usage() -> tuple[int, int]`: Get scrollback usage (used_lines, max_capacity)
 
 #### Cell Inspection
@@ -92,15 +103,35 @@ Create a new terminal with specified dimensions.
 - `insert_mode() -> bool`: Check if insert mode is enabled
 - `line_feed_new_line_mode() -> bool`: Check if line feed/new line mode is enabled
 - `synchronized_updates() -> bool`: Check if synchronized updates mode is enabled (DEC 2026)
+- `auto_wrap_mode() -> bool`: Check if auto-wrap mode is enabled
+- `origin_mode() -> bool`: Check if origin mode (DECOM) is enabled
+- `application_cursor() -> bool`: Check if application cursor key mode is enabled
+
+#### VT Conformance Level
+- `conformance_level() -> int`: Get current conformance level (1-5 for VT100-VT520)
+- `conformance_level_name() -> str`: Get conformance level name ("VT100", "VT220", etc.)
+- `set_conformance_level(level: int, c1_mode: int = 2)`: Set conformance level (1-5 or 61-65)
+
+#### Bell Volume Control (VT520)
+- `warning_bell_volume() -> int`: Get warning bell volume (0-8)
+- `set_warning_bell_volume(volume: int)`: Set warning bell volume (0=off, 1-8=volume levels)
+- `margin_bell_volume() -> int`: Get margin bell volume (0-8)
+- `set_margin_bell_volume(volume: int)`: Set margin bell volume (0=off, 1-8=volume levels)
+
+#### Scrolling and Margins
+- `scroll_region() -> tuple[int, int]`: Get vertical scroll region (top, bottom)
+- `left_right_margins() -> tuple[int, int] | None`: Get horizontal margins if set
 
 #### Colors and Appearance
 - `default_fg() -> tuple[int, int, int] | None`: Get default foreground color
 - `default_bg() -> tuple[int, int, int] | None`: Get default background color
 - `set_default_fg(r: int, g: int, b: int)`: Set default foreground color
 - `set_default_bg(r: int, g: int, b: int)`: Set default background color
-- `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (ANSI colors 0-7 → 8-15)
 - `query_default_fg()`: Query default foreground color (response in drain_responses())
 - `query_default_bg()`: Query default background color (response in drain_responses())
+- `get_ansi_color(index: int) -> tuple[int, int, int] | None`: Get ANSI palette color (0-255)
+- `get_ansi_palette() -> list[tuple[int, int, int]]`: Get all 16 ANSI colors (indices 0-15)
+- `set_ansi_palette_color(index: int, r: int, g: int, b: int)`: Set ANSI palette color (0-15)
 
 #### Shell Integration (OSC 133 & OSC 7)
 - `current_directory() -> str | None`: Get current working directory (OSC 7)
@@ -178,8 +209,9 @@ Create a new terminal with specified dimensions.
 - `export_asciicast(session: RecordingSession | None = None) -> str`: Export to asciicast v2 format
 - `export_json(session: RecordingSession | None = None) -> str`: Export to JSON format
 
-### Text Extraction Utilities
+### Text Extraction and Selection
 
+#### Text Extraction Utilities
 - `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor (default word_chars: "/-+\~_.")
 - `get_url_at(col: int, row: int) -> str | None`: Detect and extract URL at cursor
 - `get_line_unwrapped(row: int) -> str | None`: Get full logical line following wrapping
@@ -187,16 +219,26 @@ Create a new terminal with specified dimensions.
 - `find_matching_bracket(col: int, row: int) -> tuple[int, int] | None`: Find matching bracket/parenthesis (supports (), [], {}, <>)
 - `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters
 
+#### Selection Management
+- `set_selection(start_col: int, start_row: int, end_col: int, end_row: int, selection_type: str = "char")`: Set text selection
+- `get_selection() -> Selection | None`: Get current selection
+- `get_selected_text() -> str | None`: Get text content of current selection
+- `clear_selection()`: Clear current selection
+- `select_word_at(col: int, row: int)`: Select word at position
+- `select_line(row: int)`: Select entire line
+
 ### Content Search
 
 - `find_text(pattern: str, case_sensitive: bool = True) -> list[tuple[int, int]]`: Find all occurrences in visible screen
 - `find_next(pattern: str, from_col: int, from_row: int, case_sensitive: bool = True) -> tuple[int, int] | None`: Find next occurrence from position
+- `search_scrollback(pattern: str, case_sensitive: bool = True, max_results: int | None = None) -> list[tuple[int, int]]`: Search scrollback buffer
 
 ### Buffer Statistics
 
 - `get_stats() -> dict[str, int]`: Get terminal statistics (cols, rows, scrollback_lines, total_cells, non_whitespace_lines, graphics_count, estimated_memory_bytes)
 - `count_non_whitespace_lines() -> int`: Count lines containing non-whitespace characters
 - `get_scrollback_usage() -> tuple[int, int]`: Get scrollback usage (used_lines, max_capacity)
+- `scrollback_stats() -> ScrollbackStats`: Get detailed scrollback statistics
 
 ### Static Utility Methods
 
@@ -237,6 +279,12 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 - `update_generation() -> int`: Get current update generation counter
 - `has_updates_since(generation: int) -> bool`: Check if terminal updated since generation
 - `send_resize_pulse()`: Send SIGWINCH to child process after resize
+- `bell_count() -> int`: Get bell event count (increments on BEL/\\x07)
+
+#### Appearance Settings (PTY-Specific)
+- `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (ANSI colors 0-7 → 8-15)
+
+**Note:** PtyTerminal inherits all Terminal methods, so you can also use all Terminal appearance settings like `set_default_fg()`, `set_default_bg()`, etc.
 
 ### Context Manager Support
 
@@ -371,6 +419,35 @@ Session recording metadata.
 
 **Methods:**
 - `get_duration_seconds() -> float`: Get recording duration in seconds
+
+### Selection
+
+Text selection information.
+
+**Properties:**
+- `start: tuple[int, int]`: Selection start position (col, row)
+- `end: tuple[int, int]`: Selection end position (col, row)
+- `selection_type: str`: Selection type ("char", "word", "line", "block")
+
+### ClipboardEntry
+
+Clipboard history entry.
+
+**Properties:**
+- `content: str`: Clipboard content
+- `slot: str`: Clipboard slot name
+- `timestamp: float`: Entry timestamp
+- `metadata: dict | None`: Optional metadata
+
+### ScrollbackStats
+
+Scrollback buffer statistics.
+
+**Properties:**
+- `total_lines: int`: Total scrollback lines
+- `max_lines: int`: Maximum scrollback capacity
+- `used_bytes: int`: Estimated memory usage
+- `wrapped_lines: int`: Count of wrapped lines
 
 ## Enumerations
 
