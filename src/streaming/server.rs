@@ -215,8 +215,14 @@ impl StreamingServer {
                                         }
                                     }
                                 }
-                                crate::streaming::protocol::ClientMessage::Resize { .. } => {
-                                    // TODO: Implement resize handling
+                                crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                    // Resize the terminal buffer
+                                    if let Ok(mut term) = self.terminal.lock() {
+                                        term.resize(cols as usize, rows as usize);
+                                    }
+                                    // TODO: Also send SIGWINCH to PTY (requires resize channel or callback)
+                                    // For now, terminal buffer is resized which is sufficient for display
+                                    // The shell won't receive SIGWINCH until this is implemented
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
                                     // Pings are handled automatically by Client::recv()

@@ -198,6 +198,19 @@
         term.open(document.getElementById('terminal'));
         fitAddon.fit();
 
+        // Debounce helper for resize events
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
         // WebSocket connection
         let ws = null;
         let bytesReceived = 0;
@@ -247,6 +260,9 @@
                     setStatus('connected');
                     disconnectBtn.disabled = false;
                     term.writeln('\r\n\x1b[32m● Connected to streaming server\x1b[0m\r\n');
+
+                    // Resize terminal to fit container and notify server
+                    setTimeout(() => handleResize(), 100);
                 };
 
                 ws.onmessage = (event) => {
@@ -353,17 +369,31 @@
             }
         });
 
-        // Handle window resize
-        window.addEventListener('resize', () => {
+        // Function to resize terminal and notify server
+        function handleResize() {
             fitAddon.fit();
             if (ws && ws.readyState === WebSocket.OPEN) {
+                const cols = term.cols;
+                const rows = term.rows;
+                console.log(`Resizing backend terminal to ${cols}x${rows}`);
                 ws.send(JSON.stringify({
                     type: 'resize',
-                    cols: term.cols,
-                    rows: term.rows
+                    cols: cols,
+                    rows: rows
                 }));
             }
-        });
+        }
+
+        // Debounced resize handler (prevent too many resize events)
+        const debouncedResize = debounce(handleResize, 100);
+
+        // Handle window resize
+        window.addEventListener('resize', debouncedResize);
+
+        // Use ResizeObserver to handle container size changes
+        const terminalContainer = document.getElementById('terminal-container');
+        const resizeObserver = new ResizeObserver(debouncedResize);
+        resizeObserver.observe(terminalContainer);
 
         // Periodic ping for keepalive
         setInterval(() => {
