@@ -123,7 +123,7 @@ def main():
                         if cmd == 's':
                             client_count = streaming_server.client_count()
                             print(f"Connected clients: {client_count}")
-                            cols, rows = pty_terminal.get_size()
+                            cols, rows = pty_terminal.size()
                             print(f"Terminal size: {cols}x{rows}")
                     except Exception as e:
                         print(f"Error: {e}")
