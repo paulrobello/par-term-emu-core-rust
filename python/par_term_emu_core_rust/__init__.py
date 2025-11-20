@@ -47,6 +47,15 @@ from ._native import (
     rgb_to_hsl,
 )
 
+# Optional streaming support (available when built with --features streaming)
+try:
+    from ._native import StreamingConfig, StreamingServer
+    _has_streaming = True
+except ImportError:
+    _has_streaming = False
+    StreamingConfig = None
+    StreamingServer = None
+
 __version__ = "0.7.0"
 __all__ = [
     "Attributes",
@@ -77,3 +86,7 @@ __all__ = [
     "rgb_to_hex",
     "rgb_to_hsl",
 ]
+
+# Add streaming classes if available
+if _has_streaming:
+    __all__.extend(["StreamingConfig", "StreamingServer"])
