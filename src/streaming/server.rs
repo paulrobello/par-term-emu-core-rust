@@ -252,16 +252,15 @@ impl StreamingServer {
                                     // Pings are handled automatically by Client::recv()
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    // Send current visible screen content to client
+                                    // Send current visible screen content to client as refresh message
                                     let refresh_msg = {
                                         if let Ok(terminal) = terminal_for_refresh.lock() {
                                             let content = terminal.export_visible_screen_styled();
                                             let (cols, rows) = terminal.size();
-                                            Some(ServerMessage::connected_with_screen(
+                                            Some(ServerMessage::refresh(
                                                 cols as u16,
                                                 rows as u16,
-                                                content,
-                                                client_id.to_string()
+                                                content
                                             ))
                                         } else {
                                             None

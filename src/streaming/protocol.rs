@@ -45,6 +45,16 @@ pub enum ServerMessage {
         session_id: String,
     },
 
+    /// Screen refresh response (full screen content)
+    Refresh {
+        /// Current terminal width in columns
+        cols: u16,
+        /// Current terminal height in rows
+        rows: u16,
+        /// Full screen content with ANSI styling
+        screen_content: String,
+    },
+
     /// Cursor position changed (optional optimization)
     #[serde(rename = "cursor")]
     CursorPosition {
@@ -172,6 +182,15 @@ impl ServerMessage {
             rows,
             initial_screen: Some(initial_screen),
             session_id,
+        }
+    }
+
+    /// Create a new refresh message with screen content
+    pub fn refresh(cols: u16, rows: u16, screen_content: String) -> Self {
+        Self::Refresh {
+            cols,
+            rows,
+            screen_content,
         }
     }
 
