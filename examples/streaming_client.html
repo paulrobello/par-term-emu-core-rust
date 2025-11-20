@@ -348,6 +348,8 @@
                                 if (msg.initial_screen) {
                                     console.log('Rendering initial screen snapshot');
                                     term.write(msg.initial_screen);
+                                    // Focus terminal for immediate keyboard input
+                                    term.focus();
                                 }
                                 // We'll get a fresh snapshot after resize confirmation
                                 break;
@@ -376,6 +378,8 @@
                                 // Fully reset terminal state to prevent wrapping issues
                                 term.reset();
                                 term.write(msg.screen_content);
+                                // Focus terminal for immediate keyboard input
+                                term.focus();
                                 break;
 
                             case 'title':
