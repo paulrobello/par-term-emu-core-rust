@@ -41,6 +41,7 @@ pub mod color_utils;
 pub mod conformance_level;
 pub mod cursor;
 pub mod debug;
+pub mod graphics;
 pub mod grid;
 pub mod html_export;
 pub mod mouse;

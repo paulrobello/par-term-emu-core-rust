@@ -18,6 +18,8 @@
 /// - ST: String terminator (ESC \ or 0x9C)
 use std::collections::HashMap;
 
+use crate::graphics::{GraphicProtocol, TerminalGraphic};
+
 /// Hard upper bounds for Sixel resources. These are deliberately high but
 /// finite, and are used to clamp user-configurable limits.
 pub const SIXEL_HARD_MAX_WIDTH: usize = 4096;
@@ -216,6 +218,23 @@ impl SixelGraphic {
         } else {
             None
         }
+    }
+
+    /// Convert to unified TerminalGraphic representation
+    pub fn to_terminal_graphic(&self) -> TerminalGraphic {
+        let mut graphic = TerminalGraphic::new(
+            self.id,
+            GraphicProtocol::Sixel,
+            self.position,
+            self.width,
+            self.height,
+            self.pixels.clone(),
+        );
+        if let Some((w, h)) = self.cell_dimensions {
+            graphic.set_cell_dimensions(w, h);
+        }
+        graphic.scroll_offset_rows = self.scroll_offset_rows;
+        graphic
     }
 }
 

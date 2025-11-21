@@ -188,10 +188,14 @@ impl PyShellIntegration {
     }
 }
 
-/// Sixel graphic representation
+/// Graphics representation (Sixel, iTerm2, or Kitty)
 #[pyclass(name = "Graphic")]
 #[derive(Clone)]
 pub struct PyGraphic {
+    #[pyo3(get)]
+    pub id: u64,
+    #[pyo3(get)]
+    pub protocol: String,
     #[pyo3(get)]
     pub position: (usize, usize),
     #[pyo3(get)]
@@ -200,6 +204,8 @@ pub struct PyGraphic {
     pub height: usize,
     #[pyo3(get)]
     pub scroll_offset_rows: usize,
+    #[pyo3(get)]
+    pub cell_dimensions: Option<(u32, u32)>,
     pixels: Vec<u8>,
 }
 
@@ -235,10 +241,44 @@ impl PyGraphic {
         self.pixels.clone()
     }
 
+    /// Get size in terminal cells
+    fn cell_size(&self, cell_width: u32, cell_height: u32) -> (usize, usize) {
+        let cols = (self.width + cell_width as usize - 1) / cell_width as usize;
+        let rows = (self.height + cell_height as usize - 1) / cell_height as usize;
+        (cols, rows)
+    }
+
+    /// Sample for half-block rendering at cell (col, row)
+    /// Returns ((top_r, top_g, top_b, top_a), (bottom_r, bottom_g, bottom_b, bottom_a))
+    fn sample_half_block(
+        &self,
+        cell_col: usize,
+        cell_row: usize,
+        cell_width: u32,
+        cell_height: u32,
+    ) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
+        // Calculate pixel coordinates relative to graphic position
+        let rel_col = cell_col.checked_sub(self.position.0)?;
+        let rel_row = cell_row.checked_sub(self.position.1)?;
+
+        let px_x = rel_col * cell_width as usize;
+        let px_y = rel_row * cell_height as usize;
+
+        // Sample center of top and bottom halves
+        let top_y = px_y + cell_height as usize / 4;
+        let bottom_y = px_y + (cell_height as usize * 3) / 4;
+        let center_x = px_x + cell_width as usize / 2;
+
+        let top = self.get_pixel(center_x, top_y)?;
+        let bottom = self.get_pixel(center_x, bottom_y)?;
+
+        Some((top, bottom))
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "Graphic(position=({},{}), size={}x{})",
-            self.position.0, self.position.1, self.width, self.height
+            "Graphic(id={}, protocol='{}', position=({},{}), size={}x{})",
+            self.id, self.protocol, self.position.0, self.position.1, self.width, self.height
         ))
     }
 }
@@ -246,11 +286,29 @@ impl PyGraphic {
 impl From<&crate::sixel::SixelGraphic> for PyGraphic {
     fn from(graphic: &crate::sixel::SixelGraphic) -> Self {
         Self {
+            id: graphic.id,
+            protocol: "sixel".to_string(),
             position: graphic.position,
             width: graphic.width,
             height: graphic.height,
             scroll_offset_rows: graphic.scroll_offset_rows,
+            cell_dimensions: graphic.cell_dimensions,
             pixels: graphic.pixels.clone(),
+        }
+    }
+}
+
+impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
+    fn from(graphic: &crate::graphics::TerminalGraphic) -> Self {
+        Self {
+            id: graphic.id,
+            protocol: graphic.protocol.as_str().to_string(),
+            position: graphic.position,
+            width: graphic.width,
+            height: graphic.height,
+            scroll_offset_rows: graphic.scroll_offset_rows,
+            cell_dimensions: graphic.cell_dimensions,
+            pixels: (*graphic.pixels).clone(),
         }
     }
 }
@@ -2705,10 +2763,13 @@ mod tests {
         ];
 
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (0, 0),
             width: 2,
             height: 2,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels,
         };
 
@@ -2721,10 +2782,13 @@ mod tests {
     #[test]
     fn test_pygraphic_get_pixel_out_of_bounds() {
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (0, 0),
             width: 2,
             height: 2,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels: vec![0; 16], // 2x2 RGBA
         };
 
@@ -2736,10 +2800,13 @@ mod tests {
     #[test]
     fn test_pygraphic_get_pixel_edge_cases() {
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (5, 10),
             width: 3,
             height: 3,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels: vec![128; 36], // 3x3 RGBA with all values at 128
         };
 
@@ -2758,10 +2825,13 @@ mod tests {
     fn test_pygraphic_pixels_returns_copy() {
         let original_pixels = vec![10, 20, 30, 40, 50, 60, 70, 80];
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (0, 0),
             width: 2,
             height: 1,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels: original_pixels.clone(),
         };
 
@@ -2773,14 +2843,19 @@ mod tests {
     #[test]
     fn test_pygraphic_repr() {
         let graphic = PyGraphic {
+            id: 42,
+            protocol: "sixel".to_string(),
             position: (10, 20),
             width: 100,
             height: 50,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels: vec![],
         };
 
         let repr = graphic.__repr__().unwrap();
+        assert!(repr.contains("id=42"));
+        assert!(repr.contains("protocol='sixel'"));
         assert!(repr.contains("position=(10,20)"));
         assert!(repr.contains("size=100x50"));
     }
@@ -2788,15 +2863,20 @@ mod tests {
     #[test]
     fn test_pygraphic_clone() {
         let graphic1 = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (5, 10),
             width: 20,
             height: 30,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels: vec![1, 2, 3, 4],
         };
 
         let graphic2 = graphic1.clone();
 
+        assert_eq!(graphic1.id, graphic2.id);
+        assert_eq!(graphic1.protocol, graphic2.protocol);
         assert_eq!(graphic1.position, graphic2.position);
         assert_eq!(graphic1.width, graphic2.width);
         assert_eq!(graphic1.height, graphic2.height);
@@ -2820,10 +2900,13 @@ mod tests {
         pixels[idx + 3] = 255; // A
 
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (0, 0),
             width: 2,
             height: 2,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels,
         };
 
@@ -2912,10 +2995,13 @@ mod tests {
         ];
 
         let graphic = PyGraphic {
+            id: 1,
+            protocol: "sixel".to_string(),
             position: (0, 0),
             width: 4,
             height: 1,
             scroll_offset_rows: 0,
+            cell_dimensions: None,
             pixels,
         };
 
