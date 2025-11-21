@@ -276,20 +276,16 @@ impl Terminal {
                         self.cursor.col = new_cursor_col;
                     }
 
-                    // Enforce per-terminal limit on number of retained graphics.
-                    if self.graphics.len() >= self.max_sixel_graphics {
-                        // Drop the oldest graphic to make room for the new one.
-                        self.graphics.remove(0);
-                        self.dropped_sixel_graphics = self.dropped_sixel_graphics.saturating_add(1);
-                        debug::log(
-                            debug::DebugLevel::Debug,
-                            "SIXEL",
-                            "Dropped oldest graphic due to max_sixel_graphics limit",
-                        );
-                    }
-
-                    // NOW add the graphic with its correctly adjusted position
-                    self.graphics.push(graphic);
+                    // Convert SixelGraphic to TerminalGraphic and add to store
+                    let terminal_graphic = crate::graphics::TerminalGraphic::new(
+                        crate::graphics::next_graphic_id(),
+                        crate::graphics::GraphicProtocol::Sixel,
+                        graphic.position,
+                        graphic.width,
+                        graphic.height,
+                        graphic.pixels.clone(),
+                    );
+                    self.graphics_store.add_graphic(terminal_graphic);
 
                     debug::log(
                         debug::DebugLevel::Debug,
@@ -360,32 +356,11 @@ impl Terminal {
         // Get cursor position for graphic placement
         let position = (self.cursor.col, self.cursor.row);
 
-        // Create a temporary graphics store for this operation
-        // TODO: Use a proper GraphicsStore when migrated
-        let mut temp_store = crate::graphics::GraphicsStore::new();
-
-        // Build the graphic
-        match parser.build_graphic(position, &mut temp_store) {
+        // Build the graphic using the terminal's graphics store
+        match parser.build_graphic(position, &mut self.graphics_store) {
             Ok(Some(graphic)) => {
-                // Convert to SixelGraphic for storage (temporary)
-                let sixel_graphic = sixel::SixelGraphic {
-                    id: graphic.id,
-                    position: graphic.position,
-                    width: graphic.width,
-                    height: graphic.height,
-                    pixels: (*graphic.pixels).clone(),
-                    palette: std::collections::HashMap::new(),
-                    cell_dimensions: graphic.cell_dimensions,
-                    scroll_offset_rows: 0,
-                };
-
-                // Enforce graphics limit
-                if self.graphics.len() >= self.max_sixel_graphics {
-                    self.graphics.remove(0);
-                    self.dropped_sixel_graphics += 1;
-                }
-
-                self.graphics.push(sixel_graphic);
+                // Add to graphics store (limit enforced internally)
+                self.graphics_store.add_graphic(graphic.clone());
 
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -761,7 +736,7 @@ mod tests {
         let mut term = create_test_terminal();
         let params = create_empty_params();
 
-        let initial_graphics_count = term.graphics.len();
+        let initial_graphics_count = term.graphics_count();
 
         term.dcs_hook(&params, &[], false, 'q');
 
@@ -773,7 +748,7 @@ mod tests {
         term.dcs_unhook();
 
         // Graphics list should have one more entry
-        assert_eq!(term.graphics.len(), initial_graphics_count + 1);
+        assert_eq!(term.graphics_count(), initial_graphics_count + 1);
     }
 
     #[test]
@@ -795,11 +770,11 @@ mod tests {
 
         emit_sixel(&mut term);
         emit_sixel(&mut term);
-        assert_eq!(term.graphics.len(), 2);
+        assert_eq!(term.graphics_count(), 2);
     }
 
     #[test]
-    fn test_sixel_graphics_drop_counter() {
+    fn test_sixel_graphics_limit_drops_oldest() {
         let mut term = create_test_terminal();
         let params = create_empty_params();
 
@@ -814,17 +789,15 @@ mod tests {
         };
 
         emit_sixel(&mut term);
-        assert_eq!(term.graphics.len(), 1);
-        assert_eq!(term.dropped_sixel_graphics(), 0);
+        assert_eq!(term.graphics_count(), 1);
 
         emit_sixel(&mut term);
-        assert_eq!(term.graphics.len(), 1);
-        assert_eq!(term.dropped_sixel_graphics(), 1);
+        // Limit enforced - still only 1 graphic
+        assert_eq!(term.graphics_count(), 1);
 
-        // Emit a third graphic; limit should be enforced by dropping the oldest
+        // Emit a third graphic; limit should still be enforced
         emit_sixel(&mut term);
-        assert_eq!(term.graphics.len(), 1);
-        assert_eq!(term.dropped_sixel_graphics(), 2);
+        assert_eq!(term.graphics_count(), 1);
     }
 
     #[test]

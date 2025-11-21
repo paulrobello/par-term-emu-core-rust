@@ -11,8 +11,8 @@ pub use error::{ScreenshotError, ScreenshotResult};
 pub use shaper::FontType;
 
 use crate::cursor::Cursor;
+use crate::graphics::TerminalGraphic;
 use crate::grid::Grid;
-use crate::sixel::SixelGraphic;
 use renderer::Renderer;
 use std::path::Path;
 
@@ -29,7 +29,7 @@ pub struct CursorInfo {
 pub fn render_grid(
     grid: &Grid,
     cursor: Option<&Cursor>,
-    graphics: &[SixelGraphic],
+    graphics: &[TerminalGraphic],
     config: ScreenshotConfig,
 ) -> ScreenshotResult<Vec<u8>> {
     // SVG doesn't support cursor or sixel rendering yet
@@ -57,7 +57,7 @@ pub fn render_grid(
 pub fn save_grid(
     grid: &Grid,
     cursor: Option<&Cursor>,
-    graphics: &[SixelGraphic],
+    graphics: &[TerminalGraphic],
     path: &Path,
     config: ScreenshotConfig,
 ) -> ScreenshotResult<()> {

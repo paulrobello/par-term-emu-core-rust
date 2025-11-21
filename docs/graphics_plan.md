@@ -7,7 +7,7 @@ Multi-protocol graphics support for Sixel, iTerm2 inline images, and Kitty graph
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Core Refactoring | **Complete** | `src/graphics/mod.rs`, `TerminalGraphic`, `GraphicsStore`, `GraphicsLimits` |
-| Phase 2: Scrollback Persistence | **Partial** | `GraphicsStore` has scrollback methods; Terminal still uses `Vec<SixelGraphic>` |
+| Phase 2: Scrollback Persistence | **Complete** | Terminal now uses `GraphicsStore` with scrollback support |
 | Phase 3: iTerm2 Support | **Complete** | OSC 1337 parsing in `osc.rs`, `ITermParser` in `src/graphics/iterm.rs` |
 | Phase 4: Kitty Support | **Complete** | APC G handling in `dcs.rs`, `KittyParser` in `src/graphics/kitty.rs` |
 | Phase 5: Advanced Features | Not started | Unicode placeholders, animations |
@@ -28,10 +28,10 @@ Multi-protocol graphics support for Sixel, iTerm2 inline images, and Kitty graph
 - `src/python_bindings/types.rs` - `PyGraphic` wrapper
 
 ### Current Architecture
-- **Storage**: `Terminal.graphics: Vec<SixelGraphic>` - flat vector, position-based
+- **Storage**: `Terminal.graphics_store: GraphicsStore` - unified storage for all protocols
 - **Cell Association**: None - graphics overlay by (col, row) coordinates
-- **Scrollback**: Graphics are REMOVED when scrolled off, not preserved
-- **Rendering**: Single RGBA pixel format, no abstraction for different backends
+- **Scrollback**: Graphics are moved to scrollback when scrolled off (preserved)
+- **Rendering**: Single RGBA pixel format via `TerminalGraphic`, supports all protocols
 
 ## Goals
 

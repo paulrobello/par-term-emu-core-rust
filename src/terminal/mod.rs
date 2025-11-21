@@ -23,6 +23,7 @@ use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
 use crate::cursor::Cursor;
 use crate::debug;
+use crate::graphics::{GraphicsLimits, GraphicsStore};
 use crate::grid::Grid;
 use crate::mouse::{MouseEncoding, MouseEvent, MouseMode};
 use crate::shell_integration::ShellIntegration;
@@ -1153,13 +1154,9 @@ pub struct Terminal {
     current_hyperlink_id: Option<u32>,
     /// Next available hyperlink ID
     next_hyperlink_id: u32,
-    /// Sixel graphics storage
-    graphics: Vec<sixel::SixelGraphic>,
-    /// Maximum number of Sixel graphics to retain
-    max_sixel_graphics: usize,
-    /// Counter of Sixel graphics dropped due to limits
-    dropped_sixel_graphics: usize,
-    /// Sixel resource limits (per-terminal)
+    /// Unified graphics storage (Sixel, iTerm2, Kitty)
+    graphics_store: GraphicsStore,
+    /// Sixel resource limits (per-terminal, for decoding)
     sixel_limits: sixel::SixelLimits,
     /// Cell dimensions in pixels (width, height) for sixel graphics
     /// Default (1, 2) is for text-mode TUI with half-block rendering
@@ -1550,9 +1547,7 @@ impl Terminal {
             hyperlinks: HashMap::new(),
             current_hyperlink_id: None,
             next_hyperlink_id: 0,
-            graphics: Vec::new(),
-            max_sixel_graphics: sixel::SIXEL_DEFAULT_MAX_GRAPHICS,
-            dropped_sixel_graphics: 0,
+            graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
             sixel_limits: sixel::SixelLimits::default(),
             cell_dimensions: (1, 2), // Default for TUI half-block rendering
             sixel_parser: None,
@@ -2021,12 +2016,12 @@ impl Terminal {
         self.cell_dimensions = (width.max(1), height.max(1));
     }
 
-    /// Get the maximum number of Sixel graphics retained for this terminal
+    /// Get the maximum number of graphics retained for this terminal
     pub fn max_sixel_graphics(&self) -> usize {
-        self.max_sixel_graphics
+        self.graphics_store.limits().max_graphics_count
     }
 
-    /// Set the maximum number of Sixel graphics retained for this terminal.
+    /// Set the maximum number of graphics retained for this terminal.
     ///
     /// The value is clamped to a safe range and applies to graphics created
     /// after the change. If the new limit is lower than the current number of
@@ -2035,26 +2030,13 @@ impl Terminal {
         use crate::sixel::SIXEL_HARD_MAX_GRAPHICS;
 
         let clamped = max_graphics.clamp(1, SIXEL_HARD_MAX_GRAPHICS);
-        self.max_sixel_graphics = clamped;
-
-        if self.graphics.len() > clamped {
-            let excess = self.graphics.len() - clamped;
-            self.dropped_sixel_graphics = self.dropped_sixel_graphics.saturating_add(excess);
-            self.graphics.drain(0..excess);
-            debug::log(
-                debug::DebugLevel::Debug,
-                "SIXEL",
-                &format!(
-                    "Dropped {} oldest graphics due to reduced max_sixel_graphics limit (now {})",
-                    excess, clamped
-                ),
-            );
-        }
+        self.graphics_store.set_max_graphics(clamped);
     }
 
-    /// Get the number of Sixel graphics dropped due to limits
+    /// Get the number of graphics dropped due to limits (deprecated, always returns 0)
     pub fn dropped_sixel_graphics(&self) -> usize {
-        self.dropped_sixel_graphics
+        // GraphicsStore handles limits internally without tracking dropped count
+        0
     }
 
     /// Get Sixel statistics for this terminal.
@@ -2063,13 +2045,12 @@ impl Terminal {
     /// - limits: SixelLimits (max width/height/repeat)
     /// - max_graphics: maximum number of retained graphics
     /// - current_graphics: current number of graphics stored
-    /// - dropped_graphics: number of graphics dropped due to limits
+    /// - dropped_graphics: number of graphics dropped due to limits (always 0 now)
     pub fn sixel_stats(&self) -> (sixel::SixelLimits, usize, usize, usize) {
         let limits = self.sixel_limits;
-        let max_graphics = self.max_sixel_graphics;
-        let current_graphics = self.graphics.len();
-        let dropped_graphics = self.dropped_sixel_graphics;
-        (limits, max_graphics, current_graphics, dropped_graphics)
+        let max_graphics = self.graphics_store.limits().max_graphics_count;
+        let current_graphics = self.graphics_store.graphics_count();
+        (limits, max_graphics, current_graphics, 0)
     }
 
     /// Process a buffered Sixel command (color, raster, repeat)
@@ -3184,7 +3165,7 @@ impl Terminal {
         let graphics = if config.sixel_render_mode != crate::screenshot::SixelRenderMode::Disabled
             && scrollback_offset == 0
         {
-            self.graphics()
+            self.all_graphics()
         } else {
             &[]
         };
@@ -3233,7 +3214,7 @@ impl Terminal {
         let graphics = if config.sixel_render_mode != crate::screenshot::SixelRenderMode::Disabled
             && scrollback_offset == 0
         {
-            self.graphics()
+            self.all_graphics()
         } else {
             &[]
         };

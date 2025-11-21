@@ -166,6 +166,11 @@ impl TerminalGraphic {
         ))
     }
 
+    /// Alias for pixel_at (compatibility with SixelGraphic API)
+    pub fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8, u8)> {
+        self.pixel_at(x, y)
+    }
+
     /// Sample color for half-block cell rendering
     /// Returns (top_half_rgba, bottom_half_rgba) for the cell at (col, row)
     pub fn sample_half_block(
@@ -287,6 +292,20 @@ impl GraphicsStore {
     /// Get total graphics count
     pub fn graphics_count(&self) -> usize {
         self.placements.len()
+    }
+
+    /// Get current limits
+    pub fn limits(&self) -> &GraphicsLimits {
+        &self.limits
+    }
+
+    /// Set maximum graphics count
+    pub fn set_max_graphics(&mut self, max: usize) {
+        self.limits.max_graphics_count = max;
+        // Enforce new limit
+        while self.placements.len() > max {
+            self.placements.remove(0);
+        }
     }
 
     /// Clear all graphics

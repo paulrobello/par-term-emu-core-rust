@@ -2,8 +2,8 @@ use image::{Rgba, RgbaImage};
 
 use crate::cell::{Cell, UnderlineStyle};
 use crate::cursor::{Cursor, CursorStyle};
+use crate::graphics::TerminalGraphic;
 use crate::grid::Grid;
-use crate::sixel::SixelGraphic;
 
 use super::config::{ScreenshotConfig, SixelRenderMode};
 use super::error::ScreenshotResult;
@@ -74,7 +74,7 @@ impl Renderer {
         &mut self,
         grid: &Grid,
         cursor: Option<&Cursor>,
-        graphics: &[SixelGraphic],
+        graphics: &[TerminalGraphic],
     ) -> ScreenshotResult<RgbaImage> {
         // Create canvas with background color
         let bg_color = self.config.background_color.unwrap_or((0, 0, 0));
@@ -905,7 +905,7 @@ impl Renderer {
     }
 
     /// Render Sixel graphic onto the image using actual pixels
-    fn render_sixel_pixels(&self, image: &mut RgbaImage, graphic: &SixelGraphic) {
+    fn render_sixel_pixels(&self, image: &mut RgbaImage, graphic: &TerminalGraphic) {
         // Calculate pixel position from terminal position
         let x_offset = self.config.padding_px + graphic.position.0 as u32 * self.cell_width;
         let y_offset = self.config.padding_px + graphic.position.1 as u32 * self.cell_height;
@@ -941,7 +941,7 @@ impl Renderer {
     fn render_sixel_halfblocks(
         &mut self,
         image: &mut RgbaImage,
-        graphic: &SixelGraphic,
+        graphic: &TerminalGraphic,
     ) -> ScreenshotResult<()> {
         // Calculate cell position from terminal position
         let base_col = graphic.position.0;

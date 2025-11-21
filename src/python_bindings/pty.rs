@@ -1894,7 +1894,7 @@ impl PyPtyTerminal {
     fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
         let terminal = self.inner.terminal();
         let graphics = if let Ok(term) = terminal.lock() {
-            let graphics = term.graphics();
+            let graphics = term.all_graphics();
             graphics.iter().map(PyGraphic::from).collect()
         } else {
             Vec::new()

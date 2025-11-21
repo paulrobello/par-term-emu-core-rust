@@ -1305,7 +1305,7 @@ impl PyTerminal {
     /// Returns:
     ///     List of all Sixel graphics
     fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
-        let graphics = self.inner.graphics();
+        let graphics = self.inner.all_graphics();
         Ok(graphics.iter().map(PyGraphic::from).collect())
     }
 
