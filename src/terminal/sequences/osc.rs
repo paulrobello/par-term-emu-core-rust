@@ -458,6 +458,15 @@ impl Terminal {
                         }
                     }
                 }
+                "1337" => {
+                    // iTerm2 inline images (OSC 1337)
+                    // Format: OSC 1337 ; File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST
+                    if params.len() >= 2 {
+                        if let Ok(data) = std::str::from_utf8(params[1]) {
+                            self.handle_iterm_image(data);
+                        }
+                    }
+                }
                 _ => {}
             }
         }

@@ -141,6 +141,101 @@ impl Terminal {
             ),
         );
     }
+
+    /// Handle iTerm2 inline image (OSC 1337)
+    ///
+    /// Format: File=name=<b64>;size=<bytes>;inline=1:<base64 data>
+    pub(crate) fn handle_iterm_image(&mut self, data: &str) {
+        use crate::graphics::iterm::ITermParser;
+
+        // Split into params and image data at the colon
+        let (params_str, image_data) = match data.split_once(':') {
+            Some((p, d)) => (p, d),
+            None => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    "No image data found in OSC 1337",
+                );
+                return;
+            }
+        };
+
+        // Must start with "File="
+        if !params_str.starts_with("File=") {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                &format!("Unsupported OSC 1337 command: {}", params_str),
+            );
+            return;
+        }
+
+        let params_str = &params_str[5..]; // Remove "File=" prefix
+
+        let mut parser = ITermParser::new();
+
+        // Parse parameters
+        if let Err(e) = parser.parse_params(params_str) {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                &format!("Failed to parse iTerm params: {}", e),
+            );
+            return;
+        }
+
+        // Set the base64 image data
+        parser.set_data(image_data.as_bytes());
+
+        // Get cursor position for graphic placement
+        let position = (self.cursor.col, self.cursor.row);
+
+        // Decode and create graphic
+        match parser.decode_image(position) {
+            Ok(mut graphic) => {
+                // Set cell dimensions
+                let (cell_w, cell_h) = self.cell_dimensions;
+                graphic.set_cell_dimensions(cell_w, cell_h);
+
+                // Convert to SixelGraphic for storage (temporary - will be updated when GraphicsStore is used)
+                let sixel_graphic = sixel::SixelGraphic {
+                    id: graphic.id,
+                    position: graphic.position,
+                    width: graphic.width,
+                    height: graphic.height,
+                    pixels: (*graphic.pixels).clone(),
+                    palette: std::collections::HashMap::new(),
+                    cell_dimensions: graphic.cell_dimensions,
+                    scroll_offset_rows: 0,
+                };
+
+                // Enforce graphics limit
+                if self.graphics.len() >= self.max_sixel_graphics {
+                    self.graphics.remove(0);
+                    self.dropped_sixel_graphics += 1;
+                }
+
+                self.graphics.push(sixel_graphic);
+
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    &format!(
+                        "Added iTerm image at ({}, {}), size {}x{}",
+                        position.0, position.1, graphic.width, graphic.height
+                    ),
+                );
+            }
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    &format!("Failed to decode iTerm image: {}", e),
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]
