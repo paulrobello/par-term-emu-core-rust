@@ -48,14 +48,6 @@ export default function Home() {
       {/* Header */}
       <div className="glass rounded-2xl p-3 shadow-2xl flex-shrink-0">
         <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-gradient mb-2">
-              Terminal Streaming
-            </h1>
-            <p className="text-terminal-muted text-sm">
-              Modern web-based terminal emulator with real-time streaming
-            </p>
-          </div>
 
           {/* Status Indicator */}
           <div className="flex items-center gap-3">

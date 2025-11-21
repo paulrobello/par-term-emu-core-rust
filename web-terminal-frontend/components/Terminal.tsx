@@ -33,7 +33,7 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
     const term = new XTerm({
       cursorBlink: false,
       fontSize: 14,
-      fontFamily: "'NerdFontsSymbols Nerd Font', 'JetBrains Mono', 'Fira Code', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'",
+      fontFamily: "'Symbols Nerd Font', 'JetBrains Mono', 'Fira Code', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'",
       rescaleOverlappingGlyphs: true,
       theme: {
         background: '#0a0a0a',

@@ -1,6 +1,13 @@
 /* All @import statements must come first */
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400;1,700&family=Fira+Code:wght@400;700&display=swap');
-@import url('https://cdn.jsdelivr.net/npm/nerdfonts-web@1.0.1/nf.css');
+/* Official Nerd Fonts Symbols from GitHub releases */
+@font-face {
+  font-family: 'Symbols Nerd Font';
+  src: url('https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@v3.3.0/patched-fonts/NerdFontsSymbolsOnly/SymbolsNerdFont-Regular.ttf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
 @import '@xterm/xterm/css/xterm.css';
 @import "tailwindcss";
 
