@@ -1,11 +1,8 @@
-@import "tailwindcss";
-
-/* Import fonts from CDN */
+/* All @import statements must come first */
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,400;0,700;1,400;1,700&family=Fira+Code:wght@400;700&display=swap');
 @import url('https://cdn.jsdelivr.net/npm/nerdfonts-web@1.0.1/nf.css');
-
-/* Import xterm.js styles */
 @import '@xterm/xterm/css/xterm.css';
+@import "tailwindcss";
 
 @layer base {
   :root {
@@ -13,10 +10,14 @@
     --terminal-surface: #1a1a1a;
     --terminal-border: #2a2a2a;
     --terminal-accent: #3a3a3a;
+    --terminal-text: #e0e0e0;
   }
 
   body {
-    @apply bg-terminal-bg text-terminal-text antialiased;
+    background: var(--terminal-bg);
+    color: var(--terminal-text);
+    -webkit-font-smoothing: antialiased;
+    min-height: 100vh;
   }
 }
 
@@ -27,34 +28,68 @@
   }
 
   .terminal-scrollbar::-webkit-scrollbar-track {
-    @apply bg-terminal-surface;
+    background: var(--terminal-surface);
   }
 
   .terminal-scrollbar::-webkit-scrollbar-thumb {
-    @apply bg-terminal-accent rounded-full;
+    background: var(--terminal-accent);
+    border-radius: 9999px;
   }
 
   .terminal-scrollbar::-webkit-scrollbar-thumb:hover {
-    @apply bg-terminal-border;
+    background: var(--terminal-border);
   }
 
   /* Glass effect */
   .glass {
-    @apply bg-terminal-surface/80 backdrop-blur-xl border border-terminal-border;
+    background: color-mix(in srgb, var(--terminal-surface) 80%, transparent);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--terminal-border);
   }
 
   /* Status indicator */
   .status-indicator {
-    @apply relative flex h-3 w-3;
+    position: relative;
+    display: flex;
+    height: 12px;
+    width: 12px;
   }
 
   .status-indicator-ping {
-    @apply animate-ping absolute inline-flex h-full w-full rounded-full opacity-75;
+    position: absolute;
+    display: inline-flex;
+    height: 100%;
+    width: 100%;
+    border-radius: 9999px;
+    opacity: 0.75;
+    animation: ping 1s cubic-bezier(0, 0, 0.2, 1) infinite;
   }
 
   .status-indicator-dot {
-    @apply relative inline-flex rounded-full h-3 w-3;
+    position: relative;
+    display: inline-flex;
+    border-radius: 9999px;
+    height: 12px;
+    width: 12px;
   }
+}
+
+/* Xterm layout helpers */
+.terminal-scrollbar {
+  width: 100%;
+  height: 100%;
+}
+
+.terminal-shell {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+}
+
+.terminal-shell .xterm {
+  position: absolute;
+  inset: 0;
 }
 
 @layer utilities {

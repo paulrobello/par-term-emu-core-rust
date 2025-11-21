@@ -1,7 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import Terminal, { ConnectionStatus } from '@/components/Terminal';
+import dynamic from 'next/dynamic';
+import type { ConnectionStatus } from '@/types/terminal';
+
+// Load Terminal component only on client side to avoid SSR issues with xterm.js
+const Terminal = dynamic(() => import('@/components/Terminal'), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center h-full">
+      <div className="text-terminal-muted">Loading terminal...</div>
+    </div>
+  ),
+});
 
 export default function Home() {
   const [wsUrl, setWsUrl] = useState('ws://127.0.0.1:8080');
@@ -33,9 +44,9 @@ export default function Home() {
   const currentStatus = statusConfig[status];
 
   return (
-    <main className="flex min-h-screen flex-col p-6 gap-6">
+    <main className="flex h-screen flex-col p-3 gap-3 overflow-hidden">
       {/* Header */}
-      <div className="glass rounded-2xl p-6 shadow-2xl">
+      <div className="glass rounded-2xl p-3 shadow-2xl flex-shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gradient mb-2">
@@ -61,9 +72,9 @@ export default function Home() {
         </div>
 
         {/* Connection Settings */}
-        <div className="mt-6 flex items-center gap-4">
+        <div className="mt-3 flex items-center gap-2">
           <div className="flex-1">
-            <label htmlFor="wsUrl" className="block text-xs font-medium text-terminal-muted mb-2">
+            <label htmlFor="wsUrl" className="block text-xs font-medium text-terminal-muted mb-1">
               WebSocket URL
             </label>
             <input
@@ -71,15 +82,15 @@ export default function Home() {
               type="text"
               value={wsUrl}
               onChange={(e) => setWsUrl(e.target.value)}
-              className="w-full px-4 py-2 rounded-lg bg-terminal-bg border border-terminal-border text-terminal-text placeholder-terminal-muted focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              className="w-full px-2 py-1 rounded-lg bg-terminal-bg border border-terminal-border text-terminal-text placeholder-terminal-muted focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
               placeholder="ws://127.0.0.1:8080"
             />
           </div>
 
-          <div className="pt-6">
+          <div className="pt-3">
             <button
               onClick={() => window.location.reload()}
-              className="px-6 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 active:scale-95"
+              className="px-3 py-1 rounded-lg bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-medium shadow-lg hover:shadow-xl transition-all duration-200 transform hover:scale-105 active:scale-95"
             >
               Reconnect
             </button>
@@ -88,16 +99,23 @@ export default function Home() {
       </div>
 
       {/* Terminal Container */}
-      <div className="flex-1 glass rounded-2xl shadow-2xl overflow-hidden min-h-[600px]">
-        <div className="h-full p-4">
-          <Terminal wsUrl={wsUrl} onStatusChange={setStatus} />
-        </div>
+      <div className="flex-1 bg-black shadow-2xl overflow-hidden min-h-0 flex flex-col">
+        <Terminal wsUrl={wsUrl} onStatusChange={setStatus} />
       </div>
 
       {/* Footer */}
-      <div className="text-center text-terminal-muted text-sm">
+      <div className="text-center text-terminal-muted text-sm flex-shrink-0">
         <p>
           Powered by{' '}
+          <a
+            href="https://github.com/paulrobello/par-term-emu-core-rust"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 transition-colors"
+          >
+            PAR Term Emu Rust Core
+          </a>
+          {' '}and{' '}
           <a
             href="https://github.com/xtermjs/xterm.js"
             target="_blank"
@@ -105,15 +123,6 @@ export default function Home() {
             className="text-blue-400 hover:text-blue-300 transition-colors"
           >
             xterm.js
-          </a>
-          {' '}and{' '}
-          <a
-            href="https://nextjs.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-blue-400 hover:text-blue-300 transition-colors"
-          >
-            Next.js
           </a>
         </p>
       </div>

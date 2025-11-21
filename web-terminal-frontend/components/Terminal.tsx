@@ -114,8 +114,6 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
     if (!xtermRef.current || wsRef.current?.readyState === WebSocket.OPEN) return;
 
     updateStatus('connecting');
-    xtermRef.current.clear();
-    xtermRef.current.write('Connecting to server...\r\n');
 
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
@@ -123,6 +121,10 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
     ws.onopen = () => {
       console.log('WebSocket connected');
       updateStatus('connected');
+
+      // Start from a clean screen before rendering snapshots
+      xtermRef.current?.reset();
+      xtermRef.current?.clear();
 
       // Send initial resize
       if (fitAddonRef.current && xtermRef.current) {
@@ -148,6 +150,8 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
           case 'connected':
             console.log(`Session ID: ${msg.session_id}`);
             console.log(`Server initial size: ${msg.cols}x${msg.rows}, Client size: ${term.cols}x${term.rows}`);
+            term.reset();
+            term.clear();
             if (msg.initial_screen) {
               console.log('Rendering initial screen snapshot');
               term.write(msg.initial_screen);
@@ -246,7 +250,7 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
   }, [wsUrl]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="terminal-shell">
       <div ref={terminalRef} className="flex-1 terminal-scrollbar" />
     </div>
   );
