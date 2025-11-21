@@ -49,8 +49,12 @@ impl Terminal {
         self.graphics.retain_mut(|graphic| {
             let graphic_row = graphic.position.1;
             // Calculate the graphic's extent (how many terminal rows it occupies)
-            // Each terminal row displays 2 pixel rows using Unicode half-blocks
-            let graphic_height_in_rows = graphic.height.div_ceil(2);
+            // Use stored cell height if available, otherwise fallback to 2 (half-block rendering)
+            let cell_height = graphic
+                .cell_dimensions
+                .map(|(_, h)| h as usize)
+                .unwrap_or(2);
+            let graphic_height_in_rows = graphic.height.div_ceil(cell_height);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
             // Check if graphic is within or overlaps the scroll region
@@ -106,7 +110,12 @@ impl Terminal {
         // Adjust graphics within the scroll region
         for graphic in &mut self.graphics {
             let graphic_row = graphic.position.1;
-            let graphic_height_in_rows = graphic.height.div_ceil(2);
+            // Use stored cell height if available, otherwise fallback to 2 (half-block rendering)
+            let cell_height = graphic
+                .cell_dimensions
+                .map(|(_, h)| h as usize)
+                .unwrap_or(2);
+            let graphic_height_in_rows = graphic.height.div_ceil(cell_height);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
             // Check if graphic is within or overlaps the scroll region
@@ -138,22 +147,16 @@ impl Terminal {
 mod tests {
     use super::*;
     use crate::sixel::SixelGraphic;
-    use std::collections::HashMap;
 
     fn create_test_terminal() -> Terminal {
         Terminal::new(80, 24)
     }
 
     fn create_test_graphic(col: usize, row: usize, width: usize, height: usize) -> SixelGraphic {
-        SixelGraphic {
-            position: (col, row),
-            width,
-            height,
-            palette: HashMap::new(),
-            pixels: vec![],
-            cell_dimensions: None,
-            scroll_offset_rows: 0,
-        }
+        // Use the constructor to get a proper unique ID
+        let mut graphic = SixelGraphic::new((col, row), width, height);
+        graphic.pixels = vec![]; // Clear pixels for test (not needed)
+        graphic
     }
 
     #[test]

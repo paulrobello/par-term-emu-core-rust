@@ -204,24 +204,23 @@ impl Terminal {
                     let graphic_width = graphic.width;
                     let graphic_height = graphic.height;
 
-                    // Set cell dimensions for Sixel graphics based on how they're displayed
-                    // Each character cell displays 2 vertical Sixel pixels using half-blocks
-                    // For horizontal, we'll use a 1:1 mapping (1 pixel per column)
-                    // This ensures consistent rendering across different screenshot font sizes
-                    graphic.set_cell_dimensions(1, 2);
+                    // Set cell dimensions from terminal configuration
+                    // TUI renderers use (1, 2) for half-block rendering
+                    // Pixel renderers should call set_cell_dimensions() with actual values
+                    let (cell_w, cell_h) = self.cell_dimensions;
+                    graphic.set_cell_dimensions(cell_w, cell_h);
 
                     debug::log(
                         debug::DebugLevel::Debug,
                         "SIXEL",
                         &format!(
-                            "Graphic added at ({},{}) size {}x{}",
-                            position.0, position.1, graphic_width, graphic_height
+                            "Graphic added at ({},{}) size {}x{}, cell_dims=({},{})",
+                            position.0, position.1, graphic_width, graphic_height, cell_w, cell_h
                         ),
                     );
 
                     // Calculate how many terminal rows the graphic occupies
-                    // Each terminal row displays 2 pixel rows using Unicode half-blocks
-                    let graphic_height_in_rows = graphic_height.div_ceil(2);
+                    let graphic_height_in_rows = graphic_height.div_ceil(cell_h as usize);
 
                     // After Sixel graphic, cursor should move to left margin of line below graphic
                     // per VT340 specification - this makes graphics "occupy space"

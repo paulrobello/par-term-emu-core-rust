@@ -1161,6 +1161,10 @@ pub struct Terminal {
     dropped_sixel_graphics: usize,
     /// Sixel resource limits (per-terminal)
     sixel_limits: sixel::SixelLimits,
+    /// Cell dimensions in pixels (width, height) for sixel graphics
+    /// Default (1, 2) is for text-mode TUI with half-block rendering
+    /// Pixel renderers should set actual cell dimensions
+    cell_dimensions: (u32, u32),
     /// Current Sixel parser (active during DCS)
     sixel_parser: Option<sixel::SixelParser>,
     /// Buffer for DCS data accumulation
@@ -1550,6 +1554,7 @@ impl Terminal {
             max_sixel_graphics: sixel::SIXEL_DEFAULT_MAX_GRAPHICS,
             dropped_sixel_graphics: 0,
             sixel_limits: sixel::SixelLimits::default(),
+            cell_dimensions: (1, 2), // Default for TUI half-block rendering
             sixel_parser: None,
             dcs_buffer: Vec::new(),
             dcs_active: false,
@@ -1997,6 +2002,23 @@ impl Terminal {
     /// sequences.
     pub fn set_sixel_limits(&mut self, max_width: usize, max_height: usize, max_repeat: usize) {
         self.sixel_limits = sixel::SixelLimits::new(max_width, max_height, max_repeat);
+    }
+
+    /// Get cell dimensions in pixels (width, height)
+    ///
+    /// Used for sixel graphics scroll calculations.
+    /// Default is (1, 2) for TUI half-block rendering.
+    pub fn cell_dimensions(&self) -> (u32, u32) {
+        self.cell_dimensions
+    }
+
+    /// Set cell dimensions in pixels (width, height)
+    ///
+    /// Pixel-based renderers should call this with actual cell dimensions
+    /// so sixel graphics scroll correctly. TUI renderers using half-blocks
+    /// should use the default (1, 2).
+    pub fn set_cell_dimensions(&mut self, width: u32, height: u32) {
+        self.cell_dimensions = (width.max(1), height.max(1));
     }
 
     /// Get the maximum number of Sixel graphics retained for this terminal

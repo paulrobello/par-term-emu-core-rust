@@ -134,9 +134,14 @@ impl SixelColor {
     }
 }
 
+/// Global counter for unique sixel graphic IDs
+static SIXEL_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 /// A complete Sixel graphic
 #[derive(Debug, Clone)]
 pub struct SixelGraphic {
+    /// Unique identifier for this graphic (stable across position changes)
+    pub id: u64,
     /// Position where graphic was placed (column, row)
     pub position: (usize, usize),
     /// Width in pixels
@@ -157,8 +162,10 @@ pub struct SixelGraphic {
 
 impl SixelGraphic {
     pub fn new(position: (usize, usize), width: usize, height: usize) -> Self {
+        let id = SIXEL_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pixels = vec![0u8; width * height * 4]; // RGBA
         Self {
+            id,
             position,
             width,
             height,
