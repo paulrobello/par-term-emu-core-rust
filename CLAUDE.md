@@ -58,7 +58,10 @@ make checkall    # All quality checks (run before commits)
 - **docs/DOCUMENTATION_STYLE_GUIDE.md** - Documentation standards
 - [PyO3 guide](https://pyo3.rs/) - Python bindings reference
 - [xterm sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) - VT spec
-- never push unless the user requests it
-- always run `make checkall` and fix all isues before pushing
-- always add tests and update documentation for new features
-- always ensure the python bindings are in sync with method signatures
+
+## Workflow Rules
+
+- Never push unless the user requests it
+- Always run `make checkall` and fix all issues before pushing
+- Always add tests and update documentation for new features
+- Always ensure the Python bindings are in sync with method signatures

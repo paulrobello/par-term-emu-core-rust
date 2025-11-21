@@ -1,39 +1,37 @@
 # Repository Guidelines
 
 ## Project Structure & Modules
-- Core Rust library lives in `src/` (terminal, grid, PTY, screenshot). Higher-level Rust tests are in `src/tests/*.rs`.
-- Python bindings and public API are in `python/par_term_emu_core_rust/` (PyO3 `_native` module).
-- Python tests are in `tests/` (pytest), with runnable examples in `examples/`.
-- Documentation is in `docs/` (start with `ARCHITECTURE.md`, `BUILDING.md`, `SECURITY.md`). Shell integration scripts live in `shell_integration/`.
+- Core Rust crate in `src/` (`terminal/`, `sixel/`, `pty_session.rs`, `html_export.rs`) with Python bindings in `src/python_bindings` and packaged Python shim under `python/`.
+- Integration and unit tests: Rust tests co-located in `src/tests`, Python tests in `tests/`. Example scripts in `examples/` (basic, PTY, streaming).
+- Docs and references live in `docs/`; helper scripts in `scripts/`; optional shell/terminfo add‑ons in `shell_integration/` and `terminfo/`.
 
-## Build, Test & Development Commands
-- First-time setup: `make setup-venv` then `make dev` (uses `uv` + `maturin`). Always use `uv` (never raw `pip`) and prefer `make dev` over `cargo build` for PyO3 work.
-- Build only: `make build` (debug) or `make build-release`.
-- Run tests: `make test` (Rust + Python), or `make test-rust` / `make test-python`.
-- Full quality gate: `make checkall` (format, lint, type-check, tests). Run and fix issues before any commit or PR.
-- Pre-commit hooks: `make pre-commit-install` to enable, `make pre-commit-run` to run on all files.
+## Build, Test, and Development Commands
+- `make setup-venv` → create `.venv` with all dev deps (uv + maturin) before building.
+- `make build` / `make build-release` → develop/install the Rust crate (debug vs release) via maturin.
+- `make build-streaming` or `make dev-streaming` → enable the `streaming` feature; pair with `make examples-streaming` to run the WebSocket demo.
+- `make test` → full Rust + Python suite; `make test-rust` runs `cargo test --lib --no-default-features --features pyo3/auto-initialize`; `make test-python` runs `pytest tests/ -v` via uv.
+- `make fmt`, `make lint`, `make check` → format, clippy+fmt with autofix, and `cargo check`; `make checkall` runs format, lint, typecheck, and both test suites.
+- Web frontend (Next.js) in `web-terminal-frontend/`: `make web-install`, `make web-dev`, `make web-build`, `make web-start`.
 
 ## Coding Style & Naming Conventions
-- Rust: use `rustfmt` via `make fmt`; snake_case for functions and fields, CamelCase for types, SCREAMING_SNAKE_CASE for constants.
-- Python: run `make fmt-python` and `make lint-python` (ruff format + ruff + pyright). Prefer type hints and pytest-style tests.
-- Keep most logic in Rust, with thin Python wrappers (see `python/par_term_emu_core_rust/debug.py` for patterns).
-
-## Implementation & API Conventions
-- ANSI sequences: add handlers in `src/terminal/sequences/{csi,osc,esc,dcs}.rs`, update grid/cursor as needed, and add Rust + Python tests. VT parameter `0` or missing should usually default to `1`.
-- PTY features: modify `src/pty_session.rs` and `src/python_bindings/pty.rs`, keep operations thread-safe (Arc/Mutex or atomics), and update any generation counters that track state.
-- Python API: return tuples `(col, row)` for coordinates and `(r, g, b)` for colors, return `None` for invalid positions instead of raising, and keep Python wrappers thin over Rust logic.
+- Rust: keep `rustfmt` clean; prefer explicit enums/structs; use `?` over `unwrap`; feature flags kept minimal (`streaming`).
+- Python: Ruff formatting (`ruff format`) and lint (`ruff check --fix`) plus `pyright` types; modules and tests in `snake_case`.
+- Naming: commits and PR titles use imperative, present-tense; prefer `feat:`, `fix:`, `chore:` prefixes seen in git log.
 
 ## Testing Guidelines
-- Rust tests should live alongside modules and in `src/tests/`, using descriptive `#[test]` names.
-- Python tests go in `tests/test_*.py` with `test_*` functions using pytest.
-- When fixing bugs or adding features, add or update tests that reproduce the behavior and update relevant docs. At minimum run `make test`; ideally run `make checkall`.
+- Default expectation: `make test` green before pushing. For quick checks, run `make test-rust` when touching core and `make test-python` for bindings or examples.
+- Add regression cases beside the touched code: Rust tests under `src/tests`, Python tests under `tests/` named `test_*.py`.
+- Streaming or surface changes should be validated with `make examples-streaming` to ensure server/client handoff still works.
 
 ## Commit & Pull Request Guidelines
-- Follow Conventional Commit-style prefixes: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`, etc. (see `git log` for examples).
-- Each PR should include a clear summary, list of key changes, tests executed (e.g. `make checkall`), and linked issues where relevant.
-- For behavior changes (terminal output, PTY behavior, screenshots), include short examples or screenshots when helpful.
+- Commits: small, focused, conventional prefix (`feat: improve cursor wrap`, `fix: reset kitty flags`).
+- PRs: include scope, behavior change, and risk notes; list test commands executed; attach screenshots for web UI tweaks; link related issues/CHANGELOG entry when user-facing.
+- Keep PRs draft until `make checkall` (or at least format + relevant tests) have run locally.
 
-## Architecture & Security Notes
-- Keep the PyO3 module definition consistent across `pyproject.toml`, `src/lib.rs`, and `python/par_term_emu_core_rust/__init__.py`.
-- Respect core invariants: do not hold Rust mutexes while calling into Python (GIL), use `unicode-width` for character widths, validate row/col bounds, and remember VT mouse coordinates are 1-indexed while internals are 0-indexed.
-- Review `docs/ARCHITECTURE.md` before large refactors and `docs/SECURITY.md` before PTY- or shell-related changes; keep behavior in sync with the sister project `par-term-emu-tui-rust` where configuration, options, or user-facing features overlap.
+## Security & Configuration Tips
+- Avoid adding default-privileged PTY or shell hooks; keep environment overrides explicit in examples.
+- If adjusting terminfo or shell integration, document required exports (`TERM=par-term`, `COLORTERM=truecolor`) and avoid enabling system-wide changes by default.
+
+## Agent Notes
+- Use `Makefile` targets instead of ad-hoc cargo/pytest invocations to stay consistent with tooling (uv, maturin, feature flags).
+- Clean builds with `make clean`; avoid removing user-created artifacts outside `target/`, `.next/`, and build caches.
