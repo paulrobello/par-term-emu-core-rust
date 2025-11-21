@@ -52,7 +52,7 @@ impl Default for GraphicsLimits {
         Self {
             max_width: 10000,
             max_height: 10000,
-            max_pixels: 25_000_000, // 25MP
+            max_pixels: 25_000_000,              // 25MP
             max_total_memory: 256 * 1024 * 1024, // 256MB
             max_graphics_count: 1000,
             max_scrollback_graphics: 500,
@@ -195,17 +195,14 @@ impl TerminalGraphic {
 
     /// Get dimensions in terminal cells
     pub fn cell_size(&self, cell_width: u32, cell_height: u32) -> (usize, usize) {
-        let cols = (self.width + cell_width as usize - 1) / cell_width as usize;
-        let rows = (self.height + cell_height as usize - 1) / cell_height as usize;
+        let cols = self.width.div_ceil(cell_width as usize);
+        let rows = self.height.div_ceil(cell_height as usize);
         (cols, rows)
     }
 
     /// Calculate height in terminal rows
     pub fn height_in_rows(&self, cell_height: u32) -> usize {
-        let cell_h = self
-            .cell_dimensions
-            .map(|(_, h)| h)
-            .unwrap_or(cell_height);
+        let cell_h = self.cell_dimensions.map(|(_, h)| h).unwrap_or(cell_height);
         (self.height as u32).div_ceil(cell_h) as usize
     }
 }
@@ -300,7 +297,13 @@ impl GraphicsStore {
     // --- Kitty image management ---
 
     /// Store a Kitty image for later reuse
-    pub fn store_kitty_image(&mut self, image_id: u32, width: usize, height: usize, pixels: Vec<u8>) {
+    pub fn store_kitty_image(
+        &mut self,
+        image_id: u32,
+        width: usize,
+        height: usize,
+        pixels: Vec<u8>,
+    ) {
         self.shared_images
             .insert(image_id, (width, height, Arc::new(pixels)));
     }
@@ -348,21 +351,19 @@ impl GraphicsStore {
             let graphic_height_in_rows = g.height.div_ceil(cell_height);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
-            // Check if graphic is within or overlaps the scroll region
-            if graphic_bottom > top && graphic_row <= bottom {
-                if graphic_row >= top {
-                    // Adjust position
-                    let new_position = graphic_row.saturating_sub(lines);
-                    let additional_scroll = lines.saturating_sub(graphic_row);
-                    g.scroll_offset_rows = g.scroll_offset_rows.saturating_add(additional_scroll);
-                    g.position.1 = new_position;
+            // Check if graphic is within the scroll region
+            if graphic_bottom > top && graphic_row <= bottom && graphic_row >= top {
+                // Adjust position
+                let new_position = graphic_row.saturating_sub(lines);
+                let additional_scroll = lines.saturating_sub(graphic_row);
+                g.scroll_offset_rows = g.scroll_offset_rows.saturating_add(additional_scroll);
+                g.position.1 = new_position;
 
-                    // Check if completely scrolled off
-                    if g.scroll_offset_rows >= graphic_height_in_rows {
-                        // Move to scrollback instead of deleting
-                        to_scrollback.push(g.clone());
-                        return false;
-                    }
+                // Check if completely scrolled off
+                if g.scroll_offset_rows >= graphic_height_in_rows {
+                    // Move to scrollback instead of deleting
+                    to_scrollback.push(g.clone());
+                    return false;
                 }
             }
             true
@@ -385,12 +386,11 @@ impl GraphicsStore {
             let graphic_height_in_rows = g.height.div_ceil(cell_height);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
-            if graphic_bottom > top && graphic_row <= bottom {
-                if graphic_row >= top && graphic_row <= bottom {
-                    let new_row = graphic_row + lines;
-                    if new_row <= bottom {
-                        g.position.1 = new_row;
-                    }
+            // Graphic starts within scroll region
+            if graphic_bottom > top && graphic_row >= top && graphic_row <= bottom {
+                let new_row = graphic_row + lines;
+                if new_row <= bottom {
+                    g.position.1 = new_row;
                 }
             }
         }
@@ -399,7 +399,11 @@ impl GraphicsStore {
     // --- Scrollback ---
 
     /// Get graphics in scrollback for a range of rows
-    pub fn graphics_in_scrollback(&self, start_row: usize, end_row: usize) -> Vec<&TerminalGraphic> {
+    pub fn graphics_in_scrollback(
+        &self,
+        start_row: usize,
+        end_row: usize,
+    ) -> Vec<&TerminalGraphic> {
         self.scrollback
             .iter()
             .filter(|g| {
@@ -468,14 +472,7 @@ mod tests {
     #[test]
     fn test_terminal_graphic_new() {
         let pixels = vec![255u8; 40]; // 10 RGBA pixels
-        let graphic = TerminalGraphic::new(
-            1,
-            GraphicProtocol::Sixel,
-            (5, 10),
-            10,
-            1,
-            pixels,
-        );
+        let graphic = TerminalGraphic::new(1, GraphicProtocol::Sixel, (5, 10), 10, 1, pixels);
         assert_eq!(graphic.id, 1);
         assert_eq!(graphic.position, (5, 10));
         assert_eq!(graphic.width, 10);
@@ -486,9 +483,9 @@ mod tests {
     fn test_terminal_graphic_pixel_at() {
         // 2x2 image, RGBA
         let pixels = vec![
-            255, 0, 0, 255,   // (0,0) red
-            0, 255, 0, 255,   // (1,0) green
-            0, 0, 255, 255,   // (0,1) blue
+            255, 0, 0, 255, // (0,0) red
+            0, 255, 0, 255, // (1,0) green
+            0, 0, 255, 255, // (0,1) blue
             255, 255, 0, 255, // (1,1) yellow
         ];
         let graphic = TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 2, 2, pixels);

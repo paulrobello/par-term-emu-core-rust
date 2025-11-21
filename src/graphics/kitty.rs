@@ -7,18 +7,20 @@
 
 use std::collections::HashMap;
 
-use crate::graphics::{next_graphic_id, GraphicProtocol, GraphicsError, GraphicsStore, TerminalGraphic};
+use crate::graphics::{
+    next_graphic_id, GraphicProtocol, GraphicsError, GraphicsStore, TerminalGraphic,
+};
 
 /// Kitty graphics transmission action
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyAction {
     #[default]
-    Transmit,        // t - transmit image data
-    TransmitDisplay, // T - transmit and display
-    Query,           // q - query terminal support
-    Put,             // p - display previously transmitted image
-    Delete,          // d - delete images
-    Frame,           // f - animation frame
+    Transmit, // t - transmit image data
+    TransmitDisplay,  // T - transmit and display
+    Query,            // q - query terminal support
+    Put,              // p - display previously transmitted image
+    Delete,           // d - delete images
+    Frame,            // f - animation frame
     AnimationControl, // a - animation control
 }
 
@@ -43,8 +45,8 @@ impl KittyAction {
 pub enum KittyFormat {
     #[default]
     Rgba, // 32 - 32-bit RGBA
-    Rgb,  // 24 - 24-bit RGB
-    Png,  // 100 - PNG compressed
+    Rgb, // 24 - 24-bit RGB
+    Png, // 100 - PNG compressed
 }
 
 impl KittyFormat {
@@ -63,9 +65,9 @@ impl KittyFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyMedium {
     #[default]
-    Direct,   // d - direct in-band data
-    File,     // f - read from file
-    TempFile, // t - read from temp file and delete
+    Direct, // d - direct in-band data
+    File,      // f - read from file
+    TempFile,  // t - read from temp file and delete
     SharedMem, // s - read from shared memory
 }
 
@@ -85,14 +87,14 @@ impl KittyMedium {
 /// Kitty delete target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyDeleteTarget {
-    All,           // a - all images
-    ById(u32),     // i - by image id
+    All,                           // a - all images
+    ById(u32),                     // i - by image id
     ByPlacement(u32, Option<u32>), // (image_id, placement_id)
-    AtCursor,      // c - at cursor position
-    InCell,        // p - at specific cell
-    OnScreen,      // z - visible on screen
-    ByColumn(u32), // x - in column
-    ByRow(u32),    // y - in row
+    AtCursor,                      // c - at cursor position
+    InCell,                        // p - at specific cell
+    OnScreen,                      // z - visible on screen
+    ByColumn(u32),                 // x - in column
+    ByRow(u32),                    // y - in row
 }
 
 /// Kitty graphics parser
@@ -207,11 +209,9 @@ impl KittyParser {
 
         // Decode and accumulate base64 data
         if !data_str.is_empty() {
-            let decoded = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                data_str,
-            )
-            .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
+            let decoded =
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_str)
+                    .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
             self.data_chunks.push(decoded);
         }
 
@@ -391,7 +391,10 @@ mod tests {
     #[test]
     fn test_kitty_action_from_char() {
         assert_eq!(KittyAction::from_char('t'), Some(KittyAction::Transmit));
-        assert_eq!(KittyAction::from_char('T'), Some(KittyAction::TransmitDisplay));
+        assert_eq!(
+            KittyAction::from_char('T'),
+            Some(KittyAction::TransmitDisplay)
+        );
         assert_eq!(KittyAction::from_char('q'), Some(KittyAction::Query));
         assert_eq!(KittyAction::from_char('p'), Some(KittyAction::Put));
         assert_eq!(KittyAction::from_char('d'), Some(KittyAction::Delete));

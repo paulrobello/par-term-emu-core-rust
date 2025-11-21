@@ -243,8 +243,8 @@ impl PyGraphic {
 
     /// Get size in terminal cells
     fn cell_size(&self, cell_width: u32, cell_height: u32) -> (usize, usize) {
-        let cols = (self.width + cell_width as usize - 1) / cell_width as usize;
-        let rows = (self.height + cell_height as usize - 1) / cell_height as usize;
+        let cols = self.width.div_ceil(cell_width as usize);
+        let rows = self.height.div_ceil(cell_height as usize);
         (cols, rows)
     }
 

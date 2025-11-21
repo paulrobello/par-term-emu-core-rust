@@ -2,6 +2,16 @@
 
 Multi-protocol graphics support for Sixel, iTerm2 inline images, and Kitty graphics protocol.
 
+## Implementation Status
+
+| Phase | Status | Notes |
+|-------|--------|-------|
+| Phase 1: Core Refactoring | **Complete** | `src/graphics/mod.rs`, `TerminalGraphic`, `GraphicsStore`, `GraphicsLimits` |
+| Phase 2: Scrollback Persistence | **Partial** | `GraphicsStore` has scrollback methods; Terminal still uses `Vec<SixelGraphic>` |
+| Phase 3: iTerm2 Support | **Complete** | OSC 1337 parsing in `osc.rs`, `ITermParser` in `src/graphics/iterm.rs` |
+| Phase 4: Kitty Support | **Complete** | APC G handling in `dcs.rs`, `KittyParser` in `src/graphics/kitty.rs` |
+| Phase 5: Advanced Features | Not started | Unicode placeholders, animations |
+
 ## Reference Specifications
 
 - **Sixel**: <https://vt100.net/docs/vt3xx-gp/chapter14.html>

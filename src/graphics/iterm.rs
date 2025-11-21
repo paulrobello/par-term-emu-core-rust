@@ -53,11 +53,9 @@ impl ITermParser {
     /// Decode the image and create a TerminalGraphic
     pub fn decode_image(&self, position: (usize, usize)) -> Result<TerminalGraphic, GraphicsError> {
         // Decode base64
-        let decoded = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &self.data,
-        )
-        .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
+        let decoded =
+            base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.data)
+                .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
 
         // Decode image using image crate
         let img = image::load_from_memory(&decoded)
