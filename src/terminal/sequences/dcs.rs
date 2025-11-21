@@ -1,8 +1,9 @@
-//! DCS (Device Control String) sequence handling
+//! DCS (Device Control String) and APC sequence handling
 //!
-//! Handles DCS sequences, primarily for Sixel graphics support.
+//! Handles DCS sequences for Sixel graphics and APC sequences for Kitty graphics.
 
 use crate::debug;
+use crate::graphics::kitty::KittyParser;
 use crate::sixel;
 use crate::terminal::Terminal;
 use vte::Params;
@@ -109,6 +110,13 @@ impl Terminal {
                 "SIXEL",
                 "Started Sixel DCS sequence",
             );
+        } else if action == 'G' {
+            // Kitty graphics protocol (APC G ... ST)
+            debug::log(
+                debug::DebugLevel::Debug,
+                "KITTY",
+                "Started Kitty graphics sequence",
+            );
         }
     }
 
@@ -182,6 +190,9 @@ impl Terminal {
                         _ => {}
                     }
                 }
+            } else if action == 'G' {
+                // Kitty graphics - accumulate all data
+                self.dcs_buffer.push(byte);
             }
         }
     }
@@ -292,12 +303,115 @@ impl Terminal {
                         ),
                     );
                 }
+            } else if action == 'G' {
+                // Kitty graphics protocol
+                self.process_kitty_graphics();
             }
         }
 
         self.dcs_active = false;
         self.dcs_action = None;
         self.dcs_buffer.clear();
+    }
+
+    /// Process accumulated Kitty graphics data
+    fn process_kitty_graphics(&mut self) {
+        if self.dcs_buffer.is_empty() {
+            return;
+        }
+
+        let payload = match std::str::from_utf8(&self.dcs_buffer) {
+            Ok(s) => s,
+            Err(_) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    "Invalid UTF-8 in Kitty graphics payload",
+                );
+                return;
+            }
+        };
+
+        let mut parser = KittyParser::new();
+
+        // Parse the payload (may be chunked)
+        match parser.parse_chunk(payload) {
+            Ok(more_chunks) => {
+                if more_chunks {
+                    // TODO: Support chunked transmission by storing parser state
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "KITTY",
+                        "Chunked Kitty graphics not yet fully supported",
+                    );
+                    return;
+                }
+            }
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    &format!("Failed to parse Kitty graphics: {}", e),
+                );
+                return;
+            }
+        }
+
+        // Get cursor position for graphic placement
+        let position = (self.cursor.col, self.cursor.row);
+
+        // Create a temporary graphics store for this operation
+        // TODO: Use a proper GraphicsStore when migrated
+        let mut temp_store = crate::graphics::GraphicsStore::new();
+
+        // Build the graphic
+        match parser.build_graphic(position, &mut temp_store) {
+            Ok(Some(graphic)) => {
+                // Convert to SixelGraphic for storage (temporary)
+                let sixel_graphic = sixel::SixelGraphic {
+                    id: graphic.id,
+                    position: graphic.position,
+                    width: graphic.width,
+                    height: graphic.height,
+                    pixels: (*graphic.pixels).clone(),
+                    palette: std::collections::HashMap::new(),
+                    cell_dimensions: graphic.cell_dimensions,
+                    scroll_offset_rows: 0,
+                };
+
+                // Enforce graphics limit
+                if self.graphics.len() >= self.max_sixel_graphics {
+                    self.graphics.remove(0);
+                    self.dropped_sixel_graphics += 1;
+                }
+
+                self.graphics.push(sixel_graphic);
+
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    &format!(
+                        "Added Kitty image at ({}, {}), size {}x{}",
+                        position.0, position.1, graphic.width, graphic.height
+                    ),
+                );
+            }
+            Ok(None) => {
+                // Command processed but no graphic created (e.g., transmit-only or delete)
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    "Kitty command processed (no graphic created)",
+                );
+            }
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    &format!("Failed to build Kitty graphic: {}", e),
+                );
+            }
+        }
     }
 }
 
