@@ -77,11 +77,13 @@ def send_frame(
     # Delay: z=<delay_ms>
     # Format: f=100 (PNG)
     # Transmission: t=d (direct)
-    action = "T" if display and frame_number == 1 else "f"
-    payload = (
-        f"a={action},i={image_id},r={frame_number},z={delay_ms},f=100,t=d;{encoded}"
-    )
+    # Always use 'f' for animation frames, not 'T'
+    payload = f"a=f,i={image_id},r={frame_number},z={delay_ms},f=100,t=d;{encoded}"
     send_kitty_graphics(payload)
+
+    # Display the image after sending the first frame (if requested)
+    if display and frame_number == 1:
+        display_image(image_id)
 
 
 def send_animation_control(image_id: int, control: str) -> None:

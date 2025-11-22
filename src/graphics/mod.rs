@@ -16,6 +16,7 @@ pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
 
+use crate::debug_info;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -504,9 +505,17 @@ impl GraphicsStore {
 
     /// Add a frame to an animation
     pub fn add_animation_frame(&mut self, image_id: u32, frame: AnimationFrame) {
+        let frame_num = frame.frame_number;
         let default_delay = frame.delay_ms.max(100); // Default to 100ms if not specified
         let anim = self.get_or_create_animation(image_id, default_delay);
         anim.add_frame(frame);
+        debug_info!(
+            "GRAPHICS",
+            "Added animation frame {} to image_id={} (total frames: {})",
+            frame_num,
+            image_id,
+            anim.frame_count()
+        );
     }
 
     /// Apply animation control to an image

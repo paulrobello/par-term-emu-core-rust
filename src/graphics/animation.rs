@@ -170,7 +170,23 @@ impl Animation {
 
     /// Add a frame to the animation
     pub fn add_frame(&mut self, frame: AnimationFrame) {
+        let frame_num = frame.frame_number;
+        debug_info!(
+            "ANIMATION",
+            "Adding frame {} to image_id={} (delay={}ms, size={}x{})",
+            frame_num,
+            self.image_id,
+            frame.delay_ms,
+            frame.width,
+            frame.height
+        );
         self.frames.insert(frame.frame_number, frame);
+        debug_info!(
+            "ANIMATION",
+            "Frame {} added. Total frames in animation: {}",
+            frame_num,
+            self.frames.len()
+        );
     }
 
     /// Get a frame by number
