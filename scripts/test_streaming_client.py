@@ -5,7 +5,7 @@ Simple WebSocket client to test bidirectional streaming
 
 import asyncio
 import json
-import websockets
+import websockets  # type: ignore
 
 
 async def test_streaming():

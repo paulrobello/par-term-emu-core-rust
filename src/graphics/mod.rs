@@ -242,6 +242,9 @@ pub struct GraphicsStore {
 
     /// Resource limits
     limits: GraphicsLimits,
+
+    /// Count of graphics dropped due to limits
+    dropped_count: usize,
 }
 
 impl GraphicsStore {
@@ -264,6 +267,7 @@ impl GraphicsStore {
         if self.placements.len() >= self.limits.max_graphics_count {
             // Remove oldest placement
             self.placements.remove(0);
+            self.dropped_count += 1;
         }
         self.placements.push(graphic);
     }
@@ -300,6 +304,11 @@ impl GraphicsStore {
     /// Get total graphics count
     pub fn graphics_count(&self) -> usize {
         self.placements.len()
+    }
+
+    /// Get count of graphics dropped due to limits
+    pub fn dropped_count(&self) -> usize {
+        self.dropped_count
     }
 
     /// Get current limits

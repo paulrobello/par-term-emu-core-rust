@@ -2049,10 +2049,9 @@ impl Terminal {
         self.graphics_store.set_max_graphics(clamped);
     }
 
-    /// Get the number of graphics dropped due to limits (deprecated, always returns 0)
+    /// Get the number of graphics dropped due to limits
     pub fn dropped_sixel_graphics(&self) -> usize {
-        // GraphicsStore handles limits internally without tracking dropped count
-        0
+        self.graphics_store.dropped_count()
     }
 
     /// Get Sixel statistics for this terminal.
@@ -2061,12 +2060,13 @@ impl Terminal {
     /// - limits: SixelLimits (max width/height/repeat)
     /// - max_graphics: maximum number of retained graphics
     /// - current_graphics: current number of graphics stored
-    /// - dropped_graphics: number of graphics dropped due to limits (always 0 now)
+    /// - dropped_graphics: number of graphics dropped due to limits
     pub fn sixel_stats(&self) -> (sixel::SixelLimits, usize, usize, usize) {
         let limits = self.sixel_limits;
         let max_graphics = self.graphics_store.limits().max_graphics_count;
         let current_graphics = self.graphics_store.graphics_count();
-        (limits, max_graphics, current_graphics, 0)
+        let dropped_graphics = self.graphics_store.dropped_count();
+        (limits, max_graphics, current_graphics, dropped_graphics)
     }
 
     /// Process a buffered Sixel command (color, raster, repeat)

@@ -15,6 +15,10 @@ use super::enums::{PyCursorStyle, PyUnderlineStyle};
 /// Tuple contains: (character, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes)
 pub type LineCellData = Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
 
+/// Type alias for half-block rendering colors
+/// Tuple contains: ((top_r, top_g, top_b, top_a), (bottom_r, bottom_g, bottom_b, bottom_a))
+type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
+
 /// Cell attributes
 #[pyclass(name = "Attributes")]
 #[derive(Clone)]
@@ -256,7 +260,7 @@ impl PyGraphic {
         cell_row: usize,
         cell_width: u32,
         cell_height: u32,
-    ) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
+    ) -> Option<HalfBlockColors> {
         // Calculate pixel coordinates relative to graphic position
         let rel_col = cell_col.checked_sub(self.position.0)?;
         let rel_row = cell_row.checked_sub(self.position.1)?;

@@ -5,7 +5,7 @@ Test client for terminal resize functionality
 
 import asyncio
 import json
-import websockets
+import websockets  # type: ignore
 
 
 async def test_resize():

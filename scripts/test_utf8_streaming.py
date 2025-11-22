@@ -5,7 +5,7 @@ Test UTF-8 character handling in streaming
 
 import asyncio
 import json
-import websockets
+import websockets  # type: ignore
 
 
 async def test_utf8():
