@@ -131,7 +131,7 @@ impl StreamingServer {
     /// This method will block until the server is stopped
     pub async fn start(self: Arc<Self>) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
-        println!("Streaming server listening on {}", self.addr);
+        crate::debug_info!("STREAMING", "Server listening on {}", self.addr);
 
         // Spawn output broadcaster task
         let server_clone = self.clone();
@@ -151,16 +151,21 @@ impl StreamingServer {
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    println!("New connection from {}", addr);
+                    crate::debug_info!("STREAMING", "New connection from {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
                         if let Err(e) = server.handle_connection(stream).await {
-                            eprintln!("Connection error from {}: {}", addr, e);
+                            crate::debug_error!(
+                                "STREAMING",
+                                "Connection error from {}: {}",
+                                addr,
+                                e
+                            );
                         }
                     });
                 }
                 Err(e) => {
-                    eprintln!("Failed to accept connection: {}", e);
+                    crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
                 }
             }
         }
@@ -203,7 +208,7 @@ impl StreamingServer {
         // For now, DON'T add to broadcaster - handle everything here
         // TODO: Refactor broadcaster to allow both sending and receiving per client
 
-        println!("Client {} connected (1 total)", client_id);
+        crate::debug_info!("STREAMING", "Client {} connected", client_id);
 
         // Get PTY writer if available
         let pty_writer = self.pty_writer.clone();
@@ -260,14 +265,6 @@ impl StreamingServer {
                                             let content = terminal.export_visible_screen_styled();
                                             let (cols, rows) = terminal.size();
 
-                                            // Debug: Log snapshot details
-                                            eprintln!("=== REFRESH SNAPSHOT DEBUG ===");
-                                            eprintln!("Terminal size: {}x{}", cols, rows);
-                                            eprintln!("Snapshot length: {} bytes", content.len());
-                                            eprintln!("First 200 chars: {:?}", &content.chars().take(200).collect::<String>());
-                                            eprintln!("Newline count: {}", content.matches('\n').count());
-                                            eprintln!("==============================");
-
                                             Some(ServerMessage::refresh(
                                                 cols as u16,
                                                 rows as u16,
@@ -280,7 +277,7 @@ impl StreamingServer {
 
                                     if let Some(msg) = refresh_msg {
                                         if let Err(e) = client.send(msg).await {
-                                            eprintln!("Failed to send refresh to client {}: {}", client_id, e);
+                                            crate::debug_error!("STREAMING", "Failed to send refresh to client {}: {}", client_id, e);
                                         }
                                     }
                                 }
@@ -291,7 +288,7 @@ impl StreamingServer {
                         }
                         None => {
                             // Client disconnected
-                            println!("Client {} disconnected", client_id);
+                            crate::debug_info!("STREAMING", "Client {} disconnected", client_id);
                             break;
                         }
                         }

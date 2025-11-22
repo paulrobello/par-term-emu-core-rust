@@ -160,11 +160,13 @@ impl PtySession {
 
         // Create the PTY system
         let pty_system = native_pty_system();
+        // Calculate pixel dimensions (10x20 per cell - standard terminal font size)
+        // This ensures kitten icat and other tools can query pixel dimensions via TIOCGWINSZ
         let pty_size = PtySize {
             rows: self.rows,
             cols: self.cols,
-            pixel_width: 0,
-            pixel_height: 0,
+            pixel_width: self.cols * 10,
+            pixel_height: self.rows * 20,
         };
 
         debug::log(
@@ -231,6 +233,7 @@ impl PtySession {
         cmd.env("TERM", "xterm-kitty");
         cmd.env("COLORTERM", "truecolor");
         // Set Kitty-specific environment variables for protocol detection
+        cmd.env("TERM_PROGRAM", "kitty");
         cmd.env("KITTY_WINDOW_ID", "1");
         cmd.env("KITTY_PID", std::process::id().to_string());
         // NOTE: Do NOT set COLUMNS/LINES environment variables!
@@ -425,7 +428,7 @@ impl PtySession {
                     }
                     Err(e) => {
                         // Log error but continue (could be temporary)
-                        eprintln!("PTY read error: {}", e);
+                        crate::debug_error!("PTY", "PTY read error: {}", e);
                         // If it's a fatal error, stop
                         if e.kind() == std::io::ErrorKind::BrokenPipe {
                             running.store(false, Ordering::SeqCst);
@@ -495,11 +498,13 @@ impl PtySession {
 
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref pair) = self.pty_pair {
+            // Calculate pixel dimensions (10x20 per cell - standard terminal font size)
+            // This ensures kitten icat and other tools can query pixel dimensions via TIOCGWINSZ
             let pty_size = PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width: cols * 10,
+                pixel_height: rows * 20,
             };
             debug::log(
                 debug::DebugLevel::Debug,

@@ -51,7 +51,9 @@ keywords = [
     "unicode",
     "true-color",
 ]
-dependencies = []
+dependencies = [
+    "pillow>=12.0.0",
+]
 
 [project.license]
 file = "LICENSE"

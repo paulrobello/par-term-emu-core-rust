@@ -1,0 +1,274 @@
+//! Unicode placeholder support for Kitty graphics protocol
+//!
+//! This module handles parsing of Unicode diacritics (combining characters)
+//! used with the U+10EEEE placeholder character to specify row, column,
+//! and most significant byte of image ID for virtual placement rendering.
+//!
+//! Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
+
+/// The Unicode placeholder character for graphics
+pub const PLACEHOLDER_CHAR: char = '\u{10EEEE}';
+
+/// Diacritic to number mapping for row/column encoding
+///
+/// Maps Unicode combining characters to their numeric values (0-63)
+/// as specified in the Kitty graphics protocol.
+pub fn diacritic_to_number(c: char) -> Option<u8> {
+    // Mapping from rowcolumn-diacritics.txt in Kitty spec
+    match c {
+        '\u{0305}' => Some(0),  // Combining Overline
+        '\u{030D}' => Some(1),  // Combining Vertical Line Above
+        '\u{030E}' => Some(2),  // Combining Double Vertical Line Above
+        '\u{0310}' => Some(3),  // Combining Candrabindu
+        '\u{0312}' => Some(4),  // Combining Turned Comma Above
+        '\u{033D}' => Some(5),  // Combining X Above
+        '\u{033E}' => Some(6),  // Combining Vertical Tilde
+        '\u{033F}' => Some(7),  // Combining Double Overline
+        '\u{0346}' => Some(8),  // Combining Bridge Above
+        '\u{034A}' => Some(9),  // Combining Not Tilde Above
+        '\u{034B}' => Some(10), // Combining Homothetic Above
+        '\u{034C}' => Some(11), // Combining Almost Equal To Above
+        '\u{0350}' => Some(12), // Combining Right Arrowhead Above
+        '\u{0351}' => Some(13), // Combining Left Half Ring Above
+        '\u{0352}' => Some(14), // Combining Fermata
+        '\u{0357}' => Some(15), // Combining Right Half Ring Above
+        '\u{035B}' => Some(16), // Combining Zigzag Above
+        '\u{0363}' => Some(17), // Combining Latin Small Letter A
+        '\u{0364}' => Some(18), // Combining Latin Small Letter E
+        '\u{0365}' => Some(19), // Combining Latin Small Letter I
+        '\u{0366}' => Some(20), // Combining Latin Small Letter O
+        '\u{0367}' => Some(21), // Combining Latin Small Letter U
+        '\u{0368}' => Some(22), // Combining Latin Small Letter C
+        '\u{0369}' => Some(23), // Combining Latin Small Letter D
+        '\u{036A}' => Some(24), // Combining Latin Small Letter H
+        '\u{036B}' => Some(25), // Combining Latin Small Letter M
+        '\u{036C}' => Some(26), // Combining Latin Small Letter R
+        '\u{036D}' => Some(27), // Combining Latin Small Letter T
+        '\u{036E}' => Some(28), // Combining Latin Small Letter V
+        '\u{036F}' => Some(29), // Combining Latin Small Letter X
+        '\u{0483}' => Some(30), // Combining Cyrillic Titlo
+        '\u{0484}' => Some(31), // Combining Cyrillic Palatalization
+        '\u{0485}' => Some(32), // Combining Cyrillic Dasia Pneumata
+        '\u{0486}' => Some(33), // Combining Cyrillic Psili Pneumata
+        '\u{0487}' => Some(34), // Combining Cyrillic Pokrytie
+        '\u{0592}' => Some(35), // Hebrew Accent Segol
+        '\u{0593}' => Some(36), // Hebrew Accent Shalshelet
+        '\u{0594}' => Some(37), // Hebrew Accent Zaqef Qatan
+        '\u{0595}' => Some(38), // Hebrew Accent Zaqef Gadol
+        '\u{0597}' => Some(39), // Hebrew Accent Revia
+        '\u{0598}' => Some(40), // Hebrew Accent Zarqa
+        '\u{0599}' => Some(41), // Hebrew Accent Pashta
+        '\u{059C}' => Some(42), // Hebrew Accent Geresh
+        '\u{059D}' => Some(43), // Hebrew Accent Geresh Muqdam
+        '\u{059E}' => Some(44), // Hebrew Accent Gershayim
+        '\u{059F}' => Some(45), // Hebrew Accent Qarney Para
+        '\u{05A0}' => Some(46), // Hebrew Accent Telisha Gedola
+        '\u{05A1}' => Some(47), // Hebrew Accent Pazer
+        '\u{05A8}' => Some(48), // Hebrew Accent Qadma
+        '\u{05A9}' => Some(49), // Hebrew Accent Telisha Qetana
+        '\u{05AB}' => Some(50), // Hebrew Accent Ole
+        '\u{05AC}' => Some(51), // Hebrew Accent Iluy
+        '\u{05AF}' => Some(52), // Hebrew Mark Masora Circle
+        '\u{05C4}' => Some(53), // Hebrew Mark Upper Dot
+        '\u{0610}' => Some(54), // Arabic Sign Sallallahou Alayhe Wassallam
+        '\u{0611}' => Some(55), // Arabic Sign Alayhe Assallam
+        '\u{0612}' => Some(56), // Arabic Sign Rahmatullah Alayhe
+        '\u{0613}' => Some(57), // Arabic Sign Radi Allahou Anhu
+        '\u{0614}' => Some(58), // Arabic Sign Takhallus
+        '\u{0615}' => Some(59), // Arabic Small High Tah
+        '\u{0616}' => Some(60), // Arabic Small High Ligature Alef with Lam with Yeh
+        '\u{0617}' => Some(61), // Arabic Small High Zain
+        '\u{0657}' => Some(62), // Arabic Inverted Damma
+        '\u{0658}' => Some(63), // Arabic Mark Noon Ghunna
+        _ => None,
+    }
+}
+
+/// Information extracted from a Unicode placeholder cell
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PlaceholderInfo {
+    /// Image ID (from foreground color)
+    pub image_id: u32,
+    /// Placement ID (from underline color, 0 if not specified)
+    pub placement_id: u32,
+    /// Row position (from first diacritic)
+    pub row: Option<u8>,
+    /// Column position (from second diacritic)
+    pub col: Option<u8>,
+    /// Most significant byte of image ID (from third diacritic)
+    pub msb: Option<u8>,
+}
+
+impl PlaceholderInfo {
+    /// Create placeholder info from foreground color (image ID)
+    pub fn from_color(image_id: u32) -> Self {
+        Self {
+            image_id,
+            placement_id: 0,
+            row: None,
+            col: None,
+            msb: None,
+        }
+    }
+
+    /// Set the placement ID from underline color
+    pub fn with_placement_id(mut self, placement_id: u32) -> Self {
+        self.placement_id = placement_id;
+        self
+    }
+
+    /// Set row/column/MSB from diacritics
+    pub fn with_diacritics(mut self, row: Option<u8>, col: Option<u8>, msb: Option<u8>) -> Self {
+        self.row = row;
+        self.col = col;
+        self.msb = msb;
+        self
+    }
+
+    /// Get the full image ID including MSB
+    pub fn full_image_id(&self) -> u32 {
+        if let Some(msb) = self.msb {
+            // Combine MSB with lower bytes from color
+            let lower_24 = self.image_id & 0x00FFFFFF;
+            ((msb as u32) << 24) | lower_24
+        } else {
+            self.image_id
+        }
+    }
+
+    /// Check if this placeholder can inherit from the previous cell
+    pub fn can_inherit_from(&self, prev: &PlaceholderInfo, expected_col: u8) -> bool {
+        // Same image ID and placement ID
+        if self.image_id != prev.image_id || self.placement_id != prev.placement_id {
+            return false;
+        }
+
+        match (self.row, self.col, self.msb) {
+            // No diacritics: inherit row, col+1, msb
+            (None, None, None) => true,
+            // Only row: inherit col+1 and msb if same row
+            (Some(row), None, None) => row == prev.row.unwrap_or(0),
+            // Row and col: inherit msb if col is prev.col + 1
+            (Some(row), Some(col), None) => row == prev.row.unwrap_or(0) && col == expected_col,
+            _ => false,
+        }
+    }
+
+    /// Inherit values from previous placeholder
+    pub fn inherit_from(&mut self, prev: &PlaceholderInfo) {
+        if self.row.is_none() {
+            self.row = prev.row;
+        }
+        if self.col.is_none() {
+            self.col = prev.col.map(|c| c + 1);
+        }
+        if self.msb.is_none() {
+            self.msb = prev.msb;
+        }
+    }
+}
+
+/// Parse diacritics from a string of combining characters
+///
+/// Returns (row, col, msb) as parsed from the diacritics
+pub fn parse_diacritics(diacritics: &str) -> (Option<u8>, Option<u8>, Option<u8>) {
+    let mut chars: Vec<char> = diacritics.chars().collect();
+
+    // Remove any non-diacritic characters
+    chars.retain(|&c| diacritic_to_number(c).is_some());
+
+    let row = chars.first().and_then(|&c| diacritic_to_number(c));
+    let col = chars.get(1).and_then(|&c| diacritic_to_number(c));
+    let msb = chars.get(2).and_then(|&c| diacritic_to_number(c));
+
+    (row, col, msb)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_placeholder_char() {
+        assert_eq!(PLACEHOLDER_CHAR, '\u{10EEEE}');
+    }
+
+    #[test]
+    fn test_diacritic_mapping() {
+        assert_eq!(diacritic_to_number('\u{0305}'), Some(0));
+        assert_eq!(diacritic_to_number('\u{030D}'), Some(1));
+        assert_eq!(diacritic_to_number('\u{030E}'), Some(2));
+        assert_eq!(diacritic_to_number('\u{0658}'), Some(63));
+        assert_eq!(diacritic_to_number('a'), None);
+    }
+
+    #[test]
+    fn test_parse_diacritics() {
+        // Row 0, col 0
+        let (row, col, msb) = parse_diacritics("\u{0305}\u{0305}");
+        assert_eq!(row, Some(0));
+        assert_eq!(col, Some(0));
+        assert_eq!(msb, None);
+
+        // Row 1, col 0
+        let (row, col, msb) = parse_diacritics("\u{030D}\u{0305}");
+        assert_eq!(row, Some(1));
+        assert_eq!(col, Some(0));
+        assert_eq!(msb, None);
+
+        // Row 0, col 1, msb 2
+        let (row, col, msb) = parse_diacritics("\u{0305}\u{030D}\u{030E}");
+        assert_eq!(row, Some(0));
+        assert_eq!(col, Some(1));
+        assert_eq!(msb, Some(2));
+    }
+
+    #[test]
+    fn test_placeholder_info_full_image_id() {
+        let info = PlaceholderInfo {
+            image_id: 42,
+            placement_id: 0,
+            row: Some(0),
+            col: Some(0),
+            msb: None,
+        };
+        assert_eq!(info.full_image_id(), 42);
+
+        let info_with_msb = PlaceholderInfo {
+            image_id: 42,
+            placement_id: 0,
+            row: Some(0),
+            col: Some(0),
+            msb: Some(2),
+        };
+        // 2 << 24 | 42 = 33554474
+        assert_eq!(info_with_msb.full_image_id(), 33554474);
+    }
+
+    #[test]
+    fn test_placeholder_inheritance() {
+        let prev = PlaceholderInfo {
+            image_id: 42,
+            placement_id: 0,
+            row: Some(0),
+            col: Some(0),
+            msb: Some(2),
+        };
+
+        // Cell with no diacritics should inherit
+        let mut current = PlaceholderInfo::from_color(42);
+        assert!(current.can_inherit_from(&prev, 1));
+        current.inherit_from(&prev);
+        assert_eq!(current.row, Some(0));
+        assert_eq!(current.col, Some(1));
+        assert_eq!(current.msb, Some(2));
+
+        // Cell with only row should inherit col and msb
+        let mut current2 = PlaceholderInfo::from_color(42).with_diacritics(Some(0), None, None);
+        assert!(current2.can_inherit_from(&prev, 1));
+        current2.inherit_from(&prev);
+        assert_eq!(current2.row, Some(0));
+        assert_eq!(current2.col, Some(1));
+        assert_eq!(current2.msb, Some(2));
+    }
+}

@@ -81,12 +81,6 @@ impl Terminal {
         _ignore: bool,
         action: char,
     ) {
-        // DEBUG: Log all DCS/APC hooks
-        eprintln!(
-            "DCS_DEBUG: hook called with action='{}' (0x{:02X})",
-            action, action as u8
-        );
-
         // Block Sixel graphics if insecure sequences are disabled
         if action == 'q' && self.disable_insecure_sequences {
             debug::log(
@@ -318,21 +312,12 @@ impl Terminal {
 
     /// Process accumulated Kitty graphics data
     fn process_kitty_graphics(&mut self) {
-        eprintln!(
-            "KITTY_PROCESS: process_kitty_graphics called, buffer len={}",
-            self.dcs_buffer.len()
-        );
-
         if self.dcs_buffer.is_empty() {
-            eprintln!("KITTY_PROCESS: Buffer empty, returning early");
             return;
         }
 
         let payload = match std::str::from_utf8(&self.dcs_buffer) {
-            Ok(s) => {
-                eprintln!("KITTY_PROCESS: Payload decoded, len={}", s.len());
-                s
-            }
+            Ok(s) => s,
             Err(_) => {
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -343,19 +328,13 @@ impl Terminal {
             }
         };
 
-        // DEBUG: Log all Kitty graphics payloads
-        eprintln!("KITTY_DEBUG: Received payload: {}", payload);
-
         let mut parser = KittyParser::new();
 
         // Parse the payload (may be chunked)
-        eprintln!("KITTY_PROCESS: About to parse chunk");
         match parser.parse_chunk(payload) {
             Ok(more_chunks) => {
-                eprintln!("KITTY_PROCESS: Parse OK, more_chunks={}", more_chunks);
                 if more_chunks {
                     // TODO: Support chunked transmission by storing parser state
-                    eprintln!("KITTY_PROCESS: Returning early - chunked transmission");
                     debug::log(
                         debug::DebugLevel::Debug,
                         "KITTY",
@@ -365,7 +344,6 @@ impl Terminal {
                 }
             }
             Err(e) => {
-                eprintln!("KITTY_PROCESS: Parse failed: {}", e);
                 debug::log(
                     debug::DebugLevel::Debug,
                     "KITTY",
@@ -374,12 +352,6 @@ impl Terminal {
                 return;
             }
         }
-
-        // DEBUG: Log parser state
-        eprintln!(
-            "KITTY_DEBUG: Action: {:?}, image_id: {:?}",
-            parser.action, parser.image_id
-        );
 
         // Check if this is a query action - if so, send response immediately
         if matches!(parser.action, crate::graphics::kitty::KittyAction::Query) {
@@ -391,7 +363,6 @@ impl Terminal {
                 "\x1b_Gi=0;OK\x1b\\".to_string()
             };
 
-            eprintln!("KITTY_DEBUG: Sending query response: {:?}", response);
             self.push_response(response.as_bytes());
 
             debug::log(

@@ -62,7 +62,7 @@ impl Broadcaster {
 
         for (id, client) in clients.iter_mut() {
             if let Err(e) = client.send(msg.clone()).await {
-                eprintln!("Failed to send to client {}: {}", id, e);
+                crate::debug_error!("STREAMING", "Failed to send to client {}: {}", id, e);
                 failed_clients.push(*id);
             }
         }
@@ -134,7 +134,7 @@ impl Broadcaster {
 
         for (id, client) in clients.iter_mut() {
             if let Err(e) = client.ping().await {
-                eprintln!("Failed to ping client {}: {}", id, e);
+                crate::debug_error!("STREAMING", "Failed to ping client {}: {}", id, e);
                 failed_clients.push(*id);
             }
         }

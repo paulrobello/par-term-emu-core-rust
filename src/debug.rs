@@ -82,12 +82,9 @@ impl DebugLogger {
                     ));
                     return logger;
                 }
-                Err(e) => {
-                    eprintln!(
-                        "Failed to open debug log file {}: {}",
-                        log_path.display(),
-                        e
-                    );
+                Err(_e) => {
+                    // Silently fail if log file can't be opened
+                    // This prevents debug output from interfering with TUI applications
                     None
                 }
             }

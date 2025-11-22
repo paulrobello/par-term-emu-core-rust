@@ -44,6 +44,11 @@ impl Terminal {
         self.graphics_store.clear();
     }
 
+    /// Get immutable access to graphics store
+    pub fn graphics_store(&self) -> &crate::graphics::GraphicsStore {
+        &self.graphics_store
+    }
+
     /// Get mutable access to graphics store
     pub fn graphics_store_mut(&mut self) -> &mut crate::graphics::GraphicsStore {
         &mut self.graphics_store
@@ -64,11 +69,6 @@ impl Terminal {
         // Since the grid has already grown by `n` lines, subtract `n` to get the old length
         let scrollback_len = self.active_grid().scrollback_len();
         let old_scrollback_len = scrollback_len.saturating_sub(n);
-
-        eprintln!(
-            "FIX_APPLIED: n={}, scrollback_len={}, old_scrollback_len={}",
-            n, scrollback_len, old_scrollback_len
-        );
 
         // Adjust graphics - pass old_scrollback_len so graphics are placed at the correct position
         // Graphics entering scrollback should be placed where the text they align with went

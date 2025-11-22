@@ -845,7 +845,6 @@ mod tests {
         // Don't assert here as system fonts may not be available in all test environments
         if let Ok(mut cache) = result {
             let dims = cache.cell_dimensions();
-            println!("Cell dimensions: {:?}", dims);
             assert!(dims.0 > 0);
             assert!(dims.1 > 0);
         }
@@ -867,10 +866,6 @@ mod tests {
     fn test_advance_width_calculation() {
         if let Ok(mut cache) = FontCache::new(None, 14.0) {
             let glyph = cache.get_glyph('M', false, false);
-            println!("Glyph 'M' metrics:");
-            println!("  advance_width: {}", glyph.metrics.advance_width);
-            println!("  width: {}", glyph.metrics.width);
-            println!("  height: {}", glyph.metrics.height);
 
             // For a 14px monospace font, advance width should be around 8-10 pixels
             assert!(
@@ -891,14 +886,7 @@ mod tests {
         if let Ok(mut cache) = FontCache::new(None, 14.0) {
             let ascent = cache.ascent();
             let descent = cache.descent();
-            let (width, height) = cache.cell_dimensions();
-
-            println!("Font metrics at 14px:");
-            println!("  ascent: {}", ascent);
-            println!("  descent: {}", descent);
-            println!("  line height (ascent - descent): {}", ascent - descent);
-            println!("  cell_width: {}", width);
-            println!("  cell_height: {}", height);
+            let (_width, _height) = cache.cell_dimensions();
 
             // Ascent should be positive
             assert!(ascent > 0, "Ascent {} should be positive", ascent);

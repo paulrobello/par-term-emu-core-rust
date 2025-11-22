@@ -1581,8 +1581,10 @@ impl Terminal {
             bell_count: 0,
             parser: vte::Parser::new(),
             pending_wrap: false,
-            pixel_width: 0,
-            pixel_height: 0,
+            // Initialize pixel dimensions with reasonable defaults (10x20 per cell)
+            // This ensures CSI 14 t queries return valid pixel dimensions
+            pixel_width: cols * 10,
+            pixel_height: rows * 20,
             insert_mode: false,
             line_feed_new_line_mode: false,
             char_protected: false,
@@ -1752,15 +1754,31 @@ impl Terminal {
 
         self.grid.resize(cols, rows);
         self.alt_grid.resize(cols, rows);
+
+        // Update pixel dimensions proportionally (10x20 per cell if not explicitly set)
+        // This ensures CSI 14 t queries return valid pixel dimensions after resize
+        if self.pixel_width == 0 || self.pixel_height == 0 {
+            self.pixel_width = cols * 10;
+            self.pixel_height = rows * 20;
+        } else {
+            // Maintain aspect ratio if pixel dimensions were explicitly set
+            let old_cols = self.grid.cols().max(1);
+            let old_rows = self.grid.rows().max(1);
+            self.pixel_width = (self.pixel_width * cols) / old_cols;
+            self.pixel_height = (self.pixel_height * rows) / old_rows;
+        }
+
         debug::log(
             debug::DebugLevel::Trace,
             "TERMINAL_RESIZE",
             &format!(
-                "Applied resize: primary={}x{}, alt={}x{}",
+                "Applied resize: primary={}x{}, alt={}x{}, pixels={}x{}",
                 self.grid.cols(),
                 self.grid.rows(),
                 self.alt_grid.cols(),
-                self.alt_grid.rows()
+                self.alt_grid.rows(),
+                self.pixel_width,
+                self.pixel_height
             ),
         );
 
@@ -2624,7 +2642,7 @@ impl Terminal {
                 if converted[i] == 0x1B && converted[i + 1] == 0x5F {
                     // Convert APC (ESC _) to DCS (ESC P)
                     converted[i + 1] = 0x50; // 'P'
-                    eprintln!("APC_CONVERT: Converted ESC _ to ESC P at offset {}", i);
+                    crate::debug_log!("APC_CONVERT", "Converted ESC _ to ESC P at offset {}", i);
                 }
                 i += 1;
             }

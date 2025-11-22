@@ -11,11 +11,17 @@
 //! All protocols are normalized to a unified `TerminalGraphic` representation with RGBA pixel data.
 //! The `GraphicsStore` handles storage, scrolling, and Kitty image ID reuse.
 
+pub mod animation;
 pub mod iterm;
 pub mod kitty;
+pub mod placeholder;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// Re-export for convenience
+pub use animation::{Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode};
+pub use placeholder::{PlaceholderInfo, PLACEHOLDER_CHAR};
 
 /// Graphics protocol identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +93,16 @@ pub struct TerminalGraphic {
     pub kitty_image_id: Option<u32>,
     /// Kitty placement ID
     pub kitty_placement_id: Option<u32>,
+    /// Virtual placement (U=1) - used as prototype for Unicode placeholders
+    pub is_virtual: bool,
+    /// Parent placement for relative positioning (P= key)
+    pub parent_image_id: Option<u32>,
+    /// Parent placement ID for relative positioning (Q= key)
+    pub parent_placement_id: Option<u32>,
+    /// X offset relative to parent placement (in pixels)
+    pub relative_x_offset: i32,
+    /// Y offset relative to parent placement (in pixels)
+    pub relative_y_offset: i32,
 }
 
 impl TerminalGraphic {
@@ -111,6 +127,11 @@ impl TerminalGraphic {
             scrollback_row: None,
             kitty_image_id: None,
             kitty_placement_id: None,
+            is_virtual: false,
+            parent_image_id: None,
+            parent_placement_id: None,
+            relative_x_offset: 0,
+            relative_y_offset: 0,
         }
     }
 
@@ -135,6 +156,11 @@ impl TerminalGraphic {
             scrollback_row: None,
             kitty_image_id: None,
             kitty_placement_id: None,
+            is_virtual: false,
+            parent_image_id: None,
+            parent_placement_id: None,
+            relative_x_offset: 0,
+            relative_y_offset: 0,
         }
     }
 
@@ -233,6 +259,13 @@ pub struct GraphicsStore {
 
     /// All active placements (visible area)
     placements: Vec<TerminalGraphic>,
+
+    /// Virtual placements - prototypes for Unicode placeholder images
+    /// Key is (image_id, placement_id)
+    virtual_placements: HashMap<(u32, u32), TerminalGraphic>,
+
+    /// Animations indexed by image ID
+    animations: HashMap<u32, Animation>,
 
     /// Graphics in scrollback (keyed by scrollback row)
     scrollback: Vec<TerminalGraphic>,
@@ -373,6 +406,135 @@ impl GraphicsStore {
             // Matches criteria, remove it
             false
         });
+
+        // Also delete from virtual placements if criteria match
+        if let (Some(iid), Some(pid)) = (image_id, placement_id) {
+            self.virtual_placements.remove(&(iid, pid));
+        } else if let Some(iid) = image_id {
+            // Remove all virtual placements with this image_id
+            self.virtual_placements
+                .retain(|(img_id, _), _| *img_id != iid);
+        }
+    }
+
+    // --- Virtual placements ---
+
+    /// Add or update a virtual placement
+    pub fn add_virtual_placement(&mut self, mut graphic: TerminalGraphic) {
+        graphic.is_virtual = true;
+        let image_id = graphic.kitty_image_id.unwrap_or(0);
+        let placement_id = graphic.kitty_placement_id.unwrap_or(0);
+        self.virtual_placements
+            .insert((image_id, placement_id), graphic);
+    }
+
+    /// Get a virtual placement
+    pub fn get_virtual_placement(
+        &self,
+        image_id: u32,
+        placement_id: u32,
+    ) -> Option<&TerminalGraphic> {
+        self.virtual_placements.get(&(image_id, placement_id))
+    }
+
+    /// Remove a virtual placement
+    pub fn remove_virtual_placement(
+        &mut self,
+        image_id: u32,
+        placement_id: u32,
+    ) -> Option<TerminalGraphic> {
+        self.virtual_placements.remove(&(image_id, placement_id))
+    }
+
+    /// Get all virtual placements
+    pub fn all_virtual_placements(&self) -> &HashMap<(u32, u32), TerminalGraphic> {
+        &self.virtual_placements
+    }
+
+    /// Get a virtual placement for rendering a Unicode placeholder
+    ///
+    /// This looks up the virtual placement using the image_id and placement_id
+    /// from the placeholder info, and returns it for rendering.
+    pub fn get_placeholder_graphic(
+        &self,
+        placeholder_info: &PlaceholderInfo,
+    ) -> Option<&TerminalGraphic> {
+        let image_id = placeholder_info.full_image_id();
+        let placement_id = placeholder_info.placement_id;
+
+        // Try exact match first
+        if let Some(graphic) = self.virtual_placements.get(&(image_id, placement_id)) {
+            return Some(graphic);
+        }
+
+        // If placement_id is 0, try to find any virtual placement for this image
+        if placement_id == 0 {
+            for ((img_id, _pid), graphic) in &self.virtual_placements {
+                if *img_id == image_id {
+                    return Some(graphic);
+                }
+            }
+        }
+
+        None
+    }
+
+    // --- Animation management ---
+
+    /// Create or get animation for an image
+    pub fn get_or_create_animation(
+        &mut self,
+        image_id: u32,
+        default_delay_ms: u32,
+    ) -> &mut Animation {
+        self.animations
+            .entry(image_id)
+            .or_insert_with(|| Animation::new(image_id, default_delay_ms))
+    }
+
+    /// Get animation for an image
+    pub fn get_animation(&self, image_id: u32) -> Option<&Animation> {
+        self.animations.get(&image_id)
+    }
+
+    /// Get mutable animation for an image
+    pub fn get_animation_mut(&mut self, image_id: u32) -> Option<&mut Animation> {
+        self.animations.get_mut(&image_id)
+    }
+
+    /// Add a frame to an animation
+    pub fn add_animation_frame(&mut self, image_id: u32, frame: AnimationFrame) {
+        let default_delay = frame.delay_ms.max(100); // Default to 100ms if not specified
+        let anim = self.get_or_create_animation(image_id, default_delay);
+        anim.add_frame(frame);
+    }
+
+    /// Apply animation control to an image
+    pub fn control_animation(&mut self, image_id: u32, control: AnimationControl) {
+        if let Some(anim) = self.get_animation_mut(image_id) {
+            anim.apply_control(control);
+        }
+    }
+
+    /// Update all animations and return list of image IDs that changed frames
+    pub fn update_animations(&mut self) -> Vec<u32> {
+        let mut changed = Vec::new();
+        for (image_id, anim) in &mut self.animations {
+            if anim.update() {
+                changed.push(*image_id);
+            }
+        }
+        changed
+    }
+
+    /// Remove animation for an image
+    pub fn remove_animation(&mut self, image_id: u32) {
+        self.animations.remove(&image_id);
+    }
+
+    /// Get all animations
+    pub fn all_animations(&self) -> &HashMap<u32, Animation> {
+        &self.animations
     }
 
     // --- Scrolling ---
@@ -418,16 +580,10 @@ impl GraphicsStore {
             // Check if graphic is within the scroll region
             if graphic_bottom > top && graphic_row <= bottom && graphic_row >= top {
                 // Adjust position
-                let old_scroll_offset = g.scroll_offset_rows;
                 let new_position = graphic_row.saturating_sub(lines);
                 let additional_scroll = lines.saturating_sub(graphic_row);
                 g.scroll_offset_rows = g.scroll_offset_rows.saturating_add(additional_scroll);
                 g.position.1 = new_position;
-
-                eprintln!(
-                    "SCROLL_DEBUG: Graphic {} adjusted. row {} → {}, scroll_offset {} → {}, grid_scrollback_len={}",
-                    g.id, graphic_row, new_position, old_scroll_offset, g.scroll_offset_rows, grid_scrollback_len
-                );
 
                 // Check if completely scrolled off
                 if g.scroll_offset_rows >= graphic_height_in_rows {
@@ -435,16 +591,6 @@ impl GraphicsStore {
                     // The graphic was originally at graphic_row, which is now at scrollback position
                     let mut scrollback_graphic = g.clone();
                     scrollback_graphic.scrollback_row = Some(grid_scrollback_len);
-
-                    eprintln!(
-                        "SCROLLBACK_DEBUG: Moving graphic {} to scrollback. graphic_row={}, scroll_offset_rows={}, height_in_rows={}, grid_scrollback_len={}, scrollback_row={:?}",
-                        scrollback_graphic.id,
-                        graphic_row,
-                        g.scroll_offset_rows,
-                        graphic_height_in_rows,
-                        grid_scrollback_len,
-                        scrollback_graphic.scrollback_row
-                    );
 
                     to_scrollback.push(scrollback_graphic);
                     return false;

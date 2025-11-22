@@ -222,7 +222,7 @@ impl PyStreamingServer {
             std::thread::spawn(move || {
                 runtime.block_on(async {
                     if let Err(e) = server.start().await {
-                        eprintln!("Streaming server error: {}", e);
+                        crate::debug_error!("STREAMING", "Streaming server error: {}", e);
                     }
                 });
             });

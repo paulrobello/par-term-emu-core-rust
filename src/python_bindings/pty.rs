@@ -1026,6 +1026,27 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Force set keyboard protocol flags directly (bypasses protocol sequences)
+    ///
+    /// Unlike set_keyboard_flags() which sends CSI sequences to the application,
+    /// this method directly modifies the terminal's internal keyboard_flags state.
+    /// Useful for resetting stuck keyboard protocol when applications fail to
+    /// properly disable it on exit.
+    ///
+    /// Args:
+    ///     flags: Keyboard protocol flags to set (0 = normal mode)
+    ///
+    /// Example:
+    ///     >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
+    fn force_set_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        let mut term = terminal
+            .lock()
+            .map_err(|_| PyRuntimeError::new_err("Failed to acquire terminal lock"))?;
+        term.set_keyboard_flags(flags);
+        Ok(())
+    }
+
     /// Get clipboard content (OSC 52)
     ///
     /// Returns:

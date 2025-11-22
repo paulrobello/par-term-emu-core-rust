@@ -10,8 +10,10 @@ use std::fs;
 use std::path::Path;
 
 use crate::graphics::{
-    next_graphic_id, GraphicProtocol, GraphicsError, GraphicsStore, TerminalGraphic,
+    next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
+    GraphicsError, GraphicsStore, TerminalGraphic,
 };
+use crate::{debug_info, debug_log};
 
 /// Kitty graphics transmission action
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -130,6 +132,24 @@ pub struct KittyParser {
     data_chunks: Vec<Vec<u8>>,
     /// Delete target
     pub delete_target: Option<KittyDeleteTarget>,
+    /// Virtual placement (U=1)
+    pub is_virtual: bool,
+    /// Parent image ID for relative positioning (P= key)
+    pub parent_image_id: Option<u32>,
+    /// Parent placement ID for relative positioning (Q= key)
+    pub parent_placement_id: Option<u32>,
+    /// Relative X offset (H= key) in pixels
+    pub relative_x_offset: Option<i32>,
+    /// Relative Y offset (V= key) in pixels
+    pub relative_y_offset: Option<i32>,
+    /// Frame number for animation
+    pub frame_number: Option<u32>,
+    /// Frame delay in milliseconds
+    pub frame_delay_ms: Option<u32>,
+    /// Frame composition mode
+    pub frame_composition: Option<CompositionMode>,
+    /// Animation control
+    pub animation_control: Option<AnimationControl>,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -180,16 +200,42 @@ impl KittyParser {
                         self.placement_id = value.parse().ok();
                     }
                     "s" => {
-                        self.width = value.parse().ok();
+                        // Animation control state (for AnimationControl action) takes priority
+                        if self.action == KittyAction::AnimationControl {
+                            self.animation_control = AnimationControl::from_value(value);
+                            debug_log!(
+                                "KITTY",
+                                "Parsed animation control: s={} -> {:?}",
+                                value,
+                                self.animation_control
+                            );
+                        } else {
+                            // Otherwise it's width
+                            self.width = value.parse().ok();
+                        }
                     }
                     "v" => {
                         self.height = value.parse().ok();
                     }
                     "c" => {
-                        self.columns = value.parse().ok();
+                        // Frame composition mode (for Frame action) takes priority
+                        if self.action == KittyAction::Frame {
+                            if let Some(first_char) = value.chars().next() {
+                                self.frame_composition = CompositionMode::from_char(first_char);
+                            }
+                        } else {
+                            // Otherwise it's columns
+                            self.columns = value.parse().ok();
+                        }
                     }
                     "r" => {
-                        self.rows = value.parse().ok();
+                        // Frame number (for Frame action) takes priority
+                        if self.action == KittyAction::Frame {
+                            self.frame_number = value.parse().ok();
+                        } else {
+                            // Otherwise it's rows
+                            self.rows = value.parse().ok();
+                        }
                     }
                     "x" => {
                         self.x_offset = value.parse().ok();
@@ -203,6 +249,33 @@ impl KittyParser {
                     "d" => {
                         // Delete specification
                         self.parse_delete_target(value);
+                    }
+                    "U" => {
+                        // Virtual placement
+                        self.is_virtual = value == "1";
+                    }
+                    "P" => {
+                        // Parent image ID for relative positioning
+                        self.parent_image_id = value.parse().ok();
+                    }
+                    "Q" => {
+                        // Parent placement ID for relative positioning
+                        self.parent_placement_id = value.parse().ok();
+                    }
+                    "H" => {
+                        // Relative X offset in pixels
+                        self.relative_x_offset = value.parse().ok();
+                    }
+                    "V" => {
+                        // Relative Y offset in pixels (note: different from v=height)
+                        // Only parse as relative offset if we have parent placement
+                        if self.parent_image_id.is_some() {
+                            self.relative_y_offset = value.parse().ok();
+                        }
+                    }
+                    "z" => {
+                        // Frame delay in milliseconds (for animations)
+                        self.frame_delay_ms = value.parse().ok();
                     }
                     _ => {}
                 }
@@ -269,21 +342,49 @@ impl KittyParser {
             }
 
             KittyAction::Put => {
-                // Display previously transmitted image
-                if let Some(image_id) = self.image_id {
-                    if let Some((width, height, pixels)) = store.get_kitty_image(image_id) {
-                        let mut graphic = TerminalGraphic::with_shared_pixels(
-                            next_graphic_id(),
-                            GraphicProtocol::Kitty,
-                            position,
-                            width,
-                            height,
-                            pixels,
-                        );
-                        graphic.kitty_image_id = Some(image_id);
-                        graphic.kitty_placement_id = self.placement_id;
-                        return Ok(Some(graphic));
+                // Display previously transmitted image or create virtual placement
+                let image_id = self.image_id.unwrap_or(0);
+
+                // If U=1, create a virtual placement
+                if self.is_virtual {
+                    // Create virtual placement without image data
+                    let mut graphic = TerminalGraphic::new(
+                        next_graphic_id(),
+                        GraphicProtocol::Kitty,
+                        position,
+                        self.columns.unwrap_or(1) as usize,
+                        self.rows.unwrap_or(1) as usize,
+                        vec![], // Virtual placements don't need pixel data
+                    );
+                    graphic.kitty_image_id = Some(image_id);
+                    graphic.kitty_placement_id = self.placement_id;
+                    graphic.is_virtual = true;
+                    store.add_virtual_placement(graphic);
+                    return Ok(None); // Virtual placements are not displayed
+                }
+
+                // Regular placement
+                if let Some((width, height, pixels)) = store.get_kitty_image(image_id) {
+                    let mut graphic = TerminalGraphic::with_shared_pixels(
+                        next_graphic_id(),
+                        GraphicProtocol::Kitty,
+                        position,
+                        width,
+                        height,
+                        pixels,
+                    );
+                    graphic.kitty_image_id = Some(image_id);
+                    graphic.kitty_placement_id = self.placement_id;
+
+                    // Handle relative positioning
+                    if let Some(parent_img_id) = self.parent_image_id {
+                        graphic.parent_image_id = Some(parent_img_id);
+                        graphic.parent_placement_id = self.parent_placement_id;
+                        graphic.relative_x_offset = self.relative_x_offset.unwrap_or(0);
+                        graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
                     }
+
+                    return Ok(Some(graphic));
                 }
                 Err(GraphicsError::KittyError("Image not found".to_string()))
             }
@@ -318,26 +419,123 @@ impl KittyParser {
                     store.store_kitty_image(image_id, width, height, pixels.clone());
                 }
 
-                // Create graphic if TransmitDisplay or Put
+                // Create graphic if TransmitDisplay, or virtual placement if U=1
                 if self.action == KittyAction::TransmitDisplay {
-                    let mut graphic = TerminalGraphic::new(
-                        next_graphic_id(),
-                        GraphicProtocol::Kitty,
-                        position,
-                        width,
-                        height,
-                        pixels,
-                    );
-                    graphic.kitty_image_id = self.image_id;
-                    graphic.kitty_placement_id = self.placement_id;
-                    Ok(Some(graphic))
+                    if self.is_virtual {
+                        // Create virtual placement
+                        let mut graphic = TerminalGraphic::new(
+                            next_graphic_id(),
+                            GraphicProtocol::Kitty,
+                            position,
+                            self.columns.unwrap_or(1) as usize,
+                            self.rows.unwrap_or(1) as usize,
+                            vec![], // Virtual placements don't need pixel data
+                        );
+                        graphic.kitty_image_id = self.image_id;
+                        graphic.kitty_placement_id = self.placement_id;
+                        graphic.is_virtual = true;
+                        store.add_virtual_placement(graphic);
+                        Ok(None) // Virtual placements are not displayed
+                    } else {
+                        let mut graphic = TerminalGraphic::new(
+                            next_graphic_id(),
+                            GraphicProtocol::Kitty,
+                            position,
+                            width,
+                            height,
+                            pixels,
+                        );
+                        graphic.kitty_image_id = self.image_id;
+                        graphic.kitty_placement_id = self.placement_id;
+
+                        // Handle relative positioning
+                        if let Some(parent_img_id) = self.parent_image_id {
+                            graphic.parent_image_id = Some(parent_img_id);
+                            graphic.parent_placement_id = self.parent_placement_id;
+                            graphic.relative_x_offset = self.relative_x_offset.unwrap_or(0);
+                            graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
+                        }
+
+                        Ok(Some(graphic))
+                    }
                 } else {
                     // Transmit only, no display
                     Ok(None)
                 }
             }
 
-            _ => Ok(None),
+            KittyAction::Frame => {
+                // Add animation frame
+                let raw_data = self.get_data();
+                if raw_data.is_empty() {
+                    return Err(GraphicsError::KittyError("No frame data".to_string()));
+                }
+
+                let image_id = self.image_id.ok_or_else(|| {
+                    GraphicsError::KittyError("Frame requires image ID".to_string())
+                })?;
+
+                // Decode frame data
+                let image_data = match self.medium {
+                    KittyMedium::File | KittyMedium::TempFile => self.load_file_data(&raw_data)?,
+                    KittyMedium::Direct => raw_data,
+                    KittyMedium::SharedMem => {
+                        return Err(GraphicsError::KittyError(
+                            "Shared memory not supported for frames".to_string(),
+                        ));
+                    }
+                };
+
+                let (width, height, pixels) = self.decode_pixels(&image_data)?;
+
+                // Create frame
+                let frame_num = self.frame_number.unwrap_or(1);
+                let mut frame = AnimationFrame::new(frame_num, pixels, width, height);
+
+                if let Some(delay) = self.frame_delay_ms {
+                    frame = frame.with_delay(delay);
+                }
+
+                if let Some(x) = self.x_offset {
+                    if let Some(y) = self.y_offset {
+                        frame = frame.with_offset(x, y);
+                    }
+                }
+
+                if let Some(comp) = self.frame_composition {
+                    frame = frame.with_composition(comp);
+                }
+
+                // Add frame to animation
+                store.add_animation_frame(image_id, frame);
+
+                Ok(None) // Frames don't create placements
+            }
+
+            KittyAction::AnimationControl => {
+                // Control animation playback
+                let image_id = self.image_id.ok_or_else(|| {
+                    GraphicsError::KittyError("Animation control requires image ID".to_string())
+                })?;
+
+                if let Some(control) = self.animation_control {
+                    debug_info!(
+                        "KITTY",
+                        "Applying animation control: image_id={}, control={:?}",
+                        image_id,
+                        control
+                    );
+                    store.control_animation(image_id, control);
+                } else {
+                    debug_log!(
+                        "KITTY",
+                        "Animation control command received but no control parsed (image_id={})",
+                        image_id
+                    );
+                }
+
+                Ok(None)
+            }
         }
     }
 
