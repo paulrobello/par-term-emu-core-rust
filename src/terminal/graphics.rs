@@ -23,6 +23,22 @@ impl Terminal {
         self.graphics_store.graphics_count()
     }
 
+    /// Get graphics in scrollback for a range of rows
+    pub fn scrollback_graphics(&self, start_row: usize, end_row: usize) -> Vec<&TerminalGraphic> {
+        self.graphics_store
+            .graphics_in_scrollback(start_row, end_row)
+    }
+
+    /// Get all scrollback graphics
+    pub fn all_scrollback_graphics(&self) -> &[TerminalGraphic] {
+        self.graphics_store.all_scrollback_graphics()
+    }
+
+    /// Get scrollback graphics count
+    pub fn scrollback_graphics_count(&self) -> usize {
+        self.graphics_store.scrollback_count()
+    }
+
     /// Clear all graphics
     pub fn clear_graphics(&mut self) {
         self.graphics_store.clear();
@@ -43,17 +59,38 @@ impl Terminal {
     /// * `top` - Top of scroll region (0-indexed)
     /// * `bottom` - Bottom of scroll region (0-indexed)
     pub(super) fn adjust_graphics_for_scroll_up(&mut self, n: usize, top: usize, bottom: usize) {
-        self.graphics_store.adjust_for_scroll_up(n, top, bottom);
+        // Get the current scrollback length from the grid (AFTER it has already scrolled)
+        // We need to pass the OLD scrollback length (before scroll) to graphics store
+        // Since the grid has already grown by `n` lines, subtract `n` to get the old length
+        let scrollback_len = self.active_grid().scrollback_len();
+        let old_scrollback_len = scrollback_len.saturating_sub(n);
+
+        eprintln!(
+            "FIX_APPLIED: n={}, scrollback_len={}, old_scrollback_len={}",
+            n, scrollback_len, old_scrollback_len
+        );
+
+        // Adjust graphics - pass old_scrollback_len so graphics are placed at the correct position
+        // Graphics entering scrollback should be placed where the text they align with went
+        self.graphics_store.adjust_for_scroll_up_with_scrollback(
+            n,
+            top,
+            bottom,
+            old_scrollback_len,
+        );
 
         debug::log(
             debug::DebugLevel::Debug,
             "GRAPHICS",
             &format!(
-                "Adjusted graphics for scroll_up: n={}, top={}, bottom={}, remaining graphics={}",
+                "Adjusted graphics for scroll_up: n={}, top={}, bottom={}, remaining graphics={}, scrollback={}, old_scrollback_len={} (current={})",
                 n,
                 top,
                 bottom,
-                self.graphics_store.graphics_count()
+                self.graphics_store.graphics_count(),
+                self.graphics_store.scrollback_count(),
+                old_scrollback_len,
+                scrollback_len
             ),
         );
     }
@@ -81,8 +118,174 @@ impl Terminal {
 
     /// Handle iTerm2 inline image (OSC 1337)
     ///
-    /// Format: File=name=<b64>;size=<bytes>;inline=1:<base64 data>
+    /// Supports:
+    /// - Single-sequence: `File=name=<b64>;size=<bytes>;inline=1:<base64 data>`
+    /// - Multi-part: `MultipartFile=...` followed by `FilePart=<chunk>` sequences
     pub(crate) fn handle_iterm_image(&mut self, data: &str) {
+        // Handle MultipartFile (start of chunked transfer)
+        if let Some(params) = data.strip_prefix("MultipartFile=") {
+            self.handle_multipart_file_start(params);
+            return;
+        }
+
+        // Handle FilePart (chunk of data in multipart transfer)
+        if let Some(chunk) = data.strip_prefix("FilePart=") {
+            self.handle_file_part(chunk);
+            return;
+        }
+
+        // Handle single-sequence File= transfer
+        self.handle_single_file_transfer(data);
+    }
+
+    /// Handle MultipartFile command (start of chunked transfer)
+    fn handle_multipart_file_start(&mut self, params_str: &str) {
+        use std::collections::HashMap;
+
+        // Parse parameters: inline=1;size=280459;name=...
+        let mut params = HashMap::new();
+        for part in params_str.split(';') {
+            if let Some((key, value)) = part.split_once('=') {
+                params.insert(key.to_string(), value.to_string());
+            }
+        }
+
+        // Validate inline=1 is present
+        if params.get("inline") != Some(&"1".to_string()) {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                "MultipartFile requires inline=1",
+            );
+            return;
+        }
+
+        // Get expected size if provided
+        let total_size = params.get("size").and_then(|s| s.parse::<usize>().ok());
+
+        // Check size limit (use same limit as graphics store)
+        if let Some(size) = total_size {
+            let limits = self.graphics_store.limits();
+            if size > limits.max_total_memory {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    &format!(
+                        "MultipartFile rejected: size {} exceeds limit {}",
+                        size, limits.max_total_memory
+                    ),
+                );
+                return;
+            }
+        }
+
+        // Initialize multipart state
+        self.iterm_multipart_buffer = Some(crate::terminal::ITermMultipartState {
+            params,
+            chunks: Vec::new(),
+            total_size,
+            accumulated_size: 0,
+        });
+    }
+
+    /// Handle FilePart command (chunk of data in multipart transfer)
+    fn handle_file_part(&mut self, base64_chunk: &str) {
+        // Check if we have an active multipart transfer
+        let state = match self.iterm_multipart_buffer.as_mut() {
+            Some(s) => s,
+            None => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    "FilePart received without MultipartFile",
+                );
+                return;
+            }
+        };
+
+        // Decode the chunk to check its size
+        let decoded_size = match base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            base64_chunk.as_bytes(),
+        ) {
+            Ok(decoded) => decoded.len(),
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    &format!("FilePart base64 decode failed: {}", e),
+                );
+                self.iterm_multipart_buffer = None;
+                return;
+            }
+        };
+
+        // Check if adding this chunk would exceed size limit
+        let new_accumulated = state.accumulated_size + decoded_size;
+        if let Some(expected_size) = state.total_size {
+            if new_accumulated > expected_size {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "ITERM",
+                    &format!(
+                        "FilePart rejected: accumulated {} + chunk {} > expected {}",
+                        state.accumulated_size, decoded_size, expected_size
+                    ),
+                );
+                self.iterm_multipart_buffer = None;
+                return;
+            }
+        }
+
+        // Add chunk and update size
+        state.chunks.push(base64_chunk.to_string());
+        state.accumulated_size = new_accumulated;
+
+        // Check if transfer is complete
+        let is_complete = if let Some(expected_size) = state.total_size {
+            state.accumulated_size >= expected_size
+        } else {
+            // Without size parameter, we can't determine completion automatically
+            // iTerm2 spec says size should be provided, so this is an error state
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                "MultipartFile missing size parameter - cannot determine completion",
+            );
+            self.iterm_multipart_buffer = None;
+            return;
+        };
+
+        if is_complete {
+            self.finalize_multipart_transfer();
+        }
+    }
+
+    /// Finalize multipart transfer and process the complete image
+    fn finalize_multipart_transfer(&mut self) {
+        // Take the buffer state
+        let state = match self.iterm_multipart_buffer.take() {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Join all chunks into single base64 string
+        let complete_data = state.chunks.join("");
+
+        // Reconstruct File= format string with params
+        let mut params_parts = Vec::new();
+        for (key, value) in &state.params {
+            params_parts.push(format!("{}={}", key, value));
+        }
+        let params_str = params_parts.join(";");
+        let file_data = format!("File={}:{}", params_str, complete_data);
+
+        // Process as single-file transfer
+        self.handle_single_file_transfer(&file_data);
+    }
+
+    /// Handle single-sequence File= transfer
+    fn handle_single_file_transfer(&mut self, data: &str) {
         use crate::graphics::iterm::ITermParser;
 
         // Split into params and image data at the colon
@@ -92,7 +295,7 @@ impl Terminal {
                 debug::log(
                     debug::DebugLevel::Debug,
                     "ITERM",
-                    "No image data found in OSC 1337",
+                    "No colon separator in File= format",
                 );
                 return;
             }
@@ -135,6 +338,46 @@ impl Terminal {
                 let (cell_w, cell_h) = self.cell_dimensions;
                 graphic.set_cell_dimensions(cell_w, cell_h);
 
+                // Calculate graphic height in terminal rows (ceiling division)
+                let graphic_height_in_rows = graphic.height.div_ceil(cell_h as usize);
+
+                // Move cursor to line below graphic (similar to Sixel behavior)
+                let new_cursor_col = 0;
+                let new_cursor_row = self.cursor.row.saturating_add(graphic_height_in_rows);
+
+                // Check if we need to scroll
+                let (_, rows) = self.size();
+                if new_cursor_row >= rows {
+                    // Graphic pushed cursor past bottom, need to scroll
+                    let scroll_amount = new_cursor_row - rows + 1;
+                    let scroll_top = self.scroll_region_top;
+                    let scroll_bottom = self.scroll_region_bottom;
+
+                    // Scroll the grid and existing graphics
+                    self.active_grid_mut().scroll_region_up(
+                        scroll_amount,
+                        scroll_top,
+                        scroll_bottom,
+                    );
+                    self.adjust_graphics_for_scroll_up(scroll_amount, scroll_top, scroll_bottom);
+
+                    // Adjust new graphic's position for the scroll
+                    let original_row = graphic.position.1;
+                    let new_row = original_row.saturating_sub(scroll_amount);
+                    graphic.position.1 = new_row;
+
+                    // Track rows that scrolled off top
+                    if scroll_amount > original_row {
+                        graphic.scroll_offset_rows = scroll_amount - original_row;
+                    }
+
+                    self.cursor.row = rows - 1;
+                    self.cursor.col = new_cursor_col;
+                } else {
+                    self.cursor.row = new_cursor_row;
+                    self.cursor.col = new_cursor_col;
+                }
+
                 // Add to graphics store (limit enforced internally)
                 self.graphics_store.add_graphic(graphic.clone());
 
@@ -142,8 +385,13 @@ impl Terminal {
                     debug::DebugLevel::Debug,
                     "ITERM",
                     &format!(
-                        "Added iTerm image at ({}, {}), size {}x{}",
-                        position.0, position.1, graphic.width, graphic.height
+                        "Added iTerm image at ({}, {}), size {}x{}, cursor moved to ({}, {})",
+                        position.0,
+                        position.1,
+                        graphic.width,
+                        graphic.height,
+                        self.cursor.col,
+                        self.cursor.row
                     ),
                 );
             }

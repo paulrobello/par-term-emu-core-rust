@@ -461,10 +461,17 @@ impl Terminal {
                 "1337" => {
                     // iTerm2 inline images (OSC 1337)
                     // Format: OSC 1337 ; File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST
+                    // VTE splits on ; so we need to join params[1..] back together
                     if params.len() >= 2 {
-                        if let Ok(data) = std::str::from_utf8(params[1]) {
-                            self.handle_iterm_image(data);
+                        // Join all remaining params with semicolons (VTE split them)
+                        let mut data_parts = Vec::new();
+                        for p in &params[1..] {
+                            if let Ok(s) = std::str::from_utf8(p) {
+                                data_parts.push(s);
+                            }
                         }
+                        let data = data_parts.join(";");
+                        self.handle_iterm_image(&data);
                     }
                 }
                 _ => {}

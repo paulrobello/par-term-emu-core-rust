@@ -704,6 +704,19 @@ pub struct InlineImage {
     pub display_rows: usize,
 }
 
+/// State for multi-part iTerm2 image transfers (MultipartFile/FilePart protocol)
+#[derive(Debug, Default)]
+struct ITermMultipartState {
+    /// Parameters from MultipartFile command (inline, size, name, etc.)
+    params: HashMap<String, String>,
+    /// Accumulated base64 chunks from FilePart commands
+    chunks: Vec<String>,
+    /// Expected total size in bytes (from size= parameter)
+    total_size: Option<usize>,
+    /// Current accumulated size (sum of decoded chunks)
+    accumulated_size: usize,
+}
+
 /// Image placement action
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImagePlacement {
@@ -1170,6 +1183,8 @@ pub struct Terminal {
     dcs_active: bool,
     /// DCS action character ('q' for Sixel)
     dcs_action: Option<char>,
+    /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
+    iterm_multipart_buffer: Option<ITermMultipartState>,
     /// Clipboard content (OSC 52)
     clipboard_content: Option<String>,
     /// Allow clipboard read operations (security flag for OSC 52 queries)
@@ -1554,6 +1569,7 @@ impl Terminal {
             dcs_buffer: Vec::new(),
             dcs_active: false,
             dcs_action: None,
+            iterm_multipart_buffer: None,
             clipboard_content: None,
             allow_clipboard_read: false,
             default_fg: Color::Named(NamedColor::White),
@@ -2598,11 +2614,30 @@ impl Terminal {
             }
         }
 
+        // Convert APC sequences to DCS before VTE parsing
+        // VTE ignores APC (ESC _ ... ST) but handles DCS (ESC P ... ST)
+        // Kitty graphics protocol uses APC, so we convert ESC _ to ESC P
+        let processed_data = if data.windows(2).any(|w| w == b"\x1b_") {
+            let mut converted = data.to_vec();
+            let mut i = 0;
+            while i + 1 < converted.len() {
+                if converted[i] == 0x1B && converted[i + 1] == 0x5F {
+                    // Convert APC (ESC _) to DCS (ESC P)
+                    converted[i + 1] = 0x50; // 'P'
+                    eprintln!("APC_CONVERT: Converted ESC _ to ESC P at offset {}", i);
+                }
+                i += 1;
+            }
+            converted
+        } else {
+            data.to_vec()
+        };
+
         // Use the persistent parser to maintain state across calls
         // This is critical for handling escape sequences that span multiple PTY reads
         // We temporarily take ownership of the parser to avoid borrow checker issues
         let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-        parser.advance(self, data);
+        parser.advance(self, &processed_data);
         self.parser = parser;
     }
     pub fn reset(&mut self) {

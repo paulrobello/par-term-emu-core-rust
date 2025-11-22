@@ -6,6 +6,8 @@
 //! Reference: <https://sw.kovidgoyal.net/kitty/graphics-protocol/>
 
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 use crate::graphics::{
     next_graphic_id, GraphicProtocol, GraphicsError, GraphicsStore, TerminalGraphic,
@@ -209,8 +211,9 @@ impl KittyParser {
 
         // Decode and accumulate base64 data
         if !data_str.is_empty() {
+            // Use STANDARD_NO_PAD to handle base64 without padding (Kitty may omit padding)
             let decoded =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_str)
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, data_str)
                     .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
             self.data_chunks.push(decoded);
         }
@@ -286,12 +289,29 @@ impl KittyParser {
             }
 
             KittyAction::Transmit | KittyAction::TransmitDisplay => {
-                let data = self.get_data();
-                if data.is_empty() {
+                let raw_data = self.get_data();
+                if raw_data.is_empty() {
                     return Err(GraphicsError::KittyError("No image data".to_string()));
                 }
 
-                let (width, height, pixels) = self.decode_pixels(&data)?;
+                // Load image data based on transmission medium
+                let image_data = match self.medium {
+                    KittyMedium::File | KittyMedium::TempFile => {
+                        // For file transmission, raw_data is a file path (not base64-encoded)
+                        self.load_file_data(&raw_data)?
+                    }
+                    KittyMedium::Direct => {
+                        // For direct transmission, use data as-is
+                        raw_data
+                    }
+                    KittyMedium::SharedMem => {
+                        return Err(GraphicsError::KittyError(
+                            "Shared memory transmission not supported".to_string(),
+                        ));
+                    }
+                };
+
+                let (width, height, pixels) = self.decode_pixels(&image_data)?;
 
                 // Store for reuse if image_id is specified
                 if let Some(image_id) = self.image_id {
@@ -319,6 +339,63 @@ impl KittyParser {
 
             _ => Ok(None),
         }
+    }
+
+    /// Load image data from file path with security validation
+    fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+        // Decode base64 data to get file path
+        let path_str = String::from_utf8(path_data.to_vec())
+            .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
+
+        let path = Path::new(&path_str);
+
+        // Security validations
+
+        // 1. Check for directory traversal attacks
+        if path_str.contains("..") {
+            return Err(GraphicsError::KittyError(
+                "Directory traversal not allowed".to_string(),
+            ));
+        }
+
+        // 2. Validate file exists and is readable
+        if !path.exists() {
+            return Err(GraphicsError::KittyError(format!(
+                "File not found: {}",
+                path_str
+            )));
+        }
+
+        if !path.is_file() {
+            return Err(GraphicsError::KittyError(format!(
+                "Path is not a file: {}",
+                path_str
+            )));
+        }
+
+        // 3. Check file size (limit to 100MB for safety)
+        const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+        let metadata = fs::metadata(path)
+            .map_err(|e| GraphicsError::KittyError(format!("Cannot read file metadata: {}", e)))?;
+
+        if metadata.len() > MAX_FILE_SIZE {
+            return Err(GraphicsError::KittyError(format!(
+                "File too large: {} bytes (max {})",
+                metadata.len(),
+                MAX_FILE_SIZE
+            )));
+        }
+
+        // 4. Read file
+        let file_data = fs::read(path)
+            .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
+
+        // Delete temp file if requested
+        if self.medium == KittyMedium::TempFile {
+            let _ = fs::remove_file(path); // Ignore errors on cleanup
+        }
+
+        Ok(file_data)
     }
 
     /// Decode pixels based on format
@@ -432,5 +509,104 @@ mod tests {
         let result = parser.parse_chunk("m=0;BBBB");
         assert!(result.is_ok());
         assert!(!result.unwrap()); // more_chunks = false
+    }
+
+    #[test]
+    fn test_kitty_medium_from_char() {
+        assert_eq!(KittyMedium::from_char('d'), Some(KittyMedium::Direct));
+        assert_eq!(KittyMedium::from_char('f'), Some(KittyMedium::File));
+        assert_eq!(KittyMedium::from_char('t'), Some(KittyMedium::TempFile));
+        assert_eq!(KittyMedium::from_char('s'), Some(KittyMedium::SharedMem));
+        assert_eq!(KittyMedium::from_char('x'), None);
+    }
+
+    #[test]
+    fn test_kitty_file_transmission() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Create a valid 1x1 red PNG using the image crate
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([255, 0, 0, 255]));
+        let mut png_data = Vec::new();
+        img.write_to(
+            &mut std::io::Cursor::new(&mut png_data),
+            image::ImageFormat::Png,
+        )
+        .expect("Failed to encode PNG");
+
+        // Write to temp file
+        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
+        temp_file
+            .write_all(&png_data)
+            .expect("Failed to write PNG data");
+        let file_path = temp_file.path().to_str().unwrap();
+
+        // Create parser and parse file transmission command
+        // Note: file path must be base64-encoded in the protocol (without padding to match Kitty)
+        let file_path_b64 =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD_NO_PAD, file_path);
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=100,t=f;{}", file_path_b64);
+        let result = parser.parse_chunk(&payload);
+
+        assert!(result.is_ok());
+        assert_eq!(parser.action, KittyAction::TransmitDisplay);
+        assert_eq!(parser.format, KittyFormat::Png);
+        assert_eq!(parser.medium, KittyMedium::File);
+
+        // Test file loading
+        let data = parser.get_data();
+        assert!(!data.is_empty());
+        assert_eq!(data, file_path.as_bytes());
+
+        // Load file data
+        let file_data = parser.load_file_data(&data);
+        assert!(file_data.is_ok());
+        let file_data = file_data.unwrap();
+        assert_eq!(file_data.len(), png_data.len());
+
+        // Decode pixels
+        let decode_result = parser.decode_pixels(&file_data);
+        assert!(
+            decode_result.is_ok(),
+            "Failed to decode: {:?}",
+            decode_result.err()
+        );
+        let (width, height, pixels) = decode_result.unwrap();
+        assert_eq!(width, 1);
+        assert_eq!(height, 1);
+        assert_eq!(pixels.len(), 4); // RGBA
+                                     // Verify it's red
+        assert_eq!(pixels[0], 255); // R
+        assert_eq!(pixels[1], 0); // G
+        assert_eq!(pixels[2], 0); // B
+        assert_eq!(pixels[3], 255); // A
+    }
+
+    #[test]
+    fn test_kitty_file_security_directory_traversal() {
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+
+        // Test directory traversal attempt
+        let malicious_path = b"../../../etc/passwd";
+        let result = parser.load_file_data(malicious_path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Directory traversal"));
+    }
+
+    #[test]
+    fn test_kitty_file_security_nonexistent() {
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+
+        // Test nonexistent file
+        let nonexistent_path = b"/this/file/does/not/exist.png";
+        let result = parser.load_file_data(nonexistent_path);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("File not found"));
     }
 }

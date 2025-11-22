@@ -228,8 +228,11 @@ impl PtySession {
         }
 
         // Set terminal-specific environment variables
-        cmd.env("TERM", "xterm-256color");
+        cmd.env("TERM", "xterm-kitty");
         cmd.env("COLORTERM", "truecolor");
+        // Set Kitty-specific environment variables for protocol detection
+        cmd.env("KITTY_WINDOW_ID", "1");
+        cmd.env("KITTY_PID", std::process::id().to_string());
         // NOTE: Do NOT set COLUMNS/LINES environment variables!
         // They are static and won't update on resize. Applications should
         // query terminal size via ioctl(TIOCGWINSZ), not environment variables.
@@ -857,7 +860,7 @@ impl PtySession {
     /// Get the number of scrollback lines
     pub fn scrollback_len(&self) -> usize {
         if let Ok(term) = self.terminal.lock() {
-            term.grid().scrollback_len()
+            term.active_grid().scrollback_len()
         } else {
             0
         }

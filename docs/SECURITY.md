@@ -50,6 +50,12 @@ term.spawn(
   - [XTWINOPS Query Response Control](#xtwinops-query-response-control)
 - [Input Validation](#input-validation)
   - [Keyboard Input Sanitization](#keyboard-input-sanitization)
+- [Graphics Protocol File Loading Security](#graphics-protocol-file-loading-security)
+  - [Kitty Graphics Protocol File Transmission](#kitty-graphics-protocol-file-transmission)
+  - [File Loading Implementation](#file-loading-implementation)
+  - [Security Considerations](#security-considerations)
+  - [Best Practices for Graphics Protocol](#best-practices-for-graphics-protocol)
+  - [Example: Secure Graphics Usage](#example-secure-graphics-usage)
 - [Terminal Size Validation](#terminal-size-validation)
 - [Privilege Considerations](#privilege-considerations)
   - [Running as Non-Root](#running-as-non-root)
@@ -521,6 +527,136 @@ def safe_send_input(term, user_input):
             raise ValueError("Dangerous escape sequence detected")
 
     term.write(input_bytes)
+```
+
+## Graphics Protocol File Loading Security
+
+### Kitty Graphics Protocol File Transmission
+
+The terminal emulator supports the Kitty graphics protocol, which includes file transmission modes (`t=f` and `t=t`). When enabled, applications can send image file paths instead of inline image data. This feature implements multiple security layers to protect against malicious file access.
+
+**Security Measures Implemented**:
+
+1. **Directory Traversal Prevention**: File paths containing `..` are rejected to prevent access to parent directories
+2. **File Type Validation**: Only existing regular files are loaded (directories and special files are rejected)
+3. **File Size Limits**: Maximum file size of 100MB to prevent memory exhaustion
+4. **Path Validation**: File paths must exist and be readable
+
+**Transmission Modes**:
+- `t=d` - Direct base64 image data (no file access, most secure)
+- `t=f` - File path (base64-encoded) - **Requires file system access**
+- `t=t` - Temporary file path (auto-deleted after loading) - **Requires file system access**
+- `t=s` - Shared memory (not supported)
+
+### File Loading Implementation
+
+```rust
+// Location: src/graphics/kitty.rs:load_file_data()
+
+// Security validations applied:
+// 1. Directory traversal check
+if path_str.contains("..") {
+    return Err("Directory traversal not allowed");
+}
+
+// 2. File existence and type validation
+if !path.exists() || !path.is_file() {
+    return Err("File not found or not a regular file");
+}
+
+// 3. File size limits
+const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+if metadata.len() > MAX_FILE_SIZE {
+    return Err("File too large");
+}
+
+// 4. Read and validate file
+let file_data = fs::read(path)?;
+
+// 5. Delete temp file if t=t
+if medium == TempFile {
+    let _ = fs::remove_file(path);
+}
+```
+
+### Security Considerations
+
+**File System Access Risks**:
+- Applications can request loading of **any readable file** on the system (within the user's permissions)
+- No sandboxing or chroot isolation is applied
+- Applications could potentially:
+  - Probe for file existence by observing error messages
+  - Read sensitive files the user has access to (e.g., `~/.ssh/id_rsa`)
+  - Cause resource exhaustion by requesting large files repeatedly
+
+**Mitigations**:
+1. **User Permission Model**: File loading operates with the same permissions as the terminal emulator process. If running as a non-root user, sensitive system files are inaccessible.
+2. **Size Limits**: 100MB maximum file size prevents single-file memory exhaustion
+3. **No Execution**: Files are only read and decoded as images, never executed
+4. **Path Sanitization**: Directory traversal attempts are blocked
+
+**Recommendations**:
+
+```python
+# GOOD: Run terminal emulator as restricted user
+# Limits file access to user's own files
+import os
+import pwd
+
+def drop_privileges():
+    """Run as restricted user"""
+    if os.getuid() == 0:
+        pwnam = pwd.getpwnam("appuser")
+        os.setgid(pwnam.pw_gid)
+        os.setuid(pwnam.pw_uid)
+
+drop_privileges()
+term = PtyTerminal(80, 24)
+```
+
+```python
+# GOOD: Monitor for suspicious file access patterns
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Log graphics loading errors (may indicate probing)
+# Implementation would need to be added to the Rust side
+# for full logging of file access attempts
+```
+
+**Advanced Security** (Future Enhancements):
+- Consider adding a configurable allowlist of directories for file loading
+- Implement rate limiting to prevent rapid file access probing
+- Add audit logging for all file loading attempts
+- Consider sandboxing or chroot for file operations
+
+### Best Practices for Graphics Protocol
+
+1. ✅ **Run as non-root** - Limits file access to user's own files
+2. ✅ **Prefer direct transmission (`t=d`)** - No file system access required
+3. ✅ **Monitor resource usage** - Watch for memory exhaustion from large images
+4. ⚠️ **Be aware of file access** - Applications can read any file the user can read
+5. ⚠️ **Consider trusted applications only** - Don't run untrusted applications with graphics support in sensitive environments
+
+### Example: Secure Graphics Usage
+
+```python
+from par_term_emu_core_rust import PtyTerminal
+
+# Create terminal with standard user permissions
+term = PtyTerminal(80, 24)
+
+# Spawn shell - inherits user permissions
+# Any file loading requests will be subject to:
+# - User's file permissions (can't read files user can't read)
+# - 100MB size limit
+# - Directory traversal prevention
+# - File type validation
+term.spawn_shell()
+
+# Direct transmission is always safer than file transmission
+# Encourage applications to use t=d mode when possible
 ```
 
 ## Terminal Size Validation

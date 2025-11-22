@@ -79,6 +79,8 @@ pub struct TerminalGraphic {
     pub cell_dimensions: Option<(u32, u32)>,
     /// Rows scrolled off visible area (for partial rendering)
     pub scroll_offset_rows: usize,
+    /// Row in scrollback buffer (only set when in scrollback)
+    pub scrollback_row: Option<usize>,
 
     // Kitty-specific (None for other protocols)
     /// Kitty image ID for image reuse
@@ -106,6 +108,7 @@ impl TerminalGraphic {
             pixels: Arc::new(pixels),
             cell_dimensions: None,
             scroll_offset_rows: 0,
+            scrollback_row: None,
             kitty_image_id: None,
             kitty_placement_id: None,
         }
@@ -129,6 +132,7 @@ impl TerminalGraphic {
             pixels,
             cell_dimensions: None,
             scroll_offset_rows: 0,
+            scrollback_row: None,
             kitty_image_id: None,
             kitty_placement_id: None,
         }
@@ -173,6 +177,7 @@ impl TerminalGraphic {
 
     /// Sample color for half-block cell rendering
     /// Returns (top_half_rgba, bottom_half_rgba) for the cell at (col, row)
+    #[allow(clippy::type_complexity)]
     pub fn sample_half_block(
         &self,
         cell_col: usize,
@@ -231,6 +236,9 @@ pub struct GraphicsStore {
 
     /// Graphics in scrollback (keyed by scrollback row)
     scrollback: Vec<TerminalGraphic>,
+
+    /// Current scrollback row counter (incremented when lines scroll off)
+    scrollback_position: usize,
 
     /// Resource limits
     limits: GraphicsLimits,
@@ -360,8 +368,36 @@ impl GraphicsStore {
 
     // --- Scrolling ---
 
+    /// Notify that lines have been added to text scrollback
+    /// This should be called when text scrolls off the screen
+    pub fn notify_scrollback_advance(&mut self, lines: usize) {
+        self.scrollback_position += lines;
+    }
+
+    /// Get current scrollback position
+    pub fn scrollback_position(&self) -> usize {
+        self.scrollback_position
+    }
+
     /// Adjust graphics positions when scrolling up
     pub fn adjust_for_scroll_up(&mut self, lines: usize, top: usize, bottom: usize) {
+        self.adjust_for_scroll_up_with_scrollback(lines, top, bottom, 0);
+    }
+
+    /// Adjust graphics positions when scrolling up, with scrollback tracking
+    ///
+    /// # Arguments
+    /// * `lines` - Number of lines to scroll
+    /// * `top` - Top of scroll region
+    /// * `bottom` - Bottom of scroll region
+    /// * `grid_scrollback_len` - Current length of text scrollback buffer
+    pub fn adjust_for_scroll_up_with_scrollback(
+        &mut self,
+        lines: usize,
+        top: usize,
+        bottom: usize,
+        grid_scrollback_len: usize,
+    ) {
         let mut to_scrollback = Vec::new();
 
         self.placements.retain_mut(|g| {
@@ -373,15 +409,35 @@ impl GraphicsStore {
             // Check if graphic is within the scroll region
             if graphic_bottom > top && graphic_row <= bottom && graphic_row >= top {
                 // Adjust position
+                let old_scroll_offset = g.scroll_offset_rows;
                 let new_position = graphic_row.saturating_sub(lines);
                 let additional_scroll = lines.saturating_sub(graphic_row);
                 g.scroll_offset_rows = g.scroll_offset_rows.saturating_add(additional_scroll);
                 g.position.1 = new_position;
 
+                eprintln!(
+                    "SCROLL_DEBUG: Graphic {} adjusted. row {} → {}, scroll_offset {} → {}, grid_scrollback_len={}",
+                    g.id, graphic_row, new_position, old_scroll_offset, g.scroll_offset_rows, grid_scrollback_len
+                );
+
                 // Check if completely scrolled off
                 if g.scroll_offset_rows >= graphic_height_in_rows {
-                    // Move to scrollback instead of deleting
-                    to_scrollback.push(g.clone());
+                    // Move to scrollback - set scrollback_row to match text scrollback position
+                    // The graphic was originally at graphic_row, which is now at scrollback position
+                    let mut scrollback_graphic = g.clone();
+                    scrollback_graphic.scrollback_row = Some(grid_scrollback_len);
+
+                    eprintln!(
+                        "SCROLLBACK_DEBUG: Moving graphic {} to scrollback. graphic_row={}, scroll_offset_rows={}, height_in_rows={}, grid_scrollback_len={}, scrollback_row={:?}",
+                        scrollback_graphic.id,
+                        graphic_row,
+                        g.scroll_offset_rows,
+                        graphic_height_in_rows,
+                        grid_scrollback_len,
+                        scrollback_graphic.scrollback_row
+                    );
+
+                    to_scrollback.push(scrollback_graphic);
                     return false;
                 }
             }
@@ -417,7 +473,7 @@ impl GraphicsStore {
 
     // --- Scrollback ---
 
-    /// Get graphics in scrollback for a range of rows
+    /// Get graphics in scrollback for a range of scrollback rows
     pub fn graphics_in_scrollback(
         &self,
         start_row: usize,
@@ -426,10 +482,18 @@ impl GraphicsStore {
         self.scrollback
             .iter()
             .filter(|g| {
-                let row = g.position.1;
-                row >= start_row && row < end_row
+                if let Some(sb_row) = g.scrollback_row {
+                    sb_row >= start_row && sb_row < end_row
+                } else {
+                    false
+                }
             })
             .collect()
+    }
+
+    /// Get all scrollback graphics
+    pub fn all_scrollback_graphics(&self) -> &[TerminalGraphic] {
+        &self.scrollback
     }
 
     /// Clear scrollback graphics

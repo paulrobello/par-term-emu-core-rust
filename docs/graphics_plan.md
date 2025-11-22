@@ -7,10 +7,43 @@ Multi-protocol graphics support for Sixel, iTerm2 inline images, and Kitty graph
 | Phase | Status | Notes |
 |-------|--------|-------|
 | Phase 1: Core Refactoring | **Complete** | `src/graphics/mod.rs`, `TerminalGraphic`, `GraphicsStore`, `GraphicsLimits` |
-| Phase 2: Scrollback Persistence | **Complete** | Terminal now uses `GraphicsStore` with scrollback support |
-| Phase 3: iTerm2 Support | **Complete** | OSC 1337 parsing in `osc.rs`, `ITermParser` in `src/graphics/iterm.rs` |
+| Phase 2: Scrollback Persistence | **Complete** | Terminal uses `GraphicsStore` with scrollback support. Graphics visible in scrollback! |
+| Phase 3: iTerm2 Support | **Complete** | Single-sequence and chunked transfers (MultipartFile/FilePart) both working |
 | Phase 4: Kitty Support | **Complete** | APC G handling in `dcs.rs`, `KittyParser` in `src/graphics/kitty.rs` |
 | Phase 5: Advanced Features | Not started | Unicode placeholders, animations |
+
+### Recent Updates (2025-11-21)
+
+**Graphics Scrollback - FULLY WORKING** ✅
+- Graphics now properly persist in scrollback and render when viewing scrollback
+- ✅ **FIXED: 2x Scroll Speed Bug** - Graphics were scrolling at 2x speed when entering scrollback
+  - **Root Cause**: Double clipping bug in par-term's `graphics_renderer.rs`
+  - Graphic height was being reduced by `scroll_offset_rows`, but position calculation already accounted for scrolling
+  - **Solution**: Removed height reduction in `graphics_renderer.rs:338`
+  - Graphics now maintain full height; only position changes as they scroll
+  - **Fix Location**: `/Users/probello/Repos/par-term/src/graphics_renderer.rs:336-338`
+- Position calculation formula is correct: `absolute_row = scrollback_len - scroll_offset + row`
+- Texture cropping (tex_v_start) correctly uses `scroll_offset_rows` for partial visibility
+- par-term frontend updated to use new `TerminalGraphic` type and unified renderer
+
+**Kitty Graphics Protocol** ✅
+- ✅ Kitty graphics protocol (APC G) fully implemented
+- ✅ File transmission modes (`t=f`, `t=t`) with security validation
+  - Directory traversal prevention
+  - File size limits (100MB max)
+  - Temp file auto-deletion
+- ✅ Image ID reuse and placement support
+- ✅ Query response handling for protocol detection
+- ✅ PNG format support
+- See `docs/SECURITY.md` for file loading security considerations
+
+**iTerm2 Inline Images** ✅
+- ✅ OSC 1337 handler receives and parses sequences
+- ✅ Single-sequence format: `File=inline=1:<base64_data>`
+- ✅ Chunked transfer (`imgcat` protocol): `MultipartFile` → multiple `FilePart` → finalize
+  - Size validation and limit enforcement
+  - Automatic completion detection
+  - Fallback to single-file processing after assembly
 
 ## Reference Specifications
 

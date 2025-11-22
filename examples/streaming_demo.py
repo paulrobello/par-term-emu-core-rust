@@ -228,7 +228,7 @@ def main():
     print(f"  Terminal streaming server is running!")
     print(f"{'='*60}")
     print(f"\n  WebSocket URL: ws://{addr}")
-    print(f"\n  1. Open examples/streaming_client.html in your browser")
+    print(f"\n  1. Open examples/streaming_client.html in your browser or run `make dev-server` for enhanced demo")
     print(f"  2. Click 'Connect' to start streaming")
     print(f"\n{'='*60}\n")
 

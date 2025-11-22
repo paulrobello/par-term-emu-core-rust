@@ -81,6 +81,12 @@ impl Terminal {
         _ignore: bool,
         action: char,
     ) {
+        // DEBUG: Log all DCS/APC hooks
+        eprintln!(
+            "DCS_DEBUG: hook called with action='{}' (0x{:02X})",
+            action, action as u8
+        );
+
         // Block Sixel graphics if insecure sequences are disabled
         if action == 'q' && self.disable_insecure_sequences {
             debug::log(
@@ -312,12 +318,21 @@ impl Terminal {
 
     /// Process accumulated Kitty graphics data
     fn process_kitty_graphics(&mut self) {
+        eprintln!(
+            "KITTY_PROCESS: process_kitty_graphics called, buffer len={}",
+            self.dcs_buffer.len()
+        );
+
         if self.dcs_buffer.is_empty() {
+            eprintln!("KITTY_PROCESS: Buffer empty, returning early");
             return;
         }
 
         let payload = match std::str::from_utf8(&self.dcs_buffer) {
-            Ok(s) => s,
+            Ok(s) => {
+                eprintln!("KITTY_PROCESS: Payload decoded, len={}", s.len());
+                s
+            }
             Err(_) => {
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -328,13 +343,19 @@ impl Terminal {
             }
         };
 
+        // DEBUG: Log all Kitty graphics payloads
+        eprintln!("KITTY_DEBUG: Received payload: {}", payload);
+
         let mut parser = KittyParser::new();
 
         // Parse the payload (may be chunked)
+        eprintln!("KITTY_PROCESS: About to parse chunk");
         match parser.parse_chunk(payload) {
             Ok(more_chunks) => {
+                eprintln!("KITTY_PROCESS: Parse OK, more_chunks={}", more_chunks);
                 if more_chunks {
                     // TODO: Support chunked transmission by storing parser state
+                    eprintln!("KITTY_PROCESS: Returning early - chunked transmission");
                     debug::log(
                         debug::DebugLevel::Debug,
                         "KITTY",
@@ -344,6 +365,7 @@ impl Terminal {
                 }
             }
             Err(e) => {
+                eprintln!("KITTY_PROCESS: Parse failed: {}", e);
                 debug::log(
                     debug::DebugLevel::Debug,
                     "KITTY",
@@ -353,21 +375,101 @@ impl Terminal {
             }
         }
 
+        // DEBUG: Log parser state
+        eprintln!(
+            "KITTY_DEBUG: Action: {:?}, image_id: {:?}",
+            parser.action, parser.image_id
+        );
+
+        // Check if this is a query action - if so, send response immediately
+        if matches!(parser.action, crate::graphics::kitty::KittyAction::Query) {
+            // Send query response: _Gi=<id>;OK ESC \
+            let response = if let Some(id) = parser.image_id {
+                format!("\x1b_Gi={};OK\x1b\\", id)
+            } else {
+                // If no image_id specified, respond without id
+                "\x1b_Gi=0;OK\x1b\\".to_string()
+            };
+
+            eprintln!("KITTY_DEBUG: Sending query response: {:?}", response);
+            self.push_response(response.as_bytes());
+
+            debug::log(
+                debug::DebugLevel::Debug,
+                "KITTY",
+                &format!(
+                    "Responded to Kitty graphics query: {}",
+                    response.escape_debug()
+                ),
+            );
+            return;
+        }
+
         // Get cursor position for graphic placement
         let position = (self.cursor.col, self.cursor.row);
 
         // Build the graphic using the terminal's graphics store
         match parser.build_graphic(position, &mut self.graphics_store) {
-            Ok(Some(graphic)) => {
-                // Add to graphics store (limit enforced internally)
+            Ok(Some(mut graphic)) => {
+                // Get terminal dimensions and cell size
+                let (_, rows) = self.size();
+                let (_, cell_h) = self.cell_dimensions;
+
+                // Calculate graphic height in terminal rows
+                let graphic_height = graphic.height;
+                let graphic_height_in_rows = graphic_height.div_ceil(cell_h as usize);
+
+                // Calculate new cursor position after graphic
+                let original_row = self.cursor.row;
+                let new_cursor_row = original_row.saturating_add(graphic_height_in_rows);
+                let new_cursor_col = 0; // Move to start of next line after image
+
+                // Check if we need to scroll
+                if new_cursor_row >= rows {
+                    // Need to scroll to make room for graphic
+                    let scroll_amount = new_cursor_row - rows + 1;
+                    let scroll_top = self.scroll_region_top;
+                    let scroll_bottom = self.scroll_region_bottom;
+
+                    // Scroll the grid and existing graphics (but not the new one we haven't added yet)
+                    self.active_grid_mut().scroll_region_up(
+                        scroll_amount,
+                        scroll_top,
+                        scroll_bottom,
+                    );
+                    self.adjust_graphics_for_scroll_up(scroll_amount, scroll_top, scroll_bottom);
+
+                    // Adjust the new graphic's position to account for the scroll
+                    // The graphic was at original_row, which just scrolled up by scroll_amount
+                    let new_row = original_row.saturating_sub(scroll_amount);
+                    graphic.position.1 = new_row;
+
+                    // If position was clamped to 0, track how many rows scrolled off
+                    if scroll_amount > original_row {
+                        graphic.scroll_offset_rows = scroll_amount - original_row;
+                    }
+
+                    self.cursor.row = rows - 1;
+                    self.cursor.col = new_cursor_col;
+                } else {
+                    self.cursor.row = new_cursor_row;
+                    self.cursor.col = new_cursor_col;
+                }
+
+                // Add to graphics store AFTER all position adjustments (limit enforced internally)
                 self.graphics_store.add_graphic(graphic.clone());
 
                 debug::log(
                     debug::DebugLevel::Debug,
                     "KITTY",
                     &format!(
-                        "Added Kitty image at ({}, {}), size {}x{}",
-                        position.0, position.1, graphic.width, graphic.height
+                        "Added Kitty image at ({}, {}), size {}x{}, cursor advanced to ({},{})",
+                        position.0,
+                        position.1,
+                        graphic.width,
+                        graphic.height,
+                        self.cursor.col,
+                        self.cursor.row
                     ),
                 );
             }
