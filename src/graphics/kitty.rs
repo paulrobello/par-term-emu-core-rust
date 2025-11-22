@@ -284,9 +284,16 @@ impl KittyParser {
 
         // Decode and accumulate base64 data
         if !data_str.is_empty() {
-            // Use STANDARD_NO_PAD to handle base64 without padding (Kitty may omit padding)
+            // Try STANDARD first (with padding), then NO_PAD if that fails
+            // This handles both padded and unpadded base64 (Kitty allows both)
             let decoded =
-                base64::Engine::decode(&base64::engine::general_purpose::STANDARD_NO_PAD, data_str)
+                base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_str)
+                    .or_else(|_| {
+                        base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD_NO_PAD,
+                            data_str,
+                        )
+                    })
                     .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
             self.data_chunks.push(decoded);
         }
