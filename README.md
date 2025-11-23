@@ -11,11 +11,21 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## What's New in 0.8.0
+## What's New in 0.9.0
 
-- **Keyboard Protocol Reset Fix**: Automatically reset Kitty Keyboard Protocol flags when exiting alternate screen buffer
-  - Prevents TUI apps from leaving keyboard in bad state if they fail to disable protocol on exit
-  - Ensures clean terminal state after TUI app termination
+- **Graphics Protocol Support**: Comprehensive multi-protocol graphics implementation
+  - **iTerm2 Inline Images** (OSC 1337): PNG, JPEG, GIF support with base64 encoding
+  - **Kitty Graphics Protocol** (APC G): Advanced image placement with reuse and animations
+  - **Sixel Graphics**: Enhanced with unique IDs and configurable cell dimensions
+  - Unified `GraphicsStore` with scrollback support and memory limits
+  - Animation support with frame composition and timing control
+  - Graphics dropped event tracking for resource management
+
+- **Pre-built Streaming Server Binaries**: Download ready-to-run binaries from GitHub Releases
+  - Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (x86_64)
+  - No compilation needed - just download and run
+  - Includes separate web frontend package (tar.gz/zip) for serving the terminal interface
+  - Published to crates.io for Rust developers: `cargo install par-term-emu-core-rust --features streaming`
 
 See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
@@ -43,10 +53,19 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **OSC 52 Clipboard** - Copy/paste over SSH without X11
 - **OSC 9/777 Notifications** - Desktop-style alerts and notifications
 - **Shell Integration** - OSC 133 (iTerm2/VSCode compatible)
-- **Sixel Graphics** - Inline graphics with half-block rendering
 - **Kitty Keyboard Protocol** - Progressive keyboard enhancement with auto-reset on alternate screen exit
 - **Synchronized Updates (DEC 2026)** - Flicker-free rendering
 - **Tmux Control Protocol** - Control mode integration support
+
+### Graphics Support
+
+- **Sixel Graphics** - DEC VT340 compatible bitmap graphics with half-block rendering
+- **iTerm2 Inline Images** - OSC 1337 protocol for PNG, JPEG, GIF images
+- **Kitty Graphics Protocol** - APC G protocol with image reuse, animations, and advanced placement
+- **Unicode Placeholders** - Virtual placements insert U+10EEEE characters for inline image display
+- **Unified Graphics Store** - Protocol-agnostic storage with scrollback support
+- **Animation Support** - Frame-based animations with timing and composition control
+- **Resource Management** - Configurable memory limits and graphics dropped tracking
 
 ### PTY Support
 
@@ -58,6 +77,17 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Event Loop Integration** - Non-blocking update detection
 - **Cross-Platform** - Linux, macOS, and Windows via portable-pty
 
+### Terminal Streaming (WebSocket)
+
+- **Standalone Server** - Pure Rust streaming server binary (no Python required)
+- **Real-time Streaming** - Sub-100ms latency terminal streaming over WebSocket
+- **Multiple Clients** - Support for concurrent viewers per session
+- **Authentication** - Optional API key authentication (header or URL param)
+- **Configurable Themes** - Multiple built-in color themes (iTerm2, Monokai, Dracula, Solarized)
+- **Auto-resize** - Client-initiated terminal resizing with SIGWINCH support
+- **Browser Compatible** - Works with any WebSocket client (xterm.js recommended)
+- **Modern Web Frontend** - Next.js/React application with Tailwind CSS v4 and xterm.js
+
 ### Screenshots and Export
 
 - **Multiple Formats** - PNG, JPEG, BMP, SVG (vector), HTML
@@ -68,11 +98,22 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Session Recording** - Record/replay sessions (asciicast v2, JSON)
 - **Export Functions** - Plain text, ANSI styled, HTML export
 
+### Macro Recording and Playback
+
+- **YAML Format** - Human-readable macro storage format
+- **Friendly Key Names** - Intuitive key combinations (`ctrl+shift+s`, `enter`, `f1`, etc.)
+- **Keyboard Events** - Record and replay keyboard input with precise timing
+- **Delays** - Control timing between events
+- **Screenshot Triggers** - Trigger screenshots during playback
+- **Playback Controls** - Play, pause, resume, stop, and speed control
+- **Macro Library** - Store and manage multiple macros
+- **Recording Conversion** - Convert terminal recording sessions to macros
+
 ### Utility Functions
 
 - **Text Extraction** - Smart word/URL detection, selection boundaries, bracket matching
 - **Content Search** - Find text with case-sensitive/insensitive matching
-- **Buffer Statistics** - Memory usage, cell counts, graphics count
+- **Buffer Statistics** - Memory usage, cell counts, graphics count and memory tracking
 - **Color Utilities** - 18+ color manipulation functions (iTerm2-compatible)
   - NTSC brightness, contrast adjustment, WCAG accessibility checks
   - Color space conversions (RGB, HSL, Hex, ANSI 256)
@@ -88,8 +129,12 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **[Building](docs/BUILDING.md)** - Build instructions and requirements
 - **[Configuration Reference](docs/CONFIG_REFERENCE.md)** - Configuration options
 - **[Cross-Platform Notes](docs/CROSS_PLATFORM.md)** - Platform-specific information
-- **[VT Feature Parity](docs/VT_FEATURE_PARITY.md)** - iTerm2 compatibility details
+- **[VT Technical Reference](docs/VT_TECHNICAL_REFERENCE.md)** - Detailed VT compatibility and implementation
 - **[Fonts](docs/FONTS.md)** - Font configuration and rendering
+- **[Macros](docs/MACROS.md)** - Macro recording and playback system
+- **[Streaming](docs/STREAMING.md)** - WebSocket terminal streaming
+- **[Rust Usage](docs/RUST_USAGE.md)** - Using the library in pure Rust projects
+- **[Graphics Testing](docs/GRAPHICS_TESTING.md)** - Testing graphics protocol implementations
 
 ## Installation
 
@@ -121,6 +166,49 @@ uv add --find-links target/wheels par-term-emu-core-rust
 # or
 pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
+
+### Using as a Rust Library
+
+The library can be used in pure Rust projects without Python. Choose your feature combination:
+
+| Use Case | Cargo.toml | What's Included |
+|----------|------------|-----------------|
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.9", default-features = false }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.9", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.9"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.9", features = ["full"] }` | All features |
+
+**Download pre-built streaming server (recommended):**
+
+Pre-built binaries and web frontend packages are available from [GitHub Releases](https://github.com/paulrobello/par-term-emu-core-rust/releases):
+
+```bash
+# Download binary (Linux example)
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-streamer-linux-x86_64
+chmod +x par-term-streamer-linux-x86_64
+
+# Download web frontend
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
+tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+
+# Run
+./par-term-streamer-linux-x86_64 --web-root ./web_term
+```
+
+Available binaries: Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (x86_64)
+
+**Or install from crates.io:**
+```bash
+cargo install par-term-emu-core-rust --features streaming
+```
+
+**Or build from source:**
+```bash
+cargo build --bin par-term-streamer --no-default-features --features streaming --release
+./target/release/par-term-streamer --help
+```
+
+See [docs/RUST_USAGE.md](docs/RUST_USAGE.md) for detailed Rust API documentation and examples.
 
 ### Optional Components
 
@@ -242,6 +330,64 @@ rgb = hex_to_rgb("#FF8040")  # (255, 128, 64)
 mixed = mix_colors((255, 0, 0), (0, 0, 255), 0.5)  # Purple
 ```
 
+### Macro Recording and Playback
+
+```python
+from par_term_emu_core_rust import Macro, PtyTerminal
+import time
+
+# Create a macro manually
+macro = Macro("git_status")
+macro.set_description("Check git status and show branch")
+macro.add_key("g")
+macro.add_key("i")
+macro.add_key("t")
+macro.add_key("space")
+macro.add_key("s")
+macro.add_key("t")
+macro.add_key("a")
+macro.add_key("t")
+macro.add_key("u")
+macro.add_key("s")
+macro.add_key("enter")
+macro.add_delay(500)  # Wait 500ms
+macro.add_screenshot("git_status.png")  # Trigger screenshot
+
+# Save to YAML
+macro.save_yaml("git_status.yaml")
+
+# Load and play back
+term = PtyTerminal(80, 24)
+term.spawn_shell()
+
+# Load macro from file
+loaded_macro = Macro.load_yaml("git_status.yaml")
+term.load_macro("git_check", loaded_macro)
+
+# Play the macro
+term.play_macro("git_check", speed=1.0)  # Normal speed
+
+# Tick to execute macro events
+while term.is_macro_playing():
+    if term.tick_macro():  # Returns True if event was processed
+        time.sleep(0.01)  # Small delay for visual effect
+
+    # Check for screenshot triggers
+    triggers = term.get_macro_screenshot_triggers()
+    for label in triggers:
+        term.screenshot_to_file(label)
+
+# Convert a recording to a macro
+term.start_recording("test session")
+term.write_str("ls -la\n")
+time.sleep(0.5)
+session = term.stop_recording()
+
+# Convert and save
+macro = term.recording_to_macro(session, "ls_command")
+macro.save_yaml("ls_command.yaml")
+```
+
 ## Examples
 
 See the `examples/` directory for comprehensive examples:
@@ -252,6 +398,7 @@ See the `examples/` directory for comprehensive examples:
 - `cursor_movement.py` - Cursor control
 - `text_attributes.py` - Text styling
 - `unicode_emoji.py` - Unicode/emoji support
+- `scrollback_demo.py` - Scrollback buffer usage
 
 ### Advanced Features
 - `alt_screen.py` - Alternate screen buffer
@@ -267,6 +414,8 @@ See the `examples/` directory for comprehensive examples:
 
 ### Graphics and Export
 - `display_image_sixel.py` - Sixel graphics
+- `test_sixel_simple.py` - Simple sixel examples
+- `test_sixel_display.py` - Advanced sixel display
 - `screenshot_demo.py` - Screenshot features
 - `feature_showcase.py` - Comprehensive TUI showcase
 
@@ -276,6 +425,86 @@ See the `examples/` directory for comprehensive examples:
 - `pty_resize.py` - Dynamic resizing
 - `pty_event_loop.py` - Event loop integration
 - `pty_mouse_events.py` - Mouse in PTY
+- `pty_custom_env.py` - Custom environment variables
+- `pty_multiple.py` - Multiple PTY sessions
+- `pty_with_par_term.py` - Integration with par-term
+
+### Terminal Streaming
+- `streaming_demo.py` - Python WebSocket streaming server
+- `streaming_client.html` - Browser-based terminal client
+
+### Macros and Automation
+- `demo.yaml` - Example macro definition
+
+**Standalone Rust Server:**
+```bash
+# Build and run (default: ws://127.0.0.1:8080)
+make streamer-run
+
+# Run with authentication
+make streamer-run-auth
+
+# Or use cargo directly
+cargo build --bin par-term-streamer --no-default-features --features streaming --release
+./target/release/par-term-streamer --port 8080 --theme dracula
+
+# With authentication
+./target/release/par-term-streamer --api-key my-secret --theme monokai
+
+# Install globally
+make streamer-install
+par-term-streamer --help
+```
+
+**Available Themes:** `iterm2-dark`, `monokai`, `dracula`, `solarized-dark`
+
+### Web Terminal Frontend
+
+**Using Pre-built Package (Recommended):**
+
+Download the pre-built static web frontend from [GitHub Releases](https://github.com/paulrobello/par-term-emu-core-rust/releases):
+
+```bash
+# Download and extract
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
+tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+
+# Run streamer with web frontend
+par-term-streamer --web-root ./web_term
+# Open browser to http://localhost:8080
+```
+
+See [web_term/README.md](web_term/README.md) for detailed usage instructions.
+
+**Building from Source:**
+
+A modern Next.js-based web terminal frontend source is in `web-terminal-frontend/`:
+
+```bash
+cd web-terminal-frontend
+
+# Install dependencies
+npm install
+
+# Development server (runs on port 8030)
+npm run dev
+
+# Build for production (outputs to out/)
+npm run build
+
+# Copy to web_term for serving
+cp -r out/* ../web_term/
+```
+
+**Features:**
+- Modern UI with Tailwind CSS v4
+- xterm.js terminal emulator
+- WebSocket connection to streaming server
+- Theme selection and synchronization
+- Responsive design
+- Terminal resize support
+
+See [web-terminal-frontend/README.md](web-terminal-frontend/README.md) for detailed setup and configuration.
 
 ## TUI Demo Application
 

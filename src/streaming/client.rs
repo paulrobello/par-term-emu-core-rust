@@ -42,7 +42,7 @@ impl Client {
     pub async fn send(&mut self, msg: ServerMessage) -> Result<()> {
         let json = serde_json::to_string(&msg)?;
         self.ws
-            .send(Message::Text(json))
+            .send(Message::Text(json.into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
         Ok(())
@@ -99,7 +99,7 @@ impl Client {
     /// Send a ping to the client
     pub async fn ping(&mut self) -> Result<()> {
         self.ws
-            .send(Message::Ping(vec![]))
+            .send(Message::Ping(vec![].into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
         Ok(())

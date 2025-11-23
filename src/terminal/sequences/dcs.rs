@@ -380,8 +380,9 @@ impl Terminal {
         let position = (self.cursor.col, self.cursor.row);
 
         // Build the graphic using the terminal's graphics store
+        use crate::graphics::kitty::KittyGraphicResult;
         match parser.build_graphic(position, &mut self.graphics_store) {
-            Ok(Some(mut graphic)) => {
+            Ok(KittyGraphicResult::Graphic(mut graphic)) => {
                 // Get terminal dimensions and cell size
                 let (_, rows) = self.size();
                 let (_, cell_h) = self.cell_dimensions;
@@ -444,7 +445,26 @@ impl Terminal {
                     ),
                 );
             }
-            Ok(None) => {
+            Ok(KittyGraphicResult::VirtualPlacement {
+                image_id,
+                placement_id,
+                position,
+                cols,
+                rows,
+            }) => {
+                // Virtual placement - insert Unicode placeholders
+                self.insert_placeholder_chars(image_id, placement_id, position, cols, rows);
+
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "KITTY",
+                    &format!(
+                        "Inserted Unicode placeholders for virtual placement: image_id={}, placement_id={}, pos=({},{}), size={}x{}",
+                        image_id, placement_id, position.0, position.1, cols, rows
+                    ),
+                );
+            }
+            Ok(KittyGraphicResult::None) => {
                 // Command processed but no graphic created (e.g., transmit-only or delete)
                 debug::log(
                     debug::DebugLevel::Debug,

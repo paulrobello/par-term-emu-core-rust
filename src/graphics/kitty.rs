@@ -101,6 +101,23 @@ pub enum KittyDeleteTarget {
     ByRow(u32),                    // y - in row
 }
 
+/// Result of building a Kitty graphic
+#[derive(Debug, Clone)]
+pub enum KittyGraphicResult {
+    /// A regular graphic that should be displayed
+    Graphic(TerminalGraphic),
+    /// A virtual placement - insert Unicode placeholders into grid
+    VirtualPlacement {
+        image_id: u32,
+        placement_id: u32,
+        position: (usize, usize),
+        cols: usize,
+        rows: usize,
+    },
+    /// Command processed but no output (delete, query, transmit-only, etc.)
+    None,
+}
+
 /// Kitty graphics parser
 #[derive(Debug, Default)]
 pub struct KittyParser {
@@ -150,6 +167,9 @@ pub struct KittyParser {
     pub frame_composition: Option<CompositionMode>,
     /// Animation control
     pub animation_control: Option<AnimationControl>,
+    /// Number of times to play animation (v= parameter)
+    /// Per Kitty spec: v=0 ignored, v=1 infinite, v=N means (N-1) loops
+    pub num_plays: Option<u32>,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -215,7 +235,15 @@ impl KittyParser {
                         }
                     }
                     "v" => {
-                        self.height = value.parse().ok();
+                        // v= is overloaded: height for images, num_plays for animation control
+                        if self.action == KittyAction::AnimationControl {
+                            // Number of times to play animation (v= for animation control)
+                            // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means loop (N-1) times
+                            self.num_plays = value.parse().ok();
+                        } else {
+                            // Height for image transmission/display
+                            self.height = value.parse().ok();
+                        }
                     }
                     "c" => {
                         // Frame composition mode (for Frame action) takes priority
@@ -324,7 +352,7 @@ impl KittyParser {
         &self,
         position: (usize, usize),
         store: &mut GraphicsStore,
-    ) -> Result<Option<TerminalGraphic>, GraphicsError> {
+    ) -> Result<KittyGraphicResult, GraphicsError> {
         match self.action {
             KittyAction::Delete => {
                 // Handle delete
@@ -340,12 +368,12 @@ impl KittyParser {
                         _ => {} // TODO: implement other delete targets
                     }
                 }
-                Ok(None)
+                Ok(KittyGraphicResult::None)
             }
 
             KittyAction::Query => {
                 // Query doesn't create a graphic
-                Ok(None)
+                Ok(KittyGraphicResult::None)
             }
 
             KittyAction::Put => {
@@ -354,20 +382,32 @@ impl KittyParser {
 
                 // If U=1, create a virtual placement
                 if self.is_virtual {
+                    let cols = self.columns.unwrap_or(1) as usize;
+                    let rows = self.rows.unwrap_or(1) as usize;
+                    let placement_id = self.placement_id.unwrap_or(0);
+
                     // Create virtual placement without image data
                     let mut graphic = TerminalGraphic::new(
                         next_graphic_id(),
                         GraphicProtocol::Kitty,
                         position,
-                        self.columns.unwrap_or(1) as usize,
-                        self.rows.unwrap_or(1) as usize,
+                        cols,
+                        rows,
                         vec![], // Virtual placements don't need pixel data
                     );
                     graphic.kitty_image_id = Some(image_id);
-                    graphic.kitty_placement_id = self.placement_id;
+                    graphic.kitty_placement_id = Some(placement_id);
                     graphic.is_virtual = true;
                     store.add_virtual_placement(graphic);
-                    return Ok(None); // Virtual placements are not displayed
+
+                    // Return virtual placement info for placeholder insertion
+                    return Ok(KittyGraphicResult::VirtualPlacement {
+                        image_id,
+                        placement_id,
+                        position,
+                        cols,
+                        rows,
+                    });
                 }
 
                 // Regular placement
@@ -391,7 +431,7 @@ impl KittyParser {
                         graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
                     }
 
-                    return Ok(Some(graphic));
+                    return Ok(KittyGraphicResult::Graphic(graphic));
                 }
                 Err(GraphicsError::KittyError("Image not found".to_string()))
             }
@@ -429,20 +469,33 @@ impl KittyParser {
                 // Create graphic if TransmitDisplay, or virtual placement if U=1
                 if self.action == KittyAction::TransmitDisplay {
                     if self.is_virtual {
+                        let cols = self.columns.unwrap_or(1) as usize;
+                        let rows = self.rows.unwrap_or(1) as usize;
+                        let image_id = self.image_id.unwrap_or(0);
+                        let placement_id = self.placement_id.unwrap_or(0);
+
                         // Create virtual placement
                         let mut graphic = TerminalGraphic::new(
                             next_graphic_id(),
                             GraphicProtocol::Kitty,
                             position,
-                            self.columns.unwrap_or(1) as usize,
-                            self.rows.unwrap_or(1) as usize,
+                            cols,
+                            rows,
                             vec![], // Virtual placements don't need pixel data
                         );
-                        graphic.kitty_image_id = self.image_id;
-                        graphic.kitty_placement_id = self.placement_id;
+                        graphic.kitty_image_id = Some(image_id);
+                        graphic.kitty_placement_id = Some(placement_id);
                         graphic.is_virtual = true;
                         store.add_virtual_placement(graphic);
-                        Ok(None) // Virtual placements are not displayed
+
+                        // Return virtual placement info for placeholder insertion
+                        Ok(KittyGraphicResult::VirtualPlacement {
+                            image_id,
+                            placement_id,
+                            position,
+                            cols,
+                            rows,
+                        })
                     } else {
                         let mut graphic = TerminalGraphic::new(
                             next_graphic_id(),
@@ -463,11 +516,11 @@ impl KittyParser {
                             graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
                         }
 
-                        Ok(Some(graphic))
+                        Ok(KittyGraphicResult::Graphic(graphic))
                     }
                 } else {
                     // Transmit only, no display
-                    Ok(None)
+                    Ok(KittyGraphicResult::None)
                 }
             }
 
@@ -497,7 +550,7 @@ impl KittyParser {
 
                 // Create frame
                 let frame_num = self.frame_number.unwrap_or(1);
-                let mut frame = AnimationFrame::new(frame_num, pixels, width, height);
+                let mut frame = AnimationFrame::new(frame_num, pixels.clone(), width, height);
 
                 if let Some(delay) = self.frame_delay_ms {
                     frame = frame.with_delay(delay);
@@ -516,7 +569,36 @@ impl KittyParser {
                 // Add frame to animation
                 store.add_animation_frame(image_id, frame);
 
-                Ok(None) // Frames don't create placements
+                // Frame 1 creates both animation entry AND a placement for display
+                if frame_num == 1 {
+                    // Store as shared image so it can be referenced by Put commands
+                    store.store_kitty_image(image_id, width, height, pixels.clone());
+
+                    // Create placement to display the animation
+                    let mut graphic = TerminalGraphic::new(
+                        next_graphic_id(),
+                        GraphicProtocol::Kitty,
+                        position,
+                        width,
+                        height,
+                        pixels,
+                    );
+                    graphic.kitty_image_id = Some(image_id);
+                    graphic.kitty_placement_id = self.placement_id;
+
+                    // Handle relative positioning
+                    if let Some(parent_img_id) = self.parent_image_id {
+                        graphic.parent_image_id = Some(parent_img_id);
+                        graphic.parent_placement_id = self.parent_placement_id;
+                        graphic.relative_x_offset = self.relative_x_offset.unwrap_or(0);
+                        graphic.relative_y_offset = self.relative_y_offset.unwrap_or(0);
+                    }
+
+                    return Ok(KittyGraphicResult::Graphic(graphic));
+                }
+
+                // Subsequent frames only add to animation, don't create new placements
+                Ok(KittyGraphicResult::None)
             }
 
             KittyAction::AnimationControl => {
@@ -525,6 +607,27 @@ impl KittyParser {
                     GraphicsError::KittyError("Animation control requires image ID".to_string())
                 })?;
 
+                // Handle num_plays (v= parameter) for setting loop count
+                // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means loop (N-1) times
+                if let Some(num_plays) = self.num_plays {
+                    if num_plays > 0 {
+                        let loop_count = if num_plays == 1 {
+                            0 // v=1 means infinite looping
+                        } else {
+                            num_plays - 1 // v=N means (N-1) loops
+                        };
+                        debug_info!(
+                            "KITTY",
+                            "Setting loop count for image_id={}: num_plays={}, loop_count={}",
+                            image_id,
+                            num_plays,
+                            loop_count
+                        );
+                        store.set_animation_loops(image_id, loop_count);
+                    }
+                }
+
+                // Handle state control (s= parameter)
                 if let Some(control) = self.animation_control {
                     debug_info!(
                         "KITTY",
@@ -541,7 +644,7 @@ impl KittyParser {
                     );
                 }
 
-                Ok(None)
+                Ok(KittyGraphicResult::None)
             }
         }
     }

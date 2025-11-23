@@ -21,6 +21,8 @@ from ._native import (
     Attributes,
     CursorStyle,
     Graphic,
+    Macro,
+    MacroEvent,
     PtyTerminal,
     ScreenSnapshot,
     ShellIntegration,
@@ -57,11 +59,13 @@ except ImportError:
     StreamingConfig = None
     StreamingServer = None
 
-__version__ = "0.7.0"
+__version__ = "0.9.0"
 __all__ = [
     "Attributes",
     "CursorStyle",
     "Graphic",
+    "Macro",
+    "MacroEvent",
     "PtyTerminal",
     "ScreenSnapshot",
     "ShellIntegration",

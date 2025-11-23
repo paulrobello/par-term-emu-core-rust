@@ -17,6 +17,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Notifications (OSC 9/777)](#notifications-osc-9777)
 - [Shell Integration](#shell-integration)
 - [Sixel Graphics](#sixel-graphics)
+- [Kitty Graphics Protocol](#kitty-graphics-protocol)
 - [Synchronized Updates](#synchronized-updates)
 - [Kitty Keyboard Protocol](#kitty-keyboard-protocol)
 - [Underline Styles](#underline-styles)
@@ -25,6 +26,8 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Buffer Export](#buffer-export)
 - [Terminal Notifications](#terminal-notifications)
 - [Session Recording and Replay](#session-recording-and-replay)
+- [Macro Recording and Playback](#macro-recording-and-playback)
+- [Terminal Streaming](#terminal-streaming)
 - [Complete Example](#complete-example)
 - [Related Documentation](#related-documentation)
 
@@ -63,6 +66,7 @@ graph TB
         Links[OSC 8 Hyperlinks]
         Notify[Notifications]
         Sixel[Sixel Graphics]
+        Kitty[Kitty Graphics]
         Sync[Synchronized Updates]
     end
 
@@ -93,6 +97,7 @@ graph TB
     style Shell fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
     style Links fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
     style Sixel fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style Kitty fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
 ```
 
 ## True Color Support
@@ -646,53 +651,16 @@ term.clear_graphics()
 
 ### Resource Limits and Safety
 
-Sixel graphics can be large, so the core enforces per-terminal limits to prevent
+Graphics (Sixel and Kitty) can be large, so the core enforces per-terminal limits to prevent
 pathological memory usage:
 
 - Default limits per terminal:
-  - Max bitmap width: 1024 pixels
-  - Max bitmap height: 1024 pixels
-  - Max repeat count (`!Pn`): 10_000
-  - Max in-memory graphics: 256
-- Hard ceilings (cannot be exceeded even via the API):
-  - Max width: 4096 pixels
-  - Max height: 4096 pixels
-  - Max repeat count: 10_000
-
-You can tune limits at runtime from Python:
-
-```python
-from par_term_emu_core_rust import Terminal
-
-term = Terminal(80, 24)
-
-# Inspect current Sixel limits
-max_w, max_h, max_repeat = term.get_sixel_limits()
-
-# Tighten limits for untrusted content (e.g., 512x512, repeat up to 2000)
-term.set_sixel_limits(512, 512, 2000)
-
-# Inspect Sixel stats (for debugging/monitoring)
-stats = term.get_sixel_stats()
-print(
-    f"Sixel stats: max={stats['max_width_px']}x{stats['max_height_px']}, "
-    f"repeat={stats['max_repeat']}, "
-    f"graphics={stats['current_graphics']}/{stats['max_graphics']}, "
-    f"dropped={stats['dropped_graphics']}"
-)
-
-# These limits apply to future Sixel DCS sequences processed by this terminal.
-```
-
-For PTY-backed terminals:
-
-```python
-from par_term_emu_core_rust import PtyTerminal
-
-pty = PtyTerminal(80, 24)
-pty.set_sixel_limits(512, 512, 2000)
-pty.set_sixel_graphics_limit(128)
-```
+  - Max bitmap width: 10,000 pixels
+  - Max bitmap height: 10,000 pixels
+  - Max pixels: 25,000,000 (25MP)
+  - Max total memory: 256 MB
+  - Max in-memory graphics: 1,000
+  - Max scrollback graphics: 500
 
 ### Use Cases
 
@@ -703,6 +671,206 @@ pty.set_sixel_graphics_limit(128)
 - Terminal-based image viewers
 
 > **📝 Note:** Uses half-block rendering for compatibility with character-based displays
+
+## Kitty Graphics Protocol
+
+Comprehensive support for the Kitty graphics protocol, including image transmission, display, animation, and Unicode placeholders.
+
+### Overview
+
+The Kitty graphics protocol provides advanced features beyond Sixel:
+
+- **Image Reuse**: Transmit once, display multiple times with shared memory
+- **Virtual Placements**: Unicode placeholder-based image rendering
+- **Animation Support**: Multi-frame animations with control and timing
+- **File Transmission**: Load images from local files
+- **Relative Positioning**: Position images relative to parent placements
+
+Reference: [Kitty Graphics Protocol Documentation](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
+
+### Basic Image Display
+
+```python
+import base64
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Read PNG file and encode as base64
+with open("image.png", "rb") as f:
+    png_data = f.read()
+    encoded = base64.standard_b64encode(png_data).decode("ascii")
+
+# Transmit and display (action=T)
+# Format: f=100 (PNG), transmission: t=d (direct)
+sequence = f"\x1b_Ga=T,f=100,t=d;{encoded}\x1b\\"
+term.process_str(sequence)
+```
+
+### Image Reuse
+
+```python
+# Transmit image without displaying (action=t) with ID=42
+sequence = f"\x1b_Ga=t,i=42,f=100,t=d;{encoded}\x1b\\"
+term.process_str(sequence)
+
+# Display the same image multiple times at different positions
+term.process_str("\x1b_Ga=p,i=42\x1b\\")  # Display at cursor
+term.process_str("\x1b[10;20H")  # Move cursor
+term.process_str("\x1b_Ga=p,i=42\x1b\\")  # Display again
+```
+
+### Animation
+
+```python
+import base64
+import time
+
+term = Terminal(80, 24)
+
+# Create animation frames
+# Frame 1 (action=f, frame number r=1)
+with open("frame1.png", "rb") as f:
+    frame1 = base64.standard_b64encode(f.read()).decode("ascii")
+    term.process_str(f"\x1b_Ga=f,i=100,r=1,z=500,f=100;{frame1}\x1b\\")
+
+# Frame 2
+with open("frame2.png", "rb") as f:
+    frame2 = base64.standard_b64encode(f.read()).decode("ascii")
+    term.process_str(f"\x1b_Ga=f,i=100,r=2,z=500,f=100;{frame2}\x1b\\")
+
+# Set infinite loops (v=1) and start animation (s=3)
+term.process_str("\x1b_Ga=a,i=100,v=1\x1b\\")  # Infinite loops
+term.process_str("\x1b_Ga=a,i=100,s=3\x1b\\")  # Enable looping
+
+# Update animations (call regularly, e.g., 60Hz)
+changed_ids = term.update_animations()
+if changed_ids:
+    print(f"Animation frames changed for IDs: {changed_ids}")
+
+# Stop animation
+term.process_str("\x1b_Ga=a,i=100,s=1\x1b\\")  # Stop
+```
+
+### Animation Control
+
+| Control | Parameter | Description |
+|---------|-----------|-------------|
+| Stop | `s=1` | Stop animation and reset loop counter |
+| Loading Mode | `s=2` | Pause and wait for more frames |
+| Enable Looping | `s=3` | Start/resume normal looping playback |
+| Loop Count | `v=N` | `v=0`: ignored, `v=1`: infinite, `v=N`: loop (N-1) times |
+
+### Virtual Placements and Unicode Placeholders
+
+Virtual placements with `U=1` create template images that are displayed via Unicode placeholder characters in the terminal grid. This enables inline image display within text flow.
+
+**How it works:**
+
+1. **Create virtual placement** - Image stored as template, not directly displayed
+2. **Placeholder insertion** - Terminal automatically inserts U+10EEEE characters in grid
+3. **Metadata encoding** - Colors and diacritics encode image/placement ID and position
+4. **Frontend rendering** - Renderer detects placeholders and looks up virtual placement
+
+```python
+# Create virtual placement (U=1, cols x rows specifies placeholder grid size)
+term.process_str(f"\x1b_Ga=T,U=1,i=50,p=1,c=3,r=2,f=100;{encoded}\x1b\\")
+
+# Terminal automatically inserts 3x2 grid of U+10EEEE placeholder characters
+# Each placeholder cell encodes:
+# - Foreground color: image_id (lower 24 bits as RGB)
+# - Underline color: placement_id (as RGB)
+# - Diacritics: row/column position within placement (for future use)
+```
+
+**Implementation details:**
+- Placeholder character: U+10EEEE (Unicode private use area)
+- Image ID encoded in foreground RGB: `(r, g, b)` = `((id>>16)&0xFF, (id>>8)&0xFF, id&0xFF)`
+- Placement ID encoded in underline color using same RGB encoding
+- MSB support: Image IDs > 24 bits encode upper byte in third diacritic
+- Grid insertion: One placeholder per cell in the `cols × rows` area
+
+**Frontend integration:**
+```python
+# Detect placeholder during rendering
+if cell.c == '\u{10EEEE}':
+    # Extract IDs from colors
+    image_id = (cell.fg.r << 16) | (cell.fg.g << 8) | cell.fg.b
+    placement_id = (cell.underline_color.r << 16) | (cell.underline_color.g << 8) | cell.underline_color.b
+
+    # Look up virtual placement
+    virtual_placement = graphics_store.get_placeholder_graphic(PlaceholderInfo {
+        image_id, placement_id, ...
+    })
+
+    # Render appropriate portion of virtual placement at this cell
+```
+
+### File Transmission
+
+```python
+# Transmit from file (t=f)
+# Note: File path data is base64 encoded (like all payload data)
+file_path = "/path/to/image.png"
+file_path_b64 = base64.standard_b64encode(file_path.encode()).decode()
+term.process_str(f"\x1b_Ga=T,f=100,t=f;{file_path_b64}\x1b\\")
+
+# The parser will:
+# 1. Decode the base64 to get the file path string
+# 2. Read the image data from the file
+# 3. Decode the image (PNG format)
+# 4. Display the image
+```
+
+### Delete Images
+
+```python
+# Delete all images
+term.process_str("\x1b_Ga=d,d=a\x1b\\")
+
+# Delete specific image by ID
+term.process_str("\x1b_Ga=d,d=i,i=42\x1b\\")
+
+# Delete all placements of an image
+term.process_str("\x1b_Ga=d,i=42\x1b\\")
+```
+
+### Key Parameters
+
+| Parameter | Key | Description | Example |
+|-----------|-----|-------------|---------|
+| Action | `a` | Action to perform | `a=T` (transmit and display) |
+| Image ID | `i` | Image identifier for reuse | `i=42` |
+| Placement ID | `p` | Placement identifier | `p=1` |
+| Format | `f` | Image format | `f=100` (PNG), `f=32` (RGBA), `f=24` (RGB) |
+| Transmission | `t` | Transmission medium | `t=d` (direct), `t=f` (file) |
+| Frame Number | `r` | Animation frame number | `r=1` |
+| Frame Delay | `z` | Delay in milliseconds | `z=500` |
+| Virtual | `U` | Virtual placement flag | `U=1` |
+| Width | `s` | Image width (pixels) | `s=800` |
+| Height | `v` | Image height (pixels) | `v=600` |
+
+### Actions
+
+| Action | Code | Description |
+|--------|------|-------------|
+| Transmit | `a=t` | Transmit image without displaying |
+| Transmit & Display | `a=T` | Transmit and display |
+| Query | `a=q` | Query terminal capabilities |
+| Put | `a=p` | Display previously transmitted image |
+| Delete | `a=d` | Delete images/placements |
+| Frame | `a=f` | Add animation frame |
+| Animation Control | `a=a` | Control animation playback |
+
+### Use Cases
+
+- Display high-quality images with efficient memory usage
+- Create animated graphics in the terminal
+- Build interactive UIs with image-based elements
+- Preview images in terminal-based file managers
+- Display charts and visualizations with animations
+
+> **✅ Tip:** Kitty protocol is more efficient than Sixel for repeated image display due to image reuse capability
 
 ## Synchronized Updates
 
@@ -1276,26 +1444,22 @@ with PtyTerminal(80, 24, scrollback=5000) as pty:
         f.write(plain_log)
 ```
 
-#### Sixel Limits for PTY Sessions
+#### Graphics Limits for PTY Sessions
 
-When using `PtyTerminal`, you can apply the same Sixel safety limits as with
-`Terminal`. This is especially useful if the PTY will display untrusted
-content that might emit large Sixel images:
+When using `PtyTerminal`, you can configure graphics limits for both Sixel and Kitty protocols. This is especially useful if the PTY will display untrusted content that might emit large images:
 
 ```python
 from par_term_emu_core_rust import PtyTerminal
 
 with PtyTerminal(80, 24, scrollback=5000) as pty:
-    # Tighten Sixel limits for this PTY-backed terminal
-    pty.set_sixel_limits(512, 512, 2000)
-
+    # Access the underlying terminal to configure graphics limits
+    # Note: Graphics limits are managed through the GraphicsStore
     pty.spawn_shell()
     pty.write_str("cat image.sixel\n")
     # ... interact as normal ...
 ```
 
-Limits are per-session and apply to future Sixel DCS sequences processed by
-that PTY’s internal terminal.
+Graphics limits apply to both Sixel and Kitty protocol images and are enforced by the GraphicsStore.
 
 ### Use Cases
 
@@ -1678,6 +1842,253 @@ term.record_marker("Important moment")  # Named marker
 - Export operations are fast (millions of events/second)
 - Use markers sparingly for best performance
 
+## Macro Recording and Playback
+
+High-level macro system for recording keyboard input, delays, and screenshot triggers with YAML serialization and timed playback.
+
+### Overview
+
+While Session Recording captures raw I/O events, the macro system provides a higher-level abstraction focused on user input sequences with friendly key notation, making it ideal for demos, tutorials, and automated testing.
+
+**Key Differences from Session Recording:**
+
+| Feature | Session Recording | Macro Recording |
+|---------|------------------|-----------------|
+| **Focus** | Raw I/O events | User input sequences |
+| **Format** | Asciicast JSON | YAML with friendly keys |
+| **Key Notation** | Raw bytes | Human-readable (`ctrl+c`, `enter`) |
+| **Use Case** | Complete session replay | Demos, tutorials, testing |
+| **Timing** | Automatic timestamps | Explicit delays |
+| **Output** | Asciinema compatible | Streaming server compatible |
+
+### Basic Usage
+
+```python
+from par_term_emu_core_rust import Terminal, Macro
+
+# Manual macro creation
+macro = Macro("Demo Session")
+macro.add_key("e")
+macro.add_key("c")
+macro.add_key("h")
+macro.add_key("o")
+macro.add_key("space")
+macro.add_key("'")
+macro.add_key("H")
+macro.add_key("e")
+macro.add_key("l")
+macro.add_key("l")
+macro.add_key("o")
+macro.add_key("'")
+macro.add_key("enter")
+macro.add_delay(1000)  # 1 second pause
+macro.add_screenshot(label="after_hello")
+
+# Save to YAML
+macro.save_yaml("demo.yaml")
+
+# Load and inspect
+loaded = Macro.load_yaml("demo.yaml")
+print(f"Macro: {loaded.name}")
+print(f"Duration: {loaded.duration}ms")
+print(f"Events: {loaded.event_count}")
+```
+
+### Key Features
+
+**Friendly Key Notation:**
+- Single keys: `a`, `space`, `enter`, `tab`, `escape`
+- Modified keys: `ctrl+c`, `shift+tab`, `alt+f4`
+- Function keys: `f1` through `f12`
+- Arrow keys: `up`, `down`, `left`, `right`
+- Special keys: `home`, `end`, `pageup`, `pagedown`, `delete`
+
+**YAML Format:**
+```yaml
+name: Demo Macro
+description: Example demonstration
+created: 1700000000000
+terminal_size: [80, 24]
+events:
+  - type: key
+    key: echo
+    timestamp: 0
+  - type: key
+    key: space
+    timestamp: 100
+  - type: key
+    key: enter
+    timestamp: 200
+  - type: delay
+    duration: 1000
+    timestamp: 1200
+  - type: screenshot
+    label: demo_complete
+    timestamp: 1200
+duration: 1200
+```
+
+### Integration with Streaming
+
+Macros integrate seamlessly with the streaming server for automated demos:
+
+```bash
+# Play macro to connected web clients
+par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
+```
+
+### Use Cases
+
+1. **Interactive Demos**: Pre-record complex command sequences
+2. **Tutorials**: Create step-by-step learning sessions
+3. **Testing**: Automated regression tests with screenshot checkpoints
+4. **Presentations**: Professional live coding without typos
+5. **Documentation**: Generate terminal session recordings
+
+> **📝 Note:** For complete macro documentation including playback control, speed adjustment, and advanced features, see [MACROS.md](MACROS.md)
+
+## Terminal Streaming
+
+Real-time terminal streaming over WebSocket with browser-based frontend for remote terminal access and multi-viewer support.
+
+### Overview
+
+The streaming system enables terminal sessions to be viewed and controlled through web browsers using WebSocket connections. It consists of a Rust/Python streaming server and a Next.js/React web frontend with xterm.js rendering.
+
+**Architecture:**
+- **Backend**: Streaming server captures terminal output and forwards via WebSocket
+- **Frontend**: Next.js application with xterm.js for browser rendering
+- **Protocol**: JSON-based bidirectional messaging
+- **Latency**: Sub-100ms for local connections
+
+### Quick Start
+
+**Python Server:**
+```python
+from par_term_emu_core_rust import PtyTerminal, StreamingServer
+
+# Create PTY terminal
+pty_term = PtyTerminal(80, 24)
+pty_term.spawn_shell()
+
+# Create and start streaming server
+server = StreamingServer(pty_term, "127.0.0.1:8099")
+server.start()
+
+# Server now streams terminal to ws://127.0.0.1:8099
+# Connect with web browser or custom client
+```
+
+**Rust Standalone Server:**
+```bash
+# Build with streaming support
+cargo build --release --bin par-term-streamer --features streaming
+
+# Run server
+par-term-streamer --host 127.0.0.1 --port 8099 --theme dracula
+
+# Or run with macro playback
+par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
+```
+
+**Web Frontend:**
+```bash
+cd web-terminal-frontend
+npm install
+npm run dev  # Development server on http://localhost:3000
+```
+
+### Key Features
+
+**Server Features:**
+- Multiple concurrent viewers (configurable limit)
+- Read-only and read-write client modes
+- Color theme synchronization
+- Automatic resize handling
+- Macro playback mode
+- HTTP static file serving
+- Optional API key authentication
+
+**Frontend Features:**
+- Modern Next.js/React/TypeScript stack
+- xterm.js with WebGL rendering
+- Automatic reconnection
+- Theme synchronization
+- Responsive design
+- Full Unicode and emoji support
+
+### Protocol Messages
+
+**Server → Client:**
+```json
+{"type": "connected", "cols": 80, "rows": 24, "session_id": "...", "theme": {...}}
+{"type": "output", "data": "terminal output"}
+{"type": "resize", "cols": 100, "rows": 30}
+{"type": "title", "title": "New Title"}
+```
+
+**Client → Server:**
+```json
+{"type": "input", "data": "user input"}
+{"type": "resize", "cols": 100, "rows": 30}
+{"type": "refresh"}
+```
+
+### Configuration
+
+```python
+from par_term_emu_core_rust import StreamingConfig
+
+config = StreamingConfig(
+    max_clients=100,              # Maximum concurrent clients
+    send_initial_screen=True,     # Send screen snapshot on connect
+    keepalive_interval=30,        # Ping interval in seconds
+    default_read_only=False       # New clients read-only by default
+)
+
+server = StreamingServer(pty_term, "0.0.0.0:8099", config)
+```
+
+### Use Cases
+
+1. **Remote Access**: Access terminals from web browsers anywhere
+2. **Training/Education**: Multiple students viewing instructor's terminal
+3. **Demos/Presentations**: Stream terminal to audience
+4. **Collaboration**: Multiple developers watching build/deployment
+5. **Monitoring**: Central dashboard for multiple terminal sessions
+6. **Testing**: Automated testing with visual verification
+
+### Security Considerations
+
+> **🔒 Security:** Streaming exposes shell access over the network
+
+**Best Practices:**
+- Bind to `127.0.0.1` for local-only access
+- Use API key authentication for remote access
+- Consider VPN or SSH tunneling for production
+- Implement read-only mode for viewers
+- Configure maximum client limits
+- Monitor connection logs
+
+**Example with Authentication:**
+```bash
+par-term-streamer --api-key secret-token --host 0.0.0.0 --port 8099
+```
+
+### Technology Stack
+
+**Backend:**
+- Rust: tokio, axum, tokio-tungstenite for async WebSocket server
+- Python: PyO3 bindings for easy integration
+
+**Frontend:**
+- Next.js 16 with React 19
+- TypeScript 5.9
+- xterm.js 5.5 with WebGL renderer
+- Tailwind CSS 4.1
+
+> **📝 Note:** For complete streaming documentation including protocol specification, frontend setup, performance tuning, and troubleshooting, see [STREAMING.md](STREAMING.md)
+
 ## Complete Example
 
 Comprehensive example combining multiple advanced features:
@@ -1798,7 +2209,7 @@ The example demonstrates:
 10. **Underline Styles**: Different underline types for menu items
 11. **Unicode Support**: Emoji and box-drawing characters
 
-> **📝 Note:** See [examples/](../examples/) directory for more focused demonstrations of individual features
+> **📝 Note:** See [examples/](../examples/) directory for more focused demonstrations of individual features including Kitty graphics animations
 
 ## Related Documentation
 
@@ -1806,7 +2217,9 @@ The example demonstrates:
 - [QUICKSTART.md](../QUICKSTART.md) - Getting started guide
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture
 - [SECURITY.md](SECURITY.md) - Security guidelines for PTY usage
-- [VT_FEATURE_PARITY.md](VT_FEATURE_PARITY.md) - Complete VT compatibility matrix
+- [VT_TECHNICAL_REFERENCE.md](VT_TECHNICAL_REFERENCE.md) - Complete VT compatibility matrix and implementation details
+- [MACROS.md](MACROS.md) - Macro recording and playback system
+- [STREAMING.md](STREAMING.md) - WebSocket streaming server and web frontend
 - [examples/](../examples/) - Example scripts and demonstrations
 
 ## References
@@ -1814,4 +2227,5 @@ The example demonstrates:
 - [XTerm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html)
 - [ANSI Escape Codes](https://en.wikipedia.org/wiki/ANSI_escape_code)
 - [iTerm2 Proprietary Escape Codes](https://iterm2.com/documentation-escape-codes.html)
+- [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/)
 - [VS Code Terminal Shell Integration](https://code.visualstudio.com/docs/terminal/shell-integration)

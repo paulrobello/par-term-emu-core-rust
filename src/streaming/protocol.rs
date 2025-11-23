@@ -5,6 +5,21 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Theme information for terminal color scheme
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThemeInfo {
+    /// Theme name (e.g., "iterm2-dark", "monokai")
+    pub name: String,
+    /// Background color (RGB)
+    pub background: (u8, u8, u8),
+    /// Foreground color (RGB)
+    pub foreground: (u8, u8, u8),
+    /// Normal ANSI colors 0-7 (RGB)
+    pub normal: [(u8, u8, u8); 8],
+    /// Bright ANSI colors 8-15 (RGB)
+    pub bright: [(u8, u8, u8); 8],
+}
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -43,6 +58,9 @@ pub enum ServerMessage {
         initial_screen: Option<String>,
         /// Session ID for this connection
         session_id: String,
+        /// Optional theme information
+        #[serde(skip_serializing_if = "Option::is_none")]
+        theme: Option<ThemeInfo>,
     },
 
     /// Screen refresh response (full screen content)
@@ -167,6 +185,7 @@ impl ServerMessage {
             rows,
             initial_screen: None,
             session_id,
+            theme: None,
         }
     }
 
@@ -182,6 +201,40 @@ impl ServerMessage {
             rows,
             initial_screen: Some(initial_screen),
             session_id,
+            theme: None,
+        }
+    }
+
+    /// Create a new connected message with theme
+    pub fn connected_with_theme(
+        cols: u16,
+        rows: u16,
+        session_id: String,
+        theme: ThemeInfo,
+    ) -> Self {
+        Self::Connected {
+            cols,
+            rows,
+            initial_screen: None,
+            session_id,
+            theme: Some(theme),
+        }
+    }
+
+    /// Create a new connected message with initial screen and theme
+    pub fn connected_with_screen_and_theme(
+        cols: u16,
+        rows: u16,
+        initial_screen: String,
+        session_id: String,
+        theme: ThemeInfo,
+    ) -> Self {
+        Self::Connected {
+            cols,
+            rows,
+            initial_screen: Some(initial_screen),
+            session_id,
+            theme: Some(theme),
         }
     }
 
@@ -333,5 +386,81 @@ mod tests {
         let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains(r#""output"#));
         assert!(json.contains(r#""bell"#));
+    }
+
+    #[test]
+    fn test_theme_info_serialization() {
+        let theme = ThemeInfo {
+            name: "test-theme".to_string(),
+            background: (0, 0, 0),
+            foreground: (255, 255, 255),
+            normal: [
+                (0, 0, 0),
+                (255, 0, 0),
+                (0, 255, 0),
+                (255, 255, 0),
+                (0, 0, 255),
+                (255, 0, 255),
+                (0, 255, 255),
+                (255, 255, 255),
+            ],
+            bright: [
+                (128, 128, 128),
+                (255, 128, 128),
+                (128, 255, 128),
+                (255, 255, 128),
+                (128, 128, 255),
+                (255, 128, 255),
+                (128, 255, 255),
+                (255, 255, 255),
+            ],
+        };
+
+        let json = serde_json::to_string(&theme).unwrap();
+        assert!(json.contains(r#""name":"test-theme"#));
+        assert!(json.contains(r#""background":[0,0,0]"#));
+        assert!(json.contains(r#""foreground":[255,255,255]"#));
+
+        // Deserialize back
+        let deserialized: ThemeInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.name, "test-theme");
+        assert_eq!(deserialized.background, (0, 0, 0));
+        assert_eq!(deserialized.foreground, (255, 255, 255));
+    }
+
+    #[test]
+    fn test_connected_message_with_theme() {
+        let theme = ThemeInfo {
+            name: "test-theme".to_string(),
+            background: (0, 0, 0),
+            foreground: (255, 255, 255),
+            normal: [
+                (0, 0, 0),
+                (255, 0, 0),
+                (0, 255, 0),
+                (255, 255, 0),
+                (0, 0, 255),
+                (255, 0, 255),
+                (0, 255, 255),
+                (255, 255, 255),
+            ],
+            bright: [
+                (128, 128, 128),
+                (255, 128, 128),
+                (128, 255, 128),
+                (255, 255, 128),
+                (128, 128, 255),
+                (255, 128, 255),
+                (128, 255, 255),
+                (255, 255, 255),
+            ],
+        };
+
+        let msg = ServerMessage::connected_with_theme(80, 24, "session-123".to_string(), theme);
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"connected"#));
+        assert!(json.contains(r#""session_id":"session-123"#));
+        assert!(json.contains(r#""theme":{"#));
+        assert!(json.contains(r#""name":"test-theme"#));
     }
 }

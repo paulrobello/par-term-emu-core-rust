@@ -3,13 +3,51 @@ name = "par-term-emu-core-rust"
 version = "0.9.0"
 edition = "2021"
 rust-version = "1.75"
+authors = ["Paul Robello <probello@gmail.com>"]
+description = "Comprehensive terminal emulator library in Rust with Python bindings - VT100/VT220/VT320/VT420/VT520 support, PTY, Sixel/iTerm2/Kitty graphics"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/paulrobello/par-term-emu-core-rust"
+homepage = "https://github.com/paulrobello/par-term-emu-core-rust"
+documentation = "https://github.com/paulrobello/par-term-emu-core-rust/blob/main/README.md"
+keywords = ["terminal", "emulator", "vt100", "pty", "sixel"]
+categories = ["command-line-utilities", "development-tools", "api-bindings"]
+exclude = [
+    "*.png",
+    "*.jpg",
+    "*.jpeg",
+    "*.svg",
+    "*.sixel",
+    "*.html",
+    "*.yaml",
+    "images/",
+    "examples/",
+    "tests/",
+    "web-terminal-frontend/",
+    "terminfo/",
+    "shell_integration/",
+    ".github/",
+    ".gitignore",
+    "CLAUDE.md",
+    "handoff.md",
+    "streaming.md",
+    "Makefile",
+    "pyproject.toml",
+    "python/",
+    "scripts/",
+]
 
 [lib]
 name = "par_term_emu_core_rust"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "par-term-streamer"
+path = "src/bin/streaming_server.rs"
+required-features = ["streaming"]
+
 [dependencies]
-pyo3 = "0.27.1"
+pyo3 = { version = "0.27.1", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
@@ -18,13 +56,21 @@ bitflags = "2.10.0"
 regex = "1.11.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_yaml = "0.9"
 
 # Streaming server dependencies
 tokio = { version = "1.35", features = ["full"], optional = true }
-tokio-tungstenite = { version = "0.23", optional = true }
-axum = { version = "0.7", optional = true }
+tokio-tungstenite = { version = "0.28", optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "trace"], optional = true }
 futures-util = { version = "0.3", optional = true }
 uuid = { version = "1.6", features = ["v4", "serde"], optional = true }
+
+# CLI dependencies (for streaming server binary)
+clap = { version = "4.5", features = ["derive"], optional = true }
+anyhow = { version = "1.0", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", optional = true }
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
 image = "0.25.9"
@@ -39,8 +85,13 @@ proptest = "1.9.0"
 tempfile = "3.13"
 
 [features]
-default = ["pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "futures-util", "uuid"]
+default = ["python"]
+python = ["pyo3", "pyo3/extension-module"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber"]
+
+# Convenience feature combinations
+rust-only = []
+full = ["python", "streaming"]
 
 [profile.release]
 opt-level = 3

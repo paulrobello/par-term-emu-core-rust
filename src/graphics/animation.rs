@@ -100,34 +100,29 @@ pub enum AnimationState {
     Paused,
 }
 
-/// Animation playback control
+/// Animation playback control (per Kitty graphics protocol spec)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimationControl {
-    /// Start/resume animation
-    Play,
-    /// Pause animation
-    Pause,
-    /// Stop animation and reset to first frame
+    /// Stop the animation (s=1)
     Stop,
-    /// Set number of loops (0 = infinite)
-    SetLoops(u32),
+    /// Loading mode - wait for more frames instead of looping (s=2)
+    LoadingMode,
+    /// Enable normal looping after reaching final frame (s=3)
+    EnableLooping,
 }
 
 impl AnimationControl {
-    /// Parse animation control from Kitty protocol value
+    /// Parse animation control from Kitty protocol s= value
+    /// According to spec:
+    /// - s=1: stop animation
+    /// - s=2: loading mode (wait for frames, don't loop)
+    /// - s=3: enable looping
     pub fn from_value(value: &str) -> Option<Self> {
         match value {
-            "1" => Some(AnimationControl::Play),
-            "2" => Some(AnimationControl::Pause),
-            "3" => Some(AnimationControl::Stop),
-            _ => {
-                // Try to parse as loop count
-                if let Ok(loops) = value.parse::<u32>() {
-                    Some(AnimationControl::SetLoops(loops))
-                } else {
-                    None
-                }
-            }
+            "1" => Some(AnimationControl::Stop),
+            "2" => Some(AnimationControl::LoadingMode),
+            "3" => Some(AnimationControl::EnableLooping),
+            _ => None,
         }
     }
 }
@@ -333,6 +328,10 @@ impl Animation {
     }
 
     /// Apply animation control command
+    /// Per Kitty spec:
+    /// - Stop: stops animation and resets loop counter
+    /// - LoadingMode: waits for more frames, doesn't loop
+    /// - EnableLooping: starts/resumes normal looping playback
     pub fn apply_control(&mut self, control: AnimationControl) {
         debug_info!(
             "ANIMATION",
@@ -344,10 +343,19 @@ impl Animation {
             self.frame_count()
         );
         match control {
-            AnimationControl::Play => self.play(),
-            AnimationControl::Pause => self.pause(),
-            AnimationControl::Stop => self.stop(),
-            AnimationControl::SetLoops(count) => self.set_loops(count),
+            AnimationControl::Stop => {
+                // Stop animation and reset loop counter
+                self.stop();
+                self.loops_completed = 0;
+            }
+            AnimationControl::LoadingMode => {
+                // Pause and wait for more frames
+                self.pause();
+            }
+            AnimationControl::EnableLooping => {
+                // Start/resume normal looping playback
+                self.play();
+            }
         }
         debug_info!(
             "ANIMATION",
@@ -379,22 +387,21 @@ mod tests {
 
     #[test]
     fn test_animation_control() {
+        // Per Kitty spec: s=1 stop, s=2 loading, s=3 enable looping
         assert_eq!(
             AnimationControl::from_value("1"),
-            Some(AnimationControl::Play)
-        );
-        assert_eq!(
-            AnimationControl::from_value("2"),
-            Some(AnimationControl::Pause)
-        );
-        assert_eq!(
-            AnimationControl::from_value("3"),
             Some(AnimationControl::Stop)
         );
         assert_eq!(
-            AnimationControl::from_value("5"),
-            Some(AnimationControl::SetLoops(5))
+            AnimationControl::from_value("2"),
+            Some(AnimationControl::LoadingMode)
         );
+        assert_eq!(
+            AnimationControl::from_value("3"),
+            Some(AnimationControl::EnableLooping)
+        );
+        // Other values return None (loop counts use v= parameter now)
+        assert_eq!(AnimationControl::from_value("5"), None);
     }
 
     #[test]

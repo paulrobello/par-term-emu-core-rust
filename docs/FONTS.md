@@ -29,7 +29,7 @@ The library includes two embedded fonts that work without any external dependenc
 
 ### 1. JetBrains Mono Regular (Main Font)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~267 KB (273,900 bytes)
+**Size**: ~274 KB (280,576 bytes)
 
 Features:
 - Programming ligatures (=>, !=, >=, etc.)
@@ -39,7 +39,7 @@ Features:
 
 ### 2. Noto Emoji Regular (Emoji Fallback)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~408 KB (418,804 bytes)
+**Size**: ~419 KB (428,032 bytes)
 
 Features:
 - Universal emoji coverage (all Unicode emoji)
@@ -50,7 +50,11 @@ Features:
 Both fonts are used automatically when no `font_path` is specified:
 
 ```python
-term.screenshot()  # Uses embedded JetBrains Mono + Noto Emoji - no setup needed!
+# Take screenshot with default embedded fonts (JetBrains Mono + Noto Emoji)
+term.screenshot_to_file("output.png")  # No setup needed!
+
+# Or get bytes for in-memory processing
+png_bytes = term.screenshot()  # Returns PNG bytes
 ```
 
 ## Emoji & CJK Fallback Fonts
@@ -198,7 +202,7 @@ The script downloads Hack font (MIT licensed) to your user fonts directory:
 This downloads and installs Hack font to `~/.local/share/fonts/` and updates the font cache. You can then use it with:
 
 ```python
-term.screenshot(font_path="~/.local/share/fonts/Hack-Regular.ttf")
+term.screenshot_to_file("output.png", font_path="~/.local/share/fonts/Hack-Regular.ttf")
 ```
 
 ### Option 3: Specify a Custom Font
@@ -207,10 +211,10 @@ You can use any TTF/OTF monospace font by specifying its path. When you provide 
 
 ```python
 # Use a custom font (replaces JetBrains Mono)
-term.screenshot(font_path="/path/to/your/font.ttf")
+term.screenshot_to_file("output.png", font_path="/path/to/your/font.ttf")
 
 # Use embedded defaults (JetBrains Mono + Noto Emoji)
-term.screenshot()  # No font_path needed!
+term.screenshot_to_file("output.png")  # No font_path needed!
 ```
 
 **Note**: Custom fonts are used for the main text, but emoji and CJK characters will still fall back to system fonts or the embedded Noto Emoji font as needed.
@@ -227,7 +231,7 @@ Download any monospace font you prefer:
 Then place the `.ttf` file somewhere accessible and specify its path:
 
 ```python
-term.screenshot(font_path="/path/to/downloaded/font.ttf")
+term.screenshot_to_file("output.png", font_path="/path/to/downloaded/font.ttf")
 ```
 
 ## Docker/Container Environments

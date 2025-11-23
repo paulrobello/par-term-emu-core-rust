@@ -1,0 +1,264 @@
+name: Terminal Demo
+description: A demonstration of terminal capabilities with colors and formatting
+created: 1700000000000
+terminal_size:
+  - 80
+  - 24
+env: {}
+events:
+  - type: key
+    key: e
+    timestamp: 0
+  - type: key
+    key: c
+    timestamp: 100
+  - type: key
+    key: h
+    timestamp: 200
+  - type: key
+    key: o
+    timestamp: 300
+  - type: key
+    key: space
+    timestamp: 400
+  - type: key
+    key: "'"
+    timestamp: 500
+  - type: key
+    key: "\\"
+    timestamp: 600
+  - type: key
+    key: e
+    timestamp: 700
+  - type: key
+    key: "["
+    timestamp: 800
+  - type: key
+    key: "1"
+    timestamp: 900
+  - type: key
+    key: ";"
+    timestamp: 1000
+  - type: key
+    key: "3"
+    timestamp: 1100
+  - type: key
+    key: "1"
+    timestamp: 1200
+  - type: key
+    key: m
+    timestamp: 1300
+  - type: key
+    key: W
+    timestamp: 1400
+  - type: key
+    key: e
+    timestamp: 1500
+  - type: key
+    key: l
+    timestamp: 1600
+  - type: key
+    key: c
+    timestamp: 1700
+  - type: key
+    key: o
+    timestamp: 1800
+  - type: key
+    key: m
+    timestamp: 1900
+  - type: key
+    key: e
+    timestamp: 2000
+  - type: key
+    key: space
+    timestamp: 2100
+  - type: key
+    key: t
+    timestamp: 2200
+  - type: key
+    key: o
+    timestamp: 2300
+  - type: key
+    key: space
+    timestamp: 2400
+  - type: key
+    key: t
+    timestamp: 2500
+  - type: key
+    key: h
+    timestamp: 2600
+  - type: key
+    key: e
+    timestamp: 2700
+  - type: key
+    key: space
+    timestamp: 2800
+  - type: key
+    key: T
+    timestamp: 2900
+  - type: key
+    key: e
+    timestamp: 3000
+  - type: key
+    key: r
+    timestamp: 3100
+  - type: key
+    key: m
+    timestamp: 3200
+  - type: key
+    key: i
+    timestamp: 3300
+  - type: key
+    key: n
+    timestamp: 3400
+  - type: key
+    key: a
+    timestamp: 3500
+  - type: key
+    key: l
+    timestamp: 3600
+  - type: key
+    key: space
+    timestamp: 3700
+  - type: key
+    key: D
+    timestamp: 3800
+  - type: key
+    key: e
+    timestamp: 3900
+  - type: key
+    key: m
+    timestamp: 4000
+  - type: key
+    key: o
+    timestamp: 4100
+  - type: key
+    key: "\\"
+    timestamp: 4200
+  - type: key
+    key: e
+    timestamp: 4300
+  - type: key
+    key: "["
+    timestamp: 4400
+  - type: key
+    key: "0"
+    timestamp: 4500
+  - type: key
+    key: m
+    timestamp: 4600
+  - type: key
+    key: "'"
+    timestamp: 4700
+  - type: key
+    key: enter
+    timestamp: 4800
+  - type: delay
+    duration: 1000
+    timestamp: 5800
+  - type: key
+    key: e
+    timestamp: 5800
+  - type: key
+    key: c
+    timestamp: 5900
+  - type: key
+    key: h
+    timestamp: 6000
+  - type: key
+    key: o
+    timestamp: 6100
+  - type: key
+    key: space
+    timestamp: 6200
+  - type: key
+    key: "'"
+    timestamp: 6300
+  - type: key
+    key: T
+    timestamp: 6400
+  - type: key
+    key: h
+    timestamp: 6500
+  - type: key
+    key: i
+    timestamp: 6600
+  - type: key
+    key: s
+    timestamp: 6700
+  - type: key
+    key: space
+    timestamp: 6800
+  - type: key
+    key: i
+    timestamp: 6900
+  - type: key
+    key: s
+    timestamp: 7000
+  - type: key
+    key: space
+    timestamp: 7100
+  - type: key
+    key: a
+    timestamp: 7200
+  - type: key
+    key: space
+    timestamp: 7300
+  - type: key
+    key: m
+    timestamp: 7400
+  - type: key
+    key: a
+    timestamp: 7500
+  - type: key
+    key: c
+    timestamp: 7600
+  - type: key
+    key: r
+    timestamp: 7700
+  - type: key
+    key: o
+    timestamp: 7800
+  - type: key
+    key: space
+    timestamp: 7900
+  - type: key
+    key: p
+    timestamp: 8000
+  - type: key
+    key: l
+    timestamp: 8100
+  - type: key
+    key: a
+    timestamp: 8200
+  - type: key
+    key: y
+    timestamp: 8300
+  - type: key
+    key: b
+    timestamp: 8400
+  - type: key
+    key: a
+    timestamp: 8500
+  - type: key
+    key: c
+    timestamp: 8600
+  - type: key
+    key: k
+    timestamp: 8700
+  - type: key
+    key: "!"
+    timestamp: 8800
+  - type: key
+    key: "'"
+    timestamp: 8900
+  - type: key
+    key: enter
+    timestamp: 9000
+  - type: delay
+    duration: 2000
+    timestamp: 11000
+  - type: screenshot
+    label: demo_complete
+    timestamp: 11000
+duration: 11000

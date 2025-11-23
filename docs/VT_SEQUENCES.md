@@ -1,8 +1,10 @@
 # VT Sequences Reference
 
-Complete reference of supported ANSI/VT escape sequences.
+**Quick reference guide for supported ANSI/VT escape sequences.**
 
-This terminal emulator provides comprehensive VT100/VT220/VT320/VT420 compatibility, matching iTerm2's feature set.
+This is a concise lookup table of supported sequences. For detailed behavior, implementation notes, compatibility matrices, and edge cases, see [VT_TECHNICAL_REFERENCE.md](VT_TECHNICAL_REFERENCE.md).
+
+**Compatibility Level:** VT100/VT220/VT320/VT420/VT520 + xterm extensions + modern protocols (Kitty keyboard, Kitty graphics, Sixel, iTerm2 images, OSC 8 hyperlinks, OSC 133 shell integration)
 
 ## Table of Contents
 
@@ -20,6 +22,7 @@ This terminal emulator provides comprehensive VT100/VT220/VT320/VT420 compatibil
 - [Device Queries](#device-queries)
 - [OSC Sequences](#osc-sequences)
 - [DCS Sequences](#dcs-sequences)
+- [APC Sequences](#apc-sequences)
 - [Control Characters](#control-characters)
 - [Reset Sequences](#reset-sequences)
 
@@ -75,86 +78,18 @@ VT220 insert/delete operations.
 
 ## Rectangle Operations
 
-VT420 advanced text editing operations that work on rectangular regions of the screen.
+VT420 advanced text editing operations that work on rectangular regions of the screen. All coordinates are 1-indexed.
 
-### Fill Rectangular Area (DECFRA)
+- `ESC[Pc;Pt;Pl;Pb;Pr$x` - DECFRA: Fill rectangle with character `Pc`
+- `ESC[Pts;Pls;Pbs;Prs;Pps;Ptd;Pld;Ppd$v` - DECCRA: Copy rectangular region
+- `ESC[Pt;Pl;Pb;Pr${` - DECSERA: Selective erase (respects protection)
+- `ESC[Pt;Pl;Pb;Pr$z` - DECERA: Unconditional erase (ignores protection)
+- `ESC[Pt;Pl;Pb;Pr;Ps$r` - DECCARA: Change attributes in rectangle
+- `ESC[Pt;Pl;Pb;Pr;Ps$t` - DECRARA: Reverse attributes in rectangle
+- `ESC[Pi;Pg;Pt;Pl;Pb;Pr*y` - DECRQCRA: Request rectangle checksum
+- `ESC[Ps*x` - DECSACE: Set attribute change extent (0/1=stream, 2=rectangle)
 
-`ESC[<Pc>;<Pt>;<Pl>;<Pb>;<Pr>$x`
-
-- `Pc` - Character code to fill (e.g., 88 for 'X', 42 for '*')
-- `Pt` - Top row (1-indexed)
-- `Pl` - Left column (1-indexed)
-- `Pb` - Bottom row (1-indexed)
-- `Pr` - Right column (1-indexed)
-
-Fills rectangle with specified character using current text attributes.
-
-### Copy Rectangular Area (DECCRA)
-
-`ESC[<Pts>;<Pls>;<Pbs>;<Prs>;<Pps>;<Ptd>;<Pld>;<Ppd>$v`
-
-- `Pts`, `Pls`, `Pbs`, `Prs` - Source rectangle (top, left, bottom, right)
-- `Pps` - Source page (use 1 for current screen)
-- `Ptd`, `Pld` - Destination position (top, left)
-- `Ppd` - Destination page (use 1 for current screen)
-
-Copies rectangular region to new location.
-
-### Selective Erase Rectangular Area (DECSERA)
-
-`ESC[<Pt>;<Pl>;<Pb>;<Pr>${`
-
-Selectively erases rectangle (respects character protection attribute).
-
-### Erase Rectangular Area (DECERA)
-
-`ESC[<Pt>;<Pl>;<Pb>;<Pr>$z`
-
-Unconditionally erases rectangle (ignores protection).
-
-### Change Attributes in Rectangular Area (DECCARA)
-
-`ESC[<Pt>;<Pl>;<Pb>;<Pr>;<Ps>$r`
-
-- `Pt`, `Pl`, `Pb`, `Pr` - Rectangle coordinates (top, left, bottom, right)
-- `Ps` - SGR attributes to apply:
-  - `0` - Reset
-  - `1` - Bold
-  - `4` - Underline
-  - `5` - Blink
-  - `7` - Reverse
-  - `8` - Hidden
-
-Changes text attributes in rectangle.
-
-### Reverse Attributes in Rectangular Area (DECRARA)
-
-`ESC[<Pt>;<Pl>;<Pb>;<Pr>;<Ps>$t`
-
-- `Ps` - Attributes to reverse (0=all, 1=bold, 4=underline, 5=blink, 7=reverse, 8=hidden)
-
-Toggles attributes in rectangle.
-
-### Request Checksum of Rectangular Area (DECRQCRA)
-
-`ESC[<Pi>;<Pg>;<Pt>;<Pl>;<Pb>;<Pr>*y`
-
-- `Pi` - Request ID
-- `Pg` - Page number (use 1 for current screen)
-- `Pt`, `Pl`, `Pb`, `Pr` - Rectangle coordinates
-
-Response: `DCS Pi ! ~ xxxx ST` (16-bit checksum in hex)
-
-### Select Attribute Change Extent (DECSACE)
-
-`ESC[<Ps>*x`
-
-- `Ps = 0` or `1` - Stream mode (attributes wrap at line boundaries)
-- `Ps = 2` - Rectangle mode (strict rectangular boundaries, default)
-
-Affects how DECCARA and DECRARA apply attributes.
-
-**Use Cases:** Efficient text manipulation in editors (vim, emacs), drawing box characters, clearing specific screen regions without affecting surrounding content, attribute modification without changing text, verification of screen regions via checksums.
+> See [VT_TECHNICAL_REFERENCE.md#rectangle-operations](VT_TECHNICAL_REFERENCE.md#rectangle-operations-vt420) for detailed parameter descriptions and behavior.
 
 ## Scrolling
 
@@ -287,95 +222,58 @@ xterm mouse tracking modes and encodings.
 
 ## Advanced Features
 
-Modern terminal features.
+Modern terminal features and VT520 extensions.
 
-- `ESC[?1004h/l` - Focus tracking
-- `ESC[?2004h/l` - Bracketed paste mode
-- `ESC[?2026h/l` - Synchronized updates (DEC 2026) - Batch screen updates for flicker-free rendering
+**Modern protocols:**
+- `ESC[?1004h/l` - Focus tracking (send CSI I/O on focus in/out)
+- `ESC[?2004h/l` - Bracketed paste mode (wrap pasted text)
+- `ESC[?2026h/l` - Synchronized updates (flicker-free rendering)
 
-### VT520 Features
+**VT520 features:**
+- `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV, Ps = 0-8)
+- `CSI Ps SP t` - Set Warning-Bell Volume (DECSWBV, Ps = 0-8)
+- `CSI Pl ; Pc " p` - Set Conformance Level (DECSCL, Pl = 61-65 for VT100-VT520)
 
-- `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV) - Ps = 0-8 (0=off, 1=low, 5-8=high)
-- `CSI Ps SP t` - Set Warning-Bell Volume (DECSWBV) - Ps = 0-8 (0=off, 1=low, 5-8=high)
-- `CSI Pl ; Pc " p` - Set Conformance Level (DECSCL) - Pl = 61-65 for VT100-VT520, Pc = 0/1/2 for 8-bit mode
+**Character protection:**
+- `ESC V` / `ESC W` - Start/End Protected Area (SPA/EPA)
+- `CSI ? Ps " q` - Select Character Protection Attribute (DECSCA, Ps: 0/2=unprotected, 1=protected)
 
-### Character Protection
-
-- `ESC V` - Start Protected Area (SPA)
-- `ESC W` - End Protected Area (EPA)
-- `CSI ? Ps " q` - Select Character Protection Attribute (DECSCA) - Ps = 0/2 (not protected), 1 (protected)
-
-### Color Stack Operations
-
-- `CSI # P` - Push current colors onto stack (XTPUSHCOLORS)
+**Color stack:**
+- `CSI # P` - Push current colors (XTPUSHCOLORS)
 - `CSI # Q` - Pop colors from stack (XTPOPCOLORS)
+
+> See [VT_TECHNICAL_REFERENCE.md#modern-extensions](VT_TECHNICAL_REFERENCE.md#modern-extensions) for detailed behavior and VT520 conformance level effects.
 
 ## Kitty Keyboard Protocol
 
 Progressive enhancement for keyboard handling with flags for disambiguation and event reporting.
 
-### Set Keyboard Protocol Mode
+- `CSI = flags ; mode u` - Set keyboard protocol (mode: 0=disable, 1=set, 2=lock, 3=report)
+  - Flags (bitmask): 1=disambiguate, 2=report events, 4=alt keys, 8=all keys, 16=text
+- `CSI ? u` - Query current flags → Response: `CSI ? flags u`
+- `CSI > flags u` - Push current flags and set new
+- `CSI < count u` - Pop flags from stack
 
-`CSI = flags ; mode u`
-
-**Flags** (bitmask):
-- `1` - Disambiguate escape codes
-- `2` - Report event types
-- `4` - Report alternate keys
-- `8` - Report all keys as escape codes
-- `16` - Report associated text
-
-**Mode:**
-- `0` - Disable
-- `1` - Set
-- `2` - Lock
-- `3` - Report current flags
-
-### Query Keyboard Flags
-
-`CSI ? u`
-
-Response: `CSI ? flags u`
-
-### Push/Pop Flags
-
-- `CSI > flags u` - Push current flags to stack and set new flags
-- `CSI < count u` - Pop flags from stack (count times)
-
-**Important:** Flags are maintained separately for main and alternate screen buffers with independent stacks. Flags automatically reset when exiting alternate screen to prevent TUI apps from leaving keyboard in bad state.
+> See [VT_TECHNICAL_REFERENCE.md#kitty-keyboard-protocol](VT_TECHNICAL_REFERENCE.md#kitty-keyboard-protocol) for detailed flag behavior and screen buffer handling.
 
 ## Device Queries
 
 VT100/VT220 device information requests.
 
-### Device Status Report (DSR)
-
-- `CSI 5 n` - Operating status report → Response: `CSI 0 n` (terminal ready)
-- `CSI 6 n` - Cursor position report (CPR) → Response: `CSI row ; col R` (1-indexed)
-
-### Device Attributes (DA)
-
-- `CSI c` or `CSI 0 c` - Primary DA → Response: `CSI ? id ; features c` (id: 1=VT100, 62=VT220, 63=VT320, 64=VT420, 65=VT520)
-- `CSI > c` - Secondary DA → Response: `CSI > 82 ; 10000 ; 0 c` (82='P' for par-term-emu, version 10000)
-
-### DEC Private Mode Request (DECRQM)
-
-- `CSI ? mode $ p` - Request mode status → Response: `CSI ? mode ; state $ y` (state: 0=not recognized, 1=set, 2=reset, 3=permanently set, 4=permanently reset)
-
-### Terminal Parameters (DECREQTPARM)
-
-- `CSI 0 x` or `CSI 1 x` - Request terminal parameters → Response: `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x` (sol=2 if param=0, sol=3 if param=1)
-
-### Window Operations (XTWINOPS)
-
-- `CSI 14 t` - Report text area size in pixels → Response: `CSI 4 ; height ; width t`
-- `CSI 18 t` - Report text area size in characters → Response: `CSI 8 ; rows ; cols t`
-- `CSI 22 t` - Save window title on stack (XTWINOPS)
-- `CSI 23 t` - Restore window title from stack (XTWINOPS)
+- `CSI 5 n` - Device Status Report (DSR) → `CSI 0 n` (ready)
+- `CSI 6 n` - Cursor Position Report (CPR) → `CSI row ; col R` (1-indexed)
+- `CSI c` / `CSI 0 c` - Primary Device Attributes → `CSI ? id ; features c`
+- `CSI > c` - Secondary Device Attributes → `CSI > 82 ; 10000 ; 0 c`
+- `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) → `CSI ? mode ; state $ y`
+- `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM)
+- `CSI 14 t` - Report pixel size → `CSI 4 ; height ; width t`
+- `CSI 18 t` - Report text size → `CSI 8 ; rows ; cols t`
+- `CSI 22 t` - Save window title
+- `CSI 23 t` - Restore window title
 
 ### Cursor Style (DECSCUSR)
 
-- `CSI 0 SP q` or `CSI 1 SP q` - Blinking block (default)
+- `CSI 0 SP q` / `CSI 1 SP q` - Blinking block (default)
 - `CSI 2 SP q` - Steady block
 - `CSI 3 SP q` - Blinking underline
 - `CSI 4 SP q` - Steady underline
@@ -384,114 +282,99 @@ VT100/VT220 device information requests.
 
 ### Left/Right Margins (DECSLRM)
 
-- `CSI Pl ; Pr s` - Set left/right margins (only when DECLRMM ?69 is enabled)
+- `CSI Pl ; Pr s` - Set left/right margins (requires DECLRMM mode ?69)
+
+> See [VT_TECHNICAL_REFERENCE.md#device-queries](VT_TECHNICAL_REFERENCE.md#device-queries) for detailed response formats and parameter meanings.
 
 ## OSC Sequences
 
-Operating System Command sequences for advanced features.
+Operating System Command sequences for advanced features (format: `OSC Ps ; Pt ST` where ST = ESC\ or BEL).
 
-### Window Title
+### Window Title and Directory
 
-- `OSC 0;<title>ST` - Set window title (icon + title)
-- `OSC 2;<title>ST` - Set window title
-- `OSC 21;<title>ST` - Push window title onto stack (XTWINOPS)
-- `OSC 22ST` - Pop window title from stack (XTWINOPS)
-- `OSC 23ST` - Pop icon title from stack (XTWINOPS)
+- `OSC 0;title ST` - Set window and icon title
+- `OSC 2;title ST` - Set window title only
+- `OSC 21;title ST` - Push title to stack
+- `OSC 22 ST` / `OSC 23 ST` - Pop window/icon title from stack
+- `OSC 7;file://host/path ST` - Set current working directory (URL-encoded)
 
-### Current Working Directory
+### Hyperlinks and Clipboard
 
-- `OSC 7;<cwd>ST` - Set current working directory
+- `OSC 8;;url ST text OSC 8;;ST` - Hyperlinks (iTerm2/VTE compatible)
+- `OSC 52;c;data ST` - Clipboard operations (base64-encoded)
+  - `data` = base64 text to copy
+  - `?` = query clipboard (requires `set_allow_clipboard_read(true)`)
 
-### Hyperlinks
+### Shell Integration (OSC 133)
 
-`OSC 8;;<url>ST`
+iTerm2/VSCode compatible shell integration markers:
 
-Full support with clickable TUI rendering (iTerm2/VTE compatible).
+- `OSC 133;A ST` - Prompt start
+- `OSC 133;B ST` - Command start
+- `OSC 133;C ST` - Command executed
+- `OSC 133;D;exit_code ST` - Command finished
 
-### Clipboard Operations
+### Color Operations
 
-`OSC 52;c;<data>ST`
+**Palette (ANSI colors 0-15):**
+- `OSC 4;index;colorspec ST` - Set palette entry (formats: `rgb:RR/GG/BB` or `#RRGGBB`)
+- `OSC 104 ST` - Reset all palette colors
+- `OSC 104;index ST` - Reset specific palette color
 
-Works over SSH without X11 (xterm/iTerm2 compatible).
-
-- `<data>` - base64 encoded text to copy to clipboard
-- `?` - Query clipboard (requires `set_allow_clipboard_read(true)` for security)
-- Empty data clears clipboard
-
-### Shell Integration
-
-`OSC 133;<marker>ST`
-
-iTerm2/VSCode compatible shell integration.
-
-- `A` - Prompt start
-- `B` - Command start
-- `C` - Command executed
-- `D;<exit_code>` - Command finished
-
-### Color Palette Operations
-
-- `OSC 4;index;colorspec ST` - Set ANSI color palette entry (index 0-15)
-  - Color spec formats: `rgb:RR/GG/BB` or `#RRGGBB`
-  - Example: `OSC 4;1;rgb:FF/00/00 ST` sets color 1 to red
-- `OSC 104 ST` - Reset all ANSI colors to defaults
-- `OSC 104;index ST` - Reset specific ANSI color to default
-
-### Default Color Operations
-
-- `OSC 10;? ST` - Query default foreground color → Response: `OSC 10;rgb:rrrr/gggg/bbbb ST`
-- `OSC 10;colorspec ST` - Set default foreground color
-- `OSC 110 ST` - Reset default foreground color
-
-- `OSC 11;? ST` - Query default background color → Response: `OSC 11;rgb:rrrr/gggg/bbbb ST`
-- `OSC 11;colorspec ST` - Set default background color
-- `OSC 111 ST` - Reset default background color
-
-- `OSC 12;? ST` - Query cursor color → Response: `OSC 12;rgb:rrrr/gggg/bbbb ST`
-- `OSC 12;colorspec ST` - Set cursor color
-- `OSC 112 ST` - Reset cursor color
+**Default colors:**
+- `OSC 10;? ST` / `OSC 10;colorspec ST` / `OSC 110 ST` - Query/set/reset foreground
+- `OSC 11;? ST` / `OSC 11;colorspec ST` / `OSC 111 ST` - Query/set/reset background
+- `OSC 12;? ST` / `OSC 12;colorspec ST` / `OSC 112 ST` - Query/set/reset cursor
 
 ### Notifications
 
-#### iTerm2/ConEmu Style
+- `OSC 9;message ST` - Simple notification (iTerm2/ConEmu style)
+- `OSC 777;notify;title;message ST` - Structured notification (urxvt style)
 
-`OSC 9;<message>ST`
+### iTerm2 Inline Images
 
-Simple format with message only (no title). Send desktop-style notifications.
+- `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - iTerm2 inline images
 
-#### urxvt Style
+**Security:** Notifications, color changes, hyperlinks, and Sixel graphics can be disabled via `disable_insecure_sequences`.
 
-`OSC 777;notify;<title>;<message>ST`
-
-Structured notifications with both title and message. Use for desktop notifications, alerts, or completion notices.
-
-**Security Note:** Notifications can be disabled using `disable_insecure_sequences` setting.
+> See [VT_TECHNICAL_REFERENCE.md#osc-sequences](VT_TECHNICAL_REFERENCE.md#osc-sequences) for detailed format specifications and security controls.
 
 ## DCS Sequences
 
-Device Control String sequences for graphics and advanced features.
+Device Control String sequences for graphics (format: `DCS params final data ST`).
 
 ### Sixel Graphics
 
-`DCS params q data ST`
+`DCS Pa ; Pb ; Ph q data ST`
 
-Full VT340 Sixel graphics support for inline images.
+Full VT340 Sixel graphics support for inline images with configurable limits.
 
-- Parameters: Aspect ratio, background mode
-- Data includes color definitions, raster attributes, and sixel data
-- **Security Note:** Sixel graphics can be disabled using `disable_insecure_sequences` setting
-- Configurable limits: max pixels, max colors, max graphics retained
+- Color definitions (`#Pc;Pu;Px;Py;Pz`)
+- Raster attributes (`"Pa;Pb;Ph;Pv`)
+- Repeat operator (`!Pn s`)
+- Up to 256 colors, configurable size limits
 
-**Example:**
-```
-DCS 0 ; 0 q
-"1;1;100;100    # Raster attributes (100x100 pixels)
-#0;2;100;100;100  # Define color 0 as RGB
-#0 ????           # Draw sixel data with color 0
-ST
-```
+**Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 1024×1024 pixels, 256 graphics.
 
-See [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html) for details.
+> See [VT_TECHNICAL_REFERENCE.md#sixel-graphics](VT_TECHNICAL_REFERENCE.md#sixel-graphics) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
+
+## APC Sequences
+
+Application Program Command sequences (format: `APC params data ST`).
+
+### Kitty Graphics Protocol
+
+`APC G key=value,key=value;base64-data ST`
+
+Kitty graphics protocol support for modern terminal graphics with animation, composition modes, and advanced features.
+
+- Transmission actions: transmit (t), transmit+display (T), query (q), put (p), delete (d), frame (f), animation control (a)
+- Formats: RGB (24), RGBA (32), PNG (100)
+- Transmission media: direct (d), file (f), temp file (t), shared memory (s)
+- Animation support with frame control and composition modes
+- Virtual placements and relative positioning
+
+> See [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) for complete specification.
 
 ## Control Characters
 
@@ -511,6 +394,6 @@ ASCII control characters.
 ## See Also
 
 - [API Reference](API_REFERENCE.md) - Complete Python API documentation
-- [VT Feature Parity](VT_FEATURE_PARITY.md) - Detailed VT compatibility information
+- [VT Technical Reference](VT_TECHNICAL_REFERENCE.md) - Detailed VT compatibility and implementation details
 - [Advanced Features](ADVANCED_FEATURES.md) - Feature usage guides
 - [xterm Control Sequences](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html) - Official xterm documentation

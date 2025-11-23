@@ -8,7 +8,21 @@ Complete Python API documentation for par-term-emu-core-rust.
 - [PtyTerminal Class](#ptyterminal-class)
 - [Color Utilities](#color-utilities)
 - [Data Classes](#data-classes)
+  - [Attributes](#attributes)
+  - [ShellIntegration](#shellintegration)
+  - [Graphic](#graphic)
+  - [ScreenSnapshot](#screensnapshot)
+  - [NotificationConfig](#notificationconfig)
+  - [NotificationEvent](#notificationevent)
+  - [RecordingSession](#recordingsession)
+  - [Selection](#selection)
+  - [ClipboardEntry](#clipboardentry)
+  - [ScrollbackStats](#scrollbackstats)
+  - [Macro](#macro)
+  - [MacroEvent](#macroevent)
 - [Enumerations](#enumerations)
+  - [CursorStyle](#cursorstyle)
+  - [UnderlineStyle](#underlinestyle)
 
 ## Terminal Class
 
@@ -71,7 +85,7 @@ Create a new terminal with specified dimensions.
 - `get_max_clipboard_event_bytes() -> int`: Get clipboard payload size limit
 
 #### Clipboard History
-- `add_to_clipboard_history(content: str, slot: str = "default", metadata: dict | None = None)`: Add entry to clipboard history
+- `add_to_clipboard_history(slot: str, content: str, label: str | None = None)`: Add entry to clipboard history
 - `get_clipboard_history(slot: str) -> list[ClipboardEntry]`: Get clipboard history for slot
 - `get_latest_clipboard(slot: str) -> ClipboardEntry | None`: Get most recent clipboard entry for slot
 - `clear_clipboard_history(slot: str)`: Clear history for specific slot
@@ -131,7 +145,7 @@ Create a new terminal with specified dimensions.
 - `query_default_bg()`: Query default background color (response in drain_responses())
 - `get_ansi_color(index: int) -> tuple[int, int, int] | None`: Get ANSI palette color (0-255)
 - `get_ansi_palette() -> list[tuple[int, int, int]]`: Get all 16 ANSI colors (indices 0-15)
-- `set_ansi_palette_color(index: int, r: int, g: int, b: int)`: Set ANSI palette color (0-15)
+- `set_ansi_palette_color(index: int, r: int, g: int, b: int)`: Set ANSI palette color (0-255)
 
 #### Shell Integration (OSC 133 & OSC 7)
 - `current_directory() -> str | None`: Get current working directory (OSC 7)
@@ -173,11 +187,27 @@ Create a new terminal with specified dimensions.
 - `check_activity()`: Check if activity occurred after inactivity
 - `handle_bell_notification()`: Triggers configured bell alerts
 
-#### Graphics (Sixel)
+#### Graphics
+Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), and Kitty Graphics Protocol (APC G).
+
 - `resize_pixels(width_px: int, height_px: int)`: Resize terminal by pixel dimensions
-- `graphics_count() -> int`: Get count of Sixel graphics stored
-- `graphics_at_row(row: int) -> list[Graphic]`: Get Sixel graphics at specific row
-- `clear_graphics()`: Clear all Sixel graphics
+- `graphics_count() -> int`: Get count of graphics currently displayed
+- `graphics_at_row(row: int) -> list[Graphic]`: Get graphics at specific row
+- `clear_graphics()`: Clear all graphics
+- `graphics_store() -> GraphicsStore`: Get immutable access to graphics store (Rust API only)
+- `graphics_store_mut() -> GraphicsStore`: Get mutable access to graphics store (Rust API only)
+
+**Supported Protocols:**
+- **Sixel** (DCS): VT340 bitmap graphics via `DCS Pq ... ST`
+- **iTerm2** (OSC 1337): Inline images via `OSC 1337 ; File=... ST`
+- **Kitty** (APC G): Advanced graphics protocol with image reuse, animation, and Unicode placeholders
+
+**Unicode Placeholders** (Kitty Protocol):
+- Virtual placements (`U=1`) insert U+10EEEE placeholder characters in grid
+- Metadata encoded in cell colors (image_id in foreground, placement_id in underline)
+- Frontend detects placeholders and renders corresponding virtual placement
+- Enables inline image display within text flow
+- See `src/graphics/placeholder.rs` for encoding details
 
 #### Snapshots
 - `create_snapshot() -> ScreenSnapshot`: Create atomic snapshot of current screen state
@@ -212,15 +242,14 @@ Create a new terminal with specified dimensions.
 ### Text Extraction and Selection
 
 #### Text Extraction Utilities
-- `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor (default word_chars: "/-+\~_.")
+- `get_word_at(col: int, row: int, word_chars: str | None = None) -> str | None`: Extract word at cursor (default word_chars: "/-+\\~_.")
 - `get_url_at(col: int, row: int) -> str | None`: Detect and extract URL at cursor
 - `get_line_unwrapped(row: int) -> str | None`: Get full logical line following wrapping
-- `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries for selection
 - `find_matching_bracket(col: int, row: int) -> tuple[int, int] | None`: Find matching bracket/parenthesis (supports (), [], {}, <>)
 - `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters
 
 #### Selection Management
-- `set_selection(start_col: int, start_row: int, end_col: int, end_row: int, selection_type: str = "char")`: Set text selection
+- `set_selection(start_col: int, start_row: int, end_col: int, end_row: int, mode: str = "character")`: Set text selection (mode: "character", "line", or "block")
 - `get_selection() -> Selection | None`: Get current selection
 - `get_selected_text() -> str | None`: Get text content of current selection
 - `clear_selection()`: Clear current selection
@@ -405,19 +434,21 @@ Notification event information.
 - `alert: str`: Alert type (Desktop, Sound, Visual)
 - `message: str | None`: Notification message
 - `delivered: bool`: Whether notification was delivered
-- `timestamp: float`: Event timestamp
+- `timestamp: int`: Event timestamp (Unix timestamp in seconds)
 
 ### RecordingSession
 
 Session recording metadata.
 
 **Properties:**
-- `start_time: float`: Recording start timestamp
-- `initial_size: tuple[int, int]`: Initial terminal dimensions
+- `start_time: int`: Recording start timestamp (milliseconds)
+- `initial_size: tuple[int, int]`: Initial terminal dimensions (cols, rows)
+- `duration: int`: Recording duration in milliseconds
 - `event_count: int`: Number of recorded events
 - `title: str | None`: Session title
 
 **Methods:**
+- `get_size() -> tuple[int, int]`: Get recording size (cols, rows)
 - `get_duration_seconds() -> float`: Get recording duration in seconds
 
 ### Selection
@@ -427,7 +458,7 @@ Text selection information.
 **Properties:**
 - `start: tuple[int, int]`: Selection start position (col, row)
 - `end: tuple[int, int]`: Selection end position (col, row)
-- `selection_type: str`: Selection type ("char", "word", "line", "block")
+- `mode: str`: Selection mode ("character", "line", or "block")
 
 ### ClipboardEntry
 
@@ -435,9 +466,8 @@ Clipboard history entry.
 
 **Properties:**
 - `content: str`: Clipboard content
-- `slot: str`: Clipboard slot name
-- `timestamp: float`: Entry timestamp
-- `metadata: dict | None`: Optional metadata
+- `timestamp: int`: Entry timestamp (Unix timestamp in seconds)
+- `label: str | None`: Optional label for the entry
 
 ### ScrollbackStats
 
@@ -445,9 +475,35 @@ Scrollback buffer statistics.
 
 **Properties:**
 - `total_lines: int`: Total scrollback lines
-- `max_lines: int`: Maximum scrollback capacity
-- `used_bytes: int`: Estimated memory usage
-- `wrapped_lines: int`: Count of wrapped lines
+- `memory_bytes: int`: Estimated memory usage in bytes
+- `has_wrapped: bool`: Whether the scrollback buffer has wrapped (cycled)
+
+### Macro
+
+Macro recording for keyboard automation.
+
+**Properties:**
+- `name: str`: Macro name
+- `duration: int`: Total duration in milliseconds
+- `events: list[MacroEvent]`: List of macro events
+
+**Methods:**
+- `add_key(key: str)`: Add a key press event
+- `add_delay(duration: int)`: Add a delay event
+- `add_screenshot(label: str | None = None)`: Add a screenshot trigger event
+- `to_yaml() -> str`: Export macro to YAML format
+- `from_yaml(yaml_str: str) -> Macro`: Load macro from YAML format (static method)
+
+### MacroEvent
+
+Event in a macro recording.
+
+**Properties:**
+- `event_type: str`: Event type ("key", "delay", or "screenshot")
+- `timestamp: int`: Event timestamp in milliseconds
+- `key: str | None`: Key name for key press events
+- `duration: int | None`: Duration in milliseconds for delay events
+- `label: str | None`: Label for screenshot events
 
 ## Enumerations
 

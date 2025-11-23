@@ -40,13 +40,16 @@ pub mod color;
 pub mod color_utils;
 pub mod conformance_level;
 pub mod cursor;
+#[macro_use]
 pub mod debug;
 pub mod graphics;
 pub mod grid;
 pub mod html_export;
+pub mod macros;
 pub mod mouse;
 pub mod pty_error;
 pub mod pty_session;
+#[cfg(feature = "python")]
 pub mod python_bindings;
 pub mod screenshot;
 pub mod shell_integration;
@@ -56,10 +59,13 @@ pub mod terminal;
 pub mod text_utils;
 pub mod tmux_control;
 
+#[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
 
 // Re-export Python bindings for convenience
+#[cfg(feature = "python")]
 pub use python_bindings::{
     py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_color_luminance,
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
@@ -69,15 +75,17 @@ pub use python_bindings::{
     PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
     PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
-    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMouseEvent, PyMousePosition,
-    PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData,
-    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
-    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
-    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEvent,
+    PyMousePosition, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
+    PyProfilingData, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
+    PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
+#[cfg(feature = "python")]
 impl From<pty_error::PtyError> for PyErr {
     fn from(err: pty_error::PtyError) -> PyErr {
         match err {
@@ -102,6 +110,7 @@ impl From<pty_error::PtyError> for PyErr {
 }
 
 /// A comprehensive terminal emulator library
+#[cfg(feature = "python")]
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sixel rendering mode constants
@@ -160,6 +169,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyNotificationConfig>()?;
     m.add_class::<PyRecordingEvent>()?;
     m.add_class::<PyRecordingSession>()?;
+    m.add_class::<PyMacro>()?;
+    m.add_class::<PyMacroEvent>()?;
     m.add_class::<PyStreamingServer>()?;
     m.add_class::<PyStreamingConfig>()?;
 

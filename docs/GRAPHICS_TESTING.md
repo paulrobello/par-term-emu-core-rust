@@ -2,6 +2,20 @@
 
 Quick reference for testing graphics support in par-term-emu-core-rust.
 
+## Table of Contents
+- [Supported Protocols](#supported-protocols)
+- [Quick Tests](#quick-tests)
+- [Graphics in Scrollback](#graphics-in-scrollback)
+- [Debug Logging](#debug-logging)
+- [Python TUI Testing](#python-tui-testing)
+- [Common Issues](#common-issues)
+- [Performance Testing](#performance-testing)
+- [Architecture Documentation](#architecture-documentation)
+- [Test Images](#test-images)
+- [Tools](#tools)
+- [Next Steps](#next-steps)
+- [Contributing](#contributing)
+
 ## Supported Protocols
 
 | Protocol | Status | Format | Test Script |
@@ -9,7 +23,7 @@ Quick reference for testing graphics support in par-term-emu-core-rust.
 | Sixel | ✅ Complete | DCS | Built-in examples |
 | iTerm2 Inline | ✅ Complete | OSC 1337 | Use `imgcat` |
 | Kitty Graphics | ✅ Complete | APC G | See below |
-| Kitty Animation | 🔄 Backend only | APC G | [`test_kitty_animation.py`](../scripts/test_kitty_animation.py) |
+| Kitty Animation | ✅ Complete | APC G | [`test_kitty_animation.py`](../scripts/test_kitty_animation.py) |
 
 ## Quick Tests
 
@@ -49,8 +63,10 @@ print(f'\x1b_Ga=T,f=100,t=d;{data}\x1b\\')
 ### Kitty Graphics Animation
 
 ```bash
+# Start the par-term frontend
 cd /Users/probello/Repos/par-term && cargo run
-# In the terminal:
+
+# In the terminal that opens, run the test script
 python /Users/probello/Repos/par-term-emu-core-rust/scripts/test_kitty_animation.py
 ```
 
@@ -112,11 +128,24 @@ uv run par-term-emu-tui-rust
 
 ### Animation not playing
 
-**Frontend integration incomplete** - Animations are stored in backend but need:
-1. Periodic `update_animations()` calls to advance frames
-2. Rendering current animation frame instead of static image
+**Frontend integration complete** - Animations are fully supported in both backend and frontend:
 
-See: [TESTING_KITTY_ANIMATIONS.md](TESTING_KITTY_ANIMATIONS.md#frontend-integration-todo)
+1. **Backend (Complete)**:
+   - `update_animations()` is called periodically in par-term's render loop
+   - Animation frames advance based on timing
+   - State control (play/pause/stop/loop) is implemented
+
+2. **Frontend (Complete)**:
+   - Static graphics display correctly
+   - Animation frame rendering is working
+   - `get_graphics_with_animations()` method properly integrated in par-term
+
+If animations aren't playing, check:
+- Animation control sequences were sent correctly (action 'a', 'f', 's', etc.)
+- Frame delays are appropriate (gap parameter)
+- Debug logs show frame updates
+
+See: [TESTING_KITTY_ANIMATIONS.md](TESTING_KITTY_ANIMATIONS.md) for detailed testing guide
 
 ## Performance Testing
 
@@ -129,14 +158,17 @@ done
 # Check memory usage
 ps aux | grep par-term
 
-# Check graphics count
-# (Requires Python bindings)
-python -c "
+# Check graphics count using Python bindings
+python3 << 'EOF'
 from par_term_emu_core_rust import Terminal
+
 term = Terminal(80, 24)
-print(f'Graphics count: {term.graphics_count()}')
-print(f'Scrollback graphics: {len(term.all_scrollback_graphics())}')
-"
+# Send some test graphics here if needed
+
+print(f'Active graphics: {term.graphics_count()}')
+# Note: all_scrollback_graphics() is not exposed in Python API
+# Use the Rust API or debug logs to inspect scrollback graphics
+EOF
 ```
 
 ## Architecture Documentation
@@ -146,16 +178,19 @@ For implementation details, see:
 - [Testing Kitty Animations](TESTING_KITTY_ANIMATIONS.md) - Animation-specific testing
 - [Security Considerations](SECURITY.md) - File loading and resource limits
 
-## Example Images
+## Test Images
 
 Test images are available in the repository:
 
 ```
 images/
-├── test.png          # Basic test image
-├── test.jpg          # JPEG test image
-└── animated.gif      # GIF test (iTerm2)
+├── snake.png         # Snake game screenshot (280KB)
+├── snake.sixel       # Snake as Sixel (271KB)
+├── snake_tui.png     # Snake TUI version (4.7KB)
+└── snake_tui.sixel   # Snake TUI as Sixel (8.8KB)
 ```
+
+**Note**: Currently, test images are primarily snake game screenshots. Additional test images (basic colors, patterns, etc.) can be added for comprehensive protocol testing.
 
 ## Tools
 
@@ -182,9 +217,9 @@ Both tools work with par-term if the respective protocols are supported.
 
 1. ✅ **Sixel, iTerm2, Kitty** - All protocols working
 2. ✅ **Scrollback persistence** - Graphics saved in scrollback
-3. 🔄 **Animation playback** - Needs frontend integration
-4. ⏳ **Unicode placeholders** - Backend ready, needs testing
-5. ⏳ **Performance optimization** - Texture caching, frame pooling
+3. ✅ **Animation playback** - Fully integrated in backend and frontend
+4. ✅ **Unicode placeholders** - Virtual placements insert placeholder characters into grid
+5. ⏳ **Performance optimization** - Consider texture caching, frame pooling for large animations
 
 ## Contributing
 

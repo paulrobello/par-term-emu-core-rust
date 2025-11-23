@@ -54,8 +54,8 @@ impl PyPtyTerminal {
 
     /// Spawn a shell process (auto-detected from environment)
     ///
-    /// On Unix: Uses $SHELL or defaults to /bin/sh
-    /// On Windows: Uses PowerShell or cmd.exe
+    /// On Unix: Uses $SHELL or defaults to /bin/bash
+    /// On Windows: Uses %COMSPEC% or defaults to cmd.exe
     fn spawn_shell(&mut self) -> PyResult<()> {
         self.inner.spawn_shell()?;
         Ok(())
@@ -1932,6 +1932,24 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Update all Kitty graphics animations and trigger refresh if frames changed
+    ///
+    /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
+    /// It returns a list of image IDs whose frames changed, allowing frontends to
+    /// selectively refresh only graphics that were updated.
+    ///
+    /// Returns:
+    ///     List of image IDs that changed frames
+    fn update_animations(&mut self) -> PyResult<Vec<u32>> {
+        let terminal = self.inner.terminal();
+        let changed = if let Ok(mut term) = terminal.lock() {
+            term.update_animations()
+        } else {
+            Vec::new()
+        };
+        Ok(changed)
+    }
+
     fn __repr__(&self) -> PyResult<String> {
         let (cols, rows) = self.inner.size();
         let running = if self.inner.is_running() {
@@ -2459,6 +2477,217 @@ impl PyPtyTerminal {
                     "No active recording session (pass session=stop_recording())",
                 ))
             }
+        } else {
+            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        }
+    }
+
+    // === Macro Recording and Playback ===
+
+    /// Load a macro into the library
+    ///
+    /// Args:
+    ///     name: Name to store the macro under
+    ///     macro: Macro object to load
+    fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.load_macro(name, macro_obj.inner.clone());
+        }
+        Ok(())
+    }
+
+    /// Get a macro from the library
+    ///
+    /// Args:
+    ///     name: Name of the macro to retrieve
+    ///
+    /// Returns:
+    ///     Macro object if found, None otherwise
+    fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term
+                .get_macro(&name)
+                .cloned()
+                .map(super::types::PyMacro::from))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Remove a macro from the library
+    ///
+    /// Args:
+    ///     name: Name of the macro to remove
+    ///
+    /// Returns:
+    ///     Removed Macro object if found, None otherwise
+    fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// List all macro names
+    ///
+    /// Returns:
+    ///     List of macro names
+    fn list_macros(&self) -> PyResult<Vec<String>> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.list_macros())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Start playing a macro
+    ///
+    /// Args:
+    ///     name: Name of the macro to play
+    ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
+    fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.play_macro(&name, speed.unwrap_or(1.0))
+                .map_err(PyValueError::new_err)
+        } else {
+            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        }
+    }
+
+    /// Stop macro playback
+    fn stop_macro(&self) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.stop_macro();
+        }
+        Ok(())
+    }
+
+    /// Pause macro playback
+    fn pause_macro(&self) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.pause_macro();
+        }
+        Ok(())
+    }
+
+    /// Resume macro playback
+    fn resume_macro(&self) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.resume_macro();
+        }
+        Ok(())
+    }
+
+    /// Set macro playback speed
+    ///
+    /// Args:
+    ///     speed: Speed multiplier (0.1 to 10.0)
+    fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            term.set_macro_speed(speed);
+        }
+        Ok(())
+    }
+
+    /// Check if a macro is currently playing
+    ///
+    /// Returns:
+    ///     True if a macro is playing, False otherwise
+    fn is_macro_playing(&self) -> PyResult<bool> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.is_macro_playing())
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Check if macro playback is paused
+    ///
+    /// Returns:
+    ///     True if paused, False otherwise
+    fn is_macro_paused(&self) -> PyResult<bool> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.is_macro_paused())
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get macro playback progress
+    ///
+    /// Returns:
+    ///     Tuple of (current_event, total_events) if playing, None otherwise
+    fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.get_macro_progress())
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get the name of the currently playing macro
+    ///
+    /// Returns:
+    ///     Macro name if playing, None otherwise
+    fn get_current_macro_name(&self) -> PyResult<Option<String>> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(term.get_current_macro_name())
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Tick macro playback and send events to PTY
+    ///
+    /// Call this regularly (e.g., every 10ms) to advance macro playback
+    ///
+    /// Returns:
+    ///     True if an event was processed, False otherwise
+    fn tick_macro(&mut self) -> PyResult<bool> {
+        let bytes = if let Ok(mut term) = self.inner.terminal().lock() {
+            term.tick_macro()
+        } else {
+            None
+        };
+
+        if let Some(bytes) = bytes {
+            self.write(&bytes)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get and clear screenshot triggers from macro playback
+    ///
+    /// Returns:
+    ///     List of screenshot labels
+    fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
+        if let Ok(mut term) = self.inner.terminal().lock() {
+            Ok(term.get_macro_screenshot_triggers())
+        } else {
+            Ok(Vec::new())
+        }
+    }
+
+    /// Convert a recording session to a macro
+    ///
+    /// Args:
+    ///     session: RecordingSession to convert
+    ///     name: Name for the new macro
+    ///
+    /// Returns:
+    ///     Macro object
+    fn recording_to_macro(
+        &self,
+        session: &super::types::PyRecordingSession,
+        name: String,
+    ) -> PyResult<super::types::PyMacro> {
+        if let Ok(term) = self.inner.terminal().lock() {
+            Ok(super::types::PyMacro::from(
+                term.recording_to_macro(&session.inner, name),
+            ))
         } else {
             Err(PyRuntimeError::new_err("Failed to lock terminal"))
         }

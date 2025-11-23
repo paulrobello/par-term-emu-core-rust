@@ -1,12 +1,28 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Terminal Streaming | Modern Web Terminal",
-  description: "A sleek, modern web-based terminal emulator with streaming support",
+  title: "Par Terminal Streamer | Modern Web Terminal",
+  description: "A sleek, modern web-based terminal emulator with real-time streaming support. Built with Next.js, xterm.js, and Rust.",
   icons: {
-    icon: "/favicon.ico",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.png", type: "image/png", sizes: "32x32" },
+      { url: "/icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/icon-512.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [
+      { url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
   },
+  manifest: "/manifest.json",
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  themeColor: "#1e1e1e",
 };
 
 export default function RootLayout({

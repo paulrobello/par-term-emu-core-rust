@@ -130,6 +130,23 @@ pub enum TmuxNotification {
     /// Arguments: subscription_name, value
     SubscriptionChanged { name: String, value: String },
 
+    /// Window layout changed
+    /// Arguments: window_id, window_layout, window_visible_layout, window_raw_flags
+    LayoutChange {
+        window_id: String,
+        window_layout: String,
+        window_visible_layout: String,
+        window_raw_flags: String,
+    },
+
+    /// Paste buffer changed
+    /// Arguments: buffer_name
+    PasteBufferChanged { name: String },
+
+    /// Paste buffer deleted
+    /// Arguments: buffer_name
+    PasteBufferDeleted { name: String },
+
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
     Unknown { line: String },
@@ -166,6 +183,9 @@ impl TmuxNotification {
             Self::ExtendedOutput { .. } => "extended-output",
             Self::Continue => "continue",
             Self::SubscriptionChanged { .. } => "subscription-changed",
+            Self::LayoutChange { .. } => "layout-change",
+            Self::PasteBufferChanged { .. } => "paste-buffer-changed",
+            Self::PasteBufferDeleted { .. } => "paste-buffer-deleted",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
         }
@@ -280,6 +300,9 @@ impl TmuxControlParser {
             "extended-output" => Self::parse_extended_output(args),
             "continue" => Some(TmuxNotification::Continue),
             "subscription-changed" => Self::parse_subscription_changed(args),
+            "layout-change" => Self::parse_layout_change(args),
+            "paste-buffer-changed" => Self::parse_paste_buffer_changed(args),
+            "paste-buffer-deleted" => Self::parse_paste_buffer_deleted(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
             }),
@@ -539,6 +562,31 @@ impl TmuxControlParser {
             } else {
                 String::new()
             },
+        })
+    }
+
+    fn parse_layout_change(args: &str) -> Option<TmuxNotification> {
+        let parts: Vec<&str> = args.splitn(4, ' ').collect();
+        if parts.len() < 4 {
+            return None;
+        }
+        Some(TmuxNotification::LayoutChange {
+            window_id: parts[0].to_string(),
+            window_layout: parts[1].to_string(),
+            window_visible_layout: parts[2].to_string(),
+            window_raw_flags: parts[3].to_string(),
+        })
+    }
+
+    fn parse_paste_buffer_changed(args: &str) -> Option<TmuxNotification> {
+        Some(TmuxNotification::PasteBufferChanged {
+            name: args.trim().to_string(),
+        })
+    }
+
+    fn parse_paste_buffer_deleted(args: &str) -> Option<TmuxNotification> {
+        Some(TmuxNotification::PasteBufferDeleted {
+            name: args.trim().to_string(),
         })
     }
 
@@ -839,6 +887,57 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_layout_change() {
+        let mut parser = TmuxControlParser::new(true);
+        let notifications =
+            parser.parse(b"%layout-change @1 abc123,80x24,0,0 def456,80x24,0,0 *Z\n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::LayoutChange {
+                window_id,
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+            } => {
+                assert_eq!(window_id, "@1");
+                assert_eq!(window_layout, "abc123,80x24,0,0");
+                assert_eq!(window_visible_layout, "def456,80x24,0,0");
+                assert_eq!(window_raw_flags, "*Z");
+            }
+            _ => panic!("Expected LayoutChange notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_paste_buffer_changed() {
+        let mut parser = TmuxControlParser::new(true);
+        let notifications = parser.parse(b"%paste-buffer-changed buffer0\n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::PasteBufferChanged { name } => {
+                assert_eq!(name, "buffer0");
+            }
+            _ => panic!("Expected PasteBufferChanged notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_paste_buffer_deleted() {
+        let mut parser = TmuxControlParser::new(true);
+        let notifications = parser.parse(b"%paste-buffer-deleted buffer0\n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::PasteBufferDeleted { name } => {
+                assert_eq!(name, "buffer0");
+            }
+            _ => panic!("Expected PasteBufferDeleted notification"),
+        }
+    }
+
+    #[test]
     fn test_notification_type() {
         assert_eq!(
             TmuxNotification::SessionsChanged.notification_type(),
@@ -852,6 +951,30 @@ mod tests {
             }
             .notification_type(),
             "output"
+        );
+        assert_eq!(
+            TmuxNotification::LayoutChange {
+                window_id: "@1".to_string(),
+                window_layout: "layout".to_string(),
+                window_visible_layout: "visible".to_string(),
+                window_raw_flags: "flags".to_string(),
+            }
+            .notification_type(),
+            "layout-change"
+        );
+        assert_eq!(
+            TmuxNotification::PasteBufferChanged {
+                name: "buffer0".to_string(),
+            }
+            .notification_type(),
+            "paste-buffer-changed"
+        );
+        assert_eq!(
+            TmuxNotification::PasteBufferDeleted {
+                name: "buffer0".to_string(),
+            }
+            .notification_type(),
+            "paste-buffer-deleted"
         );
     }
 }

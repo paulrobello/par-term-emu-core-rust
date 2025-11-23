@@ -86,21 +86,30 @@ def send_frame(
         display_image(image_id)
 
 
-def send_animation_control(image_id: int, control: str) -> None:
+def send_animation_control(
+    image_id: int, state: str | None = None, num_plays: int | None = None
+) -> None:
     """Send animation control command.
 
     Args:
         image_id: Image ID to control
-        control: Control value:
-            - '1': Play/resume
-            - '2': Pause
-            - '3': Stop
-            - Number: Set loop count (0 = infinite)
+        state: State control (s= parameter):
+            - '1': Stop animation
+            - '2': Loading mode (wait for frames)
+            - '3': Enable looping
+        num_plays: Number of times to play (v= parameter):
+            - 0: Ignored
+            - 1: Infinite looping
+            - N: Loop (N-1) times
     """
     # Action: a=a (animation control)
     # Image ID: i=<id>
-    # Control: s=<control>
-    payload = f"a=a,i={image_id},s={control}"
+    params = ["a=a", f"i={image_id}"]
+    if state is not None:
+        params.append(f"s={state}")
+    if num_plays is not None:
+        params.append(f"v={num_plays}")
+    payload = ",".join(params)
     send_kitty_graphics(payload)
 
 
@@ -156,24 +165,24 @@ def test_simple_animation() -> None:
 
     # Demonstrate controls
     print("Controls:")
-    print("  - Playing animation (infinite loops)...")
-    send_animation_control(image_id, "1")  # Play
-    send_animation_control(image_id, "0")  # Set infinite loops
+    print("  - Setting infinite loops and starting animation...")
+    send_animation_control(image_id, num_plays=1)  # v=1 = infinite loops
+    send_animation_control(image_id, state="3")  # s=3 = enable looping
 
     time.sleep(3)
 
-    print("  - Pausing animation...")
-    send_animation_control(image_id, "2")  # Pause
+    print("  - Pausing animation (loading mode)...")
+    send_animation_control(image_id, state="2")  # s=2 = loading mode (pause)
 
     time.sleep(2)
 
     print("  - Resuming animation...")
-    send_animation_control(image_id, "1")  # Resume
+    send_animation_control(image_id, state="3")  # s=3 = enable looping again
 
     time.sleep(3)
 
     print("  - Stopping animation...")
-    send_animation_control(image_id, "3")  # Stop
+    send_animation_control(image_id, state="1")  # s=1 = stop
 
     time.sleep(1)
 
@@ -204,8 +213,8 @@ def test_multi_frame_animation() -> None:
         time.sleep(0.05)
 
     print(f"\n{len(colors)}-frame animation loaded. Playing with 2 loops...")
-    send_animation_control(image_id, "2")  # Set 2 loops
-    send_animation_control(image_id, "1")  # Play
+    send_animation_control(image_id, num_plays=3)  # v=3 means 2 loops (N-1)
+    send_animation_control(image_id, state="3")  # s=3 = enable looping
 
     # Wait for animation to complete (2 loops * 4 frames * 400ms)
     time.sleep(2 * len(colors) * 0.4 + 0.5)

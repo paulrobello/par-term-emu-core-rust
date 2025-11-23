@@ -1357,6 +1357,14 @@ pub struct Terminal {
     is_recording: bool,
     /// Recording start timestamp (for relative timing)
     recording_start_time: u64,
+
+    // === Feature 38: Macro Recording and Playback ===
+    /// Macro library (name -> macro)
+    macro_library: HashMap<String, crate::macros::Macro>,
+    /// Current macro playback state
+    macro_playback: Option<crate::macros::MacroPlayback>,
+    /// Screenshot triggers from macro playback
+    macro_screenshot_triggers: Vec<String>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1678,6 +1686,11 @@ impl Terminal {
             recording_session: None,
             is_recording: false,
             recording_start_time: 0,
+
+            // Macro Recording and Playback
+            macro_library: HashMap::new(),
+            macro_playback: None,
+            macro_screenshot_triggers: Vec::new(),
         }
     }
 
@@ -2070,6 +2083,18 @@ impl Terminal {
     /// Get the number of graphics dropped due to limits
     pub fn dropped_sixel_graphics(&self) -> usize {
         self.graphics_store.dropped_count()
+    }
+
+    /// Update all Kitty graphics animations and return list of image IDs that changed frames
+    ///
+    /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
+    /// It returns a list of image IDs whose frames changed, allowing frontends to
+    /// selectively refresh only graphics that were updated.
+    ///
+    /// Returns:
+    ///     List of image IDs that changed frames
+    pub fn update_animations(&mut self) -> Vec<u32> {
+        self.graphics_store.update_animations()
     }
 
     /// Get Sixel statistics for this terminal.
@@ -2762,7 +2787,15 @@ impl Terminal {
     /// # Returns
     ///     String containing visible screen with ANSI styling
     pub fn export_visible_screen_styled(&self) -> String {
-        self.active_grid().export_visible_screen_styled()
+        let mut result = self.active_grid().export_visible_screen_styled();
+
+        // Restore cursor to its actual position (1-indexed for VT100)
+        // Without this, the cursor is left at the last row, causing subsequent
+        // output to appear in the wrong location
+        let cursor = self.cursor();
+        result.push_str(&format!("\x1b[{};{}H", cursor.row + 1, cursor.col + 1));
+
+        result
     }
 
     // ========== Text Extraction Utilities ==========
@@ -5855,6 +5888,165 @@ impl Terminal {
             }).collect::<Vec<_>>(),
         }))
         .unwrap_or_default()
+    }
+
+    // === Macro Recording and Playback Methods ===
+
+    /// Load a macro into the macro library
+    pub fn load_macro(&mut self, name: String, macro_data: crate::macros::Macro) {
+        self.macro_library.insert(name, macro_data);
+    }
+
+    /// Get a macro from the library
+    pub fn get_macro(&self, name: &str) -> Option<&crate::macros::Macro> {
+        self.macro_library.get(name)
+    }
+
+    /// Remove a macro from the library
+    pub fn remove_macro(&mut self, name: &str) -> Option<crate::macros::Macro> {
+        self.macro_library.remove(name)
+    }
+
+    /// List all macro names
+    pub fn list_macros(&self) -> Vec<String> {
+        self.macro_library.keys().cloned().collect()
+    }
+
+    /// Start playing a macro
+    pub fn play_macro(&mut self, name: &str, speed: f64) -> Result<(), String> {
+        if let Some(macro_data) = self.macro_library.get(name) {
+            self.macro_playback = Some(crate::macros::MacroPlayback::with_speed(
+                macro_data.clone(),
+                speed,
+            ));
+            Ok(())
+        } else {
+            Err(format!("Macro '{}' not found", name))
+        }
+    }
+
+    /// Stop macro playback
+    pub fn stop_macro(&mut self) {
+        self.macro_playback = None;
+        self.macro_screenshot_triggers.clear();
+    }
+
+    /// Pause macro playback
+    pub fn pause_macro(&mut self) {
+        if let Some(ref mut playback) = self.macro_playback {
+            playback.pause();
+        }
+    }
+
+    /// Resume macro playback
+    pub fn resume_macro(&mut self) {
+        if let Some(ref mut playback) = self.macro_playback {
+            playback.resume();
+        }
+    }
+
+    /// Set macro playback speed
+    pub fn set_macro_speed(&mut self, speed: f64) {
+        if let Some(ref mut playback) = self.macro_playback {
+            playback.set_speed(speed);
+        }
+    }
+
+    /// Check if a macro is currently playing
+    pub fn is_macro_playing(&self) -> bool {
+        self.macro_playback
+            .as_ref()
+            .map(|p| !p.is_finished())
+            .unwrap_or(false)
+    }
+
+    /// Check if macro playback is paused
+    pub fn is_macro_paused(&self) -> bool {
+        self.macro_playback
+            .as_ref()
+            .map(|p| p.is_paused())
+            .unwrap_or(false)
+    }
+
+    /// Get macro playback progress
+    pub fn get_macro_progress(&self) -> Option<(usize, usize)> {
+        self.macro_playback.as_ref().map(|p| p.progress())
+    }
+
+    /// Get the name of the currently playing macro
+    pub fn get_current_macro_name(&self) -> Option<String> {
+        self.macro_playback.as_ref().map(|p| p.name().to_string())
+    }
+
+    /// Tick macro playback and return events that should be processed now
+    ///
+    /// Returns bytes to send to PTY for KeyPress events, None for others
+    /// Screenshot events are stored in macro_screenshot_triggers
+    pub fn tick_macro(&mut self) -> Option<Vec<u8>> {
+        if let Some(ref mut playback) = self.macro_playback {
+            if let Some(event) = playback.next_event() {
+                match event {
+                    crate::macros::MacroEvent::KeyPress { key, .. } => {
+                        let bytes = crate::macros::KeyParser::parse_key(&key);
+                        return Some(bytes);
+                    }
+                    crate::macros::MacroEvent::Screenshot { label, .. } => {
+                        self.macro_screenshot_triggers
+                            .push(label.unwrap_or_else(|| "screenshot".to_string()));
+                    }
+                    crate::macros::MacroEvent::Delay { .. } => {
+                        // Delays are handled by timing in the playback state machine
+                    }
+                }
+            }
+
+            // Check if playback is finished and clean up
+            if playback.is_finished() {
+                self.macro_playback = None;
+            }
+        }
+        None
+    }
+
+    /// Get and clear screenshot triggers
+    pub fn get_macro_screenshot_triggers(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.macro_screenshot_triggers)
+    }
+
+    /// Convert a RecordingSession to a Macro
+    pub fn recording_to_macro(
+        &self,
+        session: &RecordingSession,
+        name: String,
+    ) -> crate::macros::Macro {
+        let mut macro_data = crate::macros::Macro::new(name)
+            .with_terminal_size(session.initial_size.0, session.initial_size.1);
+
+        // Copy environment variables
+        for (k, v) in &session.env {
+            macro_data = macro_data.add_env(k.clone(), v.clone());
+        }
+
+        // Convert input events to key presses
+        let mut last_timestamp = 0u64;
+        for event in &session.events {
+            if event.event_type == RecordingEventType::Input {
+                // Add delay if there's a gap
+                if event.timestamp > last_timestamp {
+                    let delay = event.timestamp - last_timestamp;
+                    macro_data.add_delay(delay);
+                }
+
+                // Convert raw bytes to a key string (basic conversion)
+                let key_string = String::from_utf8_lossy(&event.data).to_string();
+                macro_data.add_key(key_string);
+
+                last_timestamp = event.timestamp;
+            }
+        }
+
+        macro_data.duration = session.duration;
+        macro_data
     }
 }
 

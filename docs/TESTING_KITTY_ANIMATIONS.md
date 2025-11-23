@@ -1,6 +1,20 @@
 # Testing Kitty Graphics Animations
 
-This guide explains how to test Kitty graphics protocol animation support in par-term-emu-core-rust.
+This guide explains how to test Kitty graphics protocol animation support in `par-term-emu-core-rust`.
+
+## Table of Contents
+- [Current Status](#current-status)
+- [Prerequisites](#prerequisites)
+- [Quick Test](#quick-test)
+- [What the Test Does](#what-the-test-does)
+- [Kitty Animation Protocol](#kitty-animation-protocol)
+  - [Frame Transmission](#frame-transmission)
+  - [Animation Control](#animation-control)
+- [Backend Verification](#backend-verification)
+- [Frontend Integration](#frontend-integration)
+- [Manual Testing](#manual-testing)
+- [Debugging](#debugging)
+- [Related Documentation](#related-documentation)
 
 ## Current Status
 
@@ -8,7 +22,8 @@ This guide explains how to test Kitty graphics protocol animation support in par
 |-----------|--------|-------|
 | Backend Animation Storage | ✅ Complete | `src/graphics/animation.rs` |
 | Backend Frame Management | ✅ Complete | Frames stored in `GraphicsStore.animations` |
-| Backend Playback Control | ✅ Complete | Play/Pause/Stop/SetLoops |
+| Backend Playback Control | ✅ Complete | Stop/LoadingMode/EnableLooping |
+| Backend Loop Count | ✅ Complete | Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops) |
 | Frontend Rendering | 🔄 Pending | Needs integration in par-term |
 
 ## Prerequisites
@@ -16,19 +31,25 @@ This guide explains how to test Kitty graphics protocol animation support in par
 Install Pillow for PNG generation:
 
 ```bash
-pip install Pillow
-# or with uv:
+# Install with uv (recommended):
 uv pip install Pillow
+
+# Or with pip:
+pip install Pillow
 ```
 
 ## Quick Test
 
-Run the test script in par-term:
+Run the test script to verify animation support:
 
 ```bash
-cd /Users/probello/Repos/par-term && cargo run
-# In the terminal that opens, run:
-python /Users/probello/Repos/par-term-emu-core-rust/scripts/test_kitty_animation.py
+# Method 1: Run in your current terminal
+python scripts/test_kitty_animation.py
+
+# Method 2: Test in par-term frontend
+cd ../par-term && cargo run
+# In the par-term window, run:
+python ../par-term-emu-core-rust/scripts/test_kitty_animation.py
 ```
 
 ## What the Test Does
@@ -52,28 +73,56 @@ The test script creates two animations:
 ESC _ G a=f,i=<id>,r=<frame>,z=<delay>,f=100,t=d ; <base64_png> ESC \
 ```
 
-Parameters:
+**Parameters:**
 - `a=f` - Action: frame
 - `i=<id>` - Image ID
 - `r=<frame>` - Frame number (1-indexed)
 - `z=<delay>` - Frame delay in milliseconds
 - `f=100` - Format: PNG
-- `t=d` - Transmission: direct
+- `t=d` - Transmission: direct (or `f` for file, `t` for temp file)
+
+**Example:**
+```python
+# Send frame 1 of animation with image_id=42, 500ms delay
+payload = f"a=f,i=42,r=1,z=500,f=100,t=d;{base64_png_data}"
+print(f"\x1b_G{payload}\x1b\\", end="", flush=True)
+```
 
 ### Animation Control
 
 ```
-ESC _ G a=a,i=<id>,s=<control> ESC \
+ESC _ G a=a,i=<id>,s=<state>[,v=<num_plays>] ESC \
 ```
 
-Parameters:
+**Parameters:**
 - `a=a` - Action: animation control
 - `i=<id>` - Image ID
-- `s=<control>` - Control value:
-  - `1` = Play/Resume
-  - `2` = Pause
-  - `3` = Stop
-  - `0` or other number = Set loop count (0 = infinite)
+- `s=<state>` - State control:
+  - `1` = Stop animation and reset loop counter
+  - `2` = Loading mode (pause, wait for more frames)
+  - `3` = Enable looping (start/resume normal playback)
+- `v=<num_plays>` - Number of times to play (optional):
+  - `0` = Ignored (no change to loop count)
+  - `1` = Infinite looping
+  - `N` = Loop (N-1) times (e.g., v=3 means loop 2 times)
+
+**Examples:**
+```python
+# Set infinite loops
+print("\x1b_Ga=a,i=42,v=1\x1b\\", end="", flush=True)
+
+# Enable looping (start animation)
+print("\x1b_Ga=a,i=42,s=3\x1b\\", end="", flush=True)
+
+# Set to loop 2 times (v=3 means N-1 = 2 loops)
+print("\x1b_Ga=a,i=42,v=3\x1b\\", end="", flush=True)
+
+# Pause animation (loading mode)
+print("\x1b_Ga=a,i=42,s=2\x1b\\", end="", flush=True)
+
+# Stop animation completely
+print("\x1b_Ga=a,i=42,s=1\x1b\\", end="", flush=True)
+```
 
 ## Backend Verification
 
@@ -83,33 +132,57 @@ Check debug logs for animation events:
 # Enable debug logging
 export DEBUG_LEVEL=4
 
-# Run par-term
-cd /Users/probello/Repos/par-term && cargo run
+# Run par-term (if testing with frontend)
+cd ../par-term && cargo run
 
-# In another terminal, check logs
+# In another terminal, monitor logs
 tail -f /tmp/par_term_emu_core_rust_debug_rust.log
 ```
 
-You should see:
+**Expected log entries:**
 - Animation frame additions
 - Animation control commands
-- Frame timing updates (if frontend calls `update_animations()`)
+- Frame timing updates (when `update_animations()` is called)
+- Frame advancement messages with timing details
 
-## Frontend Integration (TODO)
+## Frontend Integration
 
 The frontend (par-term) needs the following integration to enable animation playback:
 
-### 1. Call `update_animations()` periodically
+### Required Implementation Steps
 
-In `app.rs` redraw loop (around line 1595), add:
+```mermaid
+graph TD
+    Update[Call update_animations periodically]
+    Changed{Frames changed?}
+    Redraw[Request redraw]
+    Render[Render current frame pixels]
+
+    Update --> Changed
+    Changed -->|Yes| Redraw
+    Changed -->|No| Update
+    Redraw --> Render
+    Render --> Update
+
+    style Update fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Changed fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style Redraw fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style Render fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+```
+
+### 1. Update Animations Periodically
+
+Call `GraphicsStore::update_animations()` in the redraw loop:
 
 ```rust
-// Update animations and get list of images with frame changes
+// In par-term app.rs redraw loop
 if let Some(terminal) = &self.terminal {
     let terminal = terminal.blocking_lock();
     let pty = terminal.pty_session.lock().unwrap();
     let term_arc = pty.terminal();
     let mut term = term_arc.lock().unwrap();
+
+    // Update animations and get list of images with frame changes
     let changed_images = term.graphics_store_mut().update_animations();
 
     if !changed_images.is_empty() {
@@ -121,44 +194,48 @@ if let Some(terminal) = &self.terminal {
 }
 ```
 
-### 2. Render current animation frame
+### 2. Render Current Animation Frame
 
-Modify graphics retrieval to use current animation frame:
+The `update_animations()` method automatically updates the pixel data in all placements, so no additional rendering logic is needed. The current implementation already handles this:
 
 ```rust
-// Get current graphics with animation frames
-let mut graphics = Vec::new();
-for graphic in terminal.all_graphics() {
-    // If this graphic has an animation, get current frame
-    if let Some(image_id) = graphic.kitty_image_id {
-        if let Some(anim) = term.graphics_store().get_animation(image_id) {
-            if let Some(current_frame) = anim.current_frame() {
-                // Create graphic from current animation frame
-                let mut animated_graphic = graphic.clone();
-                animated_graphic.pixels = current_frame.pixels.clone();
-                animated_graphic.width = current_frame.width;
-                animated_graphic.height = current_frame.height;
-                graphics.push(animated_graphic);
-                continue;
-            }
+// In src/graphics/mod.rs - GraphicsStore::update_animations()
+// This method updates pixels automatically for all placements
+if let Some(current_frame) = anim.current_frame() {
+    let frame_pixels = current_frame.pixels.clone();
+
+    // Update all placements that reference this image
+    for placement in &mut self.placements {
+        if placement.kitty_image_id == Some(*image_id) {
+            placement.pixels = frame_pixels.clone();
+            placement.width = current_frame.width;
+            placement.height = current_frame.height;
         }
     }
-    // Not animated or no current frame
-    graphics.push(graphic.clone());
 }
 ```
 
-### 3. Terminal API additions needed
+### 3. Animation State Flow
 
-The Terminal struct needs to expose `graphics_store_mut()`:
+```mermaid
+stateDiagram-v2
+    [*] --> Stopped: Create Animation
+    Stopped --> Playing: s=3 (EnableLooping)
+    Playing --> Paused: s=2 (LoadingMode)
+    Paused --> Playing: s=3 (EnableLooping)
+    Playing --> Stopped: s=1 (Stop)
+    Paused --> Stopped: s=1 (Stop)
+    Stopped --> [*]: Delete Image
 
-```rust
-// In src/terminal/mod.rs
-impl Terminal {
-    pub fn graphics_store_mut(&mut self) -> &mut GraphicsStore {
-        &mut self.graphics_store
-    }
-}
+    note right of Playing
+        Frames advance based on
+        delay_ms timing
+    end note
+
+    note right of Stopped
+        Loop counter reset
+        Frame reset to 1
+    end note
 ```
 
 ## Manual Testing
@@ -176,8 +253,8 @@ img.save(buf, format='PNG')
 print(base64.standard_b64encode(buf.getvalue()).decode())
 " > /tmp/red.b64
 
-# Send frame 1
-printf '\x1b_Ga=T,i=1,r=1,z=500,f=100,t=d;'
+# Send frame 1 (action='f' for frame, not 'T')
+printf '\x1b_Ga=f,i=1,r=1,z=500,f=100,t=d;'
 cat /tmp/red.b64
 printf '\x1b\\'
 
@@ -191,50 +268,135 @@ img.save(buf, format='PNG')
 print(base64.standard_b64encode(buf.getvalue()).decode())
 " | (printf '\x1b_Ga=f,i=1,r=2,z=500,f=100,t=d;'; cat; printf '\x1b\\')
 
-# Play animation
+# Set infinite loops
+printf '\x1b_Ga=a,i=1,v=1\x1b\\'
+
+# Start animation (enable looping)
+printf '\x1b_Ga=a,i=1,s=3\x1b\\'
+
+# Wait a few seconds, then pause
+sleep 3
+printf '\x1b_Ga=a,i=1,s=2\x1b\\'
+
+# Resume
+sleep 2
+printf '\x1b_Ga=a,i=1,s=3\x1b\\'
+
+# Stop completely
+sleep 3
 printf '\x1b_Ga=a,i=1,s=1\x1b\\'
 ```
 
 ## Debugging
 
-### Check if frames are being stored
+### Check Backend Logs
 
-Add debug logging in `src/graphics/kitty.rs`:
+The implementation includes comprehensive debug logging. Enable debug output to see animation events:
 
-```rust
-debug_info!("KITTY", "Added animation frame {} to image {}", frame_number, image_id);
+```bash
+# Enable debug logging
+export DEBUG_LEVEL=4
+
+# Run par-term (if testing with frontend)
+cd ../par-term && cargo run
+
+# In another terminal, monitor logs
+tail -f /tmp/par_term_emu_core_rust_debug_rust.log
 ```
 
-### Check animation state
-
-In terminal, you can query animation state (if exposed via Python bindings):
-
-```python
-from par_term_emu_core_rust import Terminal
-term = Terminal(80, 24)
-# ... load animations ...
-anim = term.graphics_store().get_animation(1)
-print(f"State: {anim.state}, Frame: {anim.current_frame}/{anim.frame_count()}")
+**Expected log output:**
+```
+KITTY: Parsed animation control: s=3 -> Some(EnableLooping)
+ANIMATION: Adding frame 1 to image_id=42 (delay=500ms, size=100x100)
+ANIMATION: Frame 1 added. Total frames in animation: 1
+GRAPHICS: Added animation frame 1 to image_id=42 (total frames: 1)
+ANIMATION: Applying control to image_id=42: EnableLooping (current state=Stopped, frame=1/1)
+ANIMATION: After control: image_id=42 state=Playing, frame=1/1
+ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 ```
 
-## References
+### Common Issues
 
-- [Kitty Graphics Protocol - Animation](https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation)
-- [Animation Implementation](../src/graphics/animation.rs)
-- [Graphics Store](../src/graphics/mod.rs)
-- [Kitty Parser](../src/graphics/kitty.rs)
+#### Issue: Animation not advancing frames
+**Symptoms:** Frames loaded but animation stuck on first frame
 
-## Known Limitations
+**Check:**
+1. Verify `update_animations()` is being called periodically
+2. Check animation state is `Playing` (not `Stopped` or `Paused`)
+3. Ensure frame delays are reasonable (> 0ms)
+4. Look for log messages showing frame advances
 
-1. **Frontend rendering**: Animations are stored but not yet rendered in par-term
-2. **Frame composition**: Alpha blend vs overwrite modes need testing
-3. **Performance**: Large animations may need frame caching optimization
-4. **Cleanup**: Old animation data needs garbage collection strategy
+#### Issue: Animation frames not displaying
+**Symptoms:** Backend logs show frames advancing but no visual change
 
-## Next Steps
+**Check:**
+1. Frontend needs to call `update_animations()` and request redraw
+2. Verify the graphics rendering pipeline is using updated pixel data
+3. Check that placements exist for the animated image_id
 
-1. ✅ Backend animation storage - Complete
-2. ✅ Backend playback control - Complete
-3. 🔄 Frontend integration - In progress
-4. ⏳ Performance optimization - Pending
-5. ⏳ Garbage collection - Pending
+#### Issue: Wrong loop count behavior
+**Symptoms:** Animation loops wrong number of times
+
+**Check:**
+- Remember: `v=0` is ignored, `v=1` is infinite, `v=N` means (N-1) loops
+- Example: `v=3` means loop 2 times (play 3 times total)
+- Check logs for: `"Setting loop count for image_id=..."`
+
+## Related Documentation
+
+- [Kitty Graphics Protocol - Animation](https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation) - Official Kitty animation specification
+- [Architecture Documentation](ARCHITECTURE.md) - System architecture and component design
+- [Graphics Testing Guide](GRAPHICS_TESTING.md) - General graphics protocol testing
+- [VT Sequences Reference](VT_SEQUENCES.md) - All supported VT escape sequences
+
+**Implementation Files:**
+- `src/graphics/animation.rs` - Animation frame storage and playback logic
+- `src/graphics/mod.rs` - Graphics store with `update_animations()` method
+- `src/graphics/kitty.rs` - Kitty protocol parser with animation support
+- `scripts/test_kitty_animation.py` - Automated animation test script
+
+## Implementation Status
+
+```mermaid
+graph LR
+    Storage[Animation Storage]
+    Frames[Frame Management]
+    Control[Playback Control]
+    Loops[Loop Count]
+    Timing[Frame Timing]
+    Frontend[Frontend Integration]
+
+    Storage --> Frames
+    Frames --> Control
+    Control --> Loops
+    Loops --> Timing
+    Timing --> Frontend
+
+    style Storage fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Frames fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Control fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Loops fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Timing fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Frontend fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+```
+
+### Completed Features
+- ✅ **Animation Storage** - Frames stored in `GraphicsStore.animations` with Arc-shared pixels
+- ✅ **Frame Management** - Add, retrieve, and iterate frames with composition modes
+- ✅ **Playback Control** - Stop (s=1), LoadingMode (s=2), EnableLooping (s=3)
+- ✅ **Loop Count** - Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops)
+- ✅ **Frame Timing** - Automatic frame advancement based on delay_ms
+- ✅ **Auto Placement Update** - `update_animations()` updates pixel data in all placements
+
+### Pending Features
+- 🔄 **Frontend Integration** - par-term needs to call `update_animations()` in render loop
+- ⏳ **Frame Composition Testing** - Alpha blend vs overwrite modes need validation
+- ⏳ **Performance Optimization** - Large animations may benefit from additional caching
+- ⏳ **Garbage Collection** - Strategy for cleaning up old animation data
+
+### Known Limitations
+
+1. **Frontend rendering**: Backend is complete, but par-term frontend needs integration
+2. **Composition modes**: AlphaBlend and Overwrite modes are parsed but not fully tested
+3. **Memory management**: No automatic cleanup of unused animations
+4. **Performance**: Very large animations (100+ frames) may need optimization

@@ -28,19 +28,86 @@ par-term-emu-core-rust/
 │       └── (native module added by maturin)
 ├── pyproject.toml
 └── src/
-    └── lib.rs
+    ├── lib.rs
+    ├── bin/
+    │   └── streaming_server.rs
+    └── (other modules)
 ```
 
 **Status**: ✅ **Compliant**
 - Uses recommended `python-source = "python"` structure
 - Avoids [common ImportError pitfall](https://github.com/PyO3/maturin/issues/490)
 - Module name properly configured as `par_term_emu_core_rust._native`
+- Supports both Python bindings and standalone Rust binaries
+
+#### Build Architecture Flow
+
+```mermaid
+graph TB
+    subgraph "Source Code"
+        RS[Rust Source<br/>src/lib.rs]
+        BIN[Binary Source<br/>src/bin/streaming_server.rs]
+        PY[Python Wrapper<br/>python/par_term_emu_core_rust/__init__.py]
+    end
+
+    subgraph "Build Configuration"
+        CARGO[Cargo.toml<br/>Features: python, streaming]
+        PYPROJ[pyproject.toml<br/>Maturin Config]
+    end
+
+    subgraph "Maturin Build Process"
+        MAT[Maturin Build Backend]
+        FEAT{Feature Selection}
+    end
+
+    subgraph "Build Outputs"
+        WHEEL[Python Wheels<br/>.whl files]
+        NATIVE[Native Module<br/>par_term_emu_core_rust._native]
+        RUSTBIN[Rust Binary<br/>par-term-streamer]
+    end
+
+    subgraph "Distribution"
+        PYPI[PyPI<br/>pip install]
+        CARGO_BIN[Cargo Install<br/>standalone binary]
+    end
+
+    RS --> MAT
+    BIN --> MAT
+    PY --> MAT
+    CARGO --> MAT
+    PYPROJ --> MAT
+
+    MAT --> FEAT
+    FEAT -->|python feature| WHEEL
+    FEAT -->|streaming feature| RUSTBIN
+    WHEEL --> NATIVE
+    WHEEL --> PYPI
+    RUSTBIN --> CARGO_BIN
+
+    style RS fill:#e65100,stroke:#ff9800,stroke-width:2px,color:#ffffff
+    style BIN fill:#e65100,stroke:#ff9800,stroke-width:2px,color:#ffffff
+    style PY fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style CARGO fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style PYPROJ fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style MAT fill:#1b5e20,stroke:#4caf50,stroke-width:3px,color:#ffffff
+    style FEAT fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style WHEEL fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    style NATIVE fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    style RUSTBIN fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style PYPI fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
+    style CARGO_BIN fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
+```
 
 #### 2. **pyproject.toml Configuration**
 ```toml
 [build-system]
 requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
+
+[project]
+name = "par-term-emu-core-rust"
+version = "0.9.0"
+requires-python = ">=3.12"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
@@ -55,6 +122,7 @@ dev = ["maturin>=1.10.1", ...]
 - Proper PEP 517/518 build system configuration
 - Maturin version: `>=1.9,<2.0` (build), `>=1.10.1` (dev)
 - Maturin as build backend
+- Python 3.12+ requirement (aligned with modern Python)
 - Correct feature flags for PyO3
 - Explicit module naming to avoid conflicts
 
@@ -67,11 +135,18 @@ rust-version = "1.75"
 name = "par_term_emu_core_rust"
 crate-type = ["cdylib", "rlib"]
 
+[[bin]]
+name = "par-term-streamer"
+path = "src/bin/streaming_server.rs"
+required-features = ["streaming"]
+
 [dependencies]
-pyo3 = "0.27.1"
+pyo3 = { version = "0.27.1", optional = true }
 
 [features]
-default = ["pyo3/extension-module"]
+default = ["python"]
+python = ["pyo3", "pyo3/extension-module"]
+streaming = ["tokio", "tokio-tungstenite", "axum", ...]
 
 [profile.release]
 opt-level = 3
@@ -81,12 +156,13 @@ strip = true
 ```
 
 **Status**: ✅ **Compliant**
-- Correct `crate-type` for Python extension modules
-- PyO3 version: 0.27.1 (latest stable)
+- Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
+- PyO3 version: 0.27.1 (latest stable, made optional for flexibility)
 - Minimum Rust version: 1.75
-- Proper PyO3 extension-module feature
+- Proper PyO3 extension-module feature in `python` feature
+- Feature-based architecture (python, streaming, rust-only, full)
 - Aggressive release optimizations (LTO, strip, single codegen-unit)
-- Good for distribution (smaller wheel sizes)
+- Supports both Python bindings and standalone Rust binaries
 
 #### 4. **Cross-Platform Builds**
 
@@ -129,7 +205,7 @@ strip = true
 
 ## ✅ Implemented Improvements
 
-All previously recommended improvements have been **fully implemented** as of version 0.8.0!
+All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.9.0!
 
 ### 1. **Linux ARM64 (aarch64) Support** - ✅ IMPLEMENTED
 
@@ -239,6 +315,87 @@ windows:
 †macOS universal2 wheels tested for x86_64 portion on CI, Apple Silicon portion tested post-release
 ‡Windows tests exclude PTY functionality (Unix-only feature)
 
+### CI/CD Build Matrix Visualization
+
+```mermaid
+graph TB
+    subgraph "GitHub Actions Workflows"
+        CI[CI Workflow<br/>Manual Trigger]
+        DEPLOY[Deployment Workflow<br/>Manual Trigger]
+    end
+
+    subgraph "Linux Builds"
+        LX64_312[x86_64<br/>Python 3.12]
+        LX64_313[x86_64<br/>Python 3.13]
+        LX64_314[x86_64<br/>Python 3.14]
+        LARM_312[aarch64<br/>Python 3.12]
+        LARM_313[aarch64<br/>Python 3.13]
+        LARM_314[aarch64<br/>Python 3.14]
+    end
+
+    subgraph "macOS Builds"
+        MX64_312[x86_64<br/>Python 3.12]
+        MX64_313[x86_64<br/>Python 3.13]
+        MX64_314[x86_64<br/>Python 3.14]
+        MUNI_312[universal2<br/>Python 3.12]
+        MUNI_313[universal2<br/>Python 3.13]
+        MUNI_314[universal2<br/>Python 3.14]
+    end
+
+    subgraph "Windows Builds"
+        WX64_312[x86_64<br/>Python 3.12]
+        WX64_313[x86_64<br/>Python 3.13]
+        WX64_314[x86_64<br/>Python 3.14]
+    end
+
+    subgraph "Distribution"
+        SDIST[Source Distribution]
+        GHREL[GitHub Release<br/>+ Sigstore Signing]
+        PYPIPUB[PyPI Publication<br/>Trusted Publishing]
+    end
+
+    DEPLOY --> LX64_312 & LX64_313 & LX64_314
+    DEPLOY --> LARM_312 & LARM_313 & LARM_314
+    DEPLOY --> MX64_312 & MX64_313 & MX64_314
+    DEPLOY --> MUNI_312 & MUNI_313 & MUNI_314
+    DEPLOY --> WX64_312 & WX64_313 & WX64_314
+    DEPLOY --> SDIST
+
+    LX64_312 & LX64_313 & LX64_314 --> GHREL
+    LARM_312 & LARM_313 & LARM_314 --> GHREL
+    MX64_312 & MX64_313 & MX64_314 --> GHREL
+    MUNI_312 & MUNI_313 & MUNI_314 --> GHREL
+    WX64_312 & WX64_313 & WX64_314 --> GHREL
+    SDIST --> GHREL
+
+    GHREL --> PYPIPUB
+
+    style CI fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style DEPLOY fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+
+    style LX64_312 fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style LX64_313 fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style LX64_314 fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style LARM_312 fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
+    style LARM_313 fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
+    style LARM_314 fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
+
+    style MX64_312 fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style MX64_313 fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style MX64_314 fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style MUNI_312 fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    style MUNI_313 fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+    style MUNI_314 fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
+
+    style WX64_312 fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style WX64_313 fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style WX64_314 fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+
+    style SDIST fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style GHREL fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style PYPIPUB fill:#1b5e20,stroke:#4caf50,stroke-width:3px,color:#ffffff
+```
+
 ## Manylinux Compatibility
 
 ### Current Approach
@@ -330,7 +487,7 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2025-11-19 (Version 0.8.0)
+**Last Updated**: 2025-11-22 (Version 0.9.0)
 
 | Category | Score | Notes |
 |----------|-------|-------|
@@ -396,10 +553,18 @@ The current configuration provides **world-class** packaging for a Rust/Python h
 
 ## References
 
-- [Maturin Official Documentation](https://maturin.rs/)
-- [Maturin GitHub](https://github.com/PyO3/maturin)
-- [Maturin Action](https://github.com/PyO3/maturin-action)
-- [PyO3 Documentation](https://pyo3.rs/)
-- [PEP 517 - Build Backend](https://peps.python.org/pep-0517/)
-- [PEP 518 - Build System](https://peps.python.org/pep-0518/)
-- [Manylinux Specifications](https://github.com/pypa/manylinux)
+### Official Documentation
+- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-11-22)
+- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-11-22)
+- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-11-22)
+- [PyO3 Documentation](https://pyo3.rs/) - Rust-Python bindings
+- [PyO3 GitHub](https://github.com/PyO3/pyo3) - PyO3 repository
+
+### Python Packaging Standards
+- [PEP 517 - Build Backend](https://peps.python.org/pep-0517/) - Build system specification
+- [PEP 518 - Build System](https://peps.python.org/pep-0518/) - Build system requirements
+- [PEP 656 - Platform Tags](https://peps.python.org/pep-0656/) - Platform compatibility tags
+
+### Linux Compatibility
+- [Manylinux Specifications](https://github.com/pypa/manylinux) - Linux wheel compatibility
+- [PEP 600 - Future manylinux](https://peps.python.org/pep-0600/) - Manylinux platform tags

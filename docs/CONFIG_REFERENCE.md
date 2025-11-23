@@ -2,7 +2,7 @@
 
 Comprehensive reference for par-term-emu-core-rust terminal emulator configuration options, modes, and settings.
 
-This document covers the **terminal core configuration** (Rust library internals) for the par-term-emu terminal emulator. For TUI application settings, see the [par-term-emu-rust project](https://github.com/paulrobello/par-term-emu-rust).
+This document covers the **terminal core configuration** (Rust library internals) for the par-term-emu terminal emulator. For TUI application settings, see the [par-term-emu-tui-rust project](https://github.com/paulrobello/par-term-emu-tui-rust).
 
 ## Table of Contents
 
@@ -31,7 +31,7 @@ The par-term-emu-core-rust library provides low-level terminal emulation with VT
 
 **Configuration layers:**
 - **Terminal Core** (this document): Low-level terminal emulator settings (dimensions, modes, protocols)
-- **TUI Layer**: Application-level settings for the TUI (see [par-term-emu-rust](https://github.com/paulrobello/par-term-emu-rust))
+- **TUI Layer**: Application-level settings for the TUI (see [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust))
 
 **Key Distinction**: Core settings control the *terminal emulation behavior* (VT modes, color parsing, escape sequences), while TUI settings control the *application experience* (selection, clipboard, themes).
 
@@ -396,7 +396,7 @@ Control whether custom colors are used instead of defaults:
 
 ## Screenshot Configuration
 
-**Note**: This section describes the **core library** screenshot API. For TUI application screenshot settings (like `screenshot_directory`, `screenshot_format`, `open_screenshot_after_capture`), see the [par-term-emu-rust project](https://github.com/paulrobello/par-term-emu-rust).
+**Note**: This section describes the **core library** screenshot API. For TUI application screenshot settings (like `screenshot_directory`, `screenshot_format`, `open_screenshot_after_capture`), see the [par-term-emu-tui-rust project](https://github.com/paulrobello/par-term-emu-tui-rust).
 
 ### Overview
 
@@ -411,7 +411,7 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 | `bmp` | BMP (uncompressed raster) | Maximum compatibility, large files |
 | `svg` | SVG (vector graphics) | Scalable, text-selectable output |
 
-**Note**: HTML export is available via the separate `export_styled()` method, not the screenshot API.
+**Note**: HTML export is available via the separate `export_html(include_styles: bool)` method, not the screenshot API.
 
 ### Screenshot Configuration Options
 
@@ -557,9 +557,9 @@ png_bytes = term.screenshot(sixel_mode="pixels")  # Show actual image data
 - iTerm2-compatible implementation for feature parity
 
 **Related Features:**
-- `export_text()` - Export as plain text (strips ANSI codes)
-- `export_styled()` - Export as styled HTML with inline CSS
-- `export_ansi()` - Export with ANSI escape sequences preserved
+- `export_text()` - Export as plain text (strips all formatting and ANSI codes)
+- `export_styled()` - Export with ANSI escape sequences for colors and text attributes
+- `export_html(include_styles)` - Export as HTML (with optional inline CSS styles)
 
 ---
 
@@ -703,7 +703,7 @@ The terminal validates:
 
 ### For End Users
 
-**Note**: The following configuration example is for the **TUI application** ([par-term-emu-rust](https://github.com/paulrobello/par-term-emu-rust)), not the core library. Core library configuration is done programmatically via API calls.
+**Note**: The following configuration example is for the **TUI application** ([par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust)), not the core library. Core library configuration is done programmatically via API calls.
 
 **Complete TUI Configuration Example** (`~/.config/par-term-emu/config.yaml`):
 
@@ -809,7 +809,7 @@ The terminal emulator itself does not read environment variables, but host appli
 
 - [README.md](../README.md) - Project overview and complete API reference
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features with usage examples
-- [VT_FEATURE_PARITY.md](VT_FEATURE_PARITY.md) - Complete VT sequence support matrix
+- [VT_TECHNICAL_REFERENCE.md](VT_TECHNICAL_REFERENCE.md) - Complete VT sequence support matrix and implementation details
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
 - [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture and design
 - [BUILDING.md](BUILDING.md) - Build and installation guide

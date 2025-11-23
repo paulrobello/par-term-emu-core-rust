@@ -8,6 +8,8 @@ Get up and running with par-term-emu in minutes!
 - [Add Some Color](#add-some-color)
 - [Move the Cursor](#move-the-cursor)
 - [Inspect Cells](#inspect-cells)
+- [Web Terminal Streaming](#web-terminal-streaming)
+- [Explore Examples](#explore-examples)
 - [Next Steps](#next-steps)
 - [Common Patterns](#common-patterns)
   - [Progress Bar](#progress-bar)
@@ -105,6 +107,98 @@ if attrs:
     print(f"Bold: {attrs.bold}")
 ```
 
+## Web Terminal Streaming
+
+Stream terminal sessions to web browsers using the standalone streaming server with real-time WebSocket communication.
+
+### Quick Start with Pre-built Binaries
+
+**Download the streaming server and web frontend from [GitHub Releases](https://github.com/paulrobello/par-term-emu-core-rust/releases):**
+
+```bash
+# Download streaming server binary (Linux example)
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-streamer-linux-x86_64
+chmod +x par-term-streamer-linux-x86_64
+
+# Download and extract web frontend
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
+tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+
+# Run the server
+./par-term-streamer-linux-x86_64 --web-root ./web_term
+
+# Open browser to http://localhost:8080
+```
+
+**Available platforms:**
+- Linux (x86_64, ARM64)
+- macOS (Intel, Apple Silicon)
+- Windows (x86_64)
+
+### Install from crates.io
+
+```bash
+# Install the streaming server globally
+cargo install par-term-emu-core-rust --features streaming
+
+# Run the server
+par-term-streamer --port 8080 --theme dracula
+```
+
+### Build from Source
+
+```bash
+# Build the Rust streaming server
+cargo build --bin par-term-streamer --no-default-features --features streaming --release
+./target/release/par-term-streamer --help
+
+# Or use the Makefile
+make streamer-run
+```
+
+### Features
+
+- **Real-time streaming**: Sub-100ms latency terminal streaming over WebSocket
+- **Multiple viewers**: Support for concurrent viewers per session
+- **Authentication**: Optional API key authentication (header or URL parameter)
+- **Themes**: Built-in color themes (iTerm2, Monokai, Dracula, Solarized)
+- **Auto-resize**: Client-initiated terminal resizing with SIGWINCH support
+- **Modern frontend**: Next.js/React with xterm.js and Tailwind CSS v4
+
+### Architecture
+
+```mermaid
+graph TB
+    subgraph "Backend Server"
+        PTY[PTY Session]
+        Term[Terminal Emulator]
+        WS[WebSocket Server]
+        HTTP[HTTP Static Server]
+    end
+
+    subgraph "Web Browser"
+        Frontend[React Frontend]
+        XTerm[xterm.js Renderer]
+    end
+
+    PTY -->|ANSI Output| Term
+    Term -->|Screen State| WS
+    WS -->|Terminal Data| Frontend
+    Frontend -->|Render| XTerm
+    Frontend -->|User Input| WS
+    WS -->|Input| PTY
+    HTTP -->|Serve Assets| Frontend
+
+    style PTY fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Term fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style WS fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style HTTP fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style Frontend fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style XTerm fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+```
+
+> **📝 Note:** For detailed streaming documentation including protocol specification, advanced features, and troubleshooting, see [docs/STREAMING.md](docs/STREAMING.md)
+
 ## Explore Examples
 
 The project includes 33 example scripts demonstrating various features. Explore the `examples/` directory for code samples including PTY sessions, graphics, and advanced terminal features.
@@ -124,6 +218,7 @@ uv run python examples/pty_shell.py
 
 - Check out the [full API documentation](README.md) for complete method reference
 - Explore the [examples directory](examples/) for 33 code samples including PTY, graphics, and advanced features
+- Review [Streaming Documentation](docs/STREAMING.md) for WebSocket protocol, advanced features, and troubleshooting
 - Review [CLAUDE.md](CLAUDE.md) for development and build instructions
 - Run example demonstrations: `make examples`
 

@@ -13,6 +13,7 @@ A modern, sleek web-based terminal emulator built with Next.js, TypeScript, Tail
 - ⚡ **Performance**: WebGL rendering for smooth performance
 - 🔗 **Link Detection**: Clickable URLs in terminal output
 - 🌈 **Unicode Support**: Full Unicode 11 support including emojis
+- 📲 **PWA Support**: Installable as a progressive web app with custom icons
 
 ## Getting Started
 
@@ -81,12 +82,18 @@ Custom terminal colors are defined in `tailwind.config.ts` under the `terminal` 
 web-terminal-frontend/
 ├── app/
 │   ├── globals.css       # Global styles and Tailwind directives
-│   ├── layout.tsx        # Root layout with font loading
+│   ├── layout.tsx        # Root layout with metadata and icons
 │   └── page.tsx          # Main page component
 ├── components/
 │   └── Terminal.tsx      # Terminal component with xterm.js
 ├── public/
-│   └── fonts/           # Custom fonts (if needed)
+│   ├── favicon.ico       # Multi-size favicon (16x16, 32x32, 48x48)
+│   ├── favicon.png       # 32x32 PNG favicon
+│   ├── apple-touch-icon.png  # 180x180 Apple touch icon
+│   ├── icon-192.png      # 192x192 PWA icon
+│   ├── icon-512.png      # 512x512 PWA icon
+│   ├── icon-1024.png     # Original high-res icon
+│   └── manifest.json     # PWA manifest
 ├── next.config.mjs      # Next.js configuration
 ├── tailwind.config.ts   # Tailwind CSS configuration
 ├── tsconfig.json        # TypeScript configuration

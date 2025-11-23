@@ -222,6 +222,13 @@ impl Terminal {
             }
             'm' => {
                 // SGR - Select Graphic Rendition
+                // Debug: Log SGR parameters for TMUX status bar debugging
+                if crate::debug::is_enabled(crate::debug::DebugLevel::Info) && !params.is_empty() {
+                    let params_str: Vec<String> =
+                        params.iter().map(|p| format!("{:?}", p)).collect();
+                    crate::debug_info!("CSI_SGR", "SGR params: [{}]", params_str.join(", "));
+                }
+
                 if params.is_empty() {
                     self.flags = CellFlags::default();
                     // Reset to terminal defaults (OSC 10/11 configurable)
@@ -270,7 +277,10 @@ impl Terminal {
                                 }
                             }
                             5 => self.flags.set_blink(true),
-                            7 => self.flags.set_reverse(true),
+                            7 => {
+                                self.flags.set_reverse(true);
+                                crate::debug_info!("CSI_SGR", "Set REVERSE flag (SGR 7)");
+                            }
                             8 => self.flags.set_hidden(true),
                             9 => self.flags.set_strikethrough(true),
                             22 => {
@@ -294,7 +304,30 @@ impl Terminal {
                             }
                             38 => {
                                 // Extended foreground color
-                                if let Some(next) = iter.next() {
+                                // Handle both formats:
+                                // 1. Subparameters in same slice: [38, 2, r, g, b] or [38, 5, idx]
+                                // 2. Separate parameter slices: [38], [2], [r], [g], [b]
+
+                                // Check if mode is in the same parameter slice (TMUX format)
+                                if let Some(&mode) = param_slice.get(1) {
+                                    match mode {
+                                        2 => {
+                                            // RGB (true color) - subparameters in same slice
+                                            let r = param_slice.get(2).copied().unwrap_or(0) as u8;
+                                            let g = param_slice.get(3).copied().unwrap_or(0) as u8;
+                                            let b = param_slice.get(4).copied().unwrap_or(0) as u8;
+                                            self.fg = Color::Rgb(r, g, b);
+                                        }
+                                        5 => {
+                                            // 256 color - subparameter in same slice
+                                            if let Some(&idx) = param_slice.get(2) {
+                                                self.fg = Color::from_ansi_code(idx as u8);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                } else if let Some(next) = iter.next() {
+                                    // Fallback: separate parameter slices (old format)
                                     if let Some(&mode) = next.first() {
                                         match mode {
                                             2 => {
@@ -334,11 +367,42 @@ impl Terminal {
                             }
                             39 => self.fg = self.default_fg,
                             40..=47 => {
-                                self.bg = Color::Named(NamedColor::from_u8((param - 40) as u8))
+                                self.bg = Color::Named(NamedColor::from_u8((param - 40) as u8));
+                                crate::debug_info!(
+                                    "CSI_SGR",
+                                    "Set BG color (SGR {}): {:?}",
+                                    param,
+                                    self.bg
+                                );
                             }
                             48 => {
                                 // Extended background color
-                                if let Some(next) = iter.next() {
+                                // Handle both formats:
+                                // 1. Subparameters in same slice: [48, 2, r, g, b] or [48, 5, idx]
+                                // 2. Separate parameter slices: [48], [2], [r], [g], [b]
+
+                                // Check if mode is in the same parameter slice (TMUX format)
+                                if let Some(&mode) = param_slice.get(1) {
+                                    match mode {
+                                        2 => {
+                                            // RGB (true color) - subparameters in same slice
+                                            let r = param_slice.get(2).copied().unwrap_or(0) as u8;
+                                            let g = param_slice.get(3).copied().unwrap_or(0) as u8;
+                                            let b = param_slice.get(4).copied().unwrap_or(0) as u8;
+                                            self.bg = Color::Rgb(r, g, b);
+                                            crate::debug_info!("CSI_SGR", "Set RGB BG color (SGR 48;2 subparams): RGB({},{},{})", r, g, b);
+                                        }
+                                        5 => {
+                                            // 256 color - subparameter in same slice
+                                            if let Some(&idx) = param_slice.get(2) {
+                                                self.bg = Color::from_ansi_code(idx as u8);
+                                                crate::debug_info!("CSI_SGR", "Set 256-color BG (SGR 48;5 subparams): index {}", idx);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                } else if let Some(next) = iter.next() {
+                                    // Fallback: separate parameter slices (old format)
                                     if let Some(&mode) = next.first() {
                                         match mode {
                                             2 => {
@@ -362,6 +426,7 @@ impl Terminal {
                                                     .unwrap_or(0)
                                                     as u8;
                                                 self.bg = Color::Rgb(r, g, b);
+                                                crate::debug_info!("CSI_SGR", "Set RGB BG color (SGR 48;2 separate): RGB({},{},{})", r, g, b);
                                             }
                                             5 => {
                                                 // 256 color
@@ -369,6 +434,7 @@ impl Terminal {
                                                     iter.next().and_then(|p| p.first())
                                                 {
                                                     self.bg = Color::from_ansi_code(*idx as u8);
+                                                    crate::debug_info!("CSI_SGR", "Set 256-color BG (SGR 48;5 separate): index {}", idx);
                                                 }
                                             }
                                             _ => {}
@@ -379,7 +445,31 @@ impl Terminal {
                             49 => self.bg = self.default_bg,
                             58 => {
                                 // Extended underline color (SGR 58)
-                                if let Some(next) = iter.next() {
+                                // Handle both formats:
+                                // 1. Subparameters in same slice: [58, 2, r, g, b] or [58, 5, idx]
+                                // 2. Separate parameter slices: [58], [2], [r], [g], [b]
+
+                                // Check if mode is in the same parameter slice
+                                if let Some(&mode) = param_slice.get(1) {
+                                    match mode {
+                                        2 => {
+                                            // RGB (true color) - subparameters in same slice
+                                            let r = param_slice.get(2).copied().unwrap_or(0) as u8;
+                                            let g = param_slice.get(3).copied().unwrap_or(0) as u8;
+                                            let b = param_slice.get(4).copied().unwrap_or(0) as u8;
+                                            self.underline_color = Some(Color::Rgb(r, g, b));
+                                        }
+                                        5 => {
+                                            // 256 color - subparameter in same slice
+                                            if let Some(&idx) = param_slice.get(2) {
+                                                self.underline_color =
+                                                    Some(Color::from_ansi_code(idx as u8));
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                } else if let Some(next) = iter.next() {
+                                    // Fallback: separate parameter slices (old format)
                                     if let Some(&mode) = next.first() {
                                         match mode {
                                             2 => {
@@ -423,7 +513,14 @@ impl Terminal {
                                 self.fg = Color::Named(NamedColor::from_u8((param - 90 + 8) as u8))
                             }
                             100..=107 => {
-                                self.bg = Color::Named(NamedColor::from_u8((param - 100 + 8) as u8))
+                                self.bg =
+                                    Color::Named(NamedColor::from_u8((param - 100 + 8) as u8));
+                                crate::debug_info!(
+                                    "CSI_SGR",
+                                    "Set bright BG color (SGR {}): {:?}",
+                                    param,
+                                    self.bg
+                                );
                             }
                             _ => {}
                         }

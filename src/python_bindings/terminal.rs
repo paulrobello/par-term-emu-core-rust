@@ -1315,6 +1315,18 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Update all Kitty graphics animations and trigger refresh if frames changed
+    ///
+    /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
+    /// It returns a list of image IDs whose frames changed, allowing frontends to
+    /// selectively refresh only graphics that were updated.
+    ///
+    /// Returns:
+    ///     List of image IDs that changed frames
+    fn update_animations(&mut self) -> PyResult<Vec<u32>> {
+        Ok(self.inner.update_animations())
+    }
+
     // Device query response methods
 
     /// Drain and return pending device query responses

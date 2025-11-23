@@ -37,6 +37,8 @@ impl PyStreamingConfig {
                 send_initial_screen,
                 keepalive_interval,
                 default_read_only,
+                enable_http: false,
+                web_root: "./web_term".to_string(),
             },
         }
     }

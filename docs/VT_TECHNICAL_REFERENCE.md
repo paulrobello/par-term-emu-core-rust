@@ -1,6 +1,14 @@
-# VT Feature Parity
+# VT Technical Reference
 
-This document provides a comprehensive reference for VT100/VT220/VT320/VT420/VT520 terminal sequence support in par-term-emu-core-rust.
+**Comprehensive technical reference with implementation details, compatibility matrices, and behavior specifications.**
+
+This document provides detailed VT terminal sequence support information including:
+- Implementation details (which Rust modules handle each sequence)
+- Compatibility matrices for VT100/VT220/VT320/VT420/VT520
+- Detailed parameter handling and edge cases
+- Known limitations and testing information
+
+For a quick sequence lookup, see [VT_SEQUENCES.md](VT_SEQUENCES.md).
 
 ## Table of Contents
 
@@ -9,6 +17,7 @@ This document provides a comprehensive reference for VT100/VT220/VT320/VT420/VT5
 - [ESC Sequences](#esc-sequences)
 - [OSC Sequences](#osc-sequences)
 - [DCS Sequences](#dcs-sequences)
+- [APC Sequences](#apc-sequences)
 - [Character Handling](#character-handling)
 - [Compatibility Matrix](#compatibility-matrix)
 - [Known Limitations](#known-limitations)
@@ -27,7 +36,7 @@ par-term-emu-core-rust implements extensive VT terminal compatibility:
 - ✅ **VT420** - Rectangle operations supported
 - ✅ **VT520** - Conformance level control, bell volume control
 - ✅ **xterm** - Modern extensions (256-color, true color, mouse, etc.)
-- ✅ **Modern protocols** - Kitty keyboard, synchronized updates, OSC 133
+- ✅ **Modern protocols** - Kitty keyboard, Kitty graphics, iTerm2 images, synchronized updates, OSC 133
 
 ### Implementation Location
 
@@ -39,14 +48,20 @@ The terminal implementation uses a modular structure:
 - `csi.rs` - CSI sequence handler (`csi_dispatch_impl()`)
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
 - `osc.rs` - OSC sequence handler (`osc_dispatch_impl()`)
-- `dcs.rs` - DCS sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
+- `dcs.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
 
 **Core components:**
-- `src/terminal/mod.rs` - Terminal core and VTE callbacks
+- `src/terminal/mod.rs` - Terminal core, VTE callbacks, APC to DCS conversion
 - `src/terminal/write.rs` - Character writing and text handling
 - `src/grid.rs` - Screen buffer and cell grid
-- `src/sixel.rs` - Sixel graphics parser
 - `src/conformance_level.rs` - VT conformance level management
+
+**Graphics support** (in `src/graphics/`):
+- `mod.rs` - Unified graphics store and protocol-agnostic representation
+- `kitty.rs` - Kitty graphics protocol parser (APC G)
+- `iterm.rs` - iTerm2 inline images parser (OSC 1337)
+- `animation.rs` - Animation frame and state management
+- `src/sixel.rs` - Sixel graphics parser (DCS q)
 
 ---
 
@@ -840,19 +855,69 @@ OSC 133 ; C ST           # Output starts
 OSC 133 ; D ; 0 ST       # Command finished with exit code 0
 ```
 
+### iTerm2 Inline Images (OSC 1337)
+
+`OSC 1337 ; File=name=<base64>;size=<bytes>;inline=1:<base64-data> ST`
+
+**Implementation:**
+- OSC handler in `src/terminal/sequences/osc.rs`
+- iTerm2 parser in `src/graphics/iterm.rs`
+- Graphics store in `src/graphics/mod.rs`
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `name` | No | Filename (base64-encoded) |
+| `size` | No | File size in bytes |
+| `width` | No | Display width (auto, Npx, N%, Ncells) |
+| `height` | No | Display height (auto, Npx, N%, Ncells) |
+| `preserveAspectRatio` | No | 0=stretch, 1=preserve (default=1) |
+| `inline` | Yes | Must be `1` for display |
+
+**Supported Formats:**
+- PNG (detected automatically)
+- JPEG (detected automatically)
+- GIF (static only, first frame)
+- Base64-encoded image data follows colon (`:`)
+
+**Width/Height Specifications:**
+- `auto` - Original dimensions
+- `Npx` - Exact pixels (e.g., `100px`)
+- `N%` - Percentage of terminal width/height (e.g., `50%`)
+- `Ncells` - Terminal cells (e.g., `10cells`)
+
+**Example:**
+```
+OSC 1337 ; File=inline=1:iVBORw0KGgoAAAA... ST
+```
+
+**Features:**
+- Automatic image format detection (PNG, JPEG, GIF)
+- Dimension specification in multiple units
+- Aspect ratio preservation
+- Base64 decoding with padding tolerance
+
+**Security:** Can be blocked via `disable_insecure_sequences`
+
+**Note:** Graphics are converted to RGBA pixel data and stored in the unified `GraphicsStore` alongside Sixel and Kitty graphics.
+
 ---
 
 ## DCS Sequences
 
 DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 
-### Sixel Graphics
+**Implementation:** `src/terminal/sequences/dcs.rs`
+
+### Sixel Graphics (DCS q)
 
 `DCS Pa ; Pb ; Ph q ... ST`
 
 **Implementation:**
 - DCS handlers in `src/terminal/sequences/dcs.rs` (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
 - Sixel parser in `src/sixel.rs`
+- Graphics store in `src/graphics/mod.rs`
 
 **Raster Attributes:**
 - `Pa` - Pixel aspect ratio
@@ -890,6 +955,152 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
   - Python: `Terminal.set_sixel_limits(...)` and `Terminal.set_max_sixel_graphics(...)`
 
 **Security:** Can be blocked via `disable_insecure_sequences`
+
+### Kitty Graphics Protocol (APC G)
+
+`APC G <key>=<value>,<key>=<value>;<base64-data> ST`
+
+**Note:** The terminal converts APC sequences (`ESC _`) to DCS sequences (`ESC P`) internally since VTE ignores APC.
+
+**Implementation:**
+- APC to DCS conversion in `src/terminal/mod.rs`
+- DCS handler in `src/terminal/sequences/dcs.rs` (action 'G')
+- Kitty parser in `src/graphics/kitty.rs`
+- Graphics store in `src/graphics/mod.rs`
+
+#### Actions
+
+| Action | Code | Description |
+|--------|------|-------------|
+| Transmit | `a=t` | Transmit image data (store only, no display) |
+| Transmit and Display | `a=T` | Transmit and display image |
+| Query | `a=q` | Query terminal graphics support |
+| Display | `a=p` | Display previously transmitted image |
+| Delete | `a=d` | Delete images by ID or position |
+| Frame | `a=f` | Add animation frame to image |
+| Animation Control | `a=a` | Control animation playback |
+
+#### Transmission Format
+
+| Format | Code | Description |
+|--------|------|-------------|
+| PNG | `f=100` | PNG image data (default) |
+| RGB/RGBA | `f=24/32` | Raw RGB(A) pixel data |
+| File | `t=f` | Load from file path |
+| Temporary File | `t=t` | Load from temporary file |
+
+#### Parameters
+
+**Image Identification:**
+- `i=<id>` - Image ID for reuse
+- `I=<placement_id>` - Placement ID (unique instance)
+
+**Dimensions:**
+- `s=<width>` - Source width in pixels
+- `v=<height>` - Source height in pixels
+- `c=<cols>` - Display width in terminal cells
+- `r=<rows>` - Display height in terminal cells
+
+**Positioning:**
+- `X=<offset>` - Left edge offset in pixels
+- `Y=<offset>` - Top edge offset in pixels
+- `P=<parent_id>` - Parent image ID for relative positioning
+- `Q=<parent_placement>` - Parent placement ID for relative positioning
+
+**Animation:**
+- `z=<index>` - Frame index (0-based)
+- `g=<gap>` - Gap in milliseconds before next frame
+- `s=<composition>` - Composition mode (0=alpha blend, 1=overwrite)
+
+**Chunking:**
+- `m=1` - More chunks follow
+- `m=0` - Last chunk (default)
+
+**Other:**
+- `U=1` - Virtual placement (Unicode placeholder mode)
+- `o=z` - Compression (z=zlib)
+
+#### Features
+
+**Image Reuse:**
+- Images transmitted with `a=t` are stored by ID
+- Subsequent placements use `a=p,i=<id>` to reuse pixel data
+- Reduces memory usage for multiple instances
+- Managed by `GraphicsStore` with Arc-based pixel sharing
+
+**Animation Support:**
+- Multi-frame animations via `a=f` action
+- Frame timing control with `g=<ms>` parameter
+- Composition modes: alpha blend (0) or overwrite (1)
+- Animation state stored in `GraphicsStore`
+- Playback controlled via `a=a` action
+
+**Unicode Placeholders:**
+- Virtual placements (`U=1`) create template images stored but not displayed
+- Terminal automatically inserts U+10EEEE placeholder characters into grid
+- Metadata encoded in cell colors:
+  - Foreground RGB: image_id (lower 24 bits)
+  - Underline RGB: placement_id
+  - Diacritics: row/column position (0-63 each)
+- Enables inline image display in text flow
+- Frontend looks up virtual placement using encoded IDs
+- See `src/graphics/placeholder.rs` for encoding details
+
+**Chunked Transmission:**
+- Large images split across multiple sequences
+- `m=1` indicates more chunks follow
+- Final chunk uses `m=0` (default)
+
+**Query Response:**
+```
+APC G i=<id>;OK ST
+```
+
+**Resource Limits:**
+- Maximum image dimensions enforced by `GraphicsLimits`
+- Graphics count limited to prevent memory exhaustion
+- Oldest graphics dropped when limit reached
+- See `GraphicsLimits` in `src/graphics/mod.rs`
+
+**Implementation Details:**
+- RGBA pixel data stored with Arc for sharing
+- Position tracked as (col, row) in terminal
+- Scroll adjustments automatically applied
+- Graphics scrolled off-screen moved to scrollback
+- Dropped count tracked for debugging
+
+---
+
+## APC Sequences
+
+APC (Application Program Command) sequences follow: `ESC _ ... ESC \`
+
+**Implementation Note:** The VTE parser library ignores APC sequences, so the terminal converts them to DCS sequences internally before parsing. This conversion happens in `src/terminal/mod.rs`.
+
+### Kitty Graphics Protocol
+
+See [Kitty Graphics Protocol](#kitty-graphics-protocol-apc-g) in the DCS Sequences section above.
+
+**Sequence Format:**
+```
+APC G <key>=<value>,<key>=<value>;<base64-data> ST
+```
+
+**Internal Conversion:**
+- `ESC _` → `ESC P` (APC start to DCS start)
+- Payload remains unchanged
+- `ST` terminator handled by VTE
+
+**Why This Conversion?**
+- VTE parser library only processes DCS sequences
+- APC sequences are ignored by default
+- Kitty graphics protocol specifies APC format
+- Conversion enables Kitty compatibility without modifying VTE
+
+**Affected Commands:**
+- All Kitty graphics commands (`APC G ...`)
+
+**Implementation:** `src/terminal/mod.rs` (process method, APC to DCS conversion)
 
 ---
 
@@ -1019,12 +1230,29 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 | Protocol | Support | Implementation | Notes |
 |----------|---------|----------------|-------|
 | Kitty Keyboard | ✅ Full | `src/terminal/sequences/csi.rs` | Flags, push/pop, query |
+| Kitty Graphics | ✅ Full | `src/graphics/kitty.rs` | APC G protocol, animations, image reuse |
+| iTerm2 Inline Images | ✅ Full | `src/graphics/iterm.rs` | OSC 1337 File protocol |
 | Synchronized Updates | ✅ Full | Mode 2026 | Flicker-free rendering |
 | OSC 8 Hyperlinks | ✅ Full | `src/terminal/sequences/osc.rs` | With deduplication |
 | OSC 52 Clipboard | ✅ Full | `src/terminal/sequences/osc.rs` | Read/write with security controls |
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
 | OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | URL-encoded paths |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
+
+### Graphics Protocol Support
+
+| Protocol | Format | Implementation | Features |
+|----------|--------|----------------|----------|
+| Sixel | DCS q | `src/sixel.rs`, `src/graphics/mod.rs` | Palette, repeat, raster attributes |
+| Kitty Graphics | APC G | `src/graphics/kitty.rs` | Animations, image reuse, Unicode placeholders |
+| iTerm2 Inline | OSC 1337 | `src/graphics/iterm.rs` | PNG, JPEG, GIF, dimension control |
+
+**Unified Architecture:**
+- All protocols normalized to RGBA pixel data
+- Stored in `GraphicsStore` with position tracking
+- Automatic scroll adjustment and scrollback support
+- Resource limits prevent memory exhaustion
+- Arc-based pixel sharing for Kitty image reuse
 
 ---
 
@@ -1142,20 +1370,29 @@ To validate VT compatibility, test with:
 ### Modern Extensions
 
 - [Kitty Keyboard Protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) - Enhanced keyboard event reporting
+- [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) - APC-based graphics with animations and image reuse
+- [iTerm2 Inline Images](https://iterm2.com/documentation-images.html) - OSC 1337 inline image protocol
 - [Synchronized Updates](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036) - DEC mode 2026
 - [OSC 8 Hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) - Terminal hyperlink standard
 - [Sixel Graphics](https://vt100.net/docs/vt3xx-gp/chapter14.html) - DEC Sixel specification
+- [OSC 52 Clipboard](https://chromium.googlesource.com/apps/libapps/+/HEAD/nassh/doc/FAQ.md#Is-OSC-52-aka-clipboard-operations_supported) - Clipboard manipulation protocol
 
 ### Implementation References
 
 - [VTE Crate](https://docs.rs/vte/) - ANSI/VT parser library
 - [PyO3](https://pyo3.rs/) - Rust-Python bindings
+- [image crate](https://docs.rs/image/) - Image decoding (PNG, JPEG, GIF)
 - par-term-emu-core-rust source:
   - Terminal core: `src/terminal/mod.rs`
   - Sequence handlers: `src/terminal/sequences/` (csi.rs, esc.rs, osc.rs, dcs.rs)
   - Character writing: `src/terminal/write.rs`
   - Screen buffer: `src/grid.rs`
-  - Sixel graphics: `src/sixel.rs`
+  - Graphics:
+    - Unified store: `src/graphics/mod.rs`
+    - Sixel parser: `src/sixel.rs`
+    - Kitty protocol: `src/graphics/kitty.rs`
+    - iTerm2 protocol: `src/graphics/iterm.rs`
+    - Animation support: `src/graphics/animation.rs`
   - Conformance levels: `src/conformance_level.rs`
   - Python bindings: `src/python_bindings/`
 

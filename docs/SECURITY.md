@@ -233,7 +233,8 @@ safe_overrides = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",  # Controlled PATH
     "HOME": "/home/user",
     "USER": "safeuser",
-    # Note: TERM and COLORTERM are set automatically to xterm-256color/truecolor
+    # Note: TERM and COLORTERM are set automatically to xterm-kitty/truecolor
+    # (plus TERM_PROGRAM, KITTY_WINDOW_ID, KITTY_PID for Kitty protocol detection)
     # but can be overridden here if needed
     # Clear sensitive variables by setting to empty string
     "AWS_SECRET_KEY": "",
@@ -246,7 +247,8 @@ term.spawn("/bin/sh", env=safe_overrides)
 
 # Environment merge order:
 # 1. Inherit all parent env vars (except COLUMNS/LINES - automatically filtered)
-# 2. Set TERM=xterm-256color and COLORTERM=truecolor
+# 2. Set TERM=xterm-kitty, COLORTERM=truecolor, TERM_PROGRAM=kitty,
+#    KITTY_WINDOW_ID, and KITTY_PID
 # 3. Override with keys from env parameter
 # To completely isolate the environment, you must override ALL inherited vars
 ```
@@ -299,8 +301,8 @@ term.spawn(
 
 **Important**: The `env` parameter in `spawn()` **merges with and overrides specific keys** in the inherited environment. The process is:
 1. All parent environment variables are inherited (except `COLUMNS` and `LINES` which are automatically filtered out)
-2. `TERM=xterm-256color` and `COLORTERM=truecolor` are set automatically
-3. Variables specified in `env` override all previous values (including TERM/COLORTERM if specified)
+2. `TERM=xterm-kitty`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1`, and `KITTY_PID=<process_id>` are set automatically for Kitty graphics protocol support
+3. Variables specified in `env` override all previous values (including TERM/COLORTERM/TERM_PROGRAM if specified)
 4. The merged environment is passed to the spawned process
 
 The `env` parameter does NOT replace the entire environment. To create a completely isolated environment, you must explicitly override ALL inherited variables with safe values, or clean the parent's `os.environ` first.
@@ -550,34 +552,46 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 ### File Loading Implementation
 
-```rust
-// Location: src/graphics/kitty.rs:load_file_data()
+The file loading security implementation is located in `src/graphics/kitty.rs` in the `load_file_data()` method.
 
-// Security validations applied:
-// 1. Directory traversal check
-if path_str.contains("..") {
-    return Err("Directory traversal not allowed");
-}
+**Security validations applied:**
 
-// 2. File existence and type validation
-if !path.exists() || !path.is_file() {
-    return Err("File not found or not a regular file");
-}
+1. **Directory traversal check**
+   ```rust
+   if path_str.contains("..") {
+       return Err("Directory traversal not allowed");
+   }
+   ```
 
-// 3. File size limits
-const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
-if metadata.len() > MAX_FILE_SIZE {
-    return Err("File too large");
-}
+2. **File existence and type validation**
+   ```rust
+   if !path.exists() {
+       return Err("File not found");
+   }
+   if !path.is_file() {
+       return Err("Path is not a file");
+   }
+   ```
 
-// 4. Read and validate file
-let file_data = fs::read(path)?;
+3. **File size limits**
+   ```rust
+   const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+   if metadata.len() > MAX_FILE_SIZE {
+       return Err("File too large");
+   }
+   ```
 
-// 5. Delete temp file if t=t
-if medium == TempFile {
-    let _ = fs::remove_file(path);
-}
-```
+4. **Read and validate file**
+   ```rust
+   let file_data = fs::read(path)?;
+   ```
+
+5. **Delete temp file if t=t**
+   ```rust
+   if self.medium == KittyMedium::TempFile {
+       let _ = fs::remove_file(path);
+   }
+   ```
 
 ### Security Considerations
 

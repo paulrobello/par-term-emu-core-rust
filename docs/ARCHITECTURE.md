@@ -34,6 +34,11 @@ This document describes the internal architecture of par-term-emu-core-rust.
 
 par-term-emu-core-rust is a terminal emulator library written in Rust with Python bindings. It uses the VTE (Virtual Terminal Emulator) crate for ANSI sequence parsing and PyO3 for Python interoperability.
 
+**Library Artifacts:**
+- **Python Extension**: Built with Maturin, provides `par_term_emu_core_rust._native` module
+- **Rust Library**: Can be used as a `cdylib` or `rlib` for other Rust projects
+- **Streaming Server Binary**: `par-term-streamer` - WebSocket-based terminal streaming server (optional, requires `streaming` feature)
+
 ## Core Components
 
 ### 1. Color
@@ -147,6 +152,17 @@ Features:
 
 ### 6. Supporting Modules
 
+**Graphics Module** (`src/graphics/`)
+- **Multi-protocol support**: Sixel, iTerm2 inline images (OSC 1337), Kitty graphics protocol
+- **Unified architecture**: All protocols normalized to `TerminalGraphic` with RGBA pixel data
+- **Submodules**:
+  - `mod.rs` - Core graphics types and `GraphicsStore`
+  - `animation.rs` - Animation control and frame management
+  - `kitty.rs` - Kitty graphics protocol implementation
+  - `iterm.rs` - iTerm2 inline images implementation
+  - `placeholder.rs` - Placeholder character management
+- **Features**: Image reuse, scrolling, animation, composition modes
+
 **Mouse Handling** (`src/mouse.rs`)
 - Mouse event types and button tracking
 - Mouse mode management (Normal, Button, Any)
@@ -159,15 +175,31 @@ Features:
 
 **Sixel Graphics** (`src/sixel.rs`)
 - Sixel image parser and decoder
-- Graphics storage and positioning
-- Half-block and pixel rendering modes
+- DEC VT340 compatible bitmap graphics
+- Integrated with unified graphics system
+
+**Macros Module** (`src/macros.rs`)
+- Macro recording and playback
+- Screenshot triggers
+- Event tracking
+
+**Streaming Module** (`src/streaming/`)
+- **WebSocket-based terminal streaming**
+- **Submodules**:
+  - `mod.rs` - Core streaming types
+  - `server.rs` - Axum-based WebSocket server
+  - `client.rs` - Client connection management
+  - `protocol.rs` - Streaming protocol definitions
+  - `broadcaster.rs` - Multi-client broadcast support
+  - `error.rs` - Streaming-specific errors
+- **Features**: Real-time terminal sharing, multiplexing
 
 **Utility Modules**
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
 - `color_utils.rs` - Advanced color manipulation and conversion utilities
   - Minimum contrast adjustment (iTerm2-compatible)
   - Perceived brightness calculation (NTSC formula)
-  - Color space conversions (RGB, HSL)
+  - Color space conversions (RGB, HSL, HSV)
   - WCAG contrast ratio calculations
   - Bold brightening support for enhanced readability
   - Parametric interpolation for brightness adjustment
@@ -183,7 +215,7 @@ Features:
   - Inline CSS for terminal styling
   - Color preservation (foreground, background, attributes)
   - Monospace font stack: Monaco, Menlo, Ubuntu Mono, Consolas, monospace
-- `debug.rs` - Debug utilities and logging helpers
+- `debug.rs` - Debug utilities and logging helpers with formatted output macros
 - `conformance_level.rs` - VT terminal conformance level support
   - VT100/VT220/VT320/VT420/VT520 level definitions
   - Feature compatibility management
@@ -269,14 +301,16 @@ pub struct Terminal {
     hyperlinks: HashMap<u32, String>,
     current_hyperlink_id: Option<u32>,
     next_hyperlink_id: u32,
-    graphics: Vec<SixelGraphic>,
-    max_sixel_graphics: usize,
-    dropped_sixel_graphics: usize,
+
+    // Unified graphics system
+    graphics_store: GraphicsStore,
     sixel_limits: sixel::SixelLimits,
+    cell_dimensions: (u32, u32),
     sixel_parser: Option<sixel::SixelParser>,
     dcs_buffer: Vec<u8>,
     dcs_active: bool,
     dcs_action: Option<char>,
+    iterm_multipart_buffer: Option<ITermMultipartState>,
 
     // Kitty keyboard protocol
     keyboard_flags: u16,
@@ -291,6 +325,12 @@ pub struct Terminal {
     allow_clipboard_read: bool,
     clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     max_clipboard_history: usize,
+    clipboard_sync_events: Vec<ClipboardSyncEvent>,
+    clipboard_sync_history: HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
+    max_clipboard_sync_history: usize,
+    max_clipboard_sync_events: usize,
+    max_clipboard_event_bytes: usize,
+    remote_session_id: Option<String>,
 
     // Color management
     default_fg: Color,
@@ -318,6 +358,12 @@ pub struct Terminal {
     bell_events: Vec<BellEvent>,
     terminal_events: Vec<TerminalEvent>,
     dirty_rows: HashSet<usize>,
+    max_notifications: usize,
+    notification_config: NotificationConfig,
+    notification_events: Vec<NotificationEvent>,
+    last_activity_time: u64,
+    last_silence_check: u64,
+    custom_triggers: HashMap<u32, String>,
 
     // VTE parser and state
     parser: vte::Parser,
@@ -359,14 +405,37 @@ pub struct Terminal {
     mouse_positions: Vec<MousePosition>,
     max_mouse_history: usize,
 
-    // Rendering hints
+    // Rendering hints and damage tracking
     rendering_hints: Vec<RenderingHint>,
-
-    // Damage regions
     damage_regions: Vec<DamageRegion>,
 
     // Profiling data
-    profiling: Option<ProfilingData>,
+    profiling_data: Option<ProfilingData>,
+    profiling_enabled: bool,
+
+    // Search and regex
+    regex_matches: Vec<RegexMatch>,
+    current_regex_pattern: Option<String>,
+
+    // Multiplexing and images
+    pane_state: Option<PaneState>,
+    inline_images: Vec<InlineImage>,
+    max_inline_images: usize,
+
+    // Shell integration extended features
+    command_history: Vec<CommandExecution>,
+    current_command: Option<CommandExecution>,
+    cwd_changes: Vec<CwdChange>,
+    max_command_history: usize,
+    max_cwd_history: usize,
+
+    // Recording and macros
+    recording_session: Option<RecordingSession>,
+    is_recording: bool,
+    recording_start_time: u64,
+    macro_library: HashMap<String, Macro>,
+    macro_playback: Option<MacroPlayback>,
+    macro_screenshot_triggers: Vec<String>,
 }
 ```
 
@@ -449,7 +518,7 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
   - Hex color conversion
   - ANSI 256-color conversion
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 50 classes and 18 color utility functions.
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 54 classes and 18 color utility functions.
 
 ```rust
 #[pyclass(name = "Terminal")]
@@ -519,8 +588,8 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 811 unit and integration tests
-- **Python tests:** 168 test functions across 7 test modules (PTY tests excluded in CI)
+- **Rust tests:** 842 unit and integration tests
+- **Python tests:** 237 test functions across 13 test modules (PTY tests excluded in CI)
 - **Total:** Comprehensive coverage ensuring reliability
 
 ### Rust Tests
@@ -787,21 +856,34 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3` (0.27.1) - Python bindings
+- `pyo3` (0.27.1) - Python bindings (optional, feature-gated)
 - `vte` (0.15.0) - ANSI parser
 - `unicode-width` (0.2.2) - Character width calculation
 - `portable-pty` (0.9.0) - PTY support
 - `base64` (0.22.1) - Base64 encoding/decoding
 - `bitflags` (2.10.0) - Bit flag management
 - `regex` (1.11.1) - Regular expression support
-- `serde` (1.0) + `serde_json` (1.0) - Serialization support
+- `serde` (1.0) + `serde_json` (1.0) + `serde_yaml` (0.9) - Serialization support
 
 **Screenshot/rendering support:**
 - `image` (0.25.9) - Image encoding/decoding (PNG, JPEG, BMP)
 - `swash` (0.2.6) - Pure Rust font rendering and text shaping with color emoji support
 
+**Streaming server dependencies (optional, feature-gated):**
+- `tokio` (1.35) - Async runtime
+- `tokio-tungstenite` (0.28) - WebSocket support
+- `axum` (0.8) - Web framework
+- `tower-http` (0.6) - HTTP middleware
+- `futures-util` (0.3) - Future utilities
+- `uuid` (1.6) - UUID generation
+- `clap` (4.5) - CLI parsing
+- `anyhow` (1.0) - Error handling
+- `tracing` (0.1) + `tracing-subscriber` (0.3) - Logging
+
 **Development dependencies:**
+- `pyo3` (0.27.1, features: auto-initialize) - Python test support
 - `proptest` (1.9.0) - Property-based testing framework
+- `tempfile` (3.13) - Temporary file management for tests
 
 **Platform-specific:**
 - `libc` (0.2.177) - Unix system calls (Unix only)
@@ -841,19 +923,25 @@ The project uses conditional PyO3 feature compilation to support both production
 **Cargo.toml features:**
 ```toml
 [dependencies]
-pyo3 = "0.27.1"
+pyo3 = { version = "0.27.1", optional = true }
 
 [dev-dependencies]
 pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
 
 [features]
-default = ["pyo3/extension-module"]
+default = ["python"]
+python = ["pyo3", "pyo3/extension-module"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
+             "uuid", "clap", "anyhow", "tracing", "tracing-subscriber"]
+rust-only = []
+full = ["python", "streaming"]
 ```
 
 **Build commands:**
 - **Development build:** `maturin develop --release` (uses `extension-module` feature)
 - **Running Rust tests:** `cargo test --lib --no-default-features --features pyo3/auto-initialize`
 - **Production wheels:** `maturin build --release` (uses default features with `extension-module`)
+- **Streaming server binary:** `cargo build --release --bin par-term-streamer --features streaming`
 
 > **⚠️ Important:** Never run `cargo build` directly for PyO3 modules. Always use `maturin develop` or the `make dev` target to ensure proper Python integration.
 
@@ -1009,7 +1097,7 @@ When contributing, please:
 
 ## See Also
 
-- [VT_FEATURE_PARITY.md](VT_FEATURE_PARITY.md) - Complete VT feature support matrix
+- [VT_TECHNICAL_REFERENCE.md](VT_TECHNICAL_REFERENCE.md) - Complete VT feature support matrix and implementation details
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features guide
 - [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Terminal configuration reference
 - [BUILDING.md](BUILDING.md) - Build and installation instructions

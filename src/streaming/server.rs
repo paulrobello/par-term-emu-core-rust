@@ -3,7 +3,7 @@
 use crate::streaming::broadcaster::Broadcaster;
 use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
-use crate::streaming::protocol::ServerMessage;
+use crate::streaming::protocol::{ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -23,6 +23,10 @@ pub struct StreamingConfig {
     pub keepalive_interval: u64,
     /// Default mode for new clients (true = read-only, false = read-write)
     pub default_read_only: bool,
+    /// Enable HTTP static file serving
+    pub enable_http: bool,
+    /// Web root directory for static files (default: "./web_term")
+    pub web_root: String,
 }
 
 impl Default for StreamingConfig {
@@ -32,6 +36,8 @@ impl Default for StreamingConfig {
             send_initial_screen: true,
             keepalive_interval: 30,
             default_read_only: false,
+            enable_http: false,
+            web_root: "./web_term".to_string(),
         }
     }
 }
@@ -58,6 +64,8 @@ pub struct StreamingServer {
     resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Shared receiver for resize requests (wrapped for thread-safe access from Python)
     resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
+    /// Optional theme information to send to clients
+    theme: Option<ThemeInfo>,
 }
 
 impl StreamingServer {
@@ -90,7 +98,13 @@ impl StreamingServer {
             pty_writer: None,
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
+            theme: None,
         }
+    }
+
+    /// Set the theme to be sent to clients on connection
+    pub fn set_theme(&mut self, theme: ThemeInfo) {
+        self.theme = Some(theme);
     }
 
     /// Set the PTY writer for handling client input
@@ -130,8 +144,62 @@ impl StreamingServer {
     ///
     /// This method will block until the server is stopped
     pub async fn start(self: Arc<Self>) -> Result<()> {
+        // Choose implementation based on config
+        if self.config.enable_http {
+            self.start_with_http().await
+        } else {
+            self.start_websocket_only().await
+        }
+    }
+
+    /// Start server with HTTP static file serving using Axum
+    #[cfg(feature = "streaming")]
+    async fn start_with_http(self: Arc<Self>) -> Result<()> {
+        use axum::{routing::get, Router};
+        use tower_http::services::ServeDir;
+
+        crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
+
+        // Spawn output broadcaster task
+        let server_clone = self.clone();
+        tokio::spawn(async move {
+            server_clone.output_broadcaster_loop().await;
+        });
+
+        // Spawn keepalive task if enabled
+        if self.config.keepalive_interval > 0 {
+            let server_clone = self.clone();
+            tokio::spawn(async move {
+                server_clone.keepalive_loop().await;
+            });
+        }
+
+        // Build router
+        let app = Router::new()
+            .route("/ws", get(ws_handler))
+            .fallback_service(ServeDir::new(&self.config.web_root))
+            .with_state(self.clone());
+
+        // Start server
+        let listener = tokio::net::TcpListener::bind(&self.addr)
+            .await
+            .map_err(|e| StreamingError::ServerError(format!("Failed to bind: {}", e)))?;
+
+        axum::serve(listener, app)
+            .await
+            .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Start WebSocket-only server (original implementation)
+    async fn start_websocket_only(self: Arc<Self>) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
-        crate::debug_info!("STREAMING", "Server listening on {}", self.addr);
+        crate::debug_info!(
+            "STREAMING",
+            "WebSocket-only server listening on {}",
+            self.addr
+        );
 
         // Spawn output broadcaster task
         let server_clone = self.clone();
@@ -196,10 +264,21 @@ impl StreamingServer {
             (cols as u16, rows as u16, initial_screen)
         };
 
-        let connect_msg = if let Some(screen) = initial_screen {
-            ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
-        } else {
-            ServerMessage::connected(cols, rows, client_id.to_string())
+        let connect_msg = match (initial_screen, self.theme.clone()) {
+            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
+                cols,
+                rows,
+                screen,
+                client_id.to_string(),
+                theme,
+            ),
+            (Some(screen), None) => {
+                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
+            }
+            (None, Some(theme)) => {
+                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
+            }
+            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
         };
 
         client.send(connect_msg).await?;
@@ -362,6 +441,175 @@ impl StreamingServer {
         self.broadcaster.broadcast(msg).await;
         self.broadcaster.disconnect_all().await;
     }
+
+    /// Handle Axum WebSocket connection
+    #[cfg(feature = "streaming")]
+    async fn handle_axum_websocket(&self, socket: axum::extract::ws::WebSocket) -> Result<()> {
+        use axum::extract::ws::Message as AxumMessage;
+        use futures_util::{SinkExt, StreamExt};
+
+        let client_id = uuid::Uuid::new_v4();
+        crate::debug_info!("STREAMING", "Axum WebSocket client {} connected", client_id);
+
+        // Split the WebSocket into sender and receiver
+        let (mut ws_tx, mut ws_rx) = socket.split();
+
+        // Send initial connection message with visible screen snapshot
+        let (cols, rows, initial_screen) = {
+            let terminal = self.terminal.lock().unwrap();
+            let (cols, rows) = terminal.size();
+
+            let initial_screen = if self.config.send_initial_screen {
+                Some(terminal.export_visible_screen_styled())
+            } else {
+                None
+            };
+
+            (cols as u16, rows as u16, initial_screen)
+        };
+
+        let connect_msg = match (initial_screen, self.theme.clone()) {
+            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
+                cols,
+                rows,
+                screen,
+                client_id.to_string(),
+                theme,
+            ),
+            (Some(screen), None) => {
+                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
+            }
+            (None, Some(theme)) => {
+                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
+            }
+            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
+        };
+
+        // Send connection message
+        let msg_json =
+            serde_json::to_string(&connect_msg).map_err(StreamingError::SerializationError)?;
+        ws_tx
+            .send(AxumMessage::Text(msg_json.into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+
+        // Get PTY writer if available
+        let pty_writer = self.pty_writer.clone();
+        let read_only = self.config.default_read_only;
+
+        // Subscribe to output broadcasts
+        let mut output_rx = self.broadcast_tx.subscribe();
+
+        // Clone terminal for screen refresh
+        let terminal_for_refresh = Arc::clone(&self.terminal);
+        let resize_tx = self.resize_tx.clone();
+
+        // Handle client input and output
+        loop {
+            tokio::select! {
+                // Receive message from client
+                msg = ws_rx.next() => {
+                    match msg {
+                        Some(Ok(AxumMessage::Text(text))) => {
+                            // Parse client message
+                            match serde_json::from_str::<crate::streaming::protocol::ClientMessage>(&text) {
+                                Ok(client_msg) => {
+                                    match client_msg {
+                                        crate::streaming::protocol::ClientMessage::Input { data } => {
+                                            if read_only {
+                                                continue;
+                                            }
+
+                                            if let Some(ref writer) = pty_writer {
+                                                if let Ok(mut w) = writer.lock() {
+                                                    use std::io::Write;
+                                                    let _ = w.write_all(data.as_bytes());
+                                                    let _ = w.flush();
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                            let _ = resize_tx.send((cols, rows));
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Ping => {
+                                            // Respond with pong
+                                            let _ = ws_tx.send(AxumMessage::Pong(vec![].into())).await;
+                                        }
+                                        crate::streaming::protocol::ClientMessage::RequestRefresh => {
+                                            let refresh_msg = {
+                                                if let Ok(terminal) = terminal_for_refresh.lock() {
+                                                    let content = terminal.export_visible_screen_styled();
+                                                    let (cols, rows) = terminal.size();
+                                                    Some(ServerMessage::refresh(cols as u16, rows as u16, content))
+                                                } else {
+                                                    None
+                                                }
+                                            };
+
+                                            if let Some(msg) = refresh_msg {
+                                                if let Ok(json) = serde_json::to_string(&msg) {
+                                                    let _ = ws_tx.send(AxumMessage::Text(json.into())).await;
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
+                                            // TODO: Implement subscription handling
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::debug_error!("STREAMING", "Failed to parse client message: {}", e);
+                                }
+                            }
+                        }
+                        Some(Ok(AxumMessage::Binary(_))) => {
+                            // Ignore binary messages
+                        }
+                        Some(Ok(AxumMessage::Ping(_))) => {
+                            // Axum handles pings automatically
+                        }
+                        Some(Ok(AxumMessage::Pong(_))) => {
+                            // Pong received
+                        }
+                        Some(Ok(AxumMessage::Close(_))) | None => {
+                            crate::debug_info!("STREAMING", "Client {} disconnected", client_id);
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            crate::debug_error!("STREAMING", "WebSocket error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Receive output to broadcast to client
+                output_msg = output_rx.recv() => {
+                    if let Ok(msg) = output_msg {
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if ws_tx.send(AxumMessage::Text(json.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+/// Axum WebSocket handler
+#[cfg(feature = "streaming")]
+async fn ws_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
+) -> impl axum::response::IntoResponse {
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = server.handle_axum_websocket(socket).await {
+            crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
+        }
+    })
 }
 
 impl std::fmt::Debug for StreamingServer {

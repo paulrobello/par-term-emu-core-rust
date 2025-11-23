@@ -54,6 +54,119 @@ impl Terminal {
         &mut self.graphics_store
     }
 
+    /// Insert Unicode placeholder characters for a virtual placement
+    ///
+    /// This inserts U+10EEEE placeholder characters into the terminal grid
+    /// with appropriate foreground/underline colors and diacritics to mark
+    /// where a Kitty virtual placement should be rendered.
+    ///
+    /// # Arguments
+    /// * `image_id` - Kitty image ID
+    /// * `placement_id` - Kitty placement ID (0 if not specified)
+    /// * `position` - (col, row) position of the top-left corner
+    /// * `cols` - Width in terminal columns
+    /// * `rows` - Height in terminal rows
+    pub(crate) fn insert_placeholder_chars(
+        &mut self,
+        image_id: u32,
+        placement_id: u32,
+        position: (usize, usize),
+        cols: usize,
+        rows: usize,
+    ) {
+        use crate::cell::Cell;
+        use crate::color::Color;
+        use crate::graphics::{create_placeholder_with_diacritics, PLACEHOLDER_CHAR};
+
+        let (start_col, start_row) = position;
+        let (grid_cols, grid_rows) = self.size();
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "KITTY_PLACEHOLDER",
+            &format!(
+                "Inserting placeholders: image_id={}, placement_id={}, pos=({},{}), size={}x{}",
+                image_id, placement_id, start_col, start_row, cols, rows
+            ),
+        );
+
+        // Extract MSB from image_id if > 24 bits
+        let msb = if image_id > 0x00FFFFFF {
+            Some(((image_id >> 24) & 0xFF) as u8)
+        } else {
+            None
+        };
+
+        // Encode image_id in foreground color (lower 24 bits)
+        let image_id_color = Color::Rgb(
+            ((image_id >> 16) & 0xFF) as u8,
+            ((image_id >> 8) & 0xFF) as u8,
+            (image_id & 0xFF) as u8,
+        );
+
+        // Encode placement_id in underline color
+        let placement_id_color = Color::Rgb(
+            ((placement_id >> 16) & 0xFF) as u8,
+            ((placement_id >> 8) & 0xFF) as u8,
+            (placement_id & 0xFF) as u8,
+        );
+
+        // Insert placeholders for each cell in the virtual placement area
+        for row_offset in 0..rows {
+            let row = start_row + row_offset;
+            if row >= grid_rows {
+                break; // Don't write past grid bounds
+            }
+
+            for col_offset in 0..cols {
+                let col = start_col + col_offset;
+                if col >= grid_cols {
+                    break; // Don't write past grid bounds
+                }
+
+                // Create placeholder character with diacritics for position
+                let placeholder_str = create_placeholder_with_diacritics(
+                    row_offset.min(63) as u8,
+                    col_offset.min(63) as u8,
+                    msb,
+                );
+
+                // For now, just insert the base placeholder character
+                // TODO: Handle diacritics properly in Cell structure
+                let cell = Cell {
+                    c: PLACEHOLDER_CHAR,
+                    fg: image_id_color,
+                    bg: self.bg, // Use current background
+                    underline_color: Some(placement_id_color),
+                    flags: self.flags,
+                    width: 1, // Placeholders are narrow
+                };
+
+                self.active_grid_mut().set(col, row, cell);
+
+                debug::log(
+                    debug::DebugLevel::Trace,
+                    "KITTY_PLACEHOLDER",
+                    &format!(
+                        "Inserted placeholder at ({},{}) with placeholder_str.len()={}",
+                        col,
+                        row,
+                        placeholder_str.len()
+                    ),
+                );
+            }
+        }
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "KITTY_PLACEHOLDER",
+            &format!(
+                "Inserted {} placeholder cells",
+                rows.min(grid_rows - start_row) * cols.min(grid_cols - start_col)
+            ),
+        );
+    }
+
     /// Adjust graphics positions when scrolling up within a region
     ///
     /// When text scrolls up, graphics should scroll up with it.

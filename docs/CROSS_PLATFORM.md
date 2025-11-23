@@ -1,196 +1,429 @@
 # Cross-Platform Compatibility Guide
 
-This document details the cross-platform compatibility status of par-term-emu and provides guidance for maintaining platform compatibility.
+This document details the cross-platform compatibility status of par-term-emu-core-rust and provides guidance for maintaining platform compatibility.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Supported Platforms](#supported-platforms)
+- [Platform Compatibility Status](#platform-compatibility-status)
+  - [Terminal Emulation Core](#terminal-emulation-core)
+  - [PTY Support](#pty-support)
+  - [Screenshot Module](#screenshot-module)
+  - [Debug Infrastructure](#debug-infrastructure)
+- [Platform-Specific Considerations](#platform-specific-considerations)
+  - [Windows](#windows)
+  - [macOS](#macos)
+  - [Linux](#linux)
+- [Build Dependencies](#build-dependencies)
+- [Emoji Font Support](#emoji-font-support)
+- [Testing on Multiple Platforms](#testing-on-multiple-platforms)
+- [Best Practices for Contributors](#best-practices-for-contributors)
+- [CI/CD Configuration](#cicd-configuration)
+- [Known Limitations](#known-limitations)
+- [Potential Enhancements](#potential-enhancements)
+- [Related Documentation](#related-documentation)
+
+## Overview
+
+par-term-emu-core-rust is designed for maximum cross-platform compatibility, using pure Rust implementations wherever possible to minimize platform-specific dependencies. The library leverages well-tested cross-platform crates like `portable-pty` for PTY operations and `swash` for font rendering.
 
 ## Supported Platforms
 
-par-term-emu officially supports:
+par-term-emu-core-rust officially supports:
 - **Linux** (x86_64, aarch64)
 - **macOS** (x86_64, Apple Silicon)
 - **Windows** (x86_64)
 
 ## Platform Compatibility Status
 
-### ✅ Excellent Cross-Platform Support
+### Terminal Emulation Core
 
-#### Terminal Emulation Core
-- **VT Sequence Parsing**: Platform-agnostic (uses `vte` crate)
-- **Grid Management**: Pure Rust, no platform dependencies
-- **Color Handling**: Consistent across all platforms
-- **Unicode Support**: Full Unicode including emoji on all platforms
+**Platform Independence: Excellent**
 
-#### PTY Support (`src/pty_session.rs`)
-- **Shell Detection**: Platform-specific handling ✅
-  - **Windows**: Uses `%COMSPEC%` environment variable (typically `cmd.exe`), fallback to `cmd.exe`
-  - **Unix**: Uses `$SHELL` environment variable, fallback to `/bin/bash`
-- **Process Spawning**: Uses `portable-pty` crate for cross-platform PTY
-- **Environment Variables**: Properly inherits and sets platform-appropriate variables
-  - Automatically drops `COLUMNS` and `LINES` env vars to prevent resize issues
-  - Sets `TERM=xterm-256color` and `COLORTERM=truecolor` for all platforms
+The core terminal emulation is completely platform-agnostic:
 
-#### Screenshot Module (`src/screenshot/`)
-- **Font Rendering**: Swash (pure Rust) - no C dependencies, works on all platforms
-- **Image Encoding**: `image` crate supports all platforms
-- **Font Paths**: Comprehensive coverage with system font paths:
-  - **macOS**: Apple Color Emoji, Arial Unicode, system fonts
-  - **Linux**: NotoColorEmoji, Noto, DejaVu, Liberation
-  - **Windows**: Segoe UI Emoji, Symbol, CJK fonts
-- **Embedded Fonts**: JetBrains Mono and Noto Emoji as fallbacks
-- **Path Handling**: Uses `std::path::Path` (cross-platform abstraction)
-- **Pure Rust**: No platform-specific build dependencies required
+- **VT Sequence Parsing**: Uses the `vte` crate (pure Rust, no platform dependencies)
+- **Grid Management**: Pure Rust implementation with no platform-specific code
+- **Color Handling**: Consistent RGB color model across all platforms
+- **Unicode Support**: Full Unicode support including wide characters, combining marks, and emoji
 
-#### Debugging (`src/debug.rs`)
-- **Log File Location**: Cross-platform ✅
-  - **Unix/macOS**: `/tmp/par_term_emu_core_rust_debug_rust.log`
-  - **Windows**: `%TEMP%\par_term_emu_core_rust_debug_rust.log`
-- **Implementation**: Uses `/tmp` on Unix/macOS, `std::env::temp_dir()` on Windows
-- **Python**: Also uses `tempfile.gettempdir()` for cross-platform compatibility (`par_term_emu_debug_python.log`)
+All VT100/VT220/VT320/VT420 sequences work identically across platforms.
+
+### PTY Support
+
+**Platform Independence: Excellent (via portable-pty)**
+
+PTY operations in `src/pty_session.rs` use the `portable-pty` crate for cross-platform compatibility:
+
+**Shell Detection:**
+- **Windows**: Uses `%COMSPEC%` environment variable (typically `cmd.exe`), fallback to `cmd.exe`
+- **Unix/macOS**: Uses `$SHELL` environment variable, fallback to `/bin/bash`
+
+Implementation in `src/pty_session.rs`:
+```rust
+pub fn get_default_shell() -> String {
+    if cfg!(windows) {
+        // Use %COMSPEC% (typically cmd.exe), fall back to cmd.exe
+        if let Ok(comspec) = std::env::var("COMSPEC") {
+            comspec
+        } else {
+            "cmd.exe".to_string()
+        }
+    } else {
+        // Unix-like: check $SHELL, fall back to /bin/bash
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+    }
+}
+```
+
+**Environment Variables:**
+- Inherits parent environment variables properly on all platforms
+- Automatically drops `COLUMNS` and `LINES` to prevent resize issues (apps should query PTY size via ioctl)
+- Sets `TERM=xterm-256color` and `COLORTERM=truecolor` consistently
+
+**Process Management:**
+- Uses `portable-pty::native_pty_system()` for platform-appropriate PTY implementation
+- Thread-safe design with Arc/Mutex for shared state
+- Proper cleanup on all platforms
+
+### Screenshot Module
+
+**Platform Independence: Excellent (Pure Rust)**
+
+The screenshot module in `src/screenshot/` uses pure Rust implementations for maximum portability:
+
+**Font Rendering:**
+- Uses `swash` crate (pure Rust, no FreeType/HarfBuzz dependencies)
+- No C libraries required on any platform
+- Consistent rendering quality across all platforms
+
+**Embedded Fonts:**
+- **JetBrains Mono** (~268KB) - Primary monospace font
+- **Noto Emoji** (~409KB) - Monochrome emoji fallback
+
+**System Font Paths** (searched in priority order):
+
+**macOS:**
+```rust
+"/System/Library/Fonts/Apple Color Emoji.ttc",      // Color emoji
+"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+"/System/Library/Fonts/PingFang.ttc",               // Chinese
+"/System/Library/Fonts/AppleSDGothicNeo.ttc",       // Korean
+"/System/Library/Fonts/Hiragino Kaku Gothic ProN.ttc", // Japanese
+```
+
+**Linux:**
+```rust
+"/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+"/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+```
+
+**Windows:**
+```rust
+"C:\\Windows\\Fonts\\seguiemj.ttf",  // Segoe UI Emoji
+"C:\\Windows\\Fonts\\seguisym.ttf",  // Segoe UI Symbol
+"C:\\Windows\\Fonts\\msyh.ttc",      // Microsoft YaHei (Chinese)
+"C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (Japanese)
+```
+
+**Image Encoding:**
+- PNG, JPEG, BMP, SVG formats supported via `image` crate
+- Consistent output across all platforms
+
+### Debug Infrastructure
+
+**Platform Independence: Excellent**
+
+Debug logging in `src/debug.rs` handles platform differences transparently:
+
+**Log File Locations:**
+- **Unix/macOS**: `/tmp/par_term_emu_core_rust_debug_rust.log`
+- **Windows**: `%TEMP%\par_term_emu_core_rust_debug_rust.log`
+
+Implementation:
+```rust
+#[cfg(unix)]
+let log_path = std::path::PathBuf::from("/tmp/par_term_emu_core_rust_debug_rust.log");
+#[cfg(windows)]
+let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log");
+```
+
+**Control:**
+- `DEBUG_LEVEL` environment variable (0-4) works identically on all platforms
+- All debug output goes to log files (never stdout/stderr) to avoid corrupting TUI apps
 
 ## Platform-Specific Considerations
 
 ### Windows
-**Shell Command Differences:**
-- Default shell: cmd.exe via `%COMSPEC%` (not bash or PowerShell)
-- Path separators: `\\` instead of `/`
-- Environment variables: `%VARIABLE%` syntax
-- Line endings: CRLF (`\r\n`) vs LF (`\n`)
 
-**Font Paths:**
-- System fonts in `C:\Windows\Fonts\`
-- Emoji font: `seguiemj.ttf` (Segoe UI Emoji)
+**Shell Behavior:**
+- Default shell: `cmd.exe` (via `%COMSPEC%` environment variable)
+- Not bash or PowerShell by default
+- Path separators: Backslash (`\`) instead of forward slash (`/`)
+- Environment variable syntax: `%VARIABLE%` instead of `$VARIABLE`
+- Line endings: CRLF (`\r\n`) instead of LF (`\n`)
 
-**Testing:**
-- Some tests use Unix-specific paths (`/bin/echo`, `/home/user`)
-- These tests are informational and won't break Windows builds
+**Font System:**
+- System fonts located in `C:\Windows\Fonts\`
+- Emoji font: `seguiemj.ttf` (Segoe UI Emoji) - color emoji on Windows 10+
+- CJK fonts: `msgothic.ttc`, `msyh.ttc`
+
+**PTY Implementation:**
+- Uses ConPTY on Windows 10 1809+ (via portable-pty)
+- Fallback to winpty on older Windows versions
+- SIGWINCH not available (resize handled differently)
+
+**Testing Notes:**
+- Some tests use Unix-specific paths like `/bin/echo` or `/home/user`
+- These tests are informational and don't break Windows builds
+- Windows-specific tests should use `#[cfg(windows)]` guards
 
 ### macOS
-**Font Paths:**
-- System fonts in `/System/Library/Fonts/`
-- Emoji font: `Apple Color Emoji.ttc`
-- Excellent emoji coverage out of the box
 
-**Shell:**
-- Default: zsh (macOS 10.15+) or bash
-- Users may have custom shells in `$SHELL`
+**Shell Environment:**
+- Default shell: `zsh` on macOS 10.15 (Catalina) and later
+- Previous versions used `bash` by default
+- Users may configure custom shells via `$SHELL` environment variable
+- Common shells: zsh, bash, fish
+
+**Font System:**
+- System fonts in `/System/Library/Fonts/` and `/Library/Fonts/`
+- Emoji font: `Apple Color Emoji.ttc` (excellent color emoji coverage)
+- Built-in CJK support: PingFang (Chinese), Hiragino (Japanese), AppleSDGothic (Korean)
+- Arial Unicode provides comprehensive fallback coverage
+
+**Platform Features:**
+- Excellent out-of-the-box emoji rendering
+- May require Full Disk Access permission for some system fonts
+- PTY implementation uses Unix domain sockets
 
 ### Linux
-**Font Paths:**
-- Distro-dependent font locations
-- Common: `/usr/share/fonts/`
-- Emoji font: NotoColorEmoji (if installed)
-- May require: `sudo apt install fonts-noto-color-emoji`
 
-**Shell:**
-- Varies by distro (bash, zsh, fish, etc.)
-- Respects `$SHELL` environment variable
+**Shell Environment:**
+- Varies by distribution (bash, zsh, dash, fish, etc.)
+- Always respects `$SHELL` environment variable
+- Fallback: `/bin/bash` (most widely available)
+
+**Font System:**
+- Distribution-dependent font locations
+- Common paths:
+  - Debian/Ubuntu: `/usr/share/fonts/`
+  - Fedora/RHEL: `/usr/share/fonts/`
+  - Arch: `/usr/share/fonts/`
+- Emoji font installation:
+  ```bash
+  # Debian/Ubuntu
+  sudo apt install fonts-noto-color-emoji
+
+  # Fedora
+  sudo dnf install google-noto-emoji-color-fonts
+
+  # Arch
+  sudo pacman -S noto-fonts-emoji
+  ```
+
+**Distribution Differences:**
+- Font packages may have different names
+- Some distros include emoji fonts by default, others don't
+- Embedded Noto Emoji font ensures basic emoji support everywhere
 
 ## Build Dependencies
 
-### Pure Rust Implementation ✅
+### Pure Rust Implementation
 
-**No External Dependencies Required!**
+par-term-emu-core-rust is built entirely in Rust with no C dependencies required. This significantly simplifies the build process across all platforms.
 
-The screenshot module uses **Swash**, a pure Rust font rendering library. This means:
-- ✅ No C library dependencies (FreeType, HarfBuzz, etc.)
-- ✅ No platform-specific build tools required
-- ✅ Simpler build process across all platforms
-- ✅ Better cross-compilation support
-- ✅ Just Rust and Cargo - that's it!
+**Key Advantages:**
+- No C library dependencies (no FreeType, HarfBuzz, Fontconfig, etc.)
+- No platform-specific build tools beyond Rust toolchain
+- Simplified build process across all platforms
+- Better cross-compilation support
+- Consistent behavior everywhere
 
-**Installation:**
+**Required Tools:**
+- **Rust**: Version 1.75 or later (tested with 1.91.1)
+- **Cargo**: Comes with Rust
+- **Python**: 3.12+ for Python bindings (if building with `python` feature)
+
+**Quick Start:**
 ```bash
-# All you need is Rust
+# Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Build the project - no additional dependencies!
+# Build the project
 cargo build --release
+
+# Or build Python bindings
+uv run maturin develop --release
 ```
+
+**Platform-Specific Setup:**
+
+**Windows:**
+- MSVC Build Tools required (Visual Studio 2019+ or Build Tools for Visual Studio)
+- PowerShell or cmd.exe for build commands
+
+**macOS:**
+- Xcode Command Line Tools: `xcode-select --install`
+- No additional dependencies
+
+**Linux:**
+- GCC or Clang (usually pre-installed)
+- No additional dependencies
 
 ## Emoji Font Support
 
-### System Font Detection
-The screenshot module searches for emoji fonts in this priority order:
+### Font Fallback Strategy
 
-1. **Color emoji fonts** (highest priority)
-   - Linux: NotoColorEmoji
-   - macOS: Apple Color Emoji
-   - Windows: Segoe UI Emoji
+The screenshot module implements a sophisticated multi-tier font fallback system for emoji and Unicode characters:
 
-2. **Fallback Unicode fonts**
-   - Arial Unicode, Noto Sans, DejaVu Sans
+**Tier 1: System Color Emoji Fonts**
+- **Linux**: NotoColorEmoji (if installed)
+- **macOS**: Apple Color Emoji (built-in, excellent coverage)
+- **Windows**: Segoe UI Emoji (Windows 10+)
 
-3. **Graceful degradation**
-   - If no emoji font found, renders as grayscale placeholder boxes
+**Tier 2: System Unicode Fonts**
+- Arial Unicode, Noto Sans, DejaVu Sans
+- Platform-specific CJK fonts for Asian characters
 
-### Embedded Font Implementation
+**Tier 3: Embedded Fonts**
+- **JetBrains Mono** (~268KB) - Primary monospace font for terminal text
+- **Noto Emoji** (~409KB) - Monochrome emoji fallback for universal compatibility
 
-**Current State:**
-- ✅ JetBrains Mono (~268KB) - Embedded for text rendering
-- ✅ Noto Emoji (~409KB) - Embedded for universal emoji support
+**Tier 4: Graceful Degradation**
+- Characters not found in any font render as tofu boxes (□)
+- This only occurs if embedded fonts fail to load (extremely rare)
 
-**Implemented: Noto Emoji (Monochrome)**
-- **Size**: ~409KB (manageable)
-- **Coverage**: All Unicode emoji
-- **Quality**: Decent grayscale styling
-- **Benefit**: Works on all platforms without system fonts
+### Font Loading Implementation
 
-**Implementation:**
+The font cache in `src/screenshot/font_cache.rs` implements lazy loading:
+
 ```rust
-// src/screenshot/font_cache.rs
-// Embedded fonts loaded via Swash
+// Embedded fonts are always available
+const DEFAULT_FONT: &[u8] = include_bytes!("JetBrainsMono-Regular.ttf");
+const EMOJI_FALLBACK_FONT: &[u8] = include_bytes!("NotoEmoji-Regular.ttf");
 
-// Fallback order (as implemented):
-// 1. System color emoji font (NotoColorEmoji, Apple Color Emoji, etc.)
-// 2. Embedded emoji font (monochrome) ✅ IMPLEMENTED
-// 3. Grayscale placeholder boxes (only if embedded font fails to load)
+// System fonts loaded on-demand when emoji/CJK characters detected
+fn try_load_emoji_font(&mut self) { /* searches system paths */ }
+fn try_load_cjk_font(&mut self) { /* searches system paths */ }
 ```
 
-**Future Option: Optional Color Emoji Feature**
+**Behavior:**
+1. Regular ASCII text uses JetBrains Mono (embedded)
+2. Emoji triggers search for system color emoji fonts
+3. If system font unavailable, uses embedded Noto Emoji (monochrome)
+4. CJK characters trigger search for system CJK fonts
+5. Font choices cached per character for performance
+
+### Potential Enhancement: Optional Color Emoji Embedding
+
+Future versions could add an optional feature for embedding color emoji:
+
 ```toml
 [features]
-default = []
-embed-color-emoji = []  # Would add 10-15MB for NotoColorEmoji
+default = ["python"]
+embed-color-emoji = []  # Would add ~10-15MB for NotoColorEmoji
 ```
+
+This is not currently implemented because:
+- Most systems have adequate emoji fonts
+- Embedded monochrome fallback provides universal compatibility
+- Binary size remains reasonable (~1MB currently)
 
 ## Testing on Multiple Platforms
 
 ### Rust Tests
+
+Run Rust tests on all platforms:
+
 ```bash
-# All tests should pass on all platforms
+# Basic test suite (library tests only, no default features)
+cargo test --lib --no-default-features --features pyo3/auto-initialize
+
+# All tests including integration tests
 cargo test
 
-# Platform-specific tests (if needed)
-cargo test --features windows-specific  # Example
+# Platform-specific tests use cfg guards
+#[cfg(unix)]
+#[test]
+fn test_unix_pty_spawn() {
+    // Unix-specific PTY test
+}
+
+#[cfg(windows)]
+#[test]
+fn test_windows_pty_spawn() {
+    // Windows-specific PTY test
+}
 ```
 
 ### Python Tests
-```bash
-# Run on all platforms
-uv run pytest tests/
 
-# Some tests may need platform guards
-#[cfg(unix)]
-#[test]
-fn test_unix_specific() { ... }
+Run Python tests on all platforms using pytest:
+
+```bash
+# All tests with timeout protection
+uv run pytest tests/ -v --timeout=5 --timeout-method=thread
+
+# Exclude platform-specific PTY tests (if problematic in CI)
+uv run pytest tests/ --ignore=tests/test_pty.py
+
+# Run specific test file
+uv run pytest tests/test_terminal.py -v
+```
+
+**Note**: Some PTY tests may be excluded in CI due to platform-specific behavior.
+
+### Code Quality Checks
+
+**Rust:**
+```bash
+cargo fmt -- --check      # Format check
+cargo clippy -- -D warnings  # Linting
+```
+
+**Python:**
+```bash
+uv run ruff format --check .  # Format check
+uv run ruff check .           # Linting
+uv run pyright .              # Type checking
+```
+
+**All checks:**
+```bash
+make checkall  # Runs all quality checks
 ```
 
 ### Manual Testing Checklist
 
+When testing on a new platform, verify:
+
 **Screenshot Module:**
-- [ ] PNG screenshots work
-- [ ] Emoji render (color if system font available, grayscale otherwise)
-- [ ] Custom fonts load correctly
-- [ ] Sixel graphics render
+- [ ] PNG screenshot generation works
+- [ ] Emoji render correctly (color with system fonts, monochrome fallback)
+- [ ] CJK characters render correctly
+- [ ] Custom fonts can be loaded
+- [ ] JPEG, BMP, SVG formats work
 
 **PTY Module:**
-- [ ] Shell spawns correctly
-- [ ] Commands execute
-- [ ] Resize works (SIGWINCH on Unix)
-- [ ] Environment variables set properly
+- [ ] Default shell spawns correctly
+- [ ] Custom commands execute
+- [ ] Window resize works (SIGWINCH on Unix, ConPTY on Windows)
+- [ ] Environment variables inherited properly
+- [ ] `TERM` and `COLORTERM` set correctly
 
-**Debugging:**
+**Graphics Module:**
+- [ ] Kitty graphics protocol works
+- [ ] Sixel graphics render
+- [ ] Animation playback functions
+
+**Debug Infrastructure:**
 - [ ] Log file created in correct temp directory
-- [ ] DEBUG_LEVEL environment variable works
+- [ ] `DEBUG_LEVEL` environment variable controls verbosity
+- [ ] Debug output doesn't corrupt terminal display
 
 ## Best Practices for Contributors
 
@@ -218,7 +451,11 @@ let path = Path::new(dir).join(file);
 ```
 
 ### 3. Handle Platform Differences with cfg
+
+Use Rust's conditional compilation for platform-specific code:
+
 ```rust
+// Good: Clear platform-specific handling
 pub fn get_default_shell() -> String {
     if cfg!(windows) {
         std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
@@ -226,24 +463,64 @@ pub fn get_default_shell() -> String {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
     }
 }
+
+// Good: Platform-specific tests
+#[cfg(unix)]
+#[test]
+fn test_unix_signal_handling() {
+    // Unix-specific test
+}
+
+#[cfg(windows)]
+#[test]
+fn test_windows_conpty() {
+    // Windows-specific test
+}
 ```
 
 ### 4. Test on Multiple Platforms
-- Run tests locally if possible
-- Use CI/CD for automated cross-platform testing
-- Check GitHub Actions for Linux/macOS/Windows builds
+
+**Local Testing:**
+- Test on your development platform before committing
+- If possible, test on at least two platforms (e.g., macOS + Linux)
+- Use VMs or WSL for testing other platforms locally
+
+**CI/CD Testing:**
+- All PRs automatically run on Linux, macOS, and Windows via GitHub Actions
+- Check CI results before merging
+- Fix any platform-specific failures
+
+**Test Matrix:**
+- Tests run on Python 3.12, 3.13, and 3.14
+- Tests run on all three major platforms
+- Total: 9 test combinations per PR
 
 ### 5. Document Platform-Specific Behavior
-- Add comments explaining platform differences
-- Update this document when adding platform-specific code
-- Note any platform limitations in user-facing documentation
+
+**Code Comments:**
+```rust
+// Windows uses ConPTY (Windows 10 1809+) with fallback to winpty
+// Unix uses traditional PTY with SIGWINCH for resize notification
+let pty_system = portable_pty::native_pty_system();
+```
+
+**User Documentation:**
+- Update relevant docs when adding platform-specific features
+- Note platform limitations clearly
+- Provide platform-specific examples when behavior differs
+
+**This Document:**
+- Update `CROSS_PLATFORM.md` when adding new platform-specific code
+- Document workarounds for platform-specific issues
+- Keep compatibility matrix up to date
 
 ## CI/CD Configuration
 
-### Current GitHub Actions Implementation ✅
+### GitHub Actions Implementation
 
-**Full cross-platform CI is implemented** in `.github/workflows/ci.yml`:
+The project uses comprehensive cross-platform CI via GitHub Actions (`.github/workflows/ci.yml`).
 
+**Test Matrix:**
 ```yaml
 strategy:
   matrix:
@@ -251,70 +528,184 @@ strategy:
     python-version: ["3.12", "3.13", "3.14"]
 ```
 
-The CI pipeline includes:
-- **Test Job**: Runs on all three platforms with all supported Python versions
-- **Lint Job**: Runs Rust (fmt, clippy) and Python (ruff, pyright) checks
-- **Build Job**: Builds wheels for all platforms
+This creates **9 test combinations** (3 platforms × 3 Python versions).
 
-### Platform-Specific Build Steps
+### CI Pipeline Jobs
 
-**No platform-specific dependencies needed!** ✅
+**1. Test Job**
+- Runs on all platforms (Linux, macOS, Windows)
+- Tests all Python versions (3.12, 3.13, 3.14)
+- 15-minute timeout per job
+- Executes:
+  - Rust library tests: `cargo test --lib`
+  - Python tests: `pytest tests/` (with 5-second per-test timeout)
 
-Since the project uses pure Rust (Swash) for font rendering, CI/CD is simple:
+**2. Lint Job**
+- Runs on Ubuntu only (linting is platform-independent)
+- Checks:
+  - Rust formatting: `cargo fmt --check`
+  - Rust linting: `cargo clippy --all-targets --all-features`
+  - Python formatting: `ruff format --check`
+  - Python linting: `ruff check`
+  - Python type checking: `pyright`
 
+**3. Build Job**
+- Builds wheels for all platforms
+- Uses `maturin` for Python wheel packaging
+- Uploads artifacts for each platform
+
+### Platform-Specific CI Steps
+
+**All Platforms:**
 ```yaml
-- name: Build
-  run: cargo build --release
+- name: Build Python package
+  run: uv run maturin develop --release
 
-- name: Test
-  run: cargo test
-
-# No platform-specific setup required!
+- name: Run Rust tests
+  run: cargo test --lib --no-default-features --features pyo3/auto-initialize
 ```
 
-**Windows-Specific Setup:**
-The CI includes MSVC setup for Windows builds:
+**Windows Only:**
 ```yaml
 - name: Set up MSVC
   if: runner.os == 'Windows'
   uses: ilammy/msvc-dev-cmd@v1
 ```
 
+**Platform-Specific Test Commands:**
+
+Linux uses `timeout` wrapper:
+```yaml
+- name: Run Python tests (Linux)
+  if: runner.os == 'Linux'
+  run: timeout 300 uv run pytest tests/ -v --timeout=5
+```
+
+macOS and Windows run pytest directly:
+```yaml
+- name: Run Python tests (macOS)
+  if: runner.os == 'macOS'
+  run: uv run pytest tests/ -v --timeout=5
+```
+
+### CI Best Practices
+
+**Timeouts:**
+- Job timeout: 15 minutes
+- Individual test timeout: 5 seconds
+- Prevents hanging tests from blocking CI
+
+**Exclusions:**
+- Some PTY tests excluded in CI due to platform-specific behavior
+- Graphics tests may be excluded if they require display access
+
+**Artifacts:**
+- Wheels uploaded for each platform
+- Available for download and testing before release
+
 ## Known Limitations
 
-### Windows-Specific
-1. Some tests use Unix paths (non-breaking, informational only)
-2. Color emoji require Windows 10+ with Segoe UI Emoji installed
-3. PTY implementation may have minor behavioral differences
+### Windows
 
-### macOS-Specific
-1. Apple Color Emoji font is large (~30MB), not embedded
-2. Some system fonts require Full Disk Access in security settings
+**PTY Behavior:**
+- ConPTY available on Windows 10 1809+ (October 2018 Update)
+- Older Windows versions fall back to winpty (via portable-pty)
+- SIGWINCH signal not available (resize handled via ConPTY API)
+- Some Unix-specific tests use hardcoded paths like `/bin/echo`
 
-### Linux-Specific
-1. NotoColorEmoji may not be installed by default
-2. Font paths vary by distribution
-3. Some distros may need `fonts-noto-color-emoji` package
+**Font System:**
+- Color emoji require Windows 10+ with Segoe UI Emoji
+- Older Windows versions may have limited emoji support
+- Falls back to embedded monochrome emoji font
+
+**Shell:**
+- Default shell is `cmd.exe`, not PowerShell
+- PowerShell can be used via explicit path: `term.spawn("powershell.exe", [])`
+
+### macOS
+
+**Font System:**
+- Apple Color Emoji font is ~30MB (not embedded due to size)
+- System always has excellent color emoji support
+- Some system fonts may require Full Disk Access permission in System Settings
+
+**Platform Behavior:**
+- Default shell changed to zsh in macOS 10.15 (Catalina)
+- Older macOS versions use bash by default
+- PTY implementation uses traditional Unix PTY with SIGWINCH
+
+### Linux
+
+**Font System:**
+- NotoColorEmoji not installed by default on many distributions
+- Font paths vary by distribution (Debian/Ubuntu vs Fedora vs Arch)
+- Users may need to install emoji fonts manually
+- Embedded Noto Emoji provides fallback for missing system fonts
+
+**Distribution Differences:**
+- Font package names vary (`fonts-noto-color-emoji` vs `google-noto-emoji-color-fonts`)
+- Font locations differ (`/usr/share/fonts/` structure varies)
+- Some minimal distributions may lack basic Unicode fonts
+
+**Shell Variations:**
+- Wide variety of shells (bash, zsh, fish, dash, etc.)
+- Shell configuration files vary by distro
+- Always respects `$SHELL` environment variable
+
+### General Limitations
+
+**Test Coverage:**
+- Some platform-specific tests are informational only
+- PTY tests may behave differently on different platforms
+- Graphics tests may require display access (excluded in headless CI)
+
+**Font Embedding:**
+- Only monochrome emoji embedded (color emoji would add 10-15MB)
+- Custom fonts must be provided by user or system
+- Font fallback may not cover all Unicode ranges
 
 ## Potential Enhancements
 
-The following enhancements could further improve cross-platform support:
+Future versions could add:
 
-1. **Feature flag**: Optional NotoColorEmoji embedding (~10-15MB) for guaranteed color emoji on all platforms
-2. **Platform-specific tests**: `#[cfg(target_os = "...")]` guards for platform-specific functionality
-3. **Font discovery**: XDG config support for custom font directories on Linux
-4. **PowerShell support**: Option to use PowerShell instead of cmd.exe on Windows (currently uses `%COMSPEC%`)
+**1. Optional Color Emoji Embedding**
+```toml
+[features]
+embed-color-emoji = []  # Add ~10-15MB for guaranteed color emoji
+```
 
-## Resources
+**2. PowerShell Detection on Windows**
+- Auto-detect PowerShell Core or Windows PowerShell
+- Make PowerShell the default on modern Windows systems
+- Keep cmd.exe as fallback
 
-- [Rust Platform Support](https://doc.rust-lang.org/rustc/platform-support.html)
-- [portable-pty documentation](https://docs.rs/portable-pty/)
-- [Swash documentation](https://docs.rs/swash/) - Pure Rust font rendering
-- [std::env documentation](https://doc.rust-lang.org/std/env/)
-- [image crate documentation](https://docs.rs/image/) - Image encoding/decoding
+**3. XDG Directory Support**
+- Respect `XDG_CONFIG_HOME` for custom font directories
+- Support user font directories on all platforms
+- Better font discovery on Linux
 
-## See Also
+**4. Enhanced Platform-Specific Tests**
+- More comprehensive platform-specific test coverage
+- Automated testing of font rendering on all platforms
+- Better CI coverage for edge cases
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture
-- [BUILDING.md](BUILDING.md) - Build and installation instructions
-- [README.md](../README.md) - User-facing documentation
+**5. Cross-Compilation Support**
+- Document cross-compilation procedures
+- Provide Docker images for consistent builds
+- Support ARM platforms more comprehensively
+
+## Related Documentation
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Internal architecture and design decisions
+- [BUILDING.md](BUILDING.md) - Build and installation instructions for all platforms
+- [README.md](../README.md) - User-facing documentation and quick start
+- [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
+- [FONTS.md](FONTS.md) - Font system and emoji rendering details
+
+## External Resources
+
+- [Rust Platform Support](https://doc.rust-lang.org/rustc/platform-support.html) - Official Rust platform tiers
+- [portable-pty documentation](https://docs.rs/portable-pty/) - Cross-platform PTY abstraction
+- [swash documentation](https://docs.rs/swash/) - Pure Rust font rendering library
+- [image crate documentation](https://docs.rs/image/) - Image encoding and decoding
+- [vte crate documentation](https://docs.rs/vte/) - VT sequence parser

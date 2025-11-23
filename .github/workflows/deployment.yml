@@ -1,5 +1,15 @@
 name: Build and Deploy
 
+# This workflow handles the complete release process:
+# 1. Publishes the Rust library to crates.io (source code)
+# 2. Builds standalone streaming server binaries for multiple platforms
+# 3. Builds Python wheels for Linux, macOS, and Windows (Python 3.12, 3.13, 3.14)
+# 4. Creates a GitHub release with all artifacts (wheels + binaries)
+# 5. Publishes Python wheels to PyPI
+#
+# To trigger: Go to Actions → Build and Deploy → Run workflow
+# Ensure Cargo.toml and pyproject.toml versions are synchronized before running
+
 on:
   workflow_dispatch:
 
@@ -8,6 +18,127 @@ permissions:
   id-token: write
 
 jobs:
+  # Publish to crates.io
+  publish-crates:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify version consistency
+        run: |
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          PYTHON_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "pyproject.toml version: $PYTHON_VERSION"
+
+          if [ "$CARGO_VERSION" != "$PYTHON_VERSION" ]; then
+            echo "ERROR: Version mismatch between Cargo.toml ($CARGO_VERSION) and pyproject.toml ($PYTHON_VERSION)"
+            exit 1
+          fi
+
+          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Run Rust tests
+        run: cargo test --lib --all-features
+
+      - name: Dry run publish
+        run: cargo publish --dry-run
+
+      - name: Publish to crates.io
+        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Discord notification
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        uses: Ilshidur/action-discord@master
+        with:
+          args: 'Published {{ EVENT_PAYLOAD.repository.name }} to crates.io successfully!'
+        continue-on-error: true
+
+  # Build streaming server binaries for multiple platforms
+  build-streaming-binaries:
+    name: Build streaming binary - ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-linux-x86_64
+
+          - name: Linux ARM64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-linux-aarch64
+
+          - name: macOS x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-macos-x86_64
+
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: par-term-streamer
+            asset_name: par-term-streamer-macos-aarch64
+
+          - name: Windows x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: par-term-streamer.exe
+            asset_name: par-term-streamer-windows-x86_64.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build streaming server binary
+        run: cargo build --release --bin par-term-streamer --no-default-features --features streaming --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Strip binary (Unix)
+        if: runner.os != 'Windows'
+        run: strip target/${{ matrix.target }}/release/${{ matrix.artifact_name }}
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          mkdir -p release-binaries
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-binaries/${{ matrix.asset_name }}
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: release-binaries/${{ matrix.asset_name }}
+          retention-days: 1
+
   # Linux builds
   linux:
     name: Linux ${{ matrix.target }} - Python ${{ matrix.python-version }}
@@ -182,12 +313,58 @@ jobs:
           name: wheels-sdist
           path: dist
 
+  # Package web terminal frontend
+  package-web-frontend:
+    name: Package web terminal frontend
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: get_version
+        run: |
+          version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "Package version: $version"
+
+      - name: Verify web_term directory exists
+        run: |
+          if [ ! -d "web_term" ]; then
+            echo "ERROR: web_term directory not found"
+            exit 1
+          fi
+          ls -la web_term/
+
+      - name: Create web frontend archive
+        run: |
+          mkdir -p release-web
+          cd web_term
+          tar -czf ../release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.tar.gz .
+          cd ..
+          cd web_term
+          zip -r ../release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.zip .
+          cd ..
+
+      - name: Verify archives
+        run: |
+          ls -lh release-web/
+          tar -tzf release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.tar.gz | head -20
+          unzip -l release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.zip | head -20
+
+      - name: Upload web frontend artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-frontend
+          path: release-web/*
+          retention-days: 1
+
   # Create GitHub release
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [linux, macos, windows, sdist]
+    needs: [publish-crates, build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
     permissions:
       contents: write
       id-token: write
@@ -207,12 +384,25 @@ jobs:
           echo "version=$version" >> $GITHUB_OUTPUT
           echo "Package version: $version"
 
-      - name: Download all artifacts
+      - name: Download Python wheel artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
+
+      - name: Download streaming server binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: binaries
+          merge-multiple: true
+
+      - name: Download web frontend artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: web-frontend
+          path: web-frontend
 
       - name: Sign the dists with Sigstore
         uses: sigstore/gh-action-sigstore-python@v3.0.0
@@ -240,12 +430,30 @@ jobs:
           --generate-notes \
           --latest
 
-      - name: Upload artifacts to GitHub Release
+      - name: Upload Python wheels to GitHub Release
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           gh release upload \
           'v${{ steps.get_version.outputs.version }}' dist/** \
+          --repo '${{ github.repository }}' \
+          --clobber
+
+      - name: Upload streaming server binaries to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload \
+          'v${{ steps.get_version.outputs.version }}' binaries/* \
+          --repo '${{ github.repository }}' \
+          --clobber
+
+      - name: Upload web frontend to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload \
+          'v${{ steps.get_version.outputs.version }}' web-frontend/* \
           --repo '${{ github.repository }}' \
           --clobber
 

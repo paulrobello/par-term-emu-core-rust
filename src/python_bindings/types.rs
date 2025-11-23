@@ -373,6 +373,18 @@ pub struct PyTmuxNotification {
     #[pyo3(get)]
     pub value: Option<String>,
 
+    /// Window layout (for layout-change notifications)
+    #[pyo3(get)]
+    pub window_layout: Option<String>,
+
+    /// Window visible layout (for layout-change notifications)
+    #[pyo3(get)]
+    pub window_visible_layout: Option<String>,
+
+    /// Window raw flags (for layout-change notifications)
+    #[pyo3(get)]
+    pub window_raw_flags: Option<String>,
+
     /// Raw line (for unknown notifications)
     #[pyo3(get)]
     pub raw_line: Option<String>,
@@ -408,6 +420,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::End {
@@ -428,6 +443,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Error {
@@ -448,6 +466,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Output { pane_id, data } => PyTmuxNotification {
@@ -464,6 +485,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::PaneModeChanged { pane_id } => PyTmuxNotification {
@@ -480,6 +504,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => PyTmuxNotification {
@@ -496,6 +523,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::WindowClose { window_id } => PyTmuxNotification {
@@ -512,6 +542,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::UnlinkedWindowClose { window_id } => PyTmuxNotification {
@@ -528,6 +561,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::WindowAdd { window_id } => PyTmuxNotification {
@@ -544,6 +580,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::UnlinkedWindowAdd { window_id } => PyTmuxNotification {
@@ -560,6 +599,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::WindowRenamed { window_id, name } => PyTmuxNotification {
@@ -576,6 +618,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::UnlinkedWindowRenamed { window_id, name } => PyTmuxNotification {
@@ -592,6 +637,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::SessionChanged { session_id, name } => PyTmuxNotification {
@@ -608,6 +656,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::ClientSessionChanged {
@@ -628,6 +679,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::SessionRenamed { session_id, name } => PyTmuxNotification {
@@ -644,6 +698,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::SessionsChanged => PyTmuxNotification {
@@ -660,6 +717,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::SessionWindowChanged {
@@ -679,6 +739,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::ClientDetached { client } => PyTmuxNotification {
@@ -695,6 +758,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Exit => PyTmuxNotification {
@@ -711,6 +777,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Pause { pane_id } => PyTmuxNotification {
@@ -727,6 +796,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::ExtendedOutput {
@@ -747,6 +819,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 client: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Continue => PyTmuxNotification {
@@ -763,6 +838,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::SubscriptionChanged { name, value } => PyTmuxNotification {
@@ -779,6 +857,71 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 client: None,
                 data: None,
                 delay_ms: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
+                raw_line: None,
+            },
+            TmuxNotification::LayoutChange {
+                window_id,
+                window_layout,
+                window_visible_layout,
+                window_raw_flags,
+            } => PyTmuxNotification {
+                notification_type: "layout-change".to_string(),
+                window_id: Some(window_id.clone()),
+                window_layout: Some(window_layout.clone()),
+                window_visible_layout: Some(window_visible_layout.clone()),
+                window_raw_flags: Some(window_raw_flags.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                session_id: None,
+                name: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                raw_line: None,
+            },
+            TmuxNotification::PasteBufferChanged { name } => PyTmuxNotification {
+                notification_type: "paste-buffer-changed".to_string(),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
+                raw_line: None,
+            },
+            TmuxNotification::PasteBufferDeleted { name } => PyTmuxNotification {
+                notification_type: "paste-buffer-deleted".to_string(),
+                name: Some(name.clone()),
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: None,
+                window_id: None,
+                session_id: None,
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
             TmuxNotification::Unknown { line } => PyTmuxNotification {
@@ -796,6 +939,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
             },
             TmuxNotification::TerminalOutput { data } => PyTmuxNotification {
                 notification_type: "terminal-output".to_string(),
@@ -811,6 +957,9 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 delay_ms: None,
                 subscription_name: None,
                 value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
                 raw_line: None,
             },
         }
@@ -2482,6 +2631,195 @@ impl From<&crate::terminal::RecordingSession> for PyRecordingSession {
 impl From<crate::terminal::RecordingSession> for PyRecordingSession {
     fn from(session: crate::terminal::RecordingSession) -> Self {
         PyRecordingSession { inner: session }
+    }
+}
+
+/// Macro event
+#[pyclass(name = "MacroEvent")]
+#[derive(Clone)]
+pub struct PyMacroEvent {
+    #[pyo3(get)]
+    pub event_type: String,
+    #[pyo3(get)]
+    pub timestamp: u64,
+    #[pyo3(get)]
+    pub key: Option<String>,
+    #[pyo3(get)]
+    pub duration: Option<u64>,
+    #[pyo3(get)]
+    pub label: Option<String>,
+}
+
+#[pymethods]
+impl PyMacroEvent {
+    fn __repr__(&self) -> String {
+        match self.event_type.as_str() {
+            "key" => format!(
+                "MacroEvent(key={}, timestamp={}ms)",
+                self.key.as_ref().unwrap(),
+                self.timestamp
+            ),
+            "delay" => format!(
+                "MacroEvent(delay={}ms, timestamp={}ms)",
+                self.duration.unwrap(),
+                self.timestamp
+            ),
+            "screenshot" => format!(
+                "MacroEvent(screenshot, label={:?}, timestamp={}ms)",
+                self.label, self.timestamp
+            ),
+            _ => "MacroEvent(unknown)".to_string(),
+        }
+    }
+}
+
+impl From<&crate::macros::MacroEvent> for PyMacroEvent {
+    fn from(event: &crate::macros::MacroEvent) -> Self {
+        match event {
+            crate::macros::MacroEvent::KeyPress { key, timestamp } => PyMacroEvent {
+                event_type: "key".to_string(),
+                timestamp: *timestamp,
+                key: Some(key.clone()),
+                duration: None,
+                label: None,
+            },
+            crate::macros::MacroEvent::Delay {
+                duration,
+                timestamp,
+            } => PyMacroEvent {
+                event_type: "delay".to_string(),
+                timestamp: *timestamp,
+                key: None,
+                duration: Some(*duration),
+                label: None,
+            },
+            crate::macros::MacroEvent::Screenshot { label, timestamp } => PyMacroEvent {
+                event_type: "screenshot".to_string(),
+                timestamp: *timestamp,
+                key: None,
+                duration: None,
+                label: label.clone(),
+            },
+        }
+    }
+}
+
+/// Macro recording
+#[pyclass(name = "Macro")]
+#[derive(Clone)]
+pub struct PyMacro {
+    pub(crate) inner: crate::macros::Macro,
+}
+
+#[pymethods]
+impl PyMacro {
+    /// Create a new macro
+    #[new]
+    fn new(name: String) -> Self {
+        PyMacro {
+            inner: crate::macros::Macro::new(name),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Macro(name={}, duration={}ms, events={})",
+            self.inner.name,
+            self.inner.duration,
+            self.inner.events.len()
+        )
+    }
+
+    /// Add a key press event
+    fn add_key(&mut self, key: String) {
+        self.inner.add_key(key);
+    }
+
+    /// Add a delay event
+    fn add_delay(&mut self, duration_ms: u64) {
+        self.inner.add_delay(duration_ms);
+    }
+
+    /// Add a screenshot trigger
+    fn add_screenshot(&mut self, label: Option<String>) {
+        self.inner.add_screenshot_labeled(label);
+    }
+
+    /// Set description
+    fn set_description(&mut self, description: String) {
+        self.inner.description = Some(description);
+    }
+
+    /// Save to YAML file
+    fn save_yaml(&self, path: String) -> PyResult<()> {
+        self.inner
+            .save_yaml(path)
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
+
+    /// Load from YAML file
+    #[staticmethod]
+    fn load_yaml(path: String) -> PyResult<Self> {
+        crate::macros::Macro::load_yaml(path)
+            .map(|inner| PyMacro { inner })
+            .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
+    }
+
+    /// Convert to YAML string
+    fn to_yaml(&self) -> PyResult<String> {
+        self.inner
+            .to_yaml()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// Parse from YAML string
+    #[staticmethod]
+    fn from_yaml(yaml: String) -> PyResult<Self> {
+        crate::macros::Macro::from_yaml(&yaml)
+            .map(|inner| PyMacro { inner })
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+    }
+
+    /// Get macro name
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.name.clone()
+    }
+
+    /// Get description
+    #[getter]
+    fn description(&self) -> Option<String> {
+        self.inner.description.clone()
+    }
+
+    /// Get duration in milliseconds
+    #[getter]
+    fn duration(&self) -> u64 {
+        self.inner.duration
+    }
+
+    /// Get terminal size (cols, rows)
+    #[getter]
+    fn terminal_size(&self) -> Option<(usize, usize)> {
+        self.inner.terminal_size
+    }
+
+    /// Get number of events
+    #[getter]
+    fn event_count(&self) -> usize {
+        self.inner.events.len()
+    }
+
+    /// Get all events
+    #[getter]
+    fn events(&self) -> Vec<PyMacroEvent> {
+        self.inner.events.iter().map(PyMacroEvent::from).collect()
+    }
+}
+
+impl From<crate::macros::Macro> for PyMacro {
+    fn from(macro_data: crate::macros::Macro) -> Self {
+        PyMacro { inner: macro_data }
     }
 }
 

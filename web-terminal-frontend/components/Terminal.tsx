@@ -6,16 +6,17 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
-
-export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
+import type { ConnectionStatus, ThemeInfo } from '@/types/terminal';
 
 interface TerminalProps {
   wsUrl: string;
   onStatusChange?: (status: ConnectionStatus) => void;
+  onThemeChange?: (backgroundColor: string) => void;
 }
 
-export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
+export default function Terminal({ wsUrl, onStatusChange, onThemeChange }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -24,6 +25,51 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
   const updateStatus = (newStatus: ConnectionStatus) => {
     setStatus(newStatus);
     onStatusChange?.(newStatus);
+  };
+
+  // Convert RGB array to hex color string
+  const rgbToHex = (rgb: [number, number, number]): string => {
+    return '#' + rgb.map(x => x.toString(16).padStart(2, '0')).join('');
+  };
+
+  // Apply theme to terminal
+  const applyTheme = (theme: ThemeInfo) => {
+    if (!xtermRef.current) return;
+
+    console.log('Applying theme:', theme.name);
+
+    const bgHex = rgbToHex(theme.background);
+    const fgHex = rgbToHex(theme.foreground);
+
+    // Update xterm.js theme
+    xtermRef.current.options.theme = {
+      background: bgHex,
+      foreground: fgHex,
+      black: rgbToHex(theme.normal[0]),
+      red: rgbToHex(theme.normal[1]),
+      green: rgbToHex(theme.normal[2]),
+      yellow: rgbToHex(theme.normal[3]),
+      blue: rgbToHex(theme.normal[4]),
+      magenta: rgbToHex(theme.normal[5]),
+      cyan: rgbToHex(theme.normal[6]),
+      white: rgbToHex(theme.normal[7]),
+      brightBlack: rgbToHex(theme.bright[0]),
+      brightRed: rgbToHex(theme.bright[1]),
+      brightGreen: rgbToHex(theme.bright[2]),
+      brightYellow: rgbToHex(theme.bright[3]),
+      brightBlue: rgbToHex(theme.bright[4]),
+      brightMagenta: rgbToHex(theme.bright[5]),
+      brightCyan: rgbToHex(theme.bright[6]),
+      brightWhite: rgbToHex(theme.bright[7]),
+    };
+
+    // Update container background color
+    if (containerRef.current) {
+      containerRef.current.style.backgroundColor = bgHex;
+    }
+
+    // Notify parent component of background color change
+    onThemeChange?.(bgHex);
   };
 
   useEffect(() => {
@@ -150,6 +196,12 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
           case 'connected':
             console.log(`Session ID: ${msg.session_id}`);
             console.log(`Server initial size: ${msg.cols}x${msg.rows}, Client size: ${term.cols}x${term.rows}`);
+
+            // Apply theme if provided
+            if (msg.theme) {
+              applyTheme(msg.theme);
+            }
+
             term.reset();
             term.clear();
             if (msg.initial_screen) {
@@ -250,7 +302,7 @@ export default function Terminal({ wsUrl, onStatusChange }: TerminalProps) {
   }, [wsUrl]);
 
   return (
-    <div className="terminal-shell">
+    <div ref={containerRef} className="terminal-shell">
       <div ref={terminalRef} className="flex-1 terminal-scrollbar" />
     </div>
   );

@@ -380,7 +380,7 @@ if term.has_updates_since(last_generation):
 - [Project README](../README.md) - Main library documentation and API reference
 - [ARCHITECTURE.md](../docs/ARCHITECTURE.md) - Internal architecture and design
 - [ADVANCED_FEATURES.md](../docs/ADVANCED_FEATURES.md) - Advanced terminal features
-- [VT_FEATURE_PARITY.md](../docs/VT_FEATURE_PARITY.md) - VT sequence compatibility matrix
+- [VT_TECHNICAL_REFERENCE.md](../docs/VT_TECHNICAL_REFERENCE.md) - VT sequence compatibility matrix and implementation details
 - [FONTS.md](../docs/FONTS.md) - Font configuration for screenshot features
 - [Custom Terminfo](../terminfo/README.md) - Installing par-term terminfo definition
 

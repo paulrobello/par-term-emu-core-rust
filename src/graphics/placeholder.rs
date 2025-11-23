@@ -9,6 +9,85 @@
 /// The Unicode placeholder character for graphics
 pub const PLACEHOLDER_CHAR: char = '\u{10EEEE}';
 
+/// Number to diacritic mapping for row/column encoding
+///
+/// Maps numeric values (0-63) to Unicode combining characters
+/// as specified in the Kitty graphics protocol.
+pub fn number_to_diacritic(n: u8) -> Option<char> {
+    if n > 63 {
+        return None;
+    }
+
+    // Mapping from rowcolumn-diacritics.txt in Kitty spec
+    Some(match n {
+        0 => '\u{0305}',  // Combining Overline
+        1 => '\u{030D}',  // Combining Vertical Line Above
+        2 => '\u{030E}',  // Combining Double Vertical Line Above
+        3 => '\u{0310}',  // Combining Candrabindu
+        4 => '\u{0312}',  // Combining Turned Comma Above
+        5 => '\u{033D}',  // Combining X Above
+        6 => '\u{033E}',  // Combining Vertical Tilde
+        7 => '\u{033F}',  // Combining Double Overline
+        8 => '\u{0346}',  // Combining Bridge Above
+        9 => '\u{034A}',  // Combining Not Tilde Above
+        10 => '\u{034B}', // Combining Homothetic Above
+        11 => '\u{034C}', // Combining Almost Equal To Above
+        12 => '\u{0350}', // Combining Right Arrowhead Above
+        13 => '\u{0351}', // Combining Left Half Ring Above
+        14 => '\u{0352}', // Combining Fermata
+        15 => '\u{0357}', // Combining Right Half Ring Above
+        16 => '\u{035B}', // Combining Zigzag Above
+        17 => '\u{0363}', // Combining Latin Small Letter A
+        18 => '\u{0364}', // Combining Latin Small Letter E
+        19 => '\u{0365}', // Combining Latin Small Letter I
+        20 => '\u{0366}', // Combining Latin Small Letter O
+        21 => '\u{0367}', // Combining Latin Small Letter U
+        22 => '\u{0368}', // Combining Latin Small Letter C
+        23 => '\u{0369}', // Combining Latin Small Letter D
+        24 => '\u{036A}', // Combining Latin Small Letter H
+        25 => '\u{036B}', // Combining Latin Small Letter M
+        26 => '\u{036C}', // Combining Latin Small Letter R
+        27 => '\u{036D}', // Combining Latin Small Letter T
+        28 => '\u{036E}', // Combining Latin Small Letter V
+        29 => '\u{036F}', // Combining Latin Small Letter X
+        30 => '\u{0483}', // Combining Cyrillic Titlo
+        31 => '\u{0484}', // Combining Cyrillic Palatalization
+        32 => '\u{0485}', // Combining Cyrillic Dasia Pneumata
+        33 => '\u{0486}', // Combining Cyrillic Psili Pneumata
+        34 => '\u{0487}', // Combining Cyrillic Pokrytie
+        35 => '\u{0592}', // Hebrew Accent Segol
+        36 => '\u{0593}', // Hebrew Accent Shalshelet
+        37 => '\u{0594}', // Hebrew Accent Zaqef Qatan
+        38 => '\u{0595}', // Hebrew Accent Zaqef Gadol
+        39 => '\u{0597}', // Hebrew Accent Revia
+        40 => '\u{0598}', // Hebrew Accent Zarqa
+        41 => '\u{0599}', // Hebrew Accent Pashta
+        42 => '\u{059C}', // Hebrew Accent Geresh
+        43 => '\u{059D}', // Hebrew Accent Geresh Muqdam
+        44 => '\u{059E}', // Hebrew Accent Gershayim
+        45 => '\u{059F}', // Hebrew Accent Qarney Para
+        46 => '\u{05A0}', // Hebrew Accent Telisha Gedola
+        47 => '\u{05A1}', // Hebrew Accent Pazer
+        48 => '\u{05A8}', // Hebrew Accent Qadma
+        49 => '\u{05A9}', // Hebrew Accent Telisha Qetana
+        50 => '\u{05AB}', // Hebrew Accent Ole
+        51 => '\u{05AC}', // Hebrew Accent Iluy
+        52 => '\u{05AF}', // Hebrew Mark Masora Circle
+        53 => '\u{05C4}', // Hebrew Mark Upper Dot
+        54 => '\u{0610}', // Arabic Sign Sallallahou Alayhe Wassallam
+        55 => '\u{0611}', // Arabic Sign Alayhe Assallam
+        56 => '\u{0612}', // Arabic Sign Rahmatullah Alayhe
+        57 => '\u{0613}', // Arabic Sign Radi Allahou Anhu
+        58 => '\u{0614}', // Arabic Sign Takhallus
+        59 => '\u{0615}', // Arabic Small High Tah
+        60 => '\u{0616}', // Arabic Small High Ligature Alef with Lam with Yeh
+        61 => '\u{0617}', // Arabic Small High Zain
+        62 => '\u{0657}', // Arabic Inverted Damma
+        63 => '\u{0658}', // Arabic Mark Noon Ghunna
+        _ => unreachable!(),
+    })
+}
+
 /// Diacritic to number mapping for row/column encoding
 ///
 /// Maps Unicode combining characters to their numeric values (0-63)
@@ -168,6 +247,39 @@ impl PlaceholderInfo {
     }
 }
 
+/// Create a placeholder character with diacritics for row/column/MSB encoding
+///
+/// Returns a String containing U+10EEEE followed by up to 3 combining diacritics.
+/// - First diacritic: row (0-63)
+/// - Second diacritic: column (0-63)
+/// - Third diacritic: MSB of image ID (0-63, optional)
+///
+/// If MSB is 0 or None, it is omitted.
+pub fn create_placeholder_with_diacritics(row: u8, col: u8, msb: Option<u8>) -> String {
+    let mut result = String::from(PLACEHOLDER_CHAR);
+
+    // Add row diacritic
+    if let Some(row_diacritic) = number_to_diacritic(row) {
+        result.push(row_diacritic);
+    }
+
+    // Add column diacritic
+    if let Some(col_diacritic) = number_to_diacritic(col) {
+        result.push(col_diacritic);
+    }
+
+    // Add MSB diacritic if present and non-zero
+    if let Some(msb_val) = msb {
+        if msb_val > 0 {
+            if let Some(msb_diacritic) = number_to_diacritic(msb_val) {
+                result.push(msb_diacritic);
+            }
+        }
+    }
+
+    result
+}
+
 /// Parse diacritics from a string of combining characters
 ///
 /// Returns (row, col, msb) as parsed from the diacritics
@@ -194,12 +306,30 @@ mod tests {
     }
 
     #[test]
+    fn test_number_to_diacritic() {
+        assert_eq!(number_to_diacritic(0), Some('\u{0305}'));
+        assert_eq!(number_to_diacritic(1), Some('\u{030D}'));
+        assert_eq!(number_to_diacritic(2), Some('\u{030E}'));
+        assert_eq!(number_to_diacritic(63), Some('\u{0658}'));
+        assert_eq!(number_to_diacritic(64), None);
+    }
+
+    #[test]
     fn test_diacritic_mapping() {
         assert_eq!(diacritic_to_number('\u{0305}'), Some(0));
         assert_eq!(diacritic_to_number('\u{030D}'), Some(1));
         assert_eq!(diacritic_to_number('\u{030E}'), Some(2));
         assert_eq!(diacritic_to_number('\u{0658}'), Some(63));
         assert_eq!(diacritic_to_number('a'), None);
+    }
+
+    #[test]
+    fn test_roundtrip_diacritic_conversion() {
+        // Test that number -> diacritic -> number works
+        for n in 0..=63 {
+            let diacritic = number_to_diacritic(n).unwrap();
+            assert_eq!(diacritic_to_number(diacritic), Some(n));
+        }
     }
 
     #[test]
@@ -270,5 +400,25 @@ mod tests {
         assert_eq!(current2.row, Some(0));
         assert_eq!(current2.col, Some(1));
         assert_eq!(current2.msb, Some(2));
+    }
+
+    #[test]
+    fn test_create_placeholder_with_diacritics() {
+        // Test with row=0, col=0, no MSB
+        let placeholder = create_placeholder_with_diacritics(0, 0, None);
+        assert!(placeholder.starts_with(PLACEHOLDER_CHAR));
+        assert_eq!(placeholder.chars().count(), 3); // Char + 2 diacritics
+
+        // Test with row=1, col=2, MSB=3
+        let placeholder = create_placeholder_with_diacritics(1, 2, Some(3));
+        assert!(placeholder.starts_with(PLACEHOLDER_CHAR));
+        assert_eq!(placeholder.chars().count(), 4); // Char + 3 diacritics
+
+        // Verify round-trip
+        let diacritics: String = placeholder.chars().skip(1).collect();
+        let (row, col, msb) = parse_diacritics(&diacritics);
+        assert_eq!(row, Some(1));
+        assert_eq!(col, Some(2));
+        assert_eq!(msb, Some(3));
     }
 }

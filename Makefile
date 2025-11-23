@@ -2,7 +2,8 @@
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
-        web-install web-dev web-build web-start web-clean web-open
+        web-install web-dev web-build web-build-static web-start web-clean web-open \
+        streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install
 
 help:
 	@echo "==================================================================="
@@ -50,10 +51,20 @@ help:
 	@echo "  examples-streaming - Run streaming demo (requires streaming feature)"
 	@echo "  examples-all       - Run all examples (basic + PTY)"
 	@echo ""
+	@echo "Streaming Server (Standalone Rust Binary):"
+	@echo "  streamer-build        - Build streaming server binary (debug)"
+	@echo "  streamer-build-release - Build streaming server binary (release)"
+	@echo "  streamer-run          - Build and run streaming server (WebSocket only)"
+	@echo "  streamer-run-auth     - Build and run with authentication (API key: test-key)"
+	@echo "  streamer-run-http     - Build and run with HTTP server (serves web_term)"
+	@echo "  streamer-run-macro    - Build and run with macro playback demo"
+	@echo "  streamer-install      - Install streaming server to ~/.cargo/bin"
+	@echo ""
 	@echo "Web Frontend (Next.js):"
 	@echo "  web-install     - Install web frontend dependencies"
 	@echo "  web-dev         - Start dev server and open in browser"
-	@echo "  web-build       - Build web frontend for production"
+	@echo "  web-build       - Build web frontend for production (Next.js server)"
+	@echo "  web-build-static - Build and copy static frontend to web_term/"
 	@echo "  web-start       - Start production server"
 	@echo "  web-clean       - Clean web frontend build artifacts"
 	@echo ""
@@ -326,6 +337,121 @@ examples-all: examples-basic examples-pty
 	@echo "======================================================================"
 
 # ============================================================================
+# Streaming Server (Standalone Rust Binary)
+# ============================================================================
+
+streamer-build:
+	@echo "======================================================================"
+	@echo "  Building Streaming Server (Debug)"
+	@echo "======================================================================"
+	@echo ""
+	cargo build --bin par-term-streamer --no-default-features --features streaming
+	@echo ""
+	@echo "Binary built: target/debug/par-term-streamer"
+	@echo ""
+
+streamer-build-release:
+	@echo "======================================================================"
+	@echo "  Building Streaming Server (Release)"
+	@echo "======================================================================"
+	@echo ""
+	cargo build --bin par-term-streamer --no-default-features --features streaming --release
+	@echo ""
+	@echo "Binary built: target/release/par-term-streamer"
+	@echo ""
+
+streamer-run: streamer-build-release
+	@echo "======================================================================"
+	@echo "  Running Streaming Server"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Starting server on ws://127.0.0.1:8099"
+	@echo "Open examples/streaming_client.html or run 'make web-dev' in browser"
+	@echo ""
+	@echo "Press Ctrl+C to stop"
+	@echo ""
+	./target/release/par-term-streamer --port 8099 --theme iterm2-dark
+
+streamer-run-auth: streamer-build-release
+	@echo "======================================================================"
+	@echo "  Running Streaming Server with Authentication"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Starting server on ws://127.0.0.1:8099"
+	@echo "Authentication: ENABLED"
+	@echo "API Key: test-key"
+	@echo ""
+	@echo "Connect with:"
+	@echo "  - Header: Authorization: Bearer test-key"
+	@echo "  - URL: ws://127.0.0.1:8099?api_key=test-key"
+	@echo ""
+	@echo "Press Ctrl+C to stop"
+	@echo ""
+	./target/release/par-term-streamer --port 8099 --theme iterm2-dark --api-key test-key
+
+streamer-run-http: streamer-build-release
+	@echo "======================================================================"
+	@echo "  Running Streaming Server with HTTP Support"
+	@echo "======================================================================"
+	@echo ""
+	@if [ ! -d "web_term" ]; then \
+		echo "Error: web_term directory not found. Run 'make web-build-static' first."; \
+		exit 1; \
+	fi
+	@echo "Starting server on http://127.0.0.1:8099"
+	@echo "HTTP Server: ENABLED"
+	@echo "Web Root: ./web_term"
+	@echo ""
+	@echo "Open your browser to:"
+	@echo "  http://127.0.0.1:8099"
+	@echo ""
+	@echo "WebSocket endpoint:"
+	@echo "  ws://127.0.0.1:8099/ws"
+	@echo ""
+	@echo "Press Ctrl+C to stop"
+	@echo ""
+	./target/release/par-term-streamer --port 8099 --theme iterm2-dark --enable-http --web-root ./web_term
+
+streamer-run-macro: streamer-build-release
+	@echo "======================================================================"
+	@echo "  Running Streaming Server with Macro Playback"
+	@echo "======================================================================"
+	@echo ""
+	@if [ ! -f "examples/demo.yaml" ]; then \
+		echo "Error: examples/demo.yaml not found."; \
+		echo "Create a macro file first or use a different path."; \
+		exit 1; \
+	fi
+	@echo "Starting server on ws://127.0.0.1:8099"
+	@echo "Mode: MACRO PLAYBACK"
+	@echo "Macro file: examples/demo.yaml"
+	@echo ""
+	@echo "The server will play back the macro in a loop."
+	@echo "Connect with a WebSocket client or open examples/streaming_client.html"
+	@echo ""
+	@echo "Press Ctrl+C to stop"
+	@echo ""
+	./target/release/par-term-streamer --port 8099 --theme iterm2-dark --macro-file examples/demo.yaml --macro-loop
+
+streamer-install: streamer-build-release
+	@echo "======================================================================"
+	@echo "  Installing Streaming Server"
+	@echo "======================================================================"
+	@echo ""
+	cargo install --path . --bin par-term-streamer --no-default-features --features streaming --force
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Installation Complete!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "The streaming server has been installed to ~/.cargo/bin"
+	@echo ""
+	@echo "Run it with:"
+	@echo "  par-term-streamer --help"
+	@echo "  par-term-streamer --port 8080"
+	@echo ""
+
+# ============================================================================
 # Web Frontend (Next.js)
 # ============================================================================
 
@@ -374,6 +500,29 @@ web-build: web-install
 	@echo "  make web-start"
 	@echo ""
 
+web-build-static: web-install
+	@echo "======================================================================"
+	@echo "  Building Static Web Frontend for HTTP Server"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Building static export..."
+	cd web-terminal-frontend && npm run build
+	@echo ""
+	@echo "Copying to web_term/..."
+	rm -rf web_term
+	mkdir -p web_term
+	cp -r web-terminal-frontend/out/* web_term/
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Static build complete!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Files copied to: web_term/"
+	@echo ""
+	@echo "Run the streaming server with HTTP support:"
+	@echo "  make streamer-run-http"
+	@echo ""
+
 web-start:
 	@echo "======================================================================"
 	@echo "  Starting Web Frontend Production Server"
@@ -399,7 +548,8 @@ web-open:
 
 web-clean:
 	@echo "Cleaning web frontend build artifacts..."
-	cd web-terminal-frontend && rm -rf .next node_modules .turbo
+	cd web-terminal-frontend && rm -rf .next out node_modules .turbo
+	rm -rf web_term
 	@echo "Web frontend clean complete!"
 
 # ============================================================================
@@ -441,6 +591,7 @@ clean:
 	find . -type f -name "*.so" -delete
 	@if [ -d "web-terminal-frontend" ]; then \
 		echo "Cleaning web frontend..."; \
-		cd web-terminal-frontend && rm -rf .next node_modules .turbo; \
+		cd web-terminal-frontend && rm -rf .next out node_modules .turbo; \
 	fi
+	rm -rf web_term
 	@echo "Clean complete!"

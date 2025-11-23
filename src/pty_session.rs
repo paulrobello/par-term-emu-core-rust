@@ -915,10 +915,40 @@ impl Drop for PtySession {
             let _ = self.kill();
         }
 
-        // Wait for the reader thread to finish
-        if let Some(handle) = self.reader_thread.take() {
-            let _ = handle.join();
+        // Close writer to help unblock the reader thread
+        // This will cause the PTY to close, which should make the reader's read() return an error
+        if let Some(writer) = self.writer.take() {
+            drop(writer);
         }
+
+        // Wait for the reader thread to finish with timeout
+        if let Some(handle) = self.reader_thread.take() {
+            use std::time::Duration;
+
+            // Give it 2 seconds to finish gracefully
+            let timeout = Duration::from_secs(2);
+            let start = std::time::Instant::now();
+
+            // Poll for thread completion
+            while !handle.is_finished() && start.elapsed() < timeout {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+
+            if handle.is_finished() {
+                let _ = handle.join();
+                debug_log!("PTY_SHUTDOWN", "Reader thread joined successfully");
+            } else {
+                debug_info!(
+                    "PTY_SHUTDOWN",
+                    "Reader thread did not finish within {}s timeout, abandoning join",
+                    timeout.as_secs()
+                );
+                // Thread will be detached and cleaned up by OS
+                // This prevents indefinite hang during shutdown
+            }
+        }
+
+        debug_log!("PTY_SHUTDOWN", "PtySession dropped");
     }
 }
 

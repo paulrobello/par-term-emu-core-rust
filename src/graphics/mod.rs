@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 // Re-export for convenience
 pub use animation::{Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode};
-pub use placeholder::{PlaceholderInfo, PLACEHOLDER_CHAR};
+pub use placeholder::{
+    create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
+};
 
 /// Graphics protocol identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -525,12 +527,37 @@ impl GraphicsStore {
         }
     }
 
+    /// Set loop count for an animation
+    pub fn set_animation_loops(&mut self, image_id: u32, loop_count: u32) {
+        if let Some(anim) = self.get_animation_mut(image_id) {
+            anim.set_loops(loop_count);
+        }
+    }
+
     /// Update all animations and return list of image IDs that changed frames
+    ///
+    /// This method advances animation frames based on timing and updates the pixel data
+    /// in all placements associated with animated images.
     pub fn update_animations(&mut self) -> Vec<u32> {
         let mut changed = Vec::new();
         for (image_id, anim) in &mut self.animations {
             if anim.update() {
                 changed.push(*image_id);
+
+                // Update pixel data in all placements for this animated image
+                if let Some(current_frame) = anim.current_frame() {
+                    // Clone the pixels arc for sharing with placements
+                    let frame_pixels = current_frame.pixels.clone();
+
+                    // Update all placements that reference this image
+                    for placement in &mut self.placements {
+                        if placement.kitty_image_id == Some(*image_id) {
+                            placement.pixels = frame_pixels.clone();
+                            placement.width = current_frame.width;
+                            placement.height = current_frame.height;
+                        }
+                    }
+                }
             }
         }
         changed
