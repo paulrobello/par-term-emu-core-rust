@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1] - 2025-11-23
+
+### Fixed
+- **Theme Rendering**: Fixed theme color palette application in Python bindings
+  - Colors now properly use configured ANSI palette instead of hardcoded defaults
+  - Affects `get_visible_lines()` method in `PtyTerminal`
+  - Ensures theme colors are consistently rendered across all output methods
+  - Resolves foreground and background colors using the active palette
+
+### Added
+- **Makefile**: Added `install-force` target for force uninstall and reinstall
+
+## [0.9.0] - 2025-11-22
+
+### Added
+- **Graphics Protocol Support**: Comprehensive multi-protocol graphics implementation
+  - **iTerm2 Inline Images** (OSC 1337): PNG, JPEG, GIF support with base64 encoding
+  - **Kitty Graphics Protocol** (APC G): Advanced image placement with reuse and animations
+  - **Sixel Graphics**: Enhanced with unique IDs and configurable cell dimensions
+  - Unified `GraphicsStore` with scrollback support and memory limits
+  - Animation support with frame composition and timing control
+  - Graphics dropped event tracking for resource management
+
+- **Pre-built Streaming Server Binaries**: Download ready-to-run binaries from GitHub Releases
+  - Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows (x86_64)
+  - No compilation needed - just download and run
+  - Includes separate web frontend package (tar.gz/zip) for serving the terminal interface
+  - Published to crates.io for Rust developers: `cargo install par-term-emu-core-rust --features streaming`
+
 ## [0.8.0] - 2025-11-19
 
 ### Fixed
@@ -161,6 +190,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.9.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.5.0...v0.6.0

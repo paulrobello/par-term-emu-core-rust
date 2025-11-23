@@ -13,6 +13,13 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.9.1
+
+- **Theme Rendering Fix**: Fixed theme color palette application in Python bindings
+  - Colors now properly use configured ANSI palette instead of hardcoded defaults
+  - Affects `get_visible_lines()` method in `PtyTerminal`
+  - Ensures theme colors are consistently rendered across all output methods
+
 ## What's New in 0.9.0
 
 - **Graphics Protocol Support**: Comprehensive multi-protocol graphics implementation
@@ -175,10 +182,10 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.9", default-features = false }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.9", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.9"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.9", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.9.1", default-features = false }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.9.1", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.9.1"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.9.1", features = ["full"] }` | All features |
 
 **Download pre-built streaming server (recommended):**
 
@@ -190,8 +197,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
-tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.1.tar.gz
+tar -xzf par-term-web-frontend-v0.9.1.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -468,8 +475,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
-tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.1.tar.gz
+tar -xzf par-term-web-frontend-v0.9.1.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term
@@ -511,6 +518,8 @@ See [web-terminal-frontend/README.md](web-terminal-frontend/README.md) for detai
 ## TUI Demo Application
 
 A full-featured TUI (Text User Interface) application is available in the sister project [par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust).
+
+![TUI Demo Application](https://raw.githubusercontent.com/paulrobello/par-term-emu-tui-rust/refs/heads/main/Screenshot.png)
 
 **Installation:** `uv add par-term-emu-tui-rust` or `pip install par-term-emu-tui-rust`
 
@@ -590,6 +599,7 @@ Paul Robello - probello@gmail.com
 ## Links
 
 - **PyPI:** [https://pypi.org/project/par-term-emu-core-rust/](https://pypi.org/project/par-term-emu-core-rust/)
+- **Crates.io:** [https://crates.io/crates/par-term-emu-core-rust](https://crates.io/crates/par-term-emu-core-rust)
 - **GitHub:** [https://github.com/paulrobello/par-term-emu-core-rust](https://github.com/paulrobello/par-term-emu-core-rust)
 - **TUI Application:** [https://github.com/paulrobello/par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust)
 - **Documentation:** See [docs/](docs/) directory

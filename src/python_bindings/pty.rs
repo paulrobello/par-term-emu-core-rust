@@ -793,6 +793,49 @@ impl PyPtyTerminal {
         // Get bold brightening setting
         let bold_brightening = term.bold_brightening();
 
+        // Get ANSI palette for color resolution
+        let ansi_palette = term.get_ansi_palette();
+
+        // Helper function to resolve foreground color using the palette
+        let resolve_fg_color = |color: crate::color::Color| -> (u8, u8, u8) {
+            match color {
+                crate::color::Color::Named(named) => {
+                    // Use palette color instead of hardcoded ANSI color
+                    let palette_idx = named as usize;
+                    if palette_idx < 16 {
+                        ansi_palette[palette_idx].to_rgb()
+                    } else {
+                        color.to_rgb() // Fallback to hardcoded (shouldn't happen)
+                    }
+                }
+                crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
+                    // Indexed colors 0-15 also use palette
+                    ansi_palette[idx as usize].to_rgb()
+                }
+                _ => color.to_rgb(), // RGB and indexed 16-255 use their own values
+            }
+        };
+
+        // Helper function to resolve background color using the palette
+        let resolve_bg_color = |color: crate::color::Color| -> (u8, u8, u8) {
+            match color {
+                crate::color::Color::Named(named) => {
+                    // Use palette color instead of hardcoded ANSI color
+                    let palette_idx = named as usize;
+                    if palette_idx < 16 {
+                        ansi_palette[palette_idx].to_rgb()
+                    } else {
+                        color.to_rgb() // Fallback to hardcoded (shouldn't happen)
+                    }
+                }
+                crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
+                    // Indexed colors 0-15 also use palette
+                    ansi_palette[idx as usize].to_rgb()
+                }
+                _ => color.to_rgb(), // RGB and indexed 16-255 use their own values
+            }
+        };
+
         // Capture all lines while holding terminal lock
         let mut lines = Vec::with_capacity(rows);
         let mut wrapped_lines = Vec::with_capacity(rows);
@@ -815,8 +858,8 @@ impl PyPtyTerminal {
 
                     line.push((
                         cell.c,
-                        fg.to_rgb(),
-                        cell.bg.to_rgb(),
+                        resolve_fg_color(fg),
+                        resolve_bg_color(cell.bg),
                         PyAttributes {
                             bold: cell.flags.bold(),
                             dim: cell.flags.dim(),

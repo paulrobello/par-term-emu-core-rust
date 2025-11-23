@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-python clean install dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
@@ -18,6 +18,7 @@ help:
 	@echo "  setup-venv      - Create virtual environment and install tools"
 	@echo "  dev             - Install library in development mode (release)"
 	@echo "  install         - Build and install the package"
+	@echo "  install-force   - Force uninstall and reinstall the package"
 	@echo ""
 	@echo "Building:"
 	@echo "  build            - Build the library in development mode (debug)"
@@ -103,6 +104,19 @@ dev:
 install:
 	uv run maturin build --release
 	uv pip install target/wheels/*.whl --force-reinstall
+
+install-force:
+	@echo "Force uninstalling and reinstalling library..."
+	@if [ ! -d ".venv" ]; then \
+		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
+		exit 1; \
+	fi
+	uv pip uninstall par-term-emu-core-rust
+	uv run maturin develop --release
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Force reinstall complete!"
+	@echo "======================================================================"
 
 # ============================================================================
 # Building
