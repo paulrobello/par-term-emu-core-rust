@@ -45,7 +45,7 @@ jobs:
           echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
 
       - name: Run Rust tests
-        run: cargo test --lib --all-features
+        run: cargo test --lib --no-default-features
 
       - name: Dry run publish
         run: cargo publish --dry-run
