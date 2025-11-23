@@ -23,6 +23,7 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
     steps:
       - uses: actions/checkout@v4
 
