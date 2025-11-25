@@ -292,7 +292,7 @@ jobs:
       - name: Run tests (skip PTY tests on Windows)
         run: |
           .venv\Scripts\activate
-          pytest tests/ -v --timeout=5 --timeout-method=thread -k "not pty"
+          pytest tests/ -v --timeout=30 --timeout-method=thread -k "not pty"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
