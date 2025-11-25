@@ -29,6 +29,7 @@ par-term-emu-core-rust/
 ├── pyproject.toml
 └── src/
     ├── lib.rs
+    ├── grapheme.rs
     ├── bin/
     │   └── streaming_server.rs
     └── (other modules)
@@ -106,7 +107,7 @@ build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.9.0"
+version = "0.10.0"
 requires-python = ">=3.12"
 
 [tool.maturin]
@@ -205,7 +206,7 @@ strip = true
 
 ## ✅ Implemented Improvements
 
-All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.9.0!
+All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.10.0!
 
 ### 1. **Linux ARM64 (aarch64) Support** - ✅ IMPLEMENTED
 
@@ -226,6 +227,7 @@ All previously recommended improvements have been **fully implemented** as of ve
     target: aarch64
     manylinux: auto
     args: --release --out dist --interpreter python${{ matrix.python-version }}
+    sccache: 'true'
 ```
 
 **Benefits Delivered**:
@@ -267,11 +269,22 @@ windows:
     - uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
+    - name: Install uv
+      run: pip install uv
     - uses: PyO3/maturin-action@v1
       with:
         target: x86_64
         args: --release --out dist --interpreter python${{ matrix.python-version }}
         sccache: 'true'
+    - name: Create virtual environment
+      run: |
+        uv venv .venv
+        .venv\Scripts\activate
+        uv pip install --find-links dist par-term-emu-core-rust
+    - name: Install test dependencies
+      run: |
+        .venv\Scripts\activate
+        uv pip install pytest pytest-timeout
     - name: Run tests (skip PTY tests on Windows)
       run: |
         .venv\Scripts\activate
@@ -461,16 +474,16 @@ strip = true       # Strip symbols (smaller wheel)
 
 ### ✅ All High Priority Items - COMPLETED
 1. ✅ **Package name fixed** (par-term-emu → par-term-emu-core-rust)
-   - **Status**: ✅ Implemented in v0.8.0
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
 2. ✅ **ARM64 Linux support added**
-   - **Status**: ✅ Implemented in v0.8.0
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
    - Implementation: QEMU-based cross-compilation
    - Coverage: Python 3.12, 3.13, 3.14
 
 ### ✅ All Medium Priority Items - COMPLETED
 3. ✅ **Windows builds re-enabled**
-   - **Status**: ✅ Implemented in v0.8.0
-   - Solution: PTY tests excluded
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
+   - Solution: PTY tests excluded with `-k "not pty"` filter
    - Coverage: Python 3.12, 3.13, 3.14
 
 ### ✅ Low Priority Items - OPTIMAL
@@ -487,7 +500,7 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2025-11-22 (Version 0.9.0)
+**Last Updated**: 2025-11-24 (Version 0.10.0)
 
 | Category | Score | Notes |
 |----------|-------|-------|
@@ -554,9 +567,9 @@ The current configuration provides **world-class** packaging for a Rust/Python h
 ## References
 
 ### Official Documentation
-- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-11-22)
-- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-11-22)
-- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-11-22)
+- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-11-24)
+- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-11-24)
+- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-11-24)
 - [PyO3 Documentation](https://pyo3.rs/) - Rust-Python bindings
 - [PyO3 GitHub](https://github.com/PyO3/pyo3) - PyO3 repository
 

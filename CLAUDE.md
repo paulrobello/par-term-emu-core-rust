@@ -70,3 +70,4 @@ make checkall    # All quality checks (run before commits)
 - Always add tests and update documentation for new features
 - Always ensure the Python bindings are in sync with method signatures
 - when bumping project version make sure CHANGELOG.md is updated
+- be sure to note breaking changes in changelog and readme whats new sections

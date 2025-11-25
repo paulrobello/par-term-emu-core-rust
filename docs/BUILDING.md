@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library (version 0.9.0).
+This guide explains how to build and install the par-term-emu-core-rust library (version 0.10.0).
 
 ## Table of Contents
 
@@ -32,7 +32,7 @@ This guide explains how to build and install the par-term-emu-core-rust library 
 
 ### Rust
 
-You need Rust 1.75 or later. The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (as specified in `Cargo.toml`). The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -40,7 +40,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Python
 
-You need Python 3.12 or later. The project officially supports Python 3.12, 3.13, and 3.14. Check your version:
+You need Python 3.12 or later. The project officially supports Python 3.12, 3.13, and 3.14 (as specified in `pyproject.toml`). Check your version:
 
 ```bash
 python --version
@@ -80,6 +80,8 @@ The `setup-venv` target creates a `.venv` directory and syncs all development de
 - **ruff** (≥0.14.5) - Fast Python linter and formatter
 - **pyright** (≥1.1.407) - Static type checker
 - **pre-commit** (≥4.4.0) - Git hook framework
+- **rich** (≥14.2.0) - Rich text formatting for examples
+- **pillow** (≥12.0.0) - Image processing for graphics features
 
 ### Development Build
 
@@ -248,13 +250,13 @@ uv run python examples/pty_shell.py
 # ... and many more in the examples/ directory
 ```
 
-> **📝 Note:** The project includes 33 example scripts demonstrating various features including:
-> - **Basic Terminal**: colors, cursor movement, scrollback, text attributes, rectangle operations, alt screen, Unicode/emoji
+> **📝 Note:** The project includes 39 example scripts demonstrating various features including:
+> - **Basic Terminal**: basic usage, colors, cursor movement, scrollback, text attributes, rectangle operations, alt screen, Unicode/emoji, gradient tests
 > - **PTY/Shell**: basic PTY, shell sessions, resize, custom environments, multiple PTYs, event loops, mouse events
 > - **Graphics**: Sixel display and rendering, image display
-> - **Advanced Features**: mouse tracking, hyperlinks, notifications, shell integration, bracketed paste, synchronized updates
-> - **Testing**: underline styles, keyboard protocols, clipboard (OSC 52), TUI integration
-> - **Streaming**: WebSocket streaming demo (requires streaming feature)
+> - **Advanced Features**: mouse tracking, hyperlinks, notifications, shell integration, bracketed paste, synchronized updates, feature showcase
+> - **Testing**: underline styles, keyboard protocols, clipboard (OSC 52), TUI integration, BCE scroll tests, character tests, scroll timing tests
+> - **Streaming**: WebSocket streaming demo with debugging (requires streaming feature)
 > See the `examples/` directory for the complete list.
 
 ## Cross-Compilation
@@ -411,4 +413,5 @@ docker rm builder
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features documentation
 - [VT_SEQUENCES.md](VT_SEQUENCES.md) - VT sequence reference and implementation status
+- [STREAMING.md](STREAMING.md) - Streaming server documentation and WebSocket API
 - [Sister Project: par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) - Full-featured TUI application

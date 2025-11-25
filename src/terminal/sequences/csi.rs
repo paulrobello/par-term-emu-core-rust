@@ -1270,6 +1270,7 @@ impl Terminal {
                         // Create fill cell with current attributes
                         let fill_cell = Cell {
                             c: fill_char,
+                            combining: Vec::new(),
                             fg: self.fg,
                             bg: self.bg,
                             underline_color: self.underline_color,

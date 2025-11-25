@@ -13,12 +13,45 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.10.0
+
+### 🎉 New Features
+- **Emoji Sequence Preservation**: Complete support for complex emoji sequences and grapheme clusters
+  - ⚠️ vs ⚠ - Variation selectors (emoji vs text style)
+  - 👋🏽 - Skin tone modifiers (Fitzpatrick scale)
+  - 👨‍👩‍👧‍👦 - ZWJ sequences (family emoji)
+  - 🇺🇸 🇬🇧 - Regional indicator flags
+  - é - Combining diacritics and marks
+  - New `grapheme` module for Unicode cluster detection
+  - Enhanced Python bindings export full grapheme clusters
+
+- **Web Terminal Frontend**: Modern Next.js-based web interface
+  - Built with Next.js, TypeScript, and Tailwind CSS v4
+  - Theme support with configurable color palettes
+  - Nerd Font support for file/folder icons
+  - New Makefile targets for web frontend development
+
+- **Terminal Sequence Support**:
+  - CSI 3J - Clear scrollback buffer command
+  - Improved cursor positioning for snapshot exports
+
+### 🐛 Bug Fixes
+- Graphics now properly preserved when scrolling into scrollback buffer
+- Sixel content saved to scrollback during large scrolling operations
+- Kitty Graphics Protocol animation parsing fixes (base64 encoding, frame actions)
+
+### ⚠️ Breaking Changes (Rust API only)
+- **`Cell` struct no longer implements `Copy`** (now `Clone` only)
+  - Required for variable-length grapheme cluster storage
+  - All cell copy operations now require explicit `.clone()` calls
+  - **Python bindings are unaffected** - no changes needed in Python code
+  - Performance impact is minimal due to efficient cloning
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.9.1
 
 - **Theme Rendering Fix**: Fixed theme color palette application in Python bindings
-  - Colors now properly use configured ANSI palette instead of hardcoded defaults
-  - Affects `get_visible_lines()` method in `PtyTerminal`
-  - Ensures theme colors are consistently rendered across all output methods
 
 ## What's New in 0.9.0
 
@@ -50,7 +83,12 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Rectangle Operations** - VT420 fill/copy/erase/modify rectangular regions (DECFRA, DECCRA, etc.)
 - **Scrolling Regions** - DECSTBM for restricted scrolling areas
 - **Tab Stops** - Configurable tab stops (HTS, TBC, CHT, CBT)
-- **Unicode Support** - Full Unicode including emoji and wide characters
+- **Unicode Support** - Full Unicode including complex emoji sequences and grapheme clusters
+  - Variation selectors (emoji vs text presentation)
+  - Skin tone modifiers (Fitzpatrick scale U+1F3FB-U+1F3FF)
+  - Zero Width Joiner (ZWJ) sequences for multi-emoji glyphs
+  - Regional indicators for flag emoji
+  - Combining characters and diacritical marks
 
 ### Modern Features
 
@@ -182,10 +220,10 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.9.1", default-features = false }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.9.1", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.9.1"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.9.1", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.10", default-features = false }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.10", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.10"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.10", features = ["full"] }` | All features |
 
 **Download pre-built streaming server (recommended):**
 
@@ -197,8 +235,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.1.tar.gz
-tar -xzf par-term-web-frontend-v0.9.1.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.10.0.tar.gz
+tar -xzf par-term-web-frontend-v0.10.0.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -475,8 +513,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.1.tar.gz
-tar -xzf par-term-web-frontend-v0.9.1.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.10.0.tar.gz
+tar -xzf par-term-web-frontend-v0.10.0.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term

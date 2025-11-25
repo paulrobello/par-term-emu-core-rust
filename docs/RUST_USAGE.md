@@ -20,7 +20,9 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 
 ## Overview
 
-This library provides full VT100/VT220/VT320/VT420/VT520 terminal emulation in pure Rust. It can be used with or without Python bindings, making it suitable for pure Rust applications, embedded terminals, and CLI tools.
+This library provides full VT100/VT220/VT320/VT420/VT520 terminal emulation in pure Rust with Python 3.12+ bindings. It can be used with or without Python bindings, making it suitable for pure Rust applications, embedded terminals, and CLI tools.
+
+> **⚠️ Breaking Change in v0.10.0:** The `Cell` struct no longer implements `Copy` (now `Clone` only) to support variable-length grapheme cluster storage. All cell copy operations now require explicit `.clone()` calls. Python bindings are unaffected.
 
 ### Architecture Overview
 
@@ -75,7 +77,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.9", default-features = false }
+par-term-emu-core-rust = { version = "0.10", default-features = false }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -83,7 +85,7 @@ par-term-emu-core-rust = { version = "0.9", default-features = false }
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.9", default-features = false, features = ["streaming"] }
+par-term-emu-core-rust = { version = "0.10", default-features = false, features = ["streaming"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -91,9 +93,9 @@ par-term-emu-core-rust = { version = "0.9", default-features = false, features =
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.9" }
+par-term-emu-core-rust = { version = "0.10" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.9", features = ["python"] }
+par-term-emu-core-rust = { version = "0.10", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -101,9 +103,9 @@ par-term-emu-core-rust = { version = "0.9", features = ["python"] }
 #### Python with Streaming
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.9", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.10", features = ["python", "streaming"] }
 # Or use the convenience feature:
-par-term-emu-core-rust = { version = "0.9", features = ["full"] }
+par-term-emu-core-rust = { version = "0.10", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server
 **Use for:** Full-featured terminal applications with remote access
@@ -122,7 +124,7 @@ cargo build --no-default-features --features streaming
 
 **Python only:**
 ```bash
-maturin develop --release
+uv run maturin develop --release
 ```
 
 **Python with streaming:**
@@ -266,7 +268,7 @@ fn main() -> std::io::Result<()> {
 use par_term_emu_core_rust::{
     terminal::Terminal,
     pty_session::PtySession,
-    streaming::server::{StreamingConfig, StreamingServer},
+    streaming::{StreamingConfig, StreamingServer},
 };
 use std::sync::{Arc, Mutex};
 
@@ -327,8 +329,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Feature | Description | Includes |
 |---------|-------------|----------|
-| `python` | Python bindings via PyO3 | `pyo3` |
-| `streaming` | WebSocket streaming server | `tokio`, `axum`, `tokio-tungstenite` |
+| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module` |
+| `streaming` | WebSocket streaming server | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `uuid`, `clap`, `anyhow`, `tracing`, `tracing-subscriber` |
 | `rust-only` | Pure Rust, no Python | (none) |
 | `full` | All features | `python`, `streaming` |
 | `default` | Default features | `python` |
@@ -374,12 +376,12 @@ cargo doc --all-features --open
 ## Core Components
 
 ### Terminal
-- VT100/VT220/VT320/VT420 compatible
+- VT100/VT220/VT320/VT420/VT520 compatible
 - ANSI color support (256 colors + RGB)
-- Unicode handling with wide character support
+- Unicode handling with wide character support and grapheme cluster preservation
 - Scrollback buffer
 - Mouse event support
-- Graphics support (Kitty protocol)
+- Graphics support (Sixel, iTerm2 inline images, Kitty Graphics Protocol)
 
 ### PtySession
 - Cross-platform PTY support
@@ -438,6 +440,9 @@ pub extern "C" fn terminal_free(ptr: *mut Terminal) {
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Detailed feature guides
 - [BUILDING.md](BUILDING.md) - Build instructions and requirements
 - [API_REFERENCE.md](API_REFERENCE.md) - Python API documentation
+- [STREAMING.md](STREAMING.md) - WebSocket streaming server guide
+- [MACROS.md](MACROS.md) - Macro recording and playback documentation
+- [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
 
 ## License
 

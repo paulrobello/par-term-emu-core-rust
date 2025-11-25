@@ -24,8 +24,13 @@ term.spawn(
 - Set `PAR_TERM_REPLY_XTWINOPS=0` **before creating `PtyTerminal`** to suppress XTWINOPS (CSI t) query responses (this setting is cached at terminal creation time)
 
 **Convenience Methods:**
-- `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` or platform default)
+- `term.spawn_shell()` - Auto-detects and spawns default shell (uses `$SHELL` on Unix or `%COMSPEC%` on Windows, with fallback to `/bin/bash` or `cmd.exe` respectively)
 - `PtyTerminal.get_default_shell()` - Static method that returns the default shell path for current platform
+
+**Implementation Notes:**
+- The Rust implementation uses `set_env()` and `set_cwd()` methods internally before calling `spawn()`
+- Environment variables are stored as a `Vec<(String, String)>` and applied during process spawn
+- Working directory is stored as `Option<String>` and applied via `CommandBuilder::cwd()` if set
 
 ## Table of Contents
 
@@ -233,9 +238,13 @@ safe_overrides = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",  # Controlled PATH
     "HOME": "/home/user",
     "USER": "safeuser",
-    # Note: TERM and COLORTERM are set automatically to xterm-kitty/truecolor
-    # (plus TERM_PROGRAM, KITTY_WINDOW_ID, KITTY_PID for Kitty protocol detection)
-    # but can be overridden here if needed
+    # Note: The following are set automatically by the PTY system:
+    #   TERM=xterm-kitty
+    #   COLORTERM=truecolor
+    #   TERM_PROGRAM=kitty
+    #   KITTY_WINDOW_ID=1
+    #   KITTY_PID=<process_id>
+    # These enable Kitty graphics protocol detection and can be overridden if needed
     # Clear sensitive variables by setting to empty string
     "AWS_SECRET_KEY": "",
     "DATABASE_PASSWORD": "",
@@ -245,11 +254,15 @@ safe_overrides = {
 term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
-# Environment merge order:
+# Environment merge order (see spawn() in src/pty_session.rs):
 # 1. Inherit all parent env vars (except COLUMNS/LINES - automatically filtered)
-# 2. Set TERM=xterm-kitty, COLORTERM=truecolor, TERM_PROGRAM=kitty,
-#    KITTY_WINDOW_ID, and KITTY_PID
-# 3. Override with keys from env parameter
+# 2. Set terminal-specific environment variables:
+#    - TERM=xterm-kitty
+#    - COLORTERM=truecolor
+#    - TERM_PROGRAM=kitty
+#    - KITTY_WINDOW_ID=1
+#    - KITTY_PID=<current process ID>
+# 3. Override with keys from env parameter (user-specified values)
 # To completely isolate the environment, you must override ALL inherited vars
 ```
 
@@ -499,9 +512,13 @@ term.spawn_shell()
 
 **Technical Details**:
 - This setting is cached when `PtyTerminal` is created by reading `PAR_TERM_REPLY_XTWINOPS` from the environment (checked once at initialization in `PtySession::new()`)
+- Default behavior: enabled (returns true) if env var is unset, not "0", or not "false"
 - Changing the environment variable after terminal creation has no effect on that terminal instance
-- The filtering is implemented in the PTY reader thread and removes CSI sequences ending with 't' when disabled
-- Device query responses are still written back to the PTY master for nested applications to receive, but are filtered before being processed by the terminal emulator when `PAR_TERM_REPLY_XTWINOPS=0`
+- The filtering is implemented in the PTY reader thread (`start_reader_thread` in `src/pty_session.rs`)
+- When disabled, CSI sequences ending with 't' are filtered from responses before being written back to the PTY master
+- Device query responses are processed by scanning for escape sequences (`\x1B[`) and checking the final byte
+- Only responses with alphabetic final byte 't' are dropped when filtering is enabled
+- This prevents XTWINOPS responses from being echoed visibly when shells have `ECHOCTL` enabled
 
 ## Input Validation
 
@@ -552,46 +569,73 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 ### File Loading Implementation
 
-The file loading security implementation is located in `src/graphics/kitty.rs` in the `load_file_data()` method.
+The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty.rs`.
 
 **Security validations applied:**
 
-1. **Directory traversal check**
-   ```rust
-   if path_str.contains("..") {
-       return Err("Directory traversal not allowed");
-   }
-   ```
+1. **UTF-8 Path Validation**
+   - File paths must be valid UTF-8 strings
+   - Invalid encoding is rejected with clear error message
 
-2. **File existence and type validation**
-   ```rust
-   if !path.exists() {
-       return Err("File not found");
-   }
-   if !path.is_file() {
-       return Err("Path is not a file");
-   }
-   ```
+2. **Directory Traversal Prevention**
+   - Any path containing `..` is rejected
+   - Prevents access to parent directories
+   - Applied before any file system operations
 
-3. **File size limits**
-   ```rust
-   const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
-   if metadata.len() > MAX_FILE_SIZE {
-       return Err("File too large");
-   }
-   ```
+3. **File Existence and Type Validation**
+   - Path must exist on the filesystem
+   - Path must be a regular file (not directory, symlink, or special file)
+   - Clear error messages for each validation failure
 
-4. **Read and validate file**
-   ```rust
-   let file_data = fs::read(path)?;
-   ```
+4. **File Size Limits**
+   - Maximum file size: 100MB (`100 * 1024 * 1024` bytes)
+   - Checked via metadata before reading
+   - Prevents memory exhaustion attacks
+   - Error includes actual size and limit
 
-5. **Delete temp file if t=t**
-   ```rust
-   if self.medium == KittyMedium::TempFile {
-       let _ = fs::remove_file(path);
-   }
-   ```
+5. **Automatic Cleanup for Temporary Files**
+   - Files loaded with `t=t` (TempFile medium) are automatically deleted after reading
+   - Cleanup errors are silently ignored to prevent blocking on file system issues
+
+**Implementation Details:**
+```rust
+// From src/graphics/kitty.rs
+fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+    // 1. UTF-8 validation
+    let path_str = String::from_utf8(path_data.to_vec())?;
+    let path = Path::new(&path_str);
+
+    // 2. Directory traversal check
+    if path_str.contains("..") {
+        return Err("Directory traversal not allowed");
+    }
+
+    // 3. File existence and type validation
+    if !path.exists() {
+        return Err("File not found");
+    }
+    if !path.is_file() {
+        return Err("Path is not a file");
+    }
+
+    // 4. File size limit check
+    const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > MAX_FILE_SIZE {
+        return Err("File too large");
+    }
+
+    // 5. Read file
+    let file_data = fs::read(path)?;
+
+    // 6. Delete temp file if t=t
+    if self.medium == KittyMedium::TempFile {
+        let _ = fs::remove_file(path); // Ignore cleanup errors
+    }
+
+    Ok(file_data)
+}
+```
 
 ### Security Considerations
 

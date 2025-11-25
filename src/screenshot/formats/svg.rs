@@ -114,7 +114,11 @@ pub fn encode(grid: &Grid, font_size: f32, padding: u32) -> ScreenshotResult<Vec
                     break;
                 }
 
+                // Output full grapheme cluster (base char + combining chars)
                 run_text.push(current.c);
+                for &combining in &current.combining {
+                    run_text.push(combining);
+                }
                 col += 1;
             }
 

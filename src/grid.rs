@@ -100,13 +100,17 @@ impl Grid {
     }
 
     /// Get the text content of a row (for text shaping)
+    ///
+    /// Returns the text with full grapheme clusters (including variation selectors,
+    /// ZWJ, and other combining characters)
     pub fn row_text(&self, row: usize) -> String {
         if let Some(cells) = self.row(row) {
             cells
                 .iter()
                 .filter(|cell| !cell.flags.wide_char_spacer())
-                .map(|cell| cell.c)
-                .collect()
+                .map(|cell| cell.get_grapheme())
+                .collect::<Vec<String>>()
+                .join("")
         } else {
             String::new()
         }
@@ -188,7 +192,7 @@ impl Grid {
 
                     // Overwrite the oldest line in the circular buffer
                     self.scrollback_cells[dst_start..dst_end]
-                        .copy_from_slice(&self.cells[src_start..src_end]);
+                        .clone_from_slice(&self.cells[src_start..src_end]);
                     self.scrollback_wrapped[write_idx] = is_wrapped;
 
                     // Advance start pointer (circular)
@@ -201,8 +205,10 @@ impl Grid {
         for i in n..self.rows {
             let src_start = i * self.cols;
             let dst_start = (i - n) * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
             // Move wrapped state
             if i < self.wrapped.len() && (i - n) < self.wrapped.len() {
                 self.wrapped[i - n] = self.wrapped[i];
@@ -226,8 +232,10 @@ impl Grid {
         for i in (n..self.rows).rev() {
             let src_start = (i - n) * self.cols;
             let dst_start = i * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
             // Move wrapped state
             if (i - n) < self.wrapped.len() && i < self.wrapped.len() {
                 self.wrapped[i] = self.wrapped[i - n];
@@ -261,7 +269,7 @@ impl Grid {
         for row in 0..min_rows {
             for col in 0..min_cols {
                 if let Some(cell) = self.get(col, row) {
-                    new_cells[row * cols + col] = *cell;
+                    new_cells[row * cols + col] = cell.clone();
                 }
             }
             // Copy wrapped state
@@ -377,7 +385,11 @@ impl Grid {
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
                 for cell in row_cells {
+                    // Output full grapheme cluster (base char + combining chars)
                     result.push(cell.c);
+                    for &combining in &cell.combining {
+                        result.push(combining);
+                    }
                 }
                 result.push('\n');
             }
@@ -405,7 +417,11 @@ impl Grid {
                 for cell in line_cells {
                     // Skip wide char spacers (they're just placeholders for the second cell of wide chars)
                     if !cell.flags.wide_char_spacer() {
+                        // Output full grapheme cluster (base char + combining chars)
                         line_text.push(cell.c);
+                        for &combining in &cell.combining {
+                            line_text.push(combining);
+                        }
                     }
                 }
 
@@ -428,7 +444,11 @@ impl Grid {
                 for cell in row_cells {
                     // Skip wide char spacers
                     if !cell.flags.wide_char_spacer() {
+                        // Output full grapheme cluster (base char + combining chars)
                         line_text.push(cell.c);
+                        for &combining in &cell.combining {
+                            line_text.push(combining);
+                        }
                     }
                 }
 
@@ -567,14 +587,40 @@ impl Grid {
                 result.push('m');
             };
 
+        // Helper to find last significant column (styled or non-space content)
+        let default_fg = Color::Named(NamedColor::White);
+        let default_bg = Color::Named(NamedColor::Black);
+        let default_flags = crate::cell::CellFlags::default();
+        let find_last_significant = |cells: &[Cell]| -> usize {
+            let mut last = 0;
+            for (col, cell) in cells.iter().enumerate() {
+                if cell.flags.wide_char_spacer() {
+                    continue;
+                }
+                let has_content = cell.c != ' ' || !cell.combining.is_empty();
+                let has_styling =
+                    cell.fg != default_fg || cell.bg != default_bg || cell.flags != default_flags;
+                if has_content || has_styling {
+                    last = col + 1;
+                }
+            }
+            last
+        };
+
         // Export scrollback buffer first
         for line_idx in 0..self.scrollback_lines {
             if let Some(line_cells) = self.scrollback_line(line_idx) {
+                let last_significant = find_last_significant(line_cells);
                 let mut line_text = String::new();
 
-                for cell in line_cells {
+                for (col, cell) in line_cells.iter().enumerate() {
                     if cell.flags.wide_char_spacer() {
                         continue;
+                    }
+
+                    // Stop after last significant column (col is array index)
+                    if col >= last_significant {
+                        break;
                     }
 
                     // Check if style changed
@@ -586,15 +632,17 @@ impl Grid {
                         current_flags = cell.flags;
                     }
 
+                    // Output full grapheme cluster (base char + combining chars)
                     line_text.push(cell.c);
+                    for &combining in &cell.combining {
+                        line_text.push(combining);
+                    }
                 }
 
-                // Trim trailing spaces
-                let trimmed = line_text.trim_end();
-                result.push_str(trimmed);
+                result.push_str(&line_text);
 
                 // Reset style at end of line
-                if !trimmed.is_empty() {
+                if !line_text.is_empty() {
                     result.push_str("\x1b[0m");
                     current_fg = Color::Named(NamedColor::White);
                     current_bg = Color::Named(NamedColor::Black);
@@ -610,11 +658,17 @@ impl Grid {
         // Export current screen
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
+                let last_significant = find_last_significant(row_cells);
                 let mut line_text = String::new();
 
-                for cell in row_cells {
+                for (col, cell) in row_cells.iter().enumerate() {
                     if cell.flags.wide_char_spacer() {
                         continue;
+                    }
+
+                    // Stop after last significant column (col is array index)
+                    if col >= last_significant {
+                        break;
                     }
 
                     // Check if style changed
@@ -626,14 +680,17 @@ impl Grid {
                         current_flags = cell.flags;
                     }
 
+                    // Output full grapheme cluster (base char + combining chars)
                     line_text.push(cell.c);
+                    for &combining in &cell.combining {
+                        line_text.push(combining);
+                    }
                 }
 
-                let trimmed = line_text.trim_end();
-                result.push_str(trimmed);
+                result.push_str(&line_text);
 
                 // Reset style at end of line if there's content
-                if !trimmed.is_empty() {
+                if !line_text.is_empty() {
                     result.push_str("\x1b[0m");
                     current_fg = Color::Named(NamedColor::White);
                     current_bg = Color::Named(NamedColor::Black);
@@ -644,7 +701,7 @@ impl Grid {
                     if !self.is_line_wrapped(row) {
                         result.push('\n');
                     }
-                } else if !trimmed.is_empty() {
+                } else if !line_text.is_empty() {
                     result.push('\n');
                 }
             }
@@ -773,16 +830,47 @@ impl Grid {
 
         // Export only the visible screen (no scrollback)
         // Use explicit cursor positioning for each row to avoid newline handling issues
+        let default_fg = Color::Named(NamedColor::White);
+        let default_bg = Color::Named(NamedColor::Black);
+        let default_flags = crate::cell::CellFlags::default();
+
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
+                // Find the last column with non-default content (styled or non-space)
+                // This prevents trimming styled spaces (e.g., gradient backgrounds)
+                let mut last_significant_col = 0;
+                for (col, cell) in row_cells.iter().enumerate() {
+                    if cell.flags.wide_char_spacer() {
+                        continue;
+                    }
+                    // A cell is significant if it has non-space content OR non-default styling
+                    let has_content = cell.c != ' ' || !cell.combining.is_empty();
+                    let has_styling = cell.fg != default_fg
+                        || cell.bg != default_bg
+                        || cell.flags != default_flags;
+                    if has_content || has_styling {
+                        last_significant_col = col + 1;
+                    }
+                }
+
+                // Skip empty rows entirely
+                if last_significant_col == 0 {
+                    continue;
+                }
+
                 // Position cursor at beginning of this row (1-indexed for VT100)
                 result.push_str(&format!("\x1b[{};1H", row + 1));
 
                 let mut line_text = String::new();
 
-                for cell in row_cells {
+                for (col, cell) in row_cells.iter().enumerate() {
                     if cell.flags.wide_char_spacer() {
                         continue;
+                    }
+
+                    // Stop after last significant column (col is array index, not non-spacer count)
+                    if col >= last_significant_col {
+                        break;
                     }
 
                     // Check if style changed
@@ -794,14 +882,17 @@ impl Grid {
                         current_flags = cell.flags;
                     }
 
+                    // Output full grapheme cluster (base char + combining chars)
                     line_text.push(cell.c);
+                    for &combining in &cell.combining {
+                        line_text.push(combining);
+                    }
                 }
 
-                let trimmed = line_text.trim_end();
-                result.push_str(trimmed);
+                result.push_str(&line_text);
 
                 // Reset style at end of line if there's content
-                if !trimmed.is_empty() {
+                if !line_text.is_empty() {
                     result.push_str("\x1b[0m");
                     current_fg = Color::Named(NamedColor::White);
                     current_bg = Color::Named(NamedColor::Black);
@@ -836,8 +927,10 @@ impl Grid {
         for i in (row..=(effective_bottom - n)).rev() {
             let src_start = i * self.cols;
             let dst_start = (i + n) * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
         }
 
         // Clear the newly inserted lines
@@ -860,8 +953,10 @@ impl Grid {
         for i in row..=(effective_bottom.saturating_sub(n)) {
             let src_start = (i + n) * self.cols;
             let dst_start = i * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
         }
 
         // Clear the lines at the bottom - use saturating_sub to prevent underflow
@@ -886,7 +981,7 @@ impl Grid {
         // Move characters right from col to cols - n - 1
         if let Some(row_cells) = self.row_mut(row) {
             for i in ((col + n)..cols).rev() {
-                row_cells[i] = row_cells[i - n];
+                row_cells[i] = row_cells[i - n].clone();
             }
 
             // Clear the inserted characters
@@ -909,7 +1004,7 @@ impl Grid {
         if let Some(row_cells) = self.row_mut(row) {
             // Move characters left from col + n to cols - 1
             for i in col..(cols - n) {
-                row_cells[i] = row_cells[i + n];
+                row_cells[i] = row_cells[i + n].clone();
             }
 
             // Clear the characters at the end
@@ -971,7 +1066,7 @@ impl Grid {
 
                     // Overwrite the oldest line in the circular buffer
                     self.scrollback_cells[dst_start..dst_end]
-                        .copy_from_slice(&self.cells[src_start..src_end]);
+                        .clone_from_slice(&self.cells[src_start..src_end]);
                     self.scrollback_wrapped[write_idx] = is_wrapped;
 
                     // Advance start pointer (circular)
@@ -992,8 +1087,10 @@ impl Grid {
         for i in top..=(effective_bottom - n) {
             let src_start = (i + n) * self.cols;
             let dst_start = i * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
         }
 
         // Clear bottom lines in the region
@@ -1025,8 +1122,10 @@ impl Grid {
         for i in ((top + n)..=effective_bottom).rev() {
             let src_start = (i - n) * self.cols;
             let dst_start = i * self.cols;
-            let src_end = src_start + self.cols;
-            self.cells.copy_within(src_start..src_end, dst_start);
+            // Clone cells from source to destination
+            for j in 0..self.cols {
+                self.cells[dst_start + j] = self.cells[src_start + j].clone();
+            }
         }
 
         // Clear top lines in the region
@@ -1062,7 +1161,7 @@ impl Grid {
         for row in top..=bottom {
             for col in left..=right {
                 if let Some(cell) = self.get_mut(col, row) {
-                    *cell = fill_cell;
+                    *cell = fill_cell.clone();
                 }
             }
         }
@@ -1111,7 +1210,7 @@ impl Grid {
         for row in src_top..=src_bottom {
             for col in src_left..=src_right {
                 if let Some(cell) = self.get(col, row) {
-                    buffer.push(*cell);
+                    buffer.push(cell.clone());
                 }
             }
         }
@@ -1122,7 +1221,7 @@ impl Grid {
             for col in dst_left..=dst_right {
                 if buffer_idx < buffer.len() {
                     if let Some(cell) = self.get_mut(col, row) {
-                        *cell = buffer[buffer_idx];
+                        *cell = buffer[buffer_idx].clone();
                     }
                     buffer_idx += 1;
                 }

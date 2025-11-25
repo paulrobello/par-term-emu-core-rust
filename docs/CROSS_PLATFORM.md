@@ -80,7 +80,8 @@ pub fn get_default_shell() -> String {
 **Environment Variables:**
 - Inherits parent environment variables properly on all platforms
 - Automatically drops `COLUMNS` and `LINES` to prevent resize issues (apps should query PTY size via ioctl)
-- Sets `TERM=xterm-256color` and `COLORTERM=truecolor` consistently
+- Sets `TERM=xterm-kitty` and `COLORTERM=truecolor` consistently
+- Sets Kitty-specific variables (`TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID`, `KITTY_PID`) for protocol detection
 
 **Process Management:**
 - Uses `portable-pty::native_pty_system()` for platform-appropriate PTY implementation
@@ -244,9 +245,10 @@ par-term-emu-core-rust is built entirely in Rust with no C dependencies required
 - Consistent behavior everywhere
 
 **Required Tools:**
-- **Rust**: Version 1.75 or later (tested with 1.91.1)
+- **Rust**: Version 1.75 or later (minimum specified in Cargo.toml)
 - **Cargo**: Comes with Rust
 - **Python**: 3.12+ for Python bindings (if building with `python` feature)
+- **uv**: Python package manager for dependency management
 
 **Quick Start:**
 ```bash
@@ -413,7 +415,8 @@ When testing on a new platform, verify:
 - [ ] Custom commands execute
 - [ ] Window resize works (SIGWINCH on Unix, ConPTY on Windows)
 - [ ] Environment variables inherited properly
-- [ ] `TERM` and `COLORTERM` set correctly
+- [ ] `TERM=xterm-kitty` and `COLORTERM=truecolor` set correctly
+- [ ] Kitty protocol environment variables set (`TERM_PROGRAM`, `KITTY_WINDOW_ID`, `KITTY_PID`)
 
 **Graphics Module:**
 - [ ] Kitty graphics protocol works
@@ -520,6 +523,8 @@ let pty_system = portable_pty::native_pty_system();
 
 The project uses comprehensive cross-platform CI via GitHub Actions (`.github/workflows/ci.yml`).
 
+**Trigger**: Workflow runs on `workflow_dispatch` (manual trigger)
+
 **Test Matrix:**
 ```yaml
 strategy:
@@ -549,10 +554,7 @@ This creates **9 test combinations** (3 platforms × 3 Python versions).
   - Python linting: `ruff check`
   - Python type checking: `pyright`
 
-**3. Build Job**
-- Builds wheels for all platforms
-- Uses `maturin` for Python wheel packaging
-- Uploads artifacts for each platform
+**Note**: The CI configuration includes test and lint jobs. Build jobs for wheel packaging may be handled separately in release workflows.
 
 ### Platform-Specific CI Steps
 
@@ -596,12 +598,13 @@ macOS and Windows run pytest directly:
 - Prevents hanging tests from blocking CI
 
 **Exclusions:**
-- Some PTY tests excluded in CI due to platform-specific behavior
+- PTY tests excluded in CI: `test_pty.py`, `test_ioctl_size.py`, `test_pty_resize_sigwinch.py`, `test_nested_shell_resize.py`
+- These are excluded due to platform-specific behavior and CI environment limitations
 - Graphics tests may be excluded if they require display access
 
-**Artifacts:**
-- Wheels uploaded for each platform
-- Available for download and testing before release
+**Test Execution:**
+- All platforms run the same test suite with platform-specific exclusions
+- Tests excluded: PTY-related tests that depend on terminal control behavior
 
 ## Known Limitations
 
@@ -701,6 +704,7 @@ embed-color-emoji = []  # Add ~10-15MB for guaranteed color emoji
 - [README.md](../README.md) - User-facing documentation and quick start
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
 - [FONTS.md](FONTS.md) - Font system and emoji rendering details
+- [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Configuration options reference
 
 ## External Resources
 

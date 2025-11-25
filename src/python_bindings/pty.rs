@@ -514,7 +514,7 @@ impl PyPtyTerminal {
     fn scrollback_line(
         &self,
         index: usize,
-    ) -> PyResult<Option<Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
+    ) -> PyResult<Option<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
         let terminal = self.inner.terminal();
         let term = terminal
             .lock()
@@ -525,7 +525,7 @@ impl PyPtyTerminal {
                 .iter()
                 .map(|cell| {
                     (
-                        cell.c,
+                        cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
                         PyAttributes {
@@ -743,7 +743,7 @@ impl PyPtyTerminal {
                     .filter_map(|col| {
                         grid.get(col, row).map(|cell| {
                             (
-                                cell.c,
+                                cell.get_grapheme(),
                                 cell.fg.to_rgb(),
                                 cell.bg.to_rgb(),
                                 PyAttributes {
@@ -857,7 +857,7 @@ impl PyPtyTerminal {
                     }
 
                     line.push((
-                        cell.c,
+                        cell.get_grapheme(),
                         resolve_fg_color(fg),
                         resolve_bg_color(cell.bg),
                         PyAttributes {
@@ -877,7 +877,12 @@ impl PyPtyTerminal {
                     ));
                 } else {
                     // Empty cell
-                    line.push((' ', (0, 0, 0), (0, 0, 0), PyAttributes::default()));
+                    line.push((
+                        " ".to_string(),
+                        (0, 0, 0),
+                        (0, 0, 0),
+                        PyAttributes::default(),
+                    ));
                 }
             }
             lines.push(line);

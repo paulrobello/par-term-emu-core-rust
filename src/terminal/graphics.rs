@@ -135,6 +135,7 @@ impl Terminal {
                 // TODO: Handle diacritics properly in Cell structure
                 let cell = Cell {
                     c: PLACEHOLDER_CHAR,
+                    combining: Vec::new(),
                     fg: image_id_color,
                     bg: self.bg, // Use current background
                     underline_color: Some(placement_id_color),

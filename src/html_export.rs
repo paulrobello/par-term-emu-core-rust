@@ -68,7 +68,7 @@ fn export_line_to_html(cells: &[Cell], html: &mut String) {
             current_style = Some(cell_style);
         }
 
-        // Add the character
+        // Add the base character (with HTML escaping)
         let ch = cell.c;
         match ch {
             '<' => html.push_str("&lt;"),
@@ -77,6 +77,17 @@ fn export_line_to_html(cells: &[Cell], html: &mut String) {
             '"' => html.push_str("&quot;"),
             '\0' | ' ' => html.push(' '),
             _ => html.push(ch),
+        }
+
+        // Add combining characters (variation selectors, ZWJ, skin tone modifiers, etc.)
+        for &combining in &cell.combining {
+            match combining {
+                '<' => html.push_str("&lt;"),
+                '>' => html.push_str("&gt;"),
+                '&' => html.push_str("&amp;"),
+                '"' => html.push_str("&quot;"),
+                _ => html.push(combining),
+            }
         }
     }
 

@@ -3,27 +3,96 @@
 Quick reference for testing graphics support in par-term-emu-core-rust.
 
 ## Table of Contents
+- [Overview](#overview)
 - [Supported Protocols](#supported-protocols)
 - [Quick Tests](#quick-tests)
 - [Graphics in Scrollback](#graphics-in-scrollback)
 - [Debug Logging](#debug-logging)
 - [Python TUI Testing](#python-tui-testing)
 - [Common Issues](#common-issues)
+- [Python API Reference](#python-api-reference)
 - [Performance Testing](#performance-testing)
 - [Architecture Documentation](#architecture-documentation)
 - [Test Images](#test-images)
+- [Example Scripts](#example-scripts)
 - [Tools](#tools)
 - [Next Steps](#next-steps)
 - [Contributing](#contributing)
+
+## Overview
+
+This library implements comprehensive multi-protocol graphics support with unified storage and scrollback handling. All graphics are normalized to RGBA pixel data and managed through the `GraphicsStore` with configurable memory limits and resource tracking.
+
+### Graphics Architecture
+
+```mermaid
+graph TB
+    subgraph "Input Protocols"
+        Sixel[Sixel DCS]
+        ITerm[iTerm2 OSC 1337]
+        Kitty[Kitty APC G]
+    end
+
+    subgraph "Parsers"
+        SixelP[SixelParser]
+        ITermP[ITermParser]
+        KittyP[KittyParser]
+    end
+
+    subgraph "Graphics Store"
+        TG[TerminalGraphic]
+        Store[GraphicsStore]
+        Limits[GraphicsLimits]
+    end
+
+    subgraph "Rendering"
+        Active[Active Graphics]
+        Scrollback[Scrollback Graphics]
+        Anim[Animation Frames]
+    end
+
+    Sixel --> SixelP
+    ITerm --> ITermP
+    Kitty --> KittyP
+
+    SixelP --> TG
+    ITermP --> TG
+    KittyP --> TG
+
+    TG --> Store
+    Limits --> Store
+
+    Store --> Active
+    Store --> Scrollback
+    Store --> Anim
+
+    style Sixel fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style ITerm fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Kitty fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style SixelP fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style ITermP fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style KittyP fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style TG fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style Store fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style Limits fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
+    style Active fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Scrollback fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Anim fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+```
 
 ## Supported Protocols
 
 | Protocol | Status | Format | Test Script |
 |----------|--------|--------|-------------|
-| Sixel | ✅ Complete | DCS | Built-in examples |
-| iTerm2 Inline | ✅ Complete | OSC 1337 | Use `imgcat` |
-| Kitty Graphics | ✅ Complete | APC G | See below |
-| Kitty Animation | ✅ Complete | APC G | [`test_kitty_animation.py`](../scripts/test_kitty_animation.py) |
+| Sixel | ✅ Complete | DCS | `examples/test_sixel_simple.py`, `examples/display_image_sixel.py` |
+| iTerm2 Inline | ✅ Complete | OSC 1337 | Multipart and single-sequence transfers |
+| Kitty Graphics | ✅ Complete | APC G | Virtual placements with Unicode placeholders |
+| Kitty Animation | ✅ Complete | APC G | `scripts/test_kitty_animation.py` |
+
+**Protocol Implementation Details:**
+- **Sixel**: DEC VT340 compatible bitmap graphics with color palette support
+- **iTerm2**: OSC 1337 inline images supporting PNG, JPEG, GIF with base64 encoding
+- **Kitty**: APC-based protocol with image ID reuse, virtual placements, and frame composition
 
 ## Quick Tests
 
@@ -36,10 +105,14 @@ echo -e '\x1bPq"1;1;100;100#0;2;0;0;0#1;2;100;0;0#1!100~-\x1b\\'
 
 ### iTerm2 Inline Images
 
+iTerm2 inline images are supported through OSC 1337 sequences. The library handles both single-sequence and multi-part transfers automatically.
+
 ```bash
-# Install imgcat (iTerm2 utility)
-# Works with any terminal supporting OSC 1337
-imgcat /path/to/image.png
+# Example single-sequence transfer (base64 encode your image first)
+echo -e '\x1b]1337;File=inline=1;size=1234:BASE64_DATA_HERE\x07'
+
+# For actual testing, use a tool like imgcat if available
+# Note: imgcat is part of iTerm2's shell integration utilities
 ```
 
 ### Kitty Graphics (Static Image)
@@ -63,11 +136,13 @@ print(f'\x1b_Ga=T,f=100,t=d;{data}\x1b\\')
 ### Kitty Graphics Animation
 
 ```bash
-# Start the par-term frontend
-cd /Users/probello/Repos/par-term && cargo run
+# Run the animation test script
+python scripts/test_kitty_animation.py
 
-# In the terminal that opens, run the test script
-python /Users/probello/Repos/par-term-emu-core-rust/scripts/test_kitty_animation.py
+# The script demonstrates:
+# - Multi-frame animation loading
+# - Frame timing and composition
+# - Animation control (play/pause/loop)
 ```
 
 See detailed guide: [TESTING_KITTY_ANIMATIONS.md](TESTING_KITTY_ANIMATIONS.md)
@@ -92,13 +167,19 @@ for i in {1..50}; do echo "line $i"; done
 Enable debug output to track graphics processing:
 
 ```bash
-# Backend (Rust)
+# Set debug level (0-5, where 4=Debug, 5=Trace)
 export DEBUG_LEVEL=4
-cd /Users/probello/Repos/par-term && cargo run
 
-# In another terminal, monitor logs:
-tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY\|ITERM"
+# Debug log location
+tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY\|ITERM\|SIXEL"
 ```
+
+**Debug Categories:**
+- `GRAPHICS` - General graphics operations and scrolling
+- `KITTY` - Kitty graphics protocol parsing
+- `KITTY_PLACEHOLDER` - Unicode placeholder insertion
+- `ITERM` - iTerm2 inline image handling
+- `SIXEL` - Sixel graphics parsing
 
 ## Python TUI Testing
 
@@ -147,6 +228,47 @@ If animations aren't playing, check:
 
 See: [TESTING_KITTY_ANIMATIONS.md](TESTING_KITTY_ANIMATIONS.md) for detailed testing guide
 
+## Python API Reference
+
+The terminal provides the following graphics-related methods:
+
+### Graphics Query Methods
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Get total graphics count
+count = term.graphics_count()  # Returns: int
+
+# Get graphics at specific row
+graphics_list = term.graphics_at_row(row)  # Returns: list[PyGraphic]
+
+# Get all graphics
+all_graphics = term.graphics()  # Returns: list[PyGraphic]
+
+# Clear all graphics
+term.clear_graphics()
+```
+
+### Animation Control
+
+```python
+# Update animations and get changed image IDs
+changed_ids = term.update_animations()  # Returns: list[u32]
+# Call this regularly (e.g., 60Hz) to advance animation frames
+```
+
+### PyGraphic Object
+
+Graphics returned from query methods have the following properties:
+- `position` - Tuple `(col, row)` of top-left corner
+- `width` - Width in pixels
+- `height` - Height in pixels
+- `protocol` - Protocol identifier (string: "sixel", "iterm", "kitty")
+- `id` - Unique placement ID
+
 ## Performance Testing
 
 ```bash
@@ -163,20 +285,45 @@ python3 << 'EOF'
 from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
-# Send some test graphics here if needed
+
+# Send some test graphics
+for i in range(10):
+    term.process_str('\x1bPq"1;1;50;50#0;2;0;0;0#1;2;100;0;0#1!50~-\x1b\\')
 
 print(f'Active graphics: {term.graphics_count()}')
-# Note: all_scrollback_graphics() is not exposed in Python API
-# Use the Rust API or debug logs to inspect scrollback graphics
+print(f'Graphics at row 0: {len(term.graphics_at_row(0))}')
 EOF
 ```
+
+**Graphics Limits** (configurable via `GraphicsLimits`):
+- Max width: 10,000 pixels
+- Max height: 10,000 pixels
+- Max pixels per image: 25,000,000 (25MP)
+- Max total memory: 256MB
+- Max graphics count: 1,000
+- Max scrollback graphics: 500
 
 ## Architecture Documentation
 
 For implementation details, see:
-- [Graphics Architecture Plan](graphics_plan.md) - Full design and implementation status
-- [Testing Kitty Animations](TESTING_KITTY_ANIMATIONS.md) - Animation-specific testing
-- [Security Considerations](SECURITY.md) - File loading and resource limits
+
+**Graphics Module:**
+- `src/graphics/mod.rs` - Unified graphics module with `TerminalGraphic` and `GraphicsStore`
+- `src/graphics/iterm.rs` - iTerm2 inline image parser
+- `src/graphics/kitty.rs` - Kitty graphics protocol parser
+- `src/graphics/animation.rs` - Animation frame management and composition
+- `src/graphics/placeholder.rs` - Unicode placeholder generation for Kitty virtual placements
+
+**Sixel Support:**
+- `src/sixel.rs` - Sixel parser implementation
+- `src/terminal/sequences/dcs.rs` - DCS (Device Control String) sequence handling
+
+**Terminal Integration:**
+- `src/terminal/graphics.rs` - Graphics storage, scrolling, and position management
+
+**Documentation:**
+- [Testing Kitty Animations](TESTING_KITTY_ANIMATIONS.md) - Animation-specific testing guide
+- [Security Considerations](SECURITY.md) - Resource limits and memory management
 
 ## Test Images
 
@@ -192,26 +339,43 @@ images/
 
 **Note**: Currently, test images are primarily snake game screenshots. Additional test images (basic colors, patterns, etc.) can be added for comprehensive protocol testing.
 
+## Example Scripts
+
+The repository includes several example scripts for testing graphics functionality:
+
+**Sixel Graphics:**
+- `examples/test_sixel_simple.py` - Basic Sixel parsing test with red square
+- `examples/display_image_sixel.py` - Convert and display images as Sixel
+- `examples/test_sixel_display.py` - Sixel display demonstration
+
+**Kitty Graphics:**
+- `scripts/test_kitty_animation.py` - Multi-frame animation test
+
+**General:**
+All example scripts are located in the `examples/` directory and can be run with:
+```bash
+python examples/<script_name>.py
+```
+
 ## Tools
 
-### imgcat (iTerm2)
+### External Image Display Tools
 
+**imgcat (iTerm2)**
 ```bash
-# Install
-brew install iterm2
-
-# Use
+# Part of iTerm2 shell integration
+# Sends images using OSC 1337 protocol
 imgcat image.png
 ```
 
-### kitty icat (Kitty terminal)
-
+**kitty icat (Kitty terminal)**
 ```bash
 # Requires Kitty terminal
+# Uses Kitty graphics protocol
 kitty +kitten icat image.png
 ```
 
-Both tools work with par-term if the respective protocols are supported.
+**Note**: These tools send graphics using their respective protocols. The library implements the protocol handlers, so images sent by these tools will be parsed and stored correctly.
 
 ## Next Steps
 
@@ -224,7 +388,16 @@ Both tools work with par-term if the respective protocols are supported.
 ## Contributing
 
 When adding graphics tests:
-1. Add test script to `scripts/`
-2. Document protocol specifics
-3. Include expected output
-4. Test with both par-term (GPU) and par-term-emu-tui-rust (TUI)
+1. Add test script to `examples/` or `scripts/` directory
+2. Document protocol specifics and expected behavior
+3. Include expected output and verification steps
+4. Test with multiple frontends if available
+5. Update this documentation with new test cases
+6. Add entries to the table of contents if adding new sections
+
+**Testing Checklist:**
+- Verify graphics are stored correctly (`graphics_count()`)
+- Check position and dimensions (`graphics_at_row()`)
+- Test scrollback persistence (scroll graphics off screen)
+- Verify memory limits are enforced
+- Test with various image sizes and formats

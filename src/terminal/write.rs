@@ -7,15 +7,166 @@
 //! - Scrolling behavior
 //! - Insert mode
 //! - Character attributes and hyperlinks
+//! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers)
 
 use crate::cell::Cell;
 use crate::debug;
+use crate::grapheme;
 use crate::terminal::Terminal;
 
 impl Terminal {
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
         let (cols, _rows) = self.size();
+
+        // Handle combining characters (variation selectors, ZWJ, skin tone modifiers)
+        // These should be added to the previous cell instead of creating a new cell
+        if grapheme::is_variation_selector(c)
+            || grapheme::is_zwj(c)
+            || grapheme::is_skin_tone_modifier(c)
+            || grapheme::is_combining_mark(c)
+        {
+            // Find the previous actual character cell (skip over wide char spacers)
+            let (prev_col, prev_row) = if self.cursor.col > 0 {
+                (self.cursor.col - 1, self.cursor.row)
+            } else if self.cursor.row > 0 {
+                (cols - 1, self.cursor.row - 1)
+            } else {
+                // At position (0, 0), nowhere to add combining char
+                return;
+            };
+
+            // Check if the previous cell is a wide char spacer
+            // If so, the actual wide char is one more cell to the left
+            let (target_col, target_row) =
+                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
+                    if cell.flags.wide_char_spacer() {
+                        // Previous cell is a spacer, go back one more cell for the wide char
+                        if prev_col > 0 {
+                            (prev_col - 1, prev_row)
+                        } else if prev_row > 0 {
+                            (cols - 1, prev_row - 1)
+                        } else {
+                            // Spacer at start of grid, nowhere to go
+                            return;
+                        }
+                    } else {
+                        (prev_col, prev_row)
+                    }
+                } else {
+                    return;
+                };
+
+            // Add combining character to the target cell
+            if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
+                target_cell.combining.push(c);
+
+                // Recalculate width if needed (e.g., emoji with variation selector)
+                let grapheme = target_cell.get_grapheme();
+                let new_width = grapheme::is_wide_grapheme(&grapheme);
+                if new_width && target_cell.width() == 1 {
+                    target_cell.width = 2;
+                    target_cell.flags.set_wide_char(true);
+
+                    if target_col + 1 < cols {
+                        let mut spacer_flags = target_cell.flags;
+                        spacer_flags.set_wide_char(false);
+                        spacer_flags.set_wide_char_spacer(true);
+
+                        let spacer = Cell {
+                            c: ' ',
+                            combining: Vec::new(),
+                            fg: target_cell.fg,
+                            bg: target_cell.bg,
+                            underline_color: target_cell.underline_color,
+                            flags: spacer_flags,
+                            width: 1,
+                        };
+                        self.active_grid_mut()
+                            .set(target_col + 1, target_row, spacer);
+                    }
+                }
+
+                self.mark_row_dirty(target_row);
+            }
+            return;
+        }
+
+        // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
+        // and should be added as combining character (e.g., 👨 + ZWJ + 💻 = 👨‍💻)
+        // OPTIMIZATION: Only check for emoji characters (most text won't trigger this)
+        let char_code = c as u32;
+        let is_potential_emoji = matches!(char_code,
+            0x2600..=0x27BF  // Misc Symbols (❤️, ☀️, etc.)
+            | 0x1F000..=0x1FFFF // Emoji blocks
+        );
+
+        if is_potential_emoji && (self.cursor.col > 0 || self.cursor.row > 0) {
+            let (prev_col, prev_row) = if self.cursor.col > 0 {
+                (self.cursor.col - 1, self.cursor.row)
+            } else {
+                (cols - 1, self.cursor.row - 1)
+            };
+
+            // Skip spacers to find actual wide char
+            let (target_col, target_row) =
+                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
+                    if cell.flags.wide_char_spacer() {
+                        if prev_col > 0 {
+                            (prev_col - 1, prev_row)
+                        } else if prev_row > 0 {
+                            (cols - 1, prev_row - 1)
+                        } else {
+                            (prev_col, prev_row) // Fallback
+                        }
+                    } else {
+                        (prev_col, prev_row)
+                    }
+                } else {
+                    (prev_col, prev_row)
+                };
+
+            // Check if target cell has ZWJ in combining chars
+            if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
+                if target_cell.combining.contains(&'\u{200D}') {
+                    // Previous cell has ZWJ, add current char as combining
+                    if let Some(target_cell_mut) =
+                        self.active_grid_mut().get_mut(target_col, target_row)
+                    {
+                        target_cell_mut.combining.push(c);
+
+                        // Recalculate width if needed
+                        let grapheme = target_cell_mut.get_grapheme();
+                        let new_width = grapheme::is_wide_grapheme(&grapheme);
+                        if new_width && target_cell_mut.width() == 1 {
+                            target_cell_mut.width = 2;
+                            target_cell_mut.flags.set_wide_char(true);
+
+                            if target_col + 1 < cols {
+                                let mut spacer_flags = target_cell_mut.flags;
+                                spacer_flags.set_wide_char(false);
+                                spacer_flags.set_wide_char_spacer(true);
+
+                                let spacer = Cell {
+                                    c: ' ',
+                                    combining: Vec::new(),
+                                    fg: target_cell_mut.fg,
+                                    bg: target_cell_mut.bg,
+                                    underline_color: target_cell_mut.underline_color,
+                                    flags: spacer_flags,
+                                    width: 1,
+                                };
+                                self.active_grid_mut()
+                                    .set(target_col + 1, target_row, spacer);
+                            }
+                        }
+
+                        self.mark_row_dirty(target_row);
+                    }
+                    return;
+                }
+            }
+        }
 
         // Handle special characters
         match c {
@@ -192,6 +343,7 @@ impl Terminal {
 
         let cell = Cell {
             c,
+            combining: Vec::new(),
             fg: self.fg,
             bg: self.bg,
             underline_color: self.underline_color,
@@ -224,6 +376,7 @@ impl Terminal {
 
             let spacer = Cell {
                 c: ' ', // Spacer character
+                combining: Vec::new(),
                 fg: self.fg,
                 bg: self.bg,
                 underline_color: self.underline_color,

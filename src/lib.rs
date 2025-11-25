@@ -42,6 +42,7 @@ pub mod conformance_level;
 pub mod cursor;
 #[macro_use]
 pub mod debug;
+pub mod grapheme;
 pub mod graphics;
 pub mod grid;
 pub mod html_export;

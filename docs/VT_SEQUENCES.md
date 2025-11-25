@@ -232,7 +232,7 @@ Modern terminal features and VT520 extensions.
 **VT520 features:**
 - `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV, Ps = 0-8)
 - `CSI Ps SP t` - Set Warning-Bell Volume (DECSWBV, Ps = 0-8)
-- `CSI Pl ; Pc " p` - Set Conformance Level (DECSCL, Pl = 61-65 for VT100-VT520)
+- `CSI Pl ; Pc " p` - Set Conformance Level (DECSCL, Pl = 61-65 for VT100-VT520, Pc = 0/2 for 8-bit controls)
 
 **Character protection:**
 - `ESC V` / `ESC W` - Start/End Protected Area (SPA/EPA)
@@ -265,11 +265,11 @@ VT100/VT220 device information requests.
 - `CSI c` / `CSI 0 c` - Primary Device Attributes → `CSI ? id ; features c`
 - `CSI > c` - Secondary Device Attributes → `CSI > 82 ; 10000 ; 0 c`
 - `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) → `CSI ? mode ; state $ y`
-- `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM)
+- `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM) → `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x`
 - `CSI 14 t` - Report pixel size → `CSI 4 ; height ; width t`
 - `CSI 18 t` - Report text size → `CSI 8 ; rows ; cols t`
-- `CSI 22 t` - Save window title
-- `CSI 23 t` - Restore window title
+- `CSI 22 t` - Save window title to stack
+- `CSI 23 t` - Restore window title from stack
 
 ### Cursor Style (DECSCUSR)
 
@@ -294,7 +294,7 @@ Operating System Command sequences for advanced features (format: `OSC Ps ; Pt S
 
 - `OSC 0;title ST` - Set window and icon title
 - `OSC 2;title ST` - Set window title only
-- `OSC 21;title ST` - Push title to stack
+- `OSC 21;title ST` - Push title to stack (or `OSC 21 ST` to push current title)
 - `OSC 22 ST` / `OSC 23 ST` - Pop window/icon title from stack
 - `OSC 7;file://host/path ST` - Set current working directory (URL-encoded)
 

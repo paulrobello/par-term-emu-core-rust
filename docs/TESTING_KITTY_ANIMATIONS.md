@@ -32,9 +32,9 @@ Install Pillow for PNG generation:
 
 ```bash
 # Install with uv (recommended):
-uv pip install Pillow
+uv add Pillow
 
-# Or with pip:
+# Or with pip (legacy):
 pip install Pillow
 ```
 
@@ -43,14 +43,14 @@ pip install Pillow
 Run the test script to verify animation support:
 
 ```bash
-# Method 1: Run in your current terminal
+# Run the test script
 python scripts/test_kitty_animation.py
 
-# Method 2: Test in par-term frontend
-cd ../par-term && cargo run
-# In the par-term window, run:
-python ../par-term-emu-core-rust/scripts/test_kitty_animation.py
+# Alternative: Run with uv
+uv run scripts/test_kitty_animation.py
 ```
+
+> **⚠️ Note:** To see animations actually render, you need a terminal emulator with full Kitty graphics protocol animation support, or test with the par-term frontend once animation rendering is integrated.
 
 ## What the Test Does
 
@@ -70,7 +70,7 @@ The test script creates two animations:
 ### Frame Transmission
 
 ```
-ESC _ G a=f,i=<id>,r=<frame>,z=<delay>,f=100,t=d ; <base64_png> ESC \
+ESC _ G a=f,i=<id>,r=<frame>,z=<delay>[,c=<comp>],f=100,t=d ; <base64_png> ESC \
 ```
 
 **Parameters:**
@@ -78,6 +78,9 @@ ESC _ G a=f,i=<id>,r=<frame>,z=<delay>,f=100,t=d ; <base64_png> ESC \
 - `i=<id>` - Image ID
 - `r=<frame>` - Frame number (1-indexed)
 - `z=<delay>` - Frame delay in milliseconds
+- `c=<comp>` - Composition mode (optional):
+  - `0` or unspecified: AlphaBlend (default)
+  - `1`: Overwrite
 - `f=100` - Format: PNG
 - `t=d` - Transmission: direct (or `f` for file, `t` for temp file)
 
@@ -103,8 +106,8 @@ ESC _ G a=a,i=<id>,s=<state>[,v=<num_plays>] ESC \
   - `3` = Enable looping (start/resume normal playback)
 - `v=<num_plays>` - Number of times to play (optional):
   - `0` = Ignored (no change to loop count)
-  - `1` = Infinite looping
-  - `N` = Loop (N-1) times (e.g., v=3 means loop 2 times)
+  - `1` = Infinite looping (loops forever)
+  - `N` (N > 1) = Loop (N-1) times total (e.g., `v=3` means play 3 times = loop 2 additional times after the first play)
 
 **Examples:**
 ```python
@@ -125,6 +128,24 @@ print("\x1b_Ga=a,i=42,s=1\x1b\\", end="", flush=True)
 ```
 
 ## Backend Verification
+
+### Python API Access
+
+The animation system is accessible via Python bindings:
+
+```python
+from par_term_emu_core_rust import Terminal, PtySession
+
+# Using Terminal directly
+terminal = Terminal(80, 24)
+changed_image_ids = terminal.update_animations()  # Returns list of image IDs with frame changes
+
+# Using PtySession
+pty = PtySession.spawn("/bin/bash", 80, 24)
+changed_image_ids = pty.update_animations()  # Updates animations for the PTY's terminal
+```
+
+### Debug Logging
 
 Check debug logs for animation events:
 
@@ -147,7 +168,9 @@ tail -f /tmp/par_term_emu_core_rust_debug_rust.log
 
 ## Frontend Integration
 
-The frontend (par-term) needs the following integration to enable animation playback:
+The frontend ([par-term](https://github.com/probello/par-term)) needs the following integration to enable animation playback:
+
+> **📝 Note:** This section describes the integration requirements for the par-term Rust frontend. The integration is not yet complete.
 
 ### Required Implementation Steps
 
@@ -198,22 +221,14 @@ if let Some(terminal) = &self.terminal {
 
 The `update_animations()` method automatically updates the pixel data in all placements, so no additional rendering logic is needed. The current implementation already handles this:
 
-```rust
-// In src/graphics/mod.rs - GraphicsStore::update_animations()
-// This method updates pixels automatically for all placements
-if let Some(current_frame) = anim.current_frame() {
-    let frame_pixels = current_frame.pixels.clone();
+The `update_animations()` method in `GraphicsStore` automatically updates pixel data for all placements that reference an animated image. When a frame advances, the method:
 
-    // Update all placements that reference this image
-    for placement in &mut self.placements {
-        if placement.kitty_image_id == Some(*image_id) {
-            placement.pixels = frame_pixels.clone();
-            placement.width = current_frame.width;
-            placement.height = current_frame.height;
-        }
-    }
-}
-```
+1. Updates the animation's current frame based on timing
+2. Clones the current frame's pixel data (Arc-wrapped for efficient sharing)
+3. Updates all placements with `kitty_image_id` matching the animated image
+4. Returns a list of image IDs that had frame changes
+
+This automatic update means the frontend only needs to call `update_animations()` periodically and request a redraw when changes occur.
 
 ### 3. Animation State Flow
 
@@ -321,10 +336,12 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 **Symptoms:** Frames loaded but animation stuck on first frame
 
 **Check:**
-1. Verify `update_animations()` is being called periodically
+1. Verify `update_animations()` is being called periodically (at least once per frame delay)
 2. Check animation state is `Playing` (not `Stopped` or `Paused`)
+   - State should show `Playing` after `s=3` (EnableLooping) command
 3. Ensure frame delays are reasonable (> 0ms)
-4. Look for log messages showing frame advances
+   - Default delay of 100ms is used if frame delay is not specified
+4. Look for log messages showing frame advances with timing information
 
 #### Issue: Animation frames not displaying
 **Symptoms:** Backend logs show frames advancing but no visual change
@@ -338,9 +355,9 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 **Symptoms:** Animation loops wrong number of times
 
 **Check:**
-- Remember: `v=0` is ignored, `v=1` is infinite, `v=N` means (N-1) loops
-- Example: `v=3` means loop 2 times (play 3 times total)
-- Check logs for: `"Setting loop count for image_id=..."`
+- Remember: `v=0` is ignored, `v=1` is infinite, `v=N` (N > 1) means loop (N-1) additional times
+- Example: `v=3` means play 3 times total (first play + 2 additional loops)
+- Check logs for: `"Setting loop count for image_id=..."` messages
 
 ## Related Documentation
 
@@ -350,10 +367,12 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 - [VT Sequences Reference](VT_SEQUENCES.md) - All supported VT escape sequences
 
 **Implementation Files:**
-- `src/graphics/animation.rs` - Animation frame storage and playback logic
-- `src/graphics/mod.rs` - Graphics store with `update_animations()` method
-- `src/graphics/kitty.rs` - Kitty protocol parser with animation support
-- `scripts/test_kitty_animation.py` - Automated animation test script
+- [`src/graphics/animation.rs`](../src/graphics/animation.rs) - Animation frame storage and playback logic
+- [`src/graphics/mod.rs`](../src/graphics/mod.rs) - Graphics store with `update_animations()` method
+- [`src/graphics/kitty.rs`](../src/graphics/kitty.rs) - Kitty protocol parser with animation support
+- [`scripts/test_kitty_animation.py`](../scripts/test_kitty_animation.py) - Automated animation test script
+- [`src/python_bindings/terminal.rs`](../src/python_bindings/terminal.rs) - Python bindings for terminal animation updates
+- [`src/python_bindings/pty.rs`](../src/python_bindings/pty.rs) - Python bindings for PTY animation updates
 
 ## Implementation Status
 
@@ -390,9 +409,12 @@ graph LR
 
 ### Pending Features
 - 🔄 **Frontend Integration** - par-term needs to call `update_animations()` in render loop
-- ⏳ **Frame Composition Testing** - Alpha blend vs overwrite modes need validation
-- ⏳ **Performance Optimization** - Large animations may benefit from additional caching
-- ⏳ **Garbage Collection** - Strategy for cleaning up old animation data
+- ⏳ **Frame Composition Testing** - Alpha blend (default) vs overwrite modes are parsed but need thorough validation
+  - Composition modes are set via the `c=` parameter in frame transmission (when action is `a=f`)
+  - `c=0` or unspecified: AlphaBlend (default) - blend frame with previous frame using alpha channel
+  - `c=1`: Overwrite - completely replace previous frame pixels
+- ⏳ **Performance Optimization** - Large animations (100+ frames) may benefit from additional caching
+- ⏳ **Garbage Collection** - Strategy for cleaning up old animation data when images are deleted
 
 ### Known Limitations
 

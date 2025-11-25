@@ -847,14 +847,14 @@ impl PyTerminal {
     fn scrollback_line(
         &self,
         index: usize,
-    ) -> PyResult<Option<Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
+    ) -> PyResult<Option<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
         let grid = self.inner.grid();
         if let Some(line) = grid.scrollback_line(index) {
             let cells: Vec<_> = line
                 .iter()
                 .map(|cell| {
                     (
-                        cell.c,
+                        cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
                         PyAttributes {
@@ -889,23 +889,29 @@ impl PyTerminal {
     ///     String content of the specified row, or None if row is out of bounds
     fn get_line(&self, row: usize) -> PyResult<Option<String>> {
         if let Some(line) = self.inner.grid().row(row) {
-            Ok(Some(line.iter().map(|cell| cell.c).collect()))
+            Ok(Some(
+                line.iter()
+                    .filter(|cell| !cell.flags.wide_char_spacer())
+                    .map(|cell| cell.get_grapheme())
+                    .collect::<Vec<String>>()
+                    .join(""),
+            ))
         } else {
             Ok(None)
         }
     }
 
-    /// Get a cell's character at the specified position
+    /// Get a cell's character at the specified position (includes combining characters/modifiers)
     ///
     /// Args:
     ///     col: Column index (0-based)
     ///     row: Row index (0-based)
     ///
     /// Returns:
-    ///     Character at the position, or None if out of bounds
-    fn get_char(&self, col: usize, row: usize) -> PyResult<Option<char>> {
+    ///     Character (grapheme cluster) at the position, or None if out of bounds
+    fn get_char(&self, col: usize, row: usize) -> PyResult<Option<String>> {
         if let Some(cell) = self.inner.active_grid().get(col, row) {
-            Ok(Some(cell.c))
+            Ok(Some(cell.get_grapheme()))
         } else {
             Ok(None)
         }
@@ -1040,7 +1046,7 @@ impl PyTerminal {
             .filter_map(|col| {
                 grid.get(col, row).map(|cell| {
                     (
-                        cell.c,
+                        cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
                         PyAttributes {
@@ -1087,7 +1093,7 @@ impl PyTerminal {
             for col in 0..cols {
                 if let Some(cell) = grid.get(col, row) {
                     line.push((
-                        cell.c,
+                        cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
                         PyAttributes {
@@ -1107,7 +1113,12 @@ impl PyTerminal {
                     ));
                 } else {
                     // Empty cell
-                    line.push((' ', (0, 0, 0), (0, 0, 0), PyAttributes::default()));
+                    line.push((
+                        " ".to_string(),
+                        (0, 0, 0),
+                        (0, 0, 0),
+                        PyAttributes::default(),
+                    ));
                 }
             }
             lines.push(line);
@@ -3075,13 +3086,13 @@ impl PyTerminal {
         let old_strings: Vec<String> = old
             .lines
             .iter()
-            .map(|line| line.iter().map(|(c, _, _, _)| *c).collect())
+            .map(|line| line.iter().map(|(c, _, _, _)| c.clone()).collect())
             .collect();
 
         let new_strings: Vec<String> = new
             .lines
             .iter()
-            .map(|line| line.iter().map(|(c, _, _, _)| *c).collect())
+            .map(|line| line.iter().map(|(c, _, _, _)| c.clone()).collect())
             .collect();
 
         // Call Rust implementation

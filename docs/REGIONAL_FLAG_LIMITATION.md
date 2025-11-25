@@ -187,18 +187,46 @@ The xterm.js team may eventually integrate grapheme cluster support directly int
 
 ### Backend Implementation
 
+**Grapheme Cluster Utilities:**
+
+The Rust backend includes a dedicated `grapheme` module (`src/grapheme.rs`) with utility functions for detecting and handling various Unicode grapheme cluster components:
+
+- `is_regional_indicator(c)` - Detects regional indicator symbols (U+1F1E6-U+1F1FF)
+- `is_variation_selector(c)` - Detects variation selectors (U+FE0E, U+FE0F)
+- `is_zwj(c)` - Detects Zero Width Joiner (U+200D)
+- `is_skin_tone_modifier(c)` - Detects skin tone modifiers (U+1F3FB-U+1F3FF)
+- `is_combining_mark(c)` - Detects combining diacritical marks
+- `is_wide_grapheme(grapheme)` - Determines if a grapheme cluster should occupy 2 cells
+
 **Unicode Width Calculation:**
 
-The Rust backend uses the `unicode-width` crate (v0.2.2) to calculate character widths:
+The backend uses the `unicode-width` crate (v0.2.2) to calculate individual character widths:
 
 ```rust
 // From src/cell.rs
 let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
 ```
 
+**Combining Character Handling:**
+
+The terminal writer (`src/terminal/write.rs`) detects combining characters and adds them to the previous cell:
+
+```rust
+// Variation selectors, ZWJ, skin tone modifiers, and combining marks
+// are added to the previous cell instead of creating a new cell
+if grapheme::is_variation_selector(c)
+    || grapheme::is_zwj(c)
+    || grapheme::is_skin_tone_modifier(c)
+    || grapheme::is_combining_mark(c)
+{
+    // Add to previous cell's combining character list
+    // and recalculate width if needed
+}
+```
+
 **Regional Indicator Detection:**
 
-The screenshot renderer includes special detection for regional indicators:
+The screenshot renderer includes special detection for regional indicators to enable shaped rendering:
 
 ```rust
 // From src/screenshot/renderer.rs
@@ -234,7 +262,7 @@ Located in `web-terminal-frontend/components/Terminal.tsx`:
 
 ---
 
-**Last Updated**: 2025-11-22
+**Last Updated**: 2025-11-24
 **xterm.js Version**: 5.5.0
 **unicode-width Crate**: 0.2.2
 **Status**: Blocked on upstream xterm.js addon publishing (scheduled for v6.0.0)

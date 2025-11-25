@@ -13,6 +13,7 @@ The screenshot functionality includes **two embedded fonts**, so no font install
   - [Option 4: Download Fonts Manually](#option-4-download-fonts-manually)
 - [Docker/Container Environments](#dockercontainer-environments)
 - [Troubleshooting](#troubleshooting)
+- [Related Documentation](#related-documentation)
 
 ## Overview
 
@@ -29,7 +30,7 @@ The library includes two embedded fonts that work without any external dependenc
 
 ### 1. JetBrains Mono Regular (Main Font)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~274 KB (280,576 bytes)
+**Size**: 274 KB
 
 Features:
 - Programming ligatures (=>, !=, >=, etc.)
@@ -39,7 +40,7 @@ Features:
 
 ### 2. Noto Emoji Regular (Emoji Fallback)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: ~419 KB (428,032 bytes)
+**Size**: 419 KB
 
 Features:
 - Universal emoji coverage (all Unicode emoji)
@@ -315,3 +316,11 @@ The library uses this priority order for rendering characters:
 5. Main font result (may show as tofu box □) if all fallbacks fail
 
 **Note**: The library caches which system font has each CJK character for performance optimization.
+
+## Related Documentation
+
+- [README.md](../README.md) - Project overview and features
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design
+- [API_REFERENCE.md](API_REFERENCE.md) - Complete API documentation
+- [BUILDING.md](BUILDING.md) - Build instructions and requirements
+- [CROSS_PLATFORM.md](CROSS_PLATFORM.md) - Platform-specific considerations

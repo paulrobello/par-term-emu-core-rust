@@ -178,14 +178,13 @@ term.process_str("echo 'Hello World'\n")
 session = term.stop_recording()
 
 if session:
-    # Save to YAML file
-    term.save_macro_yaml(
-        session,
-        "demo.yaml",
-        "Hello World Demo",
-        "A simple demonstration"
-    )
+    # Recording session properties
     print(f"Recorded {session.event_count} events in {session.duration}ms")
+    print(f"Terminal size: {session.initial_size}")
+
+    # Note: RecordingSession captures raw terminal events.
+    # To create a playable macro, use the Macro class directly
+    # or convert recording events to macro format manually.
 ```
 
 **Recording with PTY:**
@@ -201,19 +200,22 @@ pty_term.start_recording("Shell Session")
 # Recording captures all input automatically
 time.sleep(30)  # Record for 30 seconds
 
-# Stop and save
+# Stop recording
 session = pty_term.stop_recording()
 if session:
-    pty_term.save_macro_yaml(session, "session.yaml")
+    print(f"Recorded {session.event_count} events in {session.duration}ms")
+    # Note: RecordingSession is for terminal output capture
+    # For playable macros, use Macro class to construct programmatically
 ```
 
 **RecordingSession Object:**
 ```python
 # session properties
-session.event_count  # Number of events recorded
-session.duration     # Total duration in milliseconds
-session.start_time   # Unix timestamp (ms)
-session.end_time     # Unix timestamp (ms)
+session.event_count      # Number of events recorded
+session.duration         # Total duration in milliseconds
+session.start_time       # Unix timestamp (ms)
+session.initial_size     # Terminal size (cols, rows) when recording started
+session.title            # Optional recording title/name
 ```
 
 ### Rust Recording API
@@ -259,7 +261,12 @@ terminal.process(b"echo hello\r");
 
 // Stop recording
 if let Some(session) = terminal.stop_recording() {
-    let macro_data = session.to_macro();
+    // RecordingSession contains raw terminal events
+    println!("Recorded {} events in {}ms", session.events.len(), session.duration);
+
+    // To create a playable macro, build it manually:
+    let mut macro_data = Macro::new(session.title.unwrap_or("Recording".to_string()));
+    // Add macro events based on recording session data
     macro_data.save_yaml("recording.yaml")?;
 }
 ```
@@ -452,17 +459,16 @@ The macro system uses human-readable key names instead of raw bytes or escape se
 **Python Playback:**
 ```python
 import par_term_emu_core_rust as terminal_core
+import time
 
 # Load macro
 macro = terminal_core.Macro.load_yaml("demo.yaml")
 
-# Create playback (built into streaming server or manual)
-# Manual playback example:
 print(f"Playing: {macro.name}")
 print(f"Duration: {macro.duration}ms")
 print(f"Events: {macro.event_count}")
 
-# Access events
+# Access events for manual playback
 for event in macro.events:
     print(f"  {event.event_type} at {event.timestamp}ms")
     if event.key:
@@ -594,11 +600,9 @@ loop {
 }
 ```
 
-**Streaming Server Loop Mode:**
-```bash
-# Continuous loop with server
-par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
-```
+**Note on Streaming:**
+Macro playback can be integrated with the StreamingServer for web-based demonstrations.
+See [STREAMING.md](STREAMING.md) for details on the streaming server architecture.
 
 ## Use Cases
 
@@ -693,13 +697,26 @@ while !playback.is_finished() {
 ```
 
 **CI/CD Integration:**
-```bash
-# Run macro tests in CI
-par-term-streamer --macro-file test_suite.yaml --macro-speed 10.0
+```python
+# Example CI/CD test runner using macros
+import par_term_emu_core_rust as terminal_core
 
-# Capture screenshots for comparison
-# Verify output matches expectations
-# Report results
+# Load test macro
+macro = terminal_core.Macro.load_yaml("test_suite.yaml")
+
+# Create terminal for test
+term = terminal_core.Terminal(80, 24)
+
+# Run macro at high speed for testing
+for event in macro.events:
+    if event.event_type == "key" and event.key:
+        term.process_str(event.key)
+    elif event.event_type == "screenshot" and event.label:
+        # Capture and compare screenshots
+        actual = term.screenshot("png")
+        # Compare with expected baseline
+        # Assert/report differences
+        pass
 ```
 
 ### Presentation Mode
@@ -731,57 +748,71 @@ macro.save_yaml("live_coding.yaml")
 
 ### Streaming Server
 
-**Standalone Server with Macros:**
-```bash
-# Start server with macro playback
-par-term-streamer \
-  --host 0.0.0.0 \
-  --port 8099 \
-  --macro-file demo.yaml \
-  --macro-speed 1.0 \
-  --macro-loop \
-  --theme dracula
+**Integration with StreamingServer:**
+
+The StreamingServer (when built with `--features streaming`) can stream terminal output to web browsers.
+Macros can be played back manually and the output streamed via the server.
+
+**Example Integration:**
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Create PTY terminal
+pty_term = terminal_core.PtyTerminal(80, 24)
+pty_term.spawn_shell()
+
+# Create streaming server
+server = terminal_core.StreamingServer(pty_term, "127.0.0.1:8080")
+server.start()
+
+# Load and play macro
+macro = terminal_core.Macro.load_yaml("demo.yaml")
+
+# Manually play macro events to PTY (output is automatically streamed)
+for event in macro.events:
+    if event.event_type == "key" and event.key:
+        # Simple key handling (full implementation would use KeyParser)
+        if len(event.key) == 1:
+            pty_term.write(event.key.encode())
+    elif event.event_type == "delay":
+        import time
+        time.sleep(event.duration / 1000.0)
 ```
-
-**Server Options:**
-
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--macro-file` | Path to YAML macro file | None |
-| `--macro-speed` | Playback speed multiplier | 1.0 |
-| `--macro-loop` | Loop continuously | false |
 
 **Architecture with Streaming:**
 ```mermaid
 sequenceDiagram
     participant Macro as Macro File
+    participant App as Python App
+    participant Terminal as PTY Terminal
     participant Server as Streaming Server
-    participant Terminal as Terminal
     participant Client as Web Browser
 
-    Macro->>Server: Load YAML
-    Server->>Terminal: Create Session
-    Server->>Client: WebSocket Connect
-    Client->>Server: Request Connection
+    App->>Macro: Load YAML
+    App->>Terminal: Create PTY
+    App->>Server: Create & Start
+    Client->>Server: WebSocket Connect
 
     loop Macro Playback
-        Server->>Server: Get Next Event
-        Server->>Terminal: Send Key/Delay
+        App->>App: Get Next Event
+        App->>Terminal: Send Key/Command
         Terminal->>Terminal: Process
-        Terminal->>Server: Output
+        Terminal->>Server: Output (auto)
         Server->>Client: Stream Output
     end
 
-    Note over Server,Terminal: Screenshot Event
-    Server->>Terminal: Capture Screenshot
-    Terminal-->>Server: Image Data
-    Server->>Server: Save/Process
+    Note over App,Terminal: Screenshot Event
+    App->>Terminal: Capture Screenshot
+    Terminal-->>App: Image Data
+    App->>App: Save/Process
 ```
 
 ### PTY Sessions
 
 **PTY with Macro Input:**
 ```python
+import time
+
 # Create PTY
 pty_term = terminal_core.PtyTerminal(80, 24)
 pty_term.spawn_shell()
@@ -790,11 +821,14 @@ pty_term.spawn_shell()
 macro = terminal_core.Macro.load_yaml("commands.yaml")
 
 # Send macro events to PTY
+# Note: Key parsing to bytes is done in Rust KeyParser
+# Python would need to replicate this logic or use a helper
 for event in macro.events:
     if event.event_type == "key":
-        # Convert key to bytes
-        # Send to PTY
-        pty_term.write(key_to_bytes(event.key))
+        # For simple keys, you can send directly
+        # For special keys, you'd need to convert using KeyParser logic
+        if event.key and len(event.key) == 1:
+            pty_term.write(event.key.encode())
     elif event.event_type == "delay":
         time.sleep(event.duration / 1000.0)
 ```
@@ -803,19 +837,18 @@ for event in macro.events:
 
 **Automatic Screenshot Capture:**
 ```python
-# Recording with screenshot triggers
-term.start_recording("Screenshot Demo")
+# Create a macro with screenshot triggers
+macro = terminal_core.Macro("Screenshot Demo")
+macro.add_key("l")
+macro.add_key("s")
+macro.add_delay(100)
+macro.add_key("enter")
+macro.add_delay(1000)
+macro.add_screenshot("after_ls")
 
-# User performs actions...
-term.process_str("ls -la\n")
+# During playback, handle screenshot events
+term = terminal_core.Terminal(80, 24)
 
-# Manually trigger screenshot marker
-# (or capture automatically during recording)
-
-session = term.stop_recording()
-
-# Playback with screenshot handling
-macro = session.to_macro()
 for event in macro.events:
     if event.event_type == "screenshot":
         # Take screenshot
@@ -823,6 +856,13 @@ for event in macro.events:
         label = event.label or "screenshot"
         with open(f"{label}.png", "wb") as f:
             f.write(image_data)
+    elif event.event_type == "key":
+        # Process key event
+        if event.key:
+            term.process_str(event.key)
+    elif event.event_type == "delay":
+        import time
+        time.sleep(event.duration / 1000.0)
 ```
 
 ## Key Parser
@@ -1056,14 +1096,6 @@ assert_eq!(bytes, vec![0x61]);
 - Screenshot events need `timestamp` (label optional)
 
 ### Integration Issues
-
-**Problem:** Streaming server won't load macro
-
-**Solutions:**
-- Check file path is absolute or relative to server working directory
-- Verify YAML file is valid
-- Ensure `--features streaming` was used during build
-- Check server logs for parse errors
 
 **Problem:** PTY not responding to macro input
 

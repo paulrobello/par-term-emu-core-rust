@@ -19,6 +19,8 @@ For a quick sequence lookup, see [VT_SEQUENCES.md](VT_SEQUENCES.md).
 - [DCS Sequences](#dcs-sequences)
 - [APC Sequences](#apc-sequences)
 - [Character Handling](#character-handling)
+  - [Wide Character Support](#wide-character-support)
+  - [Grapheme Cluster Support](#grapheme-cluster-support)
 - [Compatibility Matrix](#compatibility-matrix)
 - [Known Limitations](#known-limitations)
 
@@ -61,7 +63,11 @@ The terminal implementation uses a modular structure:
 - `kitty.rs` - Kitty graphics protocol parser (APC G)
 - `iterm.rs` - iTerm2 inline images parser (OSC 1337)
 - `animation.rs` - Animation frame and state management
+- `placeholder.rs` - Unicode placeholder support for Kitty virtual placements
 - `src/sixel.rs` - Sixel graphics parser (DCS q)
+
+**Unicode and grapheme support:**
+- `src/grapheme.rs` - Grapheme cluster detection, emoji sequences, variation selectors, ZWJ handling
 
 ---
 
@@ -1038,13 +1044,17 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 **Unicode Placeholders:**
 - Virtual placements (`U=1`) create template images stored but not displayed
 - Terminal automatically inserts U+10EEEE placeholder characters into grid
-- Metadata encoded in cell colors:
+- Metadata encoded in cell colors and combining characters:
   - Foreground RGB: image_id (lower 24 bits)
-  - Underline RGB: placement_id
-  - Diacritics: row/column position (0-63 each)
-- Enables inline image display in text flow
+  - Underline RGB: placement_id (full 24 bits)
+  - Diacritics (combining characters): row/column position and MSB of image_id
+    - First diacritic: row (0-63)
+    - Second diacritic: column (0-63)
+    - Third diacritic: MSB of image_id (0-63, optional)
+- Diacritics use special Unicode combining marks (64 different marks for values 0-63)
+- Enables inline image display in text flow with inheritance optimization
 - Frontend looks up virtual placement using encoded IDs
-- See `src/graphics/placeholder.rs` for encoding details
+- See `src/graphics/placeholder.rs` for encoding/decoding implementation
 
 **Chunked Transmission:**
 - Large images split across multiple sequences
@@ -1120,18 +1130,65 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 
 ### Wide Character Support
 
-**Implementation:** Character width detection and printing in `src/terminal/write.rs`
+**Implementation:** Character width detection and printing in `src/terminal/write.rs`, grapheme utilities in `src/grapheme.rs`
 
 **Features:**
 - Detects wide characters (East Asian Width property)
 - Allocates 2 columns for wide characters (CJK, emoji)
 - Uses spacer cells for wide character continuations
 - Proper handling of wide characters at line boundaries
+- Full grapheme cluster support for complex emoji sequences
 
 **Width Detection:**
 - Uses Unicode `EastAsianWidth` property
 - Wide (W) and Fullwidth (F) characters occupy 2 cells
-- Combining marks treated as width 0 (future enhancement)
+- Combining marks treated as width 0
+- Special handling for emoji with modifiers and ZWJ sequences
+
+### Grapheme Cluster Support
+
+**Implementation:** `src/grapheme.rs`
+
+The terminal provides comprehensive support for complex Unicode grapheme clusters:
+
+**Variation Selectors:**
+- U+FE0E (VS15) - Text style rendering
+- U+FE0F (VS16) - Emoji style rendering
+- Example: ⚠ (U+26A0) + U+FE0F = ⚠️ (colored emoji)
+
+**Zero Width Joiner (ZWJ) Sequences:**
+- U+200D combines multiple emoji into single glyphs
+- Examples:
+  - 👨‍👩‍👧‍👦 = MAN + ZWJ + WOMAN + ZWJ + GIRL + ZWJ + BOY
+  - 🏳️‍🌈 = WHITE FLAG + VS16 + ZWJ + RAINBOW
+- Always rendered as wide (2 cells)
+
+**Skin Tone Modifiers (Fitzpatrick):**
+- U+1F3FB through U+1F3FF (5 skin tone levels)
+- Applied to emoji that support skin tone variation
+- Example: 👋🏽 = WAVING HAND + MEDIUM SKIN TONE
+- Always rendered as wide (2 cells)
+
+**Regional Indicator Symbols:**
+- U+1F1E6 through U+1F1FF (26 indicators for A-Z)
+- Used in pairs to form flag emoji
+- Examples:
+  - 🇺🇸 = U+1F1FA (🇺) + U+1F1F8 (🇸)
+  - 🇬🇧 = U+1F1EC (🇬) + U+1F1E7 (🇧)
+- Always rendered as wide (2 cells)
+
+**Combining Marks:**
+- Diacritics and accents (U+0300-U+036F)
+- Combining marks for symbols (U+20D0-U+20FF)
+- Hebrew and Arabic combining marks
+- Width 0 (overlay on previous character)
+
+**Grapheme Width Determination:**
+- Regional indicator pairs: always 2 cells
+- ZWJ sequences: always 2 cells
+- Emoji with skin tone modifiers: always 2 cells
+- Emoji with variation selector U+FE0F: typically 2 cells
+- Fallback to `unicode-width` crate for other cases
 
 ### Auto-Wrap Mode (DECAWM)
 
@@ -1230,7 +1287,7 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 | Protocol | Support | Implementation | Notes |
 |----------|---------|----------------|-------|
 | Kitty Keyboard | ✅ Full | `src/terminal/sequences/csi.rs` | Flags, push/pop, query |
-| Kitty Graphics | ✅ Full | `src/graphics/kitty.rs` | APC G protocol, animations, image reuse |
+| Kitty Graphics | ✅ Full | `src/graphics/kitty.rs` | APC G protocol, animations, image reuse, Unicode placeholders |
 | iTerm2 Inline Images | ✅ Full | `src/graphics/iterm.rs` | OSC 1337 File protocol |
 | Synchronized Updates | ✅ Full | Mode 2026 | Flicker-free rendering |
 | OSC 8 Hyperlinks | ✅ Full | `src/terminal/sequences/osc.rs` | With deduplication |
@@ -1238,6 +1295,19 @@ APC G <key>=<value>,<key>=<value>;<base64-data> ST
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
 | OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | URL-encoded paths |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
+
+### Unicode Support
+
+| Feature | Support | Implementation | Notes |
+|---------|---------|----------------|-------|
+| Wide characters (CJK) | ✅ Full | `src/terminal/write.rs` | 2-cell width detection |
+| Emoji (base) | ✅ Full | `src/grapheme.rs` | Width detection via unicode-width |
+| Variation selectors | ✅ Full | `src/grapheme.rs` | U+FE0E (text), U+FE0F (emoji) |
+| ZWJ sequences | ✅ Full | `src/grapheme.rs` | Family emoji, flag combinations |
+| Skin tone modifiers | ✅ Full | `src/grapheme.rs` | Fitzpatrick types 1-5 |
+| Regional indicators | ✅ Full | `src/grapheme.rs` | Flag emoji (pair detection) |
+| Combining marks | ✅ Full | `src/grapheme.rs` | Diacritics, accents (width 0) |
+| Grapheme clusters | ✅ Full | `src/grapheme.rs` | Complex emoji rendering |
 
 ### Graphics Protocol Support
 
@@ -1371,17 +1441,20 @@ To validate VT compatibility, test with:
 
 - [Kitty Keyboard Protocol](https://sw.kovidgoyal.net/kitty/keyboard-protocol/) - Enhanced keyboard event reporting
 - [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) - APC-based graphics with animations and image reuse
+- [Kitty Unicode Placeholders](https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders) - Virtual placement with U+10EEEE
 - [iTerm2 Inline Images](https://iterm2.com/documentation-images.html) - OSC 1337 inline image protocol
 - [Synchronized Updates](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036) - DEC mode 2026
 - [OSC 8 Hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) - Terminal hyperlink standard
 - [Sixel Graphics](https://vt100.net/docs/vt3xx-gp/chapter14.html) - DEC Sixel specification
 - [OSC 52 Clipboard](https://chromium.googlesource.com/apps/libapps/+/HEAD/nassh/doc/FAQ.md#Is-OSC-52-aka-clipboard-operations_supported) - Clipboard manipulation protocol
+- [Unicode Standard](https://www.unicode.org/versions/latest/) - Unicode character properties and emoji specifications
 
 ### Implementation References
 
 - [VTE Crate](https://docs.rs/vte/) - ANSI/VT parser library
 - [PyO3](https://pyo3.rs/) - Rust-Python bindings
 - [image crate](https://docs.rs/image/) - Image decoding (PNG, JPEG, GIF)
+- [unicode-width crate](https://docs.rs/unicode-width/) - Unicode character width detection
 - par-term-emu-core-rust source:
   - Terminal core: `src/terminal/mod.rs`
   - Sequence handlers: `src/terminal/sequences/` (csi.rs, esc.rs, osc.rs, dcs.rs)
@@ -1393,6 +1466,9 @@ To validate VT compatibility, test with:
     - Kitty protocol: `src/graphics/kitty.rs`
     - iTerm2 protocol: `src/graphics/iterm.rs`
     - Animation support: `src/graphics/animation.rs`
+    - Unicode placeholders: `src/graphics/placeholder.rs`
+  - Unicode support:
+    - Grapheme utilities: `src/grapheme.rs`
   - Conformance levels: `src/conformance_level.rs`
   - Python bindings: `src/python_bindings/`
 

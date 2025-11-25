@@ -67,7 +67,8 @@ pub enum Color {
 
 Represents a single character cell in the terminal grid. Each cell contains:
 
-- A character (Unicode)
+- A base character (Unicode)
+- Combining characters (variation selectors, ZWJ, skin tone modifiers, etc.) for complete grapheme clusters
 - Foreground color
 - Background color
 - Text attributes (bold, italic, underline, etc.)
@@ -75,6 +76,7 @@ Represents a single character cell in the terminal grid. Each cell contains:
 ```rust
 pub struct Cell {
     pub c: char,
+    pub combining: Vec<char>,  // Combining chars for grapheme clusters
     pub fg: Color,
     pub bg: Color,
     pub underline_color: Option<Color>,  // SGR 58/59
@@ -196,6 +198,13 @@ Features:
 
 **Utility Modules**
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
+- `grapheme.rs` - Grapheme cluster utilities for Unicode handling
+  - Variation selector detection (U+FE0E text style, U+FE0F emoji style)
+  - Zero Width Joiner (ZWJ) detection for emoji sequences
+  - Skin tone modifier detection (U+1F3FB-U+1F3FF Fitzpatrick types)
+  - Regional indicator detection for flag emoji (U+1F1E6-U+1F1FF)
+  - Combining mark detection for diacritics and accents
+  - Wide grapheme detection for proper terminal cell width calculation
 - `color_utils.rs` - Advanced color manipulation and conversion utilities
   - Minimum contrast adjustment (iTerm2-compatible)
   - Perceived brightness calculation (NTSC formula)
@@ -588,14 +597,18 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 842 unit and integration tests
-- **Python tests:** 237 test functions across 13 test modules (PTY tests excluded in CI)
+- **Rust tests:** 850 unit and integration tests
+- **Python tests:** 300 test functions across 13 test modules
+  - 237 tests run in CI (PTY tests excluded)
+  - 63 additional PTY tests run only in local development
 - **Total:** Comprehensive coverage ensuring reliability
 
 ### Rust Tests
 
 - **Unit tests** in each module (included via `#[cfg(test)]` modules)
 - **Integration tests** for full ANSI sequences and terminal operations
+  - `tests/test_skin_tone_modifiers.rs` - Tests for emoji skin tone modifier handling
+  - `tests/test_zwj_sequences.rs` - Tests for Zero Width Joiner emoji sequences
 - **Property-based tests** for invariants (using `proptest` crate)
 - **PyO3 configuration:** Tests run with `--no-default-features --features pyo3/auto-initialize`
   - The `extension-module` feature prevents linking during tests
@@ -893,7 +906,7 @@ graph TD
 ### Python
 
 **Build and development tools:**
-- `maturin` (>=1.10.1) - Build system for PyO3 bindings
+- `maturin` (>=1.9,<2.0) - Build system for PyO3 bindings
 - `uv` - Fast Python package installer and resolver
 
 **Testing:**

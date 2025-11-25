@@ -184,10 +184,16 @@ impl CellFlags {
 }
 
 /// A single cell in the terminal grid
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Note: Cell is Clone but not Copy because it contains a Vec<char> for combining characters.
+/// Use .clone() explicitly when you need to copy a cell.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The character stored in this cell
     pub c: char,
+    /// Combining characters (variation selectors, ZWJ, modifiers, etc.)
+    /// These follow the base character to form a complete grapheme cluster
+    pub combining: Vec<char>,
     /// Foreground color
     pub fg: Color,
     /// Background color
@@ -204,6 +210,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             c: ' ',
+            combining: Vec::new(),
             fg: Color::Named(crate::color::NamedColor::White),
             bg: Color::Named(crate::color::NamedColor::Black),
             underline_color: None,
@@ -219,6 +226,7 @@ impl Cell {
         let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
         Self {
             c,
+            combining: Vec::new(),
             width,
             ..Default::default()
         }
@@ -229,6 +237,7 @@ impl Cell {
         let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
         Self {
             c,
+            combining: Vec::new(),
             fg,
             bg,
             underline_color: None,
@@ -250,6 +259,60 @@ impl Cell {
     /// Get the display width of the character (cached value)
     pub fn width(&self) -> usize {
         self.width as usize
+    }
+
+    /// Get the full grapheme cluster as a String
+    ///
+    /// This reconstructs the complete grapheme cluster by combining the base character
+    /// with all combining characters (variation selectors, ZWJ, modifiers, etc.)
+    ///
+    /// **Performance Note**: This method allocates a new String on every call.
+    /// For performance-critical code, consider using `base_char()` and `has_combining_chars()`
+    /// to avoid allocations when possible.
+    pub fn get_grapheme(&self) -> String {
+        let mut result = String::with_capacity(1 + self.combining.len());
+        result.push(self.c);
+        for &ch in &self.combining {
+            result.push(ch);
+        }
+        result
+    }
+
+    /// Check if this cell has combining characters
+    ///
+    /// Returns true if the cell has variation selectors, ZWJ, skin tone modifiers,
+    /// or other combining characters.
+    ///
+    /// This is useful for optimization - if false, you can use just `base_char()`
+    /// without allocating a String.
+    #[inline]
+    pub fn has_combining_chars(&self) -> bool {
+        !self.combining.is_empty()
+    }
+
+    /// Get the base character without combining characters
+    ///
+    /// This returns just the base character and avoids String allocation.
+    /// For cells with combining characters, use `get_grapheme()` instead
+    /// to get the complete grapheme cluster.
+    #[inline]
+    pub fn base_char(&self) -> char {
+        self.c
+    }
+
+    /// Create a cell from a grapheme cluster (base char + combining chars)
+    pub fn from_grapheme(grapheme: &str) -> Self {
+        let mut chars = grapheme.chars();
+        let base_char = chars.next().unwrap_or(' ');
+        let combining: Vec<char> = chars.collect();
+        let width = unicode_width::UnicodeWidthStr::width(grapheme).max(1) as u8;
+
+        Self {
+            c: base_char,
+            combining,
+            width,
+            ..Default::default()
+        }
     }
 }
 
@@ -535,7 +598,7 @@ mod tests {
         cell1.fg = Color::Rgb(255, 0, 0);
         cell1.flags.set_bold(true);
 
-        let cell2 = cell1;
+        let cell2 = cell1.clone();
 
         assert_eq!(cell1.c, cell2.c);
         assert_eq!(cell1.fg, cell2.fg);

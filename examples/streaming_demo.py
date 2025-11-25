@@ -271,7 +271,8 @@ def main():
                         print(f"Error: {e}")
 
             # Small sleep to prevent CPU spinning
-            time.sleep(0.1)
+            # Using 10ms instead of 100ms to minimize resize race condition
+            time.sleep(0.01)
 
     except KeyboardInterrupt:
         print("\n\nReceived interrupt signal")

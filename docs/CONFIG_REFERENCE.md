@@ -431,7 +431,8 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 |-----------|------|---------|-------------|
 | `include_scrollback` | `bool` | `false` | Include scrollback buffer in screenshot |
 | `scrollback_lines` | `Option<usize>` | `None` | Number of scrollback lines to include (None = all) |
-| `scrollback_offset` | `usize` | `0` | Scroll back N lines from current position for capture |
+
+**Note:** The `scrollback_offset` parameter is passed separately to the `screenshot()` method, not via `ScreenshotConfig`.
 
 #### Canvas Settings
 
@@ -523,7 +524,8 @@ png_bytes = term.screenshot(
     scrollback_lines=100  # Last 100 lines from scrollback
 )
 
-# Capture historical view (10 lines back)
+# Capture historical view (scroll back 10 lines from current position)
+# Note: scrollback_offset is a method parameter, not a config option
 png_bytes = term.screenshot(scrollback_offset=10)
 
 # Save directly to file

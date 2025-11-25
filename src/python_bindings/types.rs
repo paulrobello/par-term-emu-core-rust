@@ -13,7 +13,7 @@ use super::enums::{PyCursorStyle, PyUnderlineStyle};
 
 /// Type alias for a row of cell data returned by get_line_cells
 /// Tuple contains: (character, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes)
-pub type LineCellData = Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
+pub type LineCellData = Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
 
 /// Type alias for half-block rendering colors
 /// Tuple contains: ((top_r, top_g, top_b, top_a), (bottom_r, bottom_g, bottom_b, bottom_a))
@@ -87,9 +87,9 @@ impl PyAttributes {
 #[allow(clippy::type_complexity)]
 pub struct PyScreenSnapshot {
     /// All screen lines captured atomically
-    /// Format: Vec<Vec<(char, fg_rgb, bg_rgb, attributes)>>
+    /// Format: Vec<Vec<(String, fg_rgb, bg_rgb, attributes)>>
     #[pyo3(get)]
-    pub lines: Vec<Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>,
+    pub lines: Vec<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>,
 
     /// Wrapped state for each line (true = line continues to next row)
     #[pyo3(get)]
@@ -134,20 +134,21 @@ impl PyScreenSnapshot {
     ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
     ///     or empty list if row is out of bounds
     #[allow(clippy::type_complexity)]
-    fn get_line(&self, row: usize) -> Vec<(char, (u8, u8, u8), (u8, u8, u8), PyAttributes)> {
+    fn get_line(&self, row: usize) -> Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)> {
         if row < self.lines.len() {
             // Clone and filter control characters in one pass
             self.lines[row]
                 .iter()
                 .map(|(c, fg, bg, attrs)| {
                     // Filter out control characters (< 32) except space and tab
-                    // Space is actually 32, so it won't be < 32, but we check it for clarity
-                    // Tab is 9 (0x09)
-                    let filtered_char = if (*c as u32) < 32 && *c != ' ' && *c != '\t' {
-                        ' ' // Replace control chars with space
-                    } else {
-                        *c
-                    };
+                    // Check the first character of the grapheme string
+                    let first_char = c.chars().next().unwrap_or(' ');
+                    let filtered_char =
+                        if (first_char as u32) < 32 && first_char != ' ' && first_char != '\t' {
+                            " ".to_string() // Replace control chars with space
+                        } else {
+                            c.clone()
+                        };
                     (filtered_char, *fg, *bg, attrs.clone())
                 })
                 .collect()
@@ -2933,8 +2934,18 @@ mod tests {
     fn test_pyscreensnapshot_get_line_valid_row() {
         let snapshot = PyScreenSnapshot {
             lines: vec![vec![
-                ('H', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
-                ('i', (255, 255, 255), (0, 0, 0), PyAttributes::default()),
+                (
+                    "H".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ),
+                (
+                    "i".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ),
             ]],
             wrapped_lines: vec![false],
             cursor_pos: (0, 0),
@@ -2947,15 +2958,15 @@ mod tests {
 
         let line = snapshot.get_line(0);
         assert_eq!(line.len(), 2);
-        assert_eq!(line[0].0, 'H');
-        assert_eq!(line[1].0, 'i');
+        assert_eq!(line[0].0, "H");
+        assert_eq!(line[1].0, "i");
     }
 
     #[test]
     fn test_pyscreensnapshot_get_line_out_of_bounds() {
         let snapshot = PyScreenSnapshot {
             lines: vec![vec![(
-                'A',
+                "A".to_string(),
                 (255, 255, 255),
                 (0, 0, 0),
                 PyAttributes::default(),
@@ -2977,11 +2988,36 @@ mod tests {
     fn test_pyscreensnapshot_get_line_filters_control_chars() {
         let snapshot = PyScreenSnapshot {
             lines: vec![vec![
-                ('\x01', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // Control char
-                ('A', (255, 255, 255), (0, 0, 0), PyAttributes::default()),    // Regular char
-                ('\x1B', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // ESC
-                (' ', (255, 255, 255), (0, 0, 0), PyAttributes::default()),    // Space (allowed)
-                ('\t', (255, 255, 255), (0, 0, 0), PyAttributes::default()),   // Tab (allowed)
+                (
+                    "\x00".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Control char
+                (
+                    "A".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Regular char
+                (
+                    "\x00".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // ESC
+                (
+                    " ".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Space (allowed)
+                (
+                    "\t".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Tab (allowed)
             ]],
             wrapped_lines: vec![false],
             cursor_pos: (0, 0),
@@ -2994,11 +3030,11 @@ mod tests {
 
         let line = snapshot.get_line(0);
         assert_eq!(line.len(), 5);
-        assert_eq!(line[0].0, ' '); // Control char replaced with space
-        assert_eq!(line[1].0, 'A'); // Regular char unchanged
-        assert_eq!(line[2].0, ' '); // ESC replaced with space
-        assert_eq!(line[3].0, ' '); // Space unchanged
-        assert_eq!(line[4].0, '\t'); // Tab unchanged
+        assert_eq!(line[0].0, " "); // Control char replaced with space
+        assert_eq!(line[1].0, "A"); // Regular char unchanged
+        assert_eq!(line[2].0, " "); // ESC replaced with space
+        assert_eq!(line[3].0, " "); // Space unchanged
+        assert_eq!(line[4].0, "\t"); // Tab unchanged
     }
 
     #[test]
@@ -3259,14 +3295,24 @@ mod tests {
     fn test_line_cell_data_type_alias() {
         // Test that the LineCellData type alias works correctly
         let cell_data: LineCellData = vec![
-            ('A', (255, 0, 0), (0, 0, 0), PyAttributes::default()),
-            ('B', (0, 255, 0), (0, 0, 0), PyAttributes::default()),
+            (
+                "A".to_string(),
+                (255, 0, 0),
+                (0, 0, 0),
+                PyAttributes::default(),
+            ),
+            (
+                "B".to_string(),
+                (0, 255, 0),
+                (0, 0, 0),
+                PyAttributes::default(),
+            ),
         ];
 
         assert_eq!(cell_data.len(), 2);
-        assert_eq!(cell_data[0].0, 'A');
+        assert_eq!(cell_data[0].0, "A");
         assert_eq!(cell_data[0].1, (255, 0, 0)); // Red
-        assert_eq!(cell_data[1].0, 'B');
+        assert_eq!(cell_data[1].0, "B");
         assert_eq!(cell_data[1].1, (0, 255, 0)); // Green
     }
 
@@ -3301,10 +3347,30 @@ mod tests {
     fn test_control_character_filtering_edge_cases() {
         let snapshot = PyScreenSnapshot {
             lines: vec![vec![
-                ('\x00', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // NULL
-                ('\x1F', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // Unit separator
-                ('\x20', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // Space (32)
-                ('\x21', (255, 255, 255), (0, 0, 0), PyAttributes::default()), // '!' (33)
+                (
+                    "\x00".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // NULL
+                (
+                    "\x1F".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Unit separator
+                (
+                    " ".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // Space (32)
+                (
+                    "!".to_string(),
+                    (255, 255, 255),
+                    (0, 0, 0),
+                    PyAttributes::default(),
+                ), // "!" (33)
             ]],
             wrapped_lines: vec![false],
             cursor_pos: (0, 0),
@@ -3318,12 +3384,12 @@ mod tests {
         let line = snapshot.get_line(0);
 
         // Control chars (< 32) should be replaced with space
-        assert_eq!(line[0].0, ' '); // NULL -> space
-        assert_eq!(line[1].0, ' '); // Unit separator -> space
+        assert_eq!(line[0].0, " "); // NULL -> space
+        assert_eq!(line[1].0, " "); // Unit separator -> space
 
         // Space and above should be unchanged
-        assert_eq!(line[2].0, ' '); // Space unchanged
-        assert_eq!(line[3].0, '!'); // '!' unchanged
+        assert_eq!(line[2].0, " "); // Space unchanged
+        assert_eq!(line[3].0, "!"); // "!" unchanged
     }
 
     #[test]

@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2025-11-24
+
+### Added
+- **Emoji Sequence Preservation**: Complete support for complex emoji sequences and grapheme clusters
+  - **Variation Selectors**: Preserves emoji vs text style presentation (U+FE0E, U+FE0F)
+    - Example: ⚠ vs ⚠️ (warning sign in text vs emoji style)
+  - **Skin Tone Modifiers**: Supports Fitzpatrick scale skin tones (U+1F3FB-U+1F3FF)
+    - Example: 👋🏽 (waving hand with medium skin tone)
+  - **Zero Width Joiners (ZWJ)**: Preserves multi-emoji sequences
+    - Example: 👨‍👩‍👧‍👦 (family), 🏳️‍🌈 (rainbow flag)
+  - **Regional Indicators**: Proper handling of flag emoji
+    - Example: 🇺🇸 (US flag), 🇬🇧 (UK flag)
+  - **Combining Characters**: Supports diacritics and other combining marks
+    - Example: é (e + combining acute accent)
+  - New `grapheme` module with comprehensive Unicode detection utilities
+  - Enhanced `Cell` structure with `combining: Vec<char>` field for grapheme cluster storage
+  - New methods: `Cell::get_grapheme()` and `Cell::from_grapheme()`
+  - Python bindings now export full grapheme clusters through `get_line()` and `row_text()`
+
+- **Web Terminal Frontend**: Modern Next.js-based web interface for the streaming server
+  - Built with Next.js 16, React 19, TypeScript, and Tailwind CSS v4
+  - **Mobile-Responsive Design**: Fully functional on phones and tablets
+    - Responsive font sizing (4px mobile to 14px desktop)
+    - Hideable header/footer to maximize terminal space
+    - Touch support for mobile keyboard activation
+    - Orientation change handling with automatic refit
+    - Optimized scrollback (500 lines mobile, 1000 desktop)
+    - Disabled cursor blink on mobile for battery savings
+  - **Auto-Reconnect**: Exponential backoff (500ms to 5s max) with cancel button
+  - Theme support with configurable color palettes
+  - Nerd Font support for file/folder icons
+  - WebGL renderer with DOM fallback
+  - React 18 StrictMode compatible
+  - Dev server binds to all interfaces (0.0.0.0) for mobile testing
+  - New Makefile targets for web frontend development
+
+- **Terminal Sequence Support**:
+  - **CSI 3J**: Clear scrollback buffer command
+  - Improved cursor positioning for snapshot exports
+
+### Fixed
+- **Graphics Scrollback**: Graphics now properly preserved when scrolling into scrollback buffer
+  - Added `scroll_offset_rows` tracking for proper graphics rendering
+  - Tall Sixel graphics preserved when bottom is still visible
+  - Fixed premature scroll_offset during Sixel load
+- **Sixel Scrollback**: Content now saved to scrollback during large Sixel scrolling operations
+- **Kitty Graphics Protocol**: Fixed animation control parsing bugs
+  - Support for both padded and unpadded base64 encoding
+  - Corrected frame action handling for animations
+
+### Changed
+- **Breaking**: `Cell` struct no longer implements `Copy` trait (now `Clone` only)
+  - Required for supporting variable-length grapheme clusters
+  - All cell copy operations now require explicit `.clone()` calls
+  - Performance impact is minimal due to efficient cloning
+
+### Dependencies
+- Added `unicode-segmentation = "1.12"` for grapheme cluster support
+
 ## [0.9.1] - 2025-11-23
 
 ### Fixed
@@ -190,6 +249,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.10.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.7.0...v0.8.0

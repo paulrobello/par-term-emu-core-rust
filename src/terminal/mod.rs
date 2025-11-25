@@ -2476,7 +2476,7 @@ impl Terminal {
             let mut row_cells = Vec::with_capacity(cols);
             for col in 0..cols {
                 if let Some(cell) = self.active_grid().get(col, row) {
-                    row_cells.push(*cell);
+                    row_cells.push(cell.clone());
                 } else {
                     row_cells.push(Cell::default());
                 }
@@ -2501,7 +2501,7 @@ impl Terminal {
             let mut row_cells = Vec::with_capacity(cols);
             for col in 0..cols {
                 if let Some(cell) = self.active_grid().get(col, row) {
-                    row_cells.push(*cell);
+                    row_cells.push(cell.clone());
                 } else {
                     row_cells.push(Cell::default());
                 }
@@ -2536,7 +2536,7 @@ impl Terminal {
             let mut row_cells = Vec::with_capacity(width);
             for col in left..=right {
                 if let Some(cell) = self.active_grid().get(col, row) {
-                    row_cells.push(*cell);
+                    row_cells.push(cell.clone());
                 } else {
                     row_cells.push(Cell::default());
                 }
@@ -2569,6 +2569,7 @@ impl Terminal {
                 if row < rows && col < cols {
                     let cell = Cell {
                         c: ch,
+                        combining: Vec::new(),
                         fg: self.fg,
                         bg: self.bg,
                         underline_color: self.underline_color,
@@ -2595,6 +2596,7 @@ impl Terminal {
                 if row < rows && col < cols {
                     let cell = Cell {
                         c: ' ',
+                        combining: Vec::new(),
                         fg: self.default_fg,
                         bg: self.default_bg,
                         underline_color: None,
@@ -3143,7 +3145,7 @@ impl Terminal {
                     // Copy from scrollback
                     if let Some(line) = grid.scrollback_line(row) {
                         for (col, cell) in line.iter().enumerate() {
-                            view.set(col, row, *cell);
+                            view.set(col, row, cell.clone());
                         }
                     }
                 }
@@ -3168,7 +3170,7 @@ impl Terminal {
                     let scrollback_idx = scrollback_len - scrollback_offset + row;
                     if let Some(line) = grid.scrollback_line(scrollback_idx) {
                         for (col, cell) in line.iter().enumerate() {
-                            view.set(col, row, *cell);
+                            view.set(col, row, cell.clone());
                         }
                     }
                 }
@@ -3178,7 +3180,7 @@ impl Terminal {
                     let view_row = scrollback_rows_to_show + row;
                     if let Some(line) = grid.row(row) {
                         for (col, cell) in line.iter().enumerate() {
-                            view.set(col, view_row, *cell);
+                            view.set(col, view_row, cell.clone());
                         }
                     }
                 }
@@ -3191,7 +3193,7 @@ impl Terminal {
                     if scrollback_idx < scrollback_len {
                         if let Some(line) = grid.scrollback_line(scrollback_idx) {
                             for (col, cell) in line.iter().enumerate() {
-                                view.set(col, row, *cell);
+                                view.set(col, row, cell.clone());
                             }
                         }
                     }

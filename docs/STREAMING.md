@@ -15,6 +15,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
 - [Web Frontend](#web-frontend)
   - [Technology Stack](#technology-stack)
   - [Setup and Development](#setup-and-development)
+  - [Mobile Support](#mobile-support)
   - [Theme System](#theme-system)
 - [Protocol Specification](#protocol-specification)
   - [Server Messages](#server-messages)
@@ -163,6 +164,10 @@ The `par-term-streamer` binary provides a standalone streaming server:
 
 **Build:**
 ```bash
+# Using Makefile (recommended)
+make streamer-build-release
+
+# Or directly with cargo
 cargo build --release --bin par-term-streamer --features streaming
 ```
 
@@ -175,14 +180,14 @@ par-term-streamer --host 127.0.0.1 --port 8099
 par-term-streamer --theme dracula
 
 # With HTTP static file serving
-par-term-streamer --enable-http --web-root ./web-terminal-frontend/out
+par-term-streamer --enable-http --web-root ./web_term
 
 # Macro playback mode
 par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
 ```
 
 **Available Themes:**
-- `iterm2-dark` (default)
+- `iTerm2-dark` (default)
 - `monokai`
 - `dracula`
 - `solarized-dark`
@@ -266,33 +271,61 @@ let server = StreamingServer::with_config(terminal, addr, config);
 ### Technology Stack
 
 **Core Dependencies:**
-- **Next.js** 16.0.3 - React framework with App Router
-- **React** 19.2.0 - UI library
-- **TypeScript** 5.9.3 - Type safety
-- **Tailwind CSS** 4.1.17 - Utility-first styling
+- **Next.js** ^16.0.3 - React framework with App Router
+- **React** ^19.2.0 - UI library
+- **TypeScript** ^5.9.3 - Type safety
+- **Tailwind CSS** ^4.1.17 - Utility-first styling
 
 **Terminal Components:**
-- **@xterm/xterm** 5.5.0 - Terminal emulator core
-- **@xterm/addon-fit** 0.10.0 - Auto-sizing addon
-- **@xterm/addon-webgl** 0.18.0 - WebGL renderer
-- **@xterm/addon-web-links** 0.11.0 - Clickable URLs
-- **@xterm/addon-unicode11** 0.8.0 - Unicode 11 support
+- **@xterm/xterm** ^5.5.0 - Terminal emulator core
+- **@xterm/addon-fit** ^0.10.0 - Auto-sizing addon
+- **@xterm/addon-webgl** ^0.18.0 - WebGL renderer
+- **@xterm/addon-web-links** ^0.11.0 - Clickable URLs
+- **@xterm/addon-unicode11** ^0.8.0 - Unicode 11 support
 
 ### Setup and Development
 
-**Installation:**
+**Quick Start (Using Makefile):**
+```bash
+# Install dependencies
+make web-install
+
+# Run development server
+make web-dev
+
+# Build static export and copy to web_term/ directory
+make web-build-static
+
+# Clean build artifacts
+make web-clean
+```
+
+**Manual Setup:**
 ```bash
 cd web-terminal-frontend
 
 # Install dependencies
 npm install
 
-# Development server (localhost:3000)
+# Development server (binds to 0.0.0.0:3000 for mobile testing)
 npm run dev
 
-# Production build
+# Production build (creates Next.js server build)
 npm run build
 npm run start
+
+# Static export build (creates static HTML/JS in 'out' directory)
+npm run build  # Next.js configured with output: 'export'
+```
+
+**Mobile Development Testing:**
+```bash
+# Start dev server (binds to all interfaces)
+npm run dev
+
+# Access from mobile device on same network:
+# http://<your-computer-ip>:3000
+# Example: http://192.168.1.100:3000
 ```
 
 **Project Structure:**
@@ -313,11 +346,70 @@ web-terminal-frontend/
 
 **Component Overview:**
 
-`app/page.tsx`: Main application UI with connection controls and status indicator
+- `app/page.tsx`: Main application UI with connection controls and status indicator
+- `components/Terminal.tsx`: xterm.js integration with WebSocket handling
+- `types/terminal.ts`: TypeScript type definitions for messages and state
+- `next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
-`components/Terminal.tsx`: xterm.js integration with WebSocket handling
+### Mobile Support
 
-`types/terminal.ts`: TypeScript type definitions for messages and state
+The web frontend is fully responsive and optimized for mobile devices:
+
+**Responsive Features:**
+
+| Feature | Mobile | Tablet | Desktop |
+|---------|--------|--------|---------|
+| Font Size | 4-5px | 6-10px | 14px |
+| Scrollback | 500 lines | 500 lines | 1000 lines |
+| Cursor Blink | Disabled | Disabled | Enabled |
+| UI Controls | Hideable | Hideable | Always visible |
+
+**Adaptive Font Sizing:**
+```typescript
+// Font size automatically adjusts based on screen dimensions
+const getResponsiveFontSize = (): number => {
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  const minDim = Math.min(width, height);
+
+  if (minDim < 500) {
+    // Phone: use height-based sizing for landscape
+    return height < width ? (height < 400 ? 4 : 5) : 4;
+  }
+  if (minDim < 768) return 6;    // Small tablets
+  if (width < 1024) return 10;   // Tablets
+  return 14;                      // Desktop
+};
+```
+
+**Mobile-Specific Optimizations:**
+- **Hideable Header/Footer**: Toggle button to maximize terminal space on small screens
+- **Touch Support**: Tap terminal to activate mobile keyboard
+- **Orientation Handling**: Automatic refit on orientation change
+- **Battery Savings**: Cursor blink disabled on mobile devices
+- **Reduced Scrollback**: 500 lines vs 1000 to conserve memory
+
+**Auto-Reconnect:**
+- Exponential backoff: 500ms → 1s → 2s → 4s → 5s (max)
+- Infinite retry with cancel button
+- Connection state preserved across reconnects
+
+**UI Toggle:**
+```
+┌─────────────────────────────────┐
+│ [Header - WebSocket URL input]  │  ← Hideable
+├─────────────────────────────────┤
+│                                 │
+│         Terminal Area           │  ← Expands when controls hidden
+│                                 │
+├─────────────────────────────────┤
+│ [Footer - Links]                │  ← Hideable
+└─────────────────────────────────┘
+         [▼] Toggle Button          ← Always visible
+```
+
+**React StrictMode Compatibility:**
+The terminal component handles React 18's StrictMode double-invocation pattern by preserving the xterm.js instance across the unmount/remount cycle, preventing duplicate terminals in the DOM.
 
 ### Theme System
 
@@ -518,9 +610,59 @@ stateDiagram-v2
 
 ## Usage Examples
 
+### Quick Start: Complete Setup
+
+**End-to-End Setup with HTTP Server:**
+
+```bash
+# 1. Build the static web frontend
+make web-build-static
+
+# 2. Build the streaming server
+make streamer-build-release
+
+# 3. Run the server with HTTP enabled
+make streamer-run-http
+
+# 4. Open browser to http://127.0.0.1:8099
+```
+
+The server will:
+- Serve the web frontend at `http://127.0.0.1:8099/`
+- Accept WebSocket connections at `ws://127.0.0.1:8099/ws`
+- Stream the terminal session in real-time
+
+**WebSocket-Only Setup (No HTTP):**
+
+```bash
+# 1. Build and run streaming server
+make streamer-build-release
+./target/release/par-term-streamer --port 8099
+
+# 2. In another terminal, run web frontend development server
+make web-dev
+
+# 3. Open browser to http://localhost:3000
+# 4. Enter WebSocket URL: ws://127.0.0.1:8099
+```
+
 ### Rust Server
 
-**Basic Standalone Server:**
+**Using the Standalone Binary:**
+```bash
+# Build the streaming server binary
+make streamer-build-release
+
+# Run with default settings
+./target/release/par-term-streamer
+
+# Or using Makefile shortcuts
+make streamer-run          # Run with default settings
+make streamer-run-http     # Run with HTTP static file serving enabled
+make streamer-run-macro    # Run with macro playback demo
+```
+
+**Basic Standalone Server (Rust Code):**
 ```rust
 use par_term_emu_core_rust::{
     pty_session::PtySession,
@@ -636,7 +778,11 @@ if __name__ == '__main__':
 
 **Basic Connection:**
 ```typescript
-const ws = new WebSocket('ws://127.0.0.1:8099');
+// When server has HTTP enabled, connect to /ws endpoint
+const ws = new WebSocket('ws://127.0.0.1:8099/ws');
+
+// Or for WebSocket-only server (no HTTP), connect directly to root
+// const ws = new WebSocket('ws://127.0.0.1:8099');
 
 ws.onopen = () => {
   console.log('Connected');
@@ -745,12 +891,16 @@ The server can serve static files alongside WebSocket:
 
 **Enable HTTP:**
 ```bash
+# Using the built static frontend
+par-term-streamer --enable-http --web-root ./web_term
+
+# Or specify a different path
 par-term-streamer --enable-http --web-root ./web-terminal-frontend/out
 ```
 
 **Routes:**
-- `http://localhost:8099/` - Serves `index.html` from web root
-- `ws://localhost:8099/ws` - WebSocket endpoint
+- `http://localhost:8099/` - Serves `index.html` from web root (static frontend)
+- `ws://localhost:8099/ws` - WebSocket endpoint for terminal streaming
 
 **Configuration:**
 ```rust
@@ -763,9 +913,14 @@ let config = StreamingConfig {
 
 **Deploy Frontend:**
 ```bash
+# Using Makefile (recommended - builds and copies to web_term/)
+make web-build-static
+
+# Or manually:
 cd web-terminal-frontend
-npm run build
-npm run export  # Creates 'out' directory
+npm run build  # Creates 'out' directory (Next.js configured with output: 'export')
+cd ..
+cp -r web-terminal-frontend/out/* web_term/
 ```
 
 ## Security Considerations
