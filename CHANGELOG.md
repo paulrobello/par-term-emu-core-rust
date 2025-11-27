@@ -8,20 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.11.0] - 2025-11-26
 
 ### Added
-- **Scrollback Reflow on Width Resize**: Scrollback content is now preserved and properly reflowed when terminal width changes
-  - Previously, changing terminal width would clear all scrollback to avoid panics from misaligned cell indexing
-  - Now implements intelligent reflow similar to xterm and iTerm2:
+- **Full Terminal Reflow on Width Resize**: Both scrollback AND visible screen content now reflow when terminal width changes
+  - **Scrollback Reflow**: Previously, changing terminal width would clear all scrollback to avoid panics from misaligned cell indexing. Now implements intelligent reflow similar to xterm and iTerm2
+  - **Main Grid Reflow**: Visible screen content now also reflows instead of being clipped
     - **Width increase**: Unwraps previously soft-wrapped lines into longer lines
-    - **Width decrease**: Re-wraps lines that no longer fit
+    - **Width decrease**: Re-wraps lines that no longer fit, preserving all content
   - Preserves all cell attributes (colors, bold, italic, etc.) during reflow
   - Handles wide characters (CJK, emoji) correctly at line boundaries
-  - Properly manages circular buffer during reflow
+  - Properly manages circular buffer during scrollback reflow
   - Respects max_scrollback limits when reflow creates additional lines
   - Significant UX improvement for terminal resize operations
 
 ### Changed
-- Height-only resize operations no longer trigger scrollback reflow (optimization)
+- Height-only resize operations no longer trigger reflow (optimization)
 - Scrollback buffer is now rebuilt (non-circular) after reflow for simpler indexing
+- Main grid now extracts logical lines and re-wraps them on width change
 
 ## [0.10.0] - 2025-11-24
 

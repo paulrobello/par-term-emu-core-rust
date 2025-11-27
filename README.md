@@ -16,9 +16,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 ## What's New in 0.11.0
 
 ### 🎉 New Features
-- **Scrollback Reflow on Width Resize**: Scrollback content is now preserved when terminal width changes
-  - Previously, width changes cleared all scrollback history
+- **Full Terminal Reflow on Width Resize**: Both scrollback AND visible screen content now reflow when terminal width changes
+  - Previously, width changes cleared scrollback and clipped visible content
   - Now implements intelligent reflow similar to xterm and iTerm2:
+    - **Scrollback**: Preserves all history with proper line wrapping/unwrapping
+    - **Visible Screen**: Content wraps instead of being clipped when narrowing
     - Width increase: Unwraps soft-wrapped lines into longer lines
     - Width decrease: Re-wraps lines that no longer fit
   - Preserves all cell attributes (colors, bold, italic, etc.)
