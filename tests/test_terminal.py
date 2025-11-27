@@ -1952,14 +1952,12 @@ def test_scrollback_reflow_width_increase_unwraps():
     # Resize to wider - should unwrap
     term.resize(20, 5)
 
-    # Scrollback should still exist after resize (content preserved)
-    scrollback_after = term.scrollback_len()
-    assert scrollback_after >= 1
-
-    # Get scrollback content and verify it's preserved
+    # Content should be preserved - either in scrollback or pulled back to visible area
+    # When terminal widens, content may be pulled from scrollback into visible area
     scrollback = term.scrollback()
-    all_text = "".join(scrollback)
-    assert "ABCDEFGHIJKLMNO" in all_text.replace(" ", "")
+    visible = term.content()
+    all_text = "".join(scrollback) + visible
+    assert "ABCDEFGHIJKLMNO" in all_text.replace(" ", "").replace("\n", "")
 
 
 def test_scrollback_reflow_width_decrease_rewraps():

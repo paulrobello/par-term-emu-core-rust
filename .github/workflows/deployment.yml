@@ -1,10 +1,10 @@
 name: Build and Deploy
 
 # This workflow handles the complete release process:
-# 1. Publishes the Rust library to crates.io (source code)
-# 2. Builds standalone streaming server binaries for multiple platforms
-# 3. Builds Python wheels for Linux, macOS, and Windows (Python 3.12, 3.13, 3.14)
-# 4. Creates a GitHub release with all artifacts (wheels + binaries)
+# 1. Builds standalone streaming server binaries for multiple platforms
+# 2. Builds Python wheels for Linux, macOS, and Windows (Python 3.12, 3.13, 3.14)
+# 3. Creates a GitHub release with all artifacts (wheels + binaries)
+# 4. Publishes the Rust library to crates.io (source code)
 # 5. Publishes Python wheels to PyPI
 #
 # To trigger: Go to Actions → Build and Deploy → Run workflow
@@ -18,12 +18,12 @@ permissions:
   id-token: write
 
 jobs:
-  # Publish to crates.io
+  # Publish to crates.io (after GitHub release)
   publish-crates:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
+    needs: [github-release]
     steps:
       - uses: actions/checkout@v4
 
@@ -366,12 +366,12 @@ jobs:
           path: release-web/*
           retention-days: 1
 
-  # Create GitHub release
+  # Create GitHub release (before crates.io and PyPI)
   github-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [publish-crates, build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
+    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
     permissions:
       contents: write
       id-token: write
