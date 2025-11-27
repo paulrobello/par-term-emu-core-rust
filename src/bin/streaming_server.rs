@@ -236,6 +236,27 @@ impl Theme {
     }
 }
 
+/// Parse terminal size from "COLSxROWS" format (e.g., "120x40")
+fn parse_size(s: &str) -> Result<(u16, u16), String> {
+    let parts: Vec<&str> = s.split('x').collect();
+    if parts.len() != 2 {
+        return Err(format!(
+            "Invalid size format '{}'. Expected COLSxROWS (e.g., 120x40)",
+            s
+        ));
+    }
+    let cols = parts[0]
+        .parse::<u16>()
+        .map_err(|_| format!("Invalid columns value: {}", parts[0]))?;
+    let rows = parts[1]
+        .parse::<u16>()
+        .map_err(|_| format!("Invalid rows value: {}", parts[1]))?;
+    if cols == 0 || rows == 0 {
+        return Err("Columns and rows must be greater than 0".to_string());
+    }
+    Ok((cols, rows))
+}
+
 /// Command line arguments
 #[derive(Parser, Debug)]
 #[command(name = "par-term-streamer")]
@@ -248,6 +269,11 @@ struct Args {
     /// Port to bind to
     #[arg(long, short = 'p', default_value = "8099")]
     port: u16,
+
+    /// Terminal size in COLSxROWS format (e.g., 120x40)
+    /// Overrides --cols and --rows if specified
+    #[arg(long, short = 's', value_parser = parse_size)]
+    size: Option<(u16, u16)>,
 
     /// Terminal columns (width)
     #[arg(long, default_value = "80")]
@@ -264,6 +290,10 @@ struct Args {
     /// Shell command to run (auto-detect if not specified)
     #[arg(long)]
     shell: Option<String>,
+
+    /// Command to execute after shell starts (sent as input after 1 second delay)
+    #[arg(long, short = 'c')]
+    command: Option<String>,
 
     /// Color theme
     #[arg(
@@ -431,9 +461,12 @@ async fn main() -> Result<()> {
     info!("Starting terminal streaming server");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
+    // Determine terminal size (--size takes precedence over --cols/--rows)
+    let (cols, rows) = args.size.unwrap_or((args.cols, args.rows));
+
     // Create PTY session (this creates its own terminal internally)
-    info!("Creating PTY session ({}x{})", args.cols, args.rows);
-    let pty_session = PtySession::new(args.cols as usize, args.rows as usize, args.scrollback);
+    info!("Creating PTY session ({}x{})", cols, rows);
+    let pty_session = PtySession::new(cols as usize, rows as usize, args.scrollback);
 
     // Get the terminal from the PTY session
     let terminal = pty_session.terminal();
@@ -457,6 +490,8 @@ async fn main() -> Result<()> {
         default_read_only: false,
         enable_http: args.enable_http,
         web_root: args.web_root.clone(),
+        initial_cols: cols,
+        initial_rows: rows,
     };
 
     // Create streaming server
@@ -618,7 +653,7 @@ async fn main() -> Result<()> {
     }
 
     println!("\n  Theme: {}", theme.name);
-    println!("  Terminal: {}x{}", args.cols, args.rows);
+    println!("  Terminal: {}x{}", cols, rows);
     println!("  Max clients: {}", args.max_clients);
 
     if let Some(macro_file) = &args.macro_file {
@@ -635,6 +670,9 @@ async fn main() -> Result<()> {
         );
     } else {
         println!("\n  Mode: INTERACTIVE SHELL");
+        if let Some(command) = &args.command {
+            println!("  Initial command: {}", command);
+        }
     }
 
     println!("\n{}", "=".repeat(60));
@@ -656,6 +694,32 @@ async fn main() -> Result<()> {
             }
         })
     };
+
+    // Send initial command after delay if specified (only for shell mode, not macro mode)
+    if let Some(command) = &args.command {
+        if args.macro_file.is_none() {
+            let pty_session_clone = Arc::clone(&pty_session);
+            let command = command.clone();
+            tokio::spawn(async move {
+                // Wait 1 second for shell prompt to settle
+                time::sleep(Duration::from_secs(1)).await;
+                info!("Sending initial command: {}", command);
+
+                if let Ok(session) = pty_session_clone.lock() {
+                    if let Some(writer) = session.get_writer() {
+                        if let Ok(mut w) = writer.lock() {
+                            // Send command followed by newline
+                            let cmd_with_newline = format!("{}\n", command);
+                            if let Err(e) = w.write_all(cmd_with_newline.as_bytes()) {
+                                error!("Failed to send initial command: {}", e);
+                            }
+                            let _ = w.flush();
+                        }
+                    }
+                }
+            });
+        }
+    }
 
     // Run main event loop (this blocks until Ctrl+C)
     state.run().await?;

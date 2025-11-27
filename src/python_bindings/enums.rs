@@ -67,6 +67,42 @@ impl From<crate::cell::UnderlineStyle> for PyUnderlineStyle {
     }
 }
 
+/// Mouse encoding format for mouse event reporting
+#[pyclass(name = "MouseEncoding")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyMouseEncoding {
+    /// Default X11 encoding (values 32-255)
+    Default = 0,
+    /// UTF-8 encoding (supports larger coordinates)
+    Utf8 = 1,
+    /// SGR encoding (1006) - recommended for modern terminals
+    Sgr = 2,
+    /// URXVT encoding (1015)
+    Urxvt = 3,
+}
+
+impl From<crate::mouse::MouseEncoding> for PyMouseEncoding {
+    fn from(encoding: crate::mouse::MouseEncoding) -> Self {
+        match encoding {
+            crate::mouse::MouseEncoding::Default => PyMouseEncoding::Default,
+            crate::mouse::MouseEncoding::Utf8 => PyMouseEncoding::Utf8,
+            crate::mouse::MouseEncoding::Sgr => PyMouseEncoding::Sgr,
+            crate::mouse::MouseEncoding::Urxvt => PyMouseEncoding::Urxvt,
+        }
+    }
+}
+
+impl From<PyMouseEncoding> for crate::mouse::MouseEncoding {
+    fn from(encoding: PyMouseEncoding) -> Self {
+        match encoding {
+            PyMouseEncoding::Default => crate::mouse::MouseEncoding::Default,
+            PyMouseEncoding::Utf8 => crate::mouse::MouseEncoding::Utf8,
+            PyMouseEncoding::Sgr => crate::mouse::MouseEncoding::Sgr,
+            PyMouseEncoding::Urxvt => crate::mouse::MouseEncoding::Urxvt,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

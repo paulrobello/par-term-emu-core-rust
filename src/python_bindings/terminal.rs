@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::color::Color;
 
-use super::enums::PyCursorStyle;
+use super::enums::{PyCursorStyle, PyMouseEncoding};
 use super::types::{LineCellData, PyAttributes, PyGraphic, PyScreenSnapshot, PyShellIntegration};
 
 /// Python wrapper for the Terminal
@@ -357,6 +357,18 @@ impl PyTerminal {
     ///     Current terminal title string
     fn title(&self) -> PyResult<String> {
         Ok(self.inner.title().to_string())
+    }
+
+    /// Set the terminal title directly
+    ///
+    /// This sets the title without using OSC sequences.
+    /// Useful for programmatic control.
+    ///
+    /// Args:
+    ///     title: The new title string
+    fn set_title(&mut self, title: String) -> PyResult<()> {
+        self.inner.set_title(title);
+        Ok(())
     }
 
     /// Get the cursor position
@@ -788,6 +800,100 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get link/hyperlink color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn link_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.link_color().to_rgb())
+    }
+
+    /// Get bold text color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn bold_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.bold_color().to_rgb())
+    }
+
+    /// Get cursor guide color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn cursor_guide_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.cursor_guide_color().to_rgb())
+    }
+
+    /// Get badge color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn badge_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.badge_color().to_rgb())
+    }
+
+    /// Get match/search highlight color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn match_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.match_color().to_rgb())
+    }
+
+    /// Get selection background color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn selection_bg_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.selection_bg_color().to_rgb())
+    }
+
+    /// Get selection foreground/text color
+    ///
+    /// Returns:
+    ///     Tuple of (r, g, b) integers (0-255)
+    fn selection_fg_color(&self) -> PyResult<(u8, u8, u8)> {
+        Ok(self.inner.selection_fg_color().to_rgb())
+    }
+
+    /// Check if custom bold color is enabled
+    ///
+    /// Returns:
+    ///     True if using custom bold color instead of bright ANSI variant
+    fn use_bold_color(&self) -> PyResult<bool> {
+        Ok(self.inner.use_bold_color())
+    }
+
+    /// Check if custom underline color is enabled
+    ///
+    /// Returns:
+    ///     True if using custom underline color
+    fn use_underline_color(&self) -> PyResult<bool> {
+        Ok(self.inner.use_underline_color())
+    }
+
+    /// Check if bold brightening is enabled
+    ///
+    /// When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+    ///
+    /// Returns:
+    ///     True if bold brightening is enabled
+    fn bold_brightening(&self) -> PyResult<bool> {
+        Ok(self.inner.bold_brightening())
+    }
+
+    /// Set bold brightening mode
+    ///
+    /// When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+    /// This is a legacy terminal behavior that some applications rely on.
+    ///
+    /// Args:
+    ///     enabled: True to enable bold brightening, False to disable
+    fn set_bold_brightening(&mut self, enabled: bool) -> PyResult<()> {
+        self.inner.set_bold_brightening(enabled);
+        Ok(())
+    }
+
     /// Get cursor style (DECSCUSR)
     ///
     /// Returns:
@@ -1158,6 +1264,26 @@ impl PyTerminal {
         Ok(self.inner.is_alt_screen_active())
     }
 
+    /// Switch to alternate screen buffer
+    ///
+    /// This directly switches to the alternate screen without using escape sequences.
+    /// The primary screen content is preserved and can be restored with use_primary_screen().
+    /// Clears the alternate screen buffer.
+    fn use_alt_screen(&mut self) -> PyResult<()> {
+        self.inner.use_alt_screen();
+        Ok(())
+    }
+
+    /// Switch to primary screen buffer
+    ///
+    /// This directly switches to the primary screen without using escape sequences.
+    /// Restores the content that was visible before switching to alternate screen.
+    /// Also resets keyboard protocol flags (for TUI apps that fail to clean up).
+    fn use_primary_screen(&mut self) -> PyResult<()> {
+        self.inner.use_primary_screen();
+        Ok(())
+    }
+
     /// Get mouse tracking mode
     ///
     /// Returns:
@@ -1174,6 +1300,29 @@ impl PyTerminal {
         Ok(mode.to_string())
     }
 
+    /// Get mouse encoding format
+    ///
+    /// Returns:
+    ///     MouseEncoding enum value (Default, Utf8, Sgr, Urxvt)
+    fn mouse_encoding(&self) -> PyResult<PyMouseEncoding> {
+        Ok(self.inner.mouse_encoding().into())
+    }
+
+    /// Set mouse encoding format
+    ///
+    /// Controls how mouse events are encoded when reported to applications.
+    ///
+    /// Args:
+    ///     encoding: MouseEncoding enum value
+    ///         - Default: X11 encoding (values 32-255, limited coordinate range)
+    ///         - Utf8: UTF-8 encoding (supports larger coordinates)
+    ///         - Sgr: SGR encoding (1006) - recommended for modern terminals
+    ///         - Urxvt: URXVT encoding (1015)
+    fn set_mouse_encoding(&mut self, encoding: PyMouseEncoding) -> PyResult<()> {
+        self.inner.set_mouse_encoding(encoding.into());
+        Ok(())
+    }
+
     /// Check if focus tracking is enabled
     ///
     /// Returns:
@@ -1182,12 +1331,36 @@ impl PyTerminal {
         Ok(self.inner.focus_tracking())
     }
 
+    /// Set focus tracking mode
+    ///
+    /// When enabled, the terminal reports focus in/out events to applications.
+    /// Focus events are reported as ESC[I (focus in) and ESC[O (focus out).
+    ///
+    /// Args:
+    ///     enabled: True to enable focus tracking, False to disable
+    fn set_focus_tracking(&mut self, enabled: bool) -> PyResult<()> {
+        self.inner.set_focus_tracking(enabled);
+        Ok(())
+    }
+
     /// Check if bracketed paste mode is enabled
     ///
     /// Returns:
     ///     True if bracketed paste mode is enabled
     fn bracketed_paste(&self) -> PyResult<bool> {
         Ok(self.inner.bracketed_paste())
+    }
+
+    /// Set bracketed paste mode
+    ///
+    /// When enabled, pasted content is wrapped with ESC[200~ and ESC[201~
+    /// sequences, allowing applications to distinguish pasted text from typed text.
+    ///
+    /// Args:
+    ///     enabled: True to enable bracketed paste, False to disable
+    fn set_bracketed_paste(&mut self, enabled: bool) -> PyResult<()> {
+        self.inner.set_bracketed_paste(enabled);
+        Ok(())
     }
 
     /// Check if synchronized updates mode is enabled (DEC 2026)

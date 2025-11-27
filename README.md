@@ -13,17 +13,28 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.13.0
+
+### 🎉 New Features
+- **Streaming Server Enhancements**:
+  - `--size` CLI option for specifying terminal size in `COLSxROWS` format (e.g., `--size 120x40` or `-s 120x40`)
+  - `--command` / `-c` CLI option to execute a command after shell startup (with 1 second delay for prompt settling)
+  - `initial_cols` and `initial_rows` configuration options in `StreamingConfig` for both Rust and Python APIs
+
+- **Python Bindings Enhancements**:
+  - New `MouseEncoding` enum for mouse event encoding control (Default, Utf8, Sgr, Urxvt)
+  - Direct screen buffer control: `use_alt_screen()`, `use_primary_screen()`
+  - Mouse encoding control: `mouse_encoding()`, `set_mouse_encoding()`
+  - Mode setters: `set_focus_tracking()`, `set_bracketed_paste()`, `set_title()`
+  - Bold brightening control: `bold_brightening()`, `set_bold_brightening()`
+  - Color getters for all theme colors (link, bold, cursor guide, badge, match, selection)
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.12.0
 
 ### 🐛 Bug Fixes
 - **Terminal Reflow Improvements**: Multiple fixes to scrollback and grid reflow behavior during resize
-  - Prevent content at top from being incorrectly pushed to scrollback during resize
-  - Use correct column width when pulling content from scrollback
-  - Pull content back from scrollback when window widens
-  - Push TOP content to scrollback while keeping BOTTOM visible on reflow (matches expected terminal behavior)
-  - Preserve excess content in scrollback during reflow operations
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## What's New in 0.11.0
 

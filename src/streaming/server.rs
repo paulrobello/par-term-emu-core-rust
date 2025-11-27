@@ -27,6 +27,10 @@ pub struct StreamingConfig {
     pub enable_http: bool,
     /// Web root directory for static files (default: "./web_term")
     pub web_root: String,
+    /// Initial terminal columns (0 = use terminal's current size)
+    pub initial_cols: u16,
+    /// Initial terminal rows (0 = use terminal's current size)
+    pub initial_rows: u16,
 }
 
 impl Default for StreamingConfig {
@@ -38,6 +42,8 @@ impl Default for StreamingConfig {
             default_read_only: false,
             enable_http: false,
             web_root: "./web_term".to_string(),
+            initial_cols: 0,
+            initial_rows: 0,
         }
     }
 }

@@ -23,7 +23,7 @@ pub use color_utils::{
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl,
 };
-pub use enums::{PyCursorStyle, PyUnderlineStyle};
+pub use enums::{PyCursorStyle, PyMouseEncoding, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
 pub use streaming::{PyStreamingConfig, PyStreamingServer};
 pub use terminal::PyTerminal;

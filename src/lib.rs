@@ -76,13 +76,13 @@ pub use python_bindings::{
     PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
     PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
-    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEvent,
-    PyMousePosition, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
-    PyProfilingData, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
-    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
-    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle,
-    PyWindowLayout,
+    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent,
+    PyMouseEncoding, PyMouseEvent, PyMousePosition, PyNotificationConfig, PyNotificationEvent,
+    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyPtyTerminal, PyRecordingEvent,
+    PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot, PyScrollbackStats,
+    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
+    PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal,
+    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -129,6 +129,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTmuxNotification>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;
+    m.add_class::<PyMouseEncoding>()?;
     m.add_class::<PySearchMatch>()?;
     m.add_class::<PyDetectedItem>()?;
     m.add_class::<PySelection>()?;

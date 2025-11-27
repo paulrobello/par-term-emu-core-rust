@@ -24,12 +24,14 @@ pub struct PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0))]
     fn new(
         max_clients: usize,
         send_initial_screen: bool,
         keepalive_interval: u64,
         default_read_only: bool,
+        initial_cols: u16,
+        initial_rows: u16,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -39,6 +41,8 @@ impl PyStreamingConfig {
                 default_read_only,
                 enable_http: false,
                 web_root: "./web_term".to_string(),
+                initial_cols,
+                initial_rows,
             },
         }
     }
@@ -91,13 +95,39 @@ impl PyStreamingConfig {
         self.inner.default_read_only = default_read_only;
     }
 
+    /// Get initial terminal columns (0 = use terminal's current size)
+    #[getter]
+    fn initial_cols(&self) -> u16 {
+        self.inner.initial_cols
+    }
+
+    /// Set initial terminal columns (0 = use terminal's current size)
+    #[setter]
+    fn set_initial_cols(&mut self, initial_cols: u16) {
+        self.inner.initial_cols = initial_cols;
+    }
+
+    /// Get initial terminal rows (0 = use terminal's current size)
+    #[getter]
+    fn initial_rows(&self) -> u16 {
+        self.inner.initial_rows
+    }
+
+    /// Set initial terminal rows (0 = use terminal's current size)
+    #[setter]
+    fn set_initial_rows(&mut self, initial_rows: u16) {
+        self.inner.initial_rows = initial_rows;
+    }
+
     fn __repr__(&self) -> String {
         format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={})",
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={})",
             self.inner.max_clients,
             self.inner.send_initial_screen,
             self.inner.keepalive_interval,
-            self.inner.default_read_only
+            self.inner.default_read_only,
+            self.inner.initial_cols,
+            self.inner.initial_rows
         )
     }
 }

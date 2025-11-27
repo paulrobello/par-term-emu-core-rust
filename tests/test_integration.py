@@ -287,7 +287,7 @@ class TestEdgeCases:
         content = term.content()
         scrollback = term.scrollback()
         all_content = "\n".join(scrollback) + "\n" + content if scrollback else content
-        assert "Line 1" in all_content, f"Line 1 not found in content or scrollback"
+        assert "Line 1" in all_content, "Line 1 not found in content or scrollback"
 
         # Resize larger
         term.resize(120, 36)
@@ -296,7 +296,7 @@ class TestEdgeCases:
         content = term.content()
         scrollback = term.scrollback()
         all_content = "\n".join(scrollback) + "\n" + content if scrollback else content
-        assert "Line 1" in all_content, f"Line 1 not found after resize larger"
+        assert "Line 1" in all_content, "Line 1 not found after resize larger"
 
     def test_maximum_scrollback(self):
         """Test scrollback respects maximum limit."""

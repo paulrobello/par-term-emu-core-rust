@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2025-11-27
+
+### Added
+- **Streaming Server Enhancements**:
+  - `--size` CLI option for specifying terminal size in `COLSxROWS` format (e.g., `--size 120x40` or `-s 120x40`)
+  - `--command` / `-c` CLI option to execute a command after shell startup (with 1 second delay for prompt settling)
+  - `initial_cols` and `initial_rows` configuration options in `StreamingConfig` for both Rust and Python APIs
+
+- **Python Bindings Enhancements**:
+  - New `MouseEncoding` enum (`Default`, `Utf8`, `Sgr`, `Urxvt`) for mouse event encoding control
+  - Screen buffer control: `use_alt_screen()`, `use_primary_screen()` for direct screen switching
+  - Mouse encoding: `mouse_encoding()`, `set_mouse_encoding()` for controlling mouse event format
+  - Mode setters: `set_focus_tracking()`, `set_bracketed_paste()` for direct mode control
+  - Title control: `set_title()` for programmatic title changes
+  - Bold brightening: `bold_brightening()`, `set_bold_brightening()` for legacy terminal behavior
+  - Color getters: `link_color()`, `bold_color()`, `cursor_guide_color()`, `badge_color()`, `match_color()`, `selection_bg_color()`, `selection_fg_color()`
+  - Color flag getters: `use_bold_color()`, `use_underline_color()`
+
+### Changed
+- `StreamingConfig` now includes `initial_cols` and `initial_rows` fields (default: 0, meaning use terminal's current size)
+
 ## [0.12.0] - 2025-11-27
 
 ### Fixed

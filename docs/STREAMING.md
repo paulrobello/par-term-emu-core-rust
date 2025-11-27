@@ -176,6 +176,16 @@ cargo build --release --bin par-term-streamer --features streaming
 # Basic usage
 par-term-streamer --host 127.0.0.1 --port 8099
 
+# With custom terminal size (using --size shorthand)
+par-term-streamer --size 120x40
+
+# Or using separate --cols and --rows
+par-term-streamer --cols 120 --rows 40
+
+# With an initial command (executed after 1 second delay)
+par-term-streamer --command "htop"
+par-term-streamer -c "vim README.md"
+
 # With theme
 par-term-streamer --theme dracula
 
@@ -237,6 +247,8 @@ streaming_server.shutdown("Server stopping")
 | `default_read_only` | bool | false | New clients read-only by default |
 | `enable_http` | bool | false | Enable HTTP static file serving |
 | `web_root` | String | "./web_term" | Web root directory for static files |
+| `initial_cols` | u16 | 0 | Initial terminal columns (0=use terminal's current size) |
+| `initial_rows` | u16 | 0 | Initial terminal rows (0=use terminal's current size) |
 
 **Python Example:**
 ```python
@@ -244,7 +256,9 @@ config = terminal_core.StreamingConfig(
     max_clients=100,
     send_initial_screen=True,
     keepalive_interval=30,
-    default_read_only=False
+    default_read_only=False,
+    initial_cols=120,
+    initial_rows=40
 )
 
 server = terminal_core.StreamingServer(pty_terminal, addr, config)
@@ -261,6 +275,8 @@ let config = StreamingConfig {
     default_read_only: false,
     enable_http: true,
     web_root: "./web_term".to_string(),
+    initial_cols: 120,
+    initial_rows: 40,
 };
 
 let server = StreamingServer::with_config(terminal, addr, config);
