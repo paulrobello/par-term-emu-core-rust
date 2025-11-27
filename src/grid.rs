@@ -327,55 +327,50 @@ impl Grid {
             }
         }
 
-        // Step 3: If we have more lines than fit, handle the excess
-        // Keep TOP content visible, push BOTTOM excess to scrollback only if non-empty
+        // Step 3: If we have more lines than fit, push TOP excess to scrollback
+        // Keep BOTTOM lines visible (where cursor/prompt typically is)
         let total_lines = all_wrapped.len();
         if total_lines > new_rows {
+            let excess_lines = total_lines - new_rows;
 
-            // Check if bottom excess lines have any content worth preserving
-            // (i.e., not just empty rows)
+            // Push top excess lines to scrollback (oldest content scrolls up)
             if self.max_scrollback > 0 {
-                for line_idx in new_rows..total_lines {
+                for line_idx in 0..excess_lines {
                     let start = line_idx * new_cols;
                     let end = start + new_cols;
                     if end <= all_cells.len() {
                         let row_cells = &all_cells[start..end];
+                        let is_wrapped = all_wrapped.get(line_idx).copied().unwrap_or(false);
 
-                        // Only push to scrollback if line has content
-                        let has_content = row_cells.iter().any(|c| !c.is_empty());
-                        if has_content {
-                            let is_wrapped = all_wrapped.get(line_idx).copied().unwrap_or(false);
+                        // Append to scrollback
+                        if self.scrollback_lines < self.max_scrollback {
+                            self.scrollback_cells.extend_from_slice(row_cells);
+                            self.scrollback_wrapped.push(is_wrapped);
+                            self.scrollback_lines += 1;
+                        } else if self.scrollback_cells.len() >= self.max_scrollback * new_cols {
+                            // Buffer full - overwrite oldest (circular)
+                            let physical_index = self.scrollback_start;
+                            let sb_start = physical_index * new_cols;
 
-                            // Append to scrollback
-                            if self.scrollback_lines < self.max_scrollback {
-                                self.scrollback_cells.extend_from_slice(row_cells);
-                                self.scrollback_wrapped.push(is_wrapped);
-                                self.scrollback_lines += 1;
-                            } else if self.scrollback_cells.len() >= self.max_scrollback * new_cols
-                            {
-                                // Buffer full - overwrite oldest (circular)
-                                let physical_index = self.scrollback_start;
-                                let sb_start = physical_index * new_cols;
-
-                                for (i, cell) in row_cells.iter().enumerate() {
-                                    if sb_start + i < self.scrollback_cells.len() {
-                                        self.scrollback_cells[sb_start + i] = cell.clone();
-                                    }
+                            for (i, cell) in row_cells.iter().enumerate() {
+                                if sb_start + i < self.scrollback_cells.len() {
+                                    self.scrollback_cells[sb_start + i] = cell.clone();
                                 }
-                                if physical_index < self.scrollback_wrapped.len() {
-                                    self.scrollback_wrapped[physical_index] = is_wrapped;
-                                }
-                                self.scrollback_start =
-                                    (self.scrollback_start + 1) % self.max_scrollback;
                             }
+                            if physical_index < self.scrollback_wrapped.len() {
+                                self.scrollback_wrapped[physical_index] = is_wrapped;
+                            }
+                            self.scrollback_start =
+                                (self.scrollback_start + 1) % self.max_scrollback;
                         }
                     }
                 }
             }
 
-            // Keep the top lines (content stays visible)
-            all_cells.truncate(new_rows * new_cols);
-            all_wrapped.truncate(new_rows);
+            // Keep the bottom lines (cursor/prompt area stays visible)
+            let keep_start = excess_lines * new_cols;
+            all_cells = all_cells[keep_start..].to_vec();
+            all_wrapped = all_wrapped[excess_lines..].to_vec();
         }
 
         // Step 4: Create new grid with reflowed content
