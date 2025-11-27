@@ -329,9 +329,27 @@ impl Grid {
 
         // Step 3: If we have more lines than fit, push TOP excess to scrollback
         // Keep BOTTOM lines visible (where cursor/prompt typically is)
-        let total_lines = all_wrapped.len();
-        if total_lines > new_rows {
-            let excess_lines = total_lines - new_rows;
+        //
+        // IMPORTANT: Only count rows with actual content for overflow calculation.
+        // Empty trailing rows (common in fresh terminals with just a prompt at top)
+        // should NOT cause content to be pushed to scrollback.
+        // Find the last row with actual content
+        let mut last_content_line = 0;
+        for (line_idx, _) in all_wrapped.iter().enumerate() {
+            let start = line_idx * new_cols;
+            let end = (start + new_cols).min(all_cells.len());
+            let has_content = all_cells[start..end]
+                .iter()
+                .any(|c| c.c != ' ' || !c.is_empty());
+            if has_content {
+                last_content_line = line_idx + 1; // +1 because we want count, not index
+            }
+        }
+
+        // Use the content line count for overflow, but still process all lines
+        let effective_lines = last_content_line.max(1); // At least 1 line
+        if effective_lines > new_rows {
+            let excess_lines = effective_lines - new_rows;
 
             // Push top excess lines to scrollback (oldest content scrolls up)
             if self.max_scrollback > 0 {
@@ -391,11 +409,7 @@ impl Grid {
                     let sb_end = sb_start + new_cols;
                     if sb_end <= self.scrollback_cells.len() {
                         pulled_cells.extend_from_slice(&self.scrollback_cells[sb_start..sb_end]);
-                        let is_wrapped = self
-                            .scrollback_wrapped
-                            .get(i)
-                            .copied()
-                            .unwrap_or(false);
+                        let is_wrapped = self.scrollback_wrapped.get(i).copied().unwrap_or(false);
                         pulled_wrapped.push(is_wrapped);
                     }
                 }
