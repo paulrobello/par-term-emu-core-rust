@@ -13,6 +13,18 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.12.0
+
+### 🐛 Bug Fixes
+- **Terminal Reflow Improvements**: Multiple fixes to scrollback and grid reflow behavior during resize
+  - Prevent content at top from being incorrectly pushed to scrollback during resize
+  - Use correct column width when pulling content from scrollback
+  - Pull content back from scrollback when window widens
+  - Push TOP content to scrollback while keeping BOTTOM visible on reflow (matches expected terminal behavior)
+  - Preserve excess content in scrollback during reflow operations
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.11.0
 
 ### 🎉 New Features
@@ -26,8 +38,6 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
   - Preserves all cell attributes (colors, bold, italic, etc.)
   - Handles wide characters (CJK, emoji) correctly at line boundaries
   - Significant UX improvement for terminal resize operations
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## What's New in 0.10.0
 
