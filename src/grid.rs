@@ -371,6 +371,59 @@ impl Grid {
             let keep_start = excess_lines * new_cols;
             all_cells = all_cells[keep_start..].to_vec();
             all_wrapped = all_wrapped[excess_lines..].to_vec();
+        } else if all_wrapped.len() < new_rows && self.scrollback_lines > 0 {
+            // Step 3b: We have extra space - pull content back from scrollback
+            let empty_rows = new_rows - all_wrapped.len();
+            let rows_to_pull = empty_rows.min(self.scrollback_lines);
+
+            if rows_to_pull > 0 {
+                // We need to pull the LAST rows_to_pull lines from scrollback
+                // and prepend them to our content
+                let mut pulled_cells = Vec::new();
+                let mut pulled_wrapped = Vec::new();
+
+                // Get lines from scrollback (most recent first, then reverse)
+                let start_idx = self.scrollback_lines.saturating_sub(rows_to_pull);
+                for i in start_idx..self.scrollback_lines {
+                    if let Some(line) = self.scrollback_line(i) {
+                        // Re-wrap this scrollback line to new width
+                        let mut line_cells: Vec<Cell> =
+                            line.iter().filter(|c| !c.flags.wide_char_spacer()).cloned().collect();
+                        // Trim trailing empty cells
+                        while line_cells.last().is_some_and(|c| c.is_empty()) {
+                            line_cells.pop();
+                        }
+                        let (rewrapped, wrap_flags) = self.rewrap_logical_line(&line_cells, new_cols);
+
+                        for (j, chunk) in rewrapped.chunks(new_cols).enumerate() {
+                            pulled_cells.extend_from_slice(chunk);
+                            while pulled_cells.len() % new_cols != 0 {
+                                pulled_cells.push(Cell::default());
+                            }
+                            pulled_wrapped.push(wrap_flags.get(j).copied().unwrap_or(false));
+                        }
+                    }
+                }
+
+                // Remove pulled lines from scrollback
+                if rows_to_pull <= self.scrollback_lines {
+                    self.scrollback_lines -= rows_to_pull;
+                    // Truncate scrollback cells
+                    let new_sb_len = self.scrollback_lines * self.cols;
+                    if new_sb_len < self.scrollback_cells.len() {
+                        // For non-circular buffer, just truncate
+                        // For circular buffer, this is more complex - simplified here
+                        self.scrollback_cells.truncate(new_sb_len);
+                        self.scrollback_wrapped.truncate(self.scrollback_lines);
+                    }
+                }
+
+                // Prepend pulled content to all_cells
+                pulled_cells.append(&mut all_cells);
+                pulled_wrapped.append(&mut all_wrapped);
+                all_cells = pulled_cells;
+                all_wrapped = pulled_wrapped;
+            }
         }
 
         // Step 4: Create new grid with reflowed content
