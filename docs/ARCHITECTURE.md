@@ -116,7 +116,16 @@ Manages the 2D terminal buffer:
 - Scrollback buffer (configurable size)
 - Scrolling operations
 - Cell access and manipulation
-- Resize handling
+- Resize handling with scrollback reflow
+
+**Resize Behavior:**
+When terminal width changes, the scrollback buffer is automatically reflowed:
+- **Width increase**: Previously soft-wrapped lines are unwrapped into longer lines
+- **Width decrease**: Lines are re-wrapped to fit the new width
+- All cell attributes (colors, bold, italic, etc.) are preserved during reflow
+- Wide characters (CJK, emoji) are handled correctly at line boundaries
+- The circular buffer is rebuilt after reflow for simpler indexing
+- Height-only changes do not trigger scrollback reflow (optimization)
 
 The grid uses a flat Vec for efficient storage and access:
 

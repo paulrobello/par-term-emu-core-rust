@@ -21,7 +21,7 @@ pub use notification::Notification;
 // Imports
 use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
-use crate::cursor::Cursor;
+use crate::cursor::{Cursor, CursorStyle};
 use crate::debug;
 use crate::graphics::{GraphicsLimits, GraphicsStore};
 use crate::grid::Grid;
@@ -1725,6 +1725,13 @@ impl Terminal {
     /// Get the cursor
     pub fn cursor(&self) -> &Cursor {
         &self.cursor
+    }
+
+    /// Set cursor style programmatically (bypasses DECSCUSR parsing)
+    /// Use this when the terminal emulator's UI settings change the cursor style,
+    /// rather than sending DECSCUSR escape sequences to the PTY.
+    pub fn set_cursor_style(&mut self, style: CursorStyle) {
+        self.cursor.set_style(style);
     }
 
     /// Get the current conformance level

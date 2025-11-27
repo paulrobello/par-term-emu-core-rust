@@ -1932,5 +1932,175 @@ def test_insert_mode_with_wide_chars():
     assert "H🦀 ello" in content
 
 
+# ===== Scrollback Reflow Tests =====
+
+
+def test_scrollback_reflow_width_increase_unwraps():
+    """Test that increasing terminal width unwraps previously wrapped lines"""
+    term = Terminal(10, 5, scrollback=100)
+
+    # Write a long line that will wrap at 10 cols
+    term.process_str("ABCDEFGHIJKLMNO")  # 15 chars wraps to 2 lines
+
+    # Scroll lines into scrollback
+    for _ in range(5):
+        term.process_str("\n")
+
+    scrollback_before = term.scrollback_len()
+    assert scrollback_before >= 1
+
+    # Resize to wider - should unwrap
+    term.resize(20, 5)
+
+    # Scrollback should still exist after resize (content preserved)
+    scrollback_after = term.scrollback_len()
+    assert scrollback_after >= 1
+
+    # Get scrollback content and verify it's preserved
+    scrollback = term.scrollback()
+    all_text = "".join(scrollback)
+    assert "ABCDEFGHIJKLMNO" in all_text.replace(" ", "")
+
+
+def test_scrollback_reflow_width_decrease_rewraps():
+    """Test that decreasing terminal width re-wraps lines"""
+    term = Terminal(20, 5, scrollback=100)
+
+    # Write a 15 character line
+    term.process_str("ABCDEFGHIJKLMNO\n")
+
+    # Scroll into scrollback
+    for _ in range(6):
+        term.process_str("\n")
+
+    scrollback_before = term.scrollback_len()
+    assert scrollback_before >= 1
+
+    # Resize to narrower (10 cols) - should re-wrap
+    term.resize(10, 5)
+
+    # Scrollback should still exist (content preserved)
+    scrollback_after = term.scrollback_len()
+    assert scrollback_after >= 1
+
+    # Content should be preserved - get scrollback and verify
+    scrollback = term.scrollback()
+    all_text = "".join(scrollback).replace(" ", "")
+    assert "ABCDEFGHIJ" in all_text  # First part
+    assert "KLMNO" in all_text  # Second part
+
+
+def test_scrollback_reflow_preserves_content():
+    """Test that scrollback content is preserved after reflow"""
+    term = Terminal(20, 3, scrollback=100)
+
+    # Write a single line, scroll it into scrollback
+    term.process_str("TESTCONTENT\n")
+    for _ in range(3):
+        term.process_str("\n")
+
+    initial_scrollback = term.scrollback_len()
+    assert initial_scrollback >= 1
+
+    # Resize width (wider)
+    term.resize(40, 3)
+
+    # Scrollback should still have content after resize
+    assert term.scrollback_len() >= 1
+
+    # Content should be preserved - get first scrollback line
+    scrollback = term.scrollback()
+    assert len(scrollback) >= 1
+    assert "TESTCONTENT" in scrollback[0]
+
+
+def test_scrollback_reflow_height_only():
+    """Test that changing only height doesn't affect scrollback content"""
+    term = Terminal(10, 3, scrollback=100)
+
+    term.process_str("HELLO\n")
+    for _ in range(4):
+        term.process_str("\n")
+
+    scrollback_before = term.scrollback_len()
+
+    # Resize height only
+    term.resize(10, 5)
+
+    # Scrollback count should be unchanged (no reflow needed)
+    assert term.scrollback_len() == scrollback_before
+
+
+def test_scrollback_reflow_multiple_lines():
+    """Test reflow with multiple separate lines"""
+    term = Terminal(20, 5, scrollback=100)
+
+    # Write 3 short lines
+    term.process_str("AAA\n")
+    term.process_str("BBB\n")
+    term.process_str("CCC\n")
+
+    # Scroll all into scrollback
+    for _ in range(5):
+        term.process_str("\n")
+
+    scrollback_before = term.scrollback_len()
+    assert scrollback_before >= 3
+
+    # Resize wider
+    term.resize(40, 5)
+
+    # Scrollback should still exist
+    scrollback_after = term.scrollback_len()
+    assert scrollback_after >= 3
+
+    # All lines should be preserved
+    scrollback = term.scrollback()
+    all_text = "".join(scrollback)
+    assert "AAA" in all_text
+    assert "BBB" in all_text
+    assert "CCC" in all_text
+
+
+def test_scrollback_reflow_empty():
+    """Test that reflow handles empty scrollback gracefully"""
+    term = Terminal(10, 3, scrollback=100)
+
+    assert term.scrollback_len() == 0
+
+    # Resize - should not panic
+    term.resize(20, 3)
+
+    assert term.scrollback_len() == 0
+
+
+def test_scrollback_reflow_circular_buffer():
+    """Test reflow when scrollback is using circular buffer"""
+    term = Terminal(20, 2, scrollback=3)  # Small max for circular
+
+    # Fill scrollback past capacity
+    # With 2-row terminal: each line after the 2nd causes a scroll
+    # WXYZ: W->screen, X->screen (W scrolls off), Y->screen (X scrolls off), Z->screen (Y scrolls off)
+    # So scrollback gets: W, X, Y (3 lines, Z is still on screen)
+    for ch in "WXYZ":
+        term.process_str(f"{ch}\n")
+
+    # Should have 3 lines in scrollback
+    assert term.scrollback_len() == 3
+
+    # Resize wider - reflow should handle circular buffer
+    term.resize(40, 2)
+
+    # Scrollback should still have 3 lines after resize
+    assert term.scrollback_len() == 3
+
+    # Content W, X, Y should be preserved (Z is on screen, not scrollback)
+    scrollback = term.scrollback()
+    all_text = "".join(scrollback)
+    assert "W" in all_text
+    assert "X" in all_text
+    assert "Y" in all_text
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

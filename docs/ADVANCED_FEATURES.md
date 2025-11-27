@@ -24,6 +24,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [VT420 Rectangle Operations](#vt420-rectangle-operations)
 - [Unicode Support](#unicode-support)
 - [Buffer Export](#buffer-export)
+- [Scrollback Reflow](#scrollback-reflow)
 - [Terminal Notifications](#terminal-notifications)
 - [Session Recording and Replay](#session-recording-and-replay)
 - [Macro Recording and Playback](#macro-recording-and-playback)
@@ -1542,6 +1543,73 @@ Both `Terminal` and `PtyTerminal` classes provide:
 - Efficient string building optimized for large outputs
 - Styled export only emits escape sequence changes (not redundant)
 - Both methods handle large scrollback buffers efficiently (10K+ lines)
+
+## Scrollback Reflow
+
+**Feature:** Automatic reflow of scrollback content when terminal width changes.
+
+### Overview
+
+When the terminal is resized, the scrollback buffer is intelligently reflowed to match the new width, similar to behavior in xterm and iTerm2. This preserves scrollback history that would otherwise be lost during width changes.
+
+### Behavior
+
+**Width Increase (e.g., 80 → 120 columns):**
+- Previously soft-wrapped lines are unwrapped into longer lines
+- Lines that were split across multiple rows are merged back together
+- Results in fewer scrollback lines (more content fits per line)
+
+**Width Decrease (e.g., 120 → 80 columns):**
+- Lines that no longer fit are re-wrapped at the new width
+- Results in more scrollback lines (content spans more rows)
+- Respects `max_scrollback` limit (oldest lines dropped if exceeded)
+
+**Height-Only Changes:**
+- No reflow is performed (optimization)
+- Scrollback content remains unchanged
+
+### Preserved During Reflow
+
+- All text content
+- Foreground and background colors (named, indexed, RGB)
+- Text attributes (bold, italic, underline, etc.)
+- Underline styles and colors
+- Hyperlink associations
+- Wide character handling (CJK, emoji)
+
+### Example
+
+```python
+from par_term_emu_core_rust import Terminal
+
+# Create terminal with scrollback
+term = Terminal(80, 24, scrollback=1000)
+
+# Write content that wraps
+term.process_str("A" * 100 + "\n")  # Wraps at 80 cols
+
+# Scroll into scrollback
+for _ in range(30):
+    term.process_str("\n")
+
+# Before resize: 2 scrollback lines (100 chars wrapped at 80)
+print(f"Before: {term.scrollback_len()} lines")
+
+# Resize wider - lines unwrap
+term.resize(120, 24)
+print(f"After resize to 120: {term.scrollback_len()} lines")  # Now 1 line
+
+# Resize narrower - lines re-wrap
+term.resize(50, 24)
+print(f"After resize to 50: {term.scrollback_len()} lines")  # Now 2 lines
+```
+
+### Technical Details
+
+- Reflow occurs **before** the grid dimensions are updated
+- The circular buffer is linearized during reflow for simpler processing
+- Wide characters that would be split at line boundaries cause early wrapping
+- Empty trailing cells are trimmed from non-wrapped lines
 
 ## Terminal Notifications
 

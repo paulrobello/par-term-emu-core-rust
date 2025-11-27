@@ -157,12 +157,14 @@ fn main() {
     let cursor = terminal.cursor();
     println!("Cursor at column {}, row {}", cursor.col, cursor.row);
 
-    // Resize terminal
+    // Resize terminal (scrollback is automatically reflowed when width changes)
     terminal.resize(100, 30);
 }
 ```
 
 > **📝 Note:** The `process()` method is thread-safe for reading but requires `&mut self` for modifications. For concurrent access, wrap `Terminal` in `Arc<Mutex<Terminal>>`.
+
+> **📝 Resize Behavior:** When terminal width changes, scrollback content is automatically reflowed—wrapped lines are unwrapped (width increase) or re-wrapped (width decrease). All cell attributes are preserved. Height-only changes do not trigger reflow.
 
 ## PTY Session (Shell Interaction)
 

@@ -50,7 +50,7 @@ Create a new terminal with specified dimensions.
 #### Terminal State
 - `content() -> str`: Get terminal content as a string
 - `size() -> tuple[int, int]`: Get terminal dimensions (cols, rows)
-- `resize(cols: int, rows: int)`: Resize the terminal
+- `resize(cols: int, rows: int)`: Resize the terminal. When width changes, scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved.
 - `reset()`: Reset terminal to default state
 - `title() -> str`: Get terminal title
 

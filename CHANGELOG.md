@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0] - 2025-11-26
+
+### Added
+- **Scrollback Reflow on Width Resize**: Scrollback content is now preserved and properly reflowed when terminal width changes
+  - Previously, changing terminal width would clear all scrollback to avoid panics from misaligned cell indexing
+  - Now implements intelligent reflow similar to xterm and iTerm2:
+    - **Width increase**: Unwraps previously soft-wrapped lines into longer lines
+    - **Width decrease**: Re-wraps lines that no longer fit
+  - Preserves all cell attributes (colors, bold, italic, etc.) during reflow
+  - Handles wide characters (CJK, emoji) correctly at line boundaries
+  - Properly manages circular buffer during reflow
+  - Respects max_scrollback limits when reflow creates additional lines
+  - Significant UX improvement for terminal resize operations
+
+### Changed
+- Height-only resize operations no longer trigger scrollback reflow (optimization)
+- Scrollback buffer is now rebuilt (non-circular) after reflow for simpler indexing
+
 ## [0.10.0] - 2025-11-24
 
 ### Added

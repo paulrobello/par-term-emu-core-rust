@@ -257,41 +257,310 @@ impl Grid {
             return;
         }
 
-        let width_changed = cols != self.cols;
+        let old_cols = self.cols;
+        let old_rows = self.rows;
+        let width_changed = cols != old_cols;
 
-        let mut new_cells = vec![Cell::default(); cols * rows];
-        let mut new_wrapped = vec![false; rows];
+        // IMPORTANT: Reflow scrollback BEFORE updating self.cols
+        // because scrollback_line() uses self.cols to slice the old buffer
+        if width_changed && self.max_scrollback > 0 && self.scrollback_lines > 0 {
+            self.reflow_scrollback(old_cols, cols);
+        }
 
-        // Copy existing content
-        let min_rows = self.rows.min(rows);
-        let min_cols = self.cols.min(cols);
+        if width_changed {
+            // Width changed - reflow the main grid content
+            self.reflow_main_grid(old_cols, old_rows, cols, rows);
+        } else {
+            // Only height changed - simple copy/truncate
+            let mut new_cells = vec![Cell::default(); cols * rows];
+            let mut new_wrapped = vec![false; rows];
 
-        for row in 0..min_rows {
-            for col in 0..min_cols {
-                if let Some(cell) = self.get(col, row) {
-                    new_cells[row * cols + col] = cell.clone();
+            let min_rows = self.rows.min(rows);
+
+            for row in 0..min_rows {
+                for col in 0..cols {
+                    if let Some(cell) = self.get(col, row) {
+                        new_cells[row * cols + col] = cell.clone();
+                    }
+                }
+                if row < self.wrapped.len() {
+                    new_wrapped[row] = self.wrapped[row];
                 }
             }
-            // Copy wrapped state
-            if row < self.wrapped.len() {
-                new_wrapped[row] = self.wrapped[row];
+
+            self.cols = cols;
+            self.rows = rows;
+            self.cells = new_cells;
+            self.wrapped = new_wrapped;
+        }
+    }
+
+    /// Reflow main grid content to a new column width
+    ///
+    /// This handles both width increases (unwrapping) and decreases (re-wrapping).
+    /// Excess lines that don't fit are pushed to scrollback.
+    fn reflow_main_grid(
+        &mut self,
+        old_cols: usize,
+        old_rows: usize,
+        new_cols: usize,
+        new_rows: usize,
+    ) {
+        // Step 1: Extract logical lines from the main grid
+        let logical_lines = self.extract_main_grid_logical_lines(old_cols, old_rows);
+
+        // Step 2: Re-wrap each logical line to the new width
+        let mut all_cells = Vec::new();
+        let mut all_wrapped = Vec::new();
+
+        for logical_line in logical_lines {
+            let (cells, wrapped_flags) = self.rewrap_logical_line(&logical_line, new_cols);
+
+            for (i, row_cells) in cells.chunks(new_cols).enumerate() {
+                all_cells.extend_from_slice(row_cells);
+                // Pad if needed
+                while all_cells.len() % new_cols != 0 {
+                    all_cells.push(Cell::default());
+                }
+                let is_wrapped = wrapped_flags.get(i).copied().unwrap_or(false);
+                all_wrapped.push(is_wrapped);
             }
         }
 
-        self.cols = cols;
-        self.rows = rows;
+        // Step 3: Truncate to new_rows, keeping TOP content visible
+        // When terminal height decreases, content at the top stays visible
+        // and bottom empty rows are simply removed (no scrollback for empty rows)
+        if all_wrapped.len() > new_rows {
+            all_cells.truncate(new_rows * new_cols);
+            all_wrapped.truncate(new_rows);
+        }
+
+        // Step 4: Create new grid with reflowed content
+        let mut new_cells = vec![Cell::default(); new_cols * new_rows];
+        let mut new_wrapped = vec![false; new_rows];
+
+        let lines_to_copy = all_wrapped.len().min(new_rows);
+        for row in 0..lines_to_copy {
+            let src_start = row * new_cols;
+            let src_end = src_start + new_cols;
+            let dst_start = row * new_cols;
+
+            if src_end <= all_cells.len() {
+                new_cells[dst_start..dst_start + new_cols]
+                    .clone_from_slice(&all_cells[src_start..src_end]);
+            }
+            if row < all_wrapped.len() {
+                new_wrapped[row] = all_wrapped[row];
+            }
+        }
+
+        self.cols = new_cols;
+        self.rows = new_rows;
         self.cells = new_cells;
         self.wrapped = new_wrapped;
+    }
 
-        // If the width changed, any existing scrollback stored with the old
-        // column count can no longer be indexed safely. To avoid panics and
-        // misaligned lines, clear scrollback state when columns change.
-        if width_changed && self.max_scrollback > 0 {
-            self.scrollback_cells.clear();
-            self.scrollback_wrapped.clear();
-            self.scrollback_start = 0;
-            self.scrollback_lines = 0;
+    /// Extract logical lines from the main grid
+    fn extract_main_grid_logical_lines(&self, old_cols: usize, old_rows: usize) -> Vec<Vec<Cell>> {
+        let mut logical_lines = Vec::new();
+        let mut current_line = Vec::new();
+
+        for row in 0..old_rows {
+            // Extract cells from this row
+            for col in 0..old_cols {
+                if let Some(cell) = self.get(col, row) {
+                    // Skip wide char spacers - they will be regenerated when rewrapping
+                    if !cell.flags.wide_char_spacer() {
+                        current_line.push(cell.clone());
+                    }
+                }
+            }
+
+            let is_wrapped = self.wrapped.get(row).copied().unwrap_or(false);
+
+            if !is_wrapped {
+                // End of logical line - trim trailing empty cells and save
+                while current_line
+                    .last()
+                    .is_some_and(|c| c.c == ' ' && c.is_empty())
+                {
+                    current_line.pop();
+                }
+                logical_lines.push(std::mem::take(&mut current_line));
+            }
+            // If wrapped, continue accumulating into current_line
         }
+
+        // Don't forget any remaining content
+        if !current_line.is_empty() {
+            logical_lines.push(current_line);
+        }
+
+        logical_lines
+    }
+
+    /// Reflow scrollback content to a new column width
+    ///
+    /// This method handles both width increases (unwrapping) and decreases (re-wrapping).
+    /// It preserves all cell attributes, colors, and handles wide characters correctly.
+    fn reflow_scrollback(&mut self, old_cols: usize, new_cols: usize) {
+        // Step 1: Extract logical lines from the scrollback
+        // A logical line is one or more physical lines connected by wrapped=true
+        let logical_lines = self.extract_logical_lines(old_cols);
+
+        // Step 2: Re-wrap each logical line to the new width
+        let mut new_scrollback_cells = Vec::new();
+        let mut new_scrollback_wrapped = Vec::new();
+        let mut new_scrollback_lines = 0;
+
+        for logical_line in logical_lines {
+            let (cells, wrapped_flags) = self.rewrap_logical_line(&logical_line, new_cols);
+
+            // Add the re-wrapped lines to the new scrollback
+            for (i, row_cells) in cells.chunks(new_cols).enumerate() {
+                // Only add up to max_scrollback lines
+                if new_scrollback_lines >= self.max_scrollback {
+                    // We've exceeded max scrollback - need to use circular buffer logic
+                    // For simplicity, we'll shift out old content
+                    let rows_to_shift = new_scrollback_cells.len() / new_cols;
+                    if rows_to_shift > 0 {
+                        // Remove the oldest row
+                        new_scrollback_cells.drain(0..new_cols);
+                        new_scrollback_wrapped.remove(0);
+                        new_scrollback_lines -= 1;
+                    }
+                }
+
+                new_scrollback_cells.extend_from_slice(row_cells);
+                // Pad with default cells if the row is shorter than new_cols
+                while new_scrollback_cells.len() % new_cols != 0 {
+                    new_scrollback_cells.push(Cell::default());
+                }
+                // Set wrapped flag (last row of logical line is not wrapped)
+                let is_wrapped =
+                    i < wrapped_flags.len() && wrapped_flags.get(i).copied().unwrap_or(false);
+                new_scrollback_wrapped.push(is_wrapped);
+                new_scrollback_lines += 1;
+            }
+        }
+
+        // Limit to max_scrollback lines (keep the most recent)
+        while new_scrollback_lines > self.max_scrollback {
+            new_scrollback_cells.drain(0..new_cols);
+            new_scrollback_wrapped.remove(0);
+            new_scrollback_lines -= 1;
+        }
+
+        // Step 3: Update the scrollback state
+        self.scrollback_cells = new_scrollback_cells;
+        self.scrollback_wrapped = new_scrollback_wrapped;
+        self.scrollback_lines = new_scrollback_lines;
+        self.scrollback_start = 0; // Reset to non-circular since we rebuilt it
+    }
+
+    /// Extract logical lines from the scrollback buffer
+    ///
+    /// Returns a Vec of logical lines, where each logical line is a Vec<Cell>
+    /// containing the content that should be treated as a single line
+    /// (connected by soft wraps).
+    fn extract_logical_lines(&self, _old_cols: usize) -> Vec<Vec<Cell>> {
+        let mut logical_lines = Vec::new();
+        let mut current_line = Vec::new();
+
+        for line_idx in 0..self.scrollback_lines {
+            if let Some(row_cells) = self.scrollback_line(line_idx) {
+                // Extract significant cells (skip trailing default cells and wide char spacers)
+                for cell in row_cells.iter() {
+                    // Skip wide char spacers - they will be regenerated when rewrapping
+                    if !cell.flags.wide_char_spacer() {
+                        current_line.push(cell.clone());
+                    }
+                }
+
+                // Trim trailing empty cells from the current row contribution
+                // But only if this is not a wrapped line (wrapped lines might end with spaces)
+                let is_wrapped = self.is_scrollback_wrapped(line_idx);
+
+                if !is_wrapped {
+                    // End of logical line - trim trailing spaces and save
+                    while current_line
+                        .last()
+                        .is_some_and(|c| c.c == ' ' && c.is_empty())
+                    {
+                        current_line.pop();
+                    }
+                    logical_lines.push(std::mem::take(&mut current_line));
+                }
+                // If wrapped, continue accumulating into current_line
+            }
+        }
+
+        // Don't forget any remaining content
+        if !current_line.is_empty() {
+            logical_lines.push(current_line);
+        }
+
+        logical_lines
+    }
+
+    /// Re-wrap a logical line to fit the new column width
+    ///
+    /// Returns (cells, wrapped_flags) where:
+    /// - cells is a flat Vec<Cell> of the re-wrapped content
+    /// - wrapped_flags indicates which rows are soft-wrapped (true) vs hard newline (false)
+    fn rewrap_logical_line(
+        &self,
+        logical_line: &[Cell],
+        new_cols: usize,
+    ) -> (Vec<Cell>, Vec<bool>) {
+        if logical_line.is_empty() {
+            // Empty logical line = one empty row with no wrap
+            let empty_row = vec![Cell::default(); new_cols];
+            return (empty_row, vec![false]);
+        }
+
+        let mut result_cells = Vec::new();
+        let mut wrapped_flags = Vec::new();
+        let mut current_col = 0;
+        let mut row_start = result_cells.len();
+
+        for cell in logical_line.iter() {
+            let cell_width = if cell.flags.wide_char() { 2 } else { 1 };
+
+            // Check if this cell fits on the current row
+            if current_col + cell_width > new_cols {
+                // Need to wrap to next row
+                // First, pad current row to new_cols
+                while result_cells.len() - row_start < new_cols {
+                    result_cells.push(Cell::default());
+                }
+                wrapped_flags.push(true); // This row is soft-wrapped
+
+                // Start new row
+                row_start = result_cells.len();
+                current_col = 0;
+            }
+
+            // Add the cell
+            result_cells.push(cell.clone());
+            current_col += 1;
+
+            // Add wide char spacer if needed
+            if cell.flags.wide_char() {
+                let mut spacer = Cell::default();
+                spacer.flags.set_wide_char_spacer(true);
+                result_cells.push(spacer);
+                current_col += 1;
+            }
+        }
+
+        // Pad final row to new_cols
+        while result_cells.len() - row_start < new_cols {
+            result_cells.push(Cell::default());
+        }
+        wrapped_flags.push(false); // Last row is not wrapped (hard newline)
+
+        (result_cells, wrapped_flags)
     }
 
     /// Get scrollback buffer (returns a temporary Vec<Vec<Cell>> for API compatibility)
@@ -1814,7 +2083,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resize_clears_scrollback_when_width_changes() {
+    fn test_resize_reflows_scrollback_when_width_changes() {
         let mut grid = Grid::new(10, 3, 3);
 
         grid.set(0, 0, Cell::new('X'));
@@ -1824,8 +2093,10 @@ mod tests {
         grid.resize(20, 3);
 
         assert_eq!(grid.cols(), 20);
-        assert_eq!(grid.scrollback_len(), 0);
-        assert!(grid.scrollback_line(0).is_none());
+        // Scrollback should now be preserved and reflowed, not cleared
+        assert_eq!(grid.scrollback_len(), 1);
+        let line = grid.scrollback_line(0).unwrap();
+        assert_eq!(line[0].c, 'X');
     }
 
     #[test]
@@ -2259,5 +2530,291 @@ mod tests {
         for col in 0..80 {
             assert_eq!(grid.get(col, 10).unwrap().c, ' ');
         }
+    }
+
+    // ===== Scrollback Reflow Tests =====
+
+    #[test]
+    fn test_scrollback_reflow_width_increase_unwraps() {
+        // Test that increasing width unwraps previously wrapped lines
+        let mut grid = Grid::new(10, 3, 100);
+
+        // Create a line that wraps: "ABCDEFGHIJ" (10 chars) + "KLMNO" (5 chars)
+        // This will be 2 physical lines with wrap=true on the first
+        for (i, ch) in "ABCDEFGHIJ".chars().enumerate() {
+            grid.set(i, 0, Cell::new(ch));
+        }
+        grid.set_line_wrapped(0, true);
+        for (i, ch) in "KLMNO".chars().enumerate() {
+            grid.set(i, 1, Cell::new(ch));
+        }
+
+        // Scroll these lines into scrollback
+        grid.scroll_up(2);
+        assert_eq!(grid.scrollback_len(), 2);
+        assert!(grid.is_scrollback_wrapped(0)); // First line should be wrapped
+
+        // Now resize to wider (20 cols) - should unwrap
+        grid.resize(20, 3);
+
+        // After reflow, both lines should merge into one (15 chars fits in 20 cols)
+        assert_eq!(grid.scrollback_len(), 1);
+        assert!(!grid.is_scrollback_wrapped(0)); // Should not be wrapped anymore
+
+        // Verify content is preserved
+        let line = grid.scrollback_line(0).unwrap();
+        assert_eq!(line[0].c, 'A');
+        assert_eq!(line[4].c, 'E');
+        assert_eq!(line[10].c, 'K');
+        assert_eq!(line[14].c, 'O');
+    }
+
+    #[test]
+    fn test_scrollback_reflow_width_decrease_rewraps() {
+        // Test that decreasing width re-wraps lines
+        let mut grid = Grid::new(20, 3, 100);
+
+        // Create a single line with 15 characters
+        for (i, ch) in "ABCDEFGHIJKLMNO".chars().enumerate() {
+            grid.set(i, 0, Cell::new(ch));
+        }
+
+        // Scroll into scrollback
+        grid.scroll_up(1);
+        assert_eq!(grid.scrollback_len(), 1);
+        assert!(!grid.is_scrollback_wrapped(0));
+
+        // Now resize to narrower (10 cols) - should re-wrap
+        grid.resize(10, 3);
+
+        // After reflow, should be 2 lines (10 + 5 chars)
+        assert_eq!(grid.scrollback_len(), 2);
+        assert!(grid.is_scrollback_wrapped(0)); // First line should be wrapped now
+        assert!(!grid.is_scrollback_wrapped(1)); // Second line not wrapped
+
+        // Verify content
+        let line0 = grid.scrollback_line(0).unwrap();
+        let line1 = grid.scrollback_line(1).unwrap();
+        assert_eq!(line0[0].c, 'A');
+        assert_eq!(line0[9].c, 'J');
+        assert_eq!(line1[0].c, 'K');
+        assert_eq!(line1[4].c, 'O');
+    }
+
+    #[test]
+    fn test_scrollback_reflow_preserves_colors() {
+        use crate::color::Color;
+
+        let mut grid = Grid::new(10, 3, 100);
+
+        // Create a colored cell
+        let mut cell = Cell::new('X');
+        cell.fg = Color::Rgb(255, 0, 0);
+        cell.bg = Color::Rgb(0, 255, 0);
+        cell.flags.set_bold(true);
+        grid.set(0, 0, cell);
+
+        // Scroll into scrollback
+        grid.scroll_up(1);
+
+        // Resize (triggers reflow)
+        grid.resize(20, 3);
+
+        // Verify colors and attributes preserved
+        let line = grid.scrollback_line(0).unwrap();
+        assert_eq!(line[0].c, 'X');
+        assert_eq!(line[0].fg, Color::Rgb(255, 0, 0));
+        assert_eq!(line[0].bg, Color::Rgb(0, 255, 0));
+        assert!(line[0].flags.bold());
+    }
+
+    #[test]
+    fn test_scrollback_reflow_wide_chars() {
+        // Test that wide characters are handled correctly during reflow
+        let mut grid = Grid::new(10, 3, 100);
+
+        // Create a wide character at position 8 (needs 2 cells)
+        let mut wide_cell = Cell::new('中');
+        wide_cell.flags.set_wide_char(true);
+        grid.set(8, 0, wide_cell);
+
+        let mut spacer = Cell::default();
+        spacer.flags.set_wide_char_spacer(true);
+        grid.set(9, 0, spacer);
+
+        // Scroll into scrollback
+        grid.scroll_up(1);
+
+        // Resize to 5 cols - wide char should wrap properly
+        grid.resize(5, 3);
+
+        // The wide char should be on its own row or properly wrapped
+        // (can't split a wide char across lines)
+        assert!(grid.scrollback_len() >= 1);
+
+        // Verify the wide char is preserved
+        let mut found_wide = false;
+        for i in 0..grid.scrollback_len() {
+            if let Some(line) = grid.scrollback_line(i) {
+                for cell in line {
+                    if cell.c == '中' {
+                        found_wide = true;
+                        assert!(cell.flags.wide_char());
+                        break;
+                    }
+                }
+            }
+        }
+        assert!(
+            found_wide,
+            "Wide character should be preserved after reflow"
+        );
+    }
+
+    #[test]
+    fn test_scrollback_reflow_multiple_logical_lines() {
+        // Test reflow with multiple separate logical lines (non-wrapped)
+        let mut grid = Grid::new(10, 5, 100);
+
+        // Create 3 separate lines
+        for (i, ch) in "LINE1".chars().enumerate() {
+            grid.set(i, 0, Cell::new(ch));
+        }
+        for (i, ch) in "LINE2".chars().enumerate() {
+            grid.set(i, 1, Cell::new(ch));
+        }
+        for (i, ch) in "LINE3".chars().enumerate() {
+            grid.set(i, 2, Cell::new(ch));
+        }
+
+        // Scroll all into scrollback
+        grid.scroll_up(3);
+        assert_eq!(grid.scrollback_len(), 3);
+
+        // Resize wider
+        grid.resize(20, 5);
+
+        // Should still have 3 separate lines
+        assert_eq!(grid.scrollback_len(), 3);
+
+        let line0 = grid.scrollback_line(0).unwrap();
+        let line1 = grid.scrollback_line(1).unwrap();
+        let line2 = grid.scrollback_line(2).unwrap();
+
+        assert_eq!(line0[0].c, 'L');
+        assert_eq!(line0[4].c, '1');
+        assert_eq!(line1[4].c, '2');
+        assert_eq!(line2[4].c, '3');
+    }
+
+    #[test]
+    fn test_scrollback_reflow_max_scrollback_limit() {
+        // Test that reflow respects max_scrollback limit
+        let mut grid = Grid::new(20, 5, 3); // Only 3 lines max
+
+        // Create a long line that will need 4 rows when reflowed to 5 cols
+        for (i, ch) in "ABCDEFGHIJKLMNOPQRST".chars().enumerate() {
+            grid.set(i, 0, Cell::new(ch));
+        }
+
+        grid.scroll_up(1);
+        assert_eq!(grid.scrollback_len(), 1);
+
+        // Resize to 5 cols - would need 4 lines, but max is 3
+        grid.resize(5, 5);
+
+        // Should be capped at 3 lines
+        assert!(grid.scrollback_len() <= 3);
+    }
+
+    #[test]
+    fn test_scrollback_reflow_empty_scrollback() {
+        // Test that reflow handles empty scrollback gracefully
+        let mut grid = Grid::new(10, 3, 100);
+
+        assert_eq!(grid.scrollback_len(), 0);
+
+        // Resize - should not panic
+        grid.resize(20, 3);
+
+        assert_eq!(grid.scrollback_len(), 0);
+    }
+
+    #[test]
+    fn test_scrollback_reflow_same_width() {
+        // Test that same width doesn't trigger unnecessary reflow
+        let mut grid = Grid::new(10, 3, 100);
+
+        for (i, ch) in "HELLO".chars().enumerate() {
+            grid.set(i, 0, Cell::new(ch));
+        }
+        grid.scroll_up(1);
+
+        let orig_len = grid.scrollback_len();
+
+        // Resize with same width but different height
+        grid.resize(10, 5);
+
+        // Scrollback should be unchanged (no width change, no reflow)
+        assert_eq!(grid.scrollback_len(), orig_len);
+    }
+
+    #[test]
+    fn test_scrollback_reflow_circular_buffer() {
+        // Test reflow when scrollback is using circular buffer
+        let mut grid = Grid::new(10, 2, 3); // Small max for quick circular
+
+        // Fill scrollback past capacity (4 scrolls with max 3)
+        for i in 0..4 {
+            grid.set(0, 0, Cell::new((b'A' + i as u8) as char));
+            grid.scroll_up(1);
+        }
+
+        // Scrollback should have 3 lines (circular, oldest dropped)
+        assert_eq!(grid.scrollback_len(), 3);
+
+        // The oldest line should be 'B' (A was dropped)
+        let line0 = grid.scrollback_line(0).unwrap();
+        assert_eq!(line0[0].c, 'B');
+
+        // Resize - reflow should handle circular buffer correctly
+        grid.resize(20, 2);
+
+        // Content should still be B, C, D
+        assert_eq!(grid.scrollback_len(), 3);
+        let line0 = grid.scrollback_line(0).unwrap();
+        let line1 = grid.scrollback_line(1).unwrap();
+        let line2 = grid.scrollback_line(2).unwrap();
+        assert_eq!(line0[0].c, 'B');
+        assert_eq!(line1[0].c, 'C');
+        assert_eq!(line2[0].c, 'D');
+    }
+
+    #[test]
+    fn test_scrollback_reflow_wrapped_chain() {
+        // Test reflow of a chain of wrapped lines that spans multiple rows
+        let mut grid = Grid::new(5, 5, 100);
+
+        // Create a 15-char line that spans 3 rows at width 5
+        for (i, ch) in "ABCDEFGHIJKLMNO".chars().enumerate() {
+            let row = i / 5;
+            let col = i % 5;
+            grid.set(col, row, Cell::new(ch));
+        }
+        grid.set_line_wrapped(0, true);
+        grid.set_line_wrapped(1, true);
+        grid.set_line_wrapped(2, false); // End of logical line
+
+        // Scroll all 3 rows into scrollback
+        grid.scroll_up(3);
+        assert_eq!(grid.scrollback_len(), 3);
+
+        // Resize to 15 cols - should unwrap into single line
+        grid.resize(15, 5);
+
+        assert_eq!(grid.scrollback_len(), 1);
+        let line = grid.scrollback_line(0).unwrap();
+        assert_eq!(line[0].c, 'A');
+        assert_eq!(line[14].c, 'O');
     }
 }
