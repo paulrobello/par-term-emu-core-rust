@@ -683,6 +683,7 @@ def test_macro_chained_execution() -> None:
 
 
 @pytest.mark.slow
+@pytest.mark.timeout(30)
 def test_macro_very_long_playback() -> None:
     """Test playing back a very long macro."""
     term = PtyTerminal(80, 24)
