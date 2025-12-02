@@ -1716,6 +1716,92 @@ impl PyPtyTerminal {
         self.take_notifications()
     }
 
+    // Progress bar methods (OSC 9;4 - ConEmu/Windows Terminal style)
+
+    /// Get the current progress bar state
+    ///
+    /// Returns the progress bar state set via OSC 9;4 sequences.
+    /// The progress bar has a state (hidden, normal, indeterminate, warning, error)
+    /// and a percentage (0-100) for states that support it.
+    ///
+    /// Returns:
+    ///     ProgressBar object with state and progress fields
+    fn progress_bar(&self) -> PyResult<super::types::PyProgressBar> {
+        let terminal = self.inner.terminal();
+        let term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        Ok(term.progress_bar().into())
+    }
+
+    /// Check if the progress bar is currently active (visible)
+    ///
+    /// Returns:
+    ///     True if the progress bar is in any state other than Hidden
+    fn has_progress(&self) -> PyResult<bool> {
+        let terminal = self.inner.terminal();
+        let term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        Ok(term.has_progress())
+    }
+
+    /// Get the current progress percentage (0-100)
+    ///
+    /// Returns the progress percentage. Only meaningful when the progress bar
+    /// state is Normal, Warning, or Error.
+    ///
+    /// Returns:
+    ///     Progress percentage (0-100)
+    fn progress_value(&self) -> PyResult<u8> {
+        let terminal = self.inner.terminal();
+        let term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        Ok(term.progress_value())
+    }
+
+    /// Get the current progress bar state enum
+    ///
+    /// Returns:
+    ///     ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
+    fn progress_state(&self) -> PyResult<super::enums::PyProgressState> {
+        let terminal = self.inner.terminal();
+        let term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        Ok(term.progress_state().into())
+    }
+
+    /// Manually set the progress bar state
+    ///
+    /// This can be used to programmatically control the progress bar
+    /// without receiving OSC 9;4 sequences.
+    ///
+    /// Args:
+    ///     state: ProgressState enum value
+    ///     progress: Progress percentage (0-100, clamped if out of range)
+    fn set_progress(&mut self, state: super::enums::PyProgressState, progress: u8) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        let mut term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        term.set_progress(state.into(), progress);
+        Ok(())
+    }
+
+    /// Clear/hide the progress bar
+    ///
+    /// Equivalent to receiving OSC 9;4;0 (hidden state).
+    fn clear_progress(&mut self) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        let mut term = terminal
+            .lock()
+            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        term.clear_progress();
+        Ok(())
+    }
+
     /// Get a debug snapshot of the current buffer state
     ///
     /// Returns:

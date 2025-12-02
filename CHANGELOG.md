@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2025-12-01
+
+### Added
+- **Web Terminal Onscreen Keyboard**: Mobile-friendly virtual keyboard for touch devices
+  - Special keys missing from iOS/Android keyboards: Esc, Tab, arrow keys, Page Up/Down, Home, End, Insert, Delete
+  - Function keys F1-F12 (toggleable panel)
+  - Symbol keys often hard to type on mobile: |, \, `, ~, {, }, [, ], <, >
+  - Modifier keys: Ctrl, Alt, Shift (toggle to combine with other keys)
+  - Quick Ctrl shortcuts: ^C, ^D, ^Z, ^L, ^A, ^E, ^K, ^U, ^W, ^R
+  - Glass morphism design matching terminal aesthetic
+  - Haptic feedback on supported devices
+  - Auto-shows on mobile devices, toggleable on desktop
+  - Proper ANSI escape sequence generation for all keys
+
+- **OSC 9;4 Progress Bar Support** (ConEmu/Windows Terminal style):
+  - New `ProgressState` enum with states: `Hidden`, `Normal`, `Indeterminate`, `Warning`, `Error`
+  - New `ProgressBar` struct with `state` and `progress` (0-100) fields
+  - Terminal methods: `progress_bar()`, `has_progress()`, `progress_value()`, `progress_state()`, `set_progress()`, `clear_progress()`
+  - Full Python bindings for `ProgressState` enum and `ProgressBar` class
+  - OSC 9;4 sequence parsing: `ESC ] 9 ; 4 ; state [; progress] ST`
+  - Progress values are automatically clamped to 0-100
+
+### Protocol Support
+- **OSC 9;4 Format**:
+  - `ESC ] 9 ; 4 ; 0 ST` - Hide progress bar
+  - `ESC ] 9 ; 4 ; 1 ; N ST` - Normal progress at N%
+  - `ESC ] 9 ; 4 ; 2 ST` - Indeterminate/busy indicator
+  - `ESC ] 9 ; 4 ; 3 ; N ST` - Warning progress at N%
+  - `ESC ] 9 ; 4 ; 4 ; N ST` - Error progress at N%
+
 ## [0.13.0] - 2025-11-27
 
 ### Added

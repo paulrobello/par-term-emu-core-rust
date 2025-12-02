@@ -13,6 +13,44 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.14.0
+
+### 🎉 New Features
+
+- **Web Terminal Onscreen Keyboard**: Mobile-friendly virtual keyboard for touch devices
+  - Special keys missing from iOS/Android keyboards: Esc, Tab, arrow keys, Page Up/Down, Home, End, Insert, Delete
+  - Function keys F1-F12 (toggleable), symbol keys (|, \, `, ~, {, }, etc.)
+  - Modifier keys (Ctrl, Alt, Shift) that combine with other keys
+  - Quick Ctrl shortcuts: ^C, ^D, ^Z, ^L, ^A, ^E, ^K, ^U, ^W, ^R
+  - Glass morphism design, haptic feedback, auto-shows on mobile
+
+- **OSC 9;4 Progress Bar Support** (ConEmu/Windows Terminal style):
+  - Terminal applications can report progress that can be displayed in tab bars, taskbars, or window titles
+  - Five states: `Hidden`, `Normal`, `Indeterminate`, `Warning`, `Error`
+  - Progress percentage (0-100) for applicable states
+  - New `ProgressState` enum and `ProgressBar` class in Python
+  - Terminal methods: `progress_bar()`, `has_progress()`, `progress_value()`, `progress_state()`, `set_progress()`, `clear_progress()`
+
+```python
+from par_term_emu_core_rust import Terminal, ProgressState
+
+term = Terminal(80, 24)
+
+# Receive progress from application
+term.process(b"\x1b]9;4;1;50\x1b\\")  # Set progress to 50%
+
+# Check progress state
+if term.has_progress():
+    pb = term.progress_bar()
+    print(f"Progress: {pb.progress}%, State: {pb.state}")
+
+# Programmatic control
+term.set_progress(ProgressState.Warning, 75)  # Set warning at 75%
+term.clear_progress()  # Hide progress bar
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.13.0
 
 ### 🎉 New Features
@@ -28,8 +66,6 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
   - Mode setters: `set_focus_tracking()`, `set_bracketed_paste()`, `set_title()`
   - Bold brightening control: `bold_brightening()`, `set_bold_brightening()`
   - Color getters for all theme colors (link, bold, cursor guide, badge, match, selection)
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## What's New in 0.12.0
 

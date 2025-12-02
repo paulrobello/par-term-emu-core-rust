@@ -193,6 +193,81 @@ impl PyShellIntegration {
     }
 }
 
+/// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+///
+/// This struct represents the current progress bar state as set via OSC 9;4 sequences.
+/// Terminal emulators like ConEmu and Windows Terminal use this to display progress
+/// in the tab bar, taskbar, or window title.
+///
+/// ## States
+/// - Hidden: No progress bar displayed
+/// - Normal: Standard progress (0-100%)
+/// - Indeterminate: Busy/loading indicator
+/// - Warning: Progress with warning (yellow)
+/// - Error: Progress with error (red)
+///
+/// ## Examples
+/// ```python
+/// term = Terminal(80, 24)
+/// term.process(b"\\x1b]9;4;1;50\\x1b\\\\")  # Set progress to 50%
+/// pb = term.progress_bar()
+/// print(f"Progress: {pb.progress}%")  # Output: Progress: 50%
+/// print(f"State: {pb.state}")  # Output: State: ProgressState.NORMAL
+/// ```
+#[pyclass(name = "ProgressBar")]
+#[derive(Clone)]
+pub struct PyProgressBar {
+    /// Current progress state
+    #[pyo3(get)]
+    pub state: super::enums::PyProgressState,
+    /// Progress percentage (0-100)
+    #[pyo3(get)]
+    pub progress: u8,
+}
+
+#[pymethods]
+impl PyProgressBar {
+    /// Create a new progress bar with given state and progress
+    #[new]
+    #[pyo3(signature = (state=super::enums::PyProgressState::Hidden, progress=0))]
+    fn new(state: super::enums::PyProgressState, progress: u8) -> Self {
+        Self {
+            state,
+            progress: progress.min(100),
+        }
+    }
+
+    /// Check if the progress bar is currently active (visible)
+    fn is_active(&self) -> bool {
+        self.state.is_active()
+    }
+
+    /// Generate the OSC 9;4 escape sequence for this progress bar
+    fn to_escape_sequence(&self) -> String {
+        if self.state.requires_progress() {
+            format!("\x1b]9;4;{};{}\x1b\\", self.state as u8, self.progress)
+        } else {
+            format!("\x1b]9;4;{}\x1b\\", self.state as u8)
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ProgressBar(state={:?}, progress={})",
+            self.state, self.progress
+        )
+    }
+}
+
+impl From<&crate::terminal::ProgressBar> for PyProgressBar {
+    fn from(pb: &crate::terminal::ProgressBar) -> Self {
+        Self {
+            state: pb.state.into(),
+            progress: pb.progress,
+        }
+    }
+}
+
 /// Graphics representation (Sixel, iTerm2, or Kitty)
 #[pyclass(name = "Graphic")]
 #[derive(Clone)]

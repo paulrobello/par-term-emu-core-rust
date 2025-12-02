@@ -2100,5 +2100,151 @@ def test_scrollback_reflow_circular_buffer():
     assert "Y" in all_text
 
 
+# === OSC 9;4 Progress Bar Tests ===
+
+
+def test_progress_bar_normal():
+    """Test setting normal progress bar via OSC 9;4;1"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;1;50 - Set normal progress to 50%
+    term.process(b"\x1b]9;4;1;50\x1b\\")
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Normal
+    assert term.progress_value() == 50
+
+
+def test_progress_bar_hidden():
+    """Test hiding progress bar via OSC 9;4;0"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # First set a progress
+    term.process(b"\x1b]9;4;1;75\x1b\\")
+    assert term.has_progress()
+
+    # Then hide it with OSC 9;4;0
+    term.process(b"\x1b]9;4;0\x1b\\")
+
+    assert not term.has_progress()
+    assert term.progress_state() == ProgressState.Hidden
+
+
+def test_progress_bar_indeterminate():
+    """Test indeterminate progress bar via OSC 9;4;2"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;2 - Indeterminate progress
+    term.process(b"\x1b]9;4;2\x1b\\")
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Indeterminate
+
+
+def test_progress_bar_warning():
+    """Test warning progress bar via OSC 9;4;3"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;3;80 - Warning progress at 80%
+    term.process(b"\x1b]9;4;3;80\x1b\\")
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Warning
+    assert term.progress_value() == 80
+
+
+def test_progress_bar_error():
+    """Test error progress bar via OSC 9;4;4"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;4;100 - Error progress at 100%
+    term.process(b"\x1b]9;4;4;100\x1b\\")
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Error
+    assert term.progress_value() == 100
+
+
+def test_progress_bar_manual_set():
+    """Test programmatic progress bar control"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # Set progress via API
+    term.set_progress(ProgressState.Warning, 65)
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Warning
+    assert term.progress_value() == 65
+
+    # Clear it
+    term.clear_progress()
+
+    assert not term.has_progress()
+    assert term.progress_state() == ProgressState.Hidden
+
+
+def test_progress_bar_object():
+    """Test ProgressBar object returned by progress_bar()"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;1;50 - Set normal progress to 50%
+    term.process(b"\x1b]9;4;1;50\x1b\\")
+
+    pb = term.progress_bar()
+    assert pb.state == ProgressState.Normal
+    assert pb.progress == 50
+    assert pb.is_active()
+
+    # Test escape sequence generation
+    expected_seq = "\x1b]9;4;1;50\x1b\\"
+    assert pb.to_escape_sequence() == expected_seq
+
+
+def test_progress_bar_clamps_value():
+    """Test that progress values are clamped to 100"""
+    term = Terminal(80, 24)
+
+    # OSC 9;4;1;150 - Progress value above 100 should clamp
+    term.process(b"\x1b]9;4;1;150\x1b\\")
+
+    assert term.progress_value() == 100
+
+
+def test_progress_bar_does_not_affect_notifications():
+    """Test that progress bar sequences don't create notifications"""
+    term = Terminal(80, 24)
+
+    # OSC 9 with message (notification)
+    term.process(b"\x1b]9;Test notification\x1b\\")
+    notifs = term.take_notifications()
+    assert len(notifs) == 1
+    assert notifs[0][1] == "Test notification"
+
+    # Progress bar should not be set from that
+    assert not term.has_progress()
+
+    # Progress bar sequence
+    term.process(b"\x1b]9;4;1;50\x1b\\")
+
+    # Should have progress now
+    assert term.has_progress()
+    # But no new notifications
+    assert len(term.take_notifications()) == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

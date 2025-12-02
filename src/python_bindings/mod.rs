@@ -23,7 +23,7 @@ pub use color_utils::{
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
     py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl,
 };
-pub use enums::{PyCursorStyle, PyMouseEncoding, PyUnderlineStyle};
+pub use enums::{PyCursorStyle, PyMouseEncoding, PyProgressState, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
 pub use streaming::{PyStreamingConfig, PyStreamingServer};
 pub use terminal::PyTerminal;
@@ -34,8 +34,8 @@ pub use types::{
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
     PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEvent,
     PyMousePosition, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
-    PyProfilingData, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
-    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyProfilingData, PyProgressBar, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
     PyTmuxNotification, PyWindowLayout,
 };

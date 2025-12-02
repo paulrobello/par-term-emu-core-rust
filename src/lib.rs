@@ -78,11 +78,11 @@ pub use python_bindings::{
     PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
     PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent,
     PyMouseEncoding, PyMouseEvent, PyMousePosition, PyNotificationConfig, PyNotificationEvent,
-    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyPtyTerminal, PyRecordingEvent,
-    PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot, PyScrollbackStats,
-    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
-    PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal,
-    PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState,
+    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
+    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
+    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -175,6 +175,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMacroEvent>()?;
     m.add_class::<PyStreamingServer>()?;
     m.add_class::<PyStreamingConfig>()?;
+    m.add_class::<PyProgressState>()?;
+    m.add_class::<PyProgressBar>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;

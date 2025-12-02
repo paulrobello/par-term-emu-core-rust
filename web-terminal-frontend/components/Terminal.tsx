@@ -16,6 +16,7 @@ interface TerminalProps {
   onFocus?: (focusFn: () => void) => void;
   onRetryingChange?: (isRetrying: boolean) => void;
   onConnectControl?: (control: { connect: () => void; disconnect: () => void; cancelRetry: () => void }) => void;
+  onSendInput?: (sendFn: (data: string) => void) => void;
 }
 
 // Module-level storage to preserve terminal across StrictMode unmount/remount
@@ -52,7 +53,7 @@ const getResponsiveFontSize = (): number => {
   return 14;                      // Desktop
 };
 
-export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl }: TerminalProps) {
+export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -279,6 +280,15 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     if (onFocus) {
       onFocus(() => {
         term.focus();
+      });
+    }
+
+    // Expose sendInput function to parent for onscreen keyboard
+    if (onSendInput) {
+      onSendInput((data: string) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(JSON.stringify({ type: 'input', data }));
+        }
       });
     }
 

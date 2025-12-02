@@ -103,6 +103,86 @@ impl From<PyMouseEncoding> for crate::mouse::MouseEncoding {
     }
 }
 
+/// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+///
+/// This enum represents the different visual states of a progress bar:
+/// - Hidden: Progress bar is not displayed
+/// - Normal: Standard progress indicator (0-100%)
+/// - Indeterminate: Busy/loading indicator (no specific percentage)
+/// - Warning: Progress with warning status (e.g., yellow)
+/// - Error: Progress with error status (e.g., red)
+#[pyclass(name = "ProgressState", eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyProgressState {
+    /// Progress bar is hidden (state 0)
+    Hidden = 0,
+    /// Normal progress display (state 1)
+    Normal = 1,
+    /// Indeterminate/busy indicator (state 2)
+    Indeterminate = 2,
+    /// Warning state - operation may have issues (state 3)
+    Warning = 3,
+    /// Error state - operation failed (state 4)
+    Error = 4,
+}
+
+impl PyProgressState {
+    /// Check if the state represents an active (visible) progress bar
+    pub fn is_active(&self) -> bool {
+        !matches!(self, PyProgressState::Hidden)
+    }
+
+    /// Check if the state requires a progress percentage
+    pub fn requires_progress(&self) -> bool {
+        matches!(
+            self,
+            PyProgressState::Normal | PyProgressState::Warning | PyProgressState::Error
+        )
+    }
+}
+
+#[pymethods]
+impl PyProgressState {
+    /// Get a human-readable description of the state
+    fn description(&self) -> &'static str {
+        match self {
+            PyProgressState::Hidden => "hidden",
+            PyProgressState::Normal => "normal",
+            PyProgressState::Indeterminate => "indeterminate",
+            PyProgressState::Warning => "warning",
+            PyProgressState::Error => "error",
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("ProgressState.{}", self.description().to_uppercase())
+    }
+}
+
+impl From<crate::terminal::ProgressState> for PyProgressState {
+    fn from(state: crate::terminal::ProgressState) -> Self {
+        match state {
+            crate::terminal::ProgressState::Hidden => PyProgressState::Hidden,
+            crate::terminal::ProgressState::Normal => PyProgressState::Normal,
+            crate::terminal::ProgressState::Indeterminate => PyProgressState::Indeterminate,
+            crate::terminal::ProgressState::Warning => PyProgressState::Warning,
+            crate::terminal::ProgressState::Error => PyProgressState::Error,
+        }
+    }
+}
+
+impl From<PyProgressState> for crate::terminal::ProgressState {
+    fn from(state: PyProgressState) -> Self {
+        match state {
+            PyProgressState::Hidden => crate::terminal::ProgressState::Hidden,
+            PyProgressState::Normal => crate::terminal::ProgressState::Normal,
+            PyProgressState::Indeterminate => crate::terminal::ProgressState::Indeterminate,
+            PyProgressState::Warning => crate::terminal::ProgressState::Warning,
+            PyProgressState::Error => crate::terminal::ProgressState::Error,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

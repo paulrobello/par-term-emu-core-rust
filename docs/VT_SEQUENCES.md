@@ -331,6 +331,16 @@ iTerm2/VSCode compatible shell integration markers:
 - `OSC 9;message ST` - Simple notification (iTerm2/ConEmu style)
 - `OSC 777;notify;title;message ST` - Structured notification (urxvt style)
 
+### Progress Bar (OSC 9;4)
+
+ConEmu/Windows Terminal style progress indicator:
+
+- `OSC 9;4;0 ST` - Hide progress bar
+- `OSC 9;4;1;N ST` - Normal progress at N% (0-100)
+- `OSC 9;4;2 ST` - Indeterminate/busy indicator
+- `OSC 9;4;3;N ST` - Warning progress at N%
+- `OSC 9;4;4;N ST` - Error progress at N%
+
 ### iTerm2 Inline Images
 
 - `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - iTerm2 inline images

@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
 import type { ConnectionStatus } from '@/types/terminal';
+import { OnscreenKeyboard } from '@/components/OnscreenKeyboard';
 
 // Load Terminal component only on client side to avoid SSR issues with xterm.js
 const Terminal = dynamic(() => import('@/components/Terminal'), {
@@ -13,6 +14,12 @@ const Terminal = dynamic(() => import('@/components/Terminal'), {
     </div>
   ),
 });
+
+// Detect if we're on a mobile/touch device
+const isMobileDevice = (): boolean => {
+  if (typeof window === 'undefined') return false;
+  return window.innerWidth < 640 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
 
 export default function Home() {
   // Auto-detect WebSocket URL based on current location
@@ -45,6 +52,15 @@ export default function Home() {
     disconnect: () => void;
     cancelRetry: () => void;
   } | null>(null);
+  const [sendInput, setSendInput] = useState<((data: string) => void) | null>(null);
+  const [showKeyboard, setShowKeyboard] = useState(false);
+
+  // Detect mobile on mount and show keyboard by default
+  useEffect(() => {
+    if (isMobileDevice()) {
+      setShowKeyboard(true);
+    }
+  }, []);
 
   const statusConfig = {
     disconnected: {
@@ -165,7 +181,13 @@ export default function Home() {
       {/* Terminal Container */}
       <div
         className={`flex-1 shadow-2xl overflow-hidden flex flex-col ${showControls ? 'm-2 sm:m-3 mt-2 rounded-lg' : ''}`}
-        style={{ backgroundColor: terminalBgColor, minHeight: '200px' }}
+        style={{
+          backgroundColor: terminalBgColor,
+          minHeight: '200px',
+          // Add padding for onscreen keyboard when visible
+          paddingBottom: showKeyboard ? '180px' : '0',
+          transition: 'padding-bottom 0.3s ease-out',
+        }}
       >
         <Terminal
           wsUrl={wsUrl}
@@ -175,6 +197,7 @@ export default function Home() {
           onFocus={(fn) => setFocusTerminal(() => fn)}
           onRetryingChange={setIsRetrying}
           onConnectControl={setConnectControl}
+          onSendInput={(fn) => setSendInput(() => fn)}
         />
       </div>
 
@@ -233,6 +256,25 @@ export default function Home() {
           />
         </svg>
       </button>
+
+      {/* Onscreen Keyboard for mobile/touch devices */}
+      <OnscreenKeyboard
+        onInput={(data) => {
+          sendInput?.(data);
+          focusTerminal?.();
+        }}
+        isVisible={showKeyboard}
+        onToggleVisibility={() => {
+          setShowKeyboard(!showKeyboard);
+          // Refit terminal after keyboard visibility changes
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              refitTerminal?.();
+              focusTerminal?.();
+            }, 350);
+          });
+        }}
+      />
     </main>
   );
 }

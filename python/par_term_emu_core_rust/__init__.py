@@ -24,6 +24,8 @@ from ._native import (
     Macro,
     MacroEvent,
     MouseEncoding,
+    ProgressBar,
+    ProgressState,
     PtyTerminal,
     ScreenSnapshot,
     ShellIntegration,
@@ -60,7 +62,7 @@ except ImportError:
     StreamingConfig = None
     StreamingServer = None
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 __all__ = [
     "Attributes",
     "CursorStyle",
@@ -68,6 +70,8 @@ __all__ = [
     "Macro",
     "MacroEvent",
     "MouseEncoding",
+    "ProgressBar",
+    "ProgressState",
     "PtyTerminal",
     "ScreenSnapshot",
     "ShellIntegration",

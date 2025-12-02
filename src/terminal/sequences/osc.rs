@@ -7,11 +7,13 @@
 //! - Hyperlinks (OSC 8)
 //! - Shell integration (OSC 133)
 //! - Notifications (OSC 9, OSC 777)
+//! - Progress bar (OSC 9;4 - ConEmu/Windows Terminal style)
 //! - Directory tracking (OSC 7)
 
 use crate::color::Color;
 use crate::debug;
 use crate::shell_integration::ShellIntegrationMarker;
+use crate::terminal::progress::{ProgressBar, ProgressState};
 use crate::terminal::{Notification, Terminal};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 
@@ -209,13 +211,23 @@ impl Terminal {
                     }
                 }
                 "9" => {
-                    // Notification (OSC 9) - iTerm2/ConEmu style
-                    // Simple format: OSC 9 ; message ST
+                    // OSC 9 - iTerm2/ConEmu style notifications and progress
+                    // Simple notification: OSC 9 ; message ST
+                    // Progress bar: OSC 9 ; 4 ; state [; progress] ST
+                    //   state: 0=hidden, 1=normal, 2=indeterminate, 3=warning, 4=error
+                    //   progress: 0-100 (only for states 1, 3, 4)
                     if params.len() >= 2 {
-                        if let Ok(message) = std::str::from_utf8(params[1]) {
-                            let notification =
-                                Notification::new(String::new(), message.to_string());
-                            self.enqueue_notification(notification);
+                        if let Ok(param1) = std::str::from_utf8(params[1]) {
+                            let param1 = param1.trim();
+                            if param1 == "4" {
+                                // Progress bar format: OSC 9 ; 4 ; state [; progress] ST
+                                self.handle_osc9_progress(&params[2..]);
+                            } else {
+                                // Simple notification format
+                                let notification =
+                                    Notification::new(String::new(), param1.to_string());
+                                self.enqueue_notification(notification);
+                            }
                         }
                     }
                 }
@@ -477,6 +489,56 @@ impl Terminal {
                 _ => {}
             }
         }
+    }
+
+    /// Handle OSC 9;4 progress bar sequences (ConEmu/Windows Terminal style)
+    ///
+    /// Format: OSC 9 ; 4 ; state [; progress] ST
+    /// - state 0: Hide progress bar
+    /// - state 1: Normal progress (0-100%)
+    /// - state 2: Indeterminate/busy indicator
+    /// - state 3: Warning state (0-100%)
+    /// - state 4: Error state (0-100%)
+    fn handle_osc9_progress(&mut self, params: &[&[u8]]) {
+        // Need at least the state parameter
+        if params.is_empty() {
+            return;
+        }
+
+        // Parse state parameter
+        let state_param = match std::str::from_utf8(params[0]) {
+            Ok(s) => s.trim(),
+            Err(_) => return,
+        };
+
+        let state_num: u8 = match state_param.parse() {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+
+        let state = ProgressState::from_param(state_num);
+
+        // Parse progress percentage if present and required
+        let progress = if state.requires_progress() && params.len() >= 2 {
+            match std::str::from_utf8(params[1]) {
+                Ok(s) => s.trim().parse::<u8>().unwrap_or(0).min(100),
+                Err(_) => 0,
+            }
+        } else {
+            0
+        };
+
+        self.progress_bar = ProgressBar::new(state, progress);
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "OSC9",
+            &format!(
+                "Progress bar: state={}, progress={}",
+                state.description(),
+                progress
+            ),
+        );
     }
 }
 
@@ -773,5 +835,164 @@ mod tests {
         // Title with spaces and punctuation
         term.process(b"\x1b]0;Test: A Title! (v1.0)\x1b\\");
         assert_eq!(term.title(), "Test: A Title! (v1.0)");
+    }
+
+    // === OSC 9;4 Progress Bar Tests ===
+
+    #[test]
+    fn test_progress_bar_normal() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;1;50 - Set normal progress to 50%
+        term.process(b"\x1b]9;4;1;50\x1b\\");
+
+        assert!(term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Normal
+        );
+        assert_eq!(term.progress_value(), 50);
+    }
+
+    #[test]
+    fn test_progress_bar_hidden() {
+        let mut term = Terminal::new(80, 24);
+
+        // First set a progress
+        term.process(b"\x1b]9;4;1;75\x1b\\");
+        assert!(term.has_progress());
+
+        // Then hide it with OSC 9;4;0
+        term.process(b"\x1b]9;4;0\x1b\\");
+
+        assert!(!term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Hidden
+        );
+    }
+
+    #[test]
+    fn test_progress_bar_indeterminate() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;2 - Indeterminate progress
+        term.process(b"\x1b]9;4;2\x1b\\");
+
+        assert!(term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Indeterminate
+        );
+        // Progress value is not meaningful for indeterminate
+    }
+
+    #[test]
+    fn test_progress_bar_warning() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;3;80 - Warning progress at 80%
+        term.process(b"\x1b]9;4;3;80\x1b\\");
+
+        assert!(term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Warning
+        );
+        assert_eq!(term.progress_value(), 80);
+    }
+
+    #[test]
+    fn test_progress_bar_error() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;4;100 - Error progress at 100%
+        term.process(b"\x1b]9;4;4;100\x1b\\");
+
+        assert!(term.has_progress());
+        assert_eq!(term.progress_state(), crate::terminal::ProgressState::Error);
+        assert_eq!(term.progress_value(), 100);
+    }
+
+    #[test]
+    fn test_progress_bar_clamps_to_100() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;1;150 - Progress value above 100 should clamp
+        term.process(b"\x1b]9;4;1;150\x1b\\");
+
+        assert_eq!(term.progress_value(), 100);
+    }
+
+    #[test]
+    fn test_progress_bar_manual_set() {
+        let mut term = Terminal::new(80, 24);
+
+        // Use the programmatic API
+        term.set_progress(crate::terminal::ProgressState::Warning, 65);
+
+        assert!(term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Warning
+        );
+        assert_eq!(term.progress_value(), 65);
+
+        // Clear it
+        term.clear_progress();
+
+        assert!(!term.has_progress());
+        assert_eq!(
+            term.progress_state(),
+            crate::terminal::ProgressState::Hidden
+        );
+    }
+
+    #[test]
+    fn test_progress_bar_does_not_affect_notifications() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9 with message (notification)
+        term.process(b"\x1b]9;Test notification\x1b\\");
+        assert_eq!(term.notifications().len(), 1);
+        assert_eq!(term.notifications()[0].message, "Test notification");
+
+        // Progress bar should still be hidden
+        assert!(!term.has_progress());
+
+        // Progress bar sequence
+        term.process(b"\x1b]9;4;1;50\x1b\\");
+
+        // Should have progress now
+        assert!(term.has_progress());
+        // Notification count should not increase
+        assert_eq!(term.notifications().len(), 1);
+    }
+
+    #[test]
+    fn test_progress_bar_sequence_format() {
+        use crate::terminal::ProgressBar;
+
+        // Test escape sequence generation
+        assert_eq!(
+            ProgressBar::hidden().to_escape_sequence(),
+            "\x1b]9;4;0\x1b\\"
+        );
+        assert_eq!(
+            ProgressBar::normal(50).to_escape_sequence(),
+            "\x1b]9;4;1;50\x1b\\"
+        );
+        assert_eq!(
+            ProgressBar::indeterminate().to_escape_sequence(),
+            "\x1b]9;4;2\x1b\\"
+        );
+        assert_eq!(
+            ProgressBar::warning(75).to_escape_sequence(),
+            "\x1b]9;4;3;75\x1b\\"
+        );
+        assert_eq!(
+            ProgressBar::error(100).to_escape_sequence(),
+            "\x1b]9;4;4;100\x1b\\"
+        );
     }
 }

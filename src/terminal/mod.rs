@@ -12,11 +12,14 @@
 mod colors;
 mod graphics;
 pub mod notification;
+pub mod progress;
 mod sequences;
 mod write;
 
 // Re-export Notification as it's part of the public API
 pub use notification::Notification;
+// Re-export progress types as they're part of the public API
+pub use progress::{ProgressBar, ProgressState};
 
 // Imports
 use crate::cell::{Cell, CellFlags};
@@ -1201,6 +1204,8 @@ pub struct Terminal {
     color_stack: Vec<(Color, Color, Option<Color>)>,
     /// Notifications from OSC 9 / OSC 777 sequences
     notifications: Vec<Notification>,
+    /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+    progress_bar: ProgressBar,
     /// Bell event counter - incremented each time bell (BEL/\x07) is received
     bell_count: u64,
     /// VTE parser instance (maintains state across process() calls)
@@ -1586,6 +1591,7 @@ impl Terminal {
             ansi_palette: Self::default_ansi_palette(),
             color_stack: Vec::new(),
             notifications: Vec::new(),
+            progress_bar: ProgressBar::default(),
             bell_count: 0,
             parser: vte::Parser::new(),
             pending_wrap: false,
@@ -2245,6 +2251,54 @@ impl Terminal {
     /// Get maximum OSC 9/777 notifications retained
     pub fn max_notifications(&self) -> usize {
         self.max_notifications
+    }
+
+    // === Progress Bar Methods (OSC 9;4) ===
+
+    /// Get the current progress bar state
+    ///
+    /// Returns the progress bar state set via OSC 9;4 sequences.
+    /// The progress bar has a state (hidden, normal, indeterminate, warning, error)
+    /// and a percentage (0-100) for states that support it.
+    pub fn progress_bar(&self) -> &ProgressBar {
+        &self.progress_bar
+    }
+
+    /// Check if the progress bar is currently active (visible)
+    ///
+    /// Returns true if the progress bar is in any state other than Hidden.
+    pub fn has_progress(&self) -> bool {
+        self.progress_bar.is_active()
+    }
+
+    /// Get the current progress percentage (0-100)
+    ///
+    /// Returns the progress percentage. Only meaningful when the progress bar
+    /// state is Normal, Warning, or Error.
+    pub fn progress_value(&self) -> u8 {
+        self.progress_bar.progress
+    }
+
+    /// Get the current progress bar state
+    ///
+    /// Returns the state (Hidden, Normal, Indeterminate, Warning, Error).
+    pub fn progress_state(&self) -> ProgressState {
+        self.progress_bar.state
+    }
+
+    /// Manually set the progress bar state
+    ///
+    /// This can be used to programmatically control the progress bar
+    /// without receiving OSC 9;4 sequences.
+    pub fn set_progress(&mut self, state: ProgressState, progress: u8) {
+        self.progress_bar = ProgressBar::new(state, progress);
+    }
+
+    /// Clear/hide the progress bar
+    ///
+    /// Equivalent to receiving OSC 9;4;0.
+    pub fn clear_progress(&mut self) {
+        self.progress_bar = ProgressBar::hidden();
     }
 
     /// Get the current bell count
