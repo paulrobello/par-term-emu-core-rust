@@ -87,14 +87,11 @@ jobs:
     - name: Create virtual environment and sync dev dependencies
       run: uv venv .venv && uv sync --group dev
 
-    - name: Install protoc
-      run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
     - name: Check Rust formatting
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --all-targets --features python,streaming -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

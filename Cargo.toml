@@ -1,6 +1,6 @@
 [package]
 name = "par-term-emu-core-rust"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Paul Robello <probello@gmail.com>"]
@@ -96,6 +96,7 @@ swash = "0.2.6"
 libc = "0.2.178"
 
 [build-dependencies]
+# Only needed for regenerating protobuf code (requires protoc installed)
 prost-build = { version = "0.14.1", optional = true }
 
 [dev-dependencies]
@@ -106,7 +107,10 @@ tempfile = "3.23"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "flate2", "tar", "prost", "prost-build", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "flate2", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server"]
+
+# Regenerate protobuf code from proto/terminal.proto (requires protoc installed)
+regenerate-proto = ["prost-build"]
 
 # Convenience feature combinations
 rust-only = []

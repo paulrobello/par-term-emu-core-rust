@@ -23,9 +23,11 @@ use prost::Message;
 use std::io::{Read, Write};
 
 /// Generated Protocol Buffer types
-pub mod pb {
-    include!(concat!(env!("OUT_DIR"), "/terminal.rs"));
-}
+/// Pre-generated from proto/terminal.proto to avoid requiring protoc at build time.
+/// To regenerate: run `cargo build --features streaming` with protoc installed,
+/// then copy the output from target/debug/build/.../out/terminal.rs
+#[path = "terminal.pb.rs"]
+pub mod pb;
 
 /// Compression threshold in bytes (1KB)
 const COMPRESSION_THRESHOLD: usize = 1024;

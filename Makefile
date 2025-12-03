@@ -62,9 +62,9 @@ help:
 	@echo "  streamer-run-macro    - Build and run with macro playback demo"
 	@echo "  streamer-install      - Install streaming server to ~/.cargo/bin"
 	@echo ""
-	@echo "Protocol Buffers:"
+	@echo "Protocol Buffers (requires protoc installed):"
 	@echo "  proto-generate    - Generate protobuf code for Rust and TypeScript"
-	@echo "  proto-rust        - Generate Rust protobuf code only"
+	@echo "  proto-rust        - Generate Rust protobuf code and copy to source tree"
 	@echo "  proto-typescript  - Generate TypeScript protobuf code only"
 	@echo "  proto-clean       - Clean generated protobuf files"
 	@echo ""
@@ -487,14 +487,25 @@ proto-generate: proto-rust proto-typescript
 	@echo "======================================================================"
 	@echo ""
 	@echo "Generated files:"
-	@echo "  Rust:       src/streaming/gen/ (via build.rs -> OUT_DIR)"
+	@echo "  Rust:       src/streaming/terminal.pb.rs"
 	@echo "  TypeScript: web-terminal-frontend/lib/proto/"
 	@echo ""
 
 proto-rust:
 	@echo "Generating Rust protobuf code..."
-	cargo build --features streaming --no-default-features
-	@echo "Rust protobuf code generated in OUT_DIR"
+	@echo "Note: This requires protoc to be installed"
+	cargo build --features streaming,regenerate-proto --no-default-features
+	@# Find and copy the generated file to source tree
+	@GENERATED=$$(find target -name "terminal.rs" -path "*/par-term-emu-core-rust-*/out/*" -newer proto/terminal.proto 2>/dev/null | head -1); \
+	if [ -n "$$GENERATED" ]; then \
+		cp "$$GENERATED" src/streaming/terminal.pb.rs; \
+		echo "Copied generated code to src/streaming/terminal.pb.rs"; \
+		cargo fmt -- src/streaming/terminal.pb.rs; \
+		echo "Formatted src/streaming/terminal.pb.rs"; \
+	else \
+		echo "Error: Could not find generated protobuf file"; \
+		exit 1; \
+	fi
 
 proto-typescript: web-install
 	@echo "Generating TypeScript protobuf code..."
