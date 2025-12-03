@@ -153,6 +153,7 @@ The main terminal emulator that ties everything together, organized into submodu
 - `graphics.rs` - Sixel graphics management
 - `colors.rs` - Color configuration
 - `write.rs` - Character writing logic
+- `progress.rs` - OSC 9;4 progress bar support (ConEmu/Windows Terminal style)
 
 Features:
 
@@ -195,15 +196,17 @@ Features:
 - Event tracking
 
 **Streaming Module** (`src/streaming/`)
-- **WebSocket-based terminal streaming**
+- **WebSocket-based terminal streaming with Protocol Buffers**
 - **Submodules**:
   - `mod.rs` - Core streaming types
-  - `server.rs` - Axum-based WebSocket server
+  - `server.rs` - Axum-based WebSocket server with TLS support
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions
+  - `protocol.rs` - Streaming protocol definitions (app-level)
+  - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
   - `error.rs` - Streaming-specific errors
-- **Features**: Real-time terminal sharing, multiplexing
+- **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression
+- **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
 
 **Utility Modules**
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
@@ -484,6 +487,8 @@ The `Terminal` struct implements the `Perform` trait with these methods:
 - `execute(byte)`: Handle C0 control codes (newline, tab, etc.)
 - `csi_dispatch()`: Handle CSI sequences (cursor movement, colors, etc.)
 - `osc_dispatch()`: Handle OSC sequences (terminal title, etc.)
+- `esc_dispatch()`: Handle ESC sequences (charset selection, etc.)
+- `dcs_hook()`, `dcs_put()`, `dcs_unhook()`: Handle DCS sequences (Sixel graphics, etc.)
 
 ## Data Flow
 
@@ -536,7 +541,7 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
   - Hex color conversion
   - ANSI 256-color conversion
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 54 classes and 18 color utility functions.
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 57 classes and 22 functions (18 color utility functions + 4 binary protocol functions for streaming).
 
 ```rust
 #[pyclass(name = "Terminal")]
@@ -606,11 +611,11 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 850 unit and integration tests
-- **Python tests:** 300 test functions across 13 test modules
-  - 237 tests run in CI (PTY tests excluded)
-  - 63 additional PTY tests run only in local development
-- **Total:** Comprehensive coverage ensuring reliability
+- **Rust tests:** 898 unit and integration tests
+- **Python tests:** 363 test functions across 13 test modules
+  - PTY tests excluded in CI (hang in automated environments)
+  - All tests run locally for comprehensive validation
+- **Total:** 1,261 tests ensuring comprehensive coverage and reliability
 
 ### Rust Tests
 
@@ -878,37 +883,42 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3` (0.27.1) - Python bindings (optional, feature-gated)
+- `pyo3` (0.27.2) - Python bindings (optional, feature-gated)
 - `vte` (0.15.0) - ANSI parser
 - `unicode-width` (0.2.2) - Character width calculation
 - `portable-pty` (0.9.0) - PTY support
 - `base64` (0.22.1) - Base64 encoding/decoding
 - `bitflags` (2.10.0) - Bit flag management
-- `regex` (1.11.1) - Regular expression support
-- `serde` (1.0) + `serde_json` (1.0) + `serde_yaml` (0.9) - Serialization support
+- `regex` (1.12.2) - Regular expression support
+- `serde` (1.0.228) + `serde_json` (1.0.145) + `serde_yaml` (0.9.34) - Serialization support
 
 **Screenshot/rendering support:**
 - `image` (0.25.9) - Image encoding/decoding (PNG, JPEG, BMP)
 - `swash` (0.2.6) - Pure Rust font rendering and text shaping with color emoji support
 
 **Streaming server dependencies (optional, feature-gated):**
-- `tokio` (1.35) - Async runtime
+- `tokio` (1.48) - Async runtime with full features
 - `tokio-tungstenite` (0.28) - WebSocket support
-- `axum` (0.8) - Web framework
-- `tower-http` (0.6) - HTTP middleware
-- `futures-util` (0.3) - Future utilities
-- `uuid` (1.6) - UUID generation
-- `clap` (4.5) - CLI parsing
-- `anyhow` (1.0) - Error handling
-- `tracing` (0.1) + `tracing-subscriber` (0.3) - Logging
+- `axum` (0.8.7) - Web framework with WebSocket support
+- `tower-http` (0.6.7) - HTTP middleware (fs, trace)
+- `futures-util` (0.3.31) - Future utilities
+- `uuid` (1.19) - UUID generation with v4 and serde support
+- `clap` (4.5.53) - CLI parsing with derive feature
+- `anyhow` (1.0.100) - Error handling
+- `tracing` (0.1.43) + `tracing-subscriber` (0.3.22) - Logging
+- `reqwest` (0.12.24) - HTTP client with rustls-tls (for frontend downloads)
+- `flate2` (1.1.5) + `tar` (0.4.44) - Archive extraction
+- `prost` (0.14.1) + `prost-build` (0.14.1) - Protocol Buffers
+- `rustls` (0.23.35) + `tokio-rustls` (0.26.4) + `rustls-pemfile` (2.2.0) - TLS support
+- `axum-server` (0.7.3) - TLS server support
 
 **Development dependencies:**
-- `pyo3` (0.27.1, features: auto-initialize) - Python test support
+- `pyo3` (0.27.2, features: auto-initialize) - Python test support
 - `proptest` (1.9.0) - Property-based testing framework
-- `tempfile` (3.13) - Temporary file management for tests
+- `tempfile` (3.23) - Temporary file management for tests
 
 **Platform-specific:**
-- `libc` (0.2.177) - Unix system calls (Unix only)
+- `libc` (0.2.178) - Unix system calls (Unix only)
 
 > **📝 Note:** See `Cargo.toml` for current version requirements
 
@@ -916,21 +926,21 @@ graph TD
 
 **Build and development tools:**
 - `maturin` (>=1.9,<2.0) - Build system for PyO3 bindings
-- `uv` - Fast Python package installer and resolver
+- `uv` - Fast Python package installer and resolver (recommended)
+
+**Runtime dependencies:**
+- `pillow` (>=12.0.0) - Image processing for sixel examples and screenshot features
 
 **Testing:**
 - `pytest` (>=9.0.1) - Testing framework
-- `pytest-timeout` (>=2.4.0) - Test timeout protection
+- `pytest-timeout` (>=2.4.0) - Test timeout protection (5-second default)
 
 **Code quality:**
 - `ruff` (>=0.14.5) - Linting and formatting
 - `pyright` (>=1.1.407) - Static type checking
 - `pre-commit` (>=4.4.0) - Git hook management
 
-**Optional dependencies:**
-- `pillow` (>=12.0.0) - Image processing for sixel examples and screenshot features
-
-**Python version requirements:** 3.12+
+**Python version requirements:** 3.12, 3.13, 3.14
 
 > **📝 Note:** See `pyproject.toml` for current version requirements
 
@@ -945,16 +955,18 @@ The project uses conditional PyO3 feature compilation to support both production
 **Cargo.toml features:**
 ```toml
 [dependencies]
-pyo3 = { version = "0.27.1", optional = true }
+pyo3 = { version = "0.27.2", optional = true }
 
 [dev-dependencies]
-pyo3 = { version = "0.27.1", features = ["auto-initialize"] }
+pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
 
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
-             "uuid", "clap", "anyhow", "tracing", "tracing-subscriber"]
+             "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest",
+             "flate2", "tar", "prost", "prost-build", "rustls", "tokio-rustls",
+             "rustls-pemfile", "axum-server"]
 rust-only = []
 full = ["python", "streaming"]
 ```

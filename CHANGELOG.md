@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0] - 2025-12-03
+
+### Changed
+- **BREAKING: Binary Protocol for WebSocket Streaming**:
+  - Replaced JSON-based WebSocket protocol with Protocol Buffers binary encoding
+  - ~80% reduction in message sizes for typical terminal output
+  - Optional zlib compression for payloads over 1KB (screen snapshots)
+  - Wire format: 1-byte header (0x00=uncompressed, 0x01=compressed) + protobuf payload
+  - Text WebSocket messages are no longer supported (binary only)
+
+### Added
+- **TLS/SSL Support for Streaming Server**:
+  - New CLI options: `--tls-cert`, `--tls-key`, `--tls-pem` for enabling HTTPS/WSS
+  - Supports separate certificate and key files or combined PEM file
+  - Enables secure connections for production deployments
+  - New `TlsConfig` struct in Rust API for programmatic TLS configuration
+
+- **Protocol Buffers Infrastructure**:
+  - New `proto/terminal.proto` schema file (single source of truth)
+  - Rust code generation via `prost` + `prost-build` in `build.rs`
+  - TypeScript code generation via `@bufbuild/protobuf` + `buf`
+  - New `src/streaming/proto.rs` module for encode/decode with compression
+  - New `lib/protocol.ts` helper module for frontend
+
+- **Python Bindings for TLS and Binary Protocol**:
+  - `StreamingConfig.set_tls_from_files(cert_path, key_path)` - Configure TLS from separate files
+  - `StreamingConfig.set_tls_from_pem(pem_path)` - Configure TLS from combined PEM file
+  - `StreamingConfig.tls_enabled` property - Check if TLS is configured
+  - `StreamingConfig.disable_tls()` - Clear TLS configuration
+  - `encode_server_message(type, **kwargs)` - Encode server messages to protobuf
+  - `decode_server_message(data)` - Decode server messages from protobuf
+  - `encode_client_message(type, **kwargs)` - Encode client messages to protobuf
+  - `decode_client_message(data)` - Decode client messages from protobuf
+
+- **Makefile Targets**:
+  - `make proto-generate` - Generate protobuf code for Rust and TypeScript
+  - `make proto-rust` - Generate Rust protobuf code only
+  - `make proto-typescript` - Generate TypeScript protobuf code only
+  - `make proto-clean` - Clean generated protobuf files
+
+### Dependencies
+- Added `prost` v0.14.1 (Rust protobuf runtime)
+- Added `prost-build` v0.14.1 (Rust protobuf codegen, build dependency)
+- Added `@bufbuild/protobuf` v2.10.1 (TypeScript protobuf runtime)
+- Added `@bufbuild/protoc-gen-es` v2.10.1 (TypeScript protobuf codegen)
+- Added `@bufbuild/buf` v1.61.0 (Protocol Buffers toolchain)
+- Added `pako` v2.1.0 (TypeScript zlib compression)
+- Added `rustls` v0.23.35 (TLS implementation)
+- Added `tokio-rustls` v0.26.4 (Async TLS for Tokio)
+- Added `rustls-pemfile` v2.2.0 (PEM file parsing)
+- Added `axum-server` v0.7.3 (HTTPS server support)
+
 ## [0.15.0] - 2025-12-02
 
 ### Added

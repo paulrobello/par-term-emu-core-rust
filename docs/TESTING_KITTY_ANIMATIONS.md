@@ -134,14 +134,15 @@ print("\x1b_Ga=a,i=42,s=1\x1b\\", end="", flush=True)
 The animation system is accessible via Python bindings:
 
 ```python
-from par_term_emu_core_rust import Terminal, PtySession
+from par_term_emu_core_rust import Terminal, PtyTerminal
 
 # Using Terminal directly
 terminal = Terminal(80, 24)
 changed_image_ids = terminal.update_animations()  # Returns list of image IDs with frame changes
 
-# Using PtySession
-pty = PtySession.spawn("/bin/bash", 80, 24)
+# Using PtyTerminal (terminal with PTY support)
+pty = PtyTerminal(80, 24)
+pty.spawn("/bin/bash")
 changed_image_ids = pty.update_animations()  # Updates animations for the PTY's terminal
 ```
 

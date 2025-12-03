@@ -6,22 +6,28 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
-    "lint": "next lint"
+    "lint": "next lint",
+    "proto:generate": "buf generate"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "^2.10.1",
     "@xterm/xterm": "^5.5.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-unicode11": "^0.8.0",
-    "next": "^16.0.3",
+    "next": "^16.0.6",
+    "pako": "^2.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },
   "devDependencies": {
+    "@bufbuild/buf": "^1.61.0",
+    "@bufbuild/protoc-gen-es": "^2.10.1",
     "@tailwindcss/postcss": "^4.1.17",
     "@types/node": "^24.10.1",
-    "@types/react": "^19.2.6",
+    "@types/pako": "^2.0.4",
+    "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",

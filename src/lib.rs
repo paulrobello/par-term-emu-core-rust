@@ -68,6 +68,7 @@ use pyo3::prelude::*;
 // Re-export Python bindings for convenience
 #[cfg(feature = "python")]
 pub use python_bindings::{
+    decode_client_message, decode_server_message, encode_client_message, encode_server_message,
     py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_color_luminance,
     py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
     py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
@@ -197,6 +198,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_rgb_to_hex, m)?)?;
     m.add_function(wrap_pyfunction!(py_hex_to_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(py_rgb_to_ansi_256, m)?)?;
+
+    // Binary protocol functions for streaming
+    m.add_function(wrap_pyfunction!(encode_server_message, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_server_message, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_client_message, m)?)?;
+    m.add_function(wrap_pyfunction!(decode_client_message, m)?)?;
 
     Ok(())
 }

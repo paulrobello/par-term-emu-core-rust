@@ -1,6 +1,7 @@
 //! WebSocket client connection handling
 
 use crate::streaming::error::{Result, StreamingError};
+use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ClientMessage, ServerMessage};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
@@ -38,24 +39,24 @@ impl Client {
         self.read_only
     }
 
-    /// Send a message to this client
+    /// Send a message to this client using binary protobuf encoding
     pub async fn send(&mut self, msg: ServerMessage) -> Result<()> {
-        let json = serde_json::to_string(&msg)?;
+        let data = encode_server_message(&msg)?;
         self.ws
-            .send(Message::Text(json.into()))
+            .send(Message::Binary(data.into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
         Ok(())
     }
 
-    /// Receive the next message from the client
+    /// Receive the next message from the client using binary protobuf decoding
     ///
     /// Returns `Ok(None)` if the client has disconnected gracefully
     pub async fn recv(&mut self) -> Result<Option<ClientMessage>> {
         loop {
             match self.ws.next().await {
-                Some(Ok(Message::Text(text))) => {
-                    let msg = serde_json::from_str(&text)?;
+                Some(Ok(Message::Binary(data))) => {
+                    let msg = decode_client_message(&data)?;
                     return Ok(Some(msg));
                 }
                 Some(Ok(Message::Close(_))) => {
@@ -72,10 +73,10 @@ impl Client {
                 Some(Ok(Message::Pong(_))) => {
                     // Ignore pong messages and continue loop
                 }
-                Some(Ok(Message::Binary(_))) => {
-                    // We don't support binary messages in this protocol
+                Some(Ok(Message::Text(_))) => {
+                    // Text messages are not supported in the binary protocol
                     return Err(StreamingError::InvalidMessage(
-                        "Binary messages are not supported".to_string(),
+                        "Text messages are not supported, use binary protocol".to_string(),
                     ));
                 }
                 Some(Ok(Message::Frame(_))) => {

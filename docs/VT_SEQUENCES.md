@@ -30,18 +30,18 @@ This is a concise lookup table of supported sequences. For detailed behavior, im
 
 VT100 cursor movement sequences.
 
-- `ESC[<n>A` - Cursor up n lines (CUU)
-- `ESC[<n>B` - Cursor down n lines (CUD)
-- `ESC[<n>C` - Cursor forward n columns (CUF)
-- `ESC[<n>D` - Cursor back n columns (CUB)
-- `ESC[<n>E` - Cursor next line (CNL)
-- `ESC[<n>F` - Cursor previous line (CPL)
-- `ESC[<n>G` - Cursor horizontal absolute (CHA)
-- `ESC[<row>;<col>H` - Cursor position (CUP)
-- `ESC[<row>;<col>f` - Cursor position (HVP - alternative)
-- `ESC[<n>d` - Line position absolute (VPA)
-- `ESC[s` - Save cursor position (ANSI.SYS)
-- `ESC[u` - Restore cursor position (ANSI.SYS)
+- `CSI <n> A` - Cursor up n lines (CUU)
+- `CSI <n> B` - Cursor down n lines (CUD)
+- `CSI <n> C` - Cursor forward n columns (CUF)
+- `CSI <n> D` - Cursor back n columns (CUB)
+- `CSI <n> E` - Cursor next line (CNL)
+- `CSI <n> F` - Cursor previous line (CPL)
+- `CSI <n> G` - Cursor horizontal absolute (CHA)
+- `CSI <row> ; <col> H` - Cursor position (CUP)
+- `CSI <row> ; <col> f` - Cursor position (HVP - alternative)
+- `CSI <n> d` - Line position absolute (VPA)
+- `CSI s` - Save cursor position (ANSI.SYS)
+- `CSI u` - Restore cursor position (ANSI.SYS)
 - `ESC 7` - Save cursor (DECSC)
 - `ESC 8` - Restore cursor (DECRC)
 
@@ -51,7 +51,7 @@ VT100 screen clearing and erasing sequences.
 
 ### Erase in Display (ED)
 
-`ESC[<n>J`
+`CSI <n> J`
 
 - `n=0` - Clear from cursor to end
 - `n=1` - Clear from beginning to cursor
@@ -60,7 +60,7 @@ VT100 screen clearing and erasing sequences.
 
 ### Erase in Line (EL)
 
-`ESC[<n>K`
+`CSI <n> K`
 
 - `n=0` - Clear from cursor to end of line
 - `n=1` - Clear from beginning of line to cursor
@@ -70,24 +70,24 @@ VT100 screen clearing and erasing sequences.
 
 VT220 insert/delete operations.
 
-- `ESC[<n>L` - Insert n blank lines (IL)
-- `ESC[<n>M` - Delete n lines (DL)
-- `ESC[<n>@` - Insert n blank characters (ICH)
-- `ESC[<n>P` - Delete n characters (DCH)
-- `ESC[<n>X` - Erase n characters (ECH)
+- `CSI <n> L` - Insert n blank lines (IL)
+- `CSI <n> M` - Delete n lines (DL)
+- `CSI <n> @` - Insert n blank characters (ICH)
+- `CSI <n> P` - Delete n characters (DCH)
+- `CSI <n> X` - Erase n characters (ECH)
 
 ## Rectangle Operations
 
 VT420 advanced text editing operations that work on rectangular regions of the screen. All coordinates are 1-indexed.
 
-- `ESC[Pc;Pt;Pl;Pb;Pr$x` - DECFRA: Fill rectangle with character `Pc`
-- `ESC[Pts;Pls;Pbs;Prs;Pps;Ptd;Pld;Ppd$v` - DECCRA: Copy rectangular region
-- `ESC[Pt;Pl;Pb;Pr${` - DECSERA: Selective erase (respects protection)
-- `ESC[Pt;Pl;Pb;Pr$z` - DECERA: Unconditional erase (ignores protection)
-- `ESC[Pt;Pl;Pb;Pr;Ps$r` - DECCARA: Change attributes in rectangle
-- `ESC[Pt;Pl;Pb;Pr;Ps$t` - DECRARA: Reverse attributes in rectangle
-- `ESC[Pi;Pg;Pt;Pl;Pb;Pr*y` - DECRQCRA: Request rectangle checksum
-- `ESC[Ps*x` - DECSACE: Set attribute change extent (0/1=stream, 2=rectangle)
+- `CSI Pc ; Pt ; Pl ; Pb ; Pr $ x` - DECFRA: Fill rectangle with character `Pc`
+- `CSI Pts ; Pls ; Pbs ; Prs ; Pps ; Ptd ; Pld ; Ppd $ v` - DECCRA: Copy rectangular region
+- `CSI Pt ; Pl ; Pb ; Pr $ {` - DECSERA: Selective erase (respects protection)
+- `CSI Pt ; Pl ; Pb ; Pr $ z` - DECERA: Unconditional erase (ignores protection)
+- `CSI Pt ; Pl ; Pb ; Pr ; Ps $ r` - DECCARA: Change attributes in rectangle
+- `CSI Pt ; Pl ; Pb ; Pr ; Ps $ t` - DECRARA: Reverse attributes in rectangle
+- `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` - DECRQCRA: Request rectangle checksum
+- `CSI Ps * x` - DECSACE: Set attribute change extent (0/1=stream, 2=rectangle)
 
 > See [VT_TECHNICAL_REFERENCE.md#rectangle-operations](VT_TECHNICAL_REFERENCE.md#rectangle-operations-vt420) for detailed parameter descriptions and behavior.
 
@@ -97,9 +97,9 @@ VT100/VT220 scrolling operations.
 
 ### CSI Scrolling Commands
 
-- `CSI <n>S` - Scroll up n lines (SU)
-- `CSI <n>T` - Scroll down n lines (SD)
-- `CSI <top>;<bottom>r` - Set scrolling region (DECSTBM)
+- `CSI <n> S` - Scroll up n lines (SU)
+- `CSI <n> T` - Scroll down n lines (SD)
+- `CSI <top> ; <bottom> r` - Set scrolling region (DECSTBM)
 
 ### ESC Scrolling Commands
 
@@ -113,69 +113,69 @@ VT100/ECMA-48 text styling sequences.
 
 ### Basic Attributes
 
-- `ESC[0m` - Reset all attributes (SGR 0)
-- `ESC[1m` - Bold
-- `ESC[2m` - Dim
-- `ESC[3m` - Italic
-- `ESC[4m` - Underline (basic, defaults to straight)
-- `ESC[5m` - Blink
-- `ESC[7m` - Reverse
-- `ESC[8m` - Hidden
-- `ESC[9m` - Strikethrough
-- `ESC[53m` - Overline
-- `ESC[55m` - Not overlined
+- `CSI 0 m` - Reset all attributes (SGR 0)
+- `CSI 1 m` - Bold
+- `CSI 2 m` - Dim
+- `CSI 3 m` - Italic
+- `CSI 4 m` - Underline (basic, defaults to straight)
+- `CSI 5 m` - Blink
+- `CSI 7 m` - Reverse
+- `CSI 8 m` - Hidden
+- `CSI 9 m` - Strikethrough
+- `CSI 53 m` - Overline
+- `CSI 55 m` - Not overlined
 
 ### Underline Styles
 
-- `ESC[4:0m` - No underline (explicit)
-- `ESC[4:1m` - Straight underline (default)
-- `ESC[4:2m` - Double underline
-- `ESC[4:3m` - Curly underline (spell check, errors)
-- `ESC[4:4m` - Dotted underline
-- `ESC[4:5m` - Dashed underline
+- `CSI 4 : 0 m` - No underline (explicit)
+- `CSI 4 : 1 m` - Straight underline (default)
+- `CSI 4 : 2 m` - Double underline
+- `CSI 4 : 3 m` - Curly underline (spell check, errors)
+- `CSI 4 : 4 m` - Dotted underline
+- `CSI 4 : 5 m` - Dashed underline
 
 ### Attribute Reset
 
-- `ESC[22m` - Normal intensity (not bold or dim)
-- `ESC[23m` - Not italic
-- `ESC[24m` - Not underlined
-- `ESC[25m` - Not blinking
-- `ESC[27m` - Not reversed
-- `ESC[28m` - Not hidden
-- `ESC[29m` - Not strikethrough
+- `CSI 22 m` - Normal intensity (not bold or dim)
+- `CSI 23 m` - Not italic
+- `CSI 24 m` - Not underlined
+- `CSI 25 m` - Not blinking
+- `CSI 27 m` - Not reversed
+- `CSI 28 m` - Not hidden
+- `CSI 29 m` - Not strikethrough
 
 ### Basic Colors
 
-- `ESC[30-37m` - Foreground colors (black, red, green, yellow, blue, magenta, cyan, white)
-- `ESC[40-47m` - Background colors
-- `ESC[90-97m` - Bright foreground colors (aixterm)
-- `ESC[100-107m` - Bright background colors (aixterm)
+- `CSI 30-37 m` - Foreground colors (black, red, green, yellow, blue, magenta, cyan, white)
+- `CSI 40-47 m` - Background colors
+- `CSI 90-97 m` - Bright foreground colors (aixterm)
+- `CSI 100-107 m` - Bright background colors (aixterm)
 
 ### Extended Colors
 
-- `ESC[38;5;<n>m` - 256-color foreground (0-255)
-- `ESC[48;5;<n>m` - 256-color background (0-255)
-- `ESC[38;2;<r>;<g>;<b>m` - RGB/true color foreground
-- `ESC[48;2;<r>;<g>;<b>m` - RGB/true color background
-- `ESC[58;2;<r>;<g>;<b>m` - RGB underline color
-- `ESC[58;5;<n>m` - 256-color underline color
-- `ESC[59m` - Reset underline color (use foreground)
+- `CSI 38 ; 5 ; <n> m` - 256-color foreground (0-255)
+- `CSI 48 ; 5 ; <n> m` - 256-color background (0-255)
+- `CSI 38 ; 2 ; <r> ; <g> ; <b> m` - RGB/true color foreground
+- `CSI 48 ; 2 ; <r> ; <g> ; <b> m` - RGB/true color background
+- `CSI 58 ; 2 ; <r> ; <g> ; <b> m` - RGB underline color
+- `CSI 58 ; 5 ; <n> m` - 256-color underline color
+- `CSI 59 m` - Reset underline color (use foreground)
 
 ### Default Colors
 
-- `ESC[39m` - Default foreground color
-- `ESC[49m` - Default background color
+- `CSI 39 m` - Default foreground color
+- `CSI 49 m` - Default background color
 
 ## Tab Stops
 
 VT100 tab stop management.
 
 - `ESC H` - Set tab stop at current column (HTS)
-- `ESC[<n>g` - Tab clear (TBC)
+- `CSI <n> g` - Tab clear (TBC)
   - `n=0` - Clear tab at current column
   - `n=3` - Clear all tabs
-- `ESC[<n>I` - Cursor forward tabulation (CHT)
-- `ESC[<n>Z` - Cursor backward tabulation (CBT)
+- `CSI <n> I` - Cursor forward tabulation (CHT)
+- `CSI <n> Z` - Cursor backward tabulation (CBT)
 
 ## Terminal Modes
 
@@ -183,8 +183,8 @@ DEC Private Mode sequences.
 
 ### Mode Setting
 
-- `ESC[?<n>h` - Set mode
-- `ESC[?<n>l` - Reset mode
+- `CSI ? <n> h` - Set mode
+- `CSI ? <n> l` - Reset mode
 
 ### Common Modes
 
@@ -210,24 +210,24 @@ xterm mouse tracking modes and encodings.
 
 ### Tracking Modes
 
-- `ESC[?1000h/l` - Normal mouse tracking
-- `ESC[?1002h/l` - Button event mouse tracking
-- `ESC[?1003h/l` - Any event mouse tracking
+- `CSI ? 1000 h/l` - Normal mouse tracking
+- `CSI ? 1002 h/l` - Button event mouse tracking
+- `CSI ? 1003 h/l` - Any event mouse tracking
 
 ### Encoding Modes
 
-- `ESC[?1005h/l` - UTF-8 mouse encoding
-- `ESC[?1006h/l` - SGR mouse encoding
-- `ESC[?1015h/l` - URXVT mouse encoding
+- `CSI ? 1005 h/l` - UTF-8 mouse encoding
+- `CSI ? 1006 h/l` - SGR mouse encoding
+- `CSI ? 1015 h/l` - URXVT mouse encoding
 
 ## Advanced Features
 
 Modern terminal features and VT520 extensions.
 
 **Modern protocols:**
-- `ESC[?1004h/l` - Focus tracking (send CSI I/O on focus in/out)
-- `ESC[?2004h/l` - Bracketed paste mode (wrap pasted text)
-- `ESC[?2026h/l` - Synchronized updates (flicker-free rendering)
+- `CSI ? 1004 h/l` - Focus tracking (send CSI I/O on focus in/out)
+- `CSI ? 2004 h/l` - Bracketed paste mode (wrap pasted text)
+- `CSI ? 2026 h/l` - Synchronized updates (flicker-free rendering)
 
 **VT520 features:**
 - `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV, Ps = 0-8)
@@ -359,9 +359,12 @@ Device Control String sequences for graphics (format: `DCS params final data ST`
 
 Full VT340 Sixel graphics support for inline images with configurable limits.
 
-- Color definitions (`#Pc;Pu;Px;Py;Pz`)
-- Raster attributes (`"Pa;Pb;Ph;Pv`)
-- Repeat operator (`!Pn s`)
+- Color definitions: `#Pc;Pu;Px;Py;Pz`
+- Raster attributes: `"Pa;Pb;Ph;Pv`
+- Repeat operator: `!Pn s`
+- Carriage return: `$`
+- New line: `-`
+- Sixel data characters: `?` through `~` (ASCII 63-126)
 - Up to 256 colors, configurable size limits
 
 **Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 1024×1024 pixels, 256 graphics.
@@ -383,6 +386,8 @@ Kitty graphics protocol support for modern terminal graphics with animation, com
 - Transmission media: direct (d), file (f), temp file (t), shared memory (s)
 - Animation support with frame control and composition modes
 - Virtual placements and relative positioning
+
+**Note:** Kitty graphics can also be sent via DCS sequences using `DCS G key=value;data ST` format.
 
 > See [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) for complete specification.
 

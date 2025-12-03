@@ -27,11 +27,16 @@ par-term-emu-core-rust/
 │       ├── __init__.py
 │       └── (native module added by maturin)
 ├── pyproject.toml
+├── proto/                          # Protocol Buffers definitions
+│   └── terminal.proto
 └── src/
     ├── lib.rs
     ├── grapheme.rs
     ├── bin/
     │   └── streaming_server.rs
+    ├── streaming/
+    │   ├── proto.rs                # Generated protobuf code
+    │   └── (other streaming modules)
     └── (other modules)
 ```
 
@@ -107,7 +112,7 @@ build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.10.0"
+version = "0.16.0"
 requires-python = ">=3.12"
 
 [tool.maturin]
@@ -116,12 +121,12 @@ python-source = "python"
 module-name = "par_term_emu_core_rust._native"
 
 [dependency-groups]
-dev = ["maturin>=1.10.1", ...]
+dev = ["maturin>=1.10.2", ...]
 ```
 
 **Status**: ✅ **Compliant**
 - Proper PEP 517/518 build system configuration
-- Maturin version: `>=1.9,<2.0` (build), `>=1.10.1` (dev)
+- Maturin version: `>=1.9,<2.0` (build), `>=1.10.2` (dev)
 - Maturin as build backend
 - Python 3.12+ requirement (aligned with modern Python)
 - Correct feature flags for PyO3
@@ -131,6 +136,7 @@ dev = ["maturin>=1.10.1", ...]
 ```toml
 [package]
 rust-version = "1.75"
+version = "0.16.0"
 
 [lib]
 name = "par_term_emu_core_rust"
@@ -142,7 +148,7 @@ path = "src/bin/streaming_server.rs"
 required-features = ["streaming"]
 
 [dependencies]
-pyo3 = { version = "0.27.1", optional = true }
+pyo3 = { version = "0.27.2", optional = true }
 
 [features]
 default = ["python"]
@@ -158,7 +164,7 @@ strip = true
 
 **Status**: ✅ **Compliant**
 - Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
-- PyO3 version: 0.27.1 (latest stable, made optional for flexibility)
+- PyO3 version: 0.27.2 (latest stable, made optional for flexibility)
 - Minimum Rust version: 1.75
 - Proper PyO3 extension-module feature in `python` feature
 - Feature-based architecture (python, streaming, rust-only, full)
@@ -206,7 +212,7 @@ strip = true
 
 ## ✅ Implemented Improvements
 
-All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.10.0!
+All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.16.0!
 
 ### 1. **Linux ARM64 (aarch64) Support** - ✅ IMPLEMENTED
 
@@ -474,15 +480,15 @@ strip = true       # Strip symbols (smaller wheel)
 
 ### ✅ All High Priority Items - COMPLETED
 1. ✅ **Package name fixed** (par-term-emu → par-term-emu-core-rust)
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
 2. ✅ **ARM64 Linux support added**
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
    - Implementation: QEMU-based cross-compilation
    - Coverage: Python 3.12, 3.13, 3.14
 
 ### ✅ All Medium Priority Items - COMPLETED
 3. ✅ **Windows builds re-enabled**
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.10.0
+   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
    - Solution: PTY tests excluded with `-k "not pty"` filter
    - Coverage: Python 3.12, 3.13, 3.14
 
@@ -500,12 +506,12 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2025-11-24 (Version 0.10.0)
+**Last Updated**: 2025-12-03 (Version 0.16.0)
 
 | Category | Score | Notes |
 |----------|-------|-------|
-| Project Structure | ✅ 10/10 | Perfect structure with `python-source` pattern |
-| Build Configuration | ✅ 10/10 | Maturin 1.9+, PyO3 0.27.1, optimal settings |
+| Project Structure | ✅ 10/10 | Perfect structure with `python-source` pattern + Protocol Buffers |
+| Build Configuration | ✅ 10/10 | Maturin 1.9+, PyO3 0.27.2, optimal settings |
 | Cross-Platform (macOS) | ✅ 10/10 | x86_64 + universal2 (Intel + Apple Silicon) |
 | Cross-Platform (Linux) | ✅ 10/10 | x86_64 + ARM64/aarch64 with QEMU |
 | Cross-Platform (Windows) | ✅ 10/10 | x86_64 with smart PTY test exclusion |
@@ -567,9 +573,9 @@ The current configuration provides **world-class** packaging for a Rust/Python h
 ## References
 
 ### Official Documentation
-- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-11-24)
-- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-11-24)
-- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-11-24)
+- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-12-03)
+- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-12-03)
+- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-12-03)
 - [PyO3 Documentation](https://pyo3.rs/) - Rust-Python bindings
 - [PyO3 GitHub](https://github.com/PyO3/pyo3) - PyO3 repository
 

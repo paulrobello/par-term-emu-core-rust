@@ -37,7 +37,7 @@ use par_term_emu_core_rust::{
     color::Color,
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
     pty_session::PtySession,
-    streaming::{protocol::ThemeInfo, StreamingConfig, StreamingServer},
+    streaming::{protocol::ThemeInfo, StreamingConfig, StreamingServer, TlsConfig},
     terminal::Terminal,
 };
 use std::fs;
@@ -388,6 +388,21 @@ struct Args {
     /// Defaults to "latest" which fetches the most recent release
     #[arg(long, default_value = "latest")]
     frontend_version: String,
+
+    /// TLS certificate file (PEM format)
+    /// Use with --tls-key for separate cert/key files
+    #[arg(long, requires = "tls_key")]
+    tls_cert: Option<String>,
+
+    /// TLS private key file (PEM format)
+    /// Use with --tls-cert for separate cert/key files
+    #[arg(long, requires = "tls_cert")]
+    tls_key: Option<String>,
+
+    /// Combined TLS PEM file containing both certificate and private key
+    /// Alternative to using --tls-cert and --tls-key
+    #[arg(long, conflicts_with_all = ["tls_cert", "tls_key"])]
+    tls_pem: Option<String>,
 }
 
 /// Main event loop state
@@ -726,6 +741,22 @@ async fn main() -> Result<()> {
 
     let pty_session = Arc::new(Mutex::new(pty_session));
 
+    // Load TLS configuration if provided
+    let tls_config = if let Some(pem_path) = &args.tls_pem {
+        info!("Loading TLS from PEM file: {}", pem_path);
+        Some(TlsConfig::from_pem(pem_path).context("Failed to load TLS PEM file")?)
+    } else if let (Some(cert_path), Some(key_path)) = (&args.tls_cert, &args.tls_key) {
+        info!("Loading TLS from cert: {}, key: {}", cert_path, key_path);
+        Some(
+            TlsConfig::from_files(cert_path, key_path)
+                .context("Failed to load TLS certificate/key")?,
+        )
+    } else {
+        None
+    };
+
+    let use_tls = tls_config.is_some();
+
     // Create streaming server configuration
     let config = StreamingConfig {
         max_clients: args.max_clients,
@@ -736,6 +767,7 @@ async fn main() -> Result<()> {
         web_root: args.web_root.clone(),
         initial_cols: cols,
         initial_rows: rows,
+        tls: tls_config,
     };
 
     // Create streaming server
@@ -865,16 +897,22 @@ async fn main() -> Result<()> {
     let streaming_server = Arc::new(streaming_server);
 
     // Print startup information
+    let http_scheme = if use_tls { "https" } else { "http" };
+    let ws_scheme = if use_tls { "wss" } else { "ws" };
+
     println!("\n{}", "=".repeat(60));
     println!("  Terminal Streaming Server");
+    if use_tls {
+        println!("  (TLS/SSL ENABLED)");
+    }
     println!("{}", "=".repeat(60));
 
     if args.enable_http {
-        println!("\n  HTTP Server: http://{}", addr);
-        println!("  WebSocket URL: ws://{}/ws", addr);
+        println!("\n  HTTP Server: {}://{}", http_scheme, addr);
+        println!("  WebSocket URL: {}://{}/ws", ws_scheme, addr);
         println!("  Web Root: {}", args.web_root);
     } else {
-        println!("\n  WebSocket URL: ws://{}", addr);
+        println!("\n  WebSocket URL: {}://{}", ws_scheme, addr);
     }
 
     if let Some(api_key) = &args.api_key {
@@ -883,16 +921,16 @@ async fn main() -> Result<()> {
         println!("\n  Connect with:");
         println!("    - Header: Authorization: Bearer <api-key>");
         if args.enable_http {
-            println!("    - URL: ws://{}/ws?api_key=<api-key>", addr);
+            println!("    - URL: {}://{}/ws?api_key=<api-key>", ws_scheme, addr);
         } else {
-            println!("    - URL: ws://{}?api_key=<api-key>", addr);
+            println!("    - URL: {}://{}?api_key=<api-key>", ws_scheme, addr);
         }
     } else {
         println!("\n  Authentication: DISABLED");
         if args.enable_http {
-            println!("  WebSocket: ws://{}/ws", addr);
+            println!("  WebSocket: {}://{}/ws", ws_scheme, addr);
         } else {
-            println!("  Connect to: ws://{}", addr);
+            println!("  Connect to: {}://{}", ws_scheme, addr);
         }
     }
 

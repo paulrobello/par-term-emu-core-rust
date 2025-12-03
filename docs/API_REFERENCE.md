@@ -5,7 +5,57 @@ Complete Python API documentation for par-term-emu-core-rust.
 ## Table of Contents
 
 - [Terminal Class](#terminal-class)
+  - [Core Methods](#core-methods)
+  - [Terminal State](#terminal-state)
+  - [Cursor Control](#cursor-control)
+  - [Keyboard Protocol](#keyboard-protocol-kitty)
+  - [Clipboard Operations](#clipboard-operations-osc-52)
+  - [Clipboard History](#clipboard-history)
+  - [Scrollback Buffer](#scrollback-buffer)
+  - [Cell Inspection](#cell-inspection)
+  - [Terminal Modes](#terminal-modes)
+  - [VT Conformance Level](#vt-conformance-level)
+  - [Bell Volume Control](#bell-volume-control-vt520)
+  - [Scrolling and Margins](#scrolling-and-margins)
+  - [Colors and Appearance](#colors-and-appearance)
+  - [Theme Colors](#theme-colors)
+  - [Text Rendering Options](#text-rendering-options)
+  - [Shell Integration](#shell-integration-osc-133--osc-7)
+  - [Paste Operations](#paste-operations)
+  - [Focus Events](#focus-events)
+  - [Terminal Responses](#terminal-responses)
+  - [Notifications](#notifications-osc-9777)
+  - [Graphics](#graphics)
+  - [Snapshots](#snapshots)
+  - [Testing](#testing)
+  - [Export Functions](#export-functions)
+  - [Screenshots](#screenshots)
+  - [Session Recording](#session-recording)
+  - [Advanced Search and Regex](#advanced-search-and-regex)
+  - [Mouse Tracking and Events](#mouse-tracking-and-events)
+  - [Bookmarks](#bookmarks)
+  - [Shell Integration Extended](#shell-integration-extended)
+  - [Clipboard Extended](#clipboard-extended)
+  - [Graphics Extended](#graphics-extended)
+  - [Rendering and Damage Tracking](#rendering-and-damage-tracking)
+  - [Performance and Benchmarking](#performance-and-benchmarking)
+  - [Tmux Control Mode](#tmux-control-mode)
+  - [Session Management](#session-management)
+  - [Advanced Text Operations](#advanced-text-operations)
+  - [Testing and Compliance](#testing-and-compliance)
+  - [Utility Methods](#utility-methods)
+  - [Debug and Snapshot Methods](#debug-and-snapshot-methods)
+  - [Text Extraction and Selection](#text-extraction-and-selection)
+  - [Content Search](#content-search)
+  - [Buffer Statistics](#buffer-statistics)
+  - [Static Utility Methods](#static-utility-methods)
 - [PtyTerminal Class](#ptyterminal-class)
+  - [Process Management](#process-management)
+  - [I/O Operations](#io-operations)
+  - [Update Tracking](#update-tracking)
+  - [Appearance Settings](#appearance-settings-pty-specific)
+  - [Macro Playback](#macro-playback-pty-specific)
+  - [Context Manager Support](#context-manager-support)
 - [Color Utilities](#color-utilities)
 - [Data Classes](#data-classes)
   - [Attributes](#attributes)
@@ -20,9 +70,45 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [ScrollbackStats](#scrollbackstats)
   - [Macro](#macro)
   - [MacroEvent](#macroevent)
+  - [BenchmarkResult](#benchmarkresult)
+  - [BenchmarkSuite](#benchmarksuite)
+  - [ComplianceTest](#compliancetest)
+  - [ComplianceReport](#compliancereport)
+  - [CommandExecution](#commandexecution)
+  - [CwdChange](#cwdchange)
+  - [DamageRegion](#damageregion)
+  - [DetectedItem](#detecteditem)
+  - [EscapeSequenceProfile](#escapesequenceprofile)
+  - [FrameTiming](#frametiming)
+  - [ImageProtocol](#imageprotocol)
+  - [ImageFormat](#imageformat)
+  - [InlineImage](#inlineimage)
+  - [JoinedLines](#joinedlines)
+  - [LineDiff](#linediff)
+  - [MouseEncoding](#mouseencoding)
+  - [MouseEvent](#mouseevent)
+  - [MousePosition](#mouseposition)
+  - [PaneState](#panestate)
+  - [PerformanceMetrics](#performancemetrics)
+  - [ProfilingData](#profilingdata)
+  - [RegexMatch](#regexmatch)
+  - [RenderingHint](#renderinghint)
+  - [SessionState](#sessionstate)
+  - [ShellIntegrationStats](#shellintegrationstats)
+  - [SnapshotDiff](#snapshotdiff)
+  - [TmuxNotification](#tmuxnotification)
+  - [WindowLayout](#windowlayout)
+  - [ColorHSL](#colorhsl)
+  - [ColorHSV](#colorhsv)
+  - [ColorPalette](#colorpalette)
+  - [Bookmark](#bookmark)
+  - [ClipboardHistoryEntry](#clipboardhistoryentry)
+  - [ClipboardSyncEvent](#clipboardsyncevent)
+  - [SearchMatch](#searchmatch)
 - [Enumerations](#enumerations)
   - [CursorStyle](#cursorstyle)
   - [UnderlineStyle](#underlinestyle)
+  - [ProgressState](#progressstate)
 
 ## Terminal Class
 
@@ -147,6 +233,30 @@ Create a new terminal with specified dimensions.
 - `get_ansi_palette() -> list[tuple[int, int, int]]`: Get all 16 ANSI colors (indices 0-15)
 - `set_ansi_palette_color(index: int, r: int, g: int, b: int)`: Set ANSI palette color (0-255)
 
+#### Theme Colors
+- `link_color() -> tuple[int, int, int]`: Get hyperlink color (OSC 8)
+- `set_link_color(r: int, g: int, b: int)`: Set hyperlink color
+- `bold_color() -> tuple[int, int, int]`: Get bold text color
+- `set_bold_color(r: int, g: int, b: int)`: Set bold text color
+- `cursor_guide_color() -> tuple[int, int, int]`: Get cursor guide/column color
+- `set_cursor_guide_color(r: int, g: int, b: int)`: Set cursor guide color
+- `badge_color() -> tuple[int, int, int]`: Get badge/notification color
+- `set_badge_color(r: int, g: int, b: int)`: Set badge color
+- `match_color() -> tuple[int, int, int]`: Get search match highlight color
+- `set_match_color(r: int, g: int, b: int)`: Set search match color
+- `selection_bg_color() -> tuple[int, int, int]`: Get selection background color
+- `set_selection_bg_color(r: int, g: int, b: int)`: Set selection background color
+- `selection_fg_color() -> tuple[int, int, int]`: Get selection foreground/text color
+- `set_selection_fg_color(r: int, g: int, b: int)`: Set selection foreground color
+
+#### Text Rendering Options
+- `use_bold_color() -> bool`: Check if custom bold color is used instead of bright ANSI variant
+- `set_use_bold_color(use_bold: bool)`: Enable/disable custom bold color
+- `use_underline_color() -> bool`: Check if custom underline color is enabled
+- `set_use_underline_color(use_underline: bool)`: Enable/disable custom underline color
+- `bold_brightening() -> bool`: Check if bold text with colors 0-7 is brightened to 8-15
+- `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (legacy behavior)
+
 #### Shell Integration (OSC 133 & OSC 7)
 - `current_directory() -> str | None`: Get current working directory (OSC 7)
 - `accept_osc7() -> bool`: Check if OSC 7 (CWD) is accepted
@@ -220,6 +330,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `export_text() -> str`: Export entire buffer as plain text without styling
 - `export_styled() -> str`: Export entire buffer with ANSI styling
 - `export_html(include_styles: bool = True) -> str`: Export as HTML (full document or content only)
+- `export_scrollback() -> str`: Export scrollback buffer as plain text
 
 #### Screenshots
 - `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, minimum_contrast) -> bytes`: Take screenshot and return image bytes
@@ -238,6 +349,180 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `record_resize(cols: int, rows: int)`: Record resize event
 - `export_asciicast(session: RecordingSession | None = None) -> str`: Export to asciicast v2 format
 - `export_json(session: RecordingSession | None = None) -> str`: Export to JSON format
+
+### Advanced Search and Regex
+
+- `regex_search(pattern: str, case_sensitive: bool = True) -> list[RegexMatch]`: Search terminal content using regex pattern
+- `get_regex_matches() -> list[RegexMatch]`: Get current regex matches
+- `clear_regex_matches()`: Clear regex match highlighting
+- `next_regex_match()`: Move to next regex match
+- `prev_regex_match()`: Move to previous regex match
+- `get_current_regex_pattern() -> str | None`: Get active regex pattern
+
+### Mouse Tracking and Events
+
+- `mouse_encoding() -> MouseEncoding`: Get current mouse encoding mode
+- `set_mouse_encoding(encoding: MouseEncoding)`: Set mouse encoding (Default, UTF8, SGR, URXVT)
+- `get_mouse_events() -> list[MouseEvent]`: Get recorded mouse events
+- `get_mouse_positions() -> list[MousePosition]`: Get mouse position history
+- `get_last_mouse_position() -> MousePosition | None`: Get most recent mouse position
+- `clear_mouse_history()`: Clear mouse event history
+- `set_max_mouse_history(max: int)`: Set maximum mouse events to track
+- `record_mouse_event(event: MouseEvent)`: Record a mouse event
+
+### Bookmarks
+
+- `add_bookmark(row: int, label: str | None = None)`: Add bookmark at row with optional label
+- `remove_bookmark(row: int)`: Remove bookmark at row
+- `get_bookmarks() -> list[Bookmark]`: Get all bookmarks
+- `clear_bookmarks()`: Remove all bookmarks
+
+### Shell Integration Extended
+
+Extended shell integration features beyond basic OSC 133:
+
+- `get_command_history() -> list[CommandExecution]`: Get command execution history
+- `clear_command_history()`: Clear command history
+- `set_max_command_history(max: int)`: Set command history limit
+- `start_command_execution(command: str)`: Mark start of command execution
+- `end_command_execution(exit_code: int)`: Mark end of command with exit code
+- `get_current_command() -> CommandExecution | None`: Get currently executing command
+- `get_shell_integration_stats() -> ShellIntegrationStats`: Get shell integration statistics
+- `get_cwd_changes() -> list[CwdChange]`: Get working directory change history
+- `clear_cwd_history()`: Clear CWD history
+- `set_max_cwd_history(max: int)`: Set CWD history limit
+- `record_cwd_change(cwd: str)`: Record working directory change
+
+### Clipboard Extended
+
+Advanced clipboard features beyond basic OSC 52:
+
+- `get_clipboard_sync_events() -> list[ClipboardSyncEvent]`: Get clipboard synchronization events
+- `clear_clipboard_sync_events()`: Clear clipboard sync event log
+- `set_max_clipboard_sync_history(max: int)`: Set clipboard sync history limit
+- `get_clipboard_sync_history() -> list[ClipboardHistoryEntry]`: Get clipboard sync history
+- `record_clipboard_sync(slot: str, content: str)`: Record clipboard synchronization
+
+### Graphics Extended
+
+Additional graphics management beyond basic display:
+
+- `add_inline_image(image: InlineImage)`: Add inline image (iTerm2 protocol)
+- `get_image_by_id(id: int) -> InlineImage | None`: Get image by ID
+- `get_images_at(row: int) -> list[InlineImage]`: Get images at specific row
+- `get_all_images() -> list[InlineImage]`: Get all images in terminal
+- `delete_image(id: int)`: Delete image by ID
+- `clear_images()`: Clear all inline images
+- `set_max_inline_images(max: int)`: Set maximum inline image count
+- `get_sixel_limits() -> tuple[int, int]`: Get Sixel size limits (width, height)
+- `set_sixel_limits(max_width: int, max_height: int)`: Set Sixel size limits
+- `get_sixel_graphics_limit() -> int`: Get maximum Sixel graphics count
+- `set_sixel_graphics_limit(limit: int)`: Set maximum Sixel graphics count
+- `get_sixel_stats() -> dict[str, int]`: Get Sixel statistics
+- `get_dropped_sixel_graphics() -> int`: Get count of dropped Sixel graphics
+
+### Rendering and Damage Tracking
+
+For optimized rendering in frontends:
+
+- `add_damage_region(x: int, y: int, width: int, height: int)`: Mark region as damaged/needing redraw
+- `get_damage_regions() -> list[DamageRegion]`: Get all damaged regions
+- `clear_damage_regions()`: Clear damage tracking
+- `merge_damage_regions()`: Merge overlapping damage regions
+- `get_dirty_rows() -> list[int]`: Get rows that need redrawing
+- `get_dirty_region() -> DamageRegion | None`: Get bounding box of all dirty regions
+- `mark_row_dirty(row: int)`: Mark specific row as dirty
+- `mark_clean()`: Mark all content as clean
+- `add_rendering_hint(hint: RenderingHint)`: Add rendering optimization hint
+- `get_rendering_hints() -> list[RenderingHint]`: Get rendering hints
+- `clear_rendering_hints()`: Clear rendering hints
+
+### Performance and Benchmarking
+
+Performance measurement and optimization tools:
+
+- `benchmark_rendering(duration_ms: int) -> BenchmarkResult`: Benchmark rendering performance
+- `benchmark_parsing(duration_ms: int) -> BenchmarkResult`: Benchmark ANSI parsing performance
+- `benchmark_grid_ops(iterations: int) -> BenchmarkResult`: Benchmark grid operations
+- `run_benchmark_suite() -> BenchmarkSuite`: Run comprehensive benchmark suite
+- `enable_profiling()`: Enable performance profiling
+- `disable_profiling()`: Disable performance profiling
+- `is_profiling_enabled() -> bool`: Check if profiling is active
+- `get_profiling_data() -> ProfilingData`: Get profiling data
+- `reset_profiling_data()`: Reset profiling counters
+- `get_performance_metrics() -> PerformanceMetrics`: Get performance metrics
+- `reset_performance_metrics()`: Reset performance metrics
+- `get_frame_timings() -> list[FrameTiming]`: Get frame timing history
+- `get_fps() -> float`: Get current FPS
+- `get_average_frame_time() -> float`: Get average frame time in milliseconds
+- `record_frame_timing(render_time_ms: float)`: Record frame timing
+
+### Tmux Control Mode
+
+Terminal multiplexer integration:
+
+- `set_tmux_control_mode(enabled: bool)`: Enable/disable tmux control mode parsing
+- `is_tmux_control_mode() -> bool`: Check if tmux control mode is active
+- `drain_tmux_notifications() -> list[TmuxNotification]`: Get and clear tmux notifications
+- `get_tmux_notifications() -> list[TmuxNotification]`: Get tmux notifications without clearing
+- `has_tmux_notifications() -> bool`: Check if tmux notifications are pending
+- `clear_tmux_notifications()`: Clear tmux notification queue
+
+### Session Management
+
+Save and restore terminal state:
+
+- `set_remote_session_id(id: str | None)`: Set remote session identifier
+- `remote_session_id() -> str | None`: Get remote session identifier
+- `serialize_session() -> bytes`: Serialize terminal state to bytes
+- `deserialize_session(data: bytes)`: Restore terminal state from bytes
+- `create_session_state() -> SessionState`: Create session state snapshot
+- `capture_pane_state() -> PaneState`: Capture pane state for window management
+- `restore_pane_state(state: PaneState)`: Restore pane state
+- `get_pane_state() -> PaneState | None`: Get current pane state
+- `set_pane_state(state: PaneState)`: Set pane state
+- `clear_pane_state()`: Clear pane state
+- `create_window_layout() -> WindowLayout`: Create window layout descriptor
+
+### Advanced Text Operations
+
+Extended text manipulation beyond basic extraction:
+
+- `get_paragraph_at(col: int, row: int) -> str | None`: Extract paragraph at position
+- `get_logical_lines(start_row: int, end_row: int) -> list[JoinedLines]`: Get logical lines (respecting wrapping)
+- `join_wrapped_lines(start_row: int) -> JoinedLines`: Join wrapped lines from start position
+- `is_line_start(row: int) -> bool`: Check if row is start of logical line
+- `get_line_context(row: int, before: int, after: int) -> list[str]`: Get lines with context
+
+### Testing and Compliance
+
+VT compliance testing:
+
+- `test_compliance() -> ComplianceReport`: Run VT compliance tests
+- `format_compliance_report(report: ComplianceReport) -> str`: Format compliance report for display
+
+### Utility Methods
+
+- `use_alt_screen()`: Switch to alternate screen buffer (programmatic, not via escape codes)
+- `use_primary_screen()`: Switch to primary screen buffer (programmatic)
+- `poll_events() -> list[str]`: Poll for pending terminal events
+- `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
+- `debug_info() -> str`: Get debug information string
+- `detect_urls(text: str) -> list[DetectedItem]`: Detect URLs in text
+- `detect_file_paths(text: str) -> list[DetectedItem]`: Detect file paths in text
+- `detect_semantic_items(text: str) -> list[DetectedItem]`: Detect semantic items (URLs, paths, emails)
+- `get_all_hyperlinks() -> list[str]`: Get all OSC 8 hyperlinks in terminal
+- `generate_color_palette() -> ColorPalette`: Generate color palette from terminal colors
+- `color_distance(color1: tuple[int, int, int], color2: tuple[int, int, int]) -> float`: Calculate perceptual color distance
+
+### Debug and Snapshot Methods
+
+- `debug_snapshot_buffer() -> str`: Get debug snapshot of buffer state
+- `debug_snapshot_grid() -> str`: Get debug snapshot of grid state
+- `debug_snapshot_primary() -> str`: Get debug snapshot of primary screen
+- `debug_snapshot_alt() -> str`: Get debug snapshot of alternate screen
+- `debug_log_snapshot()`: Log debug snapshot to console
+- `diff_snapshots(snapshot1: ScreenSnapshot, snapshot2: ScreenSnapshot) -> SnapshotDiff`: Compare two snapshots
 
 ### Text Extraction and Selection
 
@@ -276,6 +561,10 @@ Call these on the class itself (e.g., `Terminal.strip_ansi(text)`):
 - `Terminal.strip_ansi(text: str) -> str`: Remove all ANSI escape sequences from text
 - `Terminal.measure_text_width(text: str) -> int`: Measure display width accounting for wide characters and ANSI codes
 - `Terminal.parse_color(color_string: str) -> tuple[int, int, int] | None`: Parse color from hex (#RRGGBB), rgb(r,g,b), or name
+- `Terminal.rgb_to_hsl_color(rgb: tuple[int, int, int]) -> ColorHSL`: Convert RGB to HSL color representation
+- `Terminal.rgb_to_hsv_color(rgb: tuple[int, int, int]) -> ColorHSV`: Convert RGB to HSV color representation
+- `Terminal.hsl_to_rgb_color(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
+- `Terminal.hsv_to_rgb_color(h: int, s: int, v: int) -> tuple[int, int, int]`: Convert HSV to RGB
 
 ## PtyTerminal Class
 
@@ -314,6 +603,27 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 - `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (ANSI colors 0-7 → 8-15)
 
 **Note:** PtyTerminal inherits all Terminal methods, so you can also use all Terminal appearance settings like `set_default_fg()`, `set_default_bg()`, etc.
+
+#### Macro Playback (PTY-Specific)
+
+Automate terminal interactions with recorded macros:
+
+- `play_macro(name: str, speed: float | None = None)`: Start playing a macro (speed multiplier: 1.0 = normal, 2.0 = double)
+- `stop_macro()`: Stop macro playback
+- `pause_macro()`: Pause macro playback
+- `resume_macro()`: Resume paused macro
+- `set_macro_speed(speed: float)`: Set playback speed (0.1 to 10.0)
+- `is_macro_playing() -> bool`: Check if macro is currently playing
+- `is_macro_paused() -> bool`: Check if playback is paused
+- `get_macro_progress() -> tuple[int, int] | None`: Get progress as (current_event, total_events)
+- `get_current_macro_name() -> str | None`: Get name of playing macro
+- `tick_macro() -> bool`: Advance macro playback (call regularly, e.g., every 10ms). Returns True if event was processed
+- `get_macro_screenshot_triggers() -> list[str]`: Get and clear screenshot trigger labels
+- `recording_to_macro(session: RecordingSession, name: str) -> Macro`: Convert recording session to macro
+- `get_macro(name: str) -> Macro | None`: Get macro by name
+- `list_macros() -> list[str]`: List all available macros
+- `load_macro(yaml_str: str) -> Macro`: Load macro from YAML string
+- `remove_macro(name: str)`: Remove macro by name
 
 ### Context Manager Support
 
@@ -505,6 +815,363 @@ Event in a macro recording.
 - `duration: int | None`: Duration in milliseconds for delay events
 - `label: str | None`: Label for screenshot events
 
+### BenchmarkResult
+
+Result from a single benchmark test.
+
+**Properties:**
+- `name: str`: Benchmark name
+- `duration_ms: int`: Test duration in milliseconds
+- `iterations: int`: Number of iterations performed
+- `ops_per_sec: float`: Operations per second
+- `avg_time_us: float`: Average time per operation in microseconds
+
+### BenchmarkSuite
+
+Results from comprehensive benchmark suite.
+
+**Properties:**
+- `rendering: BenchmarkResult`: Rendering benchmark results
+- `parsing: BenchmarkResult`: Parsing benchmark results
+- `grid_ops: BenchmarkResult`: Grid operations benchmark results
+- `total_duration_ms: int`: Total suite duration in milliseconds
+
+### ComplianceTest
+
+Individual VT compliance test result.
+
+**Properties:**
+- `name: str`: Test name
+- `passed: bool`: Whether test passed
+- `description: str`: Test description
+- `expected: str | None`: Expected behavior
+- `actual: str | None`: Actual behavior
+
+### ComplianceReport
+
+Complete VT compliance test report.
+
+**Properties:**
+- `total_tests: int`: Total number of tests
+- `passed_tests: int`: Number of passed tests
+- `failed_tests: int`: Number of failed tests
+- `tests: list[ComplianceTest]`: Individual test results
+
+### CommandExecution
+
+Command execution record from shell integration.
+
+**Properties:**
+- `command: str`: The executed command
+- `start_time: int`: Start timestamp (Unix timestamp in seconds)
+- `end_time: int | None`: End timestamp if completed
+- `exit_code: int | None`: Exit code if completed
+- `cwd: str | None`: Working directory where command was executed
+
+### CwdChange
+
+Working directory change event.
+
+**Properties:**
+- `cwd: str`: New working directory path
+- `timestamp: int`: Change timestamp (Unix timestamp in seconds)
+
+### DamageRegion
+
+Screen region that needs redrawing.
+
+**Properties:**
+- `x: int`: X coordinate
+- `y: int`: Y coordinate
+- `width: int`: Region width
+- `height: int`: Region height
+
+### DetectedItem
+
+Detected semantic item (URL, file path, etc.).
+
+**Properties:**
+- `item_type: str`: Type of item ("url", "file_path", "email", etc.)
+- `value: str`: The detected value
+- `start_col: int`: Start column
+- `start_row: int`: Start row
+- `end_col: int`: End column
+- `end_row: int`: End row
+
+### EscapeSequenceProfile
+
+Profile data for escape sequence parsing.
+
+**Properties:**
+- `sequence_type: str`: Type of sequence (CSI, OSC, DCS, etc.)
+- `count: int`: Number of times seen
+- `total_time_us: int`: Total processing time in microseconds
+- `avg_time_us: float`: Average processing time in microseconds
+
+### FrameTiming
+
+Frame rendering timing information.
+
+**Properties:**
+- `timestamp: int`: Frame timestamp in milliseconds
+- `render_time_ms: float`: Rendering time in milliseconds
+- `frame_number: int`: Frame sequence number
+
+### ImageProtocol
+
+Graphics protocol enumeration.
+
+**Values:**
+- `ImageProtocol.Sixel`: Sixel graphics (DCS)
+- `ImageProtocol.ITerm2`: iTerm2 inline images (OSC 1337)
+- `ImageProtocol.Kitty`: Kitty graphics protocol (APC G)
+
+### ImageFormat
+
+Image format enumeration.
+
+**Values:**
+- `ImageFormat.PNG`: PNG format
+- `ImageFormat.JPEG`: JPEG format
+- `ImageFormat.GIF`: GIF format
+- `ImageFormat.BMP`: BMP format
+
+### InlineImage
+
+Inline image metadata.
+
+**Properties:**
+- `id: int`: Image identifier
+- `protocol: ImageProtocol`: Graphics protocol used
+- `format: ImageFormat`: Image format
+- `width: int`: Width in pixels
+- `height: int`: Height in pixels
+- `row: int`: Display row
+- `col: int`: Display column
+- `data: bytes`: Image data
+
+### JoinedLines
+
+Logical line formed by joining wrapped lines.
+
+**Properties:**
+- `text: str`: Combined text content
+- `start_row: int`: Starting row
+- `end_row: int`: Ending row
+- `line_count: int`: Number of physical lines
+
+### LineDiff
+
+Difference between two lines.
+
+**Properties:**
+- `row: int`: Row number
+- `old_text: str`: Old line content
+- `new_text: str`: New line content
+- `changed: bool`: Whether line changed
+
+### MouseEncoding
+
+Mouse encoding mode enumeration.
+
+**Values:**
+- `MouseEncoding.Default`: Default encoding (single byte)
+- `MouseEncoding.UTF8`: UTF-8 encoding
+- `MouseEncoding.SGR`: SGR 1006 encoding
+- `MouseEncoding.URXVT`: URXVT encoding
+
+### MouseEvent
+
+Mouse event record.
+
+**Properties:**
+- `button: int`: Mouse button (0=left, 1=middle, 2=right, 64=wheel_up, 65=wheel_down)
+- `col: int`: Column position
+- `row: int`: Row position
+- `modifiers: int`: Modifier keys bitmask
+- `event_type: str`: Event type ("press", "release", "motion")
+- `timestamp: int`: Event timestamp in milliseconds
+
+### MousePosition
+
+Mouse cursor position.
+
+**Properties:**
+- `col: int`: Column position
+- `row: int`: Row position
+- `timestamp: int`: Position timestamp in milliseconds
+
+### PaneState
+
+Terminal pane state for window management.
+
+**Properties:**
+- `content: str`: Pane content
+- `cursor_col: int`: Cursor column
+- `cursor_row: int`: Cursor row
+- `scrollback_lines: int`: Number of scrollback lines
+- `title: str`: Pane title
+
+### PerformanceMetrics
+
+Performance metrics collection.
+
+**Properties:**
+- `total_frames: int`: Total frames rendered
+- `dropped_frames: int`: Frames dropped
+- `avg_frame_time_ms: float`: Average frame time
+- `peak_memory_bytes: int`: Peak memory usage
+- `total_bytes_processed: int`: Total bytes processed
+
+### ProfilingData
+
+Performance profiling data.
+
+**Properties:**
+- `escape_sequences: list[EscapeSequenceProfile]`: Escape sequence profiles
+- `total_sequences: int`: Total sequences processed
+- `total_time_us: int`: Total processing time in microseconds
+- `memory_allocations: int`: Number of memory allocations
+- `peak_memory_bytes: int`: Peak memory usage
+
+### RegexMatch
+
+Regular expression match result.
+
+**Properties:**
+- `start_col: int`: Match start column
+- `start_row: int`: Match start row
+- `end_col: int`: Match end column
+- `end_row: int`: Match end row
+- `text: str`: Matched text
+
+### RenderingHint
+
+Rendering optimization hint.
+
+**Properties:**
+- `hint_type: str`: Hint type ("dirty_region", "cursor_moved", "scroll", etc.)
+- `data: dict[str, Any]`: Hint-specific data
+
+### SessionState
+
+Complete terminal session state.
+
+**Properties:**
+- `session_id: str`: Session identifier
+- `content: str`: Terminal content
+- `scrollback: list[str]`: Scrollback buffer
+- `cursor_position: tuple[int, int]`: Cursor position
+- `title: str`: Terminal title
+- `environment: dict[str, str]`: Environment variables
+
+### ShellIntegrationStats
+
+Shell integration statistics.
+
+**Properties:**
+- `total_commands: int`: Total commands executed
+- `successful_commands: int`: Commands with exit code 0
+- `failed_commands: int`: Commands with non-zero exit code
+- `avg_command_duration_ms: float`: Average command duration
+- `cwd_changes: int`: Number of directory changes
+
+### SnapshotDiff
+
+Difference between two screen snapshots.
+
+**Properties:**
+- `changed_lines: list[LineDiff]`: Lines that changed
+- `cursor_moved: bool`: Whether cursor moved
+- `old_cursor: tuple[int, int]`: Old cursor position
+- `new_cursor: tuple[int, int]`: New cursor position
+
+### TmuxNotification
+
+Tmux control mode notification.
+
+**Properties:**
+- `notification_type: str`: Notification type
+- `data: str`: Notification data
+
+### WindowLayout
+
+Window layout descriptor.
+
+**Properties:**
+- `layout_type: str`: Layout type ("horizontal", "vertical", "single")
+- `panes: list[PaneState]`: Pane states
+- `active_pane: int`: Active pane index
+
+### ColorHSL
+
+HSL color representation.
+
+**Properties:**
+- `h: int`: Hue (0-360)
+- `s: int`: Saturation (0-100)
+- `l: int`: Lightness (0-100)
+
+### ColorHSV
+
+HSV color representation.
+
+**Properties:**
+- `h: int`: Hue (0-360)
+- `s: int`: Saturation (0-100)
+- `v: int`: Value (0-100)
+
+### ColorPalette
+
+Terminal color palette.
+
+**Properties:**
+- `ansi_colors: list[tuple[int, int, int]]`: 16 ANSI colors (RGB)
+- `default_fg: tuple[int, int, int]`: Default foreground color
+- `default_bg: tuple[int, int, int]`: Default background color
+- `cursor_color: tuple[int, int, int]`: Cursor color
+
+### Bookmark
+
+Terminal bookmark.
+
+**Properties:**
+- `row: int`: Bookmarked row
+- `label: str | None`: Optional label
+- `timestamp: int`: Creation timestamp (Unix timestamp in seconds)
+
+### ClipboardHistoryEntry
+
+Clipboard history entry with sync metadata.
+
+**Properties:**
+- `slot: str`: Clipboard slot name
+- `content: str`: Clipboard content
+- `timestamp: int`: Entry timestamp (Unix timestamp in seconds)
+- `source: str`: Source of clipboard change
+
+### ClipboardSyncEvent
+
+Clipboard synchronization event.
+
+**Properties:**
+- `slot: str`: Clipboard slot
+- `content: str`: Synced content
+- `timestamp: int`: Sync timestamp (Unix timestamp in seconds)
+- `direction: str`: Sync direction ("to_system", "from_system")
+
+### SearchMatch
+
+Text search match result (alias for RegexMatch with additional context).
+
+**Properties:**
+- `start_col: int`: Match start column
+- `start_row: int`: Match start row
+- `end_col: int`: Match end column
+- `end_row: int`: Match end row
+- `text: str`: Matched text
+- `line_context: str | None`: Context line containing match
+
 ## Enumerations
 
 ### CursorStyle
@@ -530,6 +1197,17 @@ Text underline styles.
 - `UnderlineStyle.Curly`: Curly underline (for spell check)
 - `UnderlineStyle.Dotted`: Dotted underline
 - `UnderlineStyle.Dashed`: Dashed underline
+
+### ProgressState
+
+Progress bar state (OSC 9;4).
+
+**Values:**
+- `ProgressState.Hidden`: Progress bar is hidden
+- `ProgressState.Indeterminate`: Progress bar shows indeterminate/spinner state
+- `ProgressState.Normal`: Progress bar shows normal progress
+- `ProgressState.Paused`: Progress bar is paused
+- `ProgressState.Error`: Progress bar shows error state
 
 ## See Also
 

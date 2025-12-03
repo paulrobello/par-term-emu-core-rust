@@ -22,7 +22,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 
 This library provides full VT100/VT220/VT320/VT420/VT520 terminal emulation in pure Rust with Python 3.12+ bindings. It can be used with or without Python bindings, making it suitable for pure Rust applications, embedded terminals, and CLI tools.
 
-> **⚠️ Breaking Change in v0.10.0:** The `Cell` struct no longer implements `Copy` (now `Clone` only) to support variable-length grapheme cluster storage. All cell copy operations now require explicit `.clone()` calls. Python bindings are unaffected.
+> **📝 Note:** The `Cell` struct implements `Clone` but not `Copy` to support variable-length grapheme cluster storage (combining characters, emoji sequences). All cell copy operations require explicit `.clone()` calls. Python bindings are unaffected.
 
 ### Architecture Overview
 
@@ -77,7 +77,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.10", default-features = false }
+par-term-emu-core-rust = { version = "0.16", default-features = false }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -85,17 +85,17 @@ par-term-emu-core-rust = { version = "0.10", default-features = false }
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.10", default-features = false, features = ["streaming"] }
+par-term-emu-core-rust = { version = "0.16", default-features = false, features = ["streaming"] }
 ```
-**Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio
+**Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.10" }
+par-term-emu-core-rust = { version = "0.16" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.10", features = ["python"] }
+par-term-emu-core-rust = { version = "0.16", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -103,11 +103,11 @@ par-term-emu-core-rust = { version = "0.10", features = ["python"] }
 #### Python with Streaming
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.10", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.16", features = ["python", "streaming"] }
 # Or use the convenience feature:
-par-term-emu-core-rust = { version = "0.10", features = ["full"] }
+par-term-emu-core-rust = { version = "0.16", features = ["full"] }
 ```
-**Includes:** Everything + Python bindings + WebSocket/HTTP server
+**Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
 
 ### Build Commands
@@ -266,6 +266,10 @@ fn main() -> std::io::Result<()> {
 
 > **📝 Note:** Requires the `streaming` feature flag.
 
+> **🔒 Security:** The streaming server supports TLS/SSL for secure WebSocket connections (WSS) and HTTPS. Configure using `StreamingConfig::with_tls_cert_key()` or `StreamingConfig::with_tls_pem()`.
+
+> **🚀 Performance:** Server uses Protocol Buffers for efficient binary messaging (~80% smaller than JSON). Messages are automatically encoded/decoded by the server.
+
 ```rust
 use par_term_emu_core_rust::{
     terminal::Terminal,
@@ -332,7 +336,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 | Feature | Description | Includes |
 |---------|-------------|----------|
 | `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module` |
-| `streaming` | WebSocket streaming server | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `uuid`, `clap`, `anyhow`, `tracing`, `tracing-subscriber` |
+| `streaming` | WebSocket streaming server with binary protocol | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `uuid`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `flate2`, `tar`, `prost`, `prost-build`, `rustls`, `tokio-rustls`, `rustls-pemfile`, `axum-server` |
 | `rust-only` | Pure Rust, no Python | (none) |
 | `full` | All features | `python`, `streaming` |
 | `default` | Default features | `python` |
@@ -358,9 +362,20 @@ cargo build --features full
 
 The repository includes example binaries:
 
-- `par-term-streamer` - Full-featured WebSocket streaming server
+- **`par-term-streamer`** - Full-featured WebSocket streaming server with TLS support and binary protocol
   ```bash
+  # View all options
   cargo run --bin par-term-streamer --no-default-features --features streaming -- --help
+
+  # Run with HTTP server
+  cargo run --bin par-term-streamer --no-default-features --features streaming -- --enable-http
+
+  # Run with TLS/SSL
+  cargo run --bin par-term-streamer --no-default-features --features streaming -- \
+    --enable-http --tls-cert cert.pem --tls-key key.pem
+
+  # Download web frontend (no Node.js required)
+  cargo run --bin par-term-streamer --no-default-features --features streaming -- --download-frontend
   ```
 
 ## API Documentation
@@ -378,33 +393,34 @@ cargo doc --all-features --open
 ## Core Components
 
 ### Terminal
-- VT100/VT220/VT320/VT420/VT520 compatible
-- ANSI color support (256 colors + RGB)
-- Unicode handling with wide character support and grapheme cluster preservation
-- Scrollback buffer
-- Mouse event support
-- Graphics support (Sixel, iTerm2 inline images, Kitty Graphics Protocol)
+- **VT Compatibility**: VT100/VT220/VT320/VT420/VT520 compatible
+- **Color Support**: ANSI 16-color, 256-color palette, and 24-bit RGB (true color)
+- **Unicode Support**: Full Unicode with wide character support, grapheme cluster preservation, combining characters, variation selectors, Zero-Width Joiners (ZWJ), and emoji sequences
+- **Scrollback Buffer**: Configurable scrollback with automatic reflow on width changes
+- **Mouse Support**: X10, Normal, Button, and Any modes with multiple encodings (Default, UTF-8, SGR, URXVT)
+- **Graphics Support**: Sixel, iTerm2 inline images, and Kitty Graphics Protocol
+- **Shell Integration**: OSC 133 support for command tracking and navigation
 
 ### PtySession
-- Cross-platform PTY support
-- Shell spawning and management
-- Async I/O with callbacks
-- Terminal resizing
-- Process lifecycle management
+- **Cross-platform PTY**: Unix and Windows support via `portable-pty`
+- **Shell Management**: Spawning, lifecycle management, and exit code handling
+- **Async I/O**: Callback-based output handling with thread-safe writer access
+- **Terminal Resizing**: Dynamic resize support with PTY coordination
+- **Process Control**: Start, stop, and status monitoring
 
 ### Macros
-- Record and playback keyboard events
-- YAML serialization
-- Variable speed playback
-- Pause/resume support
-- Screenshot triggers
+- **Recording**: Capture keyboard events with timestamps
+- **Playback**: Variable speed playback with pause/resume
+- **Serialization**: YAML format for human-readable macro files
+- **Screenshots**: Trigger screenshot capture at specific points
+- **Key Parser**: Parse key names to ANSI escape sequences
 
 ### Streaming
-- WebSocket server for real-time terminal streaming
-- HTTP static file serving
-- Multiple client support
-- Theme customization
-- Resize event handling
+- **WebSocket Server**: Real-time terminal streaming with multiple client support
+- **Binary Protocol**: Protocol Buffers for efficient messaging (~80% size reduction vs JSON)
+- **TLS/SSL Support**: Secure WebSocket (WSS) and HTTPS with rustls
+- **HTTP Server**: Static file serving for web frontend with automatic frontend download
+- **Client Control**: Read-only mode, resize events, theme customization
 
 ## C FFI (Future)
 

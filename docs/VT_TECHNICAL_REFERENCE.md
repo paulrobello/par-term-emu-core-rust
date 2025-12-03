@@ -763,7 +763,7 @@ OSC 8 ; ; https://example.com ST clickable text OSC 8 ; ; ST
 OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 ```
 
-### Notifications
+### Notifications and Progress
 
 #### iTerm2 Notifications
 
@@ -771,6 +771,51 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 
 **Implementation:** `osc_dispatch_impl()` in `src/terminal/sequences/osc.rs`
 **Security:** Can be blocked via `disable_insecure_sequences`
+
+#### Progress Bar (OSC 9;4)
+
+`OSC 9 ; 4 ; state [; progress] ST` - ConEmu/Windows Terminal style progress reporting
+
+**Implementation:**
+- OSC handler in `src/terminal/sequences/osc.rs` (`handle_osc9_progress()`)
+- Progress types in `src/terminal/progress.rs`
+
+**States:**
+| State | Code | Progress Required | Description |
+|-------|------|-------------------|-------------|
+| Hidden | 0 | No | Hide progress bar |
+| Normal | 1 | Yes (0-100) | Normal progress display |
+| Indeterminate | 2 | No | Busy/unknown progress indicator |
+| Warning | 3 | Yes (0-100) | Operation with potential issues |
+| Error | 4 | Yes (0-100) | Failed operation |
+
+**Examples:**
+```
+OSC 9 ; 4 ; 1 ; 50 ST    # Set progress to 50%
+OSC 9 ; 4 ; 0 ST         # Hide progress bar
+OSC 9 ; 4 ; 2 ST         # Show indeterminate progress
+OSC 9 ; 4 ; 3 ; 75 ST    # Show warning state at 75%
+OSC 9 ; 4 ; 4 ; 100 ST   # Show error state at 100%
+```
+
+**Features:**
+- Progress values automatically clamped to 0-100
+- Can be used for file transfers, compilation, deployments
+- Terminal UI can display in tab bar, title bar, or dedicated UI
+- Indeterminate state for operations with unknown duration
+
+**Python API:**
+```python
+# Get progress state
+progress = terminal.progress_bar()
+has_progress = terminal.has_progress()
+value = terminal.progress_value()
+state = terminal.progress_state()
+
+# Set progress
+terminal.set_progress(ProgressState.Normal, 50)
+terminal.clear_progress()
+```
 
 #### urxvt Notifications
 
@@ -1294,6 +1339,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | OSC 52 Clipboard | ✅ Full | `src/terminal/sequences/osc.rs` | Read/write with security controls |
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
 | OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | URL-encoded paths |
+| OSC 9;4 Progress Bar | ✅ Full | `src/terminal/sequences/osc.rs`, `src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
 
 ### Unicode Support
@@ -1445,6 +1491,7 @@ To validate VT compatibility, test with:
 - [iTerm2 Inline Images](https://iterm2.com/documentation-images.html) - OSC 1337 inline image protocol
 - [Synchronized Updates](https://gist.github.com/christianparpart/d8a62cc1ab659194337d73e399004036) - DEC mode 2026
 - [OSC 8 Hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) - Terminal hyperlink standard
+- [OSC 9;4 Progress Bar](https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC) - ConEmu/Windows Terminal progress reporting
 - [Sixel Graphics](https://vt100.net/docs/vt3xx-gp/chapter14.html) - DEC Sixel specification
 - [OSC 52 Clipboard](https://chromium.googlesource.com/apps/libapps/+/HEAD/nassh/doc/FAQ.md#Is-OSC-52-aka-clipboard-operations_supported) - Clipboard manipulation protocol
 - [Unicode Standard](https://www.unicode.org/versions/latest/) - Unicode character properties and emoji specifications
@@ -1470,6 +1517,7 @@ To validate VT compatibility, test with:
   - Unicode support:
     - Grapheme utilities: `src/grapheme.rs`
   - Conformance levels: `src/conformance_level.rs`
+  - Progress bar support: `src/terminal/progress.rs`
   - Python bindings: `src/python_bindings/`
 
 ---

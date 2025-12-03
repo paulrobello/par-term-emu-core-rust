@@ -28,9 +28,10 @@ term.spawn(
 - `PtyTerminal.get_default_shell()` - Static method that returns the default shell path for current platform
 
 **Implementation Notes:**
-- The Rust implementation uses `set_env()` and `set_cwd()` methods internally before calling `spawn()`
-- Environment variables are stored as a `Vec<(String, String)>` and applied during process spawn
+- The Python wrapper calls `set_env()` and `set_cwd()` on the Rust `PtySession` before calling `spawn()`
+- Environment variables are stored internally as `Vec<(String, String)>` and applied during process spawn
 - Working directory is stored as `Option<String>` and applied via `CommandBuilder::cwd()` if set
+- The Python API accepts `dict[str, str]` for environment variables and `str` for working directory, which are converted to Rust types
 
 ## Table of Contents
 
@@ -511,13 +512,14 @@ term.spawn_shell()
 - Testing scenarios where query responses interfere with output validation
 
 **Technical Details**:
-- This setting is cached when `PtyTerminal` is created by reading `PAR_TERM_REPLY_XTWINOPS` from the environment (checked once at initialization in `PtySession::new()`)
-- Default behavior: enabled (returns true) if env var is unset, not "0", or not "false"
+- This setting is cached when `PtyTerminal` is created by reading `PAR_TERM_REPLY_XTWINOPS` from the environment (checked once at initialization in `PtySession::new()`, stored in an `Arc<AtomicBool>`)
+- Default behavior: enabled (returns true) if env var is unset, not "0", or not "false" (case-insensitive)
+- The check is: `std::env::var("PAR_TERM_REPLY_XTWINOPS").ok().map(|v| v != "0" && v.to_lowercase() != "false").unwrap_or(true)`
 - Changing the environment variable after terminal creation has no effect on that terminal instance
 - The filtering is implemented in the PTY reader thread (`start_reader_thread` in `src/pty_session.rs`)
 - When disabled, CSI sequences ending with 't' are filtered from responses before being written back to the PTY master
 - Device query responses are processed by scanning for escape sequences (`\x1B[`) and checking the final byte
-- Only responses with alphabetic final byte 't' are dropped when filtering is enabled
+- Only CSI sequences with alphabetic final byte 't' are dropped when filtering is enabled (other sequences pass through)
 - This prevents XTWINOPS responses from being echoed visibly when shells have `ECHOCTL` enabled
 
 ## Input Validation
@@ -563,8 +565,8 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 **Transmission Modes**:
 - `t=d` - Direct base64 image data (no file access, most secure)
-- `t=f` - File path (base64-encoded) - **Requires file system access**
-- `t=t` - Temporary file path (auto-deleted after loading) - **Requires file system access**
+- `t=f` - File path (raw UTF-8 string, NOT base64-encoded) - **Requires file system access**
+- `t=t` - Temporary file path (raw UTF-8 string, auto-deleted after loading) - **Requires file system access**
 - `t=s` - Shared memory (not supported)
 
 ### File Loading Implementation
@@ -574,59 +576,81 @@ The file loading security implementation is located in the `load_file_data()` me
 **Security validations applied:**
 
 1. **UTF-8 Path Validation**
-   - File paths must be valid UTF-8 strings
-   - Invalid encoding is rejected with clear error message
+   - File paths are decoded from the raw bytes (not base64-encoded for file transmission)
+   - Must be valid UTF-8 strings
+   - Invalid encoding returns error: "Invalid UTF-8 in file path"
 
 2. **Directory Traversal Prevention**
    - Any path containing `..` is rejected
    - Prevents access to parent directories
    - Applied before any file system operations
+   - Returns error: "Directory traversal not allowed"
 
 3. **File Existence and Type Validation**
    - Path must exist on the filesystem
    - Path must be a regular file (not directory, symlink, or special file)
    - Clear error messages for each validation failure
+   - Errors include the path for debugging
 
 4. **File Size Limits**
    - Maximum file size: 100MB (`100 * 1024 * 1024` bytes)
-   - Checked via metadata before reading
+   - Checked via `fs::metadata()` before reading file content
    - Prevents memory exhaustion attacks
-   - Error includes actual size and limit
+   - Error message includes actual file size and the maximum limit
 
 5. **Automatic Cleanup for Temporary Files**
-   - Files loaded with `t=t` (TempFile medium) are automatically deleted after reading
-   - Cleanup errors are silently ignored to prevent blocking on file system issues
+   - Files loaded with `t=t` (TempFile medium) are automatically deleted after reading via `fs::remove_file()`
+   - Cleanup errors are silently ignored (using `let _ = ...`) to prevent blocking on file system issues
+   - This is intentional to handle cases where the file may already be deleted or locked
 
 **Implementation Details:**
 ```rust
-// From src/graphics/kitty.rs
+// From src/graphics/kitty.rs (lines 653-707)
 fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
-    // 1. UTF-8 validation
-    let path_str = String::from_utf8(path_data.to_vec())?;
+    // 1. Decode path (NOT base64 for file transmission)
+    let path_str = String::from_utf8(path_data.to_vec())
+        .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
+
     let path = Path::new(&path_str);
 
     // 2. Directory traversal check
     if path_str.contains("..") {
-        return Err("Directory traversal not allowed");
+        return Err(GraphicsError::KittyError(
+            "Directory traversal not allowed".to_string(),
+        ));
     }
 
     // 3. File existence and type validation
     if !path.exists() {
-        return Err("File not found");
+        return Err(GraphicsError::KittyError(format!(
+            "File not found: {}",
+            path_str
+        )));
     }
+
     if !path.is_file() {
-        return Err("Path is not a file");
+        return Err(GraphicsError::KittyError(format!(
+            "Path is not a file: {}",
+            path_str
+        )));
     }
 
     // 4. File size limit check
     const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
-    let metadata = fs::metadata(path)?;
+    let metadata = fs::metadata(path)
+        .map_err(|e| GraphicsError::KittyError(format!("Cannot read file metadata: {}", e)))?;
+
     if metadata.len() > MAX_FILE_SIZE {
-        return Err("File too large");
+        return Err(GraphicsError::KittyError(format!(
+            "File too large: {} bytes (max {})",
+            metadata.len(),
+            MAX_FILE_SIZE
+        )));
     }
 
     // 5. Read file
-    let file_data = fs::read(path)?;
+    let file_data = fs::read(path)
+        .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
 
     // 6. Delete temp file if t=t
     if self.medium == KittyMedium::TempFile {

@@ -30,6 +30,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Read-Only Mode](#read-only-mode)
   - [Macro Playback](#macro-playback)
   - [HTTP Static File Serving](#http-static-file-serving)
+- [TLS/SSL Configuration](#tlsssl-configuration)
 - [Security Considerations](#security-considerations)
 - [Performance](#performance)
 - [Troubleshooting](#troubleshooting)
@@ -41,7 +42,7 @@ The streaming system enables real-time terminal viewing and interaction through 
 
 - **Streaming Server**: Rust/Python server that captures terminal output and forwards it via WebSocket
 - **Web Frontend**: Next.js/React application with xterm.js for browser-based terminal rendering
-- **Protocol**: JSON-based bidirectional messaging for terminal data, input, and control
+- **Protocol**: Binary Protocol Buffers with optional zlib compression for efficient terminal data, input, and control
 
 **Key Features:**
 - Sub-100ms latency for local connections
@@ -138,16 +139,25 @@ sequenceDiagram
 
 ### WebSocket Protocol
 
-The streaming protocol uses JSON messages with a `type` field for discrimination:
+The streaming protocol uses binary Protocol Buffers messages with optional compression:
 
-**Message Format:**
-```json
-{
-  "type": "message_type",
-  "field1": "value1",
-  "field2": "value2"
-}
+**Wire Format:**
 ```
++----------------+------------------+
+| 1 byte: flags  | N bytes: payload |
++----------------+------------------+
+
+Flags byte:
+  0x00 = uncompressed protobuf
+  0x01 = zlib-compressed protobuf (automatically applied for payloads > 1KB)
+```
+
+**Protocol Definition:** See `proto/terminal.proto` for the complete schema.
+
+**Compression Behavior:**
+- Small messages (≤ 1KB): Sent uncompressed (flag = 0x00)
+- Large messages (> 1KB): Automatically compressed with zlib (flag = 0x01)
+- Both client and server automatically handle compression/decompression based on the flag
 
 **Connection Lifecycle:**
 1. Client connects to WebSocket endpoint
@@ -160,7 +170,7 @@ The streaming protocol uses JSON messages with a `type` field for discrimination
 
 ### Rust Standalone Server
 
-The `par-term-streamer` binary provides a standalone streaming server:
+The `par-term-streamer` binary (defined in `src/bin/streaming_server.rs`) provides a standalone streaming server:
 
 **Build:**
 ```bash
@@ -168,7 +178,7 @@ The `par-term-streamer` binary provides a standalone streaming server:
 make streamer-build-release
 
 # Or directly with cargo
-cargo build --release --bin par-term-streamer --no-default-features --features streaming
+cargo build --release --bin par-term-streamer --features streaming
 ```
 
 **Run:**
@@ -224,7 +234,7 @@ par-term-streamer --enable-http --web-root ./web_term
 ```
 
 **Available Themes:**
-- `iTerm2-dark` (default)
+- `iterm2-dark` (default) - Note: lowercase with hyphens
 - `monokai`
 - `dracula`
 - `solarized-dark`
@@ -272,10 +282,11 @@ streaming_server.shutdown("Server stopping")
 | `send_initial_screen` | bool | true | Send screen snapshot on connect |
 | `keepalive_interval` | u64 | 30 | Ping interval in seconds (0=disabled) |
 | `default_read_only` | bool | false | New clients read-only by default |
-| `enable_http` | bool | false | Enable HTTP static file serving |
+| `enable_http` | bool | false | Enable HTTP static file serving (requires Axum) |
 | `web_root` | String | "./web_term" | Web root directory for static files |
 | `initial_cols` | u16 | 0 | Initial terminal columns (0=use terminal's current size) |
 | `initial_rows` | u16 | 0 | Initial terminal rows (0=use terminal's current size) |
+| `tls` | Option\<TlsConfig\> | None | TLS configuration for HTTPS/WSS (see [TLS Configuration](#tlsssl-configuration)). Uses rustls for cross-platform compatibility |
 
 **Python Example:**
 ```python
@@ -293,7 +304,8 @@ server = terminal_core.StreamingServer(pty_terminal, addr, config)
 
 **Rust Example:**
 ```rust
-use par_term_emu_core_rust::streaming::StreamingConfig;
+use par_term_emu_core_rust::streaming::{StreamingConfig, StreamingServer, TlsConfig};
+use std::sync::{Arc, Mutex};
 
 let config = StreamingConfig {
     max_clients: 100,
@@ -304,6 +316,7 @@ let config = StreamingConfig {
     web_root: "./web_term".to_string(),
     initial_cols: 120,
     initial_rows: 40,
+    tls: None, // Or Some(TlsConfig::from_files("cert.pem", "key.pem")?)
 };
 
 let server = StreamingServer::with_config(terminal, addr, config);
@@ -314,17 +327,22 @@ let server = StreamingServer::with_config(terminal, addr, config);
 ### Technology Stack
 
 **Core Dependencies:**
-- **Next.js** ^16.0.3 - React framework with App Router
-- **React** ^19.2.0 - UI library
-- **TypeScript** ^5.9.3 - Type safety
-- **Tailwind CSS** ^4.1.17 - Utility-first styling
+- **Next.js** 16.0+ - React framework with App Router (configured for static export)
+- **React** 19.0+ - UI library
+- **TypeScript** 5.9+ - Type safety
+- **Tailwind CSS** 4.1+ - Utility-first styling
+
+**Protocol Buffers:**
+- **@bufbuild/protobuf** 2.10+ - Protocol Buffers runtime for binary message encoding/decoding
+- **@bufbuild/buf** 1.61+ - Buf CLI for proto code generation
+- **pako** 2.1+ - Zlib compression/decompression for large messages (> 1KB)
 
 **Terminal Components:**
-- **@xterm/xterm** ^5.5.0 - Terminal emulator core
-- **@xterm/addon-fit** ^0.10.0 - Auto-sizing addon
-- **@xterm/addon-webgl** ^0.18.0 - WebGL renderer
-- **@xterm/addon-web-links** ^0.11.0 - Clickable URLs
-- **@xterm/addon-unicode11** ^0.8.0 - Unicode 11 support
+- **@xterm/xterm** 5.5+ - Terminal emulator core with VT sequences support
+- **@xterm/addon-fit** 0.10+ - Auto-sizing addon for responsive layouts
+- **@xterm/addon-webgl** 0.18+ - Hardware-accelerated WebGL renderer (60 FPS)
+- **@xterm/addon-web-links** 0.11+ - Clickable URLs in terminal output
+- **@xterm/addon-unicode11** 0.8+ - Unicode 11 support for emojis and wide characters
 
 ### Setup and Development
 
@@ -380,18 +398,27 @@ web-terminal-frontend/
 │   └── page.tsx          # Main page component
 ├── components/
 │   └── Terminal.tsx      # Terminal component with xterm.js
-├── types/
-│   └── terminal.ts       # TypeScript interfaces
+├── lib/
+│   └── proto/
+│       └── terminal_pb.ts  # Generated Protocol Buffers types
+├── buf.gen.yaml          # Buf code generation config
 ├── next.config.js        # Next.js configuration
 ├── tailwind.config.ts    # Tailwind configuration
 └── package.json          # Dependencies
 ```
 
+**Regenerating Protocol Buffers:**
+```bash
+# After modifying proto/terminal.proto
+cd web-terminal-frontend
+npm run proto:generate
+```
+
 **Component Overview:**
 
 - `app/page.tsx`: Main application UI with connection controls and status indicator
-- `components/Terminal.tsx`: xterm.js integration with WebSocket handling
-- `types/terminal.ts`: TypeScript type definitions for messages and state
+- `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling
+- `lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
 - `next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
 ### Mobile Support
@@ -497,126 +524,57 @@ const applyTheme = (theme: ThemeInfo) => {
 
 ## Protocol Specification
 
-### Server Messages
+The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers (protobuf) binary encoding with a 1-byte compression header, processed by the `prost` library in Rust and `@bufbuild/protobuf` in TypeScript.
 
-**Connected**
-```json
-{
-  "type": "connected",
-  "cols": 80,
-  "rows": 24,
-  "session_id": "uuid-string",
-  "initial_screen": "ANSI escaped screen content",
-  "theme": {
-    "name": "iterm2-dark",
-    "background": [0, 0, 0],
-    "foreground": [255, 255, 255],
-    "normal": [[0,0,0], [201,27,0], ...],
-    "bright": [[104,104,104], [255,110,103], ...]
-  }
+### Server Messages (ServerMessage oneof)
+
+| Message | Fields | Description |
+|---------|--------|-------------|
+| `output` | `data: bytes`, `timestamp?: uint64` | Terminal output data |
+| `resize` | `cols: uint32`, `rows: uint32` | Terminal size changed |
+| `title` | `title: string` | Terminal title changed |
+| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo` | Connection established |
+| `refresh` | `cols`, `rows`, `screen_content: bytes` | Full screen content |
+| `cursor` | `col: uint32`, `row: uint32`, `visible: bool` | Cursor position |
+| `bell` | (none) | Bell event |
+| `error` | `message: string`, `code?: string` | Error occurred |
+| `shutdown` | `reason: string` | Server shutting down |
+| `pong` | (none) | Keepalive response |
+
+### Client Messages (ClientMessage oneof)
+
+| Message | Fields | Description |
+|---------|--------|-------------|
+| `input` | `data: bytes` | Keyboard input |
+| `resize` | `cols: uint32`, `rows: uint32` | Request terminal resize |
+| `ping` | (none) | Keepalive ping |
+| `refresh` | (none) | Request full screen refresh |
+| `subscribe` | `events: EventType[]` | Subscribe to event types |
+
+### ThemeInfo Structure
+
+The theme information is sent from server to client during the `connected` message handshake:
+
+```protobuf
+message ThemeInfo {
+  string name = 1;              // Theme name (e.g., "iterm2-dark")
+  Color background = 2;         // Background color RGB
+  Color foreground = 3;         // Foreground (text) color RGB
+  repeated Color normal = 4;    // 8 normal ANSI colors (indices 0-7)
+  repeated Color bright = 5;    // 8 bright ANSI colors (indices 8-15)
+}
+
+message Color {
+  uint32 r = 1;  // Red component (0-255)
+  uint32 g = 2;  // Green component (0-255)
+  uint32 b = 3;  // Blue component (0-255)
 }
 ```
 
-**Output**
-```json
-{
-  "type": "output",
-  "data": "Raw ANSI terminal data",
-  "timestamp": 1234567890
-}
-```
-
-**Resize**
-```json
-{
-  "type": "resize",
-  "cols": 120,
-  "rows": 40
-}
-```
-
-**Refresh**
-```json
-{
-  "type": "refresh",
-  "cols": 80,
-  "rows": 24,
-  "screen_content": "Full screen ANSI data"
-}
-```
-
-**Title**
-```json
-{
-  "type": "title",
-  "title": "New terminal title"
-}
-```
-
-**Bell**
-```json
-{
-  "type": "bell"
-}
-```
-
-**Error**
-```json
-{
-  "type": "error",
-  "message": "Error description",
-  "code": "ERROR_CODE"
-}
-```
-
-**Shutdown**
-```json
-{
-  "type": "shutdown",
-  "reason": "Server shutting down"
-}
-```
-
-### Client Messages
-
-**Input**
-```json
-{
-  "type": "input",
-  "data": "User keyboard input"
-}
-```
-
-**Resize**
-```json
-{
-  "type": "resize",
-  "cols": 100,
-  "rows": 30
-}
-```
-
-**Ping**
-```json
-{
-  "type": "ping"
-}
-```
-
-**Request Refresh**
-```json
-{
-  "type": "refresh"
-}
-```
-
-**Subscribe**
-```json
-{
-  "type": "subscribe",
-  "events": ["output", "cursor", "bell", "title", "resize"]
-}
-```
+**Implementation Notes:**
+- Server applies theme to terminal and sends it to clients via `ThemeInfo`
+- Client (xterm.js) applies the theme on connection for consistent colors
+- Theme is synchronized across all connected clients
 
 ### Connection Flow
 
@@ -727,15 +685,20 @@ use par_term_emu_core_rust::{
     streaming::{StreamingConfig, StreamingServer},
 };
 use std::sync::{Arc, Mutex};
+use anyhow::Result;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Create PTY session
     let pty_session = PtySession::new(80, 24, 10000);
     let terminal = pty_session.terminal();
+    let pty_session = Arc::new(Mutex::new(pty_session));
 
     // Spawn shell
-    pty_session.spawn_shell()?;
+    {
+        let mut session = pty_session.lock().unwrap();
+        session.spawn_shell()?;
+    }
 
     // Create streaming server
     let config = StreamingConfig::default();
@@ -745,7 +708,7 @@ async fn main() -> Result<()> {
         config
     ));
 
-    // Start server
+    // Start server (this blocks until shutdown)
     server.start().await?;
 
     Ok(())
@@ -754,14 +717,18 @@ async fn main() -> Result<()> {
 
 **With Output Callback:**
 ```rust
-// Set up output forwarding
+// Set up output forwarding from PTY to streaming server
 let output_sender = server.get_output_sender();
-let mut session = pty_session.lock().unwrap();
 
-session.set_output_callback(Arc::new(move |data| {
-    let text = String::from_utf8_lossy(data).to_string();
-    let _ = output_sender.send(text);
-}));
+{
+    let mut session = pty_session.lock().unwrap();
+    session.set_output_callback(Arc::new(move |data| {
+        // Convert raw bytes to UTF-8 string
+        let text = String::from_utf8_lossy(data).to_string();
+        // Forward to streaming server which broadcasts to all clients
+        let _ = output_sender.send(text);
+    }));
+}
 ```
 
 ### Python Server
@@ -834,47 +801,113 @@ if __name__ == '__main__':
 
 ### Frontend Connection
 
-**Basic Connection:**
-```typescript
-// When server has HTTP enabled, connect to /ws endpoint
-const ws = new WebSocket('ws://127.0.0.1:8099/ws');
+**Basic Connection (Binary Protocol Buffers):**
 
-// Or for WebSocket-only server (no HTTP), connect directly to root
-// const ws = new WebSocket('ws://127.0.0.1:8099');
+The protocol uses binary Protocol Buffers with a 1-byte compression header. See `web-terminal-frontend/lib/proto/terminal_pb.ts` for generated TypeScript types (auto-generated from `proto/terminal.proto` using `@bufbuild/buf`).
+
+```typescript
+import { create, toBinary, fromBinary } from "@bufbuild/protobuf";
+import * as pako from "pako";
+import {
+  ClientMessageSchema,
+  ServerMessageSchema,
+  ClientResizeSchema,
+  InputSchema,
+  type ServerMessage,
+} from "@/lib/proto/terminal_pb";
+
+// When server has HTTP enabled, connect to /ws endpoint
+// When server has TLS enabled, use wss:// instead of ws://
+const ws = new WebSocket('ws://127.0.0.1:8099/ws');
+ws.binaryType = 'arraybuffer';  // Required for binary protobuf messages
+
+// Decode server message with decompression
+function decodeServerMessage(data: ArrayBuffer): ServerMessage {
+  const bytes = new Uint8Array(data);
+  const flags = bytes[0];
+  let payload = bytes.slice(1);
+
+  // Decompress if flag is set (0x01)
+  if (flags & 0x01) {
+    payload = pako.inflate(payload);
+  }
+
+  return fromBinary(ServerMessageSchema, payload);
+}
+
+// Encode client message with optional compression
+function encodeClientMessage(msg: ClientMessage): ArrayBuffer {
+  const payload = toBinary(ClientMessageSchema, msg);
+
+  // Compress if payload > 1KB (matches server behavior)
+  if (payload.length > 1024) {
+    const compressed = pako.deflate(payload);
+    // Only use compression if it actually reduces size
+    if (compressed.length < payload.length) {
+      const result = new Uint8Array(compressed.length + 1);
+      result[0] = 0x01; // Compressed flag
+      result.set(compressed, 1);
+      return result.buffer;
+    }
+  }
+
+  // Send uncompressed for small messages or when compression doesn't help
+  const result = new Uint8Array(payload.length + 1);
+  result[0] = 0x00; // Uncompressed flag
+  result.set(payload, 1);
+  return result.buffer;
+}
 
 ws.onopen = () => {
   console.log('Connected');
   // Send initial resize
-  ws.send(JSON.stringify({
-    type: 'resize',
-    cols: terminal.cols,
-    rows: terminal.rows
-  }));
+  const resizeMsg = create(ClientMessageSchema, {
+    message: {
+      case: "resize",
+      value: create(ClientResizeSchema, {
+        cols: terminal.cols,
+        rows: terminal.rows,
+      }),
+    },
+  });
+  ws.send(encodeClientMessage(resizeMsg));
 };
 
 ws.onmessage = (event) => {
-  const msg = JSON.parse(event.data);
+  const msg = decodeServerMessage(event.data);
 
-  switch (msg.type) {
+  switch (msg.message.case) {
     case 'connected':
-      console.log('Session:', msg.session_id);
-      if (msg.theme) applyTheme(msg.theme);
-      if (msg.initial_screen) terminal.write(msg.initial_screen);
+      console.log('Session:', msg.message.value.sessionId);
+      if (msg.message.value.theme) applyTheme(msg.message.value.theme);
+      if (msg.message.value.initialScreen) {
+        const text = new TextDecoder().decode(msg.message.value.initialScreen);
+        terminal.write(text);
+      }
       break;
 
     case 'output':
-      terminal.write(msg.data);
+      const outputText = new TextDecoder().decode(msg.message.value.data);
+      terminal.write(outputText);
       break;
 
     case 'resize':
-      terminal.resize(msg.cols, msg.rows);
+      terminal.resize(msg.message.value.cols, msg.message.value.rows);
       break;
   }
 };
 
 // Send user input
 terminal.onData((data) => {
-  ws.send(JSON.stringify({ type: 'input', data }));
+  const inputMsg = create(ClientMessageSchema, {
+    message: {
+      case: "input",
+      value: create(InputSchema, {
+        data: new TextEncoder().encode(data),
+      }),
+    },
+  });
+  ws.send(encodeClientMessage(inputMsg));
 });
 ```
 
@@ -981,6 +1014,111 @@ cd ..
 cp -r web-terminal-frontend/out/* web_term/
 ```
 
+## TLS/SSL Configuration
+
+The streaming server supports TLS/SSL for secure HTTPS and WSS (WebSocket Secure) connections.
+
+### CLI Options
+
+**Using Separate Certificate and Key Files:**
+```bash
+par-term-streamer --enable-http --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+```
+
+**Using Combined PEM File:**
+```bash
+par-term-streamer --enable-http --tls-pem /path/to/combined.pem
+```
+
+| Option | Description |
+|--------|-------------|
+| `--tls-cert <PATH>` | TLS certificate file (PEM format). Use with `--tls-key` |
+| `--tls-key <PATH>` | TLS private key file (PEM format). Use with `--tls-cert` |
+| `--tls-pem <PATH>` | Combined PEM file containing both certificate and private key |
+
+### Rust API
+
+```rust
+use par_term_emu_core_rust::streaming::{StreamingConfig, StreamingServer, TlsConfig};
+
+// From separate files
+let tls = TlsConfig::from_files("cert.pem", "key.pem")?;
+
+// From combined PEM
+let tls = TlsConfig::from_pem("combined.pem")?;
+
+let config = StreamingConfig {
+    enable_http: true,
+    tls: Some(tls),
+    ..Default::default()
+};
+
+let server = StreamingServer::with_config(terminal, "0.0.0.0:8099".to_string(), config);
+```
+
+### Python API
+
+```python
+import par_term_emu_core_rust as terminal_core
+
+config = terminal_core.StreamingConfig()
+
+# From separate files
+config.set_tls_from_files("cert.pem", "key.pem")
+
+# Or from combined PEM
+config.set_tls_from_pem("combined.pem")
+
+# Check TLS status
+print(config.tls_enabled)  # True
+
+# Disable TLS
+config.disable_tls()
+```
+
+### Generating Self-Signed Certificates (Development)
+
+For local development and testing:
+
+```bash
+# Generate a self-signed certificate valid for 365 days
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes \
+  -subj "/CN=localhost"
+
+# Or generate a combined PEM file
+openssl req -x509 -newkey rsa:4096 -out combined.pem -days 365 -nodes \
+  -subj "/CN=localhost" -keyout - >> combined.pem
+```
+
+> **⚠️ Warning:** Self-signed certificates will trigger browser warnings. For production, use certificates from a trusted Certificate Authority (e.g., Let's Encrypt).
+
+### Let's Encrypt (Production)
+
+For production deployments using certbot:
+
+```bash
+# Obtain certificate
+sudo certbot certonly --standalone -d your-domain.com
+
+# Certificate files location
+# /etc/letsencrypt/live/your-domain.com/fullchain.pem (certificate)
+# /etc/letsencrypt/live/your-domain.com/privkey.pem (key)
+
+# Run server with Let's Encrypt certificate
+par-term-streamer --enable-http \
+  --tls-cert /etc/letsencrypt/live/your-domain.com/fullchain.pem \
+  --tls-key /etc/letsencrypt/live/your-domain.com/privkey.pem
+```
+
+### Connection URLs with TLS
+
+When TLS is enabled, clients must use secure URLs:
+
+| Without TLS | With TLS |
+|-------------|----------|
+| `http://localhost:8099` | `https://localhost:8099` |
+| `ws://localhost:8099/ws` | `wss://localhost:8099/ws` |
+
 ## Security Considerations
 
 > **🔒 Security:** Streaming terminals exposes shell access over the network. Use appropriate security measures.
@@ -992,15 +1130,16 @@ cp -r web-terminal-frontend/out/* web_term/
    - Use firewall rules for remote access
    - Consider VPN or SSH tunneling
 
-2. **Authentication:**
+2. **Authentication & Encryption:**
    - Implement API key authentication (standalone server supports `--api-key`)
-   - Use TLS/SSL for production (wss:// not ws://)
+   - **Enable TLS for production** using `--tls-cert`/`--tls-key` or `--tls-pem` (see [TLS Configuration](#tlsssl-configuration))
+   - Use `wss://` (secure WebSocket) instead of `ws://` in production
    - Validate client certificates if needed
 
 3. **Input Validation:**
    - Server validates all client messages
-   - Invalid JSON messages are rejected
-   - Binary WebSocket messages are not supported
+   - Invalid protobuf messages are rejected
+   - Text WebSocket messages are not supported (binary only)
 
 4. **Resource Limits:**
    - Configure `max_clients` to prevent DoS

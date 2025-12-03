@@ -554,7 +554,11 @@ This creates **9 test combinations** (3 platforms × 3 Python versions).
   - Python linting: `ruff check`
   - Python type checking: `pyright`
 
-**Note**: The CI configuration includes test and lint jobs. Build jobs for wheel packaging may be handled separately in release workflows.
+**3. Build Job**
+- Runs on all platforms (Linux, macOS, Windows)
+- Builds Python wheels using maturin
+- 15-minute timeout per job
+- Uploads wheel artifacts for each platform
 
 ### Platform-Specific CI Steps
 

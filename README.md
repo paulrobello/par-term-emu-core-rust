@@ -13,6 +13,38 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.16.0
+
+### 🔒 TLS/SSL Support
+
+- **Secure WebSocket Connections** for production deployments:
+  - New CLI options: `--tls-cert`, `--tls-key`, `--tls-pem`
+  - Supports separate cert/key files or combined PEM
+  - Enables HTTPS and WSS (secure WebSocket)
+
+```bash
+# Using separate cert and key files
+par-term-streamer --enable-http --tls-cert cert.pem --tls-key key.pem
+
+# Using combined PEM file
+par-term-streamer --enable-http --tls-pem combined.pem
+```
+
+### 🚀 Performance: Binary Protocol
+
+- **BREAKING: Protocol Buffers for WebSocket Streaming**:
+  - Replaced JSON with binary Protocol Buffers encoding
+  - **~80% smaller messages** for typical terminal output
+  - Optional zlib compression for large payloads (screen snapshots)
+  - Wire format: 1-byte header + protobuf payload
+
+### 🐍 Python Bindings
+
+- **TLS Configuration**: `StreamingConfig` methods for TLS setup
+- **Binary Protocol Functions**: `encode_server_message()`, `decode_server_message()`, `encode_client_message()`, `decode_client_message()`
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.15.0
 
 ### 🎉 New Features
@@ -23,10 +55,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
   - `--use-tty-size` option to use current terminal size from TTY
   - No longer requires Node.js/npm to use web frontend - can download prebuilt version
 
-- **Web Terminal Onscreen Keyboard Improvements**:
-  - Added Ctrl+Space shortcut (NUL character) for set-mark/autocomplete functionality
-
-### Quick Start (Now Even Easier!)
+### Quick Start
 
 ```bash
 # Build the streaming server
@@ -40,8 +69,6 @@ make streamer-build-release
 
 # Open browser to http://127.0.0.1:8099
 ```
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## What's New in 0.14.0
 

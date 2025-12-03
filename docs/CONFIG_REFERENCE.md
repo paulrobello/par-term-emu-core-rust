@@ -528,10 +528,10 @@ png_bytes = term.screenshot(
 # Note: scrollback_offset is a method parameter, not a config option
 png_bytes = term.screenshot(scrollback_offset=10)
 
-# Save directly to file
+# Save directly to file (format is auto-detected from extension, or specify explicitly)
 term.screenshot_to_file(
-    "/path/to/output.png",
-    format="png",  # Optional, auto-detected from extension
+    path="/path/to/output.png",
+    format=None,  # Optional, auto-detected from extension if None
     padding=20,
     font_size=18.0
 )

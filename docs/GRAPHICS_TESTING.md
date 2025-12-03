@@ -171,15 +171,13 @@ Enable debug output to track graphics processing:
 export DEBUG_LEVEL=4
 
 # Debug log location
-tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY\|ITERM\|SIXEL"
+tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY"
 ```
 
 **Debug Categories:**
 - `GRAPHICS` - General graphics operations and scrolling
-- `KITTY` - Kitty graphics protocol parsing
-- `KITTY_PLACEHOLDER` - Unicode placeholder insertion
-- `ITERM` - iTerm2 inline image handling
-- `SIXEL` - Sixel graphics parsing
+- `KITTY` - Kitty graphics protocol parsing and animation control
+- `KITTY_PLACEHOLDER` - Unicode placeholder insertion for virtual placements
 
 ## Python TUI Testing
 
@@ -219,7 +217,7 @@ uv run par-term-emu-tui-rust
 2. **Frontend (Complete)**:
    - Static graphics display correctly
    - Animation frame rendering is working
-   - `get_graphics_with_animations()` method properly integrated in par-term
+   - Graphics query methods properly integrated in par-term frontend
 
 If animations aren't playing, check:
 - Animation control sequences were sent correctly (action 'a', 'f', 's', etc.)
@@ -263,11 +261,16 @@ changed_ids = term.update_animations()  # Returns: list[u32]
 ### PyGraphic Object
 
 Graphics returned from query methods have the following properties:
-- `position` - Tuple `(col, row)` of top-left corner
+- `position` - Tuple `(col, row)` of top-left corner in grid coordinates
 - `width` - Width in pixels
 - `height` - Height in pixels
 - `protocol` - Protocol identifier (string: "sixel", "iterm", "kitty")
-- `id` - Unique placement ID
+- `id` - Unique placement ID (u64)
+- `scroll_offset_rows` - Number of rows scrolled from original position
+- `cell_dimensions` - Optional tuple `(cell_width, cell_height)` in pixels
+
+**Methods:**
+- `get_pixel(x, y)` - Get RGBA color at coordinates, returns `(r, g, b, a)` tuple or `None` if out of bounds
 
 ## Performance Testing
 
@@ -331,10 +334,10 @@ Test images are available in the repository:
 
 ```
 images/
-├── snake.png         # Snake game screenshot (280KB)
-├── snake.sixel       # Snake as Sixel (271KB)
-├── snake_tui.png     # Snake TUI version (4.7KB)
-└── snake_tui.sixel   # Snake TUI as Sixel (8.8KB)
+├── snake.png         # Snake game screenshot (276KB)
+├── snake.sixel       # Snake as Sixel (268KB)
+├── snake_tui.png     # Snake TUI version (8KB)
+└── snake_tui.sixel   # Snake TUI as Sixel (12KB)
 ```
 
 **Note**: Currently, test images are primarily snake game screenshots. Additional test images (basic colors, patterns, etc.) can be added for comprehensive protocol testing.

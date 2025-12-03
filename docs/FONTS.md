@@ -30,7 +30,8 @@ The library includes two embedded fonts that work without any external dependenc
 
 ### 1. JetBrains Mono Regular (Main Font)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: 274 KB
+**Size**: 267 KB (273,900 bytes)
+**Location**: `src/screenshot/JetBrainsMono-Regular.ttf`
 
 Features:
 - Programming ligatures (=>, !=, >=, etc.)
@@ -40,7 +41,8 @@ Features:
 
 ### 2. Noto Emoji Regular (Emoji Fallback)
 **License**: OFL-1.1 (SIL Open Font License)
-**Size**: 419 KB
+**Size**: 409 KB (418,804 bytes)
+**Location**: `src/screenshot/NotoEmoji-Regular.ttf`
 
 Features:
 - Universal emoji coverage (all Unicode emoji)

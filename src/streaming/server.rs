@@ -3,14 +3,193 @@
 use crate::streaming::broadcaster::Broadcaster;
 use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
+use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
+use std::fs::File;
+use std::io::BufReader;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
 use tokio::time;
+use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
+
+/// TLS/SSL configuration for secure connections
+///
+/// Supports loading certificates and keys from files (PEM or DER format).
+/// For PEM files, you can provide a combined certificate chain or separate files.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use par_term_emu_core_rust::streaming::TlsConfig;
+///
+/// // Using separate certificate and key files
+/// let tls = TlsConfig::from_files("cert.pem", "key.pem").unwrap();
+///
+/// // Using a combined PEM file (certificate + key in one file)
+/// let tls = TlsConfig::from_pem("combined.pem").unwrap();
+/// ```
+#[derive(Debug)]
+pub struct TlsConfig {
+    /// Certificate chain in DER format
+    pub certs: Vec<CertificateDer<'static>>,
+    /// Private key in DER format
+    pub key: PrivateKeyDer<'static>,
+}
+
+impl Clone for TlsConfig {
+    fn clone(&self) -> Self {
+        Self {
+            certs: self.certs.clone(),
+            key: self.key.clone_key(),
+        }
+    }
+}
+
+impl TlsConfig {
+    /// Create TLS config from separate certificate and private key PEM files
+    ///
+    /// # Arguments
+    /// * `cert_path` - Path to certificate PEM file (may contain certificate chain)
+    /// * `key_path` - Path to private key PEM file
+    ///
+    /// # Errors
+    /// Returns error if files cannot be read or parsed
+    pub fn from_files<P: AsRef<Path>>(cert_path: P, key_path: P) -> Result<Self> {
+        let cert_path = cert_path.as_ref();
+        let key_path = key_path.as_ref();
+
+        // Load certificates
+        let cert_file = File::open(cert_path).map_err(|e| {
+            StreamingError::ServerError(format!(
+                "Failed to open certificate file '{}': {}",
+                cert_path.display(),
+                e
+            ))
+        })?;
+        let mut cert_reader = BufReader::new(cert_file);
+        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                StreamingError::ServerError(format!(
+                    "Failed to parse certificate file '{}': {}",
+                    cert_path.display(),
+                    e
+                ))
+            })?;
+
+        if certs.is_empty() {
+            return Err(StreamingError::ServerError(format!(
+                "No certificates found in '{}'",
+                cert_path.display()
+            )));
+        }
+
+        // Load private key
+        let key_file = File::open(key_path).map_err(|e| {
+            StreamingError::ServerError(format!(
+                "Failed to open key file '{}': {}",
+                key_path.display(),
+                e
+            ))
+        })?;
+        let mut key_reader = BufReader::new(key_file);
+        let key = rustls_pemfile::private_key(&mut key_reader)
+            .map_err(|e| {
+                StreamingError::ServerError(format!(
+                    "Failed to parse key file '{}': {}",
+                    key_path.display(),
+                    e
+                ))
+            })?
+            .ok_or_else(|| {
+                StreamingError::ServerError(format!(
+                    "No private key found in '{}'",
+                    key_path.display()
+                ))
+            })?;
+
+        Ok(Self { certs, key })
+    }
+
+    /// Create TLS config from a single PEM file containing both certificate and key
+    ///
+    /// # Arguments
+    /// * `pem_path` - Path to PEM file containing certificate chain and private key
+    ///
+    /// # Errors
+    /// Returns error if file cannot be read or parsed
+    pub fn from_pem<P: AsRef<Path>>(pem_path: P) -> Result<Self> {
+        let pem_path = pem_path.as_ref();
+
+        let pem_file = File::open(pem_path).map_err(|e| {
+            StreamingError::ServerError(format!(
+                "Failed to open PEM file '{}': {}",
+                pem_path.display(),
+                e
+            ))
+        })?;
+        let mut reader = BufReader::new(pem_file);
+
+        // Read all items from PEM file
+        let mut certs: Vec<CertificateDer<'static>> = Vec::new();
+        let mut key: Option<PrivateKeyDer<'static>> = None;
+
+        for item in rustls_pemfile::read_all(&mut reader) {
+            match item {
+                Ok(rustls_pemfile::Item::X509Certificate(cert)) => {
+                    certs.push(cert);
+                }
+                Ok(rustls_pemfile::Item::Pkcs1Key(k)) => {
+                    key = Some(PrivateKeyDer::Pkcs1(k));
+                }
+                Ok(rustls_pemfile::Item::Pkcs8Key(k)) => {
+                    key = Some(PrivateKeyDer::Pkcs8(k));
+                }
+                Ok(rustls_pemfile::Item::Sec1Key(k)) => {
+                    key = Some(PrivateKeyDer::Sec1(k));
+                }
+                Ok(_) => {
+                    // Ignore other items (CRLs, etc.)
+                }
+                Err(e) => {
+                    return Err(StreamingError::ServerError(format!(
+                        "Failed to parse PEM file '{}': {}",
+                        pem_path.display(),
+                        e
+                    )));
+                }
+            }
+        }
+
+        if certs.is_empty() {
+            return Err(StreamingError::ServerError(format!(
+                "No certificates found in '{}'",
+                pem_path.display()
+            )));
+        }
+
+        let key = key.ok_or_else(|| {
+            StreamingError::ServerError(format!("No private key found in '{}'", pem_path.display()))
+        })?;
+
+        Ok(Self { certs, key })
+    }
+
+    /// Build a rustls ServerConfig from this TLS configuration
+    fn build_rustls_config(&self) -> Result<RustlsServerConfig> {
+        RustlsServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(self.certs.clone(), self.key.clone_key())
+            .map_err(|e| StreamingError::ServerError(format!("Failed to build TLS config: {}", e)))
+    }
+}
 
 /// Configuration for the streaming server
 #[derive(Debug, Clone)]
@@ -31,6 +210,8 @@ pub struct StreamingConfig {
     pub initial_cols: u16,
     /// Initial terminal rows (0 = use terminal's current size)
     pub initial_rows: u16,
+    /// TLS configuration for secure connections (None = no TLS)
+    pub tls: Option<TlsConfig>,
 }
 
 impl Default for StreamingConfig {
@@ -44,6 +225,7 @@ impl Default for StreamingConfig {
             web_root: "./web_term".to_string(),
             initial_cols: 0,
             initial_rows: 0,
+            tls: None,
         }
     }
 }
@@ -148,11 +330,20 @@ impl StreamingServer {
 
     /// Start the streaming server
     ///
-    /// This method will block until the server is stopped
+    /// This method will block until the server is stopped.
+    /// If TLS is configured, the server will use HTTPS/WSS instead of HTTP/WS.
     pub async fn start(self: Arc<Self>) -> Result<()> {
         // Choose implementation based on config
+        let use_tls = self.config.tls.is_some();
+
         if self.config.enable_http {
-            self.start_with_http().await
+            if use_tls {
+                self.start_with_https().await
+            } else {
+                self.start_with_http().await
+            }
+        } else if use_tls {
+            self.start_websocket_only_tls().await
         } else {
             self.start_websocket_only().await
         }
@@ -198,6 +389,67 @@ impl StreamingServer {
         Ok(())
     }
 
+    /// Start server with HTTPS/TLS static file serving using Axum
+    #[cfg(feature = "streaming")]
+    async fn start_with_https(self: Arc<Self>) -> Result<()> {
+        use axum::{routing::get, Router};
+        use axum_server::tls_rustls::RustlsConfig;
+        use tower_http::services::ServeDir;
+
+        let tls_config = self
+            .config
+            .tls
+            .as_ref()
+            .ok_or_else(|| StreamingError::ServerError("TLS config required".to_string()))?;
+
+        crate::debug_info!(
+            "STREAMING",
+            "Server with HTTPS/TLS listening on {}",
+            self.addr
+        );
+
+        // Spawn output broadcaster task
+        let server_clone = self.clone();
+        tokio::spawn(async move {
+            server_clone.output_broadcaster_loop().await;
+        });
+
+        // Spawn keepalive task if enabled
+        if self.config.keepalive_interval > 0 {
+            let server_clone = self.clone();
+            tokio::spawn(async move {
+                server_clone.keepalive_loop().await;
+            });
+        }
+
+        // Build router
+        let app = Router::new()
+            .route("/ws", get(ws_handler))
+            .fallback_service(ServeDir::new(&self.config.web_root))
+            .with_state(self.clone());
+
+        // Build TLS config for axum-server
+        let rustls_config = RustlsConfig::from_der(
+            tls_config.certs.iter().map(|c| c.to_vec()).collect(),
+            tls_config.key.secret_der().to_vec(),
+        )
+        .await
+        .map_err(|e| StreamingError::ServerError(format!("Failed to create TLS config: {}", e)))?;
+
+        // Parse address for axum-server
+        let addr: std::net::SocketAddr = self.addr.parse().map_err(|e| {
+            StreamingError::ServerError(format!("Invalid address '{}': {}", self.addr, e))
+        })?;
+
+        // Start HTTPS server
+        axum_server::bind_rustls(addr, rustls_config)
+            .serve(app.into_make_service())
+            .await
+            .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
+
+        Ok(())
+    }
+
     /// Start WebSocket-only server (original implementation)
     async fn start_websocket_only(self: Arc<Self>) -> Result<()> {
         let listener = TcpListener::bind(&self.addr).await?;
@@ -235,6 +487,76 @@ impl StreamingServer {
                                 addr,
                                 e
                             );
+                        }
+                    });
+                }
+                Err(e) => {
+                    crate::debug_error!("STREAMING", "Failed to accept connection: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Start WebSocket-only server with TLS (WSS)
+    async fn start_websocket_only_tls(self: Arc<Self>) -> Result<()> {
+        let tls_config = self
+            .config
+            .tls
+            .as_ref()
+            .ok_or_else(|| StreamingError::ServerError("TLS config required".to_string()))?;
+
+        let rustls_config = tls_config.build_rustls_config()?;
+        let acceptor = TlsAcceptor::from(Arc::new(rustls_config));
+
+        let listener = TcpListener::bind(&self.addr).await?;
+        crate::debug_info!(
+            "STREAMING",
+            "WebSocket-only server with TLS (WSS) listening on {}",
+            self.addr
+        );
+
+        // Spawn output broadcaster task
+        let server_clone = self.clone();
+        tokio::spawn(async move {
+            server_clone.output_broadcaster_loop().await;
+        });
+
+        // Spawn keepalive task if enabled
+        if self.config.keepalive_interval > 0 {
+            let server_clone = self.clone();
+            tokio::spawn(async move {
+                server_clone.keepalive_loop().await;
+            });
+        }
+
+        // Accept TLS connections
+        loop {
+            match listener.accept().await {
+                Ok((stream, addr)) => {
+                    crate::debug_info!("STREAMING", "New TLS connection from {}", addr);
+                    let server = self.clone();
+                    let acceptor = acceptor.clone();
+                    tokio::spawn(async move {
+                        // Perform TLS handshake
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => {
+                                if let Err(e) = server.handle_tls_connection(tls_stream).await {
+                                    crate::debug_error!(
+                                        "STREAMING",
+                                        "TLS connection error from {}: {}",
+                                        addr,
+                                        e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "TLS handshake failed from {}: {}",
+                                    addr,
+                                    e
+                                );
+                            }
                         }
                     });
                 }
@@ -392,6 +714,173 @@ impl StreamingServer {
         Ok(())
     }
 
+    /// Handle a new TLS WebSocket connection (WSS)
+    async fn handle_tls_connection(
+        &self,
+        stream: tokio_rustls::server::TlsStream<TcpStream>,
+    ) -> Result<()> {
+        use tokio_tungstenite::accept_async as accept_async_tls;
+
+        // Upgrade TLS stream to WebSocket
+        let ws_stream = accept_async_tls(stream)
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+
+        // Create a TLS client (different from regular Client due to stream type)
+        let client_id = uuid::Uuid::new_v4();
+        let read_only = self.config.default_read_only;
+
+        // Send initial connection message with visible screen snapshot
+        let (cols, rows, initial_screen) = {
+            let terminal = self.terminal.lock().unwrap();
+            let (cols, rows) = terminal.size();
+
+            let initial_screen = if self.config.send_initial_screen {
+                Some(terminal.export_visible_screen_styled())
+            } else {
+                None
+            };
+
+            (cols as u16, rows as u16, initial_screen)
+        };
+
+        let connect_msg = match (initial_screen, self.theme.clone()) {
+            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
+                cols,
+                rows,
+                screen,
+                client_id.to_string(),
+                theme,
+            ),
+            (Some(screen), None) => {
+                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
+            }
+            (None, Some(theme)) => {
+                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
+            }
+            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
+        };
+
+        // Use futures to split and handle the WebSocket
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        let (mut ws_tx, mut ws_rx) = ws_stream.split();
+
+        // Send connection message
+        let msg_bytes = encode_server_message(&connect_msg)?;
+        ws_tx
+            .send(Message::Binary(msg_bytes.into()))
+            .await
+            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+
+        crate::debug_info!("STREAMING", "TLS Client {} connected", client_id);
+
+        // Get PTY writer if available
+        let pty_writer = self.pty_writer.clone();
+
+        // Subscribe to output broadcasts
+        let mut output_rx = self.broadcast_tx.subscribe();
+
+        // Clone terminal for screen refresh
+        let terminal_for_refresh = Arc::clone(&self.terminal);
+        let resize_tx = self.resize_tx.clone();
+
+        // Handle client input and output
+        loop {
+            tokio::select! {
+                // Receive message from client (binary protobuf)
+                msg = ws_rx.next() => {
+                    match msg {
+                        Some(Ok(Message::Binary(data))) => {
+                            match decode_client_message(&data) {
+                                Ok(client_msg) => {
+                                    match client_msg {
+                                        crate::streaming::protocol::ClientMessage::Input { data } => {
+                                            if read_only {
+                                                continue;
+                                            }
+
+                                            if let Some(ref writer) = pty_writer {
+                                                if let Ok(mut w) = writer.lock() {
+                                                    use std::io::Write;
+                                                    let _ = w.write_all(data.as_bytes());
+                                                    let _ = w.flush();
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                            let _ = resize_tx.send((cols, rows));
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Ping => {
+                                            let _ = ws_tx.send(Message::Pong(vec![].into())).await;
+                                        }
+                                        crate::streaming::protocol::ClientMessage::RequestRefresh => {
+                                            let refresh_msg = {
+                                                if let Ok(terminal) = terminal_for_refresh.lock() {
+                                                    let content = terminal.export_visible_screen_styled();
+                                                    let (cols, rows) = terminal.size();
+                                                    Some(ServerMessage::refresh(cols as u16, rows as u16, content))
+                                                } else {
+                                                    None
+                                                }
+                                            };
+
+                                            if let Some(msg) = refresh_msg {
+                                                if let Ok(bytes) = encode_server_message(&msg) {
+                                                    let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
+                                            // TODO: Implement subscription handling
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    crate::debug_error!("STREAMING", "Failed to parse TLS client message: {}", e);
+                                }
+                            }
+                        }
+                        Some(Ok(Message::Text(_))) => {
+                            crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
+                        }
+                        Some(Ok(Message::Ping(data))) => {
+                            let _ = ws_tx.send(Message::Pong(data)).await;
+                        }
+                        Some(Ok(Message::Pong(_))) => {
+                            // Pong received
+                        }
+                        Some(Ok(Message::Close(_))) | None => {
+                            crate::debug_info!("STREAMING", "TLS Client {} disconnected", client_id);
+                            break;
+                        }
+                        Some(Ok(Message::Frame(_))) => {
+                            // Raw frames, ignore
+                        }
+                        Some(Err(e)) => {
+                            crate::debug_error!("STREAMING", "TLS WebSocket error: {}", e);
+                            break;
+                        }
+                    }
+                }
+
+                // Receive output to broadcast to client (binary protobuf)
+                output_msg = output_rx.recv() => {
+                    if let Ok(msg) = output_msg {
+                        if let Ok(bytes) = encode_server_message(&msg) {
+                            if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Output broadcaster loop - forwards terminal output to all clients
     async fn output_broadcaster_loop(&self) {
         let mut rx = self.output_rx.lock().await;
@@ -491,11 +980,10 @@ impl StreamingServer {
             (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
         };
 
-        // Send connection message
-        let msg_json =
-            serde_json::to_string(&connect_msg).map_err(StreamingError::SerializationError)?;
+        // Send connection message as binary protobuf
+        let msg_bytes = encode_server_message(&connect_msg)?;
         ws_tx
-            .send(AxumMessage::Text(msg_json.into()))
+            .send(AxumMessage::Binary(msg_bytes.into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
@@ -513,12 +1001,12 @@ impl StreamingServer {
         // Handle client input and output
         loop {
             tokio::select! {
-                // Receive message from client
+                // Receive message from client (binary protobuf)
                 msg = ws_rx.next() => {
                     match msg {
-                        Some(Ok(AxumMessage::Text(text))) => {
-                            // Parse client message
-                            match serde_json::from_str::<crate::streaming::protocol::ClientMessage>(&text) {
+                        Some(Ok(AxumMessage::Binary(data))) => {
+                            // Parse client message from binary protobuf
+                            match decode_client_message(&data) {
                                 Ok(client_msg) => {
                                     match client_msg {
                                         crate::streaming::protocol::ClientMessage::Input { data } => {
@@ -553,8 +1041,8 @@ impl StreamingServer {
                                             };
 
                                             if let Some(msg) = refresh_msg {
-                                                if let Ok(json) = serde_json::to_string(&msg) {
-                                                    let _ = ws_tx.send(AxumMessage::Text(json.into())).await;
+                                                if let Ok(bytes) = encode_server_message(&msg) {
+                                                    let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
                                                 }
                                             }
                                         }
@@ -568,8 +1056,9 @@ impl StreamingServer {
                                 }
                             }
                         }
-                        Some(Ok(AxumMessage::Binary(_))) => {
-                            // Ignore binary messages
+                        Some(Ok(AxumMessage::Text(_))) => {
+                            // Text messages not supported in binary protocol
+                            crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
                         }
                         Some(Ok(AxumMessage::Ping(_))) => {
                             // Axum handles pings automatically
@@ -588,11 +1077,11 @@ impl StreamingServer {
                     }
                 }
 
-                // Receive output to broadcast to client
+                // Receive output to broadcast to client (binary protobuf)
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
-                        if let Ok(json) = serde_json::to_string(&msg) {
-                            if ws_tx.send(AxumMessage::Text(json.into())).await.is_err() {
+                        if let Ok(bytes) = encode_server_message(&msg) {
+                            if ws_tx.send(AxumMessage::Binary(bytes.into())).await.is_err() {
                                 break;
                             }
                         }

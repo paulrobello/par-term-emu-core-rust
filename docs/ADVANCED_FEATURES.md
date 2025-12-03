@@ -15,6 +15,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [OSC 52 Clipboard Operations](#osc-52-clipboard-operations)
 - [OSC 8 Hyperlinks](#osc-8-hyperlinks)
 - [Notifications (OSC 9/777)](#notifications-osc-9777)
+- [Progress Bars (OSC 9;4)](#progress-bars-osc-94)
 - [Shell Integration](#shell-integration)
 - [Sixel Graphics](#sixel-graphics)
 - [Kitty Graphics Protocol](#kitty-graphics-protocol)
@@ -551,6 +552,163 @@ if term.has_notifications():
 - Test completion notices
 
 > **📝 Note:** Works with iTerm2, ConEmu, and other terminal emulators supporting notification protocols
+
+## Progress Bars (OSC 9;4)
+
+ConEmu/Windows Terminal style progress bar support for displaying build progress, download status, and task completion.
+
+### Overview
+
+The OSC 9;4 sequence enables applications to display progress indicators that can be rendered in the terminal emulator's UI (titlebar, tab, taskbar, etc.).
+
+**Supported Progress States:**
+- `Hidden` (0): No progress indicator visible
+- `Normal` (1): Regular progress bar (0-100%)
+- `Indeterminate` (2): Unknown progress (spinner/animation)
+- `Warning` (3): Progress with warning state (yellow/amber)
+- `Error` (4): Progress with error state (red)
+
+### Usage
+
+```python
+from par_term_emu_core_rust import Terminal, ProgressState
+
+term = Terminal(80, 24)
+
+# Show normal progress at 50%
+term.process_str("\x1b]9;4;1;50\x07")
+
+# Check progress state
+progress = term.progress_bar()
+print(f"State: {progress.state}")  # ProgressState.Normal
+print(f"Progress: {progress.progress}%")  # 50
+
+# Indeterminate progress (unknown duration)
+term.process_str("\x1b]9;4;2\x07")
+
+# Warning state at 75%
+term.process_str("\x1b]9;4;3;75\x07")
+
+# Error state
+term.process_str("\x1b]9;4;4;100\x07")
+
+# Hide progress bar
+term.process_str("\x1b]9;4;0\x07")
+# or
+term.clear_progress()
+```
+
+### Programmatic API
+
+```python
+from par_term_emu_core_rust import Terminal, ProgressState
+
+term = Terminal(80, 24)
+
+# Set progress directly
+term.set_progress(ProgressState.Normal, 33)
+
+# Get progress state and value
+if term.has_progress():
+    state = term.progress_state()  # Returns ProgressState enum
+    value = term.progress_value()  # Returns 0-100 (or None for indeterminate)
+
+    print(f"Progress: {value}% ({state})")
+
+# Get complete progress info
+progress = term.progress_bar()
+print(f"State: {progress.state}")
+print(f"Value: {progress.progress}")
+
+# Clear progress
+term.clear_progress()
+```
+
+### Sequence Format
+
+```
+ESC ] 9 ; 4 ; state [ ; progress ] ST
+```
+
+**Parameters:**
+- `state`: Progress state (0-4)
+  - `0` = Hidden
+  - `1` = Normal
+  - `2` = Indeterminate
+  - `3` = Warning
+  - `4` = Error
+- `progress`: Progress value (0-100), optional for state 0 and 2
+
+**Examples:**
+- `\x1b]9;4;0\x07` - Hide progress
+- `\x1b]9;4;1;25\x07` - Normal progress at 25%
+- `\x1b]9;4;2\x07` - Indeterminate progress
+- `\x1b]9;4;3;80\x07` - Warning at 80%
+- `\x1b]9;4;4;100\x07` - Error at 100%
+
+### Use Cases
+
+**Build Systems:**
+```python
+# Compilation progress
+for i, file in enumerate(source_files):
+    progress = int((i / len(source_files)) * 100)
+    term.set_progress(ProgressState.Normal, progress)
+    compile(file)
+term.set_progress(ProgressState.Normal, 100)
+term.clear_progress()
+```
+
+**Download Progress:**
+```python
+def download_with_progress(url, dest):
+    response = requests.get(url, stream=True)
+    total = int(response.headers.get('content-length', 0))
+    downloaded = 0
+
+    term.set_progress(ProgressState.Normal, 0)
+    with open(dest, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+            downloaded += len(chunk)
+            percent = int((downloaded / total) * 100)
+            term.set_progress(ProgressState.Normal, percent)
+    term.clear_progress()
+```
+
+**Test Suites:**
+```python
+passed = 0
+failed = 0
+for test in tests:
+    result = run_test(test)
+    if result.passed:
+        passed += 1
+    else:
+        failed += 1
+
+    progress = int(((passed + failed) / len(tests)) * 100)
+    state = ProgressState.Error if failed > 0 else ProgressState.Normal
+    term.set_progress(state, progress)
+
+term.clear_progress()
+```
+
+**Long-Running Tasks:**
+```python
+# Show indeterminate progress for unknown duration
+term.set_progress(ProgressState.Indeterminate, 0)
+perform_task()
+term.clear_progress()
+```
+
+### Terminal Emulator Support
+
+- **ConEmu**: Native support with taskbar progress
+- **Windows Terminal**: Taskbar integration
+- **Custom terminals**: Can query via `progress_bar()` API and render in UI
+
+> **📝 Note:** Progress values are automatically clamped to 0-100 range
 
 ## Shell Integration
 
@@ -2026,8 +2184,9 @@ The streaming system enables terminal sessions to be viewed and controlled throu
 **Architecture:**
 - **Backend**: Streaming server captures terminal output and forwards via WebSocket
 - **Frontend**: Next.js application with xterm.js for browser rendering
-- **Protocol**: JSON-based bidirectional messaging
+- **Protocol**: Binary Protocol Buffers with optional zlib compression
 - **Latency**: Sub-100ms for local connections
+- **Security**: Optional TLS/SSL encryption and API key authentication
 
 ### Quick Start
 
@@ -2085,27 +2244,39 @@ npm run dev  # Development server on http://localhost:3000
 - Responsive design
 - Full Unicode and emoji support
 
-### Protocol Messages
+### Protocol
+
+**Wire Format:**
+The protocol uses binary Protocol Buffers with a 1-byte compression header:
+
+```
+[1 byte: compression flag][N bytes: protobuf payload]
+```
+
+- `0x00` = Uncompressed Protocol Buffers message
+- `0x01` = zlib-compressed Protocol Buffers message (used for payloads > 1KB)
+
+**Message Types:**
 
 **Server → Client:**
-```json
-{"type": "connected", "cols": 80, "rows": 24, "session_id": "...", "theme": {...}}
-{"type": "output", "data": "terminal output"}
-{"type": "resize", "cols": 100, "rows": 30}
-{"type": "title", "title": "New Title"}
-```
+- `Connected`: Initial connection with terminal size, session ID, and theme
+- `Output`: Terminal output data (text/ANSI sequences)
+- `Resize`: Terminal dimension change
+- `Title`: Terminal title update
+- `Ping`: Keepalive message
 
 **Client → Server:**
-```json
-{"type": "input", "data": "user input"}
-{"type": "resize", "cols": 100, "rows": 30}
-{"type": "refresh"}
-```
+- `Input`: User keyboard/mouse input
+- `Resize`: Request terminal resize
+- `Refresh`: Request full screen refresh
+- `Pong`: Keepalive response
+
+> **📝 Note:** The protocol definition is in `proto/terminal.proto`. See [STREAMING.md](STREAMING.md) for complete protocol specification and examples.
 
 ### Configuration
 
 ```python
-from par_term_emu_core_rust import StreamingConfig
+from par_term_emu_core_rust import StreamingConfig, StreamingServer
 
 config = StreamingConfig(
     max_clients=100,              # Maximum concurrent clients
@@ -2115,6 +2286,57 @@ config = StreamingConfig(
 )
 
 server = StreamingServer(pty_term, "0.0.0.0:8099", config)
+```
+
+### TLS/SSL Configuration
+
+Enable secure connections with TLS/SSL encryption:
+
+```python
+from par_term_emu_core_rust import StreamingConfig, StreamingServer, PtyTerminal
+
+# Create PTY terminal
+pty_term = PtyTerminal(80, 24)
+pty_term.spawn_shell()
+
+# Create config with TLS
+config = StreamingConfig()
+
+# Option 1: Separate certificate and key files
+config.set_tls_from_files(
+    cert_path="/path/to/cert.pem",
+    key_path="/path/to/key.pem"
+)
+
+# Option 2: Combined PEM file (cert + key)
+config.set_tls_from_pem("/path/to/combined.pem")
+
+# Check TLS status
+if config.tls_enabled:
+    print("TLS is enabled")
+
+# Create server with TLS (uses wss:// instead of ws://)
+server = StreamingServer(pty_term, "0.0.0.0:8099", config)
+server.start()
+# Server now accessible via wss://0.0.0.0:8099
+
+# Disable TLS if needed
+config.disable_tls()
+```
+
+**Rust Server with TLS:**
+```bash
+# Using separate cert and key
+par-term-streamer --host 0.0.0.0 --port 8099 \
+    --tls-cert /path/to/cert.pem \
+    --tls-key /path/to/key.pem
+
+# Using combined PEM file
+par-term-streamer --host 0.0.0.0 --port 8099 \
+    --tls-pem /path/to/combined.pem
+
+# Generate self-signed certificate for testing
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
 ```
 
 ### Use Cases
@@ -2131,22 +2353,39 @@ server = StreamingServer(pty_term, "0.0.0.0:8099", config)
 > **🔒 Security:** Streaming exposes shell access over the network
 
 **Best Practices:**
+- **Always use TLS/SSL** for production deployments over public networks
 - Bind to `127.0.0.1` for local-only access
 - Use API key authentication for remote access
-- Consider VPN or SSH tunneling for production
-- Implement read-only mode for viewers
-- Configure maximum client limits
-- Monitor connection logs
+- Consider VPN or SSH tunneling as additional security layer
+- Implement read-only mode for viewers when appropriate
+- Configure maximum client limits to prevent resource exhaustion
+- Monitor connection logs for suspicious activity
+- Use firewall rules to restrict access
 
-**Example with Authentication:**
+**Example with TLS and Authentication:**
 ```bash
-par-term-streamer --api-key secret-token --host 0.0.0.0 --port 8099
+# Production deployment with TLS + API key
+par-term-streamer \
+    --host 0.0.0.0 --port 8099 \
+    --tls-cert /path/to/cert.pem \
+    --tls-key /path/to/key.pem \
+    --api-key "$(cat /secure/api-key.txt)"
+
+# Connect from browser using wss:// and provide API key
 ```
+
+**Certificate Requirements:**
+- Use trusted CA certificates for production
+- Self-signed certificates work for testing/internal use
+- Browsers will warn about self-signed certificates
+- Certificate must match the hostname/domain
 
 ### Technology Stack
 
 **Backend:**
 - Rust: tokio, axum, tokio-tungstenite for async WebSocket server
+- Protocol Buffers: prost for binary encoding
+- TLS: rustls for secure connections
 - Python: PyO3 bindings for easy integration
 
 **Frontend:**
@@ -2154,6 +2393,14 @@ par-term-streamer --api-key secret-token --host 0.0.0.0 --port 8099
 - TypeScript 5.9
 - xterm.js 5.5 with WebGL renderer
 - Tailwind CSS 4.1
+- Protocol Buffers: @bufbuild/protobuf
+- Compression: pako (zlib)
+
+**Protocol:**
+- Definition: `proto/terminal.proto` (Protocol Buffers schema)
+- Wire format: 1-byte compression header + binary protobuf
+- Compression: Optional zlib for large payloads (>1KB)
+- Generation: `prost-build` (Rust), `@bufbuild/buf` (TypeScript)
 
 > **📝 Note:** For complete streaming documentation including protocol specification, frontend setup, performance tuning, and troubleshooting, see [STREAMING.md](STREAMING.md)
 

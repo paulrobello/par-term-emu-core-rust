@@ -237,11 +237,12 @@ macro_seq
     .add_delay(100)
     .add_key("enter");
 
-// Set metadata
+// Set metadata (note: method chaining order matters due to ownership)
 let macro_seq = macro_seq
     .with_description("Directory listing demo")
     .with_terminal_size(80, 24)
-    .add_env("SHELL", "/bin/bash");
+    .add_env("SHELL", "/bin/bash")
+    .add_env("TERM", "xterm-256color");
 
 // Save to YAML
 macro_seq.save_yaml("demo.yaml")?;
@@ -457,6 +458,9 @@ The macro system uses human-readable key names instead of raw bytes or escape se
 ### Basic Playback
 
 **Python Playback:**
+
+> **Note:** The `MacroPlayback` class is only available in Rust. Python users must manually iterate over events.
+
 ```python
 import par_term_emu_core_rust as terminal_core
 import time
@@ -468,13 +472,14 @@ print(f"Playing: {macro.name}")
 print(f"Duration: {macro.duration}ms")
 print(f"Events: {macro.event_count}")
 
-# Access events for manual playback
+# Manual playback loop - iterate over events
 for event in macro.events:
     print(f"  {event.event_type} at {event.timestamp}ms")
     if event.key:
         print(f"    Key: {event.key}")
     if event.duration:
         print(f"    Duration: {event.duration}ms")
+        time.sleep(event.duration / 1000.0)  # Convert ms to seconds
     if event.label:
         print(f"    Label: {event.label}")
 ```
@@ -513,6 +518,8 @@ while !playback.is_finished() {
 
 ### Speed Control
 
+> **Rust Only:** Speed control via `MacroPlayback` is only available in Rust. Python users must implement custom timing logic.
+
 **Setting Playback Speed:**
 ```rust
 // Create with speed multiplier
@@ -540,6 +547,8 @@ playback.set_speed(5.0);  // Fast to 5x
 | 5.0x | Very fast | Testing only |
 
 ### Pause and Resume
+
+> **Rust Only:** Pause/resume control via `MacroPlayback` is only available in Rust. Python users must implement custom pause logic.
 
 **Pause Control:**
 ```rust
@@ -576,6 +585,8 @@ loop {
 
 ### Looping
 
+> **Rust Only:** The `MacroPlayback` reset mechanism shown here is Rust-only. Python users can loop by re-iterating over `macro.events`.
+
 **Continuous Playback:**
 ```rust
 let macro_data = Macro::load_yaml("demo.yaml")?;
@@ -601,8 +612,10 @@ loop {
 ```
 
 **Note on Streaming:**
-Macro playback can be integrated with the StreamingServer for web-based demonstrations.
-See [STREAMING.md](STREAMING.md) for details on the streaming server architecture.
+Macro playback can be integrated with the StreamingServer for web-based demonstrations. See [STREAMING.md](STREAMING.md) for details on the streaming server architecture.
+
+**Note on Python Playback:**
+The `MacroPlayback` class is currently only available in Rust. Python users should manually iterate over macro events for playback (see Python examples above).
 
 ## Use Cases
 

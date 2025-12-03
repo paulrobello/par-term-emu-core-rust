@@ -25,7 +25,10 @@ pub use color_utils::{
 };
 pub use enums::{PyCursorStyle, PyMouseEncoding, PyProgressState, PyUnderlineStyle};
 pub use pty::PyPtyTerminal;
-pub use streaming::{PyStreamingConfig, PyStreamingServer};
+pub use streaming::{
+    decode_client_message, decode_server_message, encode_client_message, encode_server_message,
+    PyStreamingConfig, PyStreamingServer,
+};
 pub use terminal::PyTerminal;
 pub use types::{
     PyAttributes, PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry,

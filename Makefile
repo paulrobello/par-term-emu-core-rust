@@ -2,6 +2,7 @@
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
+        proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open \
         streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install
 
@@ -60,6 +61,12 @@ help:
 	@echo "  streamer-run-http     - Build and run with HTTP server (serves web_term)"
 	@echo "  streamer-run-macro    - Build and run with macro playback demo"
 	@echo "  streamer-install      - Install streaming server to ~/.cargo/bin"
+	@echo ""
+	@echo "Protocol Buffers:"
+	@echo "  proto-generate    - Generate protobuf code for Rust and TypeScript"
+	@echo "  proto-rust        - Generate Rust protobuf code only"
+	@echo "  proto-typescript  - Generate TypeScript protobuf code only"
+	@echo "  proto-clean       - Clean generated protobuf files"
 	@echo ""
 	@echo "Web Frontend (Next.js):"
 	@echo "  web-install     - Install web frontend dependencies"
@@ -464,6 +471,41 @@ streamer-install: streamer-build-release
 	@echo "  par-term-streamer --help"
 	@echo "  par-term-streamer --port 8080"
 	@echo ""
+
+# ============================================================================
+# Web Frontend (Next.js)
+# ============================================================================
+
+# ============================================================================
+# Protocol Buffers
+# ============================================================================
+
+proto-generate: proto-rust proto-typescript
+	@echo ""
+	@echo "======================================================================"
+	@echo "  Protocol Buffers code generated successfully!"
+	@echo "======================================================================"
+	@echo ""
+	@echo "Generated files:"
+	@echo "  Rust:       src/streaming/gen/ (via build.rs -> OUT_DIR)"
+	@echo "  TypeScript: web-terminal-frontend/lib/proto/"
+	@echo ""
+
+proto-rust:
+	@echo "Generating Rust protobuf code..."
+	cargo build --features streaming --no-default-features
+	@echo "Rust protobuf code generated in OUT_DIR"
+
+proto-typescript: web-install
+	@echo "Generating TypeScript protobuf code..."
+	@mkdir -p web-terminal-frontend/lib/proto
+	cd web-terminal-frontend && npm run proto:generate
+	@echo "TypeScript protobuf code generated in web-terminal-frontend/lib/proto/"
+
+proto-clean:
+	@echo "Cleaning generated protobuf files..."
+	rm -rf web-terminal-frontend/lib/proto
+	@echo "Generated protobuf files cleaned!"
 
 # ============================================================================
 # Web Frontend (Next.js)

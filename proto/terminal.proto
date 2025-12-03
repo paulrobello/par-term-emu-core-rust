@@ -1,0 +1,144 @@
+// Terminal streaming protocol definitions
+// This is the single source of truth for the binary WebSocket protocol.
+
+syntax = "proto3";
+
+package terminal;
+
+// RGB color (0-255 per channel)
+message Color {
+  uint32 r = 1;
+  uint32 g = 2;
+  uint32 b = 3;
+}
+
+// Terminal theme with 16 ANSI colors
+message ThemeInfo {
+  string name = 1;
+  Color background = 2;
+  Color foreground = 3;
+  repeated Color normal = 4;   // 8 colors (indices 0-7)
+  repeated Color bright = 5;   // 8 colors (indices 8-15)
+}
+
+// Event types for subscription
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_OUTPUT = 1;
+  EVENT_TYPE_CURSOR = 2;
+  EVENT_TYPE_BELL = 3;
+  EVENT_TYPE_TITLE = 4;
+  EVENT_TYPE_RESIZE = 5;
+}
+
+// =============================================================================
+// Server -> Client Messages
+// =============================================================================
+
+message ServerMessage {
+  oneof message {
+    Output output = 1;
+    Resize resize = 2;
+    Title title = 3;
+    Connected connected = 4;
+    Refresh refresh = 5;
+    CursorPosition cursor = 6;
+    Bell bell = 7;
+    Error error = 8;
+    Shutdown shutdown = 9;
+    Pong pong = 10;
+  }
+}
+
+// Terminal output data (very high frequency)
+message Output {
+  bytes data = 1;                    // UTF-8 encoded terminal output with ANSI codes
+  optional uint64 timestamp = 2;     // Unix epoch milliseconds
+}
+
+// Terminal resize notification
+message Resize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+// Terminal title change
+message Title {
+  string title = 1;
+}
+
+// Initial connection handshake
+message Connected {
+  uint32 cols = 1;
+  uint32 rows = 2;
+  optional bytes initial_screen = 3;  // ANSI styled screen content
+  string session_id = 4;
+  optional ThemeInfo theme = 5;
+}
+
+// Full screen refresh response
+message Refresh {
+  uint32 cols = 1;
+  uint32 rows = 2;
+  bytes screen_content = 3;           // ANSI styled screen content
+}
+
+// Cursor position update
+message CursorPosition {
+  uint32 col = 1;
+  uint32 row = 2;
+  bool visible = 3;
+}
+
+// Bell/alert event
+message Bell {}
+
+// Error notification
+message Error {
+  string message = 1;
+  optional string code = 2;
+}
+
+// Server shutdown notification
+message Shutdown {
+  string reason = 1;
+}
+
+// Keepalive pong response
+message Pong {}
+
+// =============================================================================
+// Client -> Server Messages
+// =============================================================================
+
+message ClientMessage {
+  oneof message {
+    Input input = 1;
+    ClientResize resize = 2;
+    Ping ping = 3;
+    RequestRefresh refresh = 4;
+    Subscribe subscribe = 5;
+  }
+}
+
+// Keyboard input from client
+message Input {
+  bytes data = 1;  // UTF-8 encoded input (may include escape sequences)
+}
+
+// Client requests terminal resize
+message ClientResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+// Keepalive ping request
+message Ping {}
+
+// Client requests full screen refresh
+message RequestRefresh {}
+
+// Client subscribes to specific event types
+message Subscribe {
+  repeated EventType events = 1;
+}

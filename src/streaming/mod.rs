@@ -44,6 +44,9 @@ pub mod error;
 pub mod protocol;
 
 #[cfg(feature = "streaming")]
+pub mod proto;
+
+#[cfg(feature = "streaming")]
 pub mod client;
 
 #[cfg(feature = "streaming")]
@@ -63,4 +66,9 @@ pub use broadcaster::Broadcaster;
 pub use client::Client;
 
 #[cfg(feature = "streaming")]
-pub use server::{StreamingConfig, StreamingServer};
+pub use server::{StreamingConfig, StreamingServer, TlsConfig};
+
+#[cfg(feature = "streaming")]
+pub use proto::{
+    decode_client_message, decode_server_message, encode_client_message, encode_server_message,
+};

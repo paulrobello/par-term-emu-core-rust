@@ -6,7 +6,15 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
-import type { ConnectionStatus, ThemeInfo } from '@/types/terminal';
+import type { ConnectionStatus } from '@/types/terminal';
+import {
+  decodeServerMessage,
+  encodeClientMessage,
+  createInputMessage,
+  createResizeMessage,
+  createRefreshMessage,
+  themeToXtermOptions,
+} from '@/lib/protocol';
 
 interface TerminalProps {
   wsUrl: string;
@@ -101,41 +109,18 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     }, delay);
   }, [onRetryingChange]);
 
-  // Convert RGB array to hex color string
-  const rgbToHex = (rgb: [number, number, number]): string => {
-    return '#' + rgb.map(x => x.toString(16).padStart(2, '0')).join('');
-  };
-
-  // Apply theme to terminal
-  const applyTheme = (theme: ThemeInfo) => {
+  // Apply theme to terminal (using protobuf ThemeInfo)
+  const applyTheme = (theme: { name: string; background?: { r: number; g: number; b: number }; foreground?: { r: number; g: number; b: number }; normal: { r: number; g: number; b: number }[]; bright: { r: number; g: number; b: number }[] }) => {
     if (!xtermRef.current) return;
 
     console.log('Applying theme:', theme.name);
 
-    const bgHex = rgbToHex(theme.background);
-    const fgHex = rgbToHex(theme.foreground);
+    const xtermTheme = themeToXtermOptions(theme as import('@/lib/protocol').ThemeInfo);
 
     // Update xterm.js theme
-    xtermRef.current.options.theme = {
-      background: bgHex,
-      foreground: fgHex,
-      black: rgbToHex(theme.normal[0]),
-      red: rgbToHex(theme.normal[1]),
-      green: rgbToHex(theme.normal[2]),
-      yellow: rgbToHex(theme.normal[3]),
-      blue: rgbToHex(theme.normal[4]),
-      magenta: rgbToHex(theme.normal[5]),
-      cyan: rgbToHex(theme.normal[6]),
-      white: rgbToHex(theme.normal[7]),
-      brightBlack: rgbToHex(theme.bright[0]),
-      brightRed: rgbToHex(theme.bright[1]),
-      brightGreen: rgbToHex(theme.bright[2]),
-      brightYellow: rgbToHex(theme.bright[3]),
-      brightBlue: rgbToHex(theme.bright[4]),
-      brightMagenta: rgbToHex(theme.bright[5]),
-      brightCyan: rgbToHex(theme.bright[6]),
-      brightWhite: rgbToHex(theme.bright[7]),
-    };
+    xtermRef.current.options.theme = xtermTheme;
+
+    const bgHex = xtermTheme.background || '#000000';
 
     // Update container background color
     if (containerRef.current) {
@@ -270,7 +255,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
           if (wsRef.current?.readyState === WebSocket.OPEN) {
             console.log(`Refit: sending resize ${newCols}x${newRows}`);
-            wsRef.current.send(JSON.stringify({ type: 'resize', cols: newCols, rows: newRows }));
+            wsRef.current.send(encodeClientMessage(createResizeMessage(newCols, newRows)));
           }
         }, 50);
       });
@@ -287,7 +272,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     if (onSendInput) {
       onSendInput((data: string) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'input', data }));
+          wsRef.current.send(encodeClientMessage(createInputMessage(data)));
         }
       });
     }
@@ -321,7 +306,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     // Handle terminal input - use wsRef so it works across reconnects
     const onDataDisposable = term.onData((data) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: 'input', data }));
+        wsRef.current.send(encodeClientMessage(createInputMessage(data)));
       }
     });
 
@@ -329,7 +314,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         console.log(`Client resized to: ${cols}x${rows}`);
-        wsRef.current.send(JSON.stringify({ type: 'resize', cols, rows }));
+        wsRef.current.send(encodeClientMessage(createResizeMessage(cols, rows)));
       }
     });
 
@@ -373,6 +358,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     updateStatus('connecting');
 
     const ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer'; // Use binary protocol
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -392,23 +378,30 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
     ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data);
+        const msg = decodeServerMessage(event.data);
         const term = xtermRef.current;
         if (!term) return;
 
-        switch (msg.type) {
-          case 'output':
-            term.write(msg.data);
-            break;
+        const decoder = new TextDecoder();
 
-          case 'connected':
-            console.log(`Session ID: ${msg.session_id}`);
-            console.log(`Server initial size: ${msg.cols}x${msg.rows}, Client size: ${term.cols}x${term.rows}`);
-            console.log(`Initial screen provided: ${!!msg.initial_screen}, length: ${msg.initial_screen?.length || 0}`);
+        // Handle oneof message type
+        switch (msg.message.case) {
+          case 'output': {
+            const output = msg.message.value;
+            const data = decoder.decode(output.data);
+            term.write(data);
+            break;
+          }
+
+          case 'connected': {
+            const connected = msg.message.value;
+            console.log(`Session ID: ${connected.sessionId}`);
+            console.log(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
+            console.log(`Initial screen provided: ${!!connected.initialScreen}, length: ${connected.initialScreen?.length || 0}`);
 
             // Apply theme if provided
-            if (msg.theme) {
-              applyTheme(msg.theme);
+            if (connected.theme) {
+              applyTheme(connected.theme);
             }
 
             // Reset and clear terminal on fresh connection
@@ -420,59 +413,83 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
               const cols = term.cols;
               const rows = term.rows;
               console.log(`Sending resize after connect: ${cols}x${rows}`);
-              ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+              ws.send(encodeClientMessage(createResizeMessage(cols, rows)));
               // Request fresh snapshot
               console.log('Requesting refresh after connect');
-              ws.send(JSON.stringify({ type: 'refresh' }));
+              ws.send(encodeClientMessage(createRefreshMessage()));
             }
             term.focus();
             break;
+          }
 
-          case 'resize':
-            term.resize(msg.cols, msg.rows);
-            console.log(`Terminal resized: ${msg.cols}x${msg.rows}`);
+          case 'resize': {
+            const resize = msg.message.value;
+            term.resize(resize.cols, resize.rows);
+            console.log(`Terminal resized: ${resize.cols}x${resize.rows}`);
             if (ws.readyState === WebSocket.OPEN) {
               console.log('Requesting screen refresh after resize');
-              ws.send(JSON.stringify({ type: 'refresh' }));
+              ws.send(encodeClientMessage(createRefreshMessage()));
             }
             break;
+          }
 
-          case 'refresh':
-            console.log(`Refresh response received: ${msg.cols}x${msg.rows}`);
+          case 'refresh': {
+            const refresh = msg.message.value;
+            console.log(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
             console.log('=== CLIENT REFRESH DEBUG ===');
             console.log(`Client terminal size: ${term.cols}x${term.rows}`);
-            console.log(`Server snapshot size: ${msg.cols}x${msg.rows}`);
-            console.log(`Snapshot length: ${msg.screen_content?.length || 0} bytes`);
+            console.log(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
+            console.log(`Snapshot length: ${refresh.screenContent?.length || 0} bytes`);
             console.log('============================');
 
             // Fully reset terminal state and clear all buffers
             term.reset();
             term.clear();
             // Write fresh content - the snapshot should include cursor positioning
-            if (msg.screen_content && msg.screen_content.length > 0) {
-              term.write(msg.screen_content);
+            if (refresh.screenContent && refresh.screenContent.length > 0) {
+              const content = decoder.decode(refresh.screenContent);
+              term.write(content);
             }
             // Scroll to bottom to ensure cursor is visible
             term.scrollToBottom();
             term.focus();
             break;
+          }
 
-          case 'title':
-            document.title = msg.title + ' - Terminal Streaming';
-            console.log(`Title changed: ${msg.title}`);
+          case 'title': {
+            const title = msg.message.value;
+            document.title = title.title + ' - Terminal Streaming';
+            console.log(`Title changed: ${title.title}`);
             break;
+          }
 
           case 'bell':
             console.log('Bell received');
             break;
 
-          case 'error':
-            console.error('Server error:', msg.message);
-            term.write(`\r\n\x1b[1;31mError: ${msg.message}\x1b[0m\r\n`);
+          case 'error': {
+            const error = msg.message.value;
+            console.error('Server error:', error.message);
+            term.write(`\r\n\x1b[1;31mError: ${error.message}\x1b[0m\r\n`);
             break;
+          }
+
+          case 'shutdown': {
+            const shutdown = msg.message.value;
+            console.log('Server shutdown:', shutdown.reason);
+            term.write(`\r\n\x1b[1;33mServer shutdown: ${shutdown.reason}\x1b[0m\r\n`);
+            break;
+          }
+
+          case 'pong':
+            // Pong received - keepalive acknowledged
+            break;
+
+          default:
+            console.warn('Unknown message type:', msg.message.case);
         }
       } catch (err) {
-        console.error('Failed to parse message:', err);
+        console.error('Failed to decode message:', err);
       }
     };
 

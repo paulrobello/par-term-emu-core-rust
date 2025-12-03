@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library (version 0.10.0).
+This guide explains how to build and install the par-term-emu-core-rust library (version 0.16.0).
 
 ## Table of Contents
 
@@ -13,12 +13,14 @@ This guide explains how to build and install the par-term-emu-core-rust library 
   - [Development Build](#development-build)
   - [Production Build](#production-build)
   - [Auto-rebuild on Changes](#auto-rebuild-on-changes)
+  - [Building with Streaming Feature](#building-with-streaming-feature)
 - [Running Tests](#running-tests)
   - [Rust Tests](#rust-tests)
   - [Python Tests](#python-tests)
   - [Code Quality Checks](#code-quality-checks)
   - [Pre-commit Hooks](#pre-commit-hooks)
 - [Running Examples](#running-examples)
+- [Protocol Buffers](#protocol-buffers)
 - [Cross-Compilation](#cross-compilation)
   - [Linux](#linux)
   - [macOS](#macos)
@@ -32,11 +34,13 @@ This guide explains how to build and install the par-term-emu-core-rust library 
 
 ### Rust
 
-You need Rust 1.75 or later (as specified in `Cargo.toml`). The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (as specified in `Cargo.toml` with `rust-version = "1.75"`). The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
+
+> **📝 Note:** The streaming feature requires Protocol Buffers code generation via `build.rs` and `prost-build`. This is handled automatically during the build process when the `streaming` feature is enabled.
 
 ### Python
 
@@ -75,11 +79,11 @@ make dev
 ```
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
-- **maturin** (≥1.9, <2.0 for build; ≥1.10.1 for dev) - Build tool for PyO3 projects
+- **maturin** (≥1.9, <2.0 for build; ≥1.10.2 for dev) - Build tool for PyO3 projects
 - **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework
-- **ruff** (≥0.14.5) - Fast Python linter and formatter
+- **ruff** (≥0.14.7) - Fast Python linter and formatter
 - **pyright** (≥1.1.407) - Static type checker
-- **pre-commit** (≥4.4.0) - Git hook framework
+- **pre-commit** (≥4.5.0) - Git hook framework
 - **rich** (≥14.2.0) - Rich text formatting for examples
 - **pillow** (≥12.0.0) - Image processing for graphics features
 
@@ -139,6 +143,26 @@ make watch
 
 > **📝 Note:** The `watch` target automatically rebuilds and reinstalls the package whenever Rust source files change.
 
+### Building with Streaming Feature
+
+The streaming feature enables WebSocket-based terminal streaming:
+
+```bash
+# Debug build with streaming
+make build-streaming
+
+# Release build with streaming (recommended)
+make dev-streaming
+```
+
+This enables:
+- WebSocket server functionality
+- Protocol Buffers message encoding/decoding
+- TLS/SSL support for secure connections
+- Web frontend integration
+
+See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
+
 ## Running Tests
 
 The project includes comprehensive test coverage:
@@ -178,7 +202,7 @@ uv run pytest tests/ -v
 ```
 
 **Test configuration:**
-- Default timeout: 5 seconds per test (configured in `pyproject.toml`)
+- Default timeout: 5 seconds per test (configured in `pyproject.toml` with `timeout = 5`)
 - Pytest warning filters suppress expected PyPtyTerminal unsendable warnings
 - Some PTY tests may need special handling in CI environments due to signal handling
 
@@ -258,6 +282,54 @@ uv run python examples/pty_shell.py
 > - **Testing**: underline styles, keyboard protocols, clipboard (OSC 52), TUI integration, BCE scroll tests, character tests, scroll timing tests
 > - **Streaming**: WebSocket streaming demo with debugging (requires streaming feature)
 > See the `examples/` directory for the complete list.
+
+## Protocol Buffers
+
+The streaming feature uses Protocol Buffers for efficient binary message encoding. Protocol buffer code generation is handled automatically:
+
+### Automatic Generation
+
+**Rust:** Generated during `cargo build` when the `streaming` feature is enabled via `build.rs`:
+
+```bash
+# Rust protobuf code is generated automatically
+cargo build --features streaming
+```
+
+The generated Rust code is placed in the build output directory and included via `include!` in `src/streaming/proto.rs`.
+
+**TypeScript:** For the web frontend, generate TypeScript protobuf code:
+
+```bash
+# Generate TypeScript protobuf definitions
+make proto-typescript
+
+# Or manually
+cd web-terminal-frontend && npm run proto:generate
+```
+
+### Manual Generation
+
+```bash
+# Generate both Rust and TypeScript code
+make proto-generate
+
+# Generate only Rust protobuf code
+make proto-rust
+
+# Generate only TypeScript protobuf code
+make proto-typescript
+
+# Clean generated files
+make proto-clean
+```
+
+**Protocol Definition:**
+- Source: `proto/terminal.proto`
+- Rust output: `OUT_DIR/terminal.rs` (via `build.rs`)
+- TypeScript output: `web-terminal-frontend/lib/proto/`
+
+> **📝 Note:** The Protocol Buffers implementation replaces JSON encoding for ~80% smaller message sizes. See [STREAMING.md](STREAMING.md) for protocol details.
 
 ## Cross-Compilation
 
@@ -413,5 +485,6 @@ docker rm builder
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY operations
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features documentation
 - [VT_SEQUENCES.md](VT_SEQUENCES.md) - VT sequence reference and implementation status
-- [STREAMING.md](STREAMING.md) - Streaming server documentation and WebSocket API
-- [Sister Project: par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) - Full-featured TUI application
+- [STREAMING.md](STREAMING.md) - Streaming server documentation, WebSocket API, and Protocol Buffers details
+- [RUST_USAGE.md](RUST_USAGE.md) - Using the library directly from Rust
+- [Sister Project: par-term-emu-tui-rust](https://github.com/paulrobello/par-term-emu-tui-rust) - Full-featured TUI application ([PyPI](https://pypi.org/project/par-term-emu-tui-rust/))
