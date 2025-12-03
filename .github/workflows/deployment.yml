@@ -115,7 +115,9 @@ jobs:
 
       - name: Install cross-compilation tools (Linux ARM64)
         if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: sudo apt-get install -y gcc-aarch64-linux-gnu
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build streaming server binary
         run: cargo build --release --bin par-term-streamer --no-default-features --features streaming --target ${{ matrix.target }}
