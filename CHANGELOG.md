@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0] - 2025-12-02
+
+### Added
+- **Streaming Server CLI Enhancements**:
+  - `--download-frontend` option to download prebuilt web frontend from GitHub releases
+  - `--frontend-version` option to specify version to download (default: "latest")
+  - `--use-tty-size` option to use current terminal size from TTY for the streamed session
+  - No longer requires Node.js/npm to use web frontend - can download prebuilt version
+
+- **Web Terminal Onscreen Keyboard Improvements**:
+  - Added Ctrl+Space shortcut (NUL character) for set-mark/autocomplete functionality
+
+### Changed
+- Documentation updated with new quick start using downloaded frontend
+- Build instructions updated with `--no-default-features` flag
+
 ## [0.14.0] - 2025-12-01
 
 ### Added

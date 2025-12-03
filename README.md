@@ -13,6 +13,36 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.15.0
+
+### 🎉 New Features
+
+- **Streaming Server CLI Enhancements**:
+  - `--download-frontend` option to download prebuilt web frontend from GitHub releases
+  - `--frontend-version` option to specify version to download (default: "latest")
+  - `--use-tty-size` option to use current terminal size from TTY
+  - No longer requires Node.js/npm to use web frontend - can download prebuilt version
+
+- **Web Terminal Onscreen Keyboard Improvements**:
+  - Added Ctrl+Space shortcut (NUL character) for set-mark/autocomplete functionality
+
+### Quick Start (Now Even Easier!)
+
+```bash
+# Build the streaming server
+make streamer-build-release
+
+# Download prebuilt web frontend (no Node.js required!)
+./target/release/par-term-streamer --download-frontend
+
+# Run server with frontend
+./target/release/par-term-streamer --enable-http
+
+# Open browser to http://127.0.0.1:8099
+```
+
+See [CHANGELOG.md](CHANGELOG.md) for complete version history.
+
 ## What's New in 0.14.0
 
 ### 🎉 New Features
@@ -26,30 +56,6 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 - **OSC 9;4 Progress Bar Support** (ConEmu/Windows Terminal style):
   - Terminal applications can report progress that can be displayed in tab bars, taskbars, or window titles
-  - Five states: `Hidden`, `Normal`, `Indeterminate`, `Warning`, `Error`
-  - Progress percentage (0-100) for applicable states
-  - New `ProgressState` enum and `ProgressBar` class in Python
-  - Terminal methods: `progress_bar()`, `has_progress()`, `progress_value()`, `progress_state()`, `set_progress()`, `clear_progress()`
-
-```python
-from par_term_emu_core_rust import Terminal, ProgressState
-
-term = Terminal(80, 24)
-
-# Receive progress from application
-term.process(b"\x1b]9;4;1;50\x1b\\")  # Set progress to 50%
-
-# Check progress state
-if term.has_progress():
-    pb = term.progress_bar()
-    print(f"Progress: {pb.progress}%, State: {pb.state}")
-
-# Programmatic control
-term.set_progress(ProgressState.Warning, 75)  # Set warning at 75%
-term.clear_progress()  # Hide progress bar
-```
-
-See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 ## What's New in 0.13.0
 

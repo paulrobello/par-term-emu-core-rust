@@ -168,7 +168,7 @@ The `par-term-streamer` binary provides a standalone streaming server:
 make streamer-build-release
 
 # Or directly with cargo
-cargo build --release --bin par-term-streamer --features streaming
+cargo build --release --bin par-term-streamer --no-default-features --features streaming
 ```
 
 **Run:**
@@ -182,6 +182,9 @@ par-term-streamer --size 120x40
 # Or using separate --cols and --rows
 par-term-streamer --cols 120 --rows 40
 
+# Use current terminal size from TTY
+par-term-streamer --use-tty-size
+
 # With an initial command (executed after 1 second delay)
 par-term-streamer --command "htop"
 par-term-streamer -c "vim README.md"
@@ -192,8 +195,32 @@ par-term-streamer --theme dracula
 # With HTTP static file serving
 par-term-streamer --enable-http --web-root ./web_term
 
+# Download prebuilt web frontend from GitHub releases
+par-term-streamer --download-frontend --web-root ./web_term
+
+# Download specific version of web frontend
+par-term-streamer --download-frontend --frontend-version 0.14.0 --web-root ./web_term
+
 # Macro playback mode
 par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
+```
+
+**Download Web Frontend:**
+
+The `--download-frontend` option downloads the prebuilt web frontend from GitHub releases, so you don't need Node.js/npm installed:
+
+```bash
+# Download latest version to default location (./web_term)
+par-term-streamer --download-frontend
+
+# Download to custom location
+par-term-streamer --download-frontend --web-root /path/to/web
+
+# Download specific version
+par-term-streamer --download-frontend --frontend-version 0.14.0
+
+# Then run server with downloaded frontend
+par-term-streamer --enable-http --web-root ./web_term
 ```
 
 **Available Themes:**
@@ -628,10 +655,25 @@ stateDiagram-v2
 
 ### Quick Start: Complete Setup
 
-**End-to-End Setup with HTTP Server:**
+**Easiest Setup (Download Prebuilt Frontend):**
 
 ```bash
-# 1. Build the static web frontend
+# 1. Build the streaming server
+make streamer-build-release
+
+# 2. Download prebuilt web frontend from GitHub releases
+./target/release/par-term-streamer --download-frontend
+
+# 3. Run the server with HTTP enabled
+./target/release/par-term-streamer --enable-http
+
+# 4. Open browser to http://127.0.0.1:8099
+```
+
+**End-to-End Setup with HTTP Server (Build Frontend Locally):**
+
+```bash
+# 1. Build the static web frontend (requires Node.js)
 make web-build-static
 
 # 2. Build the streaming server

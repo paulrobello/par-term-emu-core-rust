@@ -115,6 +115,7 @@ const CTRL_SHORTCUTS: KeyDefinition[] = [
   { label: 'U', code: 'u' },    // Ctrl+U (kill line before cursor)
   { label: 'W', code: 'w' },    // Ctrl+W (delete word)
   { label: 'R', code: 'r' },    // Ctrl+R (reverse search)
+  { label: 'Spc', code: '\x00' },  // Ctrl+Space (NUL - set mark/autocomplete)
 ];
 
 // Symbol keys often hard to type on mobile

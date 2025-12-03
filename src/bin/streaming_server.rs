@@ -32,6 +32,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use flate2::read::GzDecoder;
 use par_term_emu_core_rust::{
     color::Color,
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
@@ -39,13 +40,46 @@ use par_term_emu_core_rust::{
     streaming::{protocol::ThemeInfo, StreamingConfig, StreamingServer},
     terminal::Terminal,
 };
+use std::fs;
 use std::io::Write;
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tar::Archive;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::time;
 use tracing::{error, info};
+
+/// Get the current terminal size from the TTY
+#[cfg(unix)]
+fn get_tty_size() -> Option<(u16, u16)> {
+    use std::io::IsTerminal;
+    use std::os::unix::io::AsRawFd;
+
+    let stdout = std::io::stdout();
+    if !stdout.is_terminal() {
+        return None;
+    }
+
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        let fd = stdout.as_raw_fd();
+        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
+            Some((ws.ws_col, ws.ws_row))
+        } else {
+            None
+        }
+    }
+}
+
+/// Get the current terminal size from the TTY (Windows stub)
+#[cfg(not(unix))]
+fn get_tty_size() -> Option<(u16, u16)> {
+    // On Windows, we could use GetConsoleScreenBufferInfo, but for simplicity
+    // we return None and let the caller use defaults
+    None
+}
 
 /// Terminal color theme definition
 #[derive(Debug, Clone)]
@@ -283,6 +317,11 @@ struct Args {
     #[arg(long, default_value = "24")]
     rows: u16,
 
+    /// Use current terminal size (from TTY)
+    /// Overrides --size, --cols, and --rows if specified
+    #[arg(long)]
+    use_tty_size: bool,
+
     /// Scrollback buffer size (lines)
     #[arg(long, default_value = "10000")]
     scrollback: usize,
@@ -339,6 +378,16 @@ struct Args {
     /// Loop macro playback continuously
     #[arg(long)]
     macro_loop: bool,
+
+    /// Download prebuilt web frontend from GitHub releases
+    /// When specified, downloads and extracts frontend to web-root, then exits
+    #[arg(long)]
+    download_frontend: bool,
+
+    /// Version of web frontend to download (e.g., "0.14.0")
+    /// Defaults to "latest" which fetches the most recent release
+    #[arg(long, default_value = "latest")]
+    frontend_version: String,
 }
 
 /// Main event loop state
@@ -441,9 +490,190 @@ impl Clone for ServerState {
     }
 }
 
+/// GitHub API response for release information
+#[derive(serde::Deserialize, Debug)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
+}
+
+/// GitHub API response for release asset
+#[derive(serde::Deserialize, Debug)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+const GITHUB_REPO: &str = "paulrobello/par-term-emu-core-rust";
+const FRONTEND_ARCHIVE_PREFIX: &str = "par-term-web-frontend-v";
+
+/// Download and extract the web frontend from GitHub releases
+async fn download_frontend(version: &str, web_root: &str) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .user_agent("par-term-streamer")
+        .timeout(Duration::from_secs(60))
+        .build()
+        .context("Failed to create HTTP client")?;
+
+    // Get release info from GitHub API
+    let release_url = if version == "latest" {
+        format!(
+            "https://api.github.com/repos/{}/releases/latest",
+            GITHUB_REPO
+        )
+    } else {
+        format!(
+            "https://api.github.com/repos/{}/releases/tags/v{}",
+            GITHUB_REPO, version
+        )
+    };
+
+    println!("Fetching release info from GitHub...");
+    let response = client
+        .get(&release_url)
+        .send()
+        .await
+        .context("Failed to fetch release info from GitHub")?;
+
+    if !response.status().is_success() {
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            if version == "latest" {
+                anyhow::bail!("No releases found for this repository");
+            } else {
+                anyhow::bail!("Release version '{}' not found", version);
+            }
+        }
+        anyhow::bail!(
+            "GitHub API request failed with status: {}",
+            response.status()
+        );
+    }
+
+    let release: GitHubRelease = response
+        .json()
+        .await
+        .context("Failed to parse GitHub release info")?;
+
+    println!("Found release: {}", release.tag_name);
+
+    // Find the tar.gz frontend archive
+    let archive_asset = release
+        .assets
+        .iter()
+        .find(|asset| {
+            asset.name.starts_with(FRONTEND_ARCHIVE_PREFIX) && asset.name.ends_with(".tar.gz")
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Web frontend archive not found in release {}. Available assets: {}",
+                release.tag_name,
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        })?;
+
+    println!("Downloading: {}", archive_asset.name);
+    println!("From: {}", archive_asset.browser_download_url);
+
+    // Download the archive
+    let response = client
+        .get(&archive_asset.browser_download_url)
+        .send()
+        .await
+        .context("Failed to download frontend archive")?;
+
+    if !response.status().is_success() {
+        anyhow::bail!("Failed to download archive: HTTP {}", response.status());
+    }
+
+    let content_length = response.content_length();
+    if let Some(len) = content_length {
+        println!("Download size: {} bytes", len);
+    }
+
+    let archive_bytes = response
+        .bytes()
+        .await
+        .context("Failed to read archive content")?;
+
+    println!("Downloaded {} bytes", archive_bytes.len());
+
+    // Create web root directory if it doesn't exist
+    let web_root_path = Path::new(web_root);
+    if web_root_path.exists() {
+        println!("Clearing existing web root: {}", web_root);
+        fs::remove_dir_all(web_root_path)
+            .context(format!("Failed to remove existing directory: {}", web_root))?;
+    }
+    fs::create_dir_all(web_root_path)
+        .context(format!("Failed to create web root directory: {}", web_root))?;
+
+    // Extract the tar.gz archive
+    println!("Extracting to: {}", web_root);
+    let tar_gz = GzDecoder::new(archive_bytes.as_ref());
+    let mut archive = Archive::new(tar_gz);
+
+    archive
+        .unpack(web_root_path)
+        .context("Failed to extract archive")?;
+
+    // Count extracted files
+    let file_count = count_files(web_root_path)?;
+    println!(
+        "Successfully extracted {} files to {}",
+        file_count, web_root
+    );
+
+    // Verify index.html exists
+    let index_path = web_root_path.join("index.html");
+    if !index_path.exists() {
+        println!("Warning: index.html not found in extracted content");
+    } else {
+        println!("Frontend ready at: {}/index.html", web_root);
+    }
+
+    Ok(())
+}
+
+/// Count files recursively in a directory
+fn count_files(path: &Path) -> Result<usize> {
+    let mut count = 0;
+    if path.is_dir() {
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                count += count_files(&path)?;
+            } else {
+                count += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Handle --download-frontend command
+    if args.download_frontend {
+        println!("par-term-streamer v{}", env!("CARGO_PKG_VERSION"));
+        println!("Downloading web frontend...\n");
+
+        download_frontend(&args.frontend_version, &args.web_root).await?;
+
+        println!("\nTo run the server with the downloaded frontend:");
+        println!(
+            "  par-term-streamer --enable-http --web-root {}",
+            args.web_root
+        );
+        return Ok(());
+    }
 
     // Initialize logging
     let log_level = if args.verbose {
@@ -461,8 +691,22 @@ async fn main() -> Result<()> {
     info!("Starting terminal streaming server");
     info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
-    // Determine terminal size (--size takes precedence over --cols/--rows)
-    let (cols, rows) = args.size.unwrap_or((args.cols, args.rows));
+    // Determine terminal size
+    // Priority: --use-tty-size > --size > --cols/--rows
+    let (cols, rows) = if args.use_tty_size {
+        match get_tty_size() {
+            Some(size) => {
+                info!("Using TTY size: {}x{}", size.0, size.1);
+                size
+            }
+            None => {
+                eprintln!("Warning: Could not get TTY size, using defaults (80x24)");
+                (80, 24)
+            }
+        }
+    } else {
+        args.size.unwrap_or((args.cols, args.rows))
+    };
 
     // Create PTY session (this creates its own terminal internally)
     info!("Creating PTY session ({}x{})", cols, rows);
