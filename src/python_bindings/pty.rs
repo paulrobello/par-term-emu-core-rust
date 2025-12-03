@@ -2854,3 +2854,495 @@ impl PyPtyTerminal {
         self.inner.get_writer()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // Tests for PtySession wrapper (testing the underlying Rust behavior)
+    // Note: These tests test through the inner PtySession since PyO3 types
+    // require Python interpreter setup for full testing.
+    // =========================================================================
+
+    // -------------------------------------------------------------------------
+    // Creation and initialization tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_pty_session_creation() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        assert_eq!(session.size(), (80, 24));
+        assert!(!session.is_running());
+    }
+
+    #[test]
+    fn test_pty_session_creation_different_sizes() {
+        let session1 = pty_session::PtySession::new(40, 20, 500);
+        assert_eq!(session1.size(), (40, 20));
+
+        let session2 = pty_session::PtySession::new(200, 60, 5000);
+        assert_eq!(session2.size(), (200, 60));
+    }
+
+    #[test]
+    fn test_pty_session_initial_state() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        assert!(!session.is_running());
+        assert_eq!(session.update_generation(), 0);
+        assert_eq!(session.cursor_position(), (0, 0));
+        assert!(session.content().is_empty() || session.content().trim().is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Environment variable tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_set_env_basic() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_env("TEST_VAR", "test_value");
+        // Should not panic
+    }
+
+    #[test]
+    fn test_set_env_multiple() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_env("VAR1", "value1");
+        session.set_env("VAR2", "value2");
+        session.set_env("VAR3", "value3");
+        // Should handle multiple env vars
+    }
+
+    #[test]
+    fn test_set_env_empty_value() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_env("EMPTY_VAR", "");
+        // Should handle empty values
+    }
+
+    #[test]
+    fn test_set_env_unicode() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_env("UNICODE_VAR", "Hello 世界 🌍");
+        // Should handle unicode
+    }
+
+    #[test]
+    fn test_set_env_special_chars() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_env("PATH_VAR", "/usr/bin:/usr/local/bin");
+        session.set_env("QUOTE_VAR", "value with \"quotes\"");
+        // Should handle special characters
+    }
+
+    // -------------------------------------------------------------------------
+    // Working directory tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_set_cwd() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let path = std::path::Path::new("/tmp");
+        session.set_cwd(path);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_set_cwd_home() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(home) = std::env::var("HOME") {
+            session.set_cwd(std::path::Path::new(&home));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Resize tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_resize() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.resize(100, 30).ok();
+        assert_eq!(session.size(), (100, 30));
+    }
+
+    #[test]
+    fn test_resize_multiple() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+
+        session.resize(100, 30).ok();
+        assert_eq!(session.size(), (100, 30));
+
+        session.resize(120, 40).ok();
+        assert_eq!(session.size(), (120, 40));
+
+        session.resize(60, 20).ok();
+        assert_eq!(session.size(), (60, 20));
+    }
+
+    #[test]
+    fn test_resize_small() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.resize(10, 5).ok();
+        assert_eq!(session.size(), (10, 5));
+    }
+
+    #[test]
+    fn test_resize_large() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.resize(500, 200).ok();
+        assert_eq!(session.size(), (500, 200));
+    }
+
+    #[test]
+    fn test_resize_with_pixels() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.resize_with_pixels(100, 30, 1000, 600).ok();
+        assert_eq!(session.size(), (100, 30));
+    }
+
+    // -------------------------------------------------------------------------
+    // Terminal access tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_terminal_access() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let terminal = session.terminal();
+        assert!(terminal.lock().is_ok());
+    }
+
+    #[test]
+    fn test_terminal_content_empty() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let content = session.content();
+        assert!(content.is_empty() || content.chars().all(|c| c.is_whitespace()));
+    }
+
+    #[test]
+    fn test_terminal_process_direct() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            term.process(b"Hello, World!");
+            let content = term.content();
+            assert!(content.contains("Hello, World!"));
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Update generation tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_update_generation_initial() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        assert_eq!(session.update_generation(), 0);
+    }
+
+    #[test]
+    fn test_update_generation_stable() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let gen1 = session.update_generation();
+        let gen2 = session.update_generation();
+        assert_eq!(gen1, gen2);
+    }
+
+    #[test]
+    fn test_has_updates_since() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let gen = session.update_generation();
+        assert!(!session.has_updates_since(gen));
+    }
+
+    // -------------------------------------------------------------------------
+    // Bell count tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_bell_count_initial() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        assert_eq!(session.bell_count(), 0);
+    }
+
+    #[test]
+    fn test_bell_count_after_bell() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            term.process(b"\x07"); // BEL character
+        }
+        assert_eq!(session.bell_count(), 1);
+    }
+
+    // -------------------------------------------------------------------------
+    // Scrollback tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_scrollback_empty() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        assert_eq!(session.scrollback_len(), 0);
+    }
+
+    #[test]
+    fn test_scrollback_content_empty() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let scrollback = session.scrollback();
+        assert!(scrollback.is_empty());
+    }
+
+    // -------------------------------------------------------------------------
+    // Get line tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_line_valid() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            term.process(b"Line0\nLine1\nLine2");
+        }
+        let line = session.get_line(0);
+        assert!(line.is_some());
+    }
+
+    #[test]
+    fn test_get_line_out_of_bounds() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let line = session.get_line(100);
+        assert!(line.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Export tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_export_text_empty() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let text = session.export_text();
+        // Empty terminal might have whitespace or be empty
+        assert!(text.chars().all(|c| c.is_whitespace()) || text.is_empty());
+    }
+
+    #[test]
+    fn test_export_text_with_content() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            term.process(b"Test content here");
+        }
+        let text = session.export_text();
+        assert!(text.contains("Test content here"));
+    }
+
+    #[test]
+    fn test_export_styled_with_content() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            // Add colored text
+            term.process(b"\x1b[31mRed text\x1b[0m");
+        }
+        let styled = session.export_styled();
+        assert!(styled.contains("Red text"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Write without running tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_write_without_running() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let result = session.write(b"test");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_write_str_without_running() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let result = session.write_str("test");
+        assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // Kill without running tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_kill_without_running() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let result = session.kill();
+        assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // Wait without running tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_wait_without_running() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let result = session.wait();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_wait_without_running() {
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        let result = session.try_wait();
+        assert!(result.is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // Default shell tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_default_shell() {
+        let shell = pty_session::PtySession::get_default_shell();
+        assert!(!shell.is_empty());
+    }
+
+    #[test]
+    fn test_get_default_shell_valid() {
+        let shell = pty_session::PtySession::get_default_shell();
+        #[cfg(unix)]
+        assert!(
+            shell.contains("sh") || shell.contains("zsh") || shell.contains("fish"),
+            "Shell should be a known shell: {}",
+            shell
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Output callback tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_set_output_callback() {
+        use std::sync::Arc;
+
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_output_callback(Arc::new(|_data| {
+            // Just verify callback can be set
+        }));
+        // Should not panic
+    }
+
+    #[test]
+    fn test_clear_output_callback() {
+        use std::sync::Arc;
+
+        let mut session = pty_session::PtySession::new(80, 24, 1000);
+        session.set_output_callback(Arc::new(|_data| {}));
+        session.clear_output_callback();
+        // Should not panic
+    }
+
+    // -------------------------------------------------------------------------
+    // Writer access tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_get_writer_without_running() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let writer = session.get_writer();
+        assert!(writer.is_none());
+    }
+
+    // -------------------------------------------------------------------------
+    // Cursor position tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_cursor_position_initial() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        let (col, row) = session.cursor_position();
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn test_cursor_position_after_write() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            term.process(b"Hello");
+            let cursor = term.cursor();
+            assert_eq!(cursor.col, 5);
+            assert_eq!(cursor.row, 0);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Terminal state tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_terminal_process_escape_sequences() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            // Test cursor movement
+            term.process(b"\x1b[5;10H"); // Move to row 5, col 10
+            let cursor = term.cursor();
+            assert_eq!(cursor.row, 4); // 0-indexed
+            assert_eq!(cursor.col, 9); // 0-indexed
+        }
+    }
+
+    #[test]
+    fn test_terminal_alt_screen() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            assert!(!term.is_alt_screen_active());
+
+            // Enter alt screen
+            term.process(b"\x1b[?1049h");
+            assert!(term.is_alt_screen_active());
+
+            // Exit alt screen
+            term.process(b"\x1b[?1049l");
+            assert!(!term.is_alt_screen_active());
+        }
+    }
+
+    #[test]
+    fn test_terminal_colors() {
+        let session = pty_session::PtySession::new(80, 24, 1000);
+        if let Ok(mut term) = session.terminal().lock() {
+            // Set red foreground
+            term.process(b"\x1b[31mRed\x1b[0m");
+            let cell = term.active_grid().get(0, 0);
+            assert!(cell.is_some());
+            if let Some(cell) = cell {
+                assert_eq!(cell.c, 'R');
+            }
+        }
+    }
+
+    // =========================================================================
+    // Helper function tests (conversions module)
+    // =========================================================================
+
+    #[test]
+    fn test_parse_sixel_mode_disabled() {
+        let result = super::super::conversions::parse_sixel_mode("disabled");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_sixel_mode_pixels() {
+        let result = super::super::conversions::parse_sixel_mode("pixels");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_sixel_mode_halfblocks() {
+        let result = super::super::conversions::parse_sixel_mode("halfblocks");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_parse_sixel_mode_invalid() {
+        let result = super::super::conversions::parse_sixel_mode("invalid_mode");
+        assert!(result.is_err());
+    }
+}
