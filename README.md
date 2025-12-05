@@ -13,6 +13,12 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.16.2
+
+### 🔧 Compatibility Fix
+
+- **TERM Environment Variable**: Changed default `TERM` from `xterm-kitty` to `xterm-256color` for better compatibility with systems lacking kitty terminfo
+
 ## What's New in 0.16.0
 
 ### 🔒 TLS/SSL Support

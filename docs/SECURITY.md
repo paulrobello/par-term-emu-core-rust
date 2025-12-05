@@ -240,7 +240,7 @@ safe_overrides = {
     "HOME": "/home/user",
     "USER": "safeuser",
     # Note: The following are set automatically by the PTY system:
-    #   TERM=xterm-kitty
+    #   TERM=xterm-256color
     #   COLORTERM=truecolor
     #   TERM_PROGRAM=kitty
     #   KITTY_WINDOW_ID=1
@@ -258,7 +258,7 @@ term.spawn("/bin/sh", env=safe_overrides)
 # Environment merge order (see spawn() in src/pty_session.rs):
 # 1. Inherit all parent env vars (except COLUMNS/LINES - automatically filtered)
 # 2. Set terminal-specific environment variables:
-#    - TERM=xterm-kitty
+#    - TERM=xterm-256color
 #    - COLORTERM=truecolor
 #    - TERM_PROGRAM=kitty
 #    - KITTY_WINDOW_ID=1
@@ -315,7 +315,7 @@ term.spawn(
 
 **Important**: The `env` parameter in `spawn()` **merges with and overrides specific keys** in the inherited environment. The process is:
 1. All parent environment variables are inherited (except `COLUMNS` and `LINES` which are automatically filtered out)
-2. `TERM=xterm-kitty`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1`, and `KITTY_PID=<process_id>` are set automatically for Kitty graphics protocol support
+2. `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1`, and `KITTY_PID=<process_id>` are set automatically for Kitty graphics protocol support
 3. Variables specified in `env` override all previous values (including TERM/COLORTERM/TERM_PROGRAM if specified)
 4. The merged environment is passed to the spawned process
 

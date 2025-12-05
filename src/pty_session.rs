@@ -230,7 +230,7 @@ impl PtySession {
         }
 
         // Set terminal-specific environment variables
-        cmd.env("TERM", "xterm-kitty");
+        cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
         // Set Kitty-specific environment variables for protocol detection
         cmd.env("TERM_PROGRAM", "kitty");

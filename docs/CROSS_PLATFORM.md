@@ -80,7 +80,7 @@ pub fn get_default_shell() -> String {
 **Environment Variables:**
 - Inherits parent environment variables properly on all platforms
 - Automatically drops `COLUMNS` and `LINES` to prevent resize issues (apps should query PTY size via ioctl)
-- Sets `TERM=xterm-kitty` and `COLORTERM=truecolor` consistently
+- Sets `TERM=xterm-256color` and `COLORTERM=truecolor` consistently
 - Sets Kitty-specific variables (`TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID`, `KITTY_PID`) for protocol detection
 
 **Process Management:**
@@ -415,7 +415,7 @@ When testing on a new platform, verify:
 - [ ] Custom commands execute
 - [ ] Window resize works (SIGWINCH on Unix, ConPTY on Windows)
 - [ ] Environment variables inherited properly
-- [ ] `TERM=xterm-kitty` and `COLORTERM=truecolor` set correctly
+- [ ] `TERM=xterm-256color` and `COLORTERM=truecolor` set correctly
 - [ ] Kitty protocol environment variables set (`TERM_PROGRAM`, `KITTY_WINDOW_ID`, `KITTY_PID`)
 
 **Graphics Module:**

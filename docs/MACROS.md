@@ -322,7 +322,7 @@ terminal_size:
   - 24  # rows
 env:
   SHELL: /bin/bash
-  TERM: xterm-kitty
+  TERM: xterm-256color
 events:
   - type: key
     key: echo
