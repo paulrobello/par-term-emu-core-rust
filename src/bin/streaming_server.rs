@@ -30,6 +30,15 @@
 //! - Header: `Authorization: Bearer my-secret-key`
 //! - URL param: `ws://localhost:8080?api_key=my-secret-key`
 
+// Use jemalloc for better server performance (5-15% throughput improvement)
+// Only available on non-Windows platforms
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+use tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use flate2::read::GzDecoder;

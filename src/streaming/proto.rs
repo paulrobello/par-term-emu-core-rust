@@ -29,8 +29,10 @@ use std::io::{Read, Write};
 #[path = "terminal.pb.rs"]
 pub mod pb;
 
-/// Compression threshold in bytes (1KB)
-const COMPRESSION_THRESHOLD: usize = 1024;
+/// Compression threshold in bytes (256 bytes)
+/// Lowered from 1KB to compress more messages - typical terminal output
+/// (prompts, short commands) is 200-800 bytes
+const COMPRESSION_THRESHOLD: usize = 256;
 
 /// Wire format flags
 const FLAG_UNCOMPRESSED: u8 = 0x00;
@@ -450,8 +452,8 @@ mod tests {
 
     #[test]
     fn test_compression_for_large_payload() {
-        // Create a large message that should trigger compression
-        let large_data = "A".repeat(2000);
+        // Create a message that exceeds COMPRESSION_THRESHOLD (256 bytes)
+        let large_data = "A".repeat(500);
         let msg = AppServerMessage::output(large_data.clone());
         let encoded = encode_server_message(&msg).unwrap();
 
@@ -470,11 +472,39 @@ mod tests {
 
     #[test]
     fn test_no_compression_for_small_payload() {
+        // Message below COMPRESSION_THRESHOLD (256 bytes)
         let msg = AppServerMessage::output("small".to_string());
         let encoded = encode_server_message(&msg).unwrap();
 
         // First byte should indicate no compression
         assert_eq!(encoded[0], FLAG_UNCOMPRESSED);
+    }
+
+    #[test]
+    fn test_compression_boundary() {
+        // Test right at the threshold - 256 bytes of payload should not trigger compression
+        // (threshold is >256, not >=256)
+        let boundary_data = "X".repeat(200); // Will be ~200 bytes in protobuf
+        let msg = AppServerMessage::output(boundary_data);
+        let encoded = encode_server_message(&msg).unwrap();
+        // Should NOT be compressed (at or below threshold)
+        assert_eq!(encoded[0], FLAG_UNCOMPRESSED);
+
+        // Test just above threshold
+        let above_data = "Y".repeat(300); // Will be ~300 bytes in protobuf
+        let msg2 = AppServerMessage::output(above_data.clone());
+        let encoded2 = encode_server_message(&msg2).unwrap();
+        // Should be compressed (above threshold)
+        assert_eq!(encoded2[0], FLAG_COMPRESSED);
+
+        // Verify it decodes correctly
+        let decoded = decode_server_message(&encoded2).unwrap();
+        match decoded {
+            AppServerMessage::Output { data, .. } => {
+                assert_eq!(data, above_data);
+            }
+            _ => panic!("Wrong message type"),
+        }
     }
 
     #[test]

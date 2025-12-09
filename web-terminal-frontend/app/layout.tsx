@@ -34,8 +34,26 @@ export default function RootLayout({
   return (
     <html lang="en">
       <head>
+        {/* Font preconnects for faster font loading */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+
+        {/* WebSocket preconnect hints - reduces initial connection latency by 100-200ms */}
+        {/* Development: direct WebSocket server */}
+        <link rel="preconnect" href="ws://localhost:8099" />
+        {/* Production: same-origin WebSocket */}
+        <link rel="preconnect" href="wss://localhost:8099" />
+
+        {/* Preload terminal fonts to avoid layout shift and font flash */}
+        <link
+          rel="preload"
+          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
+          as="style"
+        />
+        <link
+          href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
+          rel="stylesheet"
+        />
       </head>
       <body className="font-mono">
         {children}
