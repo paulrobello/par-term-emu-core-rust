@@ -13,6 +13,13 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.16.3
+
+### 📦 Dependency Updates
+
+- **Web Frontend**: Updated Next.js and type definitions
+- **Pre-commit Hooks**: Updated ruff linter
+
 ## What's New in 0.16.2
 
 ### 🔧 Compatibility Fix

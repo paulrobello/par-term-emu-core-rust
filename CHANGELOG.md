@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3] - 2025-12-08
+
+### Changed
+- **Web Frontend Dependencies**: Updated Next.js (16.0.7 → 16.0.8), @types/node (24.10.1 → 24.10.2)
+- **Pre-commit Hooks**: Updated ruff (0.14.4 → 0.14.8)
+
 ## [0.16.2] - 2025-12-05
 
 ### Fixed

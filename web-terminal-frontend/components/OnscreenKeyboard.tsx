@@ -105,6 +105,7 @@ const MODIFIER_ROW: KeyDefinition[] = [
 
 // Common Ctrl combinations
 const CTRL_SHORTCUTS: KeyDefinition[] = [
+  { label: 'B', code: 'b' },    // Ctrl+B (tmux prefix / move back)
   { label: 'C', code: 'c' },    // Ctrl+C (SIGINT)
   { label: 'D', code: 'd' },    // Ctrl+D (EOF)
   { label: 'Z', code: 'z' },    // Ctrl+Z (SIGTSTP)
@@ -118,8 +119,15 @@ const CTRL_SHORTCUTS: KeyDefinition[] = [
   { label: 'Spc', code: '\x00' },  // Ctrl+Space (NUL - set mark/autocomplete)
 ];
 
+// Quick insert text snippets
+const QUICK_INSERT: KeyDefinition[] = [
+  { label: 'http://', code: 'http://', width: 1.5 },
+  { label: 'https://', code: 'https://', width: 1.5 },
+];
+
 // Symbol keys often hard to type on mobile
 const SYMBOL_ROW: KeyDefinition[] = [
+  { label: '/', code: '/' },
   { label: '|', code: '|' },
   { label: '\\', code: '\\' },
   { label: '`', code: '`' },
@@ -139,6 +147,14 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
   const [showFunctionKeys, setShowFunctionKeys] = useState(false);
   const [showSymbols, setShowSymbols] = useState(false);
   const keyboardRef = useRef<HTMLDivElement>(null);
+
+  // Send a key twice with a delay between
+  const sendDoubleKey = useCallback((code: string, delayMs: number = 20) => {
+    onInput(code);
+    setTimeout(() => {
+      onInput(code);
+    }, delayMs);
+  }, [onInput]);
 
   // Reset modifiers after a key press (except when sticky mode could be added)
   const resetModifiers = useCallback(() => {
@@ -319,6 +335,56 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
           <span className="text-blue-400 text-[10px] sm:text-xs">^</span>{key.label}
         </button>
       ))}
+      {/* Double Ctrl+C button */}
+      <button
+        key="ctrl-cc"
+        className="min-w-[2.5rem] sm:min-w-[3rem] h-8 sm:h-9 px-2
+          rounded-md text-xs sm:text-sm font-medium
+          select-none touch-manipulation transition-all duration-100 active:scale-95
+          bg-[#252525]/90 text-[#e0e0e0] border border-red-500/50
+          hover:bg-[#353535]/90 active:bg-[#454545]/90 backdrop-blur-sm"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if ('vibrate' in navigator) navigator.vibrate(10);
+          sendDoubleKey(getCtrlCode('c'), 20);
+        }}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if ('vibrate' in navigator) navigator.vibrate(10);
+          sendDoubleKey(getCtrlCode('c'), 20);
+        }}
+        type="button"
+        title="Send Ctrl+C twice with 20ms delay"
+      >
+        <span className="text-red-400 text-[10px] sm:text-xs">^</span>c<span className="text-red-400 text-[10px] sm:text-xs">^</span>c
+      </button>
+      {/* Double Ctrl+D button */}
+      <button
+        key="ctrl-dd"
+        className="min-w-[2.5rem] sm:min-w-[3rem] h-8 sm:h-9 px-2
+          rounded-md text-xs sm:text-sm font-medium
+          select-none touch-manipulation transition-all duration-100 active:scale-95
+          bg-[#252525]/90 text-[#e0e0e0] border border-orange-500/50
+          hover:bg-[#353535]/90 active:bg-[#454545]/90 backdrop-blur-sm"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if ('vibrate' in navigator) navigator.vibrate(10);
+          sendDoubleKey(getCtrlCode('d'), 20);
+        }}
+        onTouchStart={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if ('vibrate' in navigator) navigator.vibrate(10);
+          sendDoubleKey(getCtrlCode('d'), 20);
+        }}
+        type="button"
+        title="Send Ctrl+D twice with 20ms delay"
+      >
+        <span className="text-orange-400 text-[10px] sm:text-xs">^</span>d<span className="text-orange-400 text-[10px] sm:text-xs">^</span>d
+      </button>
     </div>
   );
 
@@ -445,6 +511,38 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
         <div className="pt-1.5 border-t border-[#2a2a2a]/30">
           <div className="text-[10px] text-[#606060] text-center mb-1">Quick Ctrl Shortcuts</div>
           {renderCtrlShortcuts()}
+        </div>
+
+        {/* Quick insert row */}
+        <div className="pt-1.5 border-t border-[#2a2a2a]/30">
+          <div className="text-[10px] text-[#606060] text-center mb-1">Quick Insert</div>
+          <div className="flex flex-wrap gap-1 justify-center">
+            {QUICK_INSERT.map((key, index) => (
+              <button
+                key={`insert-${key.label}-${index}`}
+                className={`${key.width === 1.5 ? 'min-w-[4rem] sm:min-w-[5rem]' : 'min-w-[2.5rem] sm:min-w-[3rem]'} h-8 sm:h-9 px-2
+                  rounded-md text-xs sm:text-sm font-medium
+                  select-none touch-manipulation transition-all duration-100 active:scale-95
+                  bg-[#252525]/90 text-[#e0e0e0] border border-emerald-500/50
+                  hover:bg-[#353535]/90 active:bg-[#454545]/90 backdrop-blur-sm`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if ('vibrate' in navigator) navigator.vibrate(10);
+                  onInput(key.code);
+                }}
+                onTouchStart={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if ('vibrate' in navigator) navigator.vibrate(10);
+                  onInput(key.code);
+                }}
+                type="button"
+              >
+                <span className="text-emerald-400">{key.label}</span>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>

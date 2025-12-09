@@ -21,6 +21,18 @@ const isMobileDevice = (): boolean => {
   return window.innerWidth < 640 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 };
 
+// localStorage keys for persisting UI state
+const STORAGE_KEY_SHOW_CONTROLS = 'par-term-show-controls';
+const STORAGE_KEY_SHOW_KEYBOARD = 'par-term-show-keyboard';
+
+// Helper to safely read from localStorage
+const getStoredBoolean = (key: string, defaultValue: boolean): boolean => {
+  if (typeof window === 'undefined') return defaultValue;
+  const stored = localStorage.getItem(key);
+  if (stored === null) return defaultValue;
+  return stored === 'true';
+};
+
 export default function Home() {
   // Auto-detect WebSocket URL based on current location
   const getDefaultWsUrl = () => {
@@ -55,12 +67,30 @@ export default function Home() {
   const [sendInput, setSendInput] = useState<((data: string) => void) | null>(null);
   const [showKeyboard, setShowKeyboard] = useState(false);
 
-  // Detect mobile on mount and show keyboard by default
+  // Load persisted UI state from localStorage on mount
   useEffect(() => {
-    if (isMobileDevice()) {
+    // Load showControls from localStorage (default: true)
+    const storedShowControls = getStoredBoolean(STORAGE_KEY_SHOW_CONTROLS, true);
+    setShowControls(storedShowControls);
+
+    // Load showKeyboard from localStorage, defaulting to mobile detection if not set
+    const storedKeyboard = localStorage.getItem(STORAGE_KEY_SHOW_KEYBOARD);
+    if (storedKeyboard !== null) {
+      setShowKeyboard(storedKeyboard === 'true');
+    } else if (isMobileDevice()) {
       setShowKeyboard(true);
     }
   }, []);
+
+  // Persist showControls to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_SHOW_CONTROLS, String(showControls));
+  }, [showControls]);
+
+  // Persist showKeyboard to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_SHOW_KEYBOARD, String(showKeyboard));
+  }, [showKeyboard]);
 
   const statusConfig = {
     disconnected: {
