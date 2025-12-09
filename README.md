@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New in 0.16.3
 
+### 🐛 Bug Fixes
+
+- **Web Terminal tmux/TUI Fix**: Fixed control characters (`^[[?1;2c^[[>0;276;0c`) appearing when running tmux or other TUI applications in the web terminal. The issue was caused by xterm.js generating Device Attributes responses when the backend terminal emulator already handles these queries.
+
 ### 📦 Dependency Updates
 
 - **Web Frontend**: Updated Next.js and type definitions

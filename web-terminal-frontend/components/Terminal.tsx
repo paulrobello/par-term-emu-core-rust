@@ -61,6 +61,9 @@ const getResponsiveFontSize = (): number => {
   return 14;                      // Desktop
 };
 
+// Shared TextDecoder instance - reuse instead of creating per message
+const sharedDecoder = new TextDecoder();
+
 export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -68,6 +71,18 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
+
+  // RAF-batched write buffer for performance optimization
+  // Instead of writing to terminal on every WebSocket message, we buffer
+  // writes and flush once per animation frame (60fps = 16ms batches)
+  const writeBufferRef = useRef<string[]>([]);
+  const rafIdRef = useRef<number | null>(null);
+
+  // Local echo (predictive input) for perceived latency reduction
+  // Tracks characters we've echoed locally before server confirmation
+  // so we can filter them from server output to avoid double display
+  const pendingEchoRef = useRef<string[]>([]);
+  const localEchoEnabledRef = useRef<boolean>(true);
 
   // Auto-reconnect state
   const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -79,6 +94,45 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     setStatus(newStatus);
     onStatusChange?.(newStatus);
   };
+
+  // Flush buffered writes to terminal - called once per animation frame
+  const flushWrites = useCallback(() => {
+    if (writeBufferRef.current.length > 0 && xtermRef.current) {
+      // Join all buffered data and write once
+      xtermRef.current.write(writeBufferRef.current.join(''));
+      writeBufferRef.current = [];
+    }
+    rafIdRef.current = null;
+  }, []);
+
+  // Buffer a write and schedule RAF flush if not already scheduled
+  // Also filters out locally echoed characters to avoid double display
+  const bufferWrite = useCallback((data: string) => {
+    let filteredData = data;
+
+    // Filter out characters we already echoed locally
+    // This reconciles local echo with server output
+    while (pendingEchoRef.current.length > 0 && filteredData.length > 0) {
+      const expected = pendingEchoRef.current[0];
+      if (filteredData.startsWith(expected)) {
+        // Server confirmed our local echo, remove from pending
+        filteredData = filteredData.slice(expected.length);
+        pendingEchoRef.current.shift();
+      } else {
+        // Mismatch - server sent something different (tab completion, etc.)
+        // Clear pending echo and show full output
+        pendingEchoRef.current = [];
+        break;
+      }
+    }
+
+    if (filteredData.length > 0) {
+      writeBufferRef.current.push(filteredData);
+      if (!rafIdRef.current) {
+        rafIdRef.current = requestAnimationFrame(flushWrites);
+      }
+    }
+  }, [flushWrites]);
 
   const cancelRetry = useCallback(() => {
     if (retryTimeoutRef.current) {
@@ -215,10 +269,33 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
             console.warn('WebGL renderer failed, using default DOM renderer:', e);
           }
 
+          // Suppress xterm.js DA (Device Attributes) responses
+          // Our backend terminal emulator handles DA queries - xterm.js shouldn't respond
+          // as that causes DA responses to be echoed back and displayed on screen
+          // DA1 (Primary Device Attributes) - CSI c or CSI 0 c
+          term.parser.registerCsiHandler({ final: 'c' }, () => true);
+          // DA2 (Secondary Device Attributes) - CSI > c (note: '>' is a prefix, not intermediate)
+          term.parser.registerCsiHandler({ prefix: '>', final: 'c' }, () => true);
+          // DA3 (Tertiary Device Attributes) - CSI = c
+          term.parser.registerCsiHandler({ prefix: '=', final: 'c' }, () => true);
+          // DSR (Device Status Report) - CSI n (cursor position reports, etc.)
+          term.parser.registerCsiHandler({ final: 'n' }, () => true);
+          // DECRQM (Request Mode) - CSI ? Ps $ p
+          term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true);
+          console.log('Suppressed xterm.js DA/DSR responses (handled by backend terminal)');
+
           fitAddon.fit();
         });
       } else {
         term.open(terminalRef.current);
+
+        // Suppress xterm.js DA (Device Attributes) responses (same as above)
+        term.parser.registerCsiHandler({ final: 'c' }, () => true);
+        term.parser.registerCsiHandler({ prefix: '>', final: 'c' }, () => true);
+        term.parser.registerCsiHandler({ prefix: '=', final: 'c' }, () => true);
+        term.parser.registerCsiHandler({ final: 'n' }, () => true);
+        term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true);
+
         fitAddon.fit();
       }
     }
@@ -304,7 +381,21 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     window.addEventListener('orientationchange', handleOrientationChange);
 
     // Handle terminal input - use wsRef so it works across reconnects
+    // Implements local echo for printable characters to reduce perceived latency
     const onDataDisposable = term.onData((data) => {
+      // Local echo for single printable ASCII characters
+      // This makes typing feel instant even on slow connections
+      if (localEchoEnabledRef.current && data.length === 1) {
+        const code = data.charCodeAt(0);
+        // Printable ASCII range: space (32) through tilde (126)
+        if (code >= 32 && code <= 126) {
+          // Echo locally immediately
+          term.write(data);
+          pendingEchoRef.current.push(data);
+        }
+      }
+
+      // Always send to server
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(encodeClientMessage(createInputMessage(data)));
       }
@@ -327,6 +418,17 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
       window.removeEventListener('orientationchange', handleOrientationChange);
       onDataDisposable.dispose();
       onResizeDisposable.dispose();
+
+      // Cancel any pending RAF write flush
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      // Flush any remaining buffered writes before cleanup
+      if (writeBufferRef.current.length > 0 && term) {
+        term.write(writeBufferRef.current.join(''));
+        writeBufferRef.current = [];
+      }
 
       // Preserve terminal for potential StrictMode remount
       preservedTerminal = term;
@@ -382,14 +484,13 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
         const term = xtermRef.current;
         if (!term) return;
 
-        const decoder = new TextDecoder();
-
         // Handle oneof message type
         switch (msg.message.case) {
           case 'output': {
             const output = msg.message.value;
-            const data = decoder.decode(output.data);
-            term.write(data);
+            const data = sharedDecoder.decode(output.data);
+            // Use RAF-batched write for better performance
+            bufferWrite(data);
             break;
           }
 
@@ -407,6 +508,9 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
             // Reset and clear terminal on fresh connection
             term.reset();
             term.clear();
+
+            // Clear any pending local echo from previous session
+            pendingEchoRef.current = [];
 
             // Send our size to server, then request a fresh snapshot
             if (ws.readyState === WebSocket.OPEN) {
@@ -447,7 +551,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
             term.clear();
             // Write fresh content - the snapshot should include cursor positioning
             if (refresh.screenContent && refresh.screenContent.length > 0) {
-              const content = decoder.decode(refresh.screenContent);
+              const content = sharedDecoder.decode(refresh.screenContent);
               term.write(content);
             }
             // Scroll to bottom to ensure cursor is visible
@@ -513,7 +617,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
         scheduleRetry();
       }
     };
-  }, [wsUrl, onRetryingChange, scheduleRetry]);
+  }, [wsUrl, onRetryingChange, scheduleRetry, bufferWrite]);
 
   const disconnect = useCallback(() => {
     cancelRetry();
