@@ -167,7 +167,7 @@ pub struct KittyParser {
     /// Animation control
     pub animation_control: Option<AnimationControl>,
     /// Number of times to play animation (v= parameter)
-    /// Per Kitty spec: v=0 ignored, v=1 infinite, v=N means (N-1) loops
+    /// Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
     pub num_plays: Option<u32>,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
@@ -237,7 +237,7 @@ impl KittyParser {
                         // v= is overloaded: height for images, num_plays for animation control
                         if self.action == KittyAction::AnimationControl {
                             // Number of times to play animation (v= for animation control)
-                            // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means loop (N-1) times
+                            // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
                             self.num_plays = value.parse().ok();
                         } else {
                             // Height for image transmission/display
@@ -607,13 +607,14 @@ impl KittyParser {
                 })?;
 
                 // Handle num_plays (v= parameter) for setting loop count
-                // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means loop (N-1) times
+                // Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
+                // We store loop_count as (N-1) so animation stops after (N-1) additional loops
                 if let Some(num_plays) = self.num_plays {
                     if num_plays > 0 {
                         let loop_count = if num_plays == 1 {
                             0 // v=1 means infinite looping
                         } else {
-                            num_plays - 1 // v=N means (N-1) loops
+                            num_plays - 1 // Store N-1 to get N total plays
                         };
                         debug_info!(
                             "KITTY",
@@ -650,7 +651,7 @@ impl KittyParser {
 
     /// Load image data from file path with security validation
     fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
-        // Decode base64 data to get file path
+        // Decode path from UTF-8 bytes (NOT base64-encoded for file transmission)
         let path_str = String::from_utf8(path_data.to_vec())
             .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
 

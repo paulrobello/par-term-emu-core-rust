@@ -383,14 +383,14 @@ Control whether custom colors are used instead of defaults:
 | `use_cursor_guide` | `bool` | `false` | Not exposed | Show cursor guide (column/row highlight) |
 | `use_selected_text_color` | `bool` | `false` | Not exposed | Use custom selection text color |
 | `smart_cursor_color` | `bool` | `false` | Not exposed | Auto-adjust cursor color based on background |
-| `bold_brightening` | `bool` | `true` | Not exposed (Rust only) | Bold ANSI colors 0-7 brighten to 8-15 |
+| `bold_brightening` | `bool` | `true` | Not exposed in Python | Bold ANSI colors 0-7 brighten to 8-15 |
 
 **Notes:**
 - These settings provide feature parity with iTerm2's color configuration
 - Colors can be queried via OSC sequences (10, 11, 12, etc.)
 - Custom colors only apply when corresponding `use_*` flags are enabled
-- Bold brightening is a legacy feature for ANSI color compatibility
-- Some flags (`use_cursor_guide`, `use_selected_text_color`, `smart_cursor_color`, `bold_brightening`) are currently only accessible via Rust API
+- Bold brightening defaults to `true` in Terminal core (iTerm2 compatibility) but `false` in ScreenshotConfig
+- Some flags (`use_cursor_guide`, `use_selected_text_color`, `smart_cursor_color`, `bold_brightening`) are currently only accessible via Rust API (not exposed in Python bindings for runtime terminal configuration)
 
 ---
 
@@ -470,10 +470,10 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `link_color` | `Option<(u8,u8,u8)>` | `None` | Hyperlink color RGB (None = use theme) |
-| `bold_color` | `Option<(u8,u8,u8)>` | `None` | Bold text color RGB (None = use theme) |
-| `use_bold_color` | `Option<bool>` | `None` | Use custom bold color (None = use theme setting) |
-| `bold_brightening` | `Option<bool>` | `None` | Bold ANSI colors 0-7 brighten to 8-15 (None = use theme) |
+| `link_color` | `Option<(u8,u8,u8)>` | `None` | Hyperlink color RGB (None = use terminal default) |
+| `bold_color` | `Option<(u8,u8,u8)>` | `None` | Bold text color RGB (None = use terminal default) |
+| `use_bold_color` | `bool` | `false` | Use custom bold color instead of bright variant |
+| `bold_brightening` | `bool` | `false` | Bold ANSI colors 0-7 brighten to 8-15 |
 | `minimum_contrast` | `f64` | `0.5` | Minimum contrast adjustment (0.0-1.0, iTerm2-compatible) |
 | `faint_text_alpha` | `f32` | `0.5` | Alpha multiplier for faint/dim text (0.0-1.0) |
 
@@ -487,6 +487,8 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 - `0.0` - Fully transparent (invisible)
 - `0.5` - 50% opacity (default, matches iTerm2)
 - `1.0` - No dimming (full opacity)
+
+**Note:** In ScreenshotConfig, `use_bold_color` and `bold_brightening` are boolean values (not `Option<bool>`). When not specified in the screenshot API, they use the config defaults (false for both).
 
 ### Python API Examples
 
@@ -510,10 +512,13 @@ svg_bytes = term.screenshot(
 )
 
 # Screenshot with theme settings
+# Note: bold_brightening and use_bold_color are booleans (not Optional)
 png_bytes = term.screenshot(
     bold_brightening=True,
+    use_bold_color=True,
     background_color=(32, 32, 32),
     link_color=(100, 149, 237),
+    bold_color=(255, 255, 255),
     minimum_contrast=0.7,
     faint_text_alpha=0.6
 )

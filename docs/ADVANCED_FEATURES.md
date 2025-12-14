@@ -167,7 +167,7 @@ The minimum contrast feature automatically adjusts text colors to ensure readabi
 
 ### Usage in Screenshots
 
-The minimum contrast adjustment is available as a parameter in screenshot methods:
+The minimum contrast adjustment is available as a parameter in screenshot methods. The default value is 0.5 (moderate contrast adjustment):
 
 ```python
 from par_term_emu_core_rust import Terminal
@@ -179,10 +179,10 @@ term.process_str("\x1b[38;2;64;64;64m")  # Dark gray text
 term.process_str("\x1b[48;2;0;0;0m")      # Black background
 term.process_str("This text has poor contrast\n")
 
-# Screenshot WITHOUT minimum contrast (default)
-term.screenshot_to_file("low_contrast.png")
+# Screenshot WITHOUT minimum contrast (explicitly disable)
+term.screenshot_to_file("low_contrast.png", minimum_contrast=0.0)
 
-# Screenshot WITH minimum contrast adjustment
+# Screenshot WITH minimum contrast adjustment (default is 0.5)
 term.screenshot_to_file(
     "readable.png",
     minimum_contrast=0.5  # Recommended value for readability
@@ -580,7 +580,7 @@ term.process_str("\x1b]9;4;1;50\x07")
 
 # Check progress state
 progress = term.progress_bar()
-print(f"State: {progress.state}")  # ProgressState.Normal
+print(f"State: {progress.state}")  # "Normal"
 print(f"Progress: {progress.progress}%")  # 50
 
 # Indeterminate progress (unknown duration)
@@ -605,20 +605,14 @@ from par_term_emu_core_rust import Terminal, ProgressState
 
 term = Terminal(80, 24)
 
-# Set progress directly
+# Set progress directly using ProgressState enum
 term.set_progress(ProgressState.Normal, 33)
 
 # Get progress state and value
 if term.has_progress():
-    state = term.progress_state()  # Returns ProgressState enum
-    value = term.progress_value()  # Returns 0-100 (or None for indeterminate)
-
-    print(f"Progress: {value}% ({state})")
-
-# Get complete progress info
-progress = term.progress_bar()
-print(f"State: {progress.state}")
-print(f"Value: {progress.progress}")
+    progress = term.progress_bar()
+    print(f"State: {progress.state}")  # e.g., "Normal"
+    print(f"Progress: {progress.progress}%")  # e.g., 33
 
 # Clear progress
 term.clear_progress()
@@ -932,7 +926,7 @@ Virtual placements with `U=1` create template images that are displayed via Unic
 4. **Frontend rendering** - Renderer detects placeholders and looks up virtual placement
 
 ```python
-# Create virtual placement (U=1, cols x rows specifies placeholder grid size)
+# Create virtual placement (U=1, columns x rows specifies placeholder grid size)
 term.process_str(f"\x1b_Ga=T,U=1,i=50,p=1,c=3,r=2,f=100;{encoded}\x1b\\")
 
 # Terminal automatically inserts 3x2 grid of U+10EEEE placeholder characters
@@ -1006,8 +1000,11 @@ term.process_str("\x1b_Ga=d,i=42\x1b\\")
 | Frame Number | `r` | Animation frame number | `r=1` |
 | Frame Delay | `z` | Delay in milliseconds | `z=500` |
 | Virtual | `U` | Virtual placement flag | `U=1` |
-| Width | `s` | Image width (pixels) | `s=800` |
-| Height | `v` | Image height (pixels) | `v=600` |
+| Columns | `c` | Columns for virtual placement | `c=3` |
+| Rows | `r` | Rows for virtual placement | `r=2` |
+| Loop Count | `v` | Animation loop count | `v=1` (infinite) |
+
+**Note:** The `r` parameter is context-dependent - it's used for frame number in animations and row count in virtual placements. The `v` parameter is used for both image height and animation loop count depending on context.
 
 ### Actions
 
@@ -1786,11 +1783,11 @@ The notification system provides a comprehensive framework for handling terminal
 ### Configuration
 
 ```python
-from par_term_emu_core_rust import Terminal, NotificationConfig
+from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
 
-# Get current configuration
+# Get current notification configuration
 config = term.get_notification_config()
 
 # Configure bell notifications
@@ -1918,7 +1915,7 @@ import time
 term = Terminal(80, 24)
 
 # Start recording
-term.start_recording(title="Build Session")
+term.start_recording("Build Session")
 
 # Check recording status
 if term.is_recording():
@@ -1942,9 +1939,9 @@ term.record_resize(100, 30)
 # Get session info while recording
 session = term.get_recording_session()
 if session:
-    print(f"Events recorded: {session.event_count}")
-    print(f"Duration: {session.get_duration_seconds():.2f}s")
-    print(f"Size: {session.get_size()}")
+    print(f"Events recorded: {len(session.events)}")
+    print(f"Duration: {session.duration}ms")
+    print(f"Size: {session.terminal_size}")
 
 # Stop recording
 final_session = term.stop_recording()
@@ -1954,7 +1951,7 @@ final_session = term.stop_recording()
 
 ```python
 # Export to asciicast v2 format (asciinema compatible)
-asciicast = term.export_asciicast(session=final_session)
+asciicast = term.export_asciicast(final_session)
 with open("session.cast", "w") as f:
     f.write(asciicast)
 
@@ -1962,7 +1959,7 @@ with open("session.cast", "w") as f:
 # $ asciinema play session.cast
 
 # Export to JSON format
-json_data = term.export_json(session=final_session)
+json_data = term.export_json(final_session)
 with open("session.json", "w") as f:
     f.write(json_data)
 ```
@@ -1975,7 +1972,7 @@ import time
 
 with PtyTerminal(80, 24) as pty:
     # Start recording before spawning shell
-    pty.start_recording(title="Shell Session")
+    pty.start_recording("Shell Session")
 
     # Spawn shell
     pty.spawn_shell()
@@ -1995,7 +1992,7 @@ with PtyTerminal(80, 24) as pty:
     # Stop and export
     session = pty.stop_recording()
     if session:
-        asciicast = pty.export_asciicast(session=session)
+        asciicast = pty.export_asciicast(session)
         with open("shell.cast", "w") as f:
             f.write(asciicast)
 ```
@@ -2028,13 +2025,12 @@ session = term.get_recording_session()
 # Access session properties
 print(f"Start time: {session.start_time}")  # UNIX timestamp (ms)
 print(f"Duration: {session.duration}ms")
-print(f"Size: {session.initial_size}")  # (cols, rows)
+print(f"Size: {session.terminal_size}")  # (cols, rows) tuple or None
 print(f"Title: {session.title}")
-print(f"Events: {session.event_count}")
+print(f"Events: {len(session.events)}")
 
-# Convenience methods
-print(f"Duration: {session.get_duration_seconds():.2f}s")
-cols, rows = session.get_size()
+# Session info
+print(f"Environment: {session.env}")  # Dictionary of env vars
 ```
 
 ### Recording Events
@@ -2090,7 +2086,7 @@ While Session Recording captures raw I/O events, the macro system provides a hig
 ### Basic Usage
 
 ```python
-from par_term_emu_core_rust import Terminal, Macro
+from par_term_emu_core_rust import Macro
 
 # Manual macro creation
 macro = Macro("Demo Session")
@@ -2108,7 +2104,7 @@ macro.add_key("o")
 macro.add_key("'")
 macro.add_key("enter")
 macro.add_delay(1000)  # 1 second pause
-macro.add_screenshot(label="after_hello")
+macro.add_screenshot("after_hello")  # Screenshot with label
 
 # Save to YAML
 macro.save_yaml("demo.yaml")
@@ -2117,7 +2113,7 @@ macro.save_yaml("demo.yaml")
 loaded = Macro.load_yaml("demo.yaml")
 print(f"Macro: {loaded.name}")
 print(f"Duration: {loaded.duration}ms")
-print(f"Events: {loaded.event_count}")
+print(f"Event count: {len(loaded.events)}")
 ```
 
 ### Key Features
@@ -2362,17 +2358,18 @@ openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -node
 - Monitor connection logs for suspicious activity
 - Use firewall rules to restrict access
 
-**Example with TLS and Authentication:**
+**Example with TLS:**
 ```bash
-# Production deployment with TLS + API key
+# Production deployment with TLS
 par-term-streamer \
     --host 0.0.0.0 --port 8099 \
     --tls-cert /path/to/cert.pem \
-    --tls-key /path/to/key.pem \
-    --api-key "$(cat /secure/api-key.txt)"
+    --tls-key /path/to/key.pem
 
-# Connect from browser using wss:// and provide API key
+# Connect from browser using wss://
 ```
+
+**Note:** API key authentication is available through the StreamingConfig API but not currently exposed as a CLI flag in the standalone server.
 
 **Certificate Requirements:**
 - Use trusted CA certificates for production

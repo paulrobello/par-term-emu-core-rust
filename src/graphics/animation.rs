@@ -301,7 +301,9 @@ impl Animation {
             self.loops_completed += 1;
 
             // Check if we should stop looping
-            if self.loop_count > 0 && self.loops_completed >= self.loop_count {
+            // loop_count is set to (num_plays - 1), so we stop after (num_plays - 1) additional loops
+            // which gives us num_plays total plays
+            if self.loop_count > 0 && self.loops_completed > self.loop_count {
                 debug_info!(
                     "ANIMATION",
                     "image_id={} completed all loops, stopping",

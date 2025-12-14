@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.0] - 2025-12-14
+
+### Added
+- **Environment Variable Support**: All CLI options now support environment variables with `PAR_TERM_` prefix
+  - Examples: `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_THEME`, `PAR_TERM_HTTP_USER`
+  - Enabled via clap's `env` feature
+
+- **HTTP Basic Authentication**: New password protection for the web frontend
+  - `--http-user` - Username for HTTP Basic Auth
+  - `--http-password` - Clear text password (env: `PAR_TERM_HTTP_PASSWORD`)
+  - `--http-password-hash` - htpasswd format hash supporting bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
+  - `--http-password-file` - Read password from file (auto-detects hash vs clear text)
+  - Uses `htpasswd-verify` crate for hash verification
+
+- **Comprehensive Streaming Test Suite**: 94 new tests for streaming functionality
+  - Integration tests (`tests/test_streaming.rs`): Protocol message constructors, theme info, HTTP Basic Auth, StreamingConfig, binary protocol encoding/decoding, event types, streaming errors, JSON serialization
+  - Unit tests in `broadcaster.rs`: Default implementation, client management, empty broadcaster operations
+  - Unit tests in `proto.rs`: All message type encoding/decoding, Unicode content, ANSI escape sequences, event type conversions
+
+### Changed
+- **Dependencies**: Added `htpasswd-verify` and `headers` crates for HTTP Basic Auth support
+- **Streaming Server**: Added `HttpBasicAuthConfig` and `PasswordConfig` types to `StreamingConfig`
+- **Python Bindings**: Added exports for binary protocol functions (`encode_server_message`, `decode_server_message`, `encode_client_message`, `decode_client_message`) to `__init__.py`
+- **Python Package Version**: Updated to 0.18.0 to match Cargo.toml
+
 ## [0.17.0] - 2025-12-13
 
 ### Added

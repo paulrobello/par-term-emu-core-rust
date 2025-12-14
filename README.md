@@ -13,6 +13,45 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.18.0
+
+### 🎉 New Features
+
+- **Environment Variable Support**: All CLI options now support environment variables with `PAR_TERM_` prefix
+  - Examples: `PAR_TERM_HOST`, `PAR_TERM_PORT`, `PAR_TERM_THEME`, `PAR_TERM_HTTP_USER`
+  - Configuration via environment for containerized deployments
+
+- **HTTP Basic Authentication**: New password protection for the web frontend
+  - `--http-user` - Username for HTTP Basic Auth
+  - `--http-password` - Clear text password
+  - `--http-password-hash` - htpasswd format hash (bcrypt, apr1, SHA1, MD5 crypt)
+  - `--http-password-file` - Read password from file (auto-detects hash vs clear text)
+
+### 🧪 Test Coverage
+
+- **Comprehensive Streaming Test Suite**: 94 new tests for streaming functionality
+  - Protocol message constructors, theme info, HTTP Basic Auth configuration
+  - Binary protocol encoding/decoding with compression
+  - Event types, streaming errors, JSON serialization
+  - Unicode content and ANSI escape sequence preservation
+
+### 🔧 Improvements
+
+- **Python Bindings**: Binary protocol functions now properly exported (`encode_server_message`, `decode_server_message`, `encode_client_message`, `decode_client_message`)
+
+### Usage Examples
+
+```bash
+# Environment variables
+export PAR_TERM_HOST=0.0.0.0
+export PAR_TERM_HTTP_USER=admin
+export PAR_TERM_HTTP_PASSWORD=secret
+par-term-streamer --enable-http
+
+# CLI with htpasswd hash
+par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
+```
+
 ## What's New in 0.17.0
 
 ### 🎉 New Features

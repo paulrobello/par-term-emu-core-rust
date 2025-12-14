@@ -107,7 +107,7 @@ ESC _ G a=a,i=<id>,s=<state>[,v=<num_plays>] ESC \
 - `v=<num_plays>` - Number of times to play (optional):
   - `0` = Ignored (no change to loop count)
   - `1` = Infinite looping (loops forever)
-  - `N` (N > 1) = Loop (N-1) times total (e.g., `v=3` means play 3 times = loop 2 additional times after the first play)
+  - `N` (N > 1) = Play animation N times total (e.g., `v=3` means play the complete animation 3 times: initial play + 2 additional loops)
 
 **Examples:**
 ```python
@@ -117,7 +117,7 @@ print("\x1b_Ga=a,i=42,v=1\x1b\\", end="", flush=True)
 # Enable looping (start animation)
 print("\x1b_Ga=a,i=42,s=3\x1b\\", end="", flush=True)
 
-# Set to loop 2 times (v=3 means N-1 = 2 loops)
+# Play animation 3 times total (v=3)
 print("\x1b_Ga=a,i=42,v=3\x1b\\", end="", flush=True)
 
 # Pause animation (loading mode)
@@ -356,8 +356,9 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 **Symptoms:** Animation loops wrong number of times
 
 **Check:**
-- Remember: `v=0` is ignored, `v=1` is infinite, `v=N` (N > 1) means loop (N-1) additional times
-- Example: `v=3` means play 3 times total (first play + 2 additional loops)
+- Remember: `v=0` is ignored, `v=1` is infinite, `v=N` (N > 1) means play N times total
+- Example: `v=3` means play the complete animation 3 times (initial play + 2 additional loops)
+- Internally: `loop_count` is set to `N-1`, and the animation stops after `N-1` complete loops (giving N total plays including the initial playthrough)
 - Check logs for: `"Setting loop count for image_id=..."` messages
 
 ## Related Documentation

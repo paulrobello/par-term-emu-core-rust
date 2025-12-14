@@ -66,7 +66,9 @@ pub use broadcaster::Broadcaster;
 pub use client::Client;
 
 #[cfg(feature = "streaming")]
-pub use server::{StreamingConfig, StreamingServer, TlsConfig};
+pub use server::{
+    HttpBasicAuthConfig, PasswordConfig, StreamingConfig, StreamingServer, TlsConfig,
+};
 
 #[cfg(feature = "streaming")]
 pub use proto::{

@@ -7,20 +7,35 @@
 //! ## Features
 //!
 //! - Real-time terminal streaming via WebSocket
-//! - Optional authentication (API key in header or URL param)
+//! - Optional WebSocket authentication (API key in header or URL param)
+//! - Optional HTTP Basic Authentication for web frontend
+//! - Environment variable support for all CLI options
 //! - Configurable color themes
 //! - Graceful shutdown handling
 //! - Automatic terminal resize support
+//! - TLS/SSL support
 //!
 //! ## Usage
 //!
 //! ```bash
-//! par-term-streamer --host 127.0.0.1 --port 8080 --theme iTerm2-dark
+//! par-term-streamer --host 127.0.0.1 --port 8080 --theme iterm2-dark
 //! ```
 //!
-//! ## Authentication
+//! ## Environment Variables
 //!
-//! To enable authentication, use the `--api-key` flag:
+//! All CLI options can be set via environment variables with `PAR_TERM_` prefix:
+//!
+//! ```bash
+//! export PAR_TERM_HOST=0.0.0.0
+//! export PAR_TERM_PORT=8080
+//! export PAR_TERM_HTTP_USER=admin
+//! export PAR_TERM_HTTP_PASSWORD=secret
+//! par-term-streamer --enable-http
+//! ```
+//!
+//! ## WebSocket Authentication
+//!
+//! To enable WebSocket authentication, use the `--api-key` flag:
 //!
 //! ```bash
 //! par-term-streamer --api-key my-secret-key
@@ -29,6 +44,21 @@
 //! Clients can then authenticate using either:
 //! - Header: `Authorization: Bearer my-secret-key`
 //! - URL param: `ws://localhost:8080?api_key=my-secret-key`
+//!
+//! ## HTTP Basic Authentication
+//!
+//! To enable HTTP Basic Auth for the web frontend:
+//!
+//! ```bash
+//! # With clear text password
+//! par-term-streamer --enable-http --http-user admin --http-password secret
+//!
+//! # With htpasswd hash (bcrypt, apr1, sha1, md5crypt)
+//! par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
+//!
+//! # With password from file (auto-detects hash vs clear text)
+//! par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
+//! ```
 
 // Use jemalloc for better server performance (5-15% throughput improvement)
 // Only available on non-Windows platforms
@@ -46,11 +76,13 @@ use par_term_emu_core_rust::{
     color::Color,
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
     pty_session::PtySession,
-    streaming::{protocol::ThemeInfo, StreamingConfig, StreamingServer, TlsConfig},
+    streaming::{
+        protocol::ThemeInfo, HttpBasicAuthConfig, StreamingConfig, StreamingServer, TlsConfig,
+    },
     terminal::Terminal,
 };
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -306,112 +338,143 @@ fn parse_size(s: &str) -> Result<(u16, u16), String> {
 #[command(version, about = "Terminal streaming server with WebSocket support")]
 struct Args {
     /// Host address to bind to
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "127.0.0.1", env = "PAR_TERM_HOST")]
     host: String,
 
     /// Port to bind to
-    #[arg(long, short = 'p', default_value = "8099")]
+    #[arg(long, short = 'p', default_value = "8099", env = "PAR_TERM_PORT")]
     port: u16,
 
     /// Terminal size in COLSxROWS format (e.g., 120x40)
     /// Overrides --cols and --rows if specified
-    #[arg(long, short = 's', value_parser = parse_size)]
+    #[arg(long, short = 's', value_parser = parse_size, env = "PAR_TERM_SIZE")]
     size: Option<(u16, u16)>,
 
     /// Terminal columns (width)
-    #[arg(long, default_value = "80")]
+    #[arg(long, default_value = "80", env = "PAR_TERM_COLS")]
     cols: u16,
 
     /// Terminal rows (height)
-    #[arg(long, default_value = "24")]
+    #[arg(long, default_value = "24", env = "PAR_TERM_ROWS")]
     rows: u16,
 
     /// Use current terminal size (from TTY)
     /// Overrides --size, --cols, and --rows if specified
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_USE_TTY_SIZE")]
     use_tty_size: bool,
 
     /// Scrollback buffer size (lines)
-    #[arg(long, default_value = "10000")]
+    #[arg(long, default_value = "10000", env = "PAR_TERM_SCROLLBACK")]
     scrollback: usize,
 
     /// Shell command to run (auto-detect if not specified)
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_SHELL")]
     shell: Option<String>,
 
     /// Command to execute after shell starts (sent as input after 1 second delay)
-    #[arg(long, short = 'c')]
+    #[arg(long, short = 'c', env = "PAR_TERM_COMMAND")]
     command: Option<String>,
 
     /// Color theme
     #[arg(
         long,
         default_value = "iterm2-dark",
-        value_parser = clap::builder::PossibleValuesParser::new(Theme::available())
+        value_parser = clap::builder::PossibleValuesParser::new(Theme::available()),
+        env = "PAR_TERM_THEME"
     )]
     theme: String,
 
-    /// API key for authentication (optional)
+    /// API key for WebSocket authentication (optional)
     /// Clients must provide this via Authorization header or api_key URL param
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_API_KEY")]
     api_key: Option<String>,
 
     /// Maximum number of concurrent clients
-    #[arg(long, default_value = "100")]
+    #[arg(long, default_value = "100", env = "PAR_TERM_MAX_CLIENTS")]
     max_clients: usize,
 
     /// Keepalive ping interval in seconds (0 to disable)
-    #[arg(long, default_value = "30")]
+    #[arg(long, default_value = "30", env = "PAR_TERM_KEEPALIVE")]
     keepalive: u64,
 
     /// Enable verbose logging
-    #[arg(long, short = 'v')]
+    #[arg(long, short = 'v', env = "PAR_TERM_VERBOSE")]
     verbose: bool,
 
     /// Enable HTTP static file serving
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_ENABLE_HTTP")]
     enable_http: bool,
 
     /// Web root directory for static files
-    #[arg(long, default_value = "./web_term")]
+    #[arg(long, default_value = "./web_term", env = "PAR_TERM_WEB_ROOT")]
     web_root: String,
 
     /// Macro file to play back instead of running a shell
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_MACRO_FILE")]
     macro_file: Option<String>,
 
     /// Macro playback speed multiplier (1.0 = normal, 2.0 = 2x speed)
-    #[arg(long, default_value = "1.0")]
+    #[arg(long, default_value = "1.0", env = "PAR_TERM_MACRO_SPEED")]
     macro_speed: f64,
 
     /// Loop macro playback continuously
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_MACRO_LOOP")]
     macro_loop: bool,
 
     /// Download prebuilt web frontend from GitHub releases
     /// When specified, downloads and extracts frontend to web-root, then exits
-    #[arg(long)]
+    #[arg(long, env = "PAR_TERM_DOWNLOAD_FRONTEND")]
     download_frontend: bool,
 
     /// Version of web frontend to download (e.g., "0.14.0")
     /// Defaults to "latest" which fetches the most recent release
-    #[arg(long, default_value = "latest")]
+    #[arg(long, default_value = "latest", env = "PAR_TERM_FRONTEND_VERSION")]
     frontend_version: String,
 
     /// TLS certificate file (PEM format)
     /// Use with --tls-key for separate cert/key files
-    #[arg(long, requires = "tls_key")]
+    #[arg(long, requires = "tls_key", env = "PAR_TERM_TLS_CERT")]
     tls_cert: Option<String>,
 
     /// TLS private key file (PEM format)
     /// Use with --tls-cert for separate cert/key files
-    #[arg(long, requires = "tls_cert")]
+    #[arg(long, requires = "tls_cert", env = "PAR_TERM_TLS_KEY")]
     tls_key: Option<String>,
 
     /// Combined TLS PEM file containing both certificate and private key
     /// Alternative to using --tls-cert and --tls-key
-    #[arg(long, conflicts_with_all = ["tls_cert", "tls_key"])]
+    #[arg(long, conflicts_with_all = ["tls_cert", "tls_key"], env = "PAR_TERM_TLS_PEM")]
     tls_pem: Option<String>,
+
+    // HTTP Basic Auth options
+    /// Username for HTTP Basic Authentication
+    #[arg(long, env = "PAR_TERM_HTTP_USER")]
+    http_user: Option<String>,
+
+    /// Password for HTTP Basic Authentication (clear text)
+    /// Mutually exclusive with --http-password-hash
+    #[arg(
+        long,
+        env = "PAR_TERM_HTTP_PASSWORD",
+        conflicts_with = "http_password_hash"
+    )]
+    http_password: Option<String>,
+
+    /// Password hash for HTTP Basic Authentication (htpasswd format)
+    /// Supports: bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
+    /// Mutually exclusive with --http-password
+    #[arg(
+        long,
+        env = "PAR_TERM_HTTP_PASSWORD_HASH",
+        conflicts_with = "http_password"
+    )]
+    http_password_hash: Option<String>,
+
+    /// File containing password (reads first line)
+    /// If line starts with $ or {SHA}, treated as hash; otherwise as clear text
+    /// Overrides --http-password and --http-password-hash
+    #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
+    http_password_file: Option<String>,
 }
 
 /// Main event loop state
@@ -680,6 +743,93 @@ fn count_files(path: &Path) -> Result<usize> {
     Ok(count)
 }
 
+/// Determine if a password string looks like an htpasswd hash
+fn looks_like_hash(s: &str) -> bool {
+    // bcrypt: $2a$, $2b$, $2y$
+    // apr1: $apr1$
+    // MD5 crypt: $1$
+    // SHA1: {SHA}
+    s.starts_with("$2a$")
+        || s.starts_with("$2b$")
+        || s.starts_with("$2y$")
+        || s.starts_with("$apr1$")
+        || s.starts_with("$1$")
+        || s.starts_with("{SHA}")
+}
+
+/// Resolve HTTP Basic Auth configuration from CLI arguments
+///
+/// Priority: password_file > password_hash > password
+fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig>> {
+    // If no username is provided, no auth is configured
+    let username = match &args.http_user {
+        Some(u) => u.clone(),
+        None => {
+            // Check if any password options are provided without a username
+            if args.http_password.is_some()
+                || args.http_password_hash.is_some()
+                || args.http_password_file.is_some()
+            {
+                anyhow::bail!(
+                    "HTTP Basic Auth password options require --http-user to be specified"
+                );
+            }
+            return Ok(None);
+        }
+    };
+
+    // Priority: file > hash > clear text
+    if let Some(ref file_path) = args.http_password_file {
+        // Read password from file (first line)
+        let file = fs::File::open(file_path)
+            .context(format!("Failed to open password file: {}", file_path))?;
+        let reader = BufReader::new(file);
+        let first_line = reader
+            .lines()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Password file is empty: {}", file_path))?
+            .context("Failed to read password file")?;
+
+        let password_value = first_line.trim();
+        if password_value.is_empty() {
+            anyhow::bail!("Password file contains empty line: {}", file_path);
+        }
+
+        // Determine if it's a hash or clear text
+        if looks_like_hash(password_value) {
+            info!("Using password hash from file: {}", file_path);
+            return Ok(Some(HttpBasicAuthConfig::with_hash(
+                username,
+                password_value.to_string(),
+            )));
+        } else {
+            info!("Using clear text password from file: {}", file_path);
+            return Ok(Some(HttpBasicAuthConfig::with_password(
+                username,
+                password_value.to_string(),
+            )));
+        }
+    }
+
+    if let Some(ref hash) = args.http_password_hash {
+        info!("Using password hash from argument/environment");
+        return Ok(Some(HttpBasicAuthConfig::with_hash(username, hash.clone())));
+    }
+
+    if let Some(ref password) = args.http_password {
+        info!("Using clear text password from argument/environment");
+        return Ok(Some(HttpBasicAuthConfig::with_password(
+            username,
+            password.clone(),
+        )));
+    }
+
+    // Username provided but no password - this is an error
+    anyhow::bail!(
+        "--http-user requires one of: --http-password, --http-password-hash, or --http-password-file"
+    );
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -766,6 +916,9 @@ async fn main() -> Result<()> {
 
     let use_tls = tls_config.is_some();
 
+    // Resolve HTTP Basic Auth configuration
+    let http_basic_auth = resolve_http_basic_auth(&args)?;
+
     // Create streaming server configuration
     let config = StreamingConfig {
         max_clients: args.max_clients,
@@ -777,6 +930,7 @@ async fn main() -> Result<()> {
         initial_cols: cols,
         initial_rows: rows,
         tls: tls_config,
+        http_basic_auth: http_basic_auth.clone(),
     };
 
     // Create streaming server
@@ -924,8 +1078,9 @@ async fn main() -> Result<()> {
         println!("\n  WebSocket URL: {}://{}", ws_scheme, addr);
     }
 
+    // WebSocket API key authentication
     if let Some(api_key) = &args.api_key {
-        println!("\n  Authentication: ENABLED");
+        println!("\n  WebSocket Auth: ENABLED (API Key)");
         println!("  API Key: {}", "*".repeat(api_key.len().min(8)));
         println!("\n  Connect with:");
         println!("    - Header: Authorization: Bearer <api-key>");
@@ -935,12 +1090,21 @@ async fn main() -> Result<()> {
             println!("    - URL: {}://{}?api_key=<api-key>", ws_scheme, addr);
         }
     } else {
-        println!("\n  Authentication: DISABLED");
+        println!("\n  WebSocket Auth: DISABLED");
         if args.enable_http {
             println!("  WebSocket: {}://{}/ws", ws_scheme, addr);
         } else {
             println!("  Connect to: {}://{}", ws_scheme, addr);
         }
+    }
+
+    // HTTP Basic Authentication
+    if let Some(ref auth) = http_basic_auth {
+        println!("\n  HTTP Basic Auth: ENABLED");
+        println!("  Username: {}", auth.username);
+        println!("  Password: ********");
+    } else if args.enable_http {
+        println!("\n  HTTP Basic Auth: DISABLED (no password protection)");
     }
 
     println!("\n  Theme: {}", theme.name);

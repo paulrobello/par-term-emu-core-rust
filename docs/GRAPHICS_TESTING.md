@@ -334,10 +334,10 @@ Test images are available in the repository:
 
 ```
 images/
-├── snake.png         # Snake game screenshot (276KB)
-├── snake.sixel       # Snake as Sixel (268KB)
-├── snake_tui.png     # Snake TUI version (8KB)
-└── snake_tui.sixel   # Snake TUI as Sixel (12KB)
+├── snake.png         # Snake game screenshot (274KB)
+├── snake.sixel       # Snake as Sixel (265KB)
+├── snake_tui.png     # Snake TUI version (5KB)
+└── snake_tui.sixel   # Snake TUI as Sixel (9KB)
 ```
 
 **Note**: Currently, test images are primarily snake game screenshots. Additional test images (basic colors, patterns, etc.) can be added for comprehensive protocol testing.

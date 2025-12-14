@@ -77,7 +77,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.16", default-features = false }
+par-term-emu-core-rust = { version = "0.18", default-features = false }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -85,7 +85,7 @@ par-term-emu-core-rust = { version = "0.16", default-features = false }
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.16", default-features = false, features = ["streaming"] }
+par-term-emu-core-rust = { version = "0.18", default-features = false, features = ["streaming"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -93,9 +93,9 @@ par-term-emu-core-rust = { version = "0.16", default-features = false, features 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.16" }
+par-term-emu-core-rust = { version = "0.18" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.16", features = ["python"] }
+par-term-emu-core-rust = { version = "0.18", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -103,9 +103,9 @@ par-term-emu-core-rust = { version = "0.16", features = ["python"] }
 #### Python with Streaming
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.16", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.18", features = ["python", "streaming"] }
 # Or use the convenience feature:
-par-term-emu-core-rust = { version = "0.16", features = ["full"] }
+par-term-emu-core-rust = { version = "0.18", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
@@ -293,6 +293,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_read_only: false,
         enable_http: true,
         web_root: "./web_term".to_string(),
+        initial_cols: 0,  // 0 = use terminal's current size
+        initial_rows: 0,  // 0 = use terminal's current size
+        tls: None,
+        http_basic_auth: None,
     };
 
     let mut server = StreamingServer::with_config(

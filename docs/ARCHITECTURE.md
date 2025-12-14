@@ -375,6 +375,7 @@ pub struct Terminal {
 
     // Notifications and events
     notifications: Vec<Notification>,
+    progress_bar: ProgressBar,
     bell_count: u64,
     bell_events: Vec<BellEvent>,
     terminal_events: Vec<TerminalEvent>,

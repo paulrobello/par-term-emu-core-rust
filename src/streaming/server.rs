@@ -191,6 +191,64 @@ impl TlsConfig {
     }
 }
 
+/// HTTP Basic Authentication configuration
+///
+/// Supports password verification via:
+/// - Clear text comparison
+/// - htpasswd hash formats: bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
+#[derive(Debug, Clone)]
+pub struct HttpBasicAuthConfig {
+    /// Username for authentication
+    pub username: String,
+    /// Password storage - either clear text or htpasswd hash
+    pub password: PasswordConfig,
+}
+
+/// Password storage configuration
+#[derive(Debug, Clone)]
+pub enum PasswordConfig {
+    /// Clear text password (compared directly)
+    ClearText(String),
+    /// htpasswd format hash (bcrypt, apr1, sha1, md5crypt)
+    Hash(String),
+}
+
+impl HttpBasicAuthConfig {
+    /// Create a new HTTP Basic Auth config with clear text password
+    pub fn with_password(username: String, password: String) -> Self {
+        Self {
+            username,
+            password: PasswordConfig::ClearText(password),
+        }
+    }
+
+    /// Create a new HTTP Basic Auth config with htpasswd hash
+    pub fn with_hash(username: String, hash: String) -> Self {
+        Self {
+            username,
+            password: PasswordConfig::Hash(hash),
+        }
+    }
+
+    /// Verify a password against this config
+    pub fn verify(&self, username: &str, password: &str) -> bool {
+        if username != self.username {
+            return false;
+        }
+
+        match &self.password {
+            PasswordConfig::ClearText(expected) => password == expected,
+            PasswordConfig::Hash(hash) => {
+                // Use htpasswd-verify crate to check the password
+                // Format: "username:hash" for htpasswd library
+                let htpasswd_line = format!("{}:{}", self.username, hash);
+                let htpasswd = htpasswd_verify::Htpasswd::from(htpasswd_line.as_str());
+                htpasswd.check(username, password)
+            }
+        }
+    }
+}
+
 /// Configuration for the streaming server
 #[derive(Debug, Clone)]
 pub struct StreamingConfig {
@@ -212,6 +270,8 @@ pub struct StreamingConfig {
     pub initial_rows: u16,
     /// TLS configuration for secure connections (None = no TLS)
     pub tls: Option<TlsConfig>,
+    /// HTTP Basic Authentication configuration (None = no auth)
+    pub http_basic_auth: Option<HttpBasicAuthConfig>,
 }
 
 impl Default for StreamingConfig {
@@ -226,6 +286,7 @@ impl Default for StreamingConfig {
             initial_cols: 0,
             initial_rows: 0,
             tls: None,
+            http_basic_auth: None,
         }
     }
 }
@@ -371,18 +432,29 @@ impl StreamingServer {
             });
         }
 
-        // Build router
+        // Build router with optional basic auth middleware
         let app = Router::new()
             .route("/ws", get(ws_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
+
+        // Add basic auth middleware if configured
+        let app = if let Some(ref auth_config) = self.config.http_basic_auth {
+            let auth_config = auth_config.clone();
+            app.layer(axum::middleware::from_fn(move |req, next| {
+                let auth_config = auth_config.clone();
+                basic_auth_middleware(req, next, auth_config)
+            }))
+        } else {
+            app
+        };
 
         // Start server
         let listener = tokio::net::TcpListener::bind(&self.addr)
             .await
             .map_err(|e| StreamingError::ServerError(format!("Failed to bind: {}", e)))?;
 
-        axum::serve(listener, app)
+        axum::serve(listener, app.into_make_service())
             .await
             .map_err(|e| StreamingError::ServerError(format!("Server error: {}", e)))?;
 
@@ -422,11 +494,22 @@ impl StreamingServer {
             });
         }
 
-        // Build router
+        // Build router with optional basic auth middleware
         let app = Router::new()
             .route("/ws", get(ws_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
+
+        // Add basic auth middleware if configured
+        let app = if let Some(ref auth_config) = self.config.http_basic_auth {
+            let auth_config = auth_config.clone();
+            app.layer(axum::middleware::from_fn(move |req, next| {
+                let auth_config = auth_config.clone();
+                basic_auth_middleware(req, next, auth_config)
+            }))
+        } else {
+            app
+        };
 
         // Build TLS config for axum-server
         let rustls_config = RustlsConfig::from_der(
@@ -1143,6 +1226,55 @@ impl StreamingServer {
 
         Ok(())
     }
+}
+
+/// HTTP Basic Authentication middleware for Axum
+///
+/// Validates Authorization header with Basic credentials against the provided config.
+/// Returns 401 Unauthorized with WWW-Authenticate header if authentication fails.
+#[cfg(feature = "streaming")]
+async fn basic_auth_middleware(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+    auth_config: HttpBasicAuthConfig,
+) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+
+    // Extract Authorization header
+    let auth_header = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok());
+
+    if let Some(auth_value) = auth_header {
+        // Check if it's Basic auth
+        if let Some(credentials) = auth_value.strip_prefix("Basic ") {
+            // Decode base64 credentials
+            if let Ok(decoded) = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                credentials.trim(),
+            ) {
+                if let Ok(credentials_str) = String::from_utf8(decoded) {
+                    // Split username:password
+                    if let Some((username, password)) = credentials_str.split_once(':') {
+                        // Verify credentials
+                        if auth_config.verify(username, password) {
+                            return next.run(req).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Return 401 Unauthorized with WWW-Authenticate header
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Basic realm=\"Terminal Server\"")],
+        "Unauthorized",
+    )
+        .into_response()
 }
 
 /// Axum WebSocket handler

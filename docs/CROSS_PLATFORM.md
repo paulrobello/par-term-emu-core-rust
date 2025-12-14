@@ -109,25 +109,36 @@ The screenshot module in `src/screenshot/` uses pure Rust implementations for ma
 ```rust
 "/System/Library/Fonts/Apple Color Emoji.ttc",      // Color emoji
 "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-"/System/Library/Fonts/PingFang.ttc",               // Chinese
+"/Library/Fonts/Arial Unicode.ttf",
+"/System/Library/Fonts/Supplemental/DejaVu Sans.ttf",
+"/System/Library/Fonts/Supplemental/DejaVuSans.ttf",
 "/System/Library/Fonts/AppleSDGothicNeo.ttc",       // Korean
-"/System/Library/Fonts/Hiragino Kaku Gothic ProN.ttc", // Japanese
+"/System/Library/Fonts/CJKSymbolsFallback.ttc",
+"/System/Library/Fonts/PingFang.ttc",               // Chinese
+"/System/Library/Fonts/Hiragino Sans GB.ttc",
+"/System/Library/Fonts/Apple Symbols.ttf",
 ```
 
 **Linux:**
 ```rust
 "/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
+"/usr/share/fonts/truetype/noto-color-emoji/NotoColorEmoji.ttf",
+"/usr/share/fonts/noto-color-emoji/NotoColorEmoji.ttf",
+"/usr/share/fonts/truetype/noto/NotoEmoji-Regular.ttf",
 "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
 "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
 ```
 
 **Windows:**
 ```rust
 "C:\\Windows\\Fonts\\seguiemj.ttf",  // Segoe UI Emoji
 "C:\\Windows\\Fonts\\seguisym.ttf",  // Segoe UI Symbol
-"C:\\Windows\\Fonts\\msyh.ttc",      // Microsoft YaHei (Chinese)
+"C:\\Windows\\Fonts\\arial.ttf",     // Arial (basic coverage)
 "C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (Japanese)
+"C:\\Windows\\Fonts\\msyh.ttc",      // Microsoft YaHei (Chinese)
 ```
 
 **Image Encoding:**
@@ -193,13 +204,16 @@ let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log"
 **Font System:**
 - System fonts in `/System/Library/Fonts/` and `/Library/Fonts/`
 - Emoji font: `Apple Color Emoji.ttc` (excellent color emoji coverage)
-- Built-in CJK support: PingFang (Chinese), Hiragino (Japanese), AppleSDGothic (Korean)
-- Arial Unicode provides comprehensive fallback coverage
+- Built-in CJK support: PingFang (Chinese), Hiragino Sans GB (Chinese), Hiragino Kaku Gothic ProN (Japanese), AppleSDGothicNeo (Korean)
+- Additional fonts: CJKSymbolsFallback, Apple Symbols, STHeiti, AppleMyungjo, STSong
+- Arial Unicode provides comprehensive fallback coverage (both in `/System/Library/Fonts/Supplemental/` and `/Library/Fonts/`)
+- DejaVu Sans available in Supplemental folder for Unicode fallback
 
 **Platform Features:**
-- Excellent out-of-the-box emoji rendering
-- May require Full Disk Access permission for some system fonts
-- PTY implementation uses Unix domain sockets
+- Excellent out-of-the-box emoji rendering with Apple Color Emoji
+- Wide range of CJK fonts pre-installed (Chinese, Japanese, Korean)
+- May require Full Disk Access permission for some system fonts in certain security contexts
+- PTY implementation uses Unix domain sockets with SIGWINCH for resize signals
 
 ### Linux
 
@@ -245,10 +259,10 @@ par-term-emu-core-rust is built entirely in Rust with no C dependencies required
 - Consistent behavior everywhere
 
 **Required Tools:**
-- **Rust**: Version 1.75 or later (minimum specified in Cargo.toml)
+- **Rust**: Version 1.75 or later (minimum specified in `Cargo.toml: rust-version = "1.75"`)
 - **Cargo**: Comes with Rust
 - **Python**: 3.12+ for Python bindings (if building with `python` feature)
-- **uv**: Python package manager for dependency management
+- **uv**: Python package manager for dependency management (recommended)
 
 **Quick Start:**
 ```bash
@@ -288,8 +302,8 @@ The screenshot module implements a sophisticated multi-tier font fallback system
 - **Windows**: Segoe UI Emoji (Windows 10+)
 
 **Tier 2: System Unicode Fonts**
-- Arial Unicode, Noto Sans, DejaVu Sans
-- Platform-specific CJK fonts for Asian characters
+- Arial Unicode, Noto Sans, DejaVu Sans, Liberation Sans
+- Platform-specific CJK fonts for Asian characters (see below)
 
 **Tier 3: Embedded Fonts**
 - **JetBrains Mono** (~268KB) - Primary monospace font for terminal text
@@ -299,26 +313,66 @@ The screenshot module implements a sophisticated multi-tier font fallback system
 - Characters not found in any font render as tofu boxes (□)
 - This only occurs if embedded fonts fail to load (extremely rare)
 
+### CJK Font Paths
+
+The screenshot module searches for CJK fonts in the following locations (in priority order):
+
+**macOS:**
+```rust
+"/System/Library/Fonts/Supplemental/Arial Unicode.ttf",  // Excellent CJK coverage
+"/Library/Fonts/Arial Unicode.ttf",
+"/System/Library/Fonts/PingFang.ttc",                    // Modern Chinese
+"/System/Library/Fonts/Hiragino Sans GB.ttc",            // Chinese
+"/System/Library/Fonts/AppleSDGothicNeo.ttc",            // Korean
+"/System/Library/Fonts/Hiragino Kaku Gothic ProN.ttc",   // Japanese
+"/System/Library/Fonts/CJKSymbolsFallback.ttc",          // CJK punctuation & symbols
+"/System/Library/Fonts/STHeiti Medium.ttc",              // Legacy Chinese
+"/System/Library/Fonts/AppleMyungjo.ttf",                // Korean serif
+"/System/Library/Fonts/STSong.ttf",                      // Chinese serif
+```
+
+**Linux:**
+```rust
+"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+"/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+"/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+"/usr/share/fonts/truetype/noto-cjk/NotoSansCJK-Regular.ttc",
+"/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+"/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+```
+
+**Windows:**
+```rust
+"C:\\Windows\\Fonts\\msgothic.ttc",  // Japanese
+"C:\\Windows\\Fonts\\msyh.ttc",      // Chinese (Microsoft YaHei)
+"C:\\Windows\\Fonts\\malgun.ttf",    // Korean (Malgun Gothic)
+"C:\\Windows\\Fonts\\arial.ttf",     // Has some CJK coverage
+```
+
+**Note:** The CJK font loader loads **ALL** available fonts from the above list, not just the first one. This provides comprehensive CJK coverage through multi-font fallback. Each character is cached with its preferred font for performance.
+
 ### Font Loading Implementation
 
 The font cache in `src/screenshot/font_cache.rs` implements lazy loading:
 
 ```rust
 // Embedded fonts are always available
-const DEFAULT_FONT: &[u8] = include_bytes!("JetBrainsMono-Regular.ttf");
-const EMOJI_FALLBACK_FONT: &[u8] = include_bytes!("NotoEmoji-Regular.ttf");
+const DEFAULT_FONT: &[u8] = include_bytes!("JetBrainsMono-Regular.ttf");  // ~268KB
+const EMOJI_FALLBACK_FONT: &[u8] = include_bytes!("NotoEmoji-Regular.ttf");  // ~409KB
 
 // System fonts loaded on-demand when emoji/CJK characters detected
-fn try_load_emoji_font(&mut self) { /* searches system paths */ }
-fn try_load_cjk_font(&mut self) { /* searches system paths */ }
+fn try_load_emoji_font(&mut self) { /* searches system emoji font paths */ }
+fn try_load_cjk_font(&mut self) { /* loads ALL available CJK fonts in priority order */ }
 ```
 
 **Behavior:**
-1. Regular ASCII text uses JetBrains Mono (embedded)
-2. Emoji triggers search for system color emoji fonts
-3. If system font unavailable, uses embedded Noto Emoji (monochrome)
-4. CJK characters trigger search for system CJK fonts
-5. Font choices cached per character for performance
+1. Regular ASCII text uses JetBrains Mono (embedded, always available)
+2. Emoji detection (`is_emoji()`) triggers lazy loading of system color emoji fonts
+3. If no system emoji font found, falls back to embedded Noto Emoji (monochrome)
+4. CJK detection (`is_cjk()`) triggers lazy loading of ALL available system CJK fonts in priority order
+5. CJK font fallback: tries each loaded font until glyph is found
+6. Font choices cached per character (`cjk_font_cache: HashMap<char, usize>`) for performance
+7. Glyph cache: `HashMap<(char, u32, bool, bool), CachedGlyph>` for rendered glyphs
 
 ### Potential Enhancement: Optional Color Emoji Embedding
 
@@ -650,9 +704,12 @@ macOS and Windows run pytest directly:
 - Embedded Noto Emoji provides fallback for missing system fonts
 
 **Distribution Differences:**
-- Font package names vary (`fonts-noto-color-emoji` vs `google-noto-emoji-color-fonts`)
-- Font locations differ (`/usr/share/fonts/` structure varies)
-- Some minimal distributions may lack basic Unicode fonts
+- Font package names vary (`fonts-noto-color-emoji` vs `google-noto-emoji-color-fonts` vs `noto-fonts-emoji`)
+- Font locations vary:
+  - NotoColorEmoji: `/usr/share/fonts/truetype/noto/`, `/usr/share/fonts/truetype/noto-color-emoji/`, `/usr/share/fonts/noto-color-emoji/`
+  - NotoSansCJK: `/usr/share/fonts/opentype/noto/`, `/usr/share/fonts/truetype/noto/`, `/usr/share/fonts/noto-cjk/`, `/usr/share/fonts/truetype/noto-cjk/`
+- Some minimal distributions may lack basic Unicode fonts and need manual installation
+- Liberation and DejaVu fonts widely available as fallbacks
 
 **Shell Variations:**
 - Wide variety of shells (bash, zsh, fish, dash, etc.)

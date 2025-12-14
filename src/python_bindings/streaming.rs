@@ -53,6 +53,7 @@ impl PyStreamingConfig {
                 initial_cols,
                 initial_rows,
                 tls: None, // TLS configuration not exposed to Python (use CLI flags instead)
+                http_basic_auth: None, // HTTP Basic Auth not exposed to Python (use CLI flags instead)
             },
         }
     }

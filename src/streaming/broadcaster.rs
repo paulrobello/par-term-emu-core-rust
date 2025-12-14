@@ -202,4 +202,107 @@ mod tests {
         let fake_id = Uuid::new_v4();
         assert!(!broadcaster.has_client(fake_id).await);
     }
+
+    #[tokio::test]
+    async fn test_broadcaster_default() {
+        let broadcaster = Broadcaster::default();
+        assert_eq!(broadcaster.max_clients(), 1000);
+        assert_eq!(broadcaster.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_client_ids_empty() {
+        let broadcaster = Broadcaster::new();
+        let ids = broadcaster.client_ids().await;
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_remove_nonexistent_client() {
+        let broadcaster = Broadcaster::new();
+        let fake_id = Uuid::new_v4();
+        // Removing a client that doesn't exist should return false
+        assert!(!broadcaster.remove_client(fake_id).await);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_disconnect_all_empty() {
+        let broadcaster = Broadcaster::new();
+        // Should not panic when disconnecting from empty broadcaster
+        broadcaster.disconnect_all().await;
+        assert_eq!(broadcaster.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_ping_all_empty() {
+        let broadcaster = Broadcaster::new();
+        // Should not panic when pinging empty broadcaster
+        broadcaster.ping_all().await;
+        assert_eq!(broadcaster.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_broadcast_empty() {
+        let broadcaster = Broadcaster::new();
+        // Should not panic when broadcasting to empty broadcaster
+        broadcaster
+            .broadcast(ServerMessage::output("test".to_string()))
+            .await;
+        assert_eq!(broadcaster.client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_broadcast_with_errors_empty() {
+        let broadcaster = Broadcaster::new();
+        let errors = broadcaster
+            .broadcast_with_errors(ServerMessage::bell())
+            .await;
+        // No errors when no clients
+        assert!(errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_send_to_nonexistent_client() {
+        let broadcaster = Broadcaster::new();
+        let fake_id = Uuid::new_v4();
+        let result = broadcaster
+            .send_to_client(fake_id, ServerMessage::bell())
+            .await;
+        // Should return error for non-existent client
+        assert!(result.is_err());
+        match result {
+            Err(StreamingError::ClientDisconnected(id)) => {
+                assert_eq!(id, fake_id.to_string());
+            }
+            _ => panic!("Expected ClientDisconnected error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_read_only_count_empty() {
+        let broadcaster = Broadcaster::new();
+        assert_eq!(broadcaster.read_only_client_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_read_write_count_empty() {
+        let broadcaster = Broadcaster::new();
+        assert_eq!(broadcaster.read_write_client_count().await, 0);
+    }
+
+    #[test]
+    fn test_broadcaster_debug() {
+        let broadcaster = Broadcaster::with_max_clients(50);
+        let debug_str = format!("{:?}", broadcaster);
+        assert!(debug_str.contains("Broadcaster"));
+        assert!(debug_str.contains("max_clients"));
+        assert!(debug_str.contains("50"));
+    }
+
+    #[tokio::test]
+    async fn test_broadcaster_custom_max_clients() {
+        let broadcaster = Broadcaster::with_max_clients(5);
+        assert_eq!(broadcaster.max_clients(), 5);
+        assert_eq!(broadcaster.client_count().await, 0);
+    }
 }

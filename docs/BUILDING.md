@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library (version 0.16.0).
+This guide explains how to build and install the par-term-emu-core-rust library (version 0.18.0).
 
 ## Table of Contents
 
@@ -8,6 +8,7 @@ This guide explains how to build and install the par-term-emu-core-rust library 
   - [Rust](#rust)
   - [Python](#python)
   - [uv Package Manager](#uv-package-manager)
+- [Features](#features)
 - [Building from Source](#building-from-source)
   - [Quick Start](#quick-start)
   - [Development Build](#development-build)
@@ -34,7 +35,7 @@ This guide explains how to build and install the par-term-emu-core-rust library 
 
 ### Rust
 
-You need Rust 1.75 or later (as specified in `Cargo.toml` with `rust-version = "1.75"`). The project is currently tested with Rust 1.91.1. Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.75 or later (as specified in `Cargo.toml` with `rust-version = "1.75"`). The project is currently tested with Rust 1.92.0. Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -44,7 +45,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ### Python
 
-You need Python 3.12 or later. The project officially supports Python 3.12, 3.13, and 3.14 (as specified in `pyproject.toml`). Check your version:
+You need Python 3.12 or later. The project officially supports Python 3.12, 3.13, and 3.14 (as specified in `pyproject.toml` with `requires-python = ">=3.12"`). Check your version:
 
 ```bash
 python --version
@@ -64,6 +65,19 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 **Do not use `pip` directly** - always use `uv` commands as shown throughout this guide.
 
+## Features
+
+The library supports several optional features that can be enabled during the build:
+
+- **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`)
+- **`streaming`** - WebSocket streaming server with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
+- **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only, automatically included with streaming)
+- **`regenerate-proto`** - Regenerate Protocol Buffers code from `proto/terminal.proto` (requires `protoc` installed)
+- **`rust-only`** - Build without Python bindings (for pure Rust usage)
+- **`full`** - Enable all features (`python` + `streaming`)
+
+> **📝 Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
+
 ## Building from Source
 
 ### Quick Start
@@ -80,12 +94,12 @@ make dev
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
 - **maturin** (≥1.9, <2.0 for build; ≥1.10.2 for dev) - Build tool for PyO3 projects
-- **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework
+- **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
 - **ruff** (≥0.14.7) - Fast Python linter and formatter
 - **pyright** (≥1.1.407) - Static type checker
 - **pre-commit** (≥4.5.0) - Git hook framework
 - **rich** (≥14.2.0) - Rich text formatting for examples
-- **pillow** (≥12.0.0) - Image processing for graphics features
+- **pillow** (≥12.0.0) - Image processing for graphics features (required dependency)
 
 ### Development Build
 
@@ -98,9 +112,11 @@ uv run maturin develop
 # Release build (slower compilation, faster runtime) - RECOMMENDED
 uv run maturin develop --release
 
-# Or use the make target
+# Or use the make target (RECOMMENDED)
 make dev
 ```
+
+> **📝 Note:** The `make dev` target also runs `uv sync` to ensure all dependencies are up-to-date before building.
 
 This installs the package in your virtual environment, allowing you to import it:
 
@@ -124,10 +140,12 @@ The wheel will be created in `target/wheels/`.
 Install it with:
 
 ```bash
-uv add --find-links target/wheels par-term-emu-core-rust
-# or
+uv pip install target/wheels/par_term_emu_core_rust-*.whl
+# or if using pip directly (not recommended)
 pip install target/wheels/par_term_emu_core_rust-*.whl
 ```
+
+> **📝 Note:** Always prefer `uv pip install` over direct `pip` usage for consistency with the project's package management approach.
 
 ### Auto-rebuild on Changes
 
@@ -160,6 +178,11 @@ This enables:
 - Protocol Buffers message encoding/decoding
 - TLS/SSL support for secure connections
 - Web frontend integration
+- HTTP Basic Authentication support (via `--http-user`, `--http-password`, `--http-password-hash`, `--http-password-file`)
+- Environment variable support for all CLI options (prefix: `PAR_TERM_`)
+- jemalloc memory allocator on non-Windows platforms (5-15% performance improvement)
+
+> **📝 Note:** The `streaming` feature includes `jemalloc` by default on non-Windows platforms for improved server performance. jemalloc is not available on Windows (MSVC target).
 
 See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
 
@@ -215,11 +238,19 @@ Run all code quality checks (format, lint, type check, tests):
 make checkall
 
 # Individual checks
-make fmt              # Format Rust code
-make fmt-python       # Format Python code
-make lint             # Lint Rust code (clippy)
-make lint-python      # Lint and type-check Python code
+make fmt              # Format Rust code (cargo fmt)
+make fmt-python       # Format Python code (ruff format)
+make lint             # Lint Rust code (clippy --all-targets --all-features --fix + fmt)
+make lint-python      # Lint and type-check Python code (ruff format + ruff check --fix + pyright)
 ```
+
+> **📝 Note:** The `make checkall` target runs checks in this order:
+> 1. Rust tests (`test-rust`)
+> 2. Rust linting with auto-fix (`lint` - runs clippy + fmt)
+> 3. Python linting with auto-fix (`lint-python` - runs ruff format + ruff check + pyright)
+> 4. Python tests (`test-python` - rebuilds package with `make dev` first)
+>
+> This ensures all code quality issues are caught before committing.
 
 ### Pre-commit Hooks
 
@@ -240,11 +271,13 @@ make pre-commit-uninstall
 ```
 
 **Pre-commit hooks include:**
-- **File checks**: Trailing whitespace, end-of-file fixer, YAML/TOML validation, merge conflicts
-- **Rust**: `cargo fmt`, `cargo clippy`, `cargo test` (with PyO3 auto-initialize)
+- **File checks**: Trailing whitespace, end-of-file fixer, YAML/TOML validation, large files (max 1MB), merge conflicts, mixed line endings
+- **Rust**: `cargo fmt`, `cargo clippy --all-targets --all-features`, `cargo test --lib --no-default-features --features pyo3/auto-initialize`
 - **Python**: `ruff format`, `ruff check --fix`, `pyright`, `pytest`
 
 The pytest hook runs `uv sync && maturin develop && uv run pytest tests/ -v` to ensure the package is built before running tests.
+
+> **⚠️ Important:** The pytest pre-commit hook can be slow since it rebuilds the package. You may want to comment out the pytest section in `.pre-commit-config.yaml` if you prefer to run tests manually before pushing.
 
 > **📝 Note:** Pre-commit hooks will run automatically on `git commit`. To skip hooks temporarily, use `git commit --no-verify`.
 
@@ -275,13 +308,14 @@ uv run python examples/pty_shell.py
 ```
 
 > **📝 Note:** The project includes 39 example scripts demonstrating various features including:
-> - **Basic Terminal**: basic usage, colors, cursor movement, scrollback, text attributes, rectangle operations, alt screen, Unicode/emoji, gradient tests
-> - **PTY/Shell**: basic PTY, shell sessions, resize, custom environments, multiple PTYs, event loops, mouse events
-> - **Graphics**: Sixel display and rendering, image display
-> - **Advanced Features**: mouse tracking, hyperlinks, notifications, shell integration, bracketed paste, synchronized updates, feature showcase
-> - **Testing**: underline styles, keyboard protocols, clipboard (OSC 52), TUI integration, BCE scroll tests, character tests, scroll timing tests
-> - **Streaming**: WebSocket streaming demo with debugging (requires streaming feature)
-> See the `examples/` directory for the complete list.
+> - **Basic Terminal**: Basic usage (`basic_usage_improved.py`), colors, cursor movement, scrollback, text attributes, rectangle operations, alt screen, Unicode/emoji, gradient tests
+> - **PTY/Shell**: Basic PTY (`pty_basic.py`), shell sessions (`pty_shell.py`), resize, custom environments, multiple PTYs, event loops, mouse events
+> - **Graphics**: Sixel image display (`display_image_sixel.py`, `test_sixel_display.py`, `test_sixel_simple.py`)
+> - **Advanced Features**: Mouse tracking, hyperlinks, notifications, shell integration, bracketed paste, synchronized updates, feature showcase
+> - **Testing/Debug**: Underline styles, keyboard protocols (`test_kitty_keyboard.py`), clipboard (OSC 52 - `test_osc52_clipboard.py`), TUI integration (`test_tui_clipboard.py`), BCE scroll tests, character tests, scroll timing tests, rich rendering tests (`rich_mimic_test.py`)
+> - **Streaming**: WebSocket streaming demo with debugging (`streaming_demo.py`, `streaming_debug.py` - requires streaming feature)
+>
+> See the `examples/` directory for the complete list of all 39 example scripts.
 
 ## Protocol Buffers
 
@@ -292,11 +326,16 @@ The streaming feature uses Protocol Buffers for efficient binary message encodin
 **Rust:** Generated during `cargo build` when the `streaming` feature is enabled via `build.rs`:
 
 ```bash
-# Rust protobuf code is generated automatically
+# Rust protobuf code is generated automatically when building with streaming
 cargo build --features streaming
+
+# To explicitly regenerate (requires protoc installed)
+cargo build --features streaming,regenerate-proto --no-default-features
 ```
 
 The generated Rust code is placed in the build output directory and included via `include!` in `src/streaming/proto.rs`.
+
+> **📝 Note:** The `regenerate-proto` feature requires `protoc` (Protocol Buffers compiler) to be installed. For most development work, the pre-generated code in `src/streaming/terminal.pb.rs` is sufficient.
 
 **TypeScript:** For the web frontend, generate TypeScript protobuf code:
 

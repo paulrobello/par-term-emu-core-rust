@@ -54,15 +54,26 @@ from ._native import (
 
 # Optional streaming support (available when built with --features streaming)
 try:
-    from ._native import StreamingConfig, StreamingServer
+    from ._native import (
+        StreamingConfig,
+        StreamingServer,
+        encode_server_message,
+        decode_server_message,
+        encode_client_message,
+        decode_client_message,
+    )
 
     _has_streaming = True
 except ImportError:
     _has_streaming = False
     StreamingConfig = None
     StreamingServer = None
+    encode_server_message = None
+    decode_server_message = None
+    encode_client_message = None
+    decode_client_message = None
 
-__version__ = "0.14.0"
+__version__ = "0.18.0"
 __all__ = [
     "Attributes",
     "CursorStyle",
@@ -98,6 +109,15 @@ __all__ = [
     "rgb_to_hsl",
 ]
 
-# Add streaming classes if available
+# Add streaming classes and functions if available
 if _has_streaming:
-    __all__.extend(["StreamingConfig", "StreamingServer"])
+    __all__.extend(
+        [
+            "StreamingConfig",
+            "StreamingServer",
+            "encode_server_message",
+            "decode_server_message",
+            "encode_client_message",
+            "decode_client_message",
+        ]
+    )

@@ -213,7 +213,55 @@ par-term-streamer --download-frontend --frontend-version 0.14.0 --web-root ./web
 
 # Macro playback mode
 par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
+
+# With HTTP Basic Authentication (password protection)
+par-term-streamer --enable-http --http-user admin --http-password secret
+par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
+par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
 ```
+
+**Environment Variables:**
+
+All CLI options support environment variables with `PAR_TERM_` prefix:
+
+```bash
+# Server configuration
+export PAR_TERM_HOST=0.0.0.0
+export PAR_TERM_PORT=8099
+export PAR_TERM_THEME=dracula
+
+# HTTP Basic Authentication
+export PAR_TERM_HTTP_USER=admin
+export PAR_TERM_HTTP_PASSWORD=secret
+# Or use hash: export PAR_TERM_HTTP_PASSWORD_HASH='$apr1$...'
+# Or use file: export PAR_TERM_HTTP_PASSWORD_FILE=/path/to/password
+
+# TLS configuration
+export PAR_TERM_TLS_CERT=/path/to/cert.pem
+export PAR_TERM_TLS_KEY=/path/to/key.pem
+
+# Then run with minimal flags
+par-term-streamer --enable-http
+```
+
+| Environment Variable | CLI Option | Description |
+|---------------------|------------|-------------|
+| `PAR_TERM_HOST` | `--host` | Server bind address |
+| `PAR_TERM_PORT` | `--port` | Server port |
+| `PAR_TERM_SIZE` | `--size` | Terminal size (COLSxROWS) |
+| `PAR_TERM_COLS` | `--cols` | Terminal columns |
+| `PAR_TERM_ROWS` | `--rows` | Terminal rows |
+| `PAR_TERM_THEME` | `--theme` | Color theme |
+| `PAR_TERM_HTTP_USER` | `--http-user` | HTTP Basic Auth username |
+| `PAR_TERM_HTTP_PASSWORD` | `--http-password` | HTTP Basic Auth password (clear text) |
+| `PAR_TERM_HTTP_PASSWORD_HASH` | `--http-password-hash` | HTTP Basic Auth password (htpasswd hash) |
+| `PAR_TERM_HTTP_PASSWORD_FILE` | `--http-password-file` | Password file path |
+| `PAR_TERM_TLS_CERT` | `--tls-cert` | TLS certificate file |
+| `PAR_TERM_TLS_KEY` | `--tls-key` | TLS private key file |
+| `PAR_TERM_TLS_PEM` | `--tls-pem` | Combined TLS PEM file |
+| `PAR_TERM_ENABLE_HTTP` | `--enable-http` | Enable HTTP serving |
+| `PAR_TERM_WEB_ROOT` | `--web-root` | Static files directory |
+| `PAR_TERM_API_KEY` | `--api-key` | WebSocket API key |
 
 **Download Web Frontend:**
 
@@ -234,15 +282,18 @@ par-term-streamer --enable-http --web-root ./web_term
 ```
 
 **Available Themes:**
-- `iterm2-dark` (default) - Note: lowercase with hyphens
-- `monokai`
-- `dracula`
-- `solarized-dark`
+- `iterm2-dark` (default) - iTerm2 Dark color scheme
+- `monokai` - Monokai color scheme
+- `dracula` - Dracula color scheme
+- `solarized-dark` - Solarized Dark color scheme
+
+> **Note:** Theme names are case-sensitive and must use lowercase with hyphens.
 
 ### Python Integration
 
 ```python
 import par_term_emu_core_rust as terminal_core
+import time
 
 # Create PTY terminal
 pty_terminal = terminal_core.PtyTerminal(80, 24, 10000)
@@ -250,16 +301,16 @@ pty_terminal = terminal_core.PtyTerminal(80, 24, 10000)
 # Start shell
 pty_terminal.spawn_shell()
 
-# Create streaming server
+# Create streaming server (automatically sets up output callback)
 addr = "127.0.0.1:8080"
 streaming_server = terminal_core.StreamingServer(pty_terminal, addr)
 
-# Start server (non-blocking)
+# Start server (non-blocking, spawns background thread)
 streaming_server.start()
 
 # Main loop
 while pty_terminal.is_running():
-    # Handle resize requests
+    # Handle resize requests from clients
     resize = streaming_server.poll_resize()
     if resize:
         cols, rows = resize
@@ -287,6 +338,9 @@ streaming_server.shutdown("Server stopping")
 | `initial_cols` | u16 | 0 | Initial terminal columns (0=use terminal's current size) |
 | `initial_rows` | u16 | 0 | Initial terminal rows (0=use terminal's current size) |
 | `tls` | Option\<TlsConfig\> | None | TLS configuration for HTTPS/WSS (see [TLS Configuration](#tlsssl-configuration)). Uses rustls for cross-platform compatibility |
+| `http_basic_auth` | Option\<HttpBasicAuthConfig\> | None | HTTP Basic Authentication for web frontend protection (username + password/hash) |
+
+> **Note:** WebSocket API key authentication (`--api-key`) is configured separately at the CLI level and is not part of `StreamingConfig` or Python bindings.
 
 **Python Example:**
 ```python
@@ -304,7 +358,9 @@ server = terminal_core.StreamingServer(pty_terminal, addr, config)
 
 **Rust Example:**
 ```rust
-use par_term_emu_core_rust::streaming::{StreamingConfig, StreamingServer, TlsConfig};
+use par_term_emu_core_rust::streaming::{
+    HttpBasicAuthConfig, StreamingConfig, StreamingServer, TlsConfig
+};
 use std::sync::{Arc, Mutex};
 
 let config = StreamingConfig {
@@ -317,6 +373,10 @@ let config = StreamingConfig {
     initial_cols: 120,
     initial_rows: 40,
     tls: None, // Or Some(TlsConfig::from_files("cert.pem", "key.pem")?)
+    http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+        "admin".to_string(),
+        "secret".to_string(),
+    )), // Or None for no auth
 };
 
 let server = StreamingServer::with_config(terminal, addr, config);
@@ -745,7 +805,7 @@ def main():
     # Create terminal
     pty_terminal = terminal_core.PtyTerminal(80, 24, 10000)
 
-    # Apply theme
+    # Apply theme (optional - can be done before or after creating server)
     pty_terminal.set_default_bg(0, 0, 0)
     pty_terminal.set_default_fg(255, 255, 255)
 
@@ -758,19 +818,21 @@ def main():
     for i, (r, g, b) in enumerate(colors):
         pty_terminal.set_ansi_palette_color(i, r, g, b)
 
-    # Start shell
+    # Start shell (must be done BEFORE creating StreamingServer)
     pty_terminal.spawn_shell()
 
-    # Create and start streaming server
+    # Create streaming server (automatically sets up output callback and PTY writer)
     addr = "127.0.0.1:8080"
     server = terminal_core.StreamingServer(pty_terminal, addr)
+
+    # Start server in background thread (non-blocking)
     server.start()
 
     print(f"Streaming server running on ws://{addr}")
 
     try:
         while pty_terminal.is_running():
-            # Handle resize requests
+            # Handle resize requests from clients
             resize = server.poll_resize()
             if resize:
                 cols, rows = resize
@@ -1092,6 +1154,8 @@ openssl req -x509 -newkey rsa:4096 -out combined.pem -days 365 -nodes \
 
 > **⚠️ Warning:** Self-signed certificates will trigger browser warnings. For production, use certificates from a trusted Certificate Authority (e.g., Let's Encrypt).
 
+> **ℹ️ Implementation Note:** The server uses rustls (not OpenSSL) for TLS, providing consistent cross-platform support.
+
 ### Let's Encrypt (Production)
 
 For production deployments using certbot:
@@ -1131,10 +1195,11 @@ When TLS is enabled, clients must use secure URLs:
    - Consider VPN or SSH tunneling
 
 2. **Authentication & Encryption:**
-   - Implement API key authentication (standalone server supports `--api-key`)
+   - **HTTP Basic Auth** for web frontend: `--http-user` with `--http-password`, `--http-password-hash`, or `--http-password-file`
+   - **WebSocket API key** for programmatic/direct WebSocket access: `--api-key` (clients must provide in `Authorization: Bearer <key>` header or `api_key` URL parameter)
    - **Enable TLS for production** using `--tls-cert`/`--tls-key` or `--tls-pem` (see [TLS Configuration](#tlsssl-configuration))
    - Use `wss://` (secure WebSocket) instead of `ws://` in production
-   - Validate client certificates if needed
+   - Uses rustls for cross-platform TLS support
 
 3. **Input Validation:**
    - Server validates all client messages
@@ -1153,16 +1218,27 @@ When TLS is enabled, clients must use secure URLs:
 
 **Example with Authentication:**
 ```bash
-# Server with API key
+# Server with HTTP Basic Auth (protects web frontend)
+par-term-streamer --enable-http --http-user admin --http-password secret
+
+# Server with htpasswd hash (bcrypt, apr1, sha1, md5crypt)
+par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$xyz$hash...'
+
+# Server with password from file (reads first line, auto-detects hash vs clear text)
+par-term-streamer --enable-http --http-user admin --http-password-file /etc/par-term/password
+
+# Server with WebSocket API key (protects WebSocket endpoint)
 par-term-streamer --api-key secret-token-here
 
-# Client connects with header
-curl -H "Authorization: Bearer secret-token-here" \
-     --include \
-     --no-buffer \
-     --header "Connection: Upgrade" \
-     --header "Upgrade: websocket" \
-     ws://localhost:8099
+# Combined: HTTP Basic Auth + WebSocket API key
+par-term-streamer --enable-http --http-user admin --http-password secret --api-key ws-token
+
+# WebSocket clients can authenticate via header:
+# Authorization: Bearer secret-token-here
+
+# Or via URL parameter:
+# ws://localhost:8099?api_key=secret-token-here
+# ws://localhost:8099/ws?api_key=secret-token-here (with HTTP)
 ```
 
 ## Performance
@@ -1208,6 +1284,12 @@ curl -H "Authorization: Bearer secret-token-here" \
    ```python
    pty_terminal = terminal_core.PtyTerminal(80, 24, scrollback=1000)
    ```
+
+**Built-in Performance Optimizations:**
+
+- **TCP_NODELAY:** Enabled by default for low-latency keystroke delivery (disables Nagle's algorithm)
+- **Output Batching:** Time-based batching with 16ms window (60 FPS) and 8KB buffer, reducing WebSocket overhead by 50-80% during burst output
+- **Optional jemalloc:** 5-15% throughput improvement (enabled via `jemalloc` feature, Unix only)
 
 ## Troubleshooting
 

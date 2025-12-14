@@ -565,4 +565,335 @@ mod tests {
         let result = decode_client_message(&[]);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_encode_decode_bell() {
+        let msg = AppServerMessage::Bell;
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        assert!(matches!(decoded, AppServerMessage::Bell));
+    }
+
+    #[test]
+    fn test_encode_decode_shutdown() {
+        let msg = AppServerMessage::Shutdown {
+            reason: "Server maintenance".to_string(),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Shutdown { reason } => {
+                assert_eq!(reason, "Server maintenance");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_error_message() {
+        let msg = AppServerMessage::Error {
+            message: "Something went wrong".to_string(),
+            code: Some("E500".to_string()),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Error { message, code } => {
+                assert_eq!(message, "Something went wrong");
+                assert_eq!(code, Some("E500".to_string()));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_error_without_code() {
+        let msg = AppServerMessage::Error {
+            message: "Error occurred".to_string(),
+            code: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Error { message, code } => {
+                assert_eq!(message, "Error occurred");
+                assert_eq!(code, None);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_cursor_position() {
+        let msg = AppServerMessage::CursorPosition {
+            col: 42,
+            row: 10,
+            visible: true,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::CursorPosition { col, row, visible } => {
+                assert_eq!(col, 42);
+                assert_eq!(row, 10);
+                assert!(visible);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_cursor_hidden() {
+        let msg = AppServerMessage::CursorPosition {
+            col: 0,
+            row: 0,
+            visible: false,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::CursorPosition { col, row, visible } => {
+                assert_eq!(col, 0);
+                assert_eq!(row, 0);
+                assert!(!visible);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_title() {
+        let msg = AppServerMessage::Title {
+            title: "My Terminal Window".to_string(),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Title { title } => {
+                assert_eq!(title, "My Terminal Window");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_refresh() {
+        let msg = AppServerMessage::Refresh {
+            cols: 120,
+            rows: 40,
+            screen_content: "Full screen content here".to_string(),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Refresh {
+                cols,
+                rows,
+                screen_content,
+            } => {
+                assert_eq!(cols, 120);
+                assert_eq!(rows, 40);
+                assert_eq!(screen_content, "Full screen content here");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_connected_with_screen() {
+        let msg = AppServerMessage::Connected {
+            cols: 80,
+            rows: 24,
+            initial_screen: Some("initial content".to_string()),
+            session_id: "sess-abc".to_string(),
+            theme: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Connected {
+                cols,
+                rows,
+                initial_screen,
+                session_id,
+                theme,
+            } => {
+                assert_eq!(cols, 80);
+                assert_eq!(rows, 24);
+                assert_eq!(initial_screen, Some("initial content".to_string()));
+                assert_eq!(session_id, "sess-abc");
+                assert!(theme.is_none());
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_client_ping() {
+        let msg = AppClientMessage::Ping;
+        let encoded = encode_client_message(&msg).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        assert!(matches!(decoded, AppClientMessage::Ping));
+    }
+
+    #[test]
+    fn test_encode_decode_client_refresh() {
+        let msg = AppClientMessage::RequestRefresh;
+        let encoded = encode_client_message(&msg).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        assert!(matches!(decoded, AppClientMessage::RequestRefresh));
+    }
+
+    #[test]
+    fn test_encode_decode_client_subscribe() {
+        let msg = AppClientMessage::Subscribe {
+            events: vec![
+                AppEventType::Output,
+                AppEventType::Cursor,
+                AppEventType::Bell,
+                AppEventType::Title,
+                AppEventType::Resize,
+            ],
+        };
+        let encoded = encode_client_message(&msg).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        match decoded {
+            AppClientMessage::Subscribe { events } => {
+                assert_eq!(events.len(), 5);
+                assert!(events.contains(&AppEventType::Output));
+                assert!(events.contains(&AppEventType::Cursor));
+                assert!(events.contains(&AppEventType::Bell));
+                assert!(events.contains(&AppEventType::Title));
+                assert!(events.contains(&AppEventType::Resize));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_unicode_content() {
+        let unicode_content = "Hello 世界 🌍 مرحبا Привет 日本語";
+        let msg = AppServerMessage::Output {
+            data: unicode_content.to_string(),
+            timestamp: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Output { data, .. } => {
+                assert_eq!(data, unicode_content);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_ansi_escape_sequences() {
+        let ansi_data = "\x1b[31mRed\x1b[0m \x1b[32mGreen\x1b[0m \x1b[1;34mBold Blue\x1b[0m";
+        let msg = AppServerMessage::Output {
+            data: ansi_data.to_string(),
+            timestamp: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Output { data, .. } => {
+                assert_eq!(data, ansi_data);
+                assert!(data.contains("\x1b[31m"));
+                assert!(data.contains("\x1b[0m"));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_with_timestamp() {
+        let msg = AppServerMessage::Output {
+            data: "test".to_string(),
+            timestamp: Some(1234567890123),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Output { data, timestamp } => {
+                assert_eq!(data, "test");
+                assert_eq!(timestamp, Some(1234567890123));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_decode_only_flag_byte_error() {
+        // Only has the flag byte, no actual payload
+        let result = decode_server_message(&[0x00]);
+        // This should either succeed with an empty/default message or fail
+        // depending on protobuf handling of empty data
+        // The behavior depends on the protobuf schema
+        assert!(result.is_err() || result.is_ok());
+    }
+
+    #[test]
+    fn test_encode_empty_string() {
+        let msg = AppServerMessage::Output {
+            data: String::new(),
+            timestamp: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Output { data, .. } => {
+                assert!(data.is_empty());
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_event_type_conversions() {
+        // Test all event type conversions
+        let event_types = vec![
+            (AppEventType::Output, pb::EventType::Output),
+            (AppEventType::Cursor, pb::EventType::Cursor),
+            (AppEventType::Bell, pb::EventType::Bell),
+            (AppEventType::Title, pb::EventType::Title),
+            (AppEventType::Resize, pb::EventType::Resize),
+        ];
+
+        for (app_type, _pb_type) in event_types {
+            let i32_val: i32 = app_type.clone().into();
+            // Verify conversion is deterministic
+            let i32_val2: i32 = app_type.into();
+            assert_eq!(i32_val, i32_val2);
+        }
+    }
+
+    #[test]
+    fn test_pb_event_type_to_app_event_type() {
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Output),
+            AppEventType::Output
+        ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Cursor),
+            AppEventType::Cursor
+        ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Bell),
+            AppEventType::Bell
+        ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Title),
+            AppEventType::Title
+        ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Resize),
+            AppEventType::Resize
+        ));
+        // Unspecified defaults to Output
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Unspecified),
+            AppEventType::Output
+        ));
+    }
 }

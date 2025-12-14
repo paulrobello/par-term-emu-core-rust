@@ -35,3 +35,4 @@ logs/
 # Test artifacts
 test_fallback.png
 test_font_fallback.py
+claude_scratch/
