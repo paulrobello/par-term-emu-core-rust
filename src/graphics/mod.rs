@@ -16,7 +16,6 @@ pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
 
-use crate::debug_info;
 use std::collections::HashMap;
 use std::sync::Arc;
 

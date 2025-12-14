@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.17.0] - 2025-12-13
+
+### Added
+- **Web Terminal Macro System**: New macro tab in the on-screen keyboard for creating and playing terminal command macros
+  - Create named macros with multi-line scripts (one command per line)
+  - Quick select buttons to run macros with a single tap
+  - Playback with 200ms delay before each Enter key for reliable command execution
+  - Edit and delete existing macros via hover menu
+  - Stop button to abort macro playback mid-execution
+  - Macros persist to localStorage across sessions
+  - Visual feedback during playback (pulsing animation, stop button)
+  - Option to disable sending Enter after each line (for text insertion macros)
+  - Template commands for advanced macro scripting:
+    - `[[delay:N]]` - Wait N seconds
+    - `[[enter]]` - Send Enter key
+    - `[[tab]]` - Send Tab key
+    - `[[esc]]` - Send Escape key
+    - `[[space]]` - Send Space
+    - `[[ctrl+X]]` - Send Ctrl+X
+    - `[[shift+X]]` - Send Shift+X (uppercase)
+    - `[[ctrl+shift+X]]` - Send Ctrl+Shift+X
+    - `[[shift+tab]]` - Reverse Tab
+    - `[[shift+enter]]` - Shift+Enter
+
+- **On-Screen Keyboard Enhancements**:
+  - Permanent symbols grid on the right side with all keyboard symbols (32 keys)
+  - Added Space and Enter buttons to modifier row
+  - Added http:// and https:// quick insert buttons to modifier row
+  - Added tooltips to Ctrl shortcut buttons explaining each shortcut
+  - Expanded symbol keys: added `! @ # $ % ^ & * - _ = + : ; ' " , . ?`
+
+### Changed
+- **Web Frontend Dependencies**: Updated @types/node (25.0.1 → 25.0.2)
+- **On-Screen Keyboard Layout**: Reorganized for better usability
+  - Symbols now displayed as persistent grid instead of toggle row
+  - Removed redundant Escape key from function key row
+  - More compact vertical layout with reduced gaps
+
 ## [0.16.3] - 2025-12-08
 
 ### Fixed
@@ -440,6 +478,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.17.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.3...v0.17.0
+[0.16.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.2...v0.16.3
+[0.16.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.1...v0.16.2
+[0.16.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.0...v0.16.1
+[0.16.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.10.0...v0.11.0
 [0.10.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.9.1...v0.10.0

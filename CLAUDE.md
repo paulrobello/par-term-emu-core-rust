@@ -71,3 +71,4 @@ make checkall    # All quality checks (run before commits)
 - Always ensure the Python bindings are in sync with method signatures
 - when bumping project version make sure CHANGELOG.md is updated
 - be sure to note breaking changes in changelog and readme whats new sections
+- always run `make web-build-static` after updating the web terminal frontend

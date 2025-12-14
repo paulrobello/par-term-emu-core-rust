@@ -10,28 +10,28 @@
     "proto:generate": "buf generate"
   },
   "dependencies": {
-    "@bufbuild/protobuf": "^2.10.1",
+    "@bufbuild/protobuf": "^2.10.2",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/addon-unicode11": "^0.8.0",
     "@xterm/addon-web-links": "^0.11.0",
     "@xterm/addon-webgl": "^0.18.0",
     "@xterm/xterm": "^5.5.0",
-    "next": "^16.0.8",
+    "next": "^16.0.10",
     "pako": "^2.1.0",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1"
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
   },
   "devDependencies": {
     "@bufbuild/buf": "^1.61.0",
-    "@bufbuild/protoc-gen-es": "^2.10.1",
-    "@tailwindcss/postcss": "^4.1.17",
-    "@types/node": "^24.10.2",
+    "@bufbuild/protoc-gen-es": "^2.10.2",
+    "@tailwindcss/postcss": "^4.1.18",
+    "@types/node": "^25.0.2",
     "@types/pako": "^2.0.4",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.22",
     "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.17",
+    "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3"
   }
 }

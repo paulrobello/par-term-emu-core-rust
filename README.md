@@ -13,6 +13,35 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.17.0
+
+### 🎉 New Features
+
+- **Web Terminal Macro System**: New macro tab in the on-screen keyboard for creating and playing terminal command macros
+  - Create named macros with multi-line scripts (one command per line)
+  - Quick select buttons to run macros with a single tap
+  - Playback with 200ms delay before each Enter key for reliable command execution
+  - Edit and delete existing macros via hover menu
+  - Stop button to abort macro playback mid-execution
+  - Macros persist to localStorage across sessions
+  - Visual feedback during playback (pulsing animation, stop button)
+  - Option to disable sending Enter after each line (for text insertion macros)
+  - Template commands for advanced scripting: `[[delay:N]]`, `[[enter]]`, `[[tab]]`, `[[esc]]`, `[[space]]`, `[[ctrl+X]]`, `[[shift+X]]`, `[[ctrl+shift+X]]`, `[[shift+tab]]`, `[[shift+enter]]`
+
+- **On-Screen Keyboard Enhancements**:
+  - Permanent symbols grid on the right side with all keyboard symbols (32 keys)
+  - Added Space, Enter, http://, and https:// buttons to modifier row
+  - Added tooltips to Ctrl shortcut buttons
+  - Expanded symbol keys with full punctuation set
+
+### 🔧 Improvements
+
+- **On-Screen Keyboard Layout**: Reorganized for better usability with more compact vertical layout and persistent symbols grid
+
+### 📦 Dependency Updates
+
+- **Web Frontend**: Updated @types/node (25.0.1 → 25.0.2)
+
 ## What's New in 0.16.3
 
 ### 🐛 Bug Fixes

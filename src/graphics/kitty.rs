@@ -13,7 +13,6 @@ use crate::graphics::{
     next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
     GraphicsError, GraphicsStore, TerminalGraphic,
 };
-use crate::{debug_info, debug_log};
 
 /// Kitty graphics transmission action
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
