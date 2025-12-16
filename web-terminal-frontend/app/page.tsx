@@ -24,6 +24,12 @@ const isMobileDevice = (): boolean => {
 // localStorage keys for persisting UI state
 const STORAGE_KEY_SHOW_CONTROLS = 'par-term-show-controls';
 const STORAGE_KEY_SHOW_KEYBOARD = 'par-term-show-keyboard';
+const STORAGE_KEY_FONT_SIZE = 'par-term-font-size';
+
+// Font size constraints
+const MIN_FONT_SIZE = 8;
+const MAX_FONT_SIZE = 32;
+const DEFAULT_FONT_SIZE = 14;
 
 // Helper to safely read from localStorage
 const getStoredBoolean = (key: string, defaultValue: boolean): boolean => {
@@ -31,6 +37,16 @@ const getStoredBoolean = (key: string, defaultValue: boolean): boolean => {
   const stored = localStorage.getItem(key);
   if (stored === null) return defaultValue;
   return stored === 'true';
+};
+
+// Helper to safely read number from localStorage
+const getStoredNumber = (key: string, defaultValue: number, min: number, max: number): number => {
+  if (typeof window === 'undefined') return defaultValue;
+  const stored = localStorage.getItem(key);
+  if (stored === null) return defaultValue;
+  const num = parseInt(stored, 10);
+  if (isNaN(num)) return defaultValue;
+  return Math.max(min, Math.min(max, num));
 };
 
 export default function Home() {
@@ -66,6 +82,7 @@ export default function Home() {
   } | null>(null);
   const [sendInput, setSendInput] = useState<((data: string) => void) | null>(null);
   const [showKeyboard, setShowKeyboard] = useState(false);
+  const [fontSize, setFontSize] = useState<number>(DEFAULT_FONT_SIZE);
 
   // Load persisted UI state from localStorage on mount
   useEffect(() => {
@@ -80,6 +97,10 @@ export default function Home() {
     } else if (isMobileDevice()) {
       setShowKeyboard(true);
     }
+
+    // Load fontSize from localStorage
+    const storedFontSize = getStoredNumber(STORAGE_KEY_FONT_SIZE, DEFAULT_FONT_SIZE, MIN_FONT_SIZE, MAX_FONT_SIZE);
+    setFontSize(storedFontSize);
   }, []);
 
   // Persist showControls to localStorage when it changes
@@ -91,6 +112,11 @@ export default function Home() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_SHOW_KEYBOARD, String(showKeyboard));
   }, [showKeyboard]);
+
+  // Persist fontSize to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY_FONT_SIZE, String(fontSize));
+  }, [fontSize]);
 
   const statusConfig = {
     disconnected: {
@@ -158,6 +184,35 @@ export default function Home() {
               />
             </div>
 
+            {/* Font size controls */}
+            <div className="pt-4 flex items-center gap-1">
+              <button
+                onClick={() => setFontSize(Math.max(MIN_FONT_SIZE, fontSize - 1))}
+                disabled={fontSize <= MIN_FONT_SIZE}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-terminal-text shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Decrease font size"
+                title="Decrease font size"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </button>
+              <span className="text-xs font-mono text-terminal-text min-w-[2.5rem] text-center" title="Font size">
+                {fontSize}px
+              </span>
+              <button
+                onClick={() => setFontSize(Math.min(MAX_FONT_SIZE, fontSize + 1))}
+                disabled={fontSize >= MAX_FONT_SIZE}
+                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-terminal-text shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                aria-label="Increase font size"
+                title="Increase font size"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
+
             {/* Reconnect/Stop button */}
             <div className="pt-4">
               {isRetrying ? (
@@ -221,6 +276,7 @@ export default function Home() {
       >
         <Terminal
           wsUrl={wsUrl}
+          fontSize={fontSize}
           onStatusChange={setStatus}
           onThemeChange={setTerminalBgColor}
           onRefit={(fn) => setRefitTerminal(() => fn)}
@@ -269,7 +325,7 @@ export default function Home() {
             }, 150);
           });
         }}
-        className={`fixed ${showControls ? 'bottom-8 sm:bottom-10' : 'bottom-2'} right-2 p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-terminal-text shadow-lg transition-all duration-200 z-50`}
+        className={`fixed ${showControls ? 'bottom-8 sm:bottom-10' : 'bottom-2'} right-5 p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-terminal-text shadow-lg transition-all duration-200 z-50`}
         aria-label={showControls ? 'Hide controls' : 'Show controls'}
       >
         <svg

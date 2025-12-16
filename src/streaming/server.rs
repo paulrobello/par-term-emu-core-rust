@@ -1,6 +1,5 @@
 //! WebSocket streaming server implementation
 
-use crate::streaming::broadcaster::Broadcaster;
 use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
@@ -9,11 +8,11 @@ use crate::terminal::Terminal;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
-use tokio::time;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
 use tokio_rustls::TlsAcceptor;
@@ -291,10 +290,21 @@ impl Default for StreamingConfig {
     }
 }
 
+/// Guard that decrements client count when dropped
+struct ClientGuard<'a> {
+    server: &'a StreamingServer,
+}
+
+impl<'a> Drop for ClientGuard<'a> {
+    fn drop(&mut self) {
+        self.server.remove_client();
+    }
+}
+
 /// WebSocket streaming server for terminal sessions
 pub struct StreamingServer {
-    /// Broadcaster for managing multiple clients
-    broadcaster: Arc<Broadcaster>,
+    /// Atomic counter for tracking connected clients
+    client_count: AtomicUsize,
     /// Shared terminal instance
     terminal: Arc<Mutex<Terminal>>,
     /// Server bind address
@@ -329,7 +339,6 @@ impl StreamingServer {
         addr: String,
         config: StreamingConfig,
     ) -> Self {
-        let broadcaster = Arc::new(Broadcaster::with_max_clients(config.max_clients));
         let (output_tx, output_rx) = mpsc::unbounded_channel();
         // Create broadcast channel for sending output to all clients (buffer 100 messages)
         let (broadcast_tx, _) = broadcast::channel(100);
@@ -337,7 +346,7 @@ impl StreamingServer {
         let (resize_tx, resize_rx) = mpsc::unbounded_channel();
 
         Self {
-            broadcaster,
+            client_count: AtomicUsize::new(0),
             terminal,
             addr,
             config,
@@ -380,13 +389,47 @@ impl StreamingServer {
     }
 
     /// Get the current number of connected clients
-    pub async fn client_count(&self) -> usize {
-        self.broadcaster.client_count().await
+    pub fn client_count(&self) -> usize {
+        self.client_count.load(Ordering::Relaxed)
     }
 
-    /// Broadcast a message to all clients
-    pub async fn broadcast(&self, msg: ServerMessage) {
-        self.broadcaster.broadcast(msg).await;
+    /// Get the maximum number of clients allowed
+    pub fn max_clients(&self) -> usize {
+        self.config.max_clients
+    }
+
+    /// Check if the server can accept more clients
+    fn can_accept_client(&self) -> bool {
+        self.client_count.load(Ordering::Relaxed) < self.config.max_clients
+    }
+
+    /// Increment the client count. Returns false if max_clients would be exceeded.
+    fn try_add_client(&self) -> bool {
+        loop {
+            let current = self.client_count.load(Ordering::Relaxed);
+            if current >= self.config.max_clients {
+                return false;
+            }
+            match self.client_count.compare_exchange(
+                current,
+                current + 1,
+                Ordering::SeqCst,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(_) => continue, // Another thread modified, retry
+            }
+        }
+    }
+
+    /// Decrement the client count
+    fn remove_client(&self) {
+        self.client_count.fetch_sub(1, Ordering::SeqCst);
+    }
+
+    /// Broadcast a message to all clients via the broadcast channel
+    pub fn broadcast(&self, msg: ServerMessage) {
+        let _ = self.broadcast_tx.send(msg);
     }
 
     /// Start the streaming server
@@ -423,14 +466,6 @@ impl StreamingServer {
         tokio::spawn(async move {
             server_clone.output_broadcaster_loop().await;
         });
-
-        // Spawn keepalive task if enabled
-        if self.config.keepalive_interval > 0 {
-            let server_clone = self.clone();
-            tokio::spawn(async move {
-                server_clone.keepalive_loop().await;
-            });
-        }
 
         // Build router with optional basic auth middleware
         let app = Router::new()
@@ -486,14 +521,6 @@ impl StreamingServer {
             server_clone.output_broadcaster_loop().await;
         });
 
-        // Spawn keepalive task if enabled
-        if self.config.keepalive_interval > 0 {
-            let server_clone = self.clone();
-            tokio::spawn(async move {
-                server_clone.keepalive_loop().await;
-            });
-        }
-
         // Build router with optional basic auth middleware
         let app = Router::new()
             .route("/ws", get(ws_handler))
@@ -548,18 +575,21 @@ impl StreamingServer {
             server_clone.output_broadcaster_loop().await;
         });
 
-        // Spawn keepalive task if enabled
-        if self.config.keepalive_interval > 0 {
-            let server_clone = self.clone();
-            tokio::spawn(async move {
-                server_clone.keepalive_loop().await;
-            });
-        }
-
         // Accept WebSocket connections
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
+                    // Check max_clients before accepting
+                    if !self.can_accept_client() {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Max clients reached ({}), rejecting connection from {}",
+                            self.config.max_clients,
+                            addr
+                        );
+                        continue;
+                    }
+
                     // Enable TCP_NODELAY for lower latency on small messages (keystrokes)
                     // This disables Nagle's algorithm which can add up to 40ms delay
                     if let Err(e) = stream.set_nodelay(true) {
@@ -610,18 +640,21 @@ impl StreamingServer {
             server_clone.output_broadcaster_loop().await;
         });
 
-        // Spawn keepalive task if enabled
-        if self.config.keepalive_interval > 0 {
-            let server_clone = self.clone();
-            tokio::spawn(async move {
-                server_clone.keepalive_loop().await;
-            });
-        }
-
         // Accept TLS connections
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
+                    // Check max_clients before accepting
+                    if !self.can_accept_client() {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Max clients reached ({}), rejecting TLS connection from {}",
+                            self.config.max_clients,
+                            addr
+                        );
+                        continue;
+                    }
+
                     // Enable TCP_NODELAY for lower latency on small messages (keystrokes)
                     // This disables Nagle's algorithm which can add up to 40ms delay
                     if let Err(e) = stream.set_nodelay(true) {
@@ -664,6 +697,14 @@ impl StreamingServer {
 
     /// Handle a new WebSocket connection
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
+        // Try to reserve a client slot (atomic check-and-increment)
+        if !self.try_add_client() {
+            return Err(StreamingError::MaxClientsReached);
+        }
+
+        // Ensure we decrement the count when we exit this function
+        let _guard = ClientGuard { server: self };
+
         // Upgrade to WebSocket
         let ws_stream = accept_async(stream)
             .await
@@ -706,11 +747,12 @@ impl StreamingServer {
 
         client.send(connect_msg).await?;
 
-        // Add client to broadcaster (takes ownership, so we need to change this)
-        // For now, DON'T add to broadcaster - handle everything here
-        // TODO: Refactor broadcaster to allow both sending and receiving per client
-
-        crate::debug_info!("STREAMING", "Client {} connected", client_id);
+        crate::debug_info!(
+            "STREAMING",
+            "Client {} connected (total: {})",
+            client_id,
+            self.client_count()
+        );
 
         // Get PTY writer if available
         let pty_writer = self.pty_writer.clone();
@@ -722,6 +764,14 @@ impl StreamingServer {
         // Clone terminal for screen refresh
         let terminal_for_refresh = Arc::clone(&self.terminal);
 
+        // Setup keepalive timer if enabled
+        let keepalive_interval = if self.config.keepalive_interval > 0 {
+            Some(Duration::from_secs(self.config.keepalive_interval))
+        } else {
+            None
+        };
+        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
+
         // Handle client input and output in this task
         loop {
             tokio::select! {
@@ -729,7 +779,8 @@ impl StreamingServer {
                 msg = client.recv() => {
                     match msg {
                         Err(e) => {
-                            return Err(e);
+                            crate::debug_error!("STREAMING", "Client {} error: {}", client_id, e);
+                            break;
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
@@ -800,11 +851,35 @@ impl StreamingServer {
                 // Receive output to broadcast to client
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
-                        client.send(msg).await?;
+                        if client.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+
+                // Send keepalive ping if enabled
+                _ = async {
+                    if let Some(ref mut timer) = keepalive_timer {
+                        timer.tick().await
+                    } else {
+                        // Never fires if keepalive is disabled
+                        std::future::pending::<tokio::time::Instant>().await
+                    }
+                } => {
+                    if let Err(e) = client.ping().await {
+                        crate::debug_error!("STREAMING", "Failed to ping client {}: {}", client_id, e);
+                        break;
                     }
                 }
             }
         }
+
+        crate::debug_info!(
+            "STREAMING",
+            "Client {} cleanup (remaining: {})",
+            client_id,
+            self.client_count() - 1
+        );
 
         Ok(())
     }
@@ -815,6 +890,14 @@ impl StreamingServer {
         stream: tokio_rustls::server::TlsStream<TcpStream>,
     ) -> Result<()> {
         use tokio_tungstenite::accept_async as accept_async_tls;
+
+        // Try to reserve a client slot (atomic check-and-increment)
+        if !self.try_add_client() {
+            return Err(StreamingError::MaxClientsReached);
+        }
+
+        // Ensure we decrement the count when we exit this function
+        let _guard = ClientGuard { server: self };
 
         // Upgrade TLS stream to WebSocket
         let ws_stream = accept_async_tls(stream)
@@ -869,7 +952,12 @@ impl StreamingServer {
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
-        crate::debug_info!("STREAMING", "TLS Client {} connected", client_id);
+        crate::debug_info!(
+            "STREAMING",
+            "TLS Client {} connected (total: {})",
+            client_id,
+            self.client_count()
+        );
 
         // Get PTY writer if available
         let pty_writer = self.pty_writer.clone();
@@ -880,6 +968,14 @@ impl StreamingServer {
         // Clone terminal for screen refresh
         let terminal_for_refresh = Arc::clone(&self.terminal);
         let resize_tx = self.resize_tx.clone();
+
+        // Setup keepalive timer if enabled
+        let keepalive_interval = if self.config.keepalive_interval > 0 {
+            Some(Duration::from_secs(self.config.keepalive_interval))
+        } else {
+            None
+        };
+        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
 
         // Handle client input and output
         loop {
@@ -970,8 +1066,29 @@ impl StreamingServer {
                         }
                     }
                 }
+
+                // Send keepalive ping if enabled
+                _ = async {
+                    if let Some(ref mut timer) = keepalive_timer {
+                        timer.tick().await
+                    } else {
+                        std::future::pending::<tokio::time::Instant>().await
+                    }
+                } => {
+                    if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
+                        crate::debug_error!("STREAMING", "Failed to ping TLS client {}", client_id);
+                        break;
+                    }
+                }
             }
         }
+
+        crate::debug_info!(
+            "STREAMING",
+            "TLS Client {} cleanup (remaining: {})",
+            client_id,
+            self.client_count() - 1
+        );
 
         Ok(())
     }
@@ -1028,17 +1145,6 @@ impl StreamingServer {
         }
     }
 
-    /// Keepalive loop - periodically pings all clients
-    async fn keepalive_loop(&self) {
-        let interval = Duration::from_secs(self.config.keepalive_interval);
-        let mut ticker = time::interval(interval);
-
-        loop {
-            ticker.tick().await;
-            self.broadcaster.ping_all().await;
-        }
-    }
-
     /// Send terminal output to all connected clients
     pub fn send_output(&self, data: String) -> Result<()> {
         self.output_tx
@@ -1047,28 +1153,27 @@ impl StreamingServer {
     }
 
     /// Send a resize event to all clients
-    pub async fn send_resize(&self, cols: u16, rows: u16) {
+    pub fn send_resize(&self, cols: u16, rows: u16) {
         let msg = ServerMessage::resize(cols, rows);
-        self.broadcaster.broadcast(msg).await;
+        self.broadcast(msg);
     }
 
     /// Send a title change event to all clients
-    pub async fn send_title(&self, title: String) {
+    pub fn send_title(&self, title: String) {
         let msg = ServerMessage::title(title);
-        self.broadcaster.broadcast(msg).await;
+        self.broadcast(msg);
     }
 
     /// Send a bell event to all clients
-    pub async fn send_bell(&self) {
+    pub fn send_bell(&self) {
         let msg = ServerMessage::bell();
-        self.broadcaster.broadcast(msg).await;
+        self.broadcast(msg);
     }
 
     /// Shutdown the server and disconnect all clients
-    pub async fn shutdown(&self, reason: String) {
+    pub fn shutdown(&self, reason: String) {
         let msg = ServerMessage::shutdown(reason);
-        self.broadcaster.broadcast(msg).await;
-        self.broadcaster.disconnect_all().await;
+        self.broadcast(msg);
     }
 
     /// Handle Axum WebSocket connection
@@ -1077,8 +1182,15 @@ impl StreamingServer {
         use axum::extract::ws::Message as AxumMessage;
         use futures_util::{SinkExt, StreamExt};
 
+        // Try to reserve a client slot (atomic check-and-increment)
+        if !self.try_add_client() {
+            return Err(StreamingError::MaxClientsReached);
+        }
+
+        // Ensure we decrement the count when we exit this function
+        let _guard = ClientGuard { server: self };
+
         let client_id = uuid::Uuid::new_v4();
-        crate::debug_info!("STREAMING", "Axum WebSocket client {} connected", client_id);
 
         // Split the WebSocket into sender and receiver
         let (mut ws_tx, mut ws_rx) = socket.split();
@@ -1121,6 +1233,13 @@ impl StreamingServer {
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
+        crate::debug_info!(
+            "STREAMING",
+            "Axum WebSocket client {} connected (total: {})",
+            client_id,
+            self.client_count()
+        );
+
         // Get PTY writer if available
         let pty_writer = self.pty_writer.clone();
         let read_only = self.config.default_read_only;
@@ -1131,6 +1250,14 @@ impl StreamingServer {
         // Clone terminal for screen refresh
         let terminal_for_refresh = Arc::clone(&self.terminal);
         let resize_tx = self.resize_tx.clone();
+
+        // Setup keepalive timer if enabled
+        let keepalive_interval = if self.config.keepalive_interval > 0 {
+            Some(Duration::from_secs(self.config.keepalive_interval))
+        } else {
+            None
+        };
+        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
 
         // Handle client input and output
         loop {
@@ -1201,7 +1328,7 @@ impl StreamingServer {
                             // Pong received
                         }
                         Some(Ok(AxumMessage::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "Client {} disconnected", client_id);
+                            crate::debug_info!("STREAMING", "Axum Client {} disconnected", client_id);
                             break;
                         }
                         Some(Err(e)) => {
@@ -1221,8 +1348,29 @@ impl StreamingServer {
                         }
                     }
                 }
+
+                // Send keepalive ping if enabled
+                _ = async {
+                    if let Some(ref mut timer) = keepalive_timer {
+                        timer.tick().await
+                    } else {
+                        std::future::pending::<tokio::time::Instant>().await
+                    }
+                } => {
+                    if ws_tx.send(AxumMessage::Ping(vec![].into())).await.is_err() {
+                        crate::debug_error!("STREAMING", "Failed to ping Axum client {}", client_id);
+                        break;
+                    }
+                }
             }
         }
+
+        crate::debug_info!(
+            "STREAMING",
+            "Axum Client {} cleanup (remaining: {})",
+            client_id,
+            self.client_count() - 1
+        );
 
         Ok(())
     }

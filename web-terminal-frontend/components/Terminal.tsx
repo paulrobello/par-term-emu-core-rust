@@ -13,11 +13,13 @@ import {
   createInputMessage,
   createResizeMessage,
   createRefreshMessage,
+  createPingMessage,
   themeToXtermOptions,
 } from '@/lib/protocol';
 
 interface TerminalProps {
   wsUrl: string;
+  fontSize?: number;
   onStatusChange?: (status: ConnectionStatus) => void;
   onThemeChange?: (backgroundColor: string) => void;
   onRefit?: (refitFn: () => void) => void;
@@ -64,7 +66,10 @@ const getResponsiveFontSize = (): number => {
 // Shared TextDecoder instance - reuse instead of creating per message
 const sharedDecoder = new TextDecoder();
 
-export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput }: TerminalProps) {
+// Maximum snapshot size (1MB) to prevent UI freeze from large payloads
+const MAX_SNAPSHOT_SIZE = 1024 * 1024;
+
+export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -89,6 +94,18 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
   const retryDelayRef = useRef(500); // Start at 500ms
   const isRetryingRef = useRef(false);
   const retryCancelledRef = useRef(false);
+
+  // Heartbeat/ping state for stale connection detection
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastPongRef = useRef<number>(0);
+  const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
+  const HEARTBEAT_TIMEOUT_MS = 10000; // Consider stale if no pong within 10 seconds
+
+  // Track previous wsUrl to detect changes
+  const prevWsUrlRef = useRef<string>(wsUrl);
+
+  // Track fontSize prop for use in handlers
+  const fontSizeRef = useRef<number | undefined>(fontSize);
 
   const updateStatus = (newStatus: ConnectionStatus) => {
     setStatus(newStatus);
@@ -163,6 +180,49 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     }, delay);
   }, [onRetryingChange]);
 
+  // Stop heartbeat timer
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
+  }, []);
+
+  // Start heartbeat timer - sends pings and detects stale connections
+  const startHeartbeat = useCallback(() => {
+    stopHeartbeat(); // Clear any existing heartbeat
+    lastPongRef.current = Date.now(); // Initialize last pong time
+
+    heartbeatIntervalRef.current = setInterval(() => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        stopHeartbeat();
+        return;
+      }
+
+      const now = Date.now();
+      const timeSinceLastPong = now - lastPongRef.current;
+
+      // Check if connection is stale (no pong received within timeout)
+      if (timeSinceLastPong > HEARTBEAT_INTERVAL_MS + HEARTBEAT_TIMEOUT_MS) {
+        console.warn(`Connection stale: no pong in ${timeSinceLastPong}ms, closing`);
+        stopHeartbeat();
+        ws.close();
+        return;
+      }
+
+      // Send ping
+      try {
+        ws.send(encodeClientMessage(createPingMessage()));
+        console.log('Heartbeat ping sent');
+      } catch (err) {
+        console.error('Failed to send heartbeat ping:', err);
+        stopHeartbeat();
+        ws.close();
+      }
+    }, HEARTBEAT_INTERVAL_MS);
+  }, [stopHeartbeat]);
+
   // Apply theme to terminal (using protobuf ThemeInfo)
   const applyTheme = (theme: { name: string; background?: { r: number; g: number; b: number }; foreground?: { r: number; g: number; b: number }; normal: { r: number; g: number; b: number }[]; bright: { r: number; g: number; b: number }[] }) => {
     if (!xtermRef.current) return;
@@ -207,7 +267,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     } else {
       // Fresh initialization
       const mobile = isMobile();
-      const initialFontSize = getResponsiveFontSize();
+      const initialFontSize = fontSize ?? getResponsiveFontSize();
       console.log(`Terminal init: width=${window.innerWidth}, mobile=${mobile}, fontSize=${initialFontSize}`);
 
       // Initialize xterm.js
@@ -246,7 +306,11 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
       // Initialize addons
       fitAddon = new FitAddon();
-      const webLinksAddon = new WebLinksAddon();
+      // Custom link handler to prevent reverse-tabnabbing attacks
+      // Without noopener,noreferrer, malicious links could hijack the original tab
+      const webLinksAddon = new WebLinksAddon((_event, uri) => {
+        window.open(uri, '_blank', 'noopener,noreferrer');
+      });
       const unicode11Addon = new Unicode11Addon();
 
       term.loadAddon(fitAddon);
@@ -308,7 +372,8 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     if (onRefit) {
       onRefit(() => {
         setTimeout(() => {
-          const newFontSize = getResponsiveFontSize();
+          // Use explicit fontSize prop if set, otherwise use responsive sizing
+          const newFontSize = fontSizeRef.current ?? getResponsiveFontSize();
           console.log(`Refit: current fontSize=${term.options.fontSize}, new=${newFontSize}`);
           console.log(`Refit: before fit - cols=${term.cols}, rows=${term.rows}`);
 
@@ -355,13 +420,17 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     }
 
     // Debounced resize handler for better performance
+    // Only applies responsive font sizing when no explicit fontSize prop is set
     let resizeTimeout: NodeJS.Timeout;
     const handleResize = () => {
       clearTimeout(resizeTimeout);
       resizeTimeout = setTimeout(() => {
-        const newFontSize = getResponsiveFontSize();
-        if (term.options.fontSize !== newFontSize) {
-          term.options.fontSize = newFontSize;
+        // Only auto-adjust font size if no explicit fontSize prop
+        if (fontSizeRef.current === undefined) {
+          const newFontSize = getResponsiveFontSize();
+          if (term.options.fontSize !== newFontSize) {
+            term.options.fontSize = newFontSize;
+          }
         }
         fitAddon.fit();
       }, 100);
@@ -370,10 +439,14 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     window.addEventListener('resize', handleResize);
 
     // Handle orientation change specifically for mobile
+    // Only applies responsive font sizing when no explicit fontSize prop is set
     const handleOrientationChange = () => {
       setTimeout(() => {
-        const newFontSize = getResponsiveFontSize();
-        term.options.fontSize = newFontSize;
+        // Only auto-adjust font size if no explicit fontSize prop
+        if (fontSizeRef.current === undefined) {
+          const newFontSize = getResponsiveFontSize();
+          term.options.fontSize = newFontSize;
+        }
         fitAddon.fit();
       }, 200);
     };
@@ -453,13 +526,32 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
   }, []);
 
   const connect = useCallback(() => {
-    if (!xtermRef.current || wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!xtermRef.current) return;
+
+    // If already connected, close existing socket first
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      console.log('Closing existing connection before reconnecting');
+      wsRef.current.close();
+      wsRef.current = null;
+    }
 
     // Reset cancelled flag when manually connecting
     retryCancelledRef.current = false;
     updateStatus('connecting');
 
-    const ws = new WebSocket(wsUrl);
+    // Validate URL and create WebSocket with error handling
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(wsUrl);
+    } catch (err) {
+      console.error('Invalid WebSocket URL:', err);
+      updateStatus('error');
+      if (xtermRef.current) {
+        xtermRef.current.write(`\r\n\x1b[1;31mInvalid WebSocket URL: ${wsUrl}\x1b[0m\r\n`);
+      }
+      return;
+    }
+
     ws.binaryType = 'arraybuffer'; // Use binary protocol
     wsRef.current = ws;
 
@@ -470,6 +562,9 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
       retryDelayRef.current = 500;
       isRetryingRef.current = false;
       onRetryingChange?.(false);
+
+      // Start heartbeat for stale connection detection
+      startHeartbeat();
 
       // Fit terminal to container
       if (fitAddonRef.current) {
@@ -496,9 +591,15 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
           case 'connected': {
             const connected = msg.message.value;
+            const initialScreenLength = connected.initialScreen?.length || 0;
             console.log(`Session ID: ${connected.sessionId}`);
             console.log(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
-            console.log(`Initial screen provided: ${!!connected.initialScreen}, length: ${connected.initialScreen?.length || 0}`);
+            console.log(`Initial screen provided: ${!!connected.initialScreen}, length: ${initialScreenLength}`);
+
+            // Guard against oversized initial screens
+            if (initialScreenLength > MAX_SNAPSHOT_SIZE) {
+              console.error(`Initial screen too large (${initialScreenLength} bytes), skipping`);
+            }
 
             // Apply theme if provided
             if (connected.theme) {
@@ -539,18 +640,26 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
           case 'refresh': {
             const refresh = msg.message.value;
+            const snapshotLength = refresh.screenContent?.length || 0;
             console.log(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
             console.log('=== CLIENT REFRESH DEBUG ===');
             console.log(`Client terminal size: ${term.cols}x${term.rows}`);
             console.log(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
-            console.log(`Snapshot length: ${refresh.screenContent?.length || 0} bytes`);
+            console.log(`Snapshot length: ${snapshotLength} bytes`);
             console.log('============================');
+
+            // Guard against oversized snapshots that could freeze the UI
+            if (snapshotLength > MAX_SNAPSHOT_SIZE) {
+              console.error(`Snapshot too large (${snapshotLength} bytes), rejecting to prevent UI freeze`);
+              term.write('\r\n\x1b[1;33mWarning: Screen snapshot too large, display may be incomplete\x1b[0m\r\n');
+              break;
+            }
 
             // Fully reset terminal state and clear all buffers
             term.reset();
             term.clear();
             // Write fresh content - the snapshot should include cursor positioning
-            if (refresh.screenContent && refresh.screenContent.length > 0) {
+            if (refresh.screenContent && snapshotLength > 0) {
               const content = sharedDecoder.decode(refresh.screenContent);
               term.write(content);
             }
@@ -586,7 +695,9 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
           }
 
           case 'pong':
-            // Pong received - keepalive acknowledged
+            // Pong received - update last pong time for heartbeat tracking
+            lastPongRef.current = Date.now();
+            console.log('Heartbeat pong received');
             break;
 
           default:
@@ -599,6 +710,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
     ws.onerror = (error) => {
       console.error('WebSocket error:', error);
+      stopHeartbeat();
       updateStatus('error');
       if (xtermRef.current) {
         xtermRef.current.write('\r\n\x1b[1;31mConnection error\x1b[0m\r\n');
@@ -607,6 +719,7 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
 
     ws.onclose = () => {
       console.log('WebSocket disconnected');
+      stopHeartbeat();
       updateStatus('disconnected');
       wsRef.current = null;
       if (xtermRef.current) {
@@ -617,20 +730,49 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
         scheduleRetry();
       }
     };
-  }, [wsUrl, onRetryingChange, scheduleRetry, bufferWrite]);
+  }, [wsUrl, onRetryingChange, scheduleRetry, bufferWrite, startHeartbeat, stopHeartbeat]);
 
   const disconnect = useCallback(() => {
     cancelRetry();
+    stopHeartbeat();
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
     }
-  }, [cancelRetry]);
+  }, [cancelRetry, stopHeartbeat]);
 
   // Expose control functions to parent
   useEffect(() => {
     onConnectControl?.({ connect, disconnect, cancelRetry });
   }, [connect, disconnect, cancelRetry, onConnectControl]);
+
+  // Reconnect when wsUrl changes
+  useEffect(() => {
+    if (prevWsUrlRef.current !== wsUrl) {
+      console.log(`WebSocket URL changed: ${prevWsUrlRef.current} -> ${wsUrl}`);
+      prevWsUrlRef.current = wsUrl;
+      // Disconnect and reconnect with new URL
+      disconnect();
+      const timer = setTimeout(connect, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [wsUrl, connect, disconnect]);
+
+  // Update font size when prop changes
+  useEffect(() => {
+    fontSizeRef.current = fontSize;
+    const term = xtermRef.current;
+    const fitAddon = fitAddonRef.current;
+    if (term && fitAddon && fontSize !== undefined) {
+      console.log(`Font size changed to ${fontSize}px`);
+      term.options.fontSize = fontSize;
+      fitAddon.fit();
+      // Send resize to server
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(encodeClientMessage(createResizeMessage(term.cols, term.rows)));
+      }
+    }
+  }, [fontSize]);
 
   useEffect(() => {
     // Auto-connect on mount
@@ -638,8 +780,9 @@ export default function Terminal({ wsUrl, onStatusChange, onThemeChange, onRefit
     return () => {
       clearTimeout(timer);
       cancelRetry();
+      stopHeartbeat();
     };
-  }, [wsUrl, connect, cancelRetry]);
+  }, [connect, cancelRetry, stopHeartbeat]);
 
   // Handle click/touch to focus terminal (needed for mobile keyboard)
   const handleTerminalClick = () => {

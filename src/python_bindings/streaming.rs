@@ -328,10 +328,7 @@ impl PyStreamingServer {
     /// Get the number of connected clients
     fn client_count(&self) -> PyResult<usize> {
         if let Some(server) = &self.server {
-            let server = server.clone();
-            let runtime = self.runtime.clone();
-
-            Ok(runtime.block_on(async { server.client_count().await }))
+            Ok(server.client_count())
         } else {
             Ok(0)
         }
@@ -358,12 +355,7 @@ impl PyStreamingServer {
     ///     rows: Number of rows
     fn send_resize(&self, cols: u16, rows: u16) -> PyResult<()> {
         if let Some(server) = &self.server {
-            let server = server.clone();
-            let runtime = self.runtime.clone();
-
-            runtime.block_on(async {
-                server.send_resize(cols, rows).await;
-            });
+            server.send_resize(cols, rows);
             Ok(())
         } else {
             Err(PyRuntimeError::new_err("Server has been stopped"))
@@ -397,12 +389,7 @@ impl PyStreamingServer {
     ///     title: The new terminal title
     fn send_title(&self, title: String) -> PyResult<()> {
         if let Some(server) = &self.server {
-            let server = server.clone();
-            let runtime = self.runtime.clone();
-
-            runtime.block_on(async {
-                server.send_title(title).await;
-            });
+            server.send_title(title);
             Ok(())
         } else {
             Err(PyRuntimeError::new_err("Server has been stopped"))
@@ -412,12 +399,7 @@ impl PyStreamingServer {
     /// Send a bell event to all clients
     fn send_bell(&self) -> PyResult<()> {
         if let Some(server) = &self.server {
-            let server = server.clone();
-            let runtime = self.runtime.clone();
-
-            runtime.block_on(async {
-                server.send_bell().await;
-            });
+            server.send_bell();
             Ok(())
         } else {
             Err(PyRuntimeError::new_err("Server has been stopped"))
@@ -430,11 +412,7 @@ impl PyStreamingServer {
     ///     reason: Reason for shutdown
     fn shutdown(&mut self, reason: String) -> PyResult<()> {
         if let Some(server) = self.server.take() {
-            let runtime = self.runtime.clone();
-
-            runtime.block_on(async {
-                server.shutdown(reason).await;
-            });
+            server.shutdown(reason);
             Ok(())
         } else {
             Ok(()) // Already stopped

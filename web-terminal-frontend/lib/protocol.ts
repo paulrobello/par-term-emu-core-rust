@@ -29,6 +29,12 @@ import pako from 'pako';
 /** Compression threshold in bytes (1KB) */
 const COMPRESSION_THRESHOLD = 1024;
 
+/** Maximum compressed payload size (256KB) - reject before decompression */
+const MAX_COMPRESSED_SIZE = 256 * 1024;
+
+/** Maximum decompressed payload size (2MB) - prevent zip bomb attacks */
+const MAX_DECOMPRESSED_SIZE = 2 * 1024 * 1024;
+
 /** Wire format flags */
 const FLAG_UNCOMPRESSED = 0x00;
 const FLAG_COMPRESSED = 0x01;
@@ -58,6 +64,7 @@ export function encodeClientMessage(msg: ClientMessage): ArrayBuffer {
 
 /**
  * Decode a server message from binary format
+ * Includes protection against zip bomb attacks via size limits
  */
 export function decodeServerMessage(data: ArrayBuffer): ServerMessage {
   const bytes = new Uint8Array(data);
@@ -69,8 +76,28 @@ export function decodeServerMessage(data: ArrayBuffer): ServerMessage {
   const flags = bytes[0];
   const payload = bytes.slice(1);
 
-  const decoded =
-    flags & FLAG_COMPRESSED ? pako.inflate(payload) : payload;
+  let decoded: Uint8Array;
+
+  if (flags & FLAG_COMPRESSED) {
+    // Reject compressed payloads that are suspiciously large
+    if (payload.length > MAX_COMPRESSED_SIZE) {
+      throw new Error(`Compressed payload too large: ${payload.length} bytes (max ${MAX_COMPRESSED_SIZE})`);
+    }
+
+    // Decompress with size limit check
+    decoded = pako.inflate(payload);
+
+    // Check decompressed size to prevent zip bomb attacks
+    if (decoded.length > MAX_DECOMPRESSED_SIZE) {
+      throw new Error(`Decompressed payload too large: ${decoded.length} bytes (max ${MAX_DECOMPRESSED_SIZE})`);
+    }
+  } else {
+    // Uncompressed payload - still enforce size limit
+    if (payload.length > MAX_DECOMPRESSED_SIZE) {
+      throw new Error(`Payload too large: ${payload.length} bytes (max ${MAX_DECOMPRESSED_SIZE})`);
+    }
+    decoded = payload;
+  }
 
   return fromBinary(ServerMessageSchema, decoded);
 }

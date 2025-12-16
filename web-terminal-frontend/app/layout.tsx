@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
+const isDevelopment = process.env.NODE_ENV === 'development';
+
 export const metadata: Metadata = {
   title: "Par Terminal Streamer | Modern Web Terminal",
   description: "A sleek, modern web-based terminal emulator with real-time streaming support. Built with Next.js, xterm.js, and Rust.",
@@ -39,10 +41,13 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
 
         {/* WebSocket preconnect hints - reduces initial connection latency by 100-200ms */}
-        {/* Development: direct WebSocket server */}
-        <link rel="preconnect" href="ws://localhost:8099" />
-        {/* Production: same-origin WebSocket */}
-        <link rel="preconnect" href="wss://localhost:8099" />
+        {/* Only in development to avoid browser port scanning localhost in production */}
+        {isDevelopment && (
+          <>
+            <link rel="preconnect" href="ws://localhost:8099" />
+            <link rel="preconnect" href="wss://localhost:8099" />
+          </>
+        )}
 
         {/* Preload terminal fonts to avoid layout shift and font flash */}
         <link

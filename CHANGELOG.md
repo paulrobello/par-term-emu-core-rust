@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.18.2] - 2025-12-15
+
+### Added
+- **Font Size Control**: User-adjustable terminal font size in web frontend
+  - Plus/minus buttons in header to adjust font size (8px to 32px range)
+  - Current font size displayed between buttons
+  - Setting persisted to localStorage across sessions
+  - Overrides automatic responsive sizing when set
+
+- **Heartbeat/Ping Mechanism**: Stale WebSocket connection detection with automatic reconnection
+  - Sends ping every 25 seconds, expects pong within 10 seconds
+  - Closes and triggers reconnect on stale connections
+  - Prevents "Connected" status showing for half-open sockets
+
+### Security
+- **Web Terminal Security Hardening**: Comprehensive security audit fixes for the web frontend
+  - **Reverse-tabnabbing prevention**: Terminal links now open with `noopener,noreferrer` to prevent malicious links from hijacking the parent tab
+  - **Zip bomb protection**: Added decompression size limits (256KB compressed, 2MB decompressed) to prevent memory exhaustion attacks
+  - **Localhost probe fix**: WebSocket preconnect hints now gated to development mode only, preventing production sites from scanning localhost ports
+  - **Snapshot size guard**: Added 1MB limit on screen snapshots to prevent UI freezes from oversized payloads
+
+### Fixed
+- **WebSocket URL Changes**: Changing the WebSocket URL while connected now properly disconnects and reconnects to the new server
+- **Invalid URL Handling**: Invalid WebSocket URLs no longer crash the UI; displays friendly error message instead
+- **Next.js Config Conflict**: Merged duplicate config files (`next.config.js` and `next.config.mjs`) into single file with `reactStrictMode` enabled
+- **Toggle Button Overlap**: Moved header/footer toggle button left to avoid overlapping with scrollbar
+
+## [0.18.1] - 2025-12-15
+
+### Fixed
+- **Web Terminal On-Screen Keyboard**: Fixed device virtual keyboard appearing when tapping on-screen keyboard buttons on mobile devices
+  - Added `tabIndex={-1}` to all buttons in the on-screen keyboard component to prevent focus acquisition
+  - Affects all keyboard sections: main keys, arrow keys, Ctrl shortcuts, symbol grid, macro buttons, and all UI controls
+
 ## [0.18.0] - 2025-12-14
 
 ### Added
@@ -503,6 +537,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.18.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.18.1...v0.18.2
+[0.18.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.18.0...v0.18.1
+[0.18.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.3...v0.17.0
 [0.16.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.2...v0.16.3
 [0.16.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.16.1...v0.16.2

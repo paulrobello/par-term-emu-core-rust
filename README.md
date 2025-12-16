@@ -13,6 +13,40 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.18.2
+
+### 🎉 New Features
+
+- **Font Size Control**: User-adjustable terminal font size in web frontend
+  - Plus/minus buttons in header (8px to 32px range)
+  - Persisted to localStorage across sessions
+
+- **Heartbeat/Ping Mechanism**: Stale WebSocket connection detection
+  - Sends ping every 25s, expects pong within 10s
+  - Automatically closes and reconnects stale connections
+
+### 🔒 Security Hardening
+
+- **Web Terminal Security Fixes**: Comprehensive security audit remediation
+  - **Reverse-tabnabbing prevention**: Terminal links now open with `noopener,noreferrer`
+  - **Zip bomb protection**: Added decompression size limits (256KB compressed, 2MB decompressed)
+  - **Localhost probe fix**: WebSocket preconnect hints gated to development mode only
+  - **Snapshot size guard**: 1MB limit on screen snapshots to prevent UI freezes
+
+### 🐛 Bug Fixes
+
+- **WebSocket URL Changes**: Properly disconnects and reconnects when URL changes
+- **Invalid URL Handling**: Displays friendly error instead of crashing
+- **Next.js Config**: Merged duplicate config files into single file
+- **Toggle Button Overlap**: Moved button left to avoid scrollbar overlap
+
+## What's New in 0.18.1
+
+### 🐛 Bug Fixes
+
+- **Web Terminal On-Screen Keyboard**: Fixed device virtual keyboard appearing when tapping on-screen keyboard buttons on mobile devices
+  - Added `tabIndex={-1}` to all buttons to prevent focus acquisition that triggered device keyboard
+
 ## What's New in 0.18.0
 
 ### 🎉 New Features

@@ -470,6 +470,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
     return (
       <button
         key={`${key.label}-${index}`}
+        tabIndex={-1}
         className={`
           ${widthClass} h-9 sm:h-10 px-1.5 sm:px-2
           rounded-md text-xs sm:text-sm font-medium
@@ -494,6 +495,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
   const renderArrowKeys = () => (
     <div className="flex flex-col items-center gap-0.5">
       <button
+        tabIndex={-1}
         className="w-10 h-[30px] sm:w-12 sm:h-[34px] rounded-md text-sm font-medium
           select-none touch-manipulation transition-all duration-100 active:scale-95
           bg-[#252525]/90 text-[#e0e0e0] border border-[#3a3a3a]/50
@@ -506,6 +508,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
       </button>
       <div className="flex gap-0.5">
         <button
+          tabIndex={-1}
           className="w-10 h-[30px] sm:w-12 sm:h-[34px] rounded-md text-sm font-medium
             select-none touch-manipulation transition-all duration-100 active:scale-95
             bg-[#252525]/90 text-[#e0e0e0] border border-[#3a3a3a]/50
@@ -517,6 +520,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
           ◀
         </button>
         <button
+          tabIndex={-1}
           className="w-10 h-[30px] sm:w-12 sm:h-[34px] rounded-md text-sm font-medium
             select-none touch-manipulation transition-all duration-100 active:scale-95
             bg-[#252525]/90 text-[#e0e0e0] border border-[#3a3a3a]/50
@@ -528,6 +532,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
           ▼
         </button>
         <button
+          tabIndex={-1}
           className="w-10 h-[30px] sm:w-12 sm:h-[34px] rounded-md text-sm font-medium
             select-none touch-manipulation transition-all duration-100 active:scale-95
             bg-[#252525]/90 text-[#e0e0e0] border border-[#3a3a3a]/50
@@ -547,6 +552,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
       {CTRL_SHORTCUTS.map((key, index) => (
         <button
           key={`ctrl-${key.label}-${index}`}
+          tabIndex={-1}
           className="min-w-[2.5rem] sm:min-w-[3rem] h-8 sm:h-9 px-2
             rounded-md text-xs sm:text-sm font-medium
             select-none touch-manipulation transition-all duration-100 active:scale-95
@@ -573,6 +579,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
       {/* Double Ctrl+C button */}
       <button
         key="ctrl-cc"
+        tabIndex={-1}
         className="min-w-[2.5rem] sm:min-w-[3rem] h-8 sm:h-9 px-2
           rounded-md text-xs sm:text-sm font-medium
           select-none touch-manipulation transition-all duration-100 active:scale-95
@@ -598,6 +605,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
       {/* Double Ctrl+D button */}
       <button
         key="ctrl-dd"
+        tabIndex={-1}
         className="min-w-[2.5rem] sm:min-w-[3rem] h-8 sm:h-9 px-2
           rounded-md text-xs sm:text-sm font-medium
           select-none touch-manipulation transition-all duration-100 active:scale-95
@@ -627,6 +635,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
     return (
       <button
         onClick={onToggleVisibility}
+        tabIndex={-1}
         className="fixed bottom-2 right-14 z-50 p-2 rounded-full
           bg-[#252525]/95 text-[#e0e0e0] border border-[#3a3a3a]/50
           backdrop-blur-md shadow-lg hover:bg-[#353535]/95
@@ -665,6 +674,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
         <div className="flex gap-1">
           <button
             onClick={() => { setShowFunctionKeys(prev => !prev); setShowMacros(false); }}
+            tabIndex={-1}
             className={`px-2.5 py-1 rounded text-xs font-medium transition-colors
               ${showFunctionKeys
                 ? 'bg-blue-600/80 text-white'
@@ -675,6 +685,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
           </button>
           <button
             onClick={() => { setShowMacros(prev => !prev); setShowFunctionKeys(false); }}
+            tabIndex={-1}
             className={`px-2.5 py-1 rounded text-xs font-medium transition-colors
               ${showMacros
                 ? 'bg-amber-600/80 text-white'
@@ -694,6 +705,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
 
         <button
           onClick={onToggleVisibility}
+          tabIndex={-1}
           className="p-1.5 rounded-md text-[#808080] hover:text-[#e0e0e0]
             hover:bg-[#2a2a2a]/80 transition-colors"
           title="Hide keyboard"
@@ -756,6 +768,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                           setMacroScript('');
                           setMacroSendEnter(true);
                         }}
+                        tabIndex={-1}
                         className="px-3 py-1.5 rounded text-xs font-medium
                           bg-[#2a2a2a]/80 text-[#a0a0a0] hover:bg-[#3a3a3a]/80 hover:text-[#e0e0e0]
                           transition-colors"
@@ -764,6 +777,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                       </button>
                       <button
                         onClick={saveMacro}
+                        tabIndex={-1}
                         disabled={!macroName.trim() || !macroScript.trim()}
                         className="px-3 py-1.5 rounded text-xs font-medium
                           bg-amber-600/80 text-white hover:bg-amber-500/80
@@ -801,6 +815,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                     {/* New macro button */}
                     <button
                       onClick={newMacro}
+                      tabIndex={-1}
                       className="h-9 px-3 rounded-md text-xs sm:text-sm font-medium
                         select-none touch-manipulation transition-all duration-100
                         bg-amber-600/20 text-amber-400 border border-amber-500/50
@@ -815,6 +830,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                       <div key={macro.id} className="relative group">
                         <button
                           onClick={() => playingMacro === macro.id ? stopMacro() : playMacro(macro)}
+                          tabIndex={-1}
                           className={`h-9 px-3 rounded-md text-xs sm:text-sm font-medium
                             select-none touch-manipulation transition-all duration-100
                             ${playingMacro === macro.id
@@ -850,6 +866,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                             <div className="flex bg-[#2a2a2a] rounded shadow-lg border border-[#3a3a3a] overflow-hidden">
                               <button
                                 onClick={(e) => { e.stopPropagation(); editMacro(macro); }}
+                                tabIndex={-1}
                                 className="px-2 py-1 text-xs text-[#a0a0a0] hover:bg-[#3a3a3a] hover:text-[#e0e0e0]"
                                 title="Edit macro"
                               >
@@ -857,6 +874,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                               </button>
                               <button
                                 onClick={(e) => { e.stopPropagation(); deleteMacro(macro.id); }}
+                                tabIndex={-1}
                                 className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20"
                                 title="Delete macro"
                               >
@@ -923,6 +941,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
                   {SYMBOL_ROW.map((key, index) => (
                     <button
                       key={`sym-${key.label}-${index}`}
+                      tabIndex={-1}
                       className="w-8 h-8 sm:w-9 sm:h-9 rounded text-xs sm:text-sm font-medium
                         select-none touch-manipulation transition-all duration-100 active:scale-95
                         bg-[#252525]/90 text-[#e0e0e0] border border-[#3a3a3a]/50

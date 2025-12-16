@@ -514,7 +514,7 @@ impl ServerState {
             }
 
             // Broadcast resize to all clients
-            self.streaming_server.send_resize(cols, rows).await;
+            self.streaming_server.send_resize(cols, rows);
         }
     }
 
@@ -1183,9 +1183,7 @@ async fn main() -> Result<()> {
     info!("Shutting down...");
 
     // Shutdown streaming server
-    streaming_server
-        .shutdown("Server shutting down".to_string())
-        .await;
+    streaming_server.shutdown("Server shutting down".to_string());
 
     // Stop PTY
     if let Ok(session) = pty_session.lock() {
