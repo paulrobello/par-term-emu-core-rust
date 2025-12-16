@@ -421,6 +421,11 @@ struct Args {
     #[arg(long, env = "PAR_TERM_MACRO_LOOP")]
     macro_loop: bool,
 
+    /// Disable automatic shell restart when it exits
+    /// By default, the shell is automatically restarted when it exits
+    #[arg(long, env = "PAR_TERM_NO_RESTART_SHELL")]
+    no_restart_shell: bool,
+
     /// Download prebuilt web frontend from GitHub releases
     /// When specified, downloads and extracts frontend to web-root, then exits
     #[arg(long, env = "PAR_TERM_DOWNLOAD_FRONTEND")]
@@ -482,6 +487,8 @@ struct ServerState {
     pty_session: Arc<Mutex<PtySession>>,
     streaming_server: Arc<StreamingServer>,
     resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
+    shell_command: Option<String>,
+    restart_shell: bool,
 }
 
 impl ServerState {
@@ -490,11 +497,15 @@ impl ServerState {
         pty_session: Arc<Mutex<PtySession>>,
         streaming_server: Arc<StreamingServer>,
         resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
+        shell_command: Option<String>,
+        restart_shell: bool,
     ) -> Self {
         Self {
             pty_session,
             streaming_server,
             resize_rx,
+            shell_command,
+            restart_shell,
         }
     }
 
@@ -518,11 +529,11 @@ impl ServerState {
         }
     }
 
-    /// Monitor PTY status
+    /// Monitor PTY status and restart shell if configured
     async fn handle_pty_status(&self) {
         loop {
             // Check if PTY is still running
-            {
+            let should_restart = {
                 let session = match self.pty_session.lock() {
                     Ok(s) => s,
                     Err(_) => break,
@@ -530,6 +541,63 @@ impl ServerState {
 
                 if !session.is_running() {
                     info!("PTY session has exited");
+                    self.restart_shell
+                } else {
+                    false
+                }
+            };
+
+            if should_restart {
+                info!("Restarting shell...");
+
+                // Small delay before restart
+                time::sleep(Duration::from_millis(500)).await;
+
+                // Restart the shell
+                let restart_result = {
+                    let mut session = match self.pty_session.lock() {
+                        Ok(s) => s,
+                        Err(_) => break,
+                    };
+
+                    if let Some(ref shell) = self.shell_command {
+                        session.spawn(shell, &[])
+                    } else {
+                        session.spawn_shell()
+                    }
+                };
+
+                match restart_result {
+                    Ok(_) => {
+                        info!("Shell restarted successfully");
+
+                        // Update the PTY writer in the streaming server
+                        let pty_writer = {
+                            let session = match self.pty_session.lock() {
+                                Ok(s) => s,
+                                Err(_) => break,
+                            };
+                            session.get_writer()
+                        };
+
+                        if let Some(writer) = pty_writer {
+                            self.streaming_server.set_pty_writer(writer);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Failed to restart shell: {}", e);
+                        // Wait a bit before trying again
+                        time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+            } else if !self.restart_shell {
+                // If restart is disabled, check if shell exited and break
+                let session = match self.pty_session.lock() {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+
+                if !session.is_running() {
                     break;
                 }
             }
@@ -555,13 +623,19 @@ impl ServerState {
             })
         };
 
-        // Wait for Ctrl+C
-        signal::ctrl_c().await?;
-        info!("Received shutdown signal");
+        // Wait for either Ctrl+C or PTY exit (when restart is disabled)
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                info!("Received shutdown signal");
+            }
+            _ = status_handle => {
+                // PTY exited and restart is disabled
+                info!("Shell exited, shutting down server");
+            }
+        }
 
         // Cancel background tasks
         resize_handle.abort();
-        status_handle.abort();
 
         Ok(())
     }
@@ -573,6 +647,8 @@ impl Clone for ServerState {
             pty_session: Arc::clone(&self.pty_session),
             streaming_server: Arc::clone(&self.streaming_server),
             resize_rx: Arc::clone(&self.resize_rx),
+            shell_command: self.shell_command.clone(),
+            restart_shell: self.restart_shell,
         }
     }
 }
@@ -1128,16 +1204,28 @@ async fn main() -> Result<()> {
         if let Some(command) = &args.command {
             println!("  Initial command: {}", command);
         }
+        println!(
+            "  Shell restart: {}",
+            if args.no_restart_shell {
+                "disabled"
+            } else {
+                "enabled (default)"
+            }
+        );
     }
 
     println!("\n{}", "=".repeat(60));
     println!("\nPress Ctrl+C to stop the server\n");
 
     // Create server state
+    // Shell restart only applies to shell mode, not macro mode
+    let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
     let state = ServerState::new(
         Arc::clone(&pty_session),
         Arc::clone(&streaming_server),
         resize_rx,
+        args.shell.clone(),
+        restart_shell,
     );
 
     // Start streaming server in background

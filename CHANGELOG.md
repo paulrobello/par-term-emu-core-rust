@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.0] - 2025-12-16
+
+### Added
+- **Automatic Shell Restart**: Streaming server now automatically restarts the shell when it exits
+  - Default behavior: shell is restarted automatically when it exits
+  - New `--no-restart-shell` CLI option to disable automatic restart
+  - New `PAR_TERM_NO_RESTART_SHELL` environment variable support
+  - When restart is disabled, server exits when the shell exits
+  - Shell restart preserves the PTY writer connection to streaming clients
+
+- **Header/Footer Toggle in On-Screen Keyboard**: New layout toggle button in the keyboard header
+  - Allows users to show/hide the header and footer directly from the on-screen keyboard
+  - Visual indicator shows current state (blue when header/footer is visible)
+  - Convenient for mobile users who want to maximize terminal space without closing the keyboard
+
+- **Font Size Controls in On-Screen Keyboard**: Plus/minus buttons in keyboard header
+  - Adjust terminal font size (8px to 32px) directly from the on-screen keyboard
+  - Shows current font size between buttons
+  - Buttons disabled at min/max limits
+
+### Changed
+- **StreamingServer Interior Mutability**: `set_pty_writer` now uses `&self` instead of `&mut self`
+  - Enables updating PTY writer after shell restart without requiring mutable reference
+  - Uses `RwLock` for thread-safe interior mutability
+
+- **Web Frontend UI Improvements**:
+  - Moved font size controls from main header to on-screen keyboard header
+  - Repositioned floating toggle buttons side by side in bottom-right corner
+  - Keyboard and header/footer toggle buttons now have consistent sizing
+
 ## [0.18.2] - 2025-12-15
 
 ### Added

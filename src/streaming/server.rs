@@ -318,7 +318,9 @@ pub struct StreamingServer {
     /// Broadcast channel for sending output to all clients
     broadcast_tx: broadcast::Sender<ServerMessage>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
-    pty_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
+    /// Wrapped in RwLock for interior mutability (allows updating through Arc)
+    #[allow(clippy::type_complexity)]
+    pty_writer: std::sync::RwLock<Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
     /// Channel for sending resize requests to main thread
     resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Shared receiver for resize requests (wrapped for thread-safe access from Python)
@@ -353,7 +355,7 @@ impl StreamingServer {
             output_tx,
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
             broadcast_tx,
-            pty_writer: None,
+            pty_writer: std::sync::RwLock::new(None),
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
             theme: None,
@@ -367,9 +369,12 @@ impl StreamingServer {
 
     /// Set the PTY writer for handling client input
     ///
-    /// This should be called before starting the server if PTY input is supported
-    pub fn set_pty_writer(&mut self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
-        self.pty_writer = Some(writer);
+    /// This should be called before starting the server if PTY input is supported.
+    /// Can be called multiple times (e.g., after shell restart) as it uses interior mutability.
+    pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
+        if let Ok(mut guard) = self.pty_writer.write() {
+            *guard = Some(writer);
+        }
     }
 
     /// Get a clone of the output sender channel
@@ -754,8 +759,8 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available
-        let pty_writer = self.pty_writer.clone();
+        // Get PTY writer if available (read from RwLock)
+        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
         let read_only = client.is_read_only();
 
         // Subscribe to output broadcasts
@@ -959,8 +964,8 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available
-        let pty_writer = self.pty_writer.clone();
+        // Get PTY writer if available (read from RwLock)
+        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
 
         // Subscribe to output broadcasts
         let mut output_rx = self.broadcast_tx.subscribe();
@@ -1240,8 +1245,8 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available
-        let pty_writer = self.pty_writer.clone();
+        // Get PTY writer if available (read from RwLock)
+        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
         let read_only = self.config.default_read_only;
 
         // Subscribe to output broadcasts

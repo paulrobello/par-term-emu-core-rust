@@ -228,7 +228,7 @@ impl PyStreamingServer {
         // Get the PTY writer for input handling
         let pty_writer = pty_terminal.get_pty_writer();
 
-        let mut server = if let Some(cfg) = config {
+        let server = if let Some(cfg) = config {
             StreamingServer::with_config(terminal_arc, addr.clone(), cfg.inner)
         } else {
             StreamingServer::new(terminal_arc, addr.clone())

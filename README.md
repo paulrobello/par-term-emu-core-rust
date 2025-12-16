@@ -13,6 +13,29 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.19.0
+
+### 🎉 New Features
+
+- **Automatic Shell Restart**: Streaming server now automatically restarts the shell when it exits
+  - Default behavior: shell is restarted automatically when it exits
+  - New `--no-restart-shell` CLI option to disable automatic restart
+  - New `PAR_TERM_NO_RESTART_SHELL` environment variable support
+  - When restart is disabled, server exits gracefully when the shell exits
+
+- **Header/Footer Toggle in On-Screen Keyboard**: Layout toggle button in keyboard header
+  - Show/hide header and footer directly from the on-screen keyboard
+  - Blue indicator shows when header/footer is visible
+  - Convenient for maximizing terminal space on mobile
+
+- **Font Size Controls in On-Screen Keyboard**: Plus/minus buttons in keyboard header
+  - Adjust font size (8-32px) without opening the header panel
+
+### 🔧 Changes
+
+- **StreamingServer API**: `set_pty_writer` now uses interior mutability for shell restart support
+- **UI Improvements**: Font size controls moved to keyboard header; floating buttons repositioned side by side
+
 ## What's New in 0.18.2
 
 ### 🎉 New Features

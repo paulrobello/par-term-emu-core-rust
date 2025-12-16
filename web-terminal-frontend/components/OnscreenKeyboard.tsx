@@ -6,6 +6,12 @@ interface OnscreenKeyboardProps {
   onInput: (data: string) => void;
   isVisible: boolean;
   onToggleVisibility: () => void;
+  showControls?: boolean;
+  onToggleControls?: () => void;
+  fontSize?: number;
+  onFontSizeChange?: (delta: number) => void;
+  minFontSize?: number;
+  maxFontSize?: number;
 }
 
 interface KeyDefinition {
@@ -175,7 +181,17 @@ const SYMBOL_ROW: KeyDefinition[] = [
   { label: '?', code: '?' },
 ];
 
-export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: OnscreenKeyboardProps) {
+export function OnscreenKeyboard({
+  onInput,
+  isVisible,
+  onToggleVisibility,
+  showControls,
+  onToggleControls,
+  fontSize,
+  onFontSizeChange,
+  minFontSize = 8,
+  maxFontSize = 32,
+}: OnscreenKeyboardProps) {
   const [ctrlActive, setCtrlActive] = useState(false);
   const [altActive, setAltActive] = useState(false);
   const [shiftActive, setShiftActive] = useState(false);
@@ -636,7 +652,7 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
       <button
         onClick={onToggleVisibility}
         tabIndex={-1}
-        className="fixed bottom-2 right-14 z-50 p-2 rounded-full
+        className="fixed bottom-2 right-[71px] z-50 p-2 rounded-full
           bg-[#252525]/95 text-[#e0e0e0] border border-[#3a3a3a]/50
           backdrop-blur-md shadow-lg hover:bg-[#353535]/95
           transition-all duration-200 hover:scale-105
@@ -696,25 +712,85 @@ export function OnscreenKeyboard({ onInput, isVisible, onToggleVisibility }: Ons
           </button>
         </div>
 
-        {/* Modifier indicators */}
-        <div className="flex gap-1.5 text-[10px] sm:text-xs">
-          {ctrlActive && <span className="px-1.5 py-0.5 rounded bg-blue-600/60 text-white">CTRL</span>}
-          {altActive && <span className="px-1.5 py-0.5 rounded bg-purple-600/60 text-white">ALT</span>}
-          {shiftActive && <span className="px-1.5 py-0.5 rounded bg-green-600/60 text-white">SHIFT</span>}
+        {/* Center section: Modifier indicators and font size */}
+        <div className="flex items-center gap-3">
+          {/* Modifier indicators */}
+          <div className="flex gap-1.5 text-[10px] sm:text-xs">
+            {ctrlActive && <span className="px-1.5 py-0.5 rounded bg-blue-600/60 text-white">CTRL</span>}
+            {altActive && <span className="px-1.5 py-0.5 rounded bg-purple-600/60 text-white">ALT</span>}
+            {shiftActive && <span className="px-1.5 py-0.5 rounded bg-green-600/60 text-white">SHIFT</span>}
+          </div>
+
+          {/* Font size controls */}
+          {fontSize !== undefined && onFontSizeChange && (
+            <div className="flex items-center gap-0.5">
+              <button
+                onClick={() => onFontSizeChange(-1)}
+                disabled={fontSize <= minFontSize}
+                tabIndex={-1}
+                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 text-[#a0a0a0] hover:text-[#e0e0e0]
+                  disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title="Decrease font size"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                </svg>
+              </button>
+              <span className="text-[10px] font-mono text-[#a0a0a0] min-w-[2rem] text-center" title="Font size">
+                {fontSize}px
+              </span>
+              <button
+                onClick={() => onFontSizeChange(1)}
+                disabled={fontSize >= maxFontSize}
+                tabIndex={-1}
+                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 text-[#a0a0a0] hover:text-[#e0e0e0]
+                  disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                title="Increase font size"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+              </button>
+            </div>
+          )}
         </div>
 
-        <button
-          onClick={onToggleVisibility}
-          tabIndex={-1}
-          className="p-1.5 rounded-md text-[#808080] hover:text-[#e0e0e0]
-            hover:bg-[#2a2a2a]/80 transition-colors"
-          title="Hide keyboard"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
+        <div className="flex items-center gap-1">
+          {/* Header/Footer toggle button */}
+          {onToggleControls && (
+            <button
+              onClick={onToggleControls}
+              tabIndex={-1}
+              className={`p-1.5 rounded-md transition-colors ${
+                showControls
+                  ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/20'
+                  : 'text-[#808080] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]/80'
+              }`}
+              title={showControls ? 'Hide header/footer' : 'Show header/footer'}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {/* Layout/panels icon */}
+                <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                <line x1="3" y1="9" x2="21" y2="9"/>
+                <line x1="3" y1="15" x2="21" y2="15"/>
+              </svg>
+            </button>
+          )}
+
+          {/* Close keyboard button */}
+          <button
+            onClick={onToggleVisibility}
+            tabIndex={-1}
+            className="p-1.5 rounded-md text-[#808080] hover:text-[#e0e0e0]
+              hover:bg-[#2a2a2a]/80 transition-colors"
+            title="Hide keyboard"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
       </div>
 
       {/* Keyboard content */}

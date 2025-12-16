@@ -184,35 +184,6 @@ export default function Home() {
               />
             </div>
 
-            {/* Font size controls */}
-            <div className="pt-4 flex items-center gap-1">
-              <button
-                onClick={() => setFontSize(Math.max(MIN_FONT_SIZE, fontSize - 1))}
-                disabled={fontSize <= MIN_FONT_SIZE}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-terminal-text shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Decrease font size"
-                title="Decrease font size"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
-                </svg>
-              </button>
-              <span className="text-xs font-mono text-terminal-text min-w-[2.5rem] text-center" title="Font size">
-                {fontSize}px
-              </span>
-              <button
-                onClick={() => setFontSize(Math.min(MAX_FONT_SIZE, fontSize + 1))}
-                disabled={fontSize >= MAX_FONT_SIZE}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 hover:border-white/20 text-terminal-text shadow-sm hover:shadow-md transition-all duration-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                aria-label="Increase font size"
-                title="Increase font size"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-              </button>
-            </div>
-
             {/* Reconnect/Stop button */}
             <div className="pt-4">
               {isRetrying ? (
@@ -325,11 +296,11 @@ export default function Home() {
             }, 150);
           });
         }}
-        className={`fixed ${showControls ? 'bottom-8 sm:bottom-10' : 'bottom-2'} right-5 p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-terminal-text shadow-lg transition-all duration-200 z-50`}
+        className={`fixed bottom-2.5 right-[25px] p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-terminal-text shadow-lg transition-all duration-200 z-50`}
         aria-label={showControls ? 'Hide controls' : 'Show controls'}
       >
         <svg
-          className={`w-4 h-4 transition-transform duration-200 ${showControls ? '' : 'rotate-180'}`}
+          className={`w-6 h-6 transition-transform duration-200 ${showControls ? '' : 'rotate-180'}`}
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -360,6 +331,23 @@ export default function Home() {
             }, 350);
           });
         }}
+        showControls={showControls}
+        onToggleControls={() => {
+          setShowControls(!showControls);
+          // Trigger refit after state update and DOM changes
+          requestAnimationFrame(() => {
+            setTimeout(() => {
+              refitTerminal?.();
+              focusTerminal?.();
+            }, 150);
+          });
+        }}
+        fontSize={fontSize}
+        onFontSizeChange={(delta) => {
+          setFontSize(Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, fontSize + delta)));
+        }}
+        minFontSize={MIN_FONT_SIZE}
+        maxFontSize={MAX_FONT_SIZE}
       />
     </main>
   );
