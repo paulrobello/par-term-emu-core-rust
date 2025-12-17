@@ -814,7 +814,10 @@ impl StreamingServer {
                                     let _ = self.resize_tx.send((cols, rows));
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
-                                    // Pings are handled automatically by Client::recv()
+                                    // Send pong response
+                                    if let Err(e) = client.send(ServerMessage::pong()).await {
+                                        crate::debug_error!("STREAMING", "Failed to send pong to client {}: {}", client_id, e);
+                                    }
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                     // Send current visible screen content to client as refresh message
@@ -1009,7 +1012,10 @@ impl StreamingServer {
                                             let _ = resize_tx.send((cols, rows));
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
-                                            let _ = ws_tx.send(Message::Pong(vec![].into())).await;
+                                            // Send pong response
+                                            if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
+                                                let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                            }
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {
@@ -1292,8 +1298,10 @@ impl StreamingServer {
                                             let _ = resize_tx.send((cols, rows));
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
-                                            // Respond with pong
-                                            let _ = ws_tx.send(AxumMessage::Pong(vec![].into())).await;
+                                            // Send pong response
+                                            if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
+                                                let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
+                                            }
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {

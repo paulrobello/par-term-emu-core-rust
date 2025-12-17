@@ -212,6 +212,7 @@ impl From<&AppServerMessage> for pb::ServerMessage {
             AppServerMessage::Shutdown { reason } => Some(Message::Shutdown(pb::Shutdown {
                 reason: reason.clone(),
             })),
+            AppServerMessage::Pong => Some(Message::Pong(pb::Pong {})),
         };
 
         pb::ServerMessage { message }
@@ -344,13 +345,7 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::Shutdown(shutdown)) => Ok(AppServerMessage::Shutdown {
                 reason: shutdown.reason,
             }),
-            Some(Message::Pong(_)) => {
-                // Pong doesn't have a direct equivalent in AppServerMessage
-                // This is a protocol-level message, not typically surfaced to app
-                Err(StreamingError::InvalidMessage(
-                    "Pong message not supported in app layer".into(),
-                ))
-            }
+            Some(Message::Pong(_)) => Ok(AppServerMessage::Pong),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -587,6 +582,14 @@ mod tests {
             }
             _ => panic!("Wrong message type"),
         }
+    }
+
+    #[test]
+    fn test_encode_decode_pong() {
+        let msg = AppServerMessage::Pong;
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        assert!(matches!(decoded, AppServerMessage::Pong));
     }
 
     #[test]

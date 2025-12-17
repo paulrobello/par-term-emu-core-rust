@@ -101,6 +101,9 @@ pub enum ServerMessage {
         /// Reason for shutdown
         reason: String,
     },
+
+    /// Keepalive pong response
+    Pong,
 }
 
 /// Messages sent from client to server
@@ -276,6 +279,11 @@ impl ServerMessage {
     /// Create a shutdown message
     pub fn shutdown(reason: String) -> Self {
         Self::Shutdown { reason }
+    }
+
+    /// Create a pong message (keepalive response)
+    pub fn pong() -> Self {
+        Self::Pong
     }
 }
 

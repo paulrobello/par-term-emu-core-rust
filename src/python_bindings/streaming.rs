@@ -684,6 +684,9 @@ pub fn decode_server_message<'py>(
             dict.set_item("type", "shutdown")?;
             dict.set_item("reason", reason)?;
         }
+        ServerMessage::Pong => {
+            dict.set_item("type", "pong")?;
+        }
     }
 
     Ok(dict)

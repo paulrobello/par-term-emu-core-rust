@@ -13,6 +13,15 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.19.1
+
+### 🐛 Bug Fixes
+
+- **Streaming Server Ping/Pong**: Fixed application-level ping/pong handling
+  - Server was sending WebSocket-level pong frames instead of protobuf `Pong` messages
+  - Frontend heartbeat mechanism now properly receives pong responses
+  - Fixes stale connection detection that was failing due to missing pong responses
+
 ## What's New in 0.19.0
 
 ### 🎉 New Features
