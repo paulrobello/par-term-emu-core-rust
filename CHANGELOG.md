@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.2] - 2025-12-17
+
+### Fixed
+- **Streaming Server Hang on Shell Exit**: Fixed server hanging indefinitely when the shell exits
+  - Added shutdown signal mechanism using `tokio::sync::Notify` to gracefully terminate the broadcaster loop
+  - The `output_broadcaster_loop` now listens for shutdown signals in its `select!` block
+  - The existing `shutdown()` method now also signals the broadcaster to exit
+  - Prevents the server from blocking indefinitely on `rx.recv()` when `output_tx` sender is never dropped
+
 ## [0.19.1] - 2025-12-16
 
 ### Fixed

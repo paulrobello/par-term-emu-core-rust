@@ -13,6 +13,14 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.19.2
+
+### 🐛 Bug Fixes
+
+- **Streaming Server Hang on Shell Exit**: Fixed server hanging indefinitely when the shell exits
+  - Added shutdown signal mechanism to gracefully terminate the broadcaster loop
+  - Prevents blocking indefinitely when shell exits in some conditions
+
 ## What's New in 0.19.1
 
 ### 🐛 Bug Fixes

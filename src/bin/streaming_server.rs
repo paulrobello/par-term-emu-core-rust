@@ -634,6 +634,10 @@ impl ServerState {
             }
         }
 
+        // Signal broadcaster to shut down (prevents hang on shell exit)
+        self.streaming_server
+            .shutdown("Server shutting down".to_string());
+
         // Cancel background tasks
         resize_handle.abort();
 

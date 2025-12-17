@@ -327,6 +327,8 @@ pub struct StreamingServer {
     resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
     /// Optional theme information to send to clients
     theme: Option<ThemeInfo>,
+    /// Shutdown signal for broadcaster loop
+    shutdown: Arc<tokio::sync::Notify>,
 }
 
 impl StreamingServer {
@@ -359,6 +361,7 @@ impl StreamingServer {
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
             theme: None,
+            shutdown: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -1121,6 +1124,16 @@ impl StreamingServer {
 
         loop {
             tokio::select! {
+                // Check for shutdown signal
+                _ = self.shutdown.notified() => {
+                    crate::debug_info!("STREAMING", "Broadcaster received shutdown signal");
+                    // Flush any remaining data before exiting
+                    if !buffer.is_empty() {
+                        let msg = ServerMessage::output(buffer);
+                        let _ = self.broadcast_tx.send(msg);
+                    }
+                    break;
+                }
                 // Receive new output data
                 msg = rx.recv() => {
                     match msg {
@@ -1182,9 +1195,15 @@ impl StreamingServer {
     }
 
     /// Shutdown the server and disconnect all clients
+    ///
+    /// This broadcasts a shutdown message to all clients and signals
+    /// the broadcaster loop to exit gracefully.
     pub fn shutdown(&self, reason: String) {
+        crate::debug_info!("STREAMING", "Shutting down server: {}", reason);
         let msg = ServerMessage::shutdown(reason);
         self.broadcast(msg);
+        // Signal the broadcaster loop to exit
+        self.shutdown.notify_waiters();
     }
 
     /// Handle Axum WebSocket connection
