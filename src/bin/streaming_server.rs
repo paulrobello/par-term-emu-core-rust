@@ -531,16 +531,27 @@ impl ServerState {
 
     /// Monitor PTY status and restart shell if configured
     async fn handle_pty_status(&self) {
+        info!(
+            "PTY status monitor started (restart_shell={})",
+            self.restart_shell
+        );
+
         loop {
             // Check if PTY is still running
             let should_restart = {
                 let session = match self.pty_session.lock() {
                     Ok(s) => s,
-                    Err(_) => break,
+                    Err(e) => {
+                        error!("PTY session mutex poisoned: {}", e);
+                        break;
+                    }
                 };
 
                 if !session.is_running() {
-                    info!("PTY session has exited");
+                    info!(
+                        "PTY session has exited (restart_shell={})",
+                        self.restart_shell
+                    );
                     self.restart_shell
                 } else {
                     false
@@ -548,21 +559,28 @@ impl ServerState {
             };
 
             if should_restart {
-                info!("Restarting shell...");
+                info!("Will restart shell in 500ms...");
 
                 // Small delay before restart
                 time::sleep(Duration::from_millis(500)).await;
+
+                info!("Attempting to restart shell...");
 
                 // Restart the shell
                 let restart_result = {
                     let mut session = match self.pty_session.lock() {
                         Ok(s) => s,
-                        Err(_) => break,
+                        Err(e) => {
+                            error!("PTY session mutex poisoned during restart: {}", e);
+                            break;
+                        }
                     };
 
                     if let Some(ref shell) = self.shell_command {
+                        info!("Spawning custom shell: {}", shell);
                         session.spawn(shell, &[])
                     } else {
+                        info!("Spawning default shell");
                         session.spawn_shell()
                     }
                 };
@@ -575,17 +593,23 @@ impl ServerState {
                         let pty_writer = {
                             let session = match self.pty_session.lock() {
                                 Ok(s) => s,
-                                Err(_) => break,
+                                Err(e) => {
+                                    error!("PTY session mutex poisoned getting writer: {}", e);
+                                    break;
+                                }
                             };
                             session.get_writer()
                         };
 
                         if let Some(writer) = pty_writer {
+                            info!("Updated PTY writer in streaming server");
                             self.streaming_server.set_pty_writer(writer);
+                        } else {
+                            error!("Failed to get PTY writer after restart");
                         }
                     }
                     Err(e) => {
-                        error!("Failed to restart shell: {}", e);
+                        error!("Failed to restart shell: {} - will retry in 5s", e);
                         // Wait a bit before trying again
                         time::sleep(Duration::from_secs(5)).await;
                     }
@@ -594,10 +618,14 @@ impl ServerState {
                 // If restart is disabled, check if shell exited and break
                 let session = match self.pty_session.lock() {
                     Ok(s) => s,
-                    Err(_) => break,
+                    Err(e) => {
+                        error!("PTY session mutex poisoned checking exit: {}", e);
+                        break;
+                    }
                 };
 
                 if !session.is_running() {
+                    info!("Shell exited and restart is disabled, stopping monitor");
                     break;
                 }
             }
@@ -605,6 +633,8 @@ impl ServerState {
             // Check PTY status every 500ms
             time::sleep(Duration::from_millis(500)).await;
         }
+
+        info!("PTY status monitor exiting");
     }
 
     /// Run the main event loop
@@ -1179,10 +1209,8 @@ async fn main() -> Result<()> {
     }
 
     // HTTP Basic Authentication
-    if let Some(ref auth) = http_basic_auth {
+    if http_basic_auth.is_some() {
         println!("\n  HTTP Basic Auth: ENABLED");
-        println!("  Username: {}", auth.username);
-        println!("  Password: ********");
     } else if args.enable_http {
         println!("\n  HTTP Basic Auth: DISABLED (no password protection)");
     }

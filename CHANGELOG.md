@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.3] - 2025-12-17
+
+### Fixed
+- **Shell Restart Hang**: Fixed streaming server hanging when attempting to restart the shell after exit
+  - Added `cleanup_previous_session()` method to properly clean up old PTY resources before spawning new shell
+  - Old writer is dropped first to unblock any blocked reads in the old reader thread
+  - Old PTY pair is closed before creating new one
+  - Old reader thread is waited on (with 2-second timeout) to ensure it finishes
+  - Old child process is properly reaped to prevent zombie processes
+  - Added detailed logging to shell restart process for easier debugging
+
+### Security
+- **Removed username from startup logs**: Streaming server no longer logs the HTTP Basic Auth username
+  - Addresses CodeQL alert for cleartext logging of sensitive information (CWE-312, CWE-359, CWE-532)
+  - Auth status still displayed as "ENABLED" or "DISABLED" without credential details
+
 ## [0.19.2] - 2025-12-17
 
 ### Fixed

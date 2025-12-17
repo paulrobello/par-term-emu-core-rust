@@ -146,6 +146,108 @@ impl PtySession {
         }
     }
 
+    /// Clean up resources from a previous session before spawning a new one
+    ///
+    /// This ensures the old reader thread is properly finished before we create
+    /// a new PTY and reader thread. Called internally by spawn() when restarting.
+    fn cleanup_previous_session(&mut self) {
+        // Close writer first to unblock any blocked reads in the old reader thread
+        if let Some(writer) = self.writer.take() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "PTY_CLEANUP",
+                "Dropping previous PTY writer to unblock reader",
+            );
+            drop(writer);
+        }
+
+        // Close the old PTY pair (closes master/slave)
+        if let Some(pair) = self.pty_pair.take() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "PTY_CLEANUP",
+                "Dropping previous PTY pair",
+            );
+            drop(pair);
+        }
+
+        // Wait for the old reader thread to finish (with timeout)
+        if let Some(handle) = self.reader_thread.take() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "PTY_CLEANUP",
+                "Waiting for previous reader thread to finish",
+            );
+
+            let timeout = std::time::Duration::from_secs(2);
+            let start = std::time::Instant::now();
+
+            // Poll for thread completion
+            while !handle.is_finished() && start.elapsed() < timeout {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+
+            if handle.is_finished() {
+                let _ = handle.join();
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "PTY_CLEANUP",
+                    "Previous reader thread joined successfully",
+                );
+            } else {
+                debug::log(
+                    debug::DebugLevel::Info,
+                    "PTY_CLEANUP",
+                    &format!(
+                        "Previous reader thread did not finish within {}s timeout, detaching",
+                        timeout.as_secs()
+                    ),
+                );
+                // Thread will be detached - it should exit soon once it sees the PTY is closed
+            }
+        }
+
+        // Clean up child process handle (should already be exited)
+        if let Some(mut child) = self.child.take() {
+            // Try to reap the child if it hasn't been reaped yet
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "PTY_CLEANUP",
+                        &format!(
+                            "Previous child reaped with exit code: {}",
+                            status.exit_code()
+                        ),
+                    );
+                }
+                Ok(None) => {
+                    // Child still running - kill it
+                    debug::log(
+                        debug::DebugLevel::Info,
+                        "PTY_CLEANUP",
+                        "Previous child still running, killing",
+                    );
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+                Err(e) => {
+                    debug::log(
+                        debug::DebugLevel::Error,
+                        "PTY_CLEANUP",
+                        &format!("Error checking child status: {}", e),
+                    );
+                }
+            }
+        }
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "PTY_CLEANUP",
+            "Previous session cleanup complete",
+        );
+    }
+
     /// Spawn a process with the specified command and arguments
     ///
     /// # Arguments
@@ -157,6 +259,16 @@ impl PtySession {
                 "Process is already running".to_string(),
             ));
         }
+
+        // Clean up any previous session resources before spawning
+        // This ensures the old reader thread is finished and PTY is closed
+        self.cleanup_previous_session();
+
+        debug::log(
+            debug::DebugLevel::Info,
+            "PTY_SPAWN",
+            &format!("Spawning process: {} {:?}", command, args),
+        );
 
         // Create the PTY system
         let pty_system = native_pty_system();
