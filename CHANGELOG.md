@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.19.4] - 2025-12-17
+
+### Added
+- **Python SDK Sync with Rust SDK**: Aligned Python streaming bindings with all Rust streaming features
+  - `StreamingConfig.enable_http` - Enable/disable HTTP static file serving (getter/setter)
+  - `StreamingConfig.web_root` - Web root directory for static files (getter/setter)
+  - `StreamingServer.max_clients()` - Get maximum number of allowed clients
+  - `StreamingServer.create_theme_info()` - Static method to create theme dictionaries for protocol functions
+  - `encode_server_message("pong")` - Added missing pong message type support
+  - `encode_server_message("connected", theme=...)` - Added theme support with name, background, foreground, normal (8 colors), bright (8 colors)
+
+### Changed
+- `StreamingConfig` constructor now accepts `enable_http` and `web_root` parameters (with backwards-compatible defaults)
+- `StreamingConfig.__repr__()` now includes `enable_http` and `web_root` in output
+- Updated deprecated `Python::with_gil` to `Python::attach` for PyO3 0.27 compatibility
+
 ## [0.19.3] - 2025-12-17
 
 ### Fixed
@@ -601,6 +617,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.19.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.3...v0.19.4
+[0.19.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.2...v0.19.3
+[0.19.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.1...v0.19.2
+[0.19.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.0...v0.19.1
+[0.19.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.18.2...v0.19.0
 [0.18.2]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.18.1...v0.18.2
 [0.18.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.18.0...v0.18.1
 [0.18.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.17.0...v0.18.0

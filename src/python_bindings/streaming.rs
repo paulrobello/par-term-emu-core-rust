@@ -33,7 +33,8 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term"))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
         send_initial_screen: bool,
@@ -41,6 +42,8 @@ impl PyStreamingConfig {
         default_read_only: bool,
         initial_cols: u16,
         initial_rows: u16,
+        enable_http: bool,
+        web_root: &str,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -48,11 +51,11 @@ impl PyStreamingConfig {
                 send_initial_screen,
                 keepalive_interval,
                 default_read_only,
-                enable_http: false,
-                web_root: "./web_term".to_string(),
+                enable_http,
+                web_root: web_root.to_string(),
                 initial_cols,
                 initial_rows,
-                tls: None, // TLS configuration not exposed to Python (use CLI flags instead)
+                tls: None, // TLS configuration via set_tls_from_files/set_tls_from_pem
                 http_basic_auth: None, // HTTP Basic Auth not exposed to Python (use CLI flags instead)
             },
         }
@@ -130,6 +133,30 @@ impl PyStreamingConfig {
         self.inner.initial_rows = initial_rows;
     }
 
+    /// Get whether HTTP static file serving is enabled
+    #[getter]
+    fn enable_http(&self) -> bool {
+        self.inner.enable_http
+    }
+
+    /// Set whether HTTP static file serving is enabled
+    #[setter]
+    fn set_enable_http(&mut self, enable_http: bool) {
+        self.inner.enable_http = enable_http;
+    }
+
+    /// Get the web root directory for static files
+    #[getter]
+    fn web_root(&self) -> String {
+        self.inner.web_root.clone()
+    }
+
+    /// Set the web root directory for static files
+    #[setter]
+    fn set_web_root(&mut self, web_root: String) {
+        self.inner.web_root = web_root;
+    }
+
     fn __repr__(&self) -> String {
         let tls_status = if self.inner.tls.is_some() {
             ", tls=enabled"
@@ -137,13 +164,15 @@ impl PyStreamingConfig {
             ""
         };
         format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}{})",
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{})",
             self.inner.max_clients,
             self.inner.send_initial_screen,
             self.inner.keepalive_interval,
             self.inner.default_read_only,
             self.inner.initial_cols,
             self.inner.initial_rows,
+            self.inner.enable_http,
+            self.inner.web_root,
             tls_status
         )
     }
@@ -334,6 +363,59 @@ impl PyStreamingServer {
         }
     }
 
+    /// Get the maximum number of clients allowed
+    fn max_clients(&self) -> PyResult<usize> {
+        if let Some(server) = &self.server {
+            Ok(server.max_clients())
+        } else {
+            Ok(0)
+        }
+    }
+
+    /// Set the theme to be sent to clients on connection
+    ///
+    /// Note: This method is not available after the server is wrapped in Arc.
+    /// Set the theme before starting the server by creating a new server instance
+    /// or use the CLI --theme flag instead.
+    ///
+    /// Args:
+    ///     name: Theme name (e.g., "iterm2-dark")
+    ///     background: RGB tuple for background color (r, g, b)
+    ///     foreground: RGB tuple for foreground color (r, g, b)
+    ///     normal: List of 8 RGB tuples for normal ANSI colors 0-7
+    ///     bright: List of 8 RGB tuples for bright ANSI colors 8-15
+    #[staticmethod]
+    fn create_theme_info(
+        name: String,
+        background: (u8, u8, u8),
+        foreground: (u8, u8, u8),
+        normal: Vec<(u8, u8, u8)>,
+        bright: Vec<(u8, u8, u8)>,
+    ) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
+        use pyo3::types::PyDict;
+
+        if normal.len() != 8 {
+            return Err(PyRuntimeError::new_err(
+                "normal must contain exactly 8 RGB tuples",
+            ));
+        }
+        if bright.len() != 8 {
+            return Err(PyRuntimeError::new_err(
+                "bright must contain exactly 8 RGB tuples",
+            ));
+        }
+
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("name", name)?;
+            dict.set_item("background", background)?;
+            dict.set_item("foreground", foreground)?;
+            dict.set_item("normal", normal)?;
+            dict.set_item("bright", bright)?;
+            Ok(dict.into())
+        })
+    }
+
     /// Send output data to all connected clients
     ///
     /// Args:
@@ -479,13 +561,14 @@ impl PyStreamingConfig {
 /// Encode a server message to binary protobuf format
 ///
 /// Args:
-///     message_type: Type of message ("output", "resize", "title", "bell", "connected", "error", "shutdown", "cursor", "refresh")
+///     message_type: Type of message ("output", "resize", "title", "bell", "connected", "error", "shutdown", "cursor", "refresh", "pong")
 ///     **kwargs: Message-specific arguments:
 ///         - output: data (str), timestamp (optional int)
 ///         - resize: cols (int), rows (int)
 ///         - title: title (str)
 ///         - bell: no arguments
-///         - connected: cols (int), rows (int), session_id (str), initial_screen (optional str)
+///         - pong: no arguments
+///         - connected: cols (int), rows (int), session_id (str), initial_screen (optional str), theme (optional dict with name, background, foreground, normal, bright)
 ///         - error: message (str), code (optional str)
 ///         - shutdown: reason (str)
 ///         - cursor: col (int), row (int), visible (bool)
@@ -538,17 +621,62 @@ pub fn encode_server_message<'py>(
             ServerMessage::title(title)
         }
         "bell" => ServerMessage::bell(),
+        "pong" => ServerMessage::pong(),
         "connected" => {
+            use crate::streaming::protocol::ThemeInfo;
+
             let cols = get_u16("cols").unwrap_or(80);
             let rows = get_u16("rows").unwrap_or(24);
             let session_id =
                 get_str("session_id").unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let initial_screen = get_str("initial_screen");
-            match initial_screen {
-                Some(screen) => {
+
+            // Try to extract theme from kwargs
+            let theme: Option<ThemeInfo> = kwargs
+                .and_then(|k| k.get_item("theme").ok().flatten())
+                .and_then(|v| {
+                    // Extract theme dict fields
+                    let name: String = v.get_item("name").ok()?.extract().ok()?;
+                    let background: (u8, u8, u8) = v.get_item("background").ok()?.extract().ok()?;
+                    let foreground: (u8, u8, u8) = v.get_item("foreground").ok()?.extract().ok()?;
+                    let normal_vec: Vec<(u8, u8, u8)> =
+                        v.get_item("normal").ok()?.extract().ok()?;
+                    let bright_vec: Vec<(u8, u8, u8)> =
+                        v.get_item("bright").ok()?.extract().ok()?;
+
+                    if normal_vec.len() != 8 || bright_vec.len() != 8 {
+                        return None;
+                    }
+
+                    let mut normal = [(0u8, 0u8, 0u8); 8];
+                    let mut bright = [(0u8, 0u8, 0u8); 8];
+                    for (i, c) in normal_vec.into_iter().enumerate() {
+                        normal[i] = c;
+                    }
+                    for (i, c) in bright_vec.into_iter().enumerate() {
+                        bright[i] = c;
+                    }
+
+                    Some(ThemeInfo {
+                        name,
+                        background,
+                        foreground,
+                        normal,
+                        bright,
+                    })
+                });
+
+            match (initial_screen, theme) {
+                (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
+                    cols, rows, screen, session_id, theme,
+                ),
+                (Some(screen), None) => {
                     ServerMessage::connected_with_screen(cols, rows, screen, session_id)
                 }
-                None => ServerMessage::connected(cols, rows, session_id),
+                (None, Some(theme)) => {
+                    ServerMessage::connected_with_theme(cols, rows, session_id, theme)
+                }
+                (None, None) => ServerMessage::connected(cols, rows, session_id),
             }
         }
         "error" => {
@@ -577,7 +705,7 @@ pub fn encode_server_message<'py>(
         }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, connected, error, shutdown, cursor, refresh",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh",
                 message_type
             )));
         }

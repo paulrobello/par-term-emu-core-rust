@@ -13,6 +13,37 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.19.4
+
+### 🔧 Python SDK Sync
+
+- **Python SDK aligned with Rust SDK**: All streaming features now available in Python bindings
+  - `StreamingConfig.enable_http` / `web_root` - HTTP server configuration (getter/setter)
+  - `StreamingServer.max_clients()` - Query maximum allowed clients
+  - `StreamingServer.create_theme_info()` - Create theme dictionaries for protocol
+  - `encode_server_message("pong")` - Pong message encoding support
+  - `encode_server_message("connected", theme=...)` - Theme support in connected messages
+
+```python
+from par_term_emu_core_rust import StreamingConfig, StreamingServer, encode_server_message
+
+# Configure HTTP serving
+config = StreamingConfig(enable_http=True, web_root="/var/www/terminal")
+
+# Create theme for connected message
+theme = StreamingServer.create_theme_info(
+    name="my-theme",
+    background=(0, 0, 0),
+    foreground=(255, 255, 255),
+    normal=[(0,0,0), (255,0,0), (0,255,0), (255,255,0), (0,0,255), (255,0,255), (0,255,255), (200,200,200)],
+    bright=[(128,128,128), (255,128,128), (128,255,128), (255,255,128), (128,128,255), (255,128,255), (128,255,255), (255,255,255)]
+)
+
+# Encode messages
+pong = encode_server_message("pong")
+connected = encode_server_message("connected", cols=80, rows=24, session_id="abc", theme=theme)
+```
+
 ## What's New in 0.19.2
 
 ### 🐛 Bug Fixes

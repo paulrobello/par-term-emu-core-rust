@@ -23,7 +23,9 @@ pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 /// A PTY session that manages a shell process and terminal state
 pub struct PtySession {
     terminal: Arc<Mutex<Terminal>>,
-    pty_pair: Option<PtyPair>,
+    /// Master end of the PTY. We intentionally drop the slave side after
+    /// spawning the child so the master sees EOF when the child exits.
+    pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
     child: Option<Box<dyn Child + Send + Sync>>,
     reader_thread: Option<JoinHandle<()>>,
     writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
@@ -60,7 +62,7 @@ impl PtySession {
                 rows,
                 max_scrollback,
             ))),
-            pty_pair: None,
+            pty_master: None,
             child: None,
             reader_thread: None,
             writer: None,
@@ -161,14 +163,14 @@ impl PtySession {
             drop(writer);
         }
 
-        // Close the old PTY pair (closes master/slave)
-        if let Some(pair) = self.pty_pair.take() {
+        // Close the old PTY master (dropping it closes the master FD)
+        if let Some(master) = self.pty_master.take() {
             debug::log(
                 debug::DebugLevel::Debug,
                 "PTY_CLEANUP",
-                "Dropping previous PTY pair",
+                "Dropping previous PTY master",
             );
-            drop(pair);
+            drop(master);
         }
 
         // Wait for the old reader thread to finish (with timeout)
@@ -364,21 +366,21 @@ impl PtySession {
             cmd.cwd(cwd);
         }
 
-        // Spawn the child process
-        let child = pair
-            .slave
+        // Spawn the child process using the slave side. Drop our handle to the slave
+        // immediately after spawn so that when the child exits, the master side sees EOF.
+        let PtyPair { master, slave } = pair;
+        let child = slave
             .spawn_command(cmd)
             .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?;
+        drop(slave);
 
         // Get the master reader
-        let reader = pair
-            .master
+        let reader = master
             .try_clone_reader()
             .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?;
 
         // Get the master writer (wrapped in Arc<Mutex<>> for shared access)
-        let writer = pair
-            .master
+        let writer = master
             .take_writer()
             .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?;
         let writer = Arc::new(Mutex::new(writer));
@@ -386,8 +388,8 @@ impl PtySession {
         // Get child PID before storing
         let child_pid = child.process_id();
 
-        // Store the PTY pair and child
-        self.pty_pair = Some(pair);
+        // Store the PTY master and child
+        self.pty_master = Some(master);
         self.child = Some(child);
         self.writer = Some(Arc::clone(&writer));
         self.running.store(true, Ordering::SeqCst);
@@ -609,7 +611,7 @@ impl PtySession {
         }
 
         // Resize the PTY (sends SIGWINCH to child)
-        if let Some(ref pair) = self.pty_pair {
+        if let Some(ref master) = self.pty_master {
             // Calculate pixel dimensions (10x20 per cell - standard terminal font size)
             // This ensures kitten icat and other tools can query pixel dimensions via TIOCGWINSZ
             let pty_size = PtySize {
@@ -621,7 +623,7 @@ impl PtySession {
             debug::log(
                 debug::DebugLevel::Debug,
                 "PTY_RESIZE",
-                &format!("Calling pair.master.resize({}, {})", cols, rows),
+                &format!("Calling master.resize({}, {})", cols, rows),
             );
             debug::log(
                 debug::DebugLevel::Trace,
@@ -631,7 +633,7 @@ impl PtySession {
                     pty_size.rows, pty_size.cols, pty_size.pixel_width, pty_size.pixel_height
                 ),
             );
-            pair.master.resize(pty_size).map_err(|e| {
+            master.resize(pty_size).map_err(|e| {
                 debug::log(
                     debug::DebugLevel::Error,
                     "PTY_RESIZE",
@@ -642,7 +644,7 @@ impl PtySession {
             debug::log(
                 debug::DebugLevel::Debug,
                 "PTY_RESIZE",
-                "pair.master.resize() completed successfully",
+                "master.resize() completed successfully",
             );
             debug::log(
                 debug::DebugLevel::Trace,
@@ -723,7 +725,7 @@ impl PtySession {
         }
 
         // Resize the PTY (sends SIGWINCH to child)
-        if let Some(ref pair) = self.pty_pair {
+        if let Some(ref master) = self.pty_master {
             let pty_size = PtySize {
                 rows,
                 cols,
@@ -734,11 +736,11 @@ impl PtySession {
                 debug::DebugLevel::Debug,
                 "PTY_RESIZE",
                 &format!(
-                    "Calling pair.master.resize({}, {}) with pixels {}x{}",
+                    "Calling master.resize({}, {}) with pixels {}x{}",
                     cols, rows, pixel_width, pixel_height
                 ),
             );
-            pair.master.resize(pty_size).map_err(|e| {
+            master.resize(pty_size).map_err(|e| {
                 debug::log(
                     debug::DebugLevel::Error,
                     "PTY_RESIZE",
@@ -749,7 +751,7 @@ impl PtySession {
             debug::log(
                 debug::DebugLevel::Debug,
                 "PTY_RESIZE",
-                "pair.master.resize() completed successfully",
+                "master.resize() completed successfully",
             );
             debug::log(
                 debug::DebugLevel::Trace,
