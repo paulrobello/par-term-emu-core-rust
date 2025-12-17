@@ -762,8 +762,6 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available (read from RwLock)
-        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
         let read_only = client.is_read_only();
 
         // Subscribe to output broadcasts
@@ -800,8 +798,8 @@ impl StreamingServer {
                                         continue;
                                     }
 
-                                    // Write input to PTY if available
-                                    if let Some(ref writer) = pty_writer {
+                                    // Always fetch latest PTY writer (may be updated after shell restart)
+                                    if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         if let Ok(mut w) = writer.lock() {
                                             use std::io::Write;
                                             let _ = w.write_all(data.as_bytes());
@@ -970,9 +968,6 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available (read from RwLock)
-        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
-
         // Subscribe to output broadcasts
         let mut output_rx = self.broadcast_tx.subscribe();
 
@@ -1003,7 +998,8 @@ impl StreamingServer {
                                                 continue;
                                             }
 
-                                            if let Some(ref writer) = pty_writer {
+                                            // Pull the latest PTY writer each time so restarts are handled
+                                            if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 if let Ok(mut w) = writer.lock() {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());
@@ -1270,8 +1266,6 @@ impl StreamingServer {
             self.client_count()
         );
 
-        // Get PTY writer if available (read from RwLock)
-        let pty_writer = self.pty_writer.read().ok().and_then(|g| g.clone());
         let read_only = self.config.default_read_only;
 
         // Subscribe to output broadcasts
@@ -1305,7 +1299,8 @@ impl StreamingServer {
                                                 continue;
                                             }
 
-                                            if let Some(ref writer) = pty_writer {
+                                            // Always grab latest PTY writer (shell may have restarted)
+                                            if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 if let Ok(mut w) = writer.lock() {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());

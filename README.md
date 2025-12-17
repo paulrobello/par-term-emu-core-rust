@@ -13,6 +13,14 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.19.5
+
+### 🐛 Bug Fixes
+
+- **Streaming Server Shell Restart Input**: Fixed WebSocket client connections not receiving input after shell restart
+  - PTY writer was captured once at connection time, becoming stale after shell restart
+  - Client keyboard input now properly reaches the shell after any restart
+
 ## What's New in 0.19.4
 
 ### 🔧 Python SDK Sync
