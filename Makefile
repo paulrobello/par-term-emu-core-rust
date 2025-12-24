@@ -580,11 +580,20 @@ web-build-static: web-install
 	mkdir -p web_term
 	cp -r web-terminal-frontend/out/* web_term/
 	@echo ""
+	@echo "Copying external theme..."
+	@if [ -f theme.css ]; then \
+		cp theme.css web_term/theme.css; \
+		echo "  ✓ Copied theme.css to web_term/"; \
+	else \
+		echo "  ℹ No external theme.css found, using default"; \
+	fi
+	@echo ""
 	@echo "======================================================================"
 	@echo "  Static build complete!"
 	@echo "======================================================================"
 	@echo ""
 	@echo "Files copied to: web_term/"
+	@echo "Theme: web_term/theme.css (edit and refresh to customize)"
 	@echo ""
 	@echo "Run the streaming server with HTTP support:"
 	@echo "  make streamer-run-http"

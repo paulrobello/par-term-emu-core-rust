@@ -13,6 +13,33 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.20.0
+
+### 🎨 External UI Theme
+
+The web frontend UI chrome can now be customized **after static build** without rebuilding:
+
+```css
+/* Edit web_term/theme.css */
+:root {
+  --terminal-bg: #0a0a0a;      /* Main background */
+  --terminal-surface: #1a1a1a; /* Status bar, cards */
+  --terminal-border: #2a2a2a;  /* Borders */
+  --terminal-accent: #3a3a3a;  /* Scrollbar, accents */
+  --terminal-text: #e0e0e0;    /* Primary text */
+}
+```
+
+- Edit colors and refresh the page - no rebuild required
+- Terminal emulator colors (ANSI palette) still controlled by server `--theme` option
+- See [docs/STREAMING.md](docs/STREAMING.md#theme-system) for details
+
+### 🐛 Bug Fixes
+
+- **Web Terminal On-Screen Keyboard**: Fixed native device keyboard appearing when tapping on-screen keyboard buttons on mobile devices
+  - The on-screen keyboard now properly prevents xterm's internal textarea from gaining focus
+  - Tapping virtual keys no longer triggers the device's native keyboard
+
 ## What's New in 0.19.5
 
 ### 🐛 Bug Fixes
@@ -861,6 +888,7 @@ cp -r out/* ../web_term/
 - Theme selection and synchronization
 - Responsive design
 - Terminal resize support
+- **Customizable UI theme** - Edit `theme.css` after build (no rebuild required)
 
 See [web-terminal-frontend/README.md](web-terminal-frontend/README.md) for detailed setup and configuration.
 

@@ -12,14 +12,6 @@
 @import "tailwindcss";
 
 @layer base {
-  :root {
-    --terminal-bg: #0a0a0a;
-    --terminal-surface: #1a1a1a;
-    --terminal-border: #2a2a2a;
-    --terminal-accent: #3a3a3a;
-    --terminal-text: #e0e0e0;
-  }
-
   body {
     background: var(--terminal-bg);
     color: var(--terminal-text);
@@ -121,5 +113,20 @@
   /* Text gradient */
   .text-gradient {
     @apply bg-gradient-to-r from-blue-400 via-purple-400 to-pink-400 bg-clip-text text-transparent;
+  }
+
+  /* Primary link color using CSS variable */
+  .text-primary {
+    color: var(--terminal-primary, #ff9500);
+  }
+
+  .text-primary:hover {
+    color: var(--terminal-primary-hover, #ffaa33);
+  }
+
+  /* Focus ring using primary color */
+  .focus-primary:focus {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--terminal-primary, #ff9500);
   }
 }

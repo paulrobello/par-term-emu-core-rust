@@ -1,12 +1,12 @@
 [build-system]
 requires = [
-    "maturin>=1.9,<2.0",
+    "maturin>=1.10.2,<2.0",
 ]
 build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.19.5"
+version = "0.20.0"
 description = "A comprehensive terminal emulator library in Rust with Python bindings - supports true color, alt screen, mouse reporting, bracketed paste, and full Unicode"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -101,10 +101,10 @@ typeCheckingMode = "basic"
 [dependency-groups]
 dev = [
     "maturin>=1.10.2",
-    "pre-commit>=4.5.0",
+    "pre-commit>=4.5.1",
     "pyright>=1.1.407",
-    "pytest>=9.0.1",
+    "pytest>=9.0.2",
     "pytest-timeout>=2.4.0",
     "rich>=14.2.0",
-    "ruff>=0.14.7",
+    "ruff>=0.14.10",
 ]

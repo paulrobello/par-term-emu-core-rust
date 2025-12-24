@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] - 2025-12-23
+
+### Added
+- **External UI Theme File**: Web frontend UI chrome theme can now be customized after static build
+  - New `theme.css` file in `web_term/` directory contains CSS custom properties
+  - Edit colors without rebuilding: `--terminal-bg`, `--terminal-surface`, `--terminal-border`, `--terminal-accent`, `--terminal-text`
+  - Changes take effect on page refresh - no rebuild required
+  - Terminal emulator colors (ANSI palette) still controlled by server `--theme` option
+
+### Fixed
+- **Web Terminal On-Screen Keyboard Mobile Fix**: Fixed native device keyboard appearing when tapping on-screen keyboard buttons on mobile
+  - Removed `focusTerminal()` call after on-screen keyboard input to prevent xterm's internal textarea from triggering native keyboard
+  - Added active element blur on touch to ensure no input retains focus
+  - Only focus terminal when hiding on-screen keyboard, not when showing or using it
+
+### Changed
+- **Theme Architecture**: Separated UI chrome theme from terminal emulator theme
+  - UI chrome (status bar, buttons, containers) now uses external `theme.css`
+  - Terminal emulator colors continue to be sent from server via protobuf
+
+### Documentation
+- Updated `docs/STREAMING.md` with new "UI Chrome Theme" section
+- Updated `web-terminal-frontend/README.md` with theme customization guide
+- Added theme customization to main README features list
+
 ## [0.19.5] - 2025-12-17
 
 ### Fixed

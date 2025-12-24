@@ -543,6 +543,31 @@ The terminal component handles React 18's StrictMode double-invocation pattern b
 
 ### Theme System
 
+There are **two separate theme systems** in the web frontend:
+
+1. **Terminal Emulator Theme** - ANSI colors sent from the server (see below)
+2. **UI Chrome Theme** - Status bar, buttons, containers (editable CSS file)
+
+#### UI Chrome Theme (Customizable Without Rebuild)
+
+The UI chrome colors are defined in `theme.css`, which is **not bundled** during build. You can edit this file after deployment without rebuilding:
+
+**Location:** `web_term/theme.css` (after static build)
+
+```css
+:root {
+  --terminal-bg: #0a0a0a;      /* Main background */
+  --terminal-surface: #1a1a1a; /* Status bar, cards */
+  --terminal-border: #2a2a2a;  /* Borders */
+  --terminal-accent: #3a3a3a;  /* Scrollbar, accents */
+  --terminal-text: #e0e0e0;    /* Primary text */
+}
+```
+
+To customize: Edit the file and refresh the page. No rebuild required.
+
+#### Terminal Emulator Theme (Server-Controlled)
+
 The server can send color theme information to clients on connection:
 
 **Theme Structure:**

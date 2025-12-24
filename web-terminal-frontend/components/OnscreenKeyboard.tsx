@@ -458,13 +458,17 @@ export function OnscreenKeyboard({
     handleKeyPress(key);
   }, [handleKeyPress]);
 
-  // Prevent keyboard from stealing focus from terminal
+  // Prevent keyboard from stealing focus from terminal and triggering native keyboard
   useEffect(() => {
     const keyboard = keyboardRef.current;
     if (!keyboard) return;
 
     const preventFocus = (e: Event) => {
       e.preventDefault();
+      // Blur any currently focused element to prevent native keyboard from appearing
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
     };
 
     keyboard.addEventListener('mousedown', preventFocus);
@@ -653,10 +657,11 @@ export function OnscreenKeyboard({
         onClick={onToggleVisibility}
         tabIndex={-1}
         className="fixed bottom-2 right-[71px] z-50 p-2 rounded-full
-          bg-[#252525]/95 text-[#e0e0e0] border border-[#3a3a3a]/50
+          bg-[#252525]/95 border border-[#3a3a3a]/50
           backdrop-blur-md shadow-lg hover:bg-[#353535]/95
           transition-all duration-200 hover:scale-105
           touch-manipulation select-none"
+        style={{ color: 'var(--terminal-primary, #ff9500)' }}
         title="Show keyboard"
       >
         <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -683,7 +688,13 @@ export function OnscreenKeyboard({
         border-t border-[#2a2a2a]/80
         shadow-[0_-4px_30px_rgba(0,0,0,0.5)]
         transition-transform duration-300 ease-out
-        select-none"
+        select-none
+        max-h-[50vh] lg:max-h-none flex flex-col"
+      // Prevent native keyboard from appearing when tapping the on-screen keyboard
+      onTouchStart={(e) => {
+        // Stop propagation to prevent terminal input from getting focus
+        e.stopPropagation();
+      }}
     >
       {/* Header with mode toggles and close button */}
       <div className="flex items-center justify-between px-2 py-1.5 border-b border-[#2a2a2a]/50">
@@ -691,22 +702,22 @@ export function OnscreenKeyboard({
           <button
             onClick={() => { setShowFunctionKeys(prev => !prev); setShowMacros(false); }}
             tabIndex={-1}
-            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors
-              ${showFunctionKeys
-                ? 'bg-blue-600/80 text-white'
-                : 'bg-[#2a2a2a]/80 text-[#a0a0a0] hover:bg-[#3a3a3a]/80 hover:text-[#e0e0e0]'
-              }`}
+            className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+            style={showFunctionKeys
+              ? { backgroundColor: 'var(--terminal-primary, #ff9500)', color: 'white' }
+              : { backgroundColor: 'rgba(42, 42, 42, 0.8)', color: '#a0a0a0' }
+            }
           >
             F1-F12
           </button>
           <button
             onClick={() => { setShowMacros(prev => !prev); setShowFunctionKeys(false); }}
             tabIndex={-1}
-            className={`px-2.5 py-1 rounded text-xs font-medium transition-colors
-              ${showMacros
-                ? 'bg-amber-600/80 text-white'
-                : 'bg-[#2a2a2a]/80 text-[#a0a0a0] hover:bg-[#3a3a3a]/80 hover:text-[#e0e0e0]'
-              }`}
+            className="px-2.5 py-1 rounded text-xs font-medium transition-colors"
+            style={showMacros
+              ? { backgroundColor: 'var(--terminal-primary, #ff9500)', color: 'white' }
+              : { backgroundColor: 'rgba(42, 42, 42, 0.8)', color: '#a0a0a0' }
+            }
           >
             Macros
           </button>
@@ -728,8 +739,8 @@ export function OnscreenKeyboard({
                 onClick={() => onFontSizeChange(-1)}
                 disabled={fontSize <= minFontSize}
                 tabIndex={-1}
-                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 text-[#a0a0a0] hover:text-[#e0e0e0]
-                  disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                style={{ color: 'var(--terminal-primary, #ff9500)' }}
                 title="Decrease font size"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -743,8 +754,8 @@ export function OnscreenKeyboard({
                 onClick={() => onFontSizeChange(1)}
                 disabled={fontSize >= maxFontSize}
                 tabIndex={-1}
-                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 text-[#a0a0a0] hover:text-[#e0e0e0]
-                  disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="p-1 rounded bg-[#2a2a2a]/80 hover:bg-[#3a3a3a]/80 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                style={{ color: 'var(--terminal-primary, #ff9500)' }}
                 title="Increase font size"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -761,11 +772,12 @@ export function OnscreenKeyboard({
             <button
               onClick={onToggleControls}
               tabIndex={-1}
-              className={`p-1.5 rounded-md transition-colors ${
-                showControls
-                  ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/20'
-                  : 'text-[#808080] hover:text-[#e0e0e0] hover:bg-[#2a2a2a]/80'
-              }`}
+              className="p-1.5 rounded-md transition-colors hover:bg-[#2a2a2a]/80"
+              style={{
+                color: showControls
+                  ? 'var(--terminal-primary, #ff9500)'
+                  : '#808080'
+              }}
               title={showControls ? 'Hide header/footer' : 'Show header/footer'}
             >
               <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -794,7 +806,7 @@ export function OnscreenKeyboard({
       </div>
 
       {/* Keyboard content */}
-      <div className="p-2">
+      <div className="p-2 flex-1 overflow-y-auto">
         {/* Macros section (conditional) - takes full keyboard space */}
         {showMacros ? (
           <div className="space-y-3">
@@ -973,10 +985,10 @@ export function OnscreenKeyboard({
             )}
           </div>
         ) : (
-          <>
+          <div className="max-h-[45vh] lg:max-h-none overflow-y-auto lg:overflow-visible">
             {/* Main keyboard section with symbols grid */}
-            <div className="flex gap-3 items-end justify-center">
-              {/* Left section: Main keyboard controls */}
+            <div className="flex flex-col lg:flex-row gap-3 items-center lg:items-end justify-center">
+              {/* Main keyboard controls */}
               <div className="space-y-2">
                 {/* Function keys row (conditional) */}
                 {showFunctionKeys && (
@@ -1011,7 +1023,7 @@ export function OnscreenKeyboard({
                 </div>
               </div>
 
-              {/* Right section: Symbols grid */}
+              {/* Symbols grid - below on mobile, right side on lg+ */}
               <div className="flex flex-col">
                 <div className="grid grid-cols-8 gap-0.5">
                   {SYMBOL_ROW.map((key, index) => (
@@ -1042,7 +1054,7 @@ export function OnscreenKeyboard({
                 </div>
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     </div>

@@ -164,28 +164,31 @@ export default function Home() {
     <main className="flex h-[100dvh] flex-col overflow-hidden">
       {/* Header - Hideable */}
       {showControls && (
-        <div className="glass p-2 sm:p-3 shadow-2xl flex-shrink-0 m-2 sm:m-3 mb-0 rounded-xl sm:rounded-2xl">
+        <div className="glass px-2 pt-2 pb-0 sm:px-3 sm:pt-3 sm:pb-0 shadow-2xl flex-shrink-0 rounded-xl sm:rounded-2xl border-0">
           <div className="flex items-center gap-2">
             {/* URL Input with inline status */}
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <label htmlFor="wsUrl" className="text-xs font-medium text-terminal-muted">
-                  WebSocket URL
-                </label>
-                <StatusIndicator showText={true} />
-              </div>
+            <div className="flex-1 relative">
               <input
                 id="wsUrl"
                 type="text"
                 value={wsUrl}
                 onChange={(e) => setWsUrl(e.target.value)}
-                className="w-full px-2 py-1 rounded-lg bg-terminal-bg border border-terminal-border text-terminal-text placeholder-terminal-muted focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all text-xs sm:text-sm"
+                className="w-full px-2 py-1.5 pr-28 rounded-lg bg-terminal-bg border text-terminal-text placeholder-terminal-muted focus:outline-none focus:ring-2 transition-all text-xs sm:text-sm"
+                style={{
+                  '--tw-ring-color': 'var(--terminal-primary, #ff9500)',
+                  borderColor: 'var(--terminal-border)'
+                } as React.CSSProperties}
+                onFocus={(e) => e.target.style.borderColor = 'var(--terminal-primary, #ff9500)'}
+                onBlur={(e) => e.target.style.borderColor = 'var(--terminal-border)'}
                 placeholder="ws://127.0.0.1:8080"
               />
+              <div className="absolute right-2 top-1/2 -translate-y-1/2">
+                <StatusIndicator showText={true} />
+              </div>
             </div>
 
             {/* Reconnect/Stop button */}
-            <div className="pt-4">
+            <div>
               {isRetrying ? (
                 <button
                   onClick={() => connectControl?.cancelRetry()}
@@ -218,6 +221,7 @@ export default function Home() {
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
+                    style={{ color: 'var(--terminal-primary, #ff9500)' }}
                   >
                     <path
                       strokeLinecap="round"
@@ -266,7 +270,7 @@ export default function Home() {
               href="https://github.com/paulrobello/par-term-emu-core-rust"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300 transition-colors"
+              className="text-primary transition-colors"
             >
               PAR Term
             </a>
@@ -275,7 +279,7 @@ export default function Home() {
               href="https://github.com/xtermjs/xterm.js"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-blue-400 hover:text-blue-300 transition-colors"
+              className="text-primary transition-colors"
             >
               xterm.js
             </a>
@@ -296,7 +300,8 @@ export default function Home() {
             }, 150);
           });
         }}
-        className={`fixed bottom-2.5 right-[25px] p-2 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-terminal-text shadow-lg transition-all duration-200 z-50`}
+        className="fixed bottom-2 right-[25px] p-2 rounded-full bg-[#252525]/95 border border-[#3a3a3a]/50 backdrop-blur-md shadow-lg hover:bg-[#353535]/95 transition-all duration-200 hover:scale-105 z-50"
+        style={{ color: 'var(--terminal-primary, #ff9500)' }}
         aria-label={showControls ? 'Hide controls' : 'Show controls'}
       >
         <svg
@@ -318,16 +323,23 @@ export default function Home() {
       <OnscreenKeyboard
         onInput={(data) => {
           sendInput?.(data);
-          focusTerminal?.();
+          // Don't call focusTerminal() here - it triggers the native keyboard on mobile
+          // by focusing xterm's internal textarea. The on-screen keyboard should work
+          // without needing focus on the terminal input element.
         }}
         isVisible={showKeyboard}
         onToggleVisibility={() => {
-          setShowKeyboard(!showKeyboard);
+          const newShowKeyboard = !showKeyboard;
+          setShowKeyboard(newShowKeyboard);
           // Refit terminal after keyboard visibility changes
           requestAnimationFrame(() => {
             setTimeout(() => {
               refitTerminal?.();
-              focusTerminal?.();
+              // Only focus terminal when hiding the on-screen keyboard
+              // to avoid triggering native keyboard on mobile
+              if (!newShowKeyboard) {
+                focusTerminal?.();
+              }
             }, 350);
           });
         }}

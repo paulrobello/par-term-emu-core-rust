@@ -70,11 +70,11 @@ By default, the application connects to `ws://127.0.0.1:8080`. You can change th
 
 ### Terminal Theme
 
-The terminal theme can be customized in `components/Terminal.tsx` in the `theme` object.
+The terminal emulator theme (ANSI colors, foreground, background) is sent from the streaming server. Use the `--theme` flag when running the server (e.g., `--theme dracula`).
 
-### Tailwind Colors
+### UI Theme
 
-Custom terminal colors are defined in `tailwind.config.ts` under the `terminal` color palette.
+UI chrome colors are defined in `public/theme.css` as CSS custom properties. See [UI Color Theme](#ui-color-theme) section below.
 
 ## Project Structure
 
@@ -87,6 +87,7 @@ web-terminal-frontend/
 ├── components/
 │   └── Terminal.tsx      # Terminal component with xterm.js
 ├── public/
+│   ├── theme.css         # External UI theme (editable after build)
 │   ├── favicon.ico       # Multi-size favicon (16x16, 32x32, 48x48)
 │   ├── favicon.png       # 32x32 PNG favicon
 │   ├── apple-touch-icon.png  # 180x180 Apple touch icon
@@ -94,7 +95,7 @@ web-terminal-frontend/
 │   ├── icon-512.png      # 512x512 PWA icon
 │   ├── icon-1024.png     # Original high-res icon
 │   └── manifest.json     # PWA manifest
-├── next.config.mjs      # Next.js configuration
+├── next.config.js       # Next.js configuration
 ├── tailwind.config.ts   # Tailwind CSS configuration
 ├── tsconfig.json        # TypeScript configuration
 └── package.json         # Dependencies and scripts
@@ -122,21 +123,23 @@ Fonts are loaded from CDN in `app/globals.css`:
 
 To use local fonts, place them in `public/fonts/` and update the `@font-face` declarations.
 
-### Color Theme
+### UI Color Theme
 
-Edit `tailwind.config.ts` to change the color scheme:
+The UI chrome theme (status bar, buttons, containers) is defined in `public/theme.css`. This file is **not bundled** during build, so you can customize it after deployment without rebuilding:
 
-```typescript
-colors: {
-  terminal: {
-    bg: "#0a0a0a",      // Background
-    surface: "#1a1a1a", // Surface/card background
-    border: "#2a2a2a",  // Border color
-    accent: "#3a3a3a",  // Accent color
-    // ... etc
-  },
+```css
+:root {
+  --terminal-bg: #0a0a0a;      /* Main background */
+  --terminal-surface: #1a1a1a; /* Surface/card background */
+  --terminal-border: #2a2a2a;  /* Border color */
+  --terminal-accent: #3a3a3a;  /* Accent color (scrollbar, etc.) */
+  --terminal-text: #e0e0e0;    /* Primary text color */
 }
 ```
+
+After running `make web-build-static`, edit `web_term/theme.css` to customize colors. Changes take effect on page refresh.
+
+**Note:** Terminal emulator colors (ANSI palette, foreground/background) are controlled by the streaming server's `--theme` option, not this file.
 
 ### Terminal Options
 

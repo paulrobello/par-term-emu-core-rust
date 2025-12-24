@@ -40,6 +40,9 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
 
+        {/* External theme file - editable without rebuild */}
+        <link rel="stylesheet" href="/theme.css" />
+
         {/* WebSocket preconnect hints - reduces initial connection latency by 100-200ms */}
         {/* Only in development to avoid browser port scanning localhost in production */}
         {isDevelopment && (
