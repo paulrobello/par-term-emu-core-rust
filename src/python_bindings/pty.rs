@@ -228,7 +228,7 @@ impl PyPtyTerminal {
     ///     Current terminal title string
     fn title(&self) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let title = if let Ok(term) = terminal.lock() {
+        let title = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.title().to_string()
         } else {
             String::new()
@@ -348,7 +348,8 @@ impl PyPtyTerminal {
 
         // Get theme settings from terminal (used as defaults if not explicitly provided)
         let terminal = self.inner.terminal();
-        let (term_bold_brightening, term_bg_color) = if let Ok(term) = terminal.lock() {
+        let (term_bold_brightening, term_bg_color) = if let Ok(term) = Ok::<_, ()>(terminal.lock())
+        {
             (term.bold_brightening(), term.default_bg().to_rgb())
         } else {
             (false, (0, 0, 0))
@@ -528,9 +529,7 @@ impl PyPtyTerminal {
         index: usize,
     ) -> PyResult<Option<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         let grid = term.grid();
         if let Some(line) = grid.scrollback_line(index) {
             let cells: Vec<_> = line
@@ -584,7 +583,7 @@ impl PyPtyTerminal {
     ///     Character at the position, or None if out of bounds
     fn get_char(&self, col: usize, row: usize) -> PyResult<Option<char>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid().get(col, row).map(|cell| cell.c)
         } else {
             None
@@ -601,7 +600,7 @@ impl PyPtyTerminal {
     ///     True if the line wraps to the next row, False otherwise
     fn is_line_wrapped(&self, row: usize) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid().is_line_wrapped(row)
         } else {
             false
@@ -619,7 +618,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) values, or None if out of bounds
     fn get_fg_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid()
                 .get(col, row)
                 .map(|cell| cell.fg.to_rgb())
@@ -639,7 +638,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) values, or None if out of bounds
     fn get_bg_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid()
                 .get(col, row)
                 .map(|cell| cell.bg.to_rgb())
@@ -659,7 +658,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) values, or None if no underline color set or out of bounds
     fn get_underline_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid()
                 .get(col, row)
                 .and_then(|cell| cell.underline_color.map(|c| c.to_rgb()))
@@ -679,7 +678,7 @@ impl PyPtyTerminal {
     ///     Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
     fn get_attributes(&self, col: usize, row: usize) -> PyResult<Option<PyAttributes>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.active_grid().get(col, row).map(|cell| PyAttributes {
                 bold: cell.flags.bold(),
                 dim: cell.flags.dim(),
@@ -713,7 +712,7 @@ impl PyPtyTerminal {
     ///     URL string if a hyperlink exists at that position, None otherwise
     fn get_hyperlink(&self, col: usize, row: usize) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             if let Some(cell) = term.active_grid().get(col, row) {
                 if let Some(id) = cell.flags.hyperlink_id {
                     term.get_hyperlink_url(id)
@@ -743,7 +742,7 @@ impl PyPtyTerminal {
     ///     or empty list if row is out of bounds
     fn get_line_cells(&self, row: usize) -> PyResult<LineCellData> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = terminal.lock() {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             let grid = term.active_grid();
             let rows = grid.rows();
 
@@ -793,9 +792,7 @@ impl PyPtyTerminal {
     ///     ScreenSnapshot with all terminal state
     fn create_snapshot(&self) -> PyResult<PyScreenSnapshot> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
 
         // Get current grid (will be either primary or alternate)
         let grid = term.active_grid();
@@ -967,7 +964,7 @@ impl PyPtyTerminal {
     fn mouse_mode(&self) -> PyResult<String> {
         use crate::mouse::MouseMode;
         let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = terminal.lock() {
+        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             match term.mouse_mode() {
                 MouseMode::Off => "off",
                 MouseMode::X10 => "x10",
@@ -987,7 +984,7 @@ impl PyPtyTerminal {
     ///     True if cursor is visible
     fn cursor_visible(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let visible = if let Ok(term) = terminal.lock() {
+        let visible = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.cursor().visible
         } else {
             false
@@ -1002,7 +999,7 @@ impl PyPtyTerminal {
     ///     Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
     fn keyboard_flags(&self) -> PyResult<u16> {
         let terminal = self.inner.terminal();
-        let flags = if let Ok(term) = terminal.lock() {
+        let flags = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.keyboard_flags()
         } else {
             0
@@ -1039,7 +1036,7 @@ impl PyPtyTerminal {
     ///     True if insert mode is enabled (characters are inserted), False if replace mode (default)
     fn insert_mode(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = terminal.lock() {
+        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.insert_mode()
         } else {
             false
@@ -1053,7 +1050,7 @@ impl PyPtyTerminal {
     ///     True if LNM is enabled (LF does CR+LF), False if LF only (default)
     fn line_feed_new_line_mode(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = terminal.lock() {
+        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.line_feed_new_line_mode()
         } else {
             false
@@ -1100,9 +1097,7 @@ impl PyPtyTerminal {
     ///     >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
     fn force_set_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        let mut term = terminal
-            .lock()
-            .map_err(|_| PyRuntimeError::new_err("Failed to acquire terminal lock"))?;
+        let mut term = terminal.lock();
         term.set_keyboard_flags(flags);
         Ok(())
     }
@@ -1113,7 +1108,7 @@ impl PyPtyTerminal {
     ///     Clipboard content as string, or None if empty
     fn clipboard(&self) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let content = if let Ok(term) = terminal.lock() {
+        let content = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.clipboard().map(|s| s.to_string())
         } else {
             None
@@ -1130,7 +1125,7 @@ impl PyPtyTerminal {
     ///     content: Content to set (None to clear)
     fn set_clipboard(&mut self, content: Option<String>) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_clipboard(content);
         }
         Ok(())
@@ -1142,7 +1137,7 @@ impl PyPtyTerminal {
     ///     True if OSC 52 queries (ESC ] 52 ; c ; ? ST) are allowed
     fn allow_clipboard_read(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let allowed = if let Ok(term) = terminal.lock() {
+        let allowed = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.allow_clipboard_read()
         } else {
             false
@@ -1159,7 +1154,7 @@ impl PyPtyTerminal {
     ///     allow: True to allow clipboard read, False to block (default)
     fn set_allow_clipboard_read(&mut self, allow: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_allow_clipboard_read(allow);
         }
         Ok(())
@@ -1173,7 +1168,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) integers
     fn default_fg(&self) -> PyResult<(u8, u8, u8)> {
         let terminal = self.inner.terminal();
-        let color = if let Ok(term) = terminal.lock() {
+        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.default_fg().to_rgb()
         } else {
             (192, 192, 192) // Default white if lock fails
@@ -1189,7 +1184,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_default_fg(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_default_fg(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1212,7 +1207,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) integers
     fn default_bg(&self) -> PyResult<(u8, u8, u8)> {
         let terminal = self.inner.terminal();
-        let color = if let Ok(term) = terminal.lock() {
+        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.default_bg().to_rgb()
         } else {
             (0, 0, 0) // Default black if lock fails
@@ -1228,7 +1223,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_default_bg(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_default_bg(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1251,7 +1246,7 @@ impl PyPtyTerminal {
     ///     Tuple of (r, g, b) integers
     fn cursor_color(&self) -> PyResult<(u8, u8, u8)> {
         let terminal = self.inner.terminal();
-        let color = if let Ok(term) = terminal.lock() {
+        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.cursor_color().to_rgb()
         } else {
             (192, 192, 192) // Default white if lock fails
@@ -1267,7 +1262,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_cursor_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_cursor_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1294,7 +1289,7 @@ impl PyPtyTerminal {
     ///     ValueError: If index is not in range 0-15
     fn set_ansi_palette_color(&mut self, index: usize, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_ansi_palette_color(index, Color::Rgb(r, g, b))
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         }
@@ -1309,7 +1304,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_link_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_link_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1323,7 +1318,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_bold_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_bold_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1337,7 +1332,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_cursor_guide_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_cursor_guide_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1351,7 +1346,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_badge_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_badge_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1365,7 +1360,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_match_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_match_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1379,7 +1374,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_selection_bg_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_selection_bg_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1393,7 +1388,7 @@ impl PyPtyTerminal {
     ///     b: Blue component (0-255)
     fn set_selection_fg_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_selection_fg_color(Color::Rgb(r, g, b));
         }
         Ok(())
@@ -1407,7 +1402,7 @@ impl PyPtyTerminal {
     ///     use_bold: Whether to use custom bold color
     fn set_use_bold_color(&mut self, use_bold: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_use_bold_color(use_bold);
         }
         Ok(())
@@ -1422,7 +1417,7 @@ impl PyPtyTerminal {
     ///     enabled: Whether to brighten bold text with colors 0-7
     fn set_bold_brightening(&mut self, enabled: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_bold_brightening(enabled);
         }
         Ok(())
@@ -1436,7 +1431,7 @@ impl PyPtyTerminal {
     ///     use_underline: Whether to use custom underline color
     fn set_use_underline_color(&mut self, use_underline: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_use_underline_color(use_underline);
         }
         Ok(())
@@ -1448,7 +1443,7 @@ impl PyPtyTerminal {
     ///     CursorStyle enum value
     fn cursor_style(&self) -> PyResult<PyCursorStyle> {
         let terminal = self.inner.terminal();
-        let style = if let Ok(term) = terminal.lock() {
+        let style = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.cursor().style().into()
         } else {
             PyCursorStyle::BlinkingBlock // Default if lock fails
@@ -1478,9 +1473,7 @@ impl PyPtyTerminal {
         );
         // Process the sequence through the terminal's parser instead of sending to PTY
         let terminal = self.inner.terminal();
-        let mut term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let mut term = terminal.lock();
         term.process(sequence.as_bytes());
         Ok(())
     }
@@ -1491,7 +1484,7 @@ impl PyPtyTerminal {
     ///     True if alternate screen is active
     fn is_alt_screen_active(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let is_alt = if let Ok(term) = terminal.lock() {
+        let is_alt = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.is_alt_screen_active()
         } else {
             false
@@ -1505,7 +1498,7 @@ impl PyPtyTerminal {
     ///     True if focus tracking is enabled (DECSET 1004)
     fn focus_tracking(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = terminal.lock() {
+        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.focus_tracking()
         } else {
             false
@@ -1522,7 +1515,7 @@ impl PyPtyTerminal {
     ///     Bytes for focus in event: b'\x1b[I'
     fn get_focus_in_event(&self) -> PyResult<Vec<u8>> {
         let terminal = self.inner.terminal();
-        let event = if let Ok(term) = terminal.lock() {
+        let event = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.report_focus_in()
         } else {
             Vec::new()
@@ -1539,7 +1532,7 @@ impl PyPtyTerminal {
     ///     Bytes for focus out event: b'\x1b[O'
     fn get_focus_out_event(&self) -> PyResult<Vec<u8>> {
         let terminal = self.inner.terminal();
-        let event = if let Ok(term) = terminal.lock() {
+        let event = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.report_focus_out()
         } else {
             Vec::new()
@@ -1553,7 +1546,7 @@ impl PyPtyTerminal {
     ///     True if bracketed paste mode is enabled (DECSET 2004)
     fn bracketed_paste(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = terminal.lock() {
+        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.bracketed_paste()
         } else {
             false
@@ -1567,7 +1560,7 @@ impl PyPtyTerminal {
     ///     Bytes for paste start (if bracketed paste is enabled)
     fn get_paste_start(&self) -> PyResult<Vec<u8>> {
         let terminal = self.inner.terminal();
-        let sequence = if let Ok(term) = terminal.lock() {
+        let sequence = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.bracketed_paste_start().to_vec()
         } else {
             Vec::new()
@@ -1581,7 +1574,7 @@ impl PyPtyTerminal {
     ///     Bytes for paste end (if bracketed paste is enabled)
     fn get_paste_end(&self) -> PyResult<Vec<u8>> {
         let terminal = self.inner.terminal();
-        let sequence = if let Ok(term) = terminal.lock() {
+        let sequence = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.bracketed_paste_end().to_vec()
         } else {
             Vec::new()
@@ -1598,7 +1591,7 @@ impl PyPtyTerminal {
     ///     content: String content to paste
     fn paste(&mut self, content: &str) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(term) = terminal.lock() {
+        if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             // Get the paste sequences (handles bracketed paste mode)
             let start = term.bracketed_paste_start();
             let end = term.bracketed_paste_end();
@@ -1625,7 +1618,7 @@ impl PyPtyTerminal {
     ///     True if synchronized updates mode is enabled
     fn synchronized_updates(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = terminal.lock() {
+        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.synchronized_updates()
         } else {
             false
@@ -1639,7 +1632,7 @@ impl PyPtyTerminal {
     /// all pending updates atomically for flicker-free rendering.
     fn flush_synchronized_updates(&mut self) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.flush_synchronized_updates();
         }
         Ok(())
@@ -1658,7 +1651,7 @@ impl PyPtyTerminal {
     ///     Bytes containing all pending responses
     fn drain_responses(&mut self) -> PyResult<Vec<u8>> {
         let terminal = self.inner.terminal();
-        let responses = if let Ok(mut term) = terminal.lock() {
+        let responses = if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.drain_responses()
         } else {
             Vec::new()
@@ -1672,7 +1665,7 @@ impl PyPtyTerminal {
     ///     True if there are buffered responses waiting
     fn has_pending_responses(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let has_pending = if let Ok(term) = terminal.lock() {
+        let has_pending = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.has_pending_responses()
         } else {
             false
@@ -1688,7 +1681,7 @@ impl PyPtyTerminal {
     ///     True if there are notifications waiting to be retrieved
     fn has_notifications(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let has_pending = if let Ok(term) = terminal.lock() {
+        let has_pending = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.has_notifications()
         } else {
             false
@@ -1706,7 +1699,7 @@ impl PyPtyTerminal {
     ///     List of (title, message) tuples
     fn take_notifications(&mut self) -> PyResult<Vec<(String, String)>> {
         let terminal = self.inner.terminal();
-        let notifications = if let Ok(mut term) = terminal.lock() {
+        let notifications = if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.take_notifications()
         } else {
             Vec::new()
@@ -1740,9 +1733,7 @@ impl PyPtyTerminal {
     ///     ProgressBar object with state and progress fields
     fn progress_bar(&self) -> PyResult<super::types::PyProgressBar> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.progress_bar().into())
     }
 
@@ -1752,9 +1743,7 @@ impl PyPtyTerminal {
     ///     True if the progress bar is in any state other than Hidden
     fn has_progress(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.has_progress())
     }
 
@@ -1767,9 +1756,7 @@ impl PyPtyTerminal {
     ///     Progress percentage (0-100)
     fn progress_value(&self) -> PyResult<u8> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.progress_value())
     }
 
@@ -1779,9 +1766,7 @@ impl PyPtyTerminal {
     ///     ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
     fn progress_state(&self) -> PyResult<super::enums::PyProgressState> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.progress_state().into())
     }
 
@@ -1795,9 +1780,7 @@ impl PyPtyTerminal {
     ///     progress: Progress percentage (0-100, clamped if out of range)
     fn set_progress(&mut self, state: super::enums::PyProgressState, progress: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        let mut term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let mut term = terminal.lock();
         term.set_progress(state.into(), progress);
         Ok(())
     }
@@ -1807,9 +1790,7 @@ impl PyPtyTerminal {
     /// Equivalent to receiving OSC 9;4;0 (hidden state).
     fn clear_progress(&mut self) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        let mut term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let mut term = terminal.lock();
         term.clear_progress();
         Ok(())
     }
@@ -1820,9 +1801,7 @@ impl PyPtyTerminal {
     ///     String containing a formatted view of the buffer
     fn debug_snapshot_buffer(&self) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         let grid = term.active_grid();
         Ok(grid.debug_snapshot())
     }
@@ -1833,9 +1812,7 @@ impl PyPtyTerminal {
     ///     String containing a formatted view of the grid
     fn debug_snapshot_grid(&self) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.grid().debug_snapshot())
     }
 
@@ -1845,9 +1822,7 @@ impl PyPtyTerminal {
     ///     String containing a formatted view of the primary buffer
     fn debug_snapshot_primary(&self) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.grid().debug_snapshot())
     }
 
@@ -1857,9 +1832,7 @@ impl PyPtyTerminal {
     ///     String containing a formatted view of the alternate buffer
     fn debug_snapshot_alt(&self) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.alt_grid().debug_snapshot())
     }
 
@@ -1870,9 +1843,7 @@ impl PyPtyTerminal {
     fn debug_log_snapshot(&self, label: &str) -> PyResult<()> {
         use crate::debug;
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         let grid = term.active_grid();
         let snapshot = grid.debug_snapshot();
         debug::log_buffer_snapshot(label, grid.rows(), grid.cols(), &snapshot);
@@ -1885,9 +1856,7 @@ impl PyPtyTerminal {
     ///     Dictionary with shell integration info
     fn shell_integration_state(&self) -> PyResult<PyShellIntegration> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         let si = term.shell_integration();
         Ok(PyShellIntegration {
             in_prompt: si.in_prompt(),
@@ -1908,7 +1877,7 @@ impl PyPtyTerminal {
     ///     Optional string with current directory path
     fn current_directory(&self) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let cwd = if let Ok(term) = terminal.lock() {
+        let cwd = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.current_directory().map(|s| s.to_string())
         } else {
             None
@@ -1922,7 +1891,7 @@ impl PyPtyTerminal {
     ///     True if OSC 7 sequences are accepted, False otherwise
     fn accept_osc7(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let accepted = if let Ok(term) = terminal.lock() {
+        let accepted = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.accept_osc7()
         } else {
             true // Default
@@ -1939,7 +1908,7 @@ impl PyPtyTerminal {
     ///     accept: True to accept OSC 7 (default), False to ignore
     fn set_accept_osc7(&mut self, accept: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_accept_osc7(accept);
         }
         Ok(())
@@ -1951,7 +1920,7 @@ impl PyPtyTerminal {
     ///     True if insecure sequences are blocked, False otherwise
     fn disable_insecure_sequences(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
-        let disabled = if let Ok(term) = terminal.lock() {
+        let disabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.disable_insecure_sequences()
         } else {
             false // Default
@@ -1973,7 +1942,7 @@ impl PyPtyTerminal {
     ///     disable: True to block insecure sequences, False to allow (default)
     fn set_disable_insecure_sequences(&mut self, disable: bool) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_disable_insecure_sequences(disable);
         }
         Ok(())
@@ -1985,9 +1954,7 @@ impl PyPtyTerminal {
     ///     Dictionary containing terminal state for debugging
     fn debug_info(&self) -> PyResult<HashMap<String, String>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
 
         let mut info = HashMap::new();
         let (cols, rows) = term.size();
@@ -2031,7 +1998,7 @@ impl PyPtyTerminal {
     ///     List of graphics that overlap the given row
     fn graphics_at_row(&self, row: usize) -> PyResult<Vec<PyGraphic>> {
         let terminal = self.inner.terminal();
-        let graphics = if let Ok(term) = terminal.lock() {
+        let graphics = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             let graphics = term.graphics_at_row(row);
             graphics.iter().map(|g| PyGraphic::from(*g)).collect()
         } else {
@@ -2046,7 +2013,7 @@ impl PyPtyTerminal {
     ///     Total count of Sixel graphics
     fn graphics_count(&self) -> PyResult<usize> {
         let terminal = self.inner.terminal();
-        let count = if let Ok(term) = terminal.lock() {
+        let count = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.graphics_count()
         } else {
             0
@@ -2060,7 +2027,7 @@ impl PyPtyTerminal {
     ///     List of all Sixel graphics
     fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
         let terminal = self.inner.terminal();
-        let graphics = if let Ok(term) = terminal.lock() {
+        let graphics = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             let graphics = term.all_graphics();
             graphics.iter().map(PyGraphic::from).collect()
         } else {
@@ -2072,7 +2039,7 @@ impl PyPtyTerminal {
     /// Clear all graphics
     fn clear_graphics(&mut self) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.clear_graphics();
         }
         Ok(())
@@ -2088,7 +2055,7 @@ impl PyPtyTerminal {
     ///     List of image IDs that changed frames
     fn update_animations(&mut self) -> PyResult<Vec<u32>> {
         let terminal = self.inner.terminal();
-        let changed = if let Ok(mut term) = terminal.lock() {
+        let changed = if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.update_animations()
         } else {
             Vec::new()
@@ -2149,9 +2116,7 @@ impl PyPtyTerminal {
         word_chars: Option<&str>,
     ) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.get_word_at(col, row, word_chars))
     }
 
@@ -2167,9 +2132,7 @@ impl PyPtyTerminal {
     ///     URL at position or None if not on a URL
     fn get_url_at(&self, col: usize, row: usize) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.get_url_at(col, row))
     }
 
@@ -2182,9 +2145,7 @@ impl PyPtyTerminal {
     ///     Complete unwrapped line or None if row is invalid
     fn get_line_unwrapped(&self, row: usize) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.get_line_unwrapped(row))
     }
 
@@ -2205,9 +2166,7 @@ impl PyPtyTerminal {
         word_chars: Option<&str>,
     ) -> PyResult<Option<((usize, usize), (usize, usize))>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.select_word(col, row, word_chars))
     }
 
@@ -2224,9 +2183,7 @@ impl PyPtyTerminal {
     #[pyo3(signature = (pattern, case_sensitive = true))]
     fn find_text(&self, pattern: &str, case_sensitive: bool) -> PyResult<Vec<(usize, usize)>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.find_text(pattern, case_sensitive))
     }
 
@@ -2249,9 +2206,7 @@ impl PyPtyTerminal {
         case_sensitive: bool,
     ) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.find_next(pattern, from_col, from_row, case_sensitive))
     }
 
@@ -2264,9 +2219,7 @@ impl PyPtyTerminal {
     ///     non_whitespace_lines, graphics_count, estimated_memory_bytes
     fn get_stats(&self) -> PyResult<HashMap<String, usize>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         let stats = term.get_stats();
         let mut result = HashMap::new();
         result.insert("cols".to_string(), stats.cols);
@@ -2291,9 +2244,7 @@ impl PyPtyTerminal {
     ///     Number of lines containing non-whitespace characters
     fn count_non_whitespace_lines(&self) -> PyResult<usize> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.count_non_whitespace_lines())
     }
 
@@ -2303,9 +2254,7 @@ impl PyPtyTerminal {
     ///     Tuple of (used_lines, max_capacity)
     fn get_scrollback_usage(&self) -> PyResult<(usize, usize)> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.get_scrollback_usage())
     }
 
@@ -2323,9 +2272,7 @@ impl PyPtyTerminal {
     ///     (col, row) position of matching bracket, or None
     fn find_matching_bracket(&self, col: usize, row: usize) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.find_matching_bracket(col, row))
     }
 
@@ -2348,9 +2295,7 @@ impl PyPtyTerminal {
         delimiters: &str,
     ) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.select_semantic_region(col, row, delimiters))
     }
 
@@ -2364,9 +2309,7 @@ impl PyPtyTerminal {
     #[pyo3(signature = (include_styles = true))]
     fn export_html(&self, include_styles: bool) -> PyResult<String> {
         let terminal = self.inner.terminal();
-        let term = terminal
-            .lock()
-            .map_err(|e| PyRuntimeError::new_err(format!("Lock error: {}", e)))?;
+        let term = terminal.lock();
         Ok(term.export_html(include_styles))
     }
 
@@ -2425,7 +2368,7 @@ impl PyPtyTerminal {
     ///     Tuple of (max_width_px, max_height_px, max_repeat)
     fn get_sixel_limits(&self) -> PyResult<(usize, usize, usize)> {
         let terminal = self.inner.terminal();
-        let limits = if let Ok(term) = terminal.lock() {
+        let limits = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.sixel_limits()
         } else {
             crate::sixel::SixelLimits::default()
@@ -2448,7 +2391,7 @@ impl PyPtyTerminal {
         max_repeat: usize,
     ) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_sixel_limits(max_width, max_height, max_repeat);
         }
         Ok(())
@@ -2460,7 +2403,7 @@ impl PyPtyTerminal {
     ///     Maximum number of in-memory Sixel graphics for this PTY terminal
     fn get_sixel_graphics_limit(&self) -> PyResult<usize> {
         let terminal = self.inner.terminal();
-        let limit = if let Ok(term) = terminal.lock() {
+        let limit = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.max_sixel_graphics()
         } else {
             crate::sixel::SIXEL_DEFAULT_MAX_GRAPHICS
@@ -2477,7 +2420,7 @@ impl PyPtyTerminal {
     /// current number of graphics. The value is clamped to a safe range.
     fn set_sixel_graphics_limit(&mut self, max_graphics: usize) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = terminal.lock() {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
             term.set_max_sixel_graphics(max_graphics);
         }
         Ok(())
@@ -2489,7 +2432,7 @@ impl PyPtyTerminal {
     ///     Number of Sixel graphics that have been dropped because of size or count limits
     fn get_dropped_sixel_graphics(&self) -> PyResult<usize> {
         let terminal = self.inner.terminal();
-        let count = if let Ok(term) = terminal.lock() {
+        let count = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
             term.dropped_sixel_graphics()
         } else {
             0
@@ -2511,7 +2454,7 @@ impl PyPtyTerminal {
     fn get_sixel_stats(&self) -> PyResult<HashMap<String, usize>> {
         let terminal = self.inner.terminal();
         let (limits, max_graphics, current_graphics, dropped_graphics) =
-            if let Ok(term) = terminal.lock() {
+            if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
                 term.sixel_stats()
             } else {
                 (
@@ -2537,7 +2480,7 @@ impl PyPtyTerminal {
     /// Args:
     ///     title: Optional session title (defaults to timestamp)
     fn start_recording(&self, title: Option<String>) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.start_recording(title);
         }
         Ok(())
@@ -2548,7 +2491,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     RecordingSession object if recording was active, None otherwise
     fn stop_recording(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term
                 .stop_recording()
                 .map(super::types::PyRecordingSession::from))
@@ -2562,7 +2505,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if recording is active, False otherwise
     fn is_recording(&self) -> PyResult<bool> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.is_recording())
         } else {
             Ok(false)
@@ -2582,12 +2525,12 @@ impl PyPtyTerminal {
         _py: Python,
     ) -> PyResult<String> {
         if let Some(session) = session {
-            if let Ok(term) = self.inner.terminal().lock() {
+            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
                 Ok(term.export_asciicast(&session.inner))
             } else {
                 Err(PyRuntimeError::new_err("Failed to lock terminal"))
             }
-        } else if let Ok(term) = self.inner.terminal().lock() {
+        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             if let Some(active) = term.get_recording_session() {
                 Ok(term.export_asciicast(active))
             } else {
@@ -2610,12 +2553,12 @@ impl PyPtyTerminal {
         _py: Python,
     ) -> PyResult<String> {
         if let Some(session) = session {
-            if let Ok(term) = self.inner.terminal().lock() {
+            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
                 Ok(term.export_json(&session.inner))
             } else {
                 Err(PyRuntimeError::new_err("Failed to lock terminal"))
             }
-        } else if let Ok(term) = self.inner.terminal().lock() {
+        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             if let Some(active) = term.get_recording_session() {
                 Ok(term.export_json(active))
             } else {
@@ -2636,7 +2579,7 @@ impl PyPtyTerminal {
     ///     name: Name to store the macro under
     ///     macro: Macro object to load
     fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.load_macro(name, macro_obj.inner.clone());
         }
         Ok(())
@@ -2650,7 +2593,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro object if found, None otherwise
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term
                 .get_macro(&name)
                 .cloned()
@@ -2668,7 +2611,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Removed Macro object if found, None otherwise
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
         } else {
             Ok(None)
@@ -2680,7 +2623,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of macro names
     fn list_macros(&self) -> PyResult<Vec<String>> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.list_macros())
         } else {
             Ok(Vec::new())
@@ -2693,7 +2636,7 @@ impl PyPtyTerminal {
     ///     name: Name of the macro to play
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.play_macro(&name, speed.unwrap_or(1.0))
                 .map_err(PyValueError::new_err)
         } else {
@@ -2703,7 +2646,7 @@ impl PyPtyTerminal {
 
     /// Stop macro playback
     fn stop_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.stop_macro();
         }
         Ok(())
@@ -2711,7 +2654,7 @@ impl PyPtyTerminal {
 
     /// Pause macro playback
     fn pause_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.pause_macro();
         }
         Ok(())
@@ -2719,7 +2662,7 @@ impl PyPtyTerminal {
 
     /// Resume macro playback
     fn resume_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.resume_macro();
         }
         Ok(())
@@ -2730,7 +2673,7 @@ impl PyPtyTerminal {
     /// Args:
     ///     speed: Speed multiplier (0.1 to 10.0)
     fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.set_macro_speed(speed);
         }
         Ok(())
@@ -2741,7 +2684,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if a macro is playing, False otherwise
     fn is_macro_playing(&self) -> PyResult<bool> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.is_macro_playing())
         } else {
             Ok(false)
@@ -2753,7 +2696,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if paused, False otherwise
     fn is_macro_paused(&self) -> PyResult<bool> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.is_macro_paused())
         } else {
             Ok(false)
@@ -2765,7 +2708,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Tuple of (current_event, total_events) if playing, None otherwise
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.get_macro_progress())
         } else {
             Ok(None)
@@ -2777,7 +2720,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro name if playing, None otherwise
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.get_current_macro_name())
         } else {
             Ok(None)
@@ -2791,7 +2734,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if an event was processed, False otherwise
     fn tick_macro(&mut self) -> PyResult<bool> {
-        let bytes = if let Ok(mut term) = self.inner.terminal().lock() {
+        let bytes = if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             term.tick_macro()
         } else {
             None
@@ -2810,7 +2753,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of screenshot labels
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
-        if let Ok(mut term) = self.inner.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(term.get_macro_screenshot_triggers())
         } else {
             Ok(Vec::new())
@@ -2830,7 +2773,7 @@ impl PyPtyTerminal {
         session: &super::types::PyRecordingSession,
         name: String,
     ) -> PyResult<super::types::PyMacro> {
-        if let Ok(term) = self.inner.terminal().lock() {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
             Ok(super::types::PyMacro::from(
                 term.recording_to_macro(&session.inner, name),
             ))
@@ -2846,7 +2789,7 @@ impl PyPtyTerminal {
     /// Get a clone of the terminal Arc (for use in streaming server)
     pub(crate) fn get_terminal_arc(
         &self,
-    ) -> std::sync::Arc<std::sync::Mutex<crate::terminal::Terminal>> {
+    ) -> std::sync::Arc<parking_lot::Mutex<crate::terminal::Terminal>> {
         self.inner.terminal()
     }
 
@@ -2862,7 +2805,7 @@ impl PyPtyTerminal {
     /// Returns a thread-safe writer that can be used to send input to the PTY
     pub(crate) fn get_pty_writer(
         &self,
-    ) -> Option<std::sync::Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>>> {
+    ) -> Option<std::sync::Arc<parking_lot::Mutex<Box<dyn std::io::Write + Send>>>> {
         self.inner.get_writer()
     }
 }
@@ -3022,7 +2965,7 @@ mod tests {
     fn test_terminal_access() {
         let session = pty_session::PtySession::new(80, 24, 1000);
         let terminal = session.terminal();
-        assert!(terminal.lock().is_ok());
+        let _ = terminal.lock();
     }
 
     #[test]
@@ -3035,7 +2978,7 @@ mod tests {
     #[test]
     fn test_terminal_process_direct() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             term.process(b"Hello, World!");
             let content = term.content();
             assert!(content.contains("Hello, World!"));
@@ -3080,7 +3023,7 @@ mod tests {
     #[test]
     fn test_bell_count_after_bell() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             term.process(b"\x07"); // BEL character
         }
         assert_eq!(session.bell_count(), 1);
@@ -3110,7 +3053,7 @@ mod tests {
     #[test]
     fn test_get_line_valid() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             term.process(b"Line0\nLine1\nLine2");
         }
         let line = session.get_line(0);
@@ -3139,7 +3082,7 @@ mod tests {
     #[test]
     fn test_export_text_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             term.process(b"Test content here");
         }
         let text = session.export_text();
@@ -3149,7 +3092,7 @@ mod tests {
     #[test]
     fn test_export_styled_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             // Add colored text
             term.process(b"\x1b[31mRed text\x1b[0m");
         }
@@ -3276,7 +3219,7 @@ mod tests {
     #[test]
     fn test_cursor_position_after_write() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             term.process(b"Hello");
             let cursor = term.cursor();
             assert_eq!(cursor.col, 5);
@@ -3291,7 +3234,7 @@ mod tests {
     #[test]
     fn test_terminal_process_escape_sequences() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             // Test cursor movement
             term.process(b"\x1b[5;10H"); // Move to row 5, col 10
             let cursor = term.cursor();
@@ -3303,7 +3246,7 @@ mod tests {
     #[test]
     fn test_terminal_alt_screen() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             assert!(!term.is_alt_screen_active());
 
             // Enter alt screen
@@ -3319,7 +3262,7 @@ mod tests {
     #[test]
     fn test_terminal_colors() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = session.terminal().lock() {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
             // Set red foreground
             term.process(b"\x1b[31mRed\x1b[0m");
             let cell = term.active_grid().get(0, 0);

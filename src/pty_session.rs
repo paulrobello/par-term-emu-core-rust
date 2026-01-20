@@ -1,13 +1,14 @@
 use crate::debug;
 use crate::pty_error::PtyError;
 use crate::terminal::Terminal;
+use parking_lot::Mutex;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtyPair, PtySize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::thread::{self, JoinHandle};
 
@@ -108,12 +109,12 @@ impl PtySession {
     /// }));
     /// ```
     pub fn set_output_callback(&mut self, callback: OutputCallback) {
-        *self.output_callback.lock().unwrap() = Some(callback);
+        *self.output_callback.lock() = Some(callback);
     }
 
     /// Remove the output callback
     pub fn clear_output_callback(&mut self) {
-        *self.output_callback.lock().unwrap() = None;
+        *self.output_callback.lock() = None;
     }
 
     /// Get a clone of the PTY writer for external use (e.g., streaming server)
@@ -521,14 +522,16 @@ impl PtySession {
                         debug::log_pty_read(n);
 
                         // Call output callback if set (for streaming, logging, etc.)
-                        if let Ok(callback_guard) = output_callback.lock() {
+                        {
+                            let callback_guard = output_callback.lock();
                             if let Some(ref callback) = *callback_guard {
                                 callback(&buffer[..n]);
                             }
                         }
 
                         // Process the bytes through the terminal
-                        if let Ok(mut term) = terminal.lock() {
+                        {
+                            let mut term = terminal.lock();
                             let old_gen = update_generation.load(Ordering::SeqCst);
                             let was_alt_screen = term.is_alt_screen_active();
                             term.process(&buffer[..n]);
@@ -582,7 +585,8 @@ impl PtySession {
 
                                 if !responses.is_empty() {
                                     debug::log_device_query("pending", &responses);
-                                    if let Ok(mut w) = writer.lock() {
+                                    {
+                                        let mut w = writer.lock();
                                         // Write responses back to PTY master so child can read them
                                         let _ = w.write_all(&responses);
                                         let _ = w.flush();
@@ -662,14 +666,13 @@ impl PtySession {
         debug::log_pty_write(data);
 
         // Record input for session recording
-        if let Ok(mut term) = self.terminal.lock() {
+        {
+            let mut term = self.terminal.lock();
             term.record_input(data);
         }
 
         if let Some(ref writer) = self.writer {
-            let mut w = writer
-                .lock()
-                .map_err(|e| PtyError::LockError(format!("Writer mutex poisoned: {}", e)))?;
+            let mut w = writer.lock();
             w.write_all(data).map_err(PtyError::IoError)?;
             w.flush().map_err(PtyError::IoError)?;
             Ok(())
@@ -698,7 +701,8 @@ impl PtySession {
         self.rows = rows;
 
         // Resize the terminal
-        if let Ok(mut term) = self.terminal.lock() {
+        {
+            let mut term = self.terminal.lock();
             term.resize(cols as usize, rows as usize);
             // Record resize event for session recording
             term.record_resize(cols as usize, rows as usize);
@@ -813,7 +817,8 @@ impl PtySession {
         self.rows = rows;
 
         // Resize the terminal and record pixel size
-        if let Ok(mut term) = self.terminal.lock() {
+        {
+            let mut term = self.terminal.lock();
             term.resize(cols as usize, rows as usize);
             term.set_pixel_size(pixel_width as usize, pixel_height as usize);
         }
@@ -939,11 +944,8 @@ impl PtySession {
 
     /// Get the terminal content as a string
     pub fn content(&self) -> String {
-        if let Ok(term) = self.terminal.lock() {
-            term.content()
-        } else {
-            String::new()
-        }
+        let term = self.terminal.lock();
+        term.content()
     }
 
     /// Export entire buffer (scrollback + current screen) as plain text
@@ -954,11 +956,8 @@ impl PtySession {
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Empty lines preserved
     pub fn export_text(&self) -> String {
-        if let Ok(term) = self.terminal.lock() {
-            term.export_text()
-        } else {
-            String::new()
-        }
+        let term = self.terminal.lock();
+        term.export_text()
     }
 
     /// Export entire buffer (scrollback + current screen) with ANSI styling
@@ -969,11 +968,8 @@ impl PtySession {
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Efficient escape sequence generation (only emits changes)
     pub fn export_styled(&self) -> String {
-        if let Ok(term) = self.terminal.lock() {
-            term.export_styled()
-        } else {
-            String::new()
-        }
+        let term = self.terminal.lock();
+        term.export_styled()
     }
 
     /// Take a screenshot of the current visible buffer
@@ -992,13 +988,8 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
-        if let Ok(term) = self.terminal.lock() {
-            term.screenshot(config, scrollback_offset)
-        } else {
-            Err(crate::screenshot::ScreenshotError::RenderError(
-                "Failed to lock terminal".to_string(),
-            ))
-        }
+        let term = self.terminal.lock();
+        term.screenshot(config, scrollback_offset)
     }
 
     /// Take a screenshot and save to file
@@ -1019,32 +1010,21 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<()> {
-        if let Ok(term) = self.terminal.lock() {
-            term.screenshot_to_file(path, config, scrollback_offset)
-        } else {
-            Err(crate::screenshot::ScreenshotError::RenderError(
-                "Failed to lock terminal".to_string(),
-            ))
-        }
+        let term = self.terminal.lock();
+        term.screenshot_to_file(path, config, scrollback_offset)
     }
 
     /// Get the cursor position
     pub fn cursor_position(&self) -> (usize, usize) {
-        if let Ok(term) = self.terminal.lock() {
-            let cursor = term.cursor();
-            (cursor.col, cursor.row)
-        } else {
-            (0, 0)
-        }
+        let term = self.terminal.lock();
+        let cursor = term.cursor();
+        (cursor.col, cursor.row)
     }
 
     /// Get the terminal size
     pub fn size(&self) -> (usize, usize) {
-        if let Ok(term) = self.terminal.lock() {
-            term.size()
-        } else {
-            (self.cols as usize, self.rows as usize)
-        }
+        let term = self.terminal.lock();
+        term.size()
     }
 
     /// Get a specific line from the active terminal buffer
@@ -1052,31 +1032,22 @@ impl PtySession {
     /// This returns a line from whichever screen buffer is currently active
     /// (primary or alternate).
     pub fn get_line(&self, row: usize) -> Option<String> {
-        if let Ok(term) = self.terminal.lock() {
-            term.active_grid()
-                .row(row)
-                .map(|line| line.iter().map(|cell| cell.c).collect())
-        } else {
-            None
-        }
+        let term = self.terminal.lock();
+        term.active_grid()
+            .row(row)
+            .map(|line| line.iter().map(|cell| cell.c).collect())
     }
 
     /// Get scrollback content
     pub fn scrollback(&self) -> Vec<String> {
-        if let Ok(term) = self.terminal.lock() {
-            term.scrollback()
-        } else {
-            Vec::new()
-        }
+        let term = self.terminal.lock();
+        term.scrollback()
     }
 
     /// Get the number of scrollback lines
     pub fn scrollback_len(&self) -> usize {
-        if let Ok(term) = self.terminal.lock() {
-            term.active_grid().scrollback_len()
-        } else {
-            0
-        }
+        let term = self.terminal.lock();
+        term.active_grid().scrollback_len()
     }
 
     /// Get the current update generation number
@@ -1109,10 +1080,7 @@ impl PtySession {
     /// # Returns
     /// The total number of bell events received since terminal creation
     pub fn bell_count(&self) -> u64 {
-        self.terminal
-            .lock()
-            .map(|term| term.bell_count())
-            .unwrap_or(0)
+        self.terminal.lock().bell_count()
     }
 }
 
@@ -1249,7 +1217,7 @@ mod tests {
     fn test_terminal_access() {
         let session = PtySession::new(80, 24, 1000);
         let terminal = session.terminal();
-        assert!(terminal.lock().is_ok());
+        let _ = terminal.lock();
     }
 
     #[test]
@@ -1326,12 +1294,12 @@ mod tests {
         let session = PtySession::new(80, 24, 1000);
         {
             let terminal = session.terminal();
-            let _lock1 = terminal.lock().unwrap();
+            let _lock1 = terminal.lock();
             // While holding lock, should not be able to get another
         }
         // After releasing, should be able to lock again
         let terminal = session.terminal();
-        let _lock2 = terminal.lock().unwrap();
+        let _lock2 = terminal.lock();
         drop(_lock2); // Explicitly drop to avoid unused variable warning
     }
 

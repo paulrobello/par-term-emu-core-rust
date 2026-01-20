@@ -95,6 +95,7 @@ headers = { version = "0.4.0", optional = true }
 # Screenshot support - using pure Rust swash for cross-platform compatibility
 image = "0.25.9"
 swash = "0.2.6"
+parking_lot = "0.12.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.178"

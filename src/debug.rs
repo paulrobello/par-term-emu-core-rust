@@ -1,3 +1,4 @@
+use parking_lot::Mutex;
 /// Comprehensive debugging infrastructure for par-term-emu
 ///
 /// Controlled by DEBUG_LEVEL environment variable:
@@ -13,7 +14,7 @@
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Debug level configuration
@@ -133,17 +134,13 @@ fn get_timestamp() -> String {
 
 /// Check if debugging is enabled at given level
 pub fn is_enabled(level: DebugLevel) -> bool {
-    let logger = get_logger()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let logger = get_logger().lock();
     level <= logger.level
 }
 
 /// Log a message at specified level
 pub fn log(level: DebugLevel, category: &str, msg: &str) {
-    let mut logger = get_logger()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut logger = get_logger().lock();
     logger.log(level, category, msg);
 }
 
@@ -243,7 +240,7 @@ pub fn log_device_query(query: &str, response: &[u8]) {
 /// Buffer snapshot logging
 pub fn log_buffer_snapshot(label: &str, rows: usize, cols: usize, content: &str) {
     if is_enabled(DebugLevel::Trace) {
-        let mut logger = get_logger().lock().unwrap();
+        let mut logger = get_logger().lock();
         logger.write_raw(&format!(
             "\n{:-<80}\nBUFFER SNAPSHOT: {} ({}x{})\n{:-<80}\n{}\n{:-<80}\n",
             "", label, rows, cols, "", content, ""

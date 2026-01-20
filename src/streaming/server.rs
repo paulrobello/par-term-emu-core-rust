@@ -9,7 +9,8 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
@@ -723,7 +724,7 @@ impl StreamingServer {
 
         // Send initial connection message with visible screen snapshot
         let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock().unwrap();
+            let terminal = self.terminal.lock();
             let (cols, rows) = terminal.size();
 
             let initial_screen = if self.config.send_initial_screen {
@@ -800,7 +801,7 @@ impl StreamingServer {
 
                                     // Always fetch latest PTY writer (may be updated after shell restart)
                                     if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        if let Ok(mut w) = writer.lock() {
+                                        if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                             use std::io::Write;
                                             let _ = w.write_all(data.as_bytes());
                                             let _ = w.flush();
@@ -823,7 +824,7 @@ impl StreamingServer {
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                     // Send current visible screen content to client as refresh message
                                     let refresh_msg = {
-                                        if let Ok(terminal) = terminal_for_refresh.lock() {
+                                        if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
                                             let content = terminal.export_visible_screen_styled();
                                             let (cols, rows) = terminal.size();
 
@@ -919,7 +920,7 @@ impl StreamingServer {
 
         // Send initial connection message with visible screen snapshot
         let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock().unwrap();
+            let terminal = self.terminal.lock();
             let (cols, rows) = terminal.size();
 
             let initial_screen = if self.config.send_initial_screen {
@@ -1000,7 +1001,7 @@ impl StreamingServer {
 
                                             // Pull the latest PTY writer each time so restarts are handled
                                             if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                                if let Ok(mut w) = writer.lock() {
+                                                if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());
                                                     let _ = w.flush();
@@ -1018,7 +1019,7 @@ impl StreamingServer {
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {
-                                                if let Ok(terminal) = terminal_for_refresh.lock() {
+                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
                                                     let content = terminal.export_visible_screen_styled();
                                                     let (cols, rows) = terminal.size();
                                                     Some(ServerMessage::refresh(cols as u16, rows as u16, content))
@@ -1223,7 +1224,7 @@ impl StreamingServer {
 
         // Send initial connection message with visible screen snapshot
         let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock().unwrap();
+            let terminal = self.terminal.lock();
             let (cols, rows) = terminal.size();
 
             let initial_screen = if self.config.send_initial_screen {
@@ -1301,7 +1302,7 @@ impl StreamingServer {
 
                                             // Always grab latest PTY writer (shell may have restarted)
                                             if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                                if let Ok(mut w) = writer.lock() {
+                                                if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());
                                                     let _ = w.flush();
@@ -1319,7 +1320,7 @@ impl StreamingServer {
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {
-                                                if let Ok(terminal) = terminal_for_refresh.lock() {
+                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
                                                     let content = terminal.export_visible_screen_styled();
                                                     let (cols, rows) = terminal.size();
                                                     Some(ServerMessage::refresh(cols as u16, rows as u16, content))

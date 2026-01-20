@@ -81,10 +81,11 @@ use par_term_emu_core_rust::{
     },
     terminal::Terminal,
 };
+use parking_lot::Mutex;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tar::Archive;
 use tokio::signal;
@@ -517,7 +518,8 @@ impl ServerState {
             info!("Resizing terminal to {}x{}", cols, rows);
 
             // Resize the PTY session (this also resizes the terminal)
-            if let Ok(mut session) = self.pty_session.lock() {
+            {
+                let mut session = self.pty_session.lock();
                 if let Err(e) = session.resize(cols, rows) {
                     error!("Failed to resize PTY: {}", e);
                     continue;
@@ -539,13 +541,7 @@ impl ServerState {
         loop {
             // Check if PTY is still running
             let should_restart = {
-                let session = match self.pty_session.lock() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("PTY session mutex poisoned: {}", e);
-                        break;
-                    }
-                };
+                let session = self.pty_session.lock();
 
                 if !session.is_running() {
                     info!(
@@ -568,13 +564,7 @@ impl ServerState {
 
                 // Restart the shell
                 let restart_result = {
-                    let mut session = match self.pty_session.lock() {
-                        Ok(s) => s,
-                        Err(e) => {
-                            error!("PTY session mutex poisoned during restart: {}", e);
-                            break;
-                        }
-                    };
+                    let mut session = self.pty_session.lock();
 
                     if let Some(ref shell) = self.shell_command {
                         info!("Spawning custom shell: {}", shell);
@@ -591,13 +581,7 @@ impl ServerState {
 
                         // Update the PTY writer in the streaming server
                         let pty_writer = {
-                            let session = match self.pty_session.lock() {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    error!("PTY session mutex poisoned getting writer: {}", e);
-                                    break;
-                                }
-                            };
+                            let session = self.pty_session.lock();
                             session.get_writer()
                         };
 
@@ -616,13 +600,7 @@ impl ServerState {
                 }
             } else if !self.restart_shell {
                 // If restart is disabled, check if shell exited and break
-                let session = match self.pty_session.lock() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        error!("PTY session mutex poisoned checking exit: {}", e);
-                        break;
-                    }
-                };
+                let session = self.pty_session.lock();
 
                 if !session.is_running() {
                     info!("Shell exited and restart is disabled, stopping monitor");
@@ -1004,7 +982,7 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Unknown theme: {}", args.theme))?;
     info!("Applying theme: {}", theme.name);
     {
-        let mut term = terminal.lock().unwrap();
+        let mut term = terminal.lock();
         theme.apply(&mut term);
     }
 
@@ -1091,7 +1069,8 @@ async fn main() -> Result<()> {
                             MacroEvent::KeyPress { key, .. } => {
                                 // Convert key to bytes and send to terminal
                                 let bytes = KeyParser::parse_key(&key);
-                                if let Ok(mut session) = pty_session_clone.lock() {
+                                {
+                                    let mut session = pty_session_clone.lock();
                                     // Write directly to terminal for macro playback
                                     session.write(&bytes).ok();
                                 }
@@ -1125,7 +1104,7 @@ async fn main() -> Result<()> {
 
         // Set up output callback to send PTY output to streaming server
         {
-            let mut session = pty_session.lock().unwrap();
+            let mut session = pty_session.lock();
             session.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
                 let _ = output_sender_clone.send(text);
@@ -1137,7 +1116,7 @@ async fn main() -> Result<()> {
         // Start shell FIRST (so PTY writer becomes available)
         info!("Starting shell");
         {
-            let mut session = pty_session.lock().unwrap();
+            let mut session = pty_session.lock();
             if let Some(shell) = &args.shell {
                 session
                     .spawn(shell, &[])
@@ -1149,7 +1128,7 @@ async fn main() -> Result<()> {
 
         // Set up output callback to send PTY output to streaming server
         {
-            let mut session = pty_session.lock().unwrap();
+            let mut session = pty_session.lock();
             session.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
                 let _ = output_sender.send(text);
@@ -1158,7 +1137,7 @@ async fn main() -> Result<()> {
 
         // Get PTY writer for client input (AFTER shell is spawned)
         let pty_writer = {
-            let session = pty_session.lock().unwrap();
+            let session = pty_session.lock();
             session.get_writer()
         };
 
@@ -1280,9 +1259,11 @@ async fn main() -> Result<()> {
                 time::sleep(Duration::from_secs(1)).await;
                 info!("Sending initial command: {}", command);
 
-                if let Ok(session) = pty_session_clone.lock() {
+                {
+                    let session = pty_session_clone.lock();
                     if let Some(writer) = session.get_writer() {
-                        if let Ok(mut w) = writer.lock() {
+                        {
+                            let mut w = writer.lock();
                             // Send command followed by newline
                             let cmd_with_newline = format!("{}\n", command);
                             if let Err(e) = w.write_all(cmd_with_newline.as_bytes()) {
@@ -1306,11 +1287,13 @@ async fn main() -> Result<()> {
     streaming_server.shutdown("Server shutting down".to_string());
 
     // Stop PTY
-    if let Ok(session) = pty_session.lock() {
+    {
+        let session = pty_session.lock();
         if session.is_running() {
             // Try to gracefully exit the shell
             if let Some(writer) = session.get_writer() {
-                if let Ok(mut w) = writer.lock() {
+                {
+                    let mut w = writer.lock();
                     let _ = w.write_all(b"exit\n");
                     let _ = w.flush();
                 }

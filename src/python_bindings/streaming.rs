@@ -276,14 +276,14 @@ impl PyStreamingServer {
 
         // Create UTF-8 decoder state for handling partial sequences
         // Multi-byte UTF-8 characters may be split across PTY reads
-        let utf8_buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let utf8_buffer = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
 
         // Create a callback that forwards PTY output to the streaming server
         let callback = {
             let utf8_buffer = Arc::clone(&utf8_buffer);
             Arc::new(move |data: &[u8]| {
                 // Append new data to buffer
-                let mut buffer = utf8_buffer.lock().unwrap();
+                let mut buffer = utf8_buffer.lock();
                 buffer.extend_from_slice(data);
 
                 // Try to convert as much as possible to valid UTF-8
