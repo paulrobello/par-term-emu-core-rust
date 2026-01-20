@@ -191,7 +191,7 @@ fn main() -> std::io::Result<()> {
 
     // Send input to shell
     if let Some(writer) = pty.get_writer() {
-        let mut w = writer.lock().unwrap();
+        let mut w = writer.lock();
         writeln!(w, "echo 'Hello from Rust!'")?;
         w.flush()?;
     }
@@ -307,21 +307,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Start shell
     {
-        let mut session = pty_session.lock().unwrap();
+        let mut session = pty_session.lock();
         session.spawn_shell()?;
     }
 
     // Setup output callback
     let output_sender = server.get_output_sender();
     {
-        let mut session = pty_session.lock().unwrap();
+        let mut session = pty_session.lock();
         session.set_output_callback(Arc::new(move |data| {
             let _ = output_sender.send(String::from_utf8_lossy(data).to_string());
         }));
     }
 
     // Get PTY writer for client input
-    if let Some(writer) = pty_session.lock().unwrap().get_writer() {
+    if let Some(writer) = pty_session.lock().get_writer() {
         server.set_pty_writer(writer);
     }
 

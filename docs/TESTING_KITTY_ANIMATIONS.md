@@ -202,9 +202,9 @@ Call `GraphicsStore::update_animations()` in the redraw loop:
 // In par-term app.rs redraw loop
 if let Some(terminal) = &self.terminal {
     let terminal = terminal.blocking_lock();
-    let pty = terminal.pty_session.lock().unwrap();
+    let pty = terminal.pty_session.lock();
     let term_arc = pty.terminal();
-    let mut term = term_arc.lock().unwrap();
+    let mut term = term_arc.lock();
 
     // Update animations and get list of images with frame changes
     let changed_images = term.graphics_store_mut().update_animations();

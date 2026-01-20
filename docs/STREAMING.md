@@ -781,7 +781,7 @@ async fn main() -> Result<()> {
 
     // Spawn shell
     {
-        let mut session = pty_session.lock().unwrap();
+        let mut session = pty_session.lock();
         session.spawn_shell()?;
     }
 
@@ -806,7 +806,7 @@ async fn main() -> Result<()> {
 let output_sender = server.get_output_sender();
 
 {
-    let mut session = pty_session.lock().unwrap();
+    let mut session = pty_session.lock();
     session.set_output_callback(Arc::new(move |data| {
         // Convert raw bytes to UTF-8 string
         let text = String::from_utf8_lossy(data).to_string();

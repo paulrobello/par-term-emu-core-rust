@@ -27,7 +27,7 @@
 //! use par_term_emu_core_rust::terminal::Terminal;
 //! use par_term_emu_core_rust::streaming::StreamingServer;
 //! use std::sync::Arc;
-//! use tokio::sync::Mutex;
+//! use parking_lot::Mutex;
 //!
 //! #[tokio::main]
 //! async fn main() {

@@ -2965,7 +2965,7 @@ mod tests {
     fn test_terminal_access() {
         let session = pty_session::PtySession::new(80, 24, 1000);
         let terminal = session.terminal();
-        let _ = terminal.lock();
+        let _guard = terminal.lock();
     }
 
     #[test]

@@ -251,7 +251,7 @@ Features:
 
 `PtySession` owns:
 
-- An `Arc<Mutex<Terminal>>` for all terminal state.
+- A `parking_lot::Mutex` (wrapped in `Arc<Mutex<Terminal>>`) for all terminal state. `parking_lot` is used for performance and to eliminate Mutex poisoning risk.
 - A `portable_pty::PtyPair` and child process handle.
 - A background reader thread that:
   - Reads from the PTY master.
