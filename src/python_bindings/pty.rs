@@ -56,8 +56,20 @@ impl PyPtyTerminal {
     ///
     /// On Unix: Uses $SHELL or defaults to /bin/bash
     /// On Windows: Uses %COMSPEC% or defaults to cmd.exe
-    fn spawn_shell(&mut self) -> PyResult<()> {
-        self.inner.spawn_shell()?;
+    ///
+    /// Args:
+    ///     env: Optional dictionary of environment variables to set for the shell.
+    ///          These are passed directly to the child process without modifying
+    ///          the parent process environment (safe for multi-threaded apps).
+    ///     cwd: Optional working directory path for the shell.
+    #[pyo3(signature = (env=None, cwd=None))]
+    fn spawn_shell(
+        &mut self,
+        env: Option<HashMap<String, String>>,
+        cwd: Option<String>,
+    ) -> PyResult<()> {
+        self.inner
+            .spawn_shell_with_env(env.as_ref(), cwd.as_deref())?;
         Ok(())
     }
 

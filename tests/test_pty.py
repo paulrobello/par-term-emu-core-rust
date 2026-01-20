@@ -452,5 +452,143 @@ def test_write_without_spawn_fails():
         term.write_str("test")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_spawn_shell_with_env():
+    """Test spawning shell with environment variables passed directly"""
+    import os
+
+    from par_term_emu_core_rust import PtyTerminal
+
+    # Use a unique var name to avoid conflicts
+    unique_var = "PTY_TEST_SHELL_ENV_VAR_12345"
+
+    # Verify it doesn't exist in current process
+    assert unique_var not in os.environ, "Test var should not exist before spawn"
+
+    term = PtyTerminal(80, 24)
+    term.spawn_shell(env={unique_var: "hello_from_shell"})
+
+    assert term.is_running()
+
+    # Echo the var to verify it was passed
+    term.write_str(f"echo ${unique_var}\n")
+    time.sleep(0.3)
+
+    content = term.content()
+    assert "hello_from_shell" in content, (
+        f"Expected env var value in output, got: {content}"
+    )
+
+    # Verify the var was NOT leaked to parent process
+    assert unique_var not in os.environ, (
+        "Test var should NOT exist in parent after spawn"
+    )
+
+    term.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_spawn_shell_with_cwd():
+    """Test spawning shell with working directory set"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn_shell(cwd="/tmp")
+
+    assert term.is_running()
+
+    # Print current directory
+    term.write_str("pwd\n")
+    time.sleep(0.3)
+
+    content = term.content()
+    # On macOS, /tmp is a symlink to /private/tmp
+    assert "/tmp" in content or "/private/tmp" in content, (
+        f"Expected /tmp in output, got: {content}"
+    )
+
+    term.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_spawn_shell_backward_compatible():
+    """Test that spawn_shell() with no args still works (backward compatibility)"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    # Call without any arguments - should work like before
+    term.spawn_shell()
+
+    assert term.is_running()
+
+    term.write_str("echo backward_compat_test\n")
+    time.sleep(0.2)
+
+    content = term.content()
+    assert "backward_compat_test" in content
+
+    term.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_spawn_shell_with_env_and_cwd():
+    """Test spawning shell with both env and cwd"""
+    import os
+
+    from par_term_emu_core_rust import PtyTerminal
+
+    unique_var = "PTY_TEST_COMBINED_VAR_67890"
+    assert unique_var not in os.environ
+
+    term = PtyTerminal(80, 24)
+    term.spawn_shell(env={unique_var: "combined_test"}, cwd="/tmp")
+
+    assert term.is_running()
+
+    # Verify both env var and cwd
+    term.write_str(f"echo ${unique_var} && pwd\n")
+    time.sleep(0.3)
+
+    content = term.content()
+    assert "combined_test" in content, (
+        f"Expected env var value in output, got: {content}"
+    )
+    assert "/tmp" in content or "/private/tmp" in content, (
+        f"Expected /tmp in output, got: {content}"
+    )
+
+    # Verify parent env unchanged
+    assert unique_var not in os.environ
+
+    term.kill()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_spawn_with_env_dict():
+    """Test spawn() with env dict parameter"""
+    import os
+
+    from par_term_emu_core_rust import PtyTerminal
+
+    unique_var = "PTY_TEST_SPAWN_ENV_VAR"
+    assert unique_var not in os.environ
+
+    term = PtyTerminal(80, 24)
+    # spawn() already supports env parameter
+    term.spawn(
+        "/bin/sh", ["-c", f"echo ${unique_var}"], env={unique_var: "spawn_env_value"}
+    )
+
+    time.sleep(0.3)
+
+    content = term.content()
+    assert "spawn_env_value" in content, (
+        f"Expected env var value in output, got: {content}"
+    )
+
+    # Verify parent env unchanged
+    assert unique_var not in os.environ
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

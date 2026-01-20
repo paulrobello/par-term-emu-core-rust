@@ -2,6 +2,7 @@ use crate::debug;
 use crate::pty_error::PtyError;
 use crate::terminal::Terminal;
 use portable_pty::{native_pty_system, Child, CommandBuilder, PtyPair, PtySize};
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{
@@ -128,9 +129,71 @@ impl PtySession {
     /// On Unix: Uses $SHELL or defaults to /bin/bash
     /// On Windows: Uses %COMSPEC% or defaults to cmd.exe
     pub fn spawn_shell(&mut self) -> Result<(), PtyError> {
+        self.spawn_shell_with_env(None, None)
+    }
+
+    /// Spawn a shell process with environment variables and/or working directory
+    ///
+    /// This method allows passing environment variables directly without modifying
+    /// the parent process environment, making it safe for multi-threaded applications.
+    ///
+    /// # Arguments
+    /// * `env` - Optional environment variables to set for the spawned process.
+    ///   These are applied after any variables set via `set_env()`.
+    /// * `cwd` - Optional working directory for the spawned process.
+    ///   If provided, overrides any directory set via `set_cwd()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut session = PtySession::new(80, 24, 1000);
+    /// let mut env = HashMap::new();
+    /// env.insert("MY_VAR".to_string(), "hello".to_string());
+    /// session.spawn_shell_with_env(Some(&env), Some("/tmp")).unwrap();
+    /// ```
+    pub fn spawn_shell_with_env(
+        &mut self,
+        env: Option<&HashMap<String, String>>,
+        cwd: Option<&str>,
+    ) -> Result<(), PtyError> {
         let shell = Self::get_default_shell();
         let args: Vec<&str> = Vec::new();
-        self.spawn(&shell, &args)
+        self.spawn_with_env(&shell, &args, env, cwd)
+    }
+
+    /// Spawn a process with environment variables and/or working directory
+    ///
+    /// This method allows passing environment variables directly without modifying
+    /// the parent process environment, making it safe for multi-threaded applications.
+    ///
+    /// # Arguments
+    /// * `command` - The command to execute
+    /// * `args` - Command-line arguments
+    /// * `env` - Optional environment variables to set for the spawned process.
+    ///   These are applied after any variables set via `set_env()`.
+    /// * `cwd` - Optional working directory for the spawned process.
+    ///   If provided, overrides any directory set via `set_cwd()`.
+    ///
+    /// # Example
+    /// ```no_run
+    /// use par_term_emu_core_rust::pty_session::PtySession;
+    /// use std::collections::HashMap;
+    ///
+    /// let mut session = PtySession::new(80, 24, 1000);
+    /// let mut env = HashMap::new();
+    /// env.insert("MY_VAR".to_string(), "hello".to_string());
+    /// session.spawn_with_env("/bin/bash", &["-c", "echo $MY_VAR"], Some(&env), None).unwrap();
+    /// ```
+    pub fn spawn_with_env(
+        &mut self,
+        command: &str,
+        args: &[&str],
+        env: Option<&HashMap<String, String>>,
+        cwd: Option<&str>,
+    ) -> Result<(), PtyError> {
+        self.spawn_internal(command, args, env, cwd)
     }
 
     /// Get the default shell for the current platform
@@ -256,6 +319,25 @@ impl PtySession {
     /// * `command` - The command to execute
     /// * `args` - Command-line arguments
     pub fn spawn(&mut self, command: &str, args: &[&str]) -> Result<(), PtyError> {
+        self.spawn_internal(command, args, None, None)
+    }
+
+    /// Internal implementation for spawning a process
+    ///
+    /// This handles all the PTY setup and process spawning logic.
+    ///
+    /// # Arguments
+    /// * `command` - The command to execute
+    /// * `args` - Command-line arguments
+    /// * `additional_env` - Additional environment variables to set (applied after `set_env()` vars)
+    /// * `override_cwd` - Working directory override (takes precedence over `set_cwd()`)
+    fn spawn_internal(
+        &mut self,
+        command: &str,
+        args: &[&str],
+        additional_env: Option<&HashMap<String, String>>,
+        override_cwd: Option<&str>,
+    ) -> Result<(), PtyError> {
         if self.is_running() {
             return Err(PtyError::ProcessSpawnError(
                 "Process is already running".to_string(),
@@ -356,13 +438,25 @@ impl PtySession {
         // Setting these breaks libraries like Textual that use shutil.get_terminal_size()
         // which prioritizes env vars over ioctl.
 
-        // Override with user-specified environment variables
+        // Override with user-specified environment variables (from set_env())
         for (key, value) in &self.env_vars {
             cmd.env(key, value);
         }
 
+        // Apply additional environment variables passed directly to spawn
+        // These take precedence over set_env() vars
+        if let Some(env) = additional_env {
+            for (key, value) in env {
+                cmd.env(key, value);
+            }
+        }
+
         // Set working directory
-        if let Some(ref cwd) = self.cwd {
+        // Priority: override_cwd > self.cwd
+        let effective_cwd = override_cwd
+            .map(|s| s.to_string())
+            .or_else(|| self.cwd.clone());
+        if let Some(ref cwd) = effective_cwd {
             cmd.cwd(cwd);
         }
 
@@ -1254,5 +1348,159 @@ mod tests {
         let mut session = PtySession::new(80, 24, 1000);
         session.set_env("UNICODE_VAR", "Hello 世界 🌍");
         // Should handle unicode without panicking
+    }
+
+    #[test]
+    fn test_spawn_with_env() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Create env vars to pass
+        let mut env = HashMap::new();
+        env.insert("TEST_VAR".to_string(), "test_value".to_string());
+
+        // Spawn with env vars
+        #[cfg(unix)]
+        let result = session.spawn_with_env("/bin/echo", &["hello"], Some(&env), None);
+        #[cfg(windows)]
+        let result = session.spawn_with_env("cmd.exe", &["/C", "echo hello"], Some(&env), None);
+
+        assert!(result.is_ok());
+
+        // Give it time to execute
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_spawn_shell_with_env() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Create env vars to pass
+        let mut env = HashMap::new();
+        env.insert("MY_SHELL_VAR".to_string(), "shell_value".to_string());
+
+        // Spawn shell with env vars
+        let result = session.spawn_shell_with_env(Some(&env), None);
+        assert!(result.is_ok());
+
+        // Shell should be running
+        assert!(session.is_running());
+
+        // Clean up
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_spawn_with_env_cwd() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Spawn with cwd set to /tmp
+        #[cfg(unix)]
+        let result = session.spawn_with_env("/bin/pwd", &[], None, Some("/tmp"));
+        #[cfg(windows)]
+        let result = session.spawn_with_env("cmd.exe", &["/C", "cd"], None, Some("C:\\"));
+
+        assert!(result.is_ok());
+
+        // Wait for process to complete
+        let _ = session.wait();
+        // Additional sleep to ensure reader thread processes all output
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Check that /tmp appears in output
+        let content = session.content();
+        #[cfg(unix)]
+        assert!(
+            content.contains("/tmp") || content.contains("private/tmp"),
+            "Expected /tmp in output, got: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_spawn_shell_with_env_cwd() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Spawn shell with cwd
+        let result = session.spawn_shell_with_env(None, Some("/tmp"));
+        assert!(result.is_ok());
+
+        // Shell should be running
+        assert!(session.is_running());
+
+        // Clean up
+        let _ = session.kill();
+    }
+
+    #[test]
+    fn test_env_not_leaked_to_parent() {
+        // Set a unique env var name that won't exist in parent
+        let unique_var = "PTY_TEST_UNIQUE_VAR_12345";
+
+        // Verify it doesn't exist in parent before spawn
+        assert!(
+            std::env::var(unique_var).is_err(),
+            "Test var should not exist in parent env before spawn"
+        );
+
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Create env vars to pass
+        let mut env = HashMap::new();
+        env.insert(unique_var.to_string(), "test_value".to_string());
+
+        // Spawn with env vars
+        #[cfg(unix)]
+        let result = session.spawn_with_env("/bin/echo", &["test"], Some(&env), None);
+        #[cfg(windows)]
+        let result = session.spawn_with_env("cmd.exe", &["/C", "echo test"], Some(&env), None);
+
+        assert!(result.is_ok());
+
+        // Give it time to execute
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Verify env var was NOT leaked to parent process
+        assert!(
+            std::env::var(unique_var).is_err(),
+            "Test var should NOT exist in parent env after spawn"
+        );
+    }
+
+    #[test]
+    fn test_spawn_with_env_and_set_env_combined() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Set env vars via set_env()
+        session.set_env("VAR_FROM_SET_ENV", "set_env_value");
+
+        // Create additional env vars to pass
+        let mut env = HashMap::new();
+        env.insert("VAR_FROM_SPAWN".to_string(), "spawn_value".to_string());
+
+        // Spawn with both set_env vars and additional env vars
+        #[cfg(unix)]
+        let result = session.spawn_with_env("/bin/echo", &["test"], Some(&env), None);
+        #[cfg(windows)]
+        let result = session.spawn_with_env("cmd.exe", &["/C", "echo test"], Some(&env), None);
+
+        assert!(result.is_ok());
+
+        // Give it time to execute
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    #[test]
+    fn test_spawn_with_empty_env() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Pass empty env HashMap
+        let env = HashMap::new();
+
+        #[cfg(unix)]
+        let result = session.spawn_with_env("/bin/echo", &["hello"], Some(&env), None);
+        #[cfg(windows)]
+        let result = session.spawn_with_env("cmd.exe", &["/C", "echo hello"], Some(&env), None);
+
+        assert!(result.is_ok());
     }
 }

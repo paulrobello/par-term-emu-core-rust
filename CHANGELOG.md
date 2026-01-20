@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.1] - 2025-01-20
+
+### Added
+- **Safe Environment Variable API for Spawn Methods** (Issue #13): New methods to pass environment variables directly to spawned processes without modifying the parent process environment
+  - `spawn_shell_with_env(env, cwd)` - Rust API to spawn shell with env vars and working directory
+  - `spawn_with_env(command, args, env, cwd)` - Rust API to spawn command with env vars and working directory
+  - Python `spawn_shell(env=None, cwd=None)` - Updated signature to accept optional env dict and cwd string
+  - Safe for multi-threaded applications (Tokio) - no `unsafe { std::env::set_var() }` required
+  - Backward compatible - existing code calling `spawn_shell()` without args still works
+  - Env vars from method parameters override those from `set_env()` (applied last)
+
+### Documentation
+- Updated README.md with examples for the new env/cwd parameters
+
 ## [0.20.0] - 2025-12-23
 
 ### Added

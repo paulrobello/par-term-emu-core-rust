@@ -671,6 +671,35 @@ with PtyTerminal(80, 24) as term:
 # Automatic cleanup
 ```
 
+#### Environment Variables and Working Directory
+
+Pass environment variables and working directory directly to `spawn_shell()` without modifying
+the parent process environment. This is safe for multi-threaded applications (e.g., Tokio):
+
+```python
+from par_term_emu_core_rust import PtyTerminal
+
+# Spawn with custom environment variables
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell(env={"MY_VAR": "hello", "DEBUG": "1"})
+    term.write_str("echo $MY_VAR\n")  # Outputs: hello
+
+# Spawn with custom working directory
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell(cwd="/tmp")
+    term.write_str("pwd\n")  # Outputs: /tmp
+
+# Combine both
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell(env={"PROJECT": "myapp"}, cwd="/home/user/projects")
+```
+
+The `spawn()` method also accepts `env` and `cwd` parameters:
+
+```python
+term.spawn("/bin/bash", ["-c", "echo $MY_VAR"], env={"MY_VAR": "test"}, cwd="/tmp")
+```
+
 ### Screenshots
 
 ```python
