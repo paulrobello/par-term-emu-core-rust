@@ -13,6 +13,26 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.21.0
+
+### 🚀 parking_lot Migration
+
+The entire library has been migrated from `std::sync::Mutex` to **`parking_lot::Mutex`**.
+
+- **Improved Reliability**: Eliminated "Mutex Poisoning". A panic in one thread no longer renders the terminal state permanently inaccessible to other threads.
+- **Better Performance**: Faster lock/unlock operations and significantly smaller memory footprint for locks.
+- **Ergonomic API**: Lock acquisition no longer requires `.unwrap()`, making the code cleaner and more robust.
+
+## What's New in 0.20.1
+
+### 🔧 Safe Environment Variable API
+
+Added new methods to pass environment variables and working directory directly to spawned processes without modifying the global environment of the parent process.
+
+- **Rust**: `spawn_shell_with_env(env, cwd)`, `spawn_with_env(command, args, env, cwd)`
+- **Python**: `spawn_shell(env=None, cwd=None)` - now supports optional environment dictionary and working directory path.
+- **Thread Safety**: Eliminates the need for `unsafe { std::env::set_var() }` in multi-threaded applications like those using Tokio.
+
 ## What's New in 0.20.0
 
 ### 🎨 External UI Theme
