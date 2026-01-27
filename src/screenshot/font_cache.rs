@@ -515,10 +515,9 @@ impl FontCache {
                     self.try_load_emoji_font();
                 }
 
-                if self.emoji_font.is_some() {
+                if let Some(emoji_font) = self.emoji_font.as_ref() {
                     // Temporarily take ownership to avoid borrow issues
                     let emoji_result = {
-                        let emoji_font = self.emoji_font.as_ref().unwrap();
                         Self::rasterize_glyph(
                             &mut self.scaler,
                             emoji_font,

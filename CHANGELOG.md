@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.0] - 2026-01-27
+
+### Added
+- **Regional Indicator Flag Emoji Support**: Proper grapheme cluster handling for flag emoji
+  - Flag emoji like 🇺🇸, 🇬🇧, 🇯🇵 are now correctly combined into single cells
+  - Two regional indicator codepoints are combined into one wide (2-cell) grapheme
+  - Flags are stored with the first indicator as the base character and the second in the combining vector
+  - Cursor correctly advances by 2 cells after writing a flag
+  - Added `unicode-segmentation` crate dependency for grapheme cluster support
+  - Comprehensive test suite for flag emoji in `tests/test_flag_emoji.rs`
+
+### Fixed
+- **Clippy Warning**: Fixed unnecessary unwrap warning in screenshot font_cache.rs
+
 ## [0.21.0] - 2026-01-20
 
 ### Changed

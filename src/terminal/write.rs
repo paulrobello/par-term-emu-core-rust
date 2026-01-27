@@ -7,7 +7,7 @@
 //! - Scrolling behavior
 //! - Insert mode
 //! - Character attributes and hyperlinks
-//! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers)
+//! - Grapheme clusters (variation selectors, ZWJ, skin tone modifiers, regional indicators)
 
 use crate::cell::Cell;
 use crate::debug;
@@ -18,6 +18,89 @@ impl Terminal {
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
         let (cols, _rows) = self.size();
+
+        // Handle regional indicator pairs (flag emoji like 🇺🇸)
+        // When the second regional indicator arrives, combine it with the first
+        if grapheme::is_regional_indicator(c) {
+            // Check if previous cell is also a regional indicator (first half of a flag)
+            let (prev_col, prev_row) = if self.cursor.col > 0 {
+                (self.cursor.col - 1, self.cursor.row)
+            } else if self.cursor.row > 0 {
+                (cols - 1, self.cursor.row - 1)
+            } else {
+                // At position (0, 0), this is the first regional indicator
+                // Continue to write it as a normal character below
+                return self.write_regional_indicator_first(c, cols);
+            };
+
+            // Check if previous cell is a regional indicator without a pair yet
+            let should_combine = if let Some(prev_cell) = self.active_grid().get(prev_col, prev_row)
+            {
+                grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining.is_empty()
+            } else {
+                false
+            };
+
+            if should_combine {
+                // Extract cursor position before mutable borrow
+                let cursor_col = self.cursor.col;
+                let cursor_row = self.cursor.row;
+
+                // Extract spacer cell properties from target cell first
+                let spacer = if cursor_col < cols {
+                    if let Some(target_cell) = self.active_grid().get(prev_col, prev_row) {
+                        let mut spacer_flags = target_cell.flags;
+                        spacer_flags.set_wide_char(false);
+                        spacer_flags.set_wide_char_spacer(true);
+                        Some(Cell {
+                            c: ' ',
+                            combining: Vec::new(),
+                            fg: target_cell.fg,
+                            bg: target_cell.bg,
+                            underline_color: target_cell.underline_color,
+                            flags: spacer_flags,
+                            width: 1,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Previous cell is a lone regional indicator - combine them
+                if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
+                    target_cell.combining.push(c);
+                    target_cell.width = 2;
+                    target_cell.flags.set_wide_char(true);
+                }
+
+                // Create spacer cell at current position
+                if let Some(spacer) = spacer {
+                    self.active_grid_mut().set(cursor_col, cursor_row, spacer);
+                }
+
+                // Advance cursor past the spacer
+                self.cursor.col += 1;
+                if self.cursor.col >= cols {
+                    if self.auto_wrap {
+                        self.cursor.col = cols - 1;
+                        self.pending_wrap = true;
+                    } else {
+                        self.cursor.col = cols - 1;
+                    }
+                }
+
+                self.mark_row_dirty(prev_row);
+                if cursor_row != prev_row {
+                    self.mark_row_dirty(cursor_row);
+                }
+                return;
+            }
+            // Previous cell is not a lone regional indicator
+            // Continue to write this as the first of a new pair
+            return self.write_regional_indicator_first(c, cols);
+        }
 
         // Handle combining characters (variation selectors, ZWJ, skin tone modifiers)
         // These should be added to the previous cell instead of creating a new cell
@@ -396,6 +479,85 @@ impl Terminal {
             self.pending_wrap = true;
         } else if self.cursor.col >= cols {
             // Fallback: if auto-wrap is disabled or some edge case, clamp to last column
+            self.cursor.col = cols - 1;
+        }
+    }
+
+    /// Write the first regional indicator of a potential flag pair.
+    /// This is written as a width-1 character initially. If followed by another
+    /// regional indicator, they will be combined into a width-2 flag emoji.
+    fn write_regional_indicator_first(&mut self, c: char, cols: usize) {
+        // If a wrap is pending from a prior write at the right margin, perform the wrap now
+        if self.pending_wrap {
+            let (_cols, rows) = self.size();
+            let was_outside_lr = self.use_lr_margins
+                && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
+
+            // Mark the current row as wrapped (line continues to next row)
+            let current_row = self.cursor.row;
+            self.active_grid_mut().set_line_wrapped(current_row, true);
+            self.mark_row_dirty(current_row);
+
+            // Move to left margin or column 0
+            self.cursor.col = if self.use_lr_margins {
+                self.left_margin.min(cols.saturating_sub(1))
+            } else {
+                0
+            };
+            if self.cursor.row == self.scroll_region_bottom && !was_outside_lr {
+                let scroll_top = self.scroll_region_top;
+                let scroll_bottom = self.scroll_region_bottom;
+                debug::log_scroll("wrap-pending-regional", scroll_top, scroll_bottom, 1);
+                self.active_grid_mut()
+                    .scroll_region_up(1, scroll_top, scroll_bottom);
+                // Adjust graphics to scroll with content
+                self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                // Cursor remains at bottom of region
+            } else {
+                self.cursor.row += 1;
+                if self.cursor.row >= rows {
+                    self.cursor.row = rows - 1;
+                }
+            }
+            self.pending_wrap = false;
+        }
+
+        // Write the regional indicator as width 1 initially
+        // (It will become width 2 if followed by another regional indicator)
+        let mut cell_flags = self.flags;
+        cell_flags.hyperlink_id = self.current_hyperlink_id;
+        cell_flags.set_guarded(self.char_protected);
+
+        let cell = Cell {
+            c,
+            combining: Vec::new(),
+            fg: self.fg,
+            bg: self.bg,
+            underline_color: self.underline_color,
+            flags: cell_flags,
+            width: 1, // Initially width 1, will become 2 when paired
+        };
+
+        let cursor_col = self.cursor.col;
+        let cursor_row = self.cursor.row;
+
+        // If insert mode (IRM) is enabled, insert space by shifting chars right
+        if self.insert_mode {
+            self.active_grid_mut()
+                .insert_chars(cursor_col, cursor_row, 1);
+        }
+
+        self.active_grid_mut().set(cursor_col, cursor_row, cell);
+        self.mark_row_dirty(cursor_row);
+
+        // Advance cursor by 1
+        self.cursor.col += 1;
+
+        // Handle delayed autowrap
+        if self.auto_wrap && self.cursor.col >= cols {
+            self.cursor.col = cols - 1;
+            self.pending_wrap = true;
+        } else if self.cursor.col >= cols {
             self.cursor.col = cols - 1;
         }
     }

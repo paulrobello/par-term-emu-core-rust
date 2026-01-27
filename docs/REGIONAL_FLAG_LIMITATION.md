@@ -1,6 +1,6 @@
-# Regional Indicator Flag Emoji Limitation
+# Regional Indicator Flag Emoji - Frontend Rendering Limitation
 
-Regional indicator flag emojis (🇺🇸, 🇨🇳, 🇯🇵, etc.) cannot render correctly in the web terminal client. This is a known limitation of xterm.js that requires grapheme cluster support, which is not yet available.
+Regional indicator flag emojis (🇺🇸, 🇨🇳, 🇯🇵, etc.) are now correctly stored as single cells in the backend (v0.22.0+), but may not render correctly in the web terminal client. This is a known limitation of xterm.js that requires grapheme cluster support, which is not yet available.
 
 ## Table of Contents
 - [Technical Background](#technical-background)
@@ -70,21 +70,23 @@ graph TD
 
 ### What Happens Now
 
-**Backend (Rust):**
+**Backend (Rust) - v0.22.0+:**
 
-The backend correctly handles regional indicator characters:
+The backend now correctly handles regional indicator flag emoji as grapheme clusters:
 - Receives the flag emoji (e.g., "🇺🇸")
-- Stores both regional indicators (U+1F1FA, U+1F1F8)
-- Calculates width 1 for each indicator using the `unicode-width` crate
-- Stores them in separate grid cells
+- Detects regional indicator pairs (two consecutive regional indicators)
+- Stores both regional indicators in a **single cell** (first as base char, second in combining vector)
+- Calculates width 2 for the combined flag emoji
+- Creates a spacer cell for the second position
+- Works correctly with all flag emoji (🇺🇸, 🇬🇧, 🇯🇵, etc.)
 
 **Frontend (xterm.js):**
 
-The frontend receives the data correctly but cannot render properly:
-- Receives both characters correctly via WebSocket
-- Cannot combine them into a single visual flag
-- Lacks grapheme cluster support to treat them as a unit
+The frontend receives the data correctly but may not render properly:
+- Receives the combined flag emoji via WebSocket
+- Lacks grapheme cluster support to treat them as a visual unit
 - Browser/font may render them as separate characters or not at all
+- This limitation is in xterm.js, not the backend
 
 ## Why Can't We Fix This Now?
 
@@ -221,6 +223,19 @@ if grapheme::is_variation_selector(c)
 {
     // Add to previous cell's combining character list
     // and recalculate width if needed
+}
+```
+
+**Regional Indicator Pair Handling (v0.22.0+):**
+
+The terminal writer now correctly handles regional indicator pairs:
+
+```rust
+// Regional indicators are detected and combined into single cells
+if grapheme::is_regional_indicator(c) {
+    // Check if previous cell is also a regional indicator
+    // If so, combine them into a single width-2 cell
+    // with the second indicator in the combining vector
 }
 ```
 
