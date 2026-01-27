@@ -13,6 +13,18 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.22.0
+
+### 🏳️ Regional Indicator Flag Emoji Support
+
+Proper grapheme cluster handling for flag emoji like 🇺🇸, 🇬🇧, 🇯🇵:
+
+- Flag emoji are now correctly combined into single wide (2-cell) graphemes
+- Two regional indicator codepoints are combined with the first as the base character and the second in the combining vector
+- Cursor correctly advances by 2 cells after writing a flag
+- Added `unicode-segmentation` crate dependency for grapheme cluster support
+- Comprehensive test suite for flag emoji
+
 ## What's New in 0.21.0
 
 ### 🚀 parking_lot Migration

@@ -687,6 +687,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.22.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.20.1...v0.21.0
+[0.20.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.20.0...v0.20.1
+[0.20.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.5...v0.20.0
 [0.19.5]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.4...v0.19.5
 [0.19.4]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.3...v0.19.4
 [0.19.3]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.19.2...v0.19.3
