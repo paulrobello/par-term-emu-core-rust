@@ -3464,6 +3464,13 @@ impl Terminal {
 
     // === Search Methods ===
 
+    /// Convert a byte offset within a string to a character (grapheme) offset.
+    /// This is needed because `String::find()` returns byte offsets, but terminal
+    /// columns are based on character positions.
+    fn byte_offset_to_char_offset(s: &str, byte_offset: usize) -> usize {
+        s[..byte_offset].chars().count()
+    }
+
     /// Search for text in the visible screen area
     ///
     /// Returns a vector of SearchMatch results containing position and matched text.
@@ -3494,16 +3501,30 @@ impl Terminal {
                     line_text.to_lowercase()
                 };
 
-                let mut start_col = 0;
-                while let Some(pos) = search_text[start_col..].find(&search_query) {
-                    let col = start_col + pos;
+                // Use byte offsets for String::find(), but convert to char offsets for results
+                let query_char_len = query.chars().count();
+                let mut start_byte = 0;
+                while let Some(pos) = search_text[start_byte..].find(&search_query) {
+                    let match_byte_offset = start_byte + pos;
+                    let char_column =
+                        Self::byte_offset_to_char_offset(&search_text, match_byte_offset);
+
+                    // Extract matched text using character iteration
+                    let matched_text: String = line_text
+                        .chars()
+                        .skip(char_column)
+                        .take(query_char_len)
+                        .collect();
+
                     matches.push(SearchMatch {
                         row: row as isize,
-                        col,
-                        length: query.len(),
-                        text: line_text[col..col + query.len()].to_string(),
+                        col: char_column,
+                        length: query_char_len,
+                        text: matched_text,
                     });
-                    start_col = col + 1;
+
+                    // Advance by at least 1 byte (or the query length in bytes) to find next match
+                    start_byte = match_byte_offset + search_query.len().max(1);
                 }
             }
         }
@@ -3549,16 +3570,30 @@ impl Terminal {
                     line_text.to_lowercase()
                 };
 
-                let mut start_col = 0;
-                while let Some(pos) = search_text[start_col..].find(&search_query) {
-                    let col = start_col + pos;
+                // Use byte offsets for String::find(), but convert to char offsets for results
+                let query_char_len = query.chars().count();
+                let mut start_byte = 0;
+                while let Some(pos) = search_text[start_byte..].find(&search_query) {
+                    let match_byte_offset = start_byte + pos;
+                    let char_column =
+                        Self::byte_offset_to_char_offset(&search_text, match_byte_offset);
+
+                    // Extract matched text using character iteration
+                    let matched_text: String = line_text
+                        .chars()
+                        .skip(char_column)
+                        .take(query_char_len)
+                        .collect();
+
                     matches.push(SearchMatch {
                         row: -((i + 1) as isize), // Negative indices for scrollback
-                        col,
-                        length: query.len(),
-                        text: line_text[col..col + query.len()].to_string(),
+                        col: char_column,
+                        length: query_char_len,
+                        text: matched_text,
                     });
-                    start_col = col + 1;
+
+                    // Advance by at least 1 byte (or the query length in bytes) to find next match
+                    start_byte = match_byte_offset + search_query.len().max(1);
                 }
             }
         }

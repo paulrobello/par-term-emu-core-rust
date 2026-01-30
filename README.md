@@ -13,6 +13,16 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.22.1
+
+### 🐛 Search Unicode Bug Fix
+
+Fixed `search()` and `search_scrollback()` returning byte offsets instead of character offsets for text containing multi-byte Unicode characters (CJK, emoji, etc.):
+
+- `SearchMatch.col` now correctly returns the character column position
+- `SearchMatch.length` now correctly returns the character count
+- Example: Searching for "World" in "こんにちは World" now returns `col=6` (correct) instead of `col=16` (byte offset)
+
 ## What's New in 0.22.0
 
 ### 🏳️ Regional Indicator Flag Emoji Support

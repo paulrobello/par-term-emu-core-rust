@@ -2813,6 +2813,51 @@ fn test_search_scrollback_with_limit() {
 }
 
 #[test]
+fn test_search_unicode_byte_offset() {
+    // Test that search returns character offsets, not byte offsets
+    // Japanese "Hello World" has multi-byte characters
+    let mut term = Terminal::new(80, 24);
+    // "こんにちは World" - 5 Japanese chars (3 bytes each) + space + "World"
+    term.process("こんにちは World".as_bytes());
+
+    let matches = term.search("World", true);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].text, "World");
+    // "World" should be at character position 6 (5 Japanese chars + 1 space)
+    // NOT byte position 16 (15 bytes for Japanese + 1 for space)
+    assert_eq!(matches[0].col, 6);
+    assert_eq!(matches[0].length, 5);
+}
+
+#[test]
+fn test_search_unicode_query() {
+    // Test searching for Unicode text
+    let mut term = Terminal::new(80, 24);
+    term.process("Hello こんにちは World".as_bytes());
+
+    let matches = term.search("こんにちは", true);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].text, "こんにちは");
+    assert_eq!(matches[0].col, 6); // After "Hello "
+    assert_eq!(matches[0].length, 5); // 5 characters, not 15 bytes
+}
+
+#[test]
+fn test_search_unicode_multiple_matches() {
+    let mut term = Terminal::new(80, 24);
+    // Two occurrences of "日本" with ASCII text between them
+    term.process("日本 is Japan 日本".as_bytes());
+
+    let matches = term.search("日本", true);
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].col, 0); // First occurrence at start
+    assert_eq!(matches[0].length, 2);
+    // "日本 is Japan " = 2 + 1 + 2 + 1 + 5 + 1 = 12 chars, so second "日本" is at col 12
+    assert_eq!(matches[1].col, 12);
+    assert_eq!(matches[1].length, 2);
+}
+
+#[test]
 fn test_detect_urls() {
     let mut term = Terminal::new(80, 24);
     term.process(b"Visit https://example.com for more");

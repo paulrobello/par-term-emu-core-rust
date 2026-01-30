@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.22.1] - 2026-01-30
+
+### Fixed
+- **Search Unicode Bug**: Fixed `search()` and `search_scrollback()` returning byte offsets instead of character offsets for multi-byte Unicode text
+  - `SearchMatch.col` now correctly returns the character (grapheme) column position, not the byte offset
+  - `SearchMatch.length` now correctly returns the character count, not the byte length
+  - `SearchMatch.text` now correctly extracts the matched text using character iteration
+  - Affects text containing multi-byte characters (CJK, emoji, etc.)
+  - Example: Searching for "World" in "こんにちは World" now returns `col=6` (correct) instead of `col=16` (byte offset)
+  - Added comprehensive tests for Unicode search scenarios
+
 ## [0.22.0] - 2026-01-27
 
 ### Added
@@ -687,6 +698,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.22.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.20.1...v0.21.0
 [0.20.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.20.0...v0.20.1
