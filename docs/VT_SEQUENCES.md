@@ -400,6 +400,7 @@ ASCII control characters.
 - `HT` (0x09) - Horizontal tab
 - `LF` (0x0A) - Line feed
 - `CR` (0x0D) - Carriage return
+- `ENQ` (0x05) - Enquiry; when configured, terminal replies with the answerback string via response buffer
 - `ESC` (0x1B) - Escape (starts escape sequences)
 
 ## Reset Sequences

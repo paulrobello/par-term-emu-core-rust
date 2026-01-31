@@ -896,6 +896,29 @@ fn test_decrqm_unrecognized_mode() {
 }
 
 #[test]
+fn test_enq_answerback_string() {
+    let mut term = Terminal::new(80, 24);
+
+    // Default: disabled for security, emit nothing
+    term.process(b"\x05");
+    assert_eq!(term.drain_responses(), b"");
+    assert_eq!(term.answerback_string(), None);
+
+    // Configure a custom answerback string
+    term.set_answerback_string(Some("par-term".to_string()));
+    assert_eq!(term.answerback_string(), Some("par-term"));
+
+    // ENQ should now return the configured answerback payload
+    term.process(b"\x05");
+    assert_eq!(term.drain_responses(), b"par-term");
+
+    // Disabling clears the response again
+    term.set_answerback_string(None);
+    term.process(b"\x05");
+    assert_eq!(term.drain_responses(), b"");
+}
+
+#[test]
 fn test_multiple_queries() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[62\"p");

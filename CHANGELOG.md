@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.23.0] - 2026-01-31
+
+### Added
+- **Configurable ENQ Answerback**: Terminal can now return a custom answerback string in response to ENQ (0x05)
+  - New Rust APIs: `Terminal::answerback_string()` and `Terminal::set_answerback_string()`
+  - Python bindings expose `answerback_string()` and `set_answerback_string()` on both `Terminal` and `PtyTerminal`
+  - Disabled by default for security; answerback payload is delivered via the existing response buffer (`drain_responses()`)
+
+### Fixed
+- **Python Version Sync**: Bumped Python package version to match crate release and expose new answerback feature
+
 ## [0.22.1] - 2026-01-30
 
 ### Fixed

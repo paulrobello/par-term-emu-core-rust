@@ -1695,6 +1695,30 @@ impl PyTerminal {
         Ok(self.inner.accept_osc7())
     }
 
+    /// Get the configured answerback string (ENQ response)
+    ///
+    /// Returns:
+    ///     The current answerback string or None if disabled (default)
+    fn answerback_string(&self) -> PyResult<Option<String>> {
+        Ok(self
+            .inner
+            .answerback_string()
+            .map(std::string::ToString::to_string))
+    }
+
+    /// Set the answerback string sent in response to ENQ (0x05)
+    ///
+    /// The answerback payload is sent whenever the terminal receives the ENQ
+    /// control character. Default is None (disabled) for security. Use with
+    /// caution in untrusted sessions.
+    ///
+    /// Args:
+    ///     answerback: Custom string to return, or None to disable
+    fn set_answerback_string(&mut self, answerback: Option<String>) -> PyResult<()> {
+        self.inner.set_answerback_string(answerback);
+        Ok(())
+    }
+
     /// Set whether OSC 7 directory tracking sequences are accepted
     ///
     /// When disabled, OSC 7 sequences are silently ignored.

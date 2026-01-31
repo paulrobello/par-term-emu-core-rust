@@ -236,6 +236,7 @@ These settings control potentially sensitive or insecure terminal features at th
 | `allow_clipboard_read` | `bool` | `false` | Allow OSC 52 clipboard queries (security risk) |
 | `accept_osc7` | `bool` | `true` | Accept OSC 7 directory tracking |
 | `disable_insecure_sequences` | `bool` | `false` | Block OSC 8, 52, 9, 777, and Sixel graphics |
+| `answerback_string` | `string | null` | `null` | Optional ENQ answerback payload returned via response buffer |
 
 ### Security Recommendations
 

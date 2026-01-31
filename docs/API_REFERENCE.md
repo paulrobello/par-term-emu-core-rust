@@ -264,6 +264,8 @@ Create a new terminal with specified dimensions.
 - `shell_integration_state() -> ShellIntegration`: Get shell integration state
 - `disable_insecure_sequences() -> bool`: Check if insecure sequences are disabled
 - `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
+- `answerback_string() -> str | None`: Get the configured ENQ answerback payload (None if disabled)
+- `set_answerback_string(answerback: str | None)`: Configure ENQ answerback string (None disables; default)
 
 #### Paste Operations
 - `get_paste_start() -> tuple[int, int] | None`: Get bracketed paste start position

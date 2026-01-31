@@ -1914,6 +1914,37 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Get the configured answerback string (ENQ response)
+    ///
+    /// Returns:
+    ///     The current answerback string or None if disabled (default)
+    fn answerback_string(&self) -> PyResult<Option<String>> {
+        let terminal = self.inner.terminal();
+        let answerback = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+            term.answerback_string()
+                .map(std::string::ToString::to_string)
+        } else {
+            None
+        };
+        Ok(answerback)
+    }
+
+    /// Set the answerback string sent in response to ENQ (0x05)
+    ///
+    /// The answerback payload is sent whenever the terminal receives the ENQ
+    /// control character. Default is None (disabled) for security. Use with
+    /// caution in untrusted sessions.
+    ///
+    /// Args:
+    ///     answerback: Custom string to return, or None to disable
+    fn set_answerback_string(&mut self, answerback: Option<String>) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+            term.set_answerback_string(answerback);
+        }
+        Ok(())
+    }
+
     /// Check if insecure sequence filtering is enabled
     ///
     /// Returns:

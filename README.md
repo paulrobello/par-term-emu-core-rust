@@ -13,6 +13,15 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.23.0
+
+### 📨 Configurable ENQ Answerback
+
+- Added an optional answerback string that the terminal returns when receiving **ENQ (0x05)**
+- Disabled by default for security; set a custom value via Rust API or Python bindings
+- Responses are buffered in the existing response buffer and drained with `drain_responses()`
+- Python bindings now expose `answerback_string()` and `set_answerback_string()`
+
 ## What's New in 0.22.1
 
 ### 🐛 Search Unicode Bug Fix

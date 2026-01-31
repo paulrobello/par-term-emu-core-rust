@@ -104,6 +104,28 @@ class TestCursorOperations:
 class TestContentOperations:
     """Test content reading and querying"""
 
+    def test_enq_answerback_string(self):
+        """ENQ (0x05) returns configured answerback via bindings"""
+
+        term = Terminal(80, 24)
+
+        # Default disabled
+        term.process(b"\x05")
+        assert term.drain_responses() == b""
+        assert term.answerback_string() is None
+
+        # Configure answerback
+        term.set_answerback_string("par-term")
+        assert term.answerback_string() == "par-term"
+
+        term.process(b"\x05")
+        assert term.drain_responses() == b"par-term"
+
+        # Disable again
+        term.set_answerback_string(None)
+        term.process(b"\x05")
+        assert term.drain_responses() == b""
+
     def test_write_simple_text(self):
         """Test writing and reading simple text"""
         term = Terminal(80, 24)

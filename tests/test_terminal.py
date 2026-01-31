@@ -1039,6 +1039,30 @@ def test_query_with_mode_changes():
     assert term.drain_responses() == b"\x1b[?2004;2$y"
 
 
+def test_enq_answerback_string():
+    """ENQ (0x05) returns configured answerback string via response buffer"""
+
+    term = Terminal(80, 24)
+
+    # Default disabled: no response
+    term.process(b"\x05")
+    assert term.drain_responses() == b""
+    assert term.answerback_string() is None
+
+    # Set custom answerback string
+    term.set_answerback_string("par-term")
+    assert term.answerback_string() == "par-term"
+
+    # ENQ returns configured string
+    term.process(b"\x05")
+    assert term.drain_responses() == b"par-term"
+
+    # Disable again
+    term.set_answerback_string(None)
+    term.process(b"\x05")
+    assert term.drain_responses() == b""
+
+
 def test_response_buffer_isolation():
     """Test that response buffers are properly isolated between terminals"""
     term1 = Terminal(80, 24)
