@@ -110,7 +110,54 @@ pub fn is_wide_grapheme(grapheme: &str) -> bool {
     }
 
     // Fallback to unicode-width for other cases
-    unicode_width::UnicodeWidthStr::width(grapheme) >= 2
+    crate::unicode_width_config::str_width(
+        grapheme,
+        &crate::unicode_width_config::WidthConfig::default(),
+    ) >= 2
+}
+
+/// Check if a grapheme cluster should be rendered with width 2 using a specific configuration
+///
+/// This variant allows specifying the width configuration for ambiguous characters.
+///
+/// # Arguments
+///
+/// * `grapheme` - The grapheme cluster to check
+/// * `config` - The width configuration to use
+///
+/// # Returns
+///
+/// true if the grapheme should occupy 2 cells, false if 1 cell
+pub fn is_wide_grapheme_with_config(
+    grapheme: &str,
+    config: &crate::unicode_width_config::WidthConfig,
+) -> bool {
+    // Regional Indicator pairs (flags) are always wide
+    let regional_indicators: Vec<char> = grapheme
+        .chars()
+        .filter(|c| is_regional_indicator(*c))
+        .collect();
+    if regional_indicators.len() == 2 {
+        return true;
+    }
+
+    // ZWJ sequences are wide
+    if grapheme.contains('\u{200D}') {
+        return true;
+    }
+
+    // Emoji with skin tone modifiers are wide
+    if grapheme.chars().any(is_skin_tone_modifier) {
+        return true;
+    }
+
+    // Emoji with variation selectors are typically wide
+    if grapheme.contains('\u{FE0F}') {
+        return true;
+    }
+
+    // Use the configured width calculation
+    crate::unicode_width_config::str_width(grapheme, config) >= 2
 }
 
 #[cfg(test)]

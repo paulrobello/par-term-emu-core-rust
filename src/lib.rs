@@ -59,6 +59,13 @@ pub mod streaming;
 pub mod terminal;
 pub mod text_utils;
 pub mod tmux_control;
+pub mod unicode_width_config;
+
+// Re-export commonly used types from unicode_width_config
+pub use unicode_width_config::{
+    char_width, char_width_cjk, is_east_asian_ambiguous, str_width, str_width_cjk, AmbiguousWidth,
+    UnicodeVersion, WidthConfig,
+};
 
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyRuntimeError};

@@ -1,7 +1,7 @@
 //! Text extraction and manipulation utilities
 
 use crate::grid::Grid;
-use unicode_width::UnicodeWidthChar;
+use crate::unicode_width_config::{char_width, WidthConfig};
 
 /// Default word characters for word boundary detection (iTerm2-compatible)
 /// Matches iTerm2's default: slash, hyphen, plus, backslash, tilde, underscore, dot
@@ -36,7 +36,7 @@ pub fn get_word_at(
             byte_pos = i;
             break;
         }
-        char_col += c.width().unwrap_or(1);
+        char_col += char_width(c, &WidthConfig::default());
         if char_col > col {
             return None; // Inside a wide character
         }
@@ -101,7 +101,7 @@ pub fn get_url_at(grid: &Grid, col: usize, row: usize) -> Option<String> {
             byte_pos = i;
             break;
         }
-        char_col += c.width().unwrap_or(1);
+        char_col += char_width(c, &WidthConfig::default());
         if char_col > col {
             return None;
         }
@@ -202,7 +202,7 @@ pub fn select_word(
             byte_pos = i;
             break;
         }
-        char_col += c.width().unwrap_or(1);
+        char_col += char_width(c, &WidthConfig::default());
         if char_col > col {
             return None;
         }
@@ -235,11 +235,11 @@ pub fn select_word(
     // Convert character indices to column positions
     let start_col = chars[..start_idx]
         .iter()
-        .map(|c| c.width().unwrap_or(1))
+        .map(|c| char_width(*c, &WidthConfig::default()))
         .sum();
     let end_col = chars[..end_idx]
         .iter()
-        .map(|c| c.width().unwrap_or(1))
+        .map(|c| char_width(*c, &WidthConfig::default()))
         .sum();
 
     Some(((start_col, row), (end_col, row)))
@@ -307,7 +307,7 @@ pub fn find_matching_bracket(grid: &Grid, col: usize, row: usize) -> Option<(usi
                         // Found matching bracket - convert char index to column
                         let match_col = search_chars[..idx]
                             .iter()
-                            .map(|c| c.width().unwrap_or(1))
+                            .map(|c| char_width(*c, &WidthConfig::default()))
                             .sum();
                         return Some((match_col, search_row));
                     }
@@ -344,7 +344,7 @@ pub fn find_matching_bracket(grid: &Grid, col: usize, row: usize) -> Option<(usi
                         // Found matching bracket - convert char index to column
                         let match_col = search_chars[..idx]
                             .iter()
-                            .map(|c| c.width().unwrap_or(1))
+                            .map(|c| char_width(*c, &WidthConfig::default()))
                             .sum();
                         return Some((match_col, search_row));
                     }

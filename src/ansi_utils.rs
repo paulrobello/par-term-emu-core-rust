@@ -1,7 +1,7 @@
 //! ANSI sequence utilities for generation and parsing
 
 use crate::color::Color;
-use unicode_width::UnicodeWidthStr;
+use crate::unicode_width_config::{str_width, WidthConfig};
 
 /// Strip all ANSI escape sequences from text
 pub fn strip_ansi(text: &str) -> String {
@@ -52,8 +52,15 @@ pub fn strip_ansi(text: &str) -> String {
 }
 
 /// Measure text width without ANSI codes (accounts for wide characters)
+///
+/// Uses the default width configuration. For configurable width, use `measure_text_width_with_config`.
 pub fn measure_text_width(text: &str) -> usize {
-    strip_ansi(text).width()
+    str_width(&strip_ansi(text), &WidthConfig::default())
+}
+
+/// Measure text width without ANSI codes using a specific width configuration
+pub fn measure_text_width_with_config(text: &str, config: &WidthConfig) -> usize {
+    str_width(&strip_ansi(text), config)
 }
 
 /// Generate SGR (Select Graphic Rendition) sequence

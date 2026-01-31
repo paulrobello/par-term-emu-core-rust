@@ -1265,7 +1265,8 @@ impl Terminal {
                         };
 
                         let fill_char_width =
-                            unicode_width::UnicodeWidthChar::width(fill_char).unwrap_or(1) as u8;
+                            crate::unicode_width_config::char_width(fill_char, &self.width_config)
+                                as u8;
 
                         // Create fill cell with current attributes
                         let fill_cell = Cell {

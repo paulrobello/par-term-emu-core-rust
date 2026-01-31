@@ -344,7 +344,7 @@ impl Terminal {
         }
 
         // Handle wide characters (emoji, CJK, etc.)
-        let char_width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+        let char_width = crate::unicode_width_config::char_width(c, &self.width_config);
 
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {

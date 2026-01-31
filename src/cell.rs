@@ -1,4 +1,5 @@
 use crate::color::Color;
+use crate::unicode_width_config::{char_width, str_width, WidthConfig};
 use bitflags::bitflags;
 
 /// Underline style for text decoration (SGR 4:x)
@@ -222,8 +223,24 @@ impl Default for Cell {
 
 impl Cell {
     /// Create a new cell with a character
+    ///
+    /// Uses the default width configuration. For configurable width, use `new_with_config`.
     pub fn new(c: char) -> Self {
-        let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
+        let width = char_width(c, &WidthConfig::default()) as u8;
+        Self {
+            c,
+            combining: Vec::new(),
+            width,
+            ..Default::default()
+        }
+    }
+
+    /// Create a new cell with a character using a specific width configuration
+    ///
+    /// This allows specifying how character widths are calculated,
+    /// particularly for ambiguous width characters.
+    pub fn new_with_config(c: char, config: &WidthConfig) -> Self {
+        let width = char_width(c, config) as u8;
         Self {
             c,
             combining: Vec::new(),
@@ -233,8 +250,24 @@ impl Cell {
     }
 
     /// Create a new cell with character and colors
+    ///
+    /// Uses the default width configuration. For configurable width, use `with_colors_and_config`.
     pub fn with_colors(c: char, fg: Color, bg: Color) -> Self {
-        let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
+        let width = char_width(c, &WidthConfig::default()) as u8;
+        Self {
+            c,
+            combining: Vec::new(),
+            fg,
+            bg,
+            underline_color: None,
+            flags: CellFlags::default(),
+            width,
+        }
+    }
+
+    /// Create a new cell with character, colors, and width configuration
+    pub fn with_colors_and_config(c: char, fg: Color, bg: Color, config: &WidthConfig) -> Self {
+        let width = char_width(c, config) as u8;
         Self {
             c,
             combining: Vec::new(),
@@ -301,17 +334,46 @@ impl Cell {
     }
 
     /// Create a cell from a grapheme cluster (base char + combining chars)
+    ///
+    /// Uses the default width configuration. For configurable width, use `from_grapheme_with_config`.
     pub fn from_grapheme(grapheme: &str) -> Self {
         let mut chars = grapheme.chars();
         let base_char = chars.next().unwrap_or(' ');
         let combining: Vec<char> = chars.collect();
-        let width = unicode_width::UnicodeWidthStr::width(grapheme).max(1) as u8;
+        let width = str_width(grapheme, &WidthConfig::default()).max(1) as u8;
 
         Self {
             c: base_char,
             combining,
             width,
             ..Default::default()
+        }
+    }
+
+    /// Create a cell from a grapheme cluster with a specific width configuration
+    pub fn from_grapheme_with_config(grapheme: &str, config: &WidthConfig) -> Self {
+        let mut chars = grapheme.chars();
+        let base_char = chars.next().unwrap_or(' ');
+        let combining: Vec<char> = chars.collect();
+        let width = str_width(grapheme, config).max(1) as u8;
+
+        Self {
+            c: base_char,
+            combining,
+            width,
+            ..Default::default()
+        }
+    }
+
+    /// Recalculate the width of this cell using the given configuration
+    ///
+    /// This is useful when the width configuration changes and cells need to be updated.
+    pub fn recalculate_width(&mut self, config: &WidthConfig) {
+        if self.combining.is_empty() {
+            self.width = char_width(self.c, config) as u8;
+        } else {
+            let grapheme = self.get_grapheme();
+            self.width = str_width(&grapheme, config).max(1) as u8;
         }
     }
 }

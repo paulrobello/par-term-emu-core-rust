@@ -1376,6 +1376,9 @@ pub struct Terminal {
     /// Default: empty (no response) for security
     /// Common values: "par-term", "vt100", or custom identification
     answerback_string: Option<String>,
+
+    /// Unicode width configuration for character width calculations
+    width_config: crate::unicode_width_config::WidthConfig,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1706,6 +1709,9 @@ impl Terminal {
 
             // Answerback String (ENQ response) - disabled by default for security
             answerback_string: None,
+
+            // Unicode width configuration - use defaults
+            width_config: crate::unicode_width_config::WidthConfig::default(),
         }
     }
 
@@ -2232,6 +2238,64 @@ impl Terminal {
     /// * `answerback` - The string to send, or None to disable
     pub fn set_answerback_string(&mut self, answerback: Option<String>) {
         self.answerback_string = answerback;
+    }
+
+    /// Get the current Unicode width configuration
+    ///
+    /// Returns the configuration used for character width calculations,
+    /// including Unicode version and ambiguous width handling.
+    pub fn width_config(&self) -> &crate::unicode_width_config::WidthConfig {
+        &self.width_config
+    }
+
+    /// Set the Unicode width configuration
+    ///
+    /// This affects how character widths are calculated for terminal display,
+    /// particularly for:
+    /// - East Asian Ambiguous width characters (narrow vs wide)
+    /// - Emoji and other Unicode characters
+    ///
+    /// # Arguments
+    /// * `config` - The new width configuration to use
+    pub fn set_width_config(&mut self, config: crate::unicode_width_config::WidthConfig) {
+        self.width_config = config;
+    }
+
+    /// Set the ambiguous width setting
+    ///
+    /// Convenience method to change only the ambiguous width treatment
+    /// without modifying other width configuration settings.
+    ///
+    /// # Arguments
+    /// * `width` - The ambiguous width setting (Narrow or Wide)
+    pub fn set_ambiguous_width(&mut self, width: crate::unicode_width_config::AmbiguousWidth) {
+        self.width_config.ambiguous_width = width;
+    }
+
+    /// Set the Unicode version for width calculations
+    ///
+    /// Convenience method to change only the Unicode version
+    /// without modifying other width configuration settings.
+    ///
+    /// # Arguments
+    /// * `version` - The Unicode version to use for width tables
+    pub fn set_unicode_version(&mut self, version: crate::unicode_width_config::UnicodeVersion) {
+        self.width_config.unicode_version = version;
+    }
+
+    /// Calculate the display width of a character using current config
+    ///
+    /// This uses the terminal's width configuration to determine
+    /// how many cells a character occupies.
+    ///
+    /// # Arguments
+    /// * `c` - The character to measure
+    ///
+    /// # Returns
+    /// The display width in cells (0, 1, or 2)
+    #[inline]
+    pub fn char_width(&self, c: char) -> usize {
+        crate::unicode_width_config::char_width(c, &self.width_config)
     }
 
     /// Get pending notifications (OSC 9 / OSC 777)

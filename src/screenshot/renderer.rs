@@ -614,8 +614,11 @@ impl Renderer {
 
         for c in line_text.chars() {
             char_to_col.push(current_col);
-            // Use unicode_width to get character width (1 for normal, 2 for wide)
-            let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1);
+            // Use configured width calculation (1 for normal, 2 for wide)
+            let width = crate::unicode_width_config::char_width(
+                c,
+                &crate::unicode_width_config::WidthConfig::default(),
+            );
             current_col += width;
         }
 
@@ -1563,15 +1566,16 @@ mod tests {
     #[test]
     fn test_wide_char_column_mapping() {
         // Test column mapping for wide characters
-        use unicode_width::UnicodeWidthChar;
+        use crate::unicode_width_config::{char_width, WidthConfig};
 
         let text = "Hello世界"; // ASCII + wide chars
         let mut char_to_col = Vec::new();
         let mut current_col = 0;
+        let config = WidthConfig::default();
 
         for c in text.chars() {
             char_to_col.push(current_col);
-            let width = UnicodeWidthChar::width(c).unwrap_or(1);
+            let width = char_width(c, &config);
             current_col += width;
         }
 
