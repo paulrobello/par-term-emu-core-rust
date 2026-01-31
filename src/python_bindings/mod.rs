@@ -18,12 +18,16 @@ pub mod types;
 
 // Re-export public types for convenience
 pub use color_utils::{
-    py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_color_luminance,
-    py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
-    py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
-    py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl,
+    py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_char_width, py_char_width_cjk,
+    py_color_luminance, py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb,
+    py_hsl_to_rgb, py_is_dark_color, py_is_east_asian_ambiguous, py_lighten_rgb, py_meets_wcag_aa,
+    py_meets_wcag_aaa, py_mix_colors, py_perceived_brightness_rgb, py_rgb_to_ansi_256,
+    py_rgb_to_hex, py_rgb_to_hsl, py_str_width, py_str_width_cjk,
 };
-pub use enums::{PyCursorStyle, PyMouseEncoding, PyProgressState, PyUnderlineStyle};
+pub use enums::{
+    PyAmbiguousWidth, PyCursorStyle, PyMouseEncoding, PyProgressState, PyUnderlineStyle,
+    PyUnicodeVersion, PyWidthConfig,
+};
 pub use pty::PyPtyTerminal;
 pub use streaming::{
     decode_client_message, decode_server_message, encode_client_message, encode_server_message,

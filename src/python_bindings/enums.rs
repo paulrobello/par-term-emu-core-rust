@@ -183,6 +183,257 @@ impl From<PyProgressState> for crate::terminal::ProgressState {
     }
 }
 
+/// Unicode version for character width calculation tables.
+///
+/// Different Unicode versions have different character width assignments,
+/// particularly for newly added emoji and other characters.
+#[pyclass(name = "UnicodeVersion", eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyUnicodeVersion {
+    /// Unicode 9.0 (June 2016) - Pre-emoji standardization
+    Unicode9 = 9,
+    /// Unicode 10.0 (June 2017)
+    Unicode10 = 10,
+    /// Unicode 11.0 (June 2018)
+    Unicode11 = 11,
+    /// Unicode 12.0 (March 2019)
+    Unicode12 = 12,
+    /// Unicode 13.0 (March 2020)
+    Unicode13 = 13,
+    /// Unicode 14.0 (September 2021)
+    Unicode14 = 14,
+    /// Unicode 15.0 (September 2022)
+    Unicode15 = 15,
+    /// Unicode 15.1 (September 2023)
+    Unicode15_1 = 151,
+    /// Unicode 16.0 (September 2024)
+    Unicode16 = 16,
+    /// Use the latest available Unicode version (default)
+    Auto = 0,
+}
+
+#[pymethods]
+impl PyUnicodeVersion {
+    /// Get a human-readable version string
+    fn version_string(&self) -> &'static str {
+        match self {
+            PyUnicodeVersion::Unicode9 => "9.0",
+            PyUnicodeVersion::Unicode10 => "10.0",
+            PyUnicodeVersion::Unicode11 => "11.0",
+            PyUnicodeVersion::Unicode12 => "12.0",
+            PyUnicodeVersion::Unicode13 => "13.0",
+            PyUnicodeVersion::Unicode14 => "14.0",
+            PyUnicodeVersion::Unicode15 => "15.0",
+            PyUnicodeVersion::Unicode15_1 => "15.1",
+            PyUnicodeVersion::Unicode16 => "16.0",
+            PyUnicodeVersion::Auto => "auto",
+        }
+    }
+
+    /// Check if this is the Auto setting
+    fn is_auto(&self) -> bool {
+        matches!(self, PyUnicodeVersion::Auto)
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "UnicodeVersion.{}",
+            self.version_string().replace('.', "_").to_uppercase()
+        )
+    }
+}
+
+impl From<crate::unicode_width_config::UnicodeVersion> for PyUnicodeVersion {
+    fn from(version: crate::unicode_width_config::UnicodeVersion) -> Self {
+        match version {
+            crate::unicode_width_config::UnicodeVersion::Unicode9 => PyUnicodeVersion::Unicode9,
+            crate::unicode_width_config::UnicodeVersion::Unicode10 => PyUnicodeVersion::Unicode10,
+            crate::unicode_width_config::UnicodeVersion::Unicode11 => PyUnicodeVersion::Unicode11,
+            crate::unicode_width_config::UnicodeVersion::Unicode12 => PyUnicodeVersion::Unicode12,
+            crate::unicode_width_config::UnicodeVersion::Unicode13 => PyUnicodeVersion::Unicode13,
+            crate::unicode_width_config::UnicodeVersion::Unicode14 => PyUnicodeVersion::Unicode14,
+            crate::unicode_width_config::UnicodeVersion::Unicode15 => PyUnicodeVersion::Unicode15,
+            crate::unicode_width_config::UnicodeVersion::Unicode15_1 => {
+                PyUnicodeVersion::Unicode15_1
+            }
+            crate::unicode_width_config::UnicodeVersion::Unicode16 => PyUnicodeVersion::Unicode16,
+            crate::unicode_width_config::UnicodeVersion::Auto => PyUnicodeVersion::Auto,
+        }
+    }
+}
+
+impl From<PyUnicodeVersion> for crate::unicode_width_config::UnicodeVersion {
+    fn from(version: PyUnicodeVersion) -> Self {
+        match version {
+            PyUnicodeVersion::Unicode9 => crate::unicode_width_config::UnicodeVersion::Unicode9,
+            PyUnicodeVersion::Unicode10 => crate::unicode_width_config::UnicodeVersion::Unicode10,
+            PyUnicodeVersion::Unicode11 => crate::unicode_width_config::UnicodeVersion::Unicode11,
+            PyUnicodeVersion::Unicode12 => crate::unicode_width_config::UnicodeVersion::Unicode12,
+            PyUnicodeVersion::Unicode13 => crate::unicode_width_config::UnicodeVersion::Unicode13,
+            PyUnicodeVersion::Unicode14 => crate::unicode_width_config::UnicodeVersion::Unicode14,
+            PyUnicodeVersion::Unicode15 => crate::unicode_width_config::UnicodeVersion::Unicode15,
+            PyUnicodeVersion::Unicode15_1 => {
+                crate::unicode_width_config::UnicodeVersion::Unicode15_1
+            }
+            PyUnicodeVersion::Unicode16 => crate::unicode_width_config::UnicodeVersion::Unicode16,
+            PyUnicodeVersion::Auto => crate::unicode_width_config::UnicodeVersion::Auto,
+        }
+    }
+}
+
+/// Treatment of East Asian Ambiguous width characters.
+///
+/// Ambiguous characters include Greek/Cyrillic letters, some symbols, and
+/// other characters that may display as either 1 or 2 cells depending on context.
+#[pyclass(name = "AmbiguousWidth", eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyAmbiguousWidth {
+    /// Narrow (1 cell) - Western/default terminal behavior
+    Narrow = 1,
+    /// Wide (2 cells) - CJK terminal behavior
+    Wide = 2,
+}
+
+#[pymethods]
+impl PyAmbiguousWidth {
+    /// Get the width value (1 or 2)
+    fn width(&self) -> usize {
+        match self {
+            PyAmbiguousWidth::Narrow => 1,
+            PyAmbiguousWidth::Wide => 2,
+        }
+    }
+
+    /// Check if this is the narrow setting
+    fn is_narrow(&self) -> bool {
+        matches!(self, PyAmbiguousWidth::Narrow)
+    }
+
+    /// Check if this is the wide setting
+    fn is_wide(&self) -> bool {
+        matches!(self, PyAmbiguousWidth::Wide)
+    }
+
+    fn __repr__(&self) -> String {
+        match self {
+            PyAmbiguousWidth::Narrow => "AmbiguousWidth.NARROW".to_string(),
+            PyAmbiguousWidth::Wide => "AmbiguousWidth.WIDE".to_string(),
+        }
+    }
+}
+
+impl From<crate::unicode_width_config::AmbiguousWidth> for PyAmbiguousWidth {
+    fn from(width: crate::unicode_width_config::AmbiguousWidth) -> Self {
+        match width {
+            crate::unicode_width_config::AmbiguousWidth::Narrow => PyAmbiguousWidth::Narrow,
+            crate::unicode_width_config::AmbiguousWidth::Wide => PyAmbiguousWidth::Wide,
+        }
+    }
+}
+
+impl From<PyAmbiguousWidth> for crate::unicode_width_config::AmbiguousWidth {
+    fn from(width: PyAmbiguousWidth) -> Self {
+        match width {
+            PyAmbiguousWidth::Narrow => crate::unicode_width_config::AmbiguousWidth::Narrow,
+            PyAmbiguousWidth::Wide => crate::unicode_width_config::AmbiguousWidth::Wide,
+        }
+    }
+}
+
+/// Configuration for Unicode width calculations.
+///
+/// This class combines Unicode version and ambiguous width settings
+/// to control how character widths are calculated in the terminal.
+#[pyclass(name = "WidthConfig")]
+#[derive(Debug, Clone)]
+pub struct PyWidthConfig {
+    /// Unicode version for width tables
+    #[pyo3(get, set)]
+    pub unicode_version: PyUnicodeVersion,
+    /// Treatment of East Asian Ambiguous width characters
+    #[pyo3(get, set)]
+    pub ambiguous_width: PyAmbiguousWidth,
+}
+
+#[pymethods]
+impl PyWidthConfig {
+    /// Create a new WidthConfig with specified settings
+    ///
+    /// Args:
+    ///     unicode_version: Unicode version for width tables (default: Auto)
+    ///     ambiguous_width: Treatment of ambiguous characters (default: Narrow)
+    #[new]
+    #[pyo3(signature = (unicode_version=None, ambiguous_width=None))]
+    fn new(
+        unicode_version: Option<PyUnicodeVersion>,
+        ambiguous_width: Option<PyAmbiguousWidth>,
+    ) -> Self {
+        Self {
+            unicode_version: unicode_version.unwrap_or(PyUnicodeVersion::Auto),
+            ambiguous_width: ambiguous_width.unwrap_or(PyAmbiguousWidth::Narrow),
+        }
+    }
+
+    /// Create a WidthConfig optimized for CJK environments
+    ///
+    /// Returns:
+    ///     WidthConfig with Auto Unicode version and Wide ambiguous width
+    #[staticmethod]
+    fn cjk() -> Self {
+        Self {
+            unicode_version: PyUnicodeVersion::Auto,
+            ambiguous_width: PyAmbiguousWidth::Wide,
+        }
+    }
+
+    /// Create a WidthConfig optimized for Western environments
+    ///
+    /// Returns:
+    ///     WidthConfig with Auto Unicode version and Narrow ambiguous width
+    #[staticmethod]
+    fn western() -> Self {
+        Self {
+            unicode_version: PyUnicodeVersion::Auto,
+            ambiguous_width: PyAmbiguousWidth::Narrow,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "WidthConfig(unicode_version={}, ambiguous_width={})",
+            self.unicode_version.__repr__(),
+            self.ambiguous_width.__repr__()
+        )
+    }
+}
+
+impl From<crate::unicode_width_config::WidthConfig> for PyWidthConfig {
+    fn from(config: crate::unicode_width_config::WidthConfig) -> Self {
+        Self {
+            unicode_version: config.unicode_version.into(),
+            ambiguous_width: config.ambiguous_width.into(),
+        }
+    }
+}
+
+impl From<PyWidthConfig> for crate::unicode_width_config::WidthConfig {
+    fn from(config: PyWidthConfig) -> Self {
+        Self {
+            unicode_version: config.unicode_version.into(),
+            ambiguous_width: config.ambiguous_width.into(),
+        }
+    }
+}
+
+impl From<&PyWidthConfig> for crate::unicode_width_config::WidthConfig {
+    fn from(config: &PyWidthConfig) -> Self {
+        Self {
+            unicode_version: config.unicode_version.into(),
+            ambiguous_width: config.ambiguous_width.into(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

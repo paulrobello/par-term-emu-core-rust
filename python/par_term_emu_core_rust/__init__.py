@@ -18,6 +18,7 @@ This library provides a full-featured terminal emulator with support for:
 """
 
 from ._native import (
+    AmbiguousWidth,
     Attributes,
     CursorStyle,
     Graphic,
@@ -31,6 +32,8 @@ from ._native import (
     ShellIntegration,
     Terminal,
     UnderlineStyle,
+    UnicodeVersion,
+    WidthConfig,
     # Color utility functions
     adjust_contrast_rgb,
     adjust_hue,
@@ -50,6 +53,12 @@ from ._native import (
     rgb_to_ansi_256,
     rgb_to_hex,
     rgb_to_hsl,
+    # Unicode width functions
+    char_width,
+    char_width_cjk,
+    str_width,
+    str_width_cjk,
+    is_east_asian_ambiguous,
 )
 
 # Optional streaming support (available when built with --features streaming)
@@ -73,8 +82,9 @@ except ImportError:
     encode_client_message = None
     decode_client_message = None
 
-__version__ = "0.23.0"
+__version__ = "0.25.0"
 __all__ = [
+    "AmbiguousWidth",
     "Attributes",
     "CursorStyle",
     "Graphic",
@@ -88,6 +98,8 @@ __all__ = [
     "ShellIntegration",
     "Terminal",
     "UnderlineStyle",
+    "UnicodeVersion",
+    "WidthConfig",
     # Color utility functions
     "adjust_contrast_rgb",
     "adjust_hue",
@@ -107,6 +119,12 @@ __all__ = [
     "rgb_to_ansi_256",
     "rgb_to_hex",
     "rgb_to_hsl",
+    # Unicode width functions
+    "char_width",
+    "char_width_cjk",
+    "str_width",
+    "str_width_cjk",
+    "is_east_asian_ambiguous",
 ]
 
 # Add streaming classes and functions if available

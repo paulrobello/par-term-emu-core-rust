@@ -384,6 +384,148 @@ pub fn py_rgb_to_ansi_256(rgb: (u8, u8, u8)) -> u8 {
     color.to_ansi_256()
 }
 
+// =========================================================================
+// Unicode Width Functions
+// =========================================================================
+
+/// Calculate the display width of a character.
+///
+/// This function calculates how many terminal cells a character occupies,
+/// taking into account the width configuration.
+///
+/// Args:
+///     c (str): A single character to measure
+///     config (WidthConfig, optional): Width configuration settings. Defaults to western settings.
+///
+/// Returns:
+///     int: The display width in cells (0, 1, or 2)
+///
+/// Example:
+///     >>> from par_term_emu_core_rust import char_width, WidthConfig
+///     >>> char_width("A")  # ASCII
+///     1
+///     >>> char_width("日")  # CJK
+///     2
+///     >>> char_width("α", WidthConfig.cjk())  # Greek with CJK config
+///     2
+#[pyfunction]
+#[pyo3(name = "char_width", signature = (c, config=None))]
+pub fn py_char_width(c: &str, config: Option<super::enums::PyWidthConfig>) -> usize {
+    let rust_config: crate::unicode_width_config::WidthConfig =
+        config.map(|c| c.into()).unwrap_or_default();
+    if let Some(ch) = c.chars().next() {
+        crate::unicode_width_config::char_width(ch, &rust_config)
+    } else {
+        0
+    }
+}
+
+/// Calculate the display width of a character with CJK ambiguous width.
+///
+/// This is a convenience function that uses AmbiguousWidth.Wide.
+/// Ambiguous characters (Greek, Cyrillic, some symbols) will be treated as 2 cells wide.
+///
+/// Args:
+///     c (str): A single character to measure
+///
+/// Returns:
+///     int: The display width in cells (0, 1, or 2)
+///
+/// Example:
+///     >>> from par_term_emu_core_rust import char_width_cjk
+///     >>> char_width_cjk("α")  # Greek letter
+///     2
+#[pyfunction]
+#[pyo3(name = "char_width_cjk")]
+pub fn py_char_width_cjk(c: &str) -> usize {
+    if let Some(ch) = c.chars().next() {
+        crate::unicode_width_config::char_width_cjk(ch)
+    } else {
+        0
+    }
+}
+
+/// Calculate the display width of a string.
+///
+/// This sums the widths of all characters in the string.
+///
+/// Args:
+///     s (str): The string to measure
+///     config (WidthConfig, optional): Width configuration settings. Defaults to western settings.
+///
+/// Returns:
+///     int: The total display width in cells
+///
+/// Example:
+///     >>> from par_term_emu_core_rust import str_width
+///     >>> str_width("Hello")
+///     5
+///     >>> str_width("Hello日本")
+///     9
+#[pyfunction]
+#[pyo3(name = "str_width", signature = (s, config=None))]
+pub fn py_str_width(s: &str, config: Option<super::enums::PyWidthConfig>) -> usize {
+    let rust_config: crate::unicode_width_config::WidthConfig =
+        config.map(|c| c.into()).unwrap_or_default();
+    crate::unicode_width_config::str_width(s, &rust_config)
+}
+
+/// Calculate the display width of a string with CJK ambiguous width.
+///
+/// This is a convenience function that uses AmbiguousWidth.Wide.
+/// Ambiguous characters (Greek, Cyrillic, some symbols) will be treated as 2 cells wide.
+///
+/// Args:
+///     s (str): The string to measure
+///
+/// Returns:
+///     int: The total display width in cells
+///
+/// Example:
+///     >>> from par_term_emu_core_rust import str_width_cjk
+///     >>> str_width_cjk("αβγ")  # Greek letters
+///     6
+#[pyfunction]
+#[pyo3(name = "str_width_cjk")]
+pub fn py_str_width_cjk(s: &str) -> usize {
+    crate::unicode_width_config::str_width_cjk(s)
+}
+
+/// Check if a character is East Asian Ambiguous.
+///
+/// East Asian Ambiguous characters are those that have uncertain width,
+/// displaying as either 1 or 2 cells depending on context.
+///
+/// This includes characters like:
+/// - Greek and Cyrillic letters
+/// - Some mathematical symbols
+/// - Some line-drawing characters
+/// - Various punctuation marks
+///
+/// Args:
+///     c (str): A single character to check
+///
+/// Returns:
+///     bool: True if the character is East Asian Ambiguous
+///
+/// Example:
+///     >>> from par_term_emu_core_rust import is_east_asian_ambiguous
+///     >>> is_east_asian_ambiguous("α")  # Greek letter
+///     True
+///     >>> is_east_asian_ambiguous("A")  # ASCII
+///     False
+///     >>> is_east_asian_ambiguous("日")  # CJK - wide, not ambiguous
+///     False
+#[pyfunction]
+#[pyo3(name = "is_east_asian_ambiguous")]
+pub fn py_is_east_asian_ambiguous(c: &str) -> bool {
+    if let Some(ch) = c.chars().next() {
+        crate::unicode_width_config::is_east_asian_ambiguous(ch)
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

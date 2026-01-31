@@ -1945,6 +1945,87 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Get the current Unicode width configuration
+    ///
+    /// Returns:
+    ///     WidthConfig: The current width configuration
+    fn width_config(&self) -> PyResult<super::enums::PyWidthConfig> {
+        let terminal = self.inner.terminal();
+        let config = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+            (*term.width_config()).into()
+        } else {
+            crate::unicode_width_config::WidthConfig::default().into()
+        };
+        Ok(config)
+    }
+
+    /// Set the Unicode width configuration
+    ///
+    /// This controls how character widths are calculated, particularly for:
+    /// - East Asian Ambiguous characters (Greek, Cyrillic, symbols)
+    /// - Unicode version-specific width tables
+    ///
+    /// Args:
+    ///     config: WidthConfig with unicode_version and ambiguous_width settings
+    fn set_width_config(&mut self, config: super::enums::PyWidthConfig) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+            term.set_width_config(config.into());
+        }
+        Ok(())
+    }
+
+    /// Set the treatment of East Asian Ambiguous width characters
+    ///
+    /// This is a convenience method to just change the ambiguous width setting
+    /// without modifying the Unicode version.
+    ///
+    /// Args:
+    ///     width: AmbiguousWidth.Narrow (1 cell) or AmbiguousWidth.Wide (2 cells)
+    fn set_ambiguous_width(&mut self, width: super::enums::PyAmbiguousWidth) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+            term.set_ambiguous_width(width.into());
+        }
+        Ok(())
+    }
+
+    /// Set the Unicode version for width calculation tables
+    ///
+    /// This is a convenience method to just change the Unicode version setting
+    /// without modifying the ambiguous width treatment.
+    ///
+    /// Args:
+    ///     version: UnicodeVersion enum value (e.g., UnicodeVersion.Auto)
+    fn set_unicode_version(&mut self, version: super::enums::PyUnicodeVersion) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+            term.set_unicode_version(version.into());
+        }
+        Ok(())
+    }
+
+    /// Calculate the display width of a character using the terminal's width config
+    ///
+    /// Args:
+    ///     c: A single character to measure
+    ///
+    /// Returns:
+    ///     int: The display width in cells (0, 1, or 2)
+    fn char_width(&self, c: &str) -> PyResult<usize> {
+        let terminal = self.inner.terminal();
+        let width = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+            if let Some(ch) = c.chars().next() {
+                term.char_width(ch)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        Ok(width)
+    }
+
     /// Check if insecure sequence filtering is enabled
     ///
     /// Returns:

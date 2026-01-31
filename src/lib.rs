@@ -76,10 +76,11 @@ use pyo3::prelude::*;
 #[cfg(feature = "python")]
 pub use python_bindings::{
     decode_client_message, decode_server_message, encode_client_message, encode_server_message,
-    py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_color_luminance,
-    py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb, py_hsl_to_rgb,
-    py_is_dark_color, py_lighten_rgb, py_meets_wcag_aa, py_meets_wcag_aaa, py_mix_colors,
-    py_perceived_brightness_rgb, py_rgb_to_ansi_256, py_rgb_to_hex, py_rgb_to_hsl, PyAttributes,
+    py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_char_width, py_char_width_cjk,
+    py_color_luminance, py_complementary_color, py_contrast_ratio, py_darken_rgb, py_hex_to_rgb,
+    py_hsl_to_rgb, py_is_dark_color, py_is_east_asian_ambiguous, py_lighten_rgb, py_meets_wcag_aa,
+    py_meets_wcag_aaa, py_mix_colors, py_perceived_brightness_rgb, py_rgb_to_ansi_256,
+    py_rgb_to_hex, py_rgb_to_hsl, py_str_width, py_str_width_cjk, PyAmbiguousWidth, PyAttributes,
     PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyClipboardHistoryEntry,
     PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
     PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
@@ -90,7 +91,8 @@ pub use python_bindings::{
     PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
     PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
     PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
-    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyWindowLayout,
+    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyUnicodeVersion,
+    PyWidthConfig, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -185,6 +187,9 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyStreamingConfig>()?;
     m.add_class::<PyProgressState>()?;
     m.add_class::<PyProgressBar>()?;
+    m.add_class::<PyUnicodeVersion>()?;
+    m.add_class::<PyAmbiguousWidth>()?;
+    m.add_class::<PyWidthConfig>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
@@ -205,6 +210,13 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_rgb_to_hex, m)?)?;
     m.add_function(wrap_pyfunction!(py_hex_to_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(py_rgb_to_ansi_256, m)?)?;
+
+    // Unicode width functions
+    m.add_function(wrap_pyfunction!(py_char_width, m)?)?;
+    m.add_function(wrap_pyfunction!(py_char_width_cjk, m)?)?;
+    m.add_function(wrap_pyfunction!(py_str_width, m)?)?;
+    m.add_function(wrap_pyfunction!(py_str_width_cjk, m)?)?;
+    m.add_function(wrap_pyfunction!(py_is_east_asian_ambiguous, m)?)?;
 
     // Binary protocol functions for streaming
     m.add_function(wrap_pyfunction!(encode_server_message, m)?)?;

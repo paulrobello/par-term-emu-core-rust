@@ -24,6 +24,7 @@ Comprehensive guide to advanced terminal emulation features in par-term-emu-core
 - [Underline Styles](#underline-styles)
 - [VT420 Rectangle Operations](#vt420-rectangle-operations)
 - [Unicode Support](#unicode-support)
+  - [Configurable Unicode Width](#configurable-unicode-width)
 - [Buffer Export](#buffer-export)
 - [Scrollback Reflow](#scrollback-reflow)
 - [Terminal Notifications](#terminal-notifications)
@@ -1493,6 +1494,66 @@ term.process_str("└─────────┘\n")
 # Colored emoji
 term.process_str("\x1b[31m❤️ 🔴 🌹\x1b[0m\n")
 ```
+
+### Configurable Unicode Width
+
+Control how character widths are calculated for proper terminal alignment:
+
+```python
+from par_term_emu_core_rust import (
+    Terminal, WidthConfig, UnicodeVersion, AmbiguousWidth,
+    char_width, str_width, is_east_asian_ambiguous
+)
+
+term = Terminal(80, 24)
+
+# Default: Western settings (ambiguous chars = 1 cell)
+print(term.char_width("α"))  # 1
+
+# CJK environment: ambiguous chars = 2 cells
+term.set_width_config(WidthConfig.cjk())
+print(term.char_width("α"))  # 2
+
+# Fine-grained control
+term.set_ambiguous_width(AmbiguousWidth.Wide)
+term.set_unicode_version(UnicodeVersion.Unicode15)
+
+# Get current config
+config = term.width_config()
+print(f"Version: {config.unicode_version}")
+print(f"Ambiguous: {config.ambiguous_width}")
+
+# Standalone width functions
+print(char_width("日"))                        # 2 - CJK
+print(char_width("α", WidthConfig.cjk()))     # 2 - Greek with CJK config
+print(str_width("Hello日本"))                  # 9 - mixed text
+print(is_east_asian_ambiguous("α"))            # True
+
+# Convenience functions for CJK
+from par_term_emu_core_rust import char_width_cjk, str_width_cjk
+print(char_width_cjk("α"))    # 2
+print(str_width_cjk("αβγ"))   # 6
+```
+
+**Width Configuration:**
+
+| Setting | Description |
+|---------|-------------|
+| `UnicodeVersion.Auto` | Use latest Unicode version (default) |
+| `UnicodeVersion.Unicode9` - `Unicode16` | Specific Unicode version width tables |
+| `AmbiguousWidth.Narrow` | Ambiguous characters = 1 cell (Western default) |
+| `AmbiguousWidth.Wide` | Ambiguous characters = 2 cells (CJK environments) |
+
+**East Asian Ambiguous Characters:**
+
+These characters have uncertain width depending on context:
+- Greek letters (α, β, γ, Ω)
+- Cyrillic letters (А, Б, В)
+- Mathematical symbols (∀, ∃, ∞)
+- Box-drawing characters (─, │, ┌, ┐)
+- Various punctuation and symbols
+
+Use `AmbiguousWidth.Wide` for CJK-centric applications where these should occupy 2 cells.
 
 ## Buffer Export
 

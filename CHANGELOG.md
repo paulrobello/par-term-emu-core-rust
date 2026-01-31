@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.25.0] - 2026-01-31
+
+### Added
+- **Configurable Unicode Width**: Full control over character width calculations for proper terminal alignment
+  - New `UnicodeVersion` enum (Unicode9 through Unicode16, plus Auto) for version-specific width tables
+  - New `AmbiguousWidth` enum (Narrow for Western, Wide for CJK) for East Asian Ambiguous characters
+  - New `WidthConfig` class combining both settings with convenience constructors `WidthConfig.cjk()` and `WidthConfig.western()`
+  - Terminal API: `width_config()`, `set_width_config()`, `set_ambiguous_width()`, `set_unicode_version()`, `char_width()`
+  - Standalone functions: `char_width()`, `str_width()`, `char_width_cjk()`, `str_width_cjk()`, `is_east_asian_ambiguous()`
+  - Python bindings for all new types and functions on both `Terminal` and `PtyTerminal`
+  - Enables proper alignment for CJK text, Greek/Cyrillic letters, mathematical symbols, and box-drawing characters
+
+## [0.24.0] - 2026-01-31
+
+### Added
+- **Configurable Unicode Width (Rust API)**: Add support for configuring the Unicode version used for character width calculations
+  - New `UnicodeVersion` enum (Unicode9 through Unicode16, plus Auto) for version-specific width tables
+  - New `AmbiguousWidth` enum (Narrow for Western, Wide for CJK) for East Asian Ambiguous characters
+  - New `WidthConfig` struct combining both settings
+  - Terminal API: `width_config()`, `set_width_config()`, `set_ambiguous_width()`, `set_unicode_version()`, `char_width()`
+  - Standalone functions: `char_width()`, `str_width()`, `char_width_cjk()`, `str_width_cjk()`, `is_east_asian_ambiguous()`
+
 ## [0.23.0] - 2026-01-31
 
 ### Added
@@ -709,6 +731,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.25.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.22.1...v0.23.0
 [0.22.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.22.0...v0.22.1
 [0.22.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.21.0...v0.22.0
 [0.21.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.20.1...v0.21.0

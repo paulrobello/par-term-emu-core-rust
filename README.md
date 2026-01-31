@@ -13,6 +13,43 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.25.0
+
+### 🌐 Configurable Unicode Width
+
+Full control over character width calculations for proper terminal alignment in CJK and mixed-script environments:
+
+```python
+from par_term_emu_core_rust import (
+    Terminal, WidthConfig, UnicodeVersion, AmbiguousWidth,
+    char_width, str_width, is_east_asian_ambiguous
+)
+
+# Configure terminal for CJK environment (Greek/Cyrillic = 2 cells)
+term = Terminal(80, 24)
+term.set_width_config(WidthConfig.cjk())
+
+# Or configure individually
+term.set_ambiguous_width(AmbiguousWidth.Wide)
+term.set_unicode_version(UnicodeVersion.Auto)
+
+# Standalone width functions
+print(char_width("日"))  # 2 - CJK character
+print(char_width("α", WidthConfig.cjk()))  # 2 - Greek with CJK config
+print(str_width("Hello日本"))  # 9 - mixed text
+print(is_east_asian_ambiguous("α"))  # True - Greek is ambiguous
+```
+
+**New Types:**
+- `UnicodeVersion`: Unicode9-Unicode16, Auto
+- `AmbiguousWidth`: Narrow (1 cell), Wide (2 cells)
+- `WidthConfig`: Combines both with `.cjk()` and `.western()` presets
+
+**New Functions:**
+- `char_width(c, config?)` / `str_width(s, config?)` - configurable width
+- `char_width_cjk(c)` / `str_width_cjk(s)` - CJK convenience functions
+- `is_east_asian_ambiguous(c)` - check if character is ambiguous
+
 ## What's New in 0.23.0
 
 ### 📨 Configurable ENQ Answerback
