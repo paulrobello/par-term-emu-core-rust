@@ -1370,6 +1370,12 @@ pub struct Terminal {
     macro_playback: Option<crate::macros::MacroPlayback>,
     /// Screenshot triggers from macro playback
     macro_screenshot_triggers: Vec<String>,
+
+    // === Answerback String (ENQ response) ===
+    /// Answerback string sent in response to ENQ (0x05) control character
+    /// Default: empty (no response) for security
+    /// Common values: "par-term", "vt100", or custom identification
+    answerback_string: Option<String>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1697,6 +1703,9 @@ impl Terminal {
             macro_library: HashMap::new(),
             macro_playback: None,
             macro_screenshot_triggers: Vec::new(),
+
+            // Answerback String (ENQ response) - disabled by default for security
+            answerback_string: None,
         }
     }
 
@@ -2202,6 +2211,27 @@ impl Terminal {
     /// When disabled (default), all standard sequences are processed normally.
     pub fn set_disable_insecure_sequences(&mut self, disable: bool) {
         self.disable_insecure_sequences = disable;
+    }
+
+    /// Get the answerback string sent in response to ENQ (0x05)
+    pub fn answerback_string(&self) -> Option<&str> {
+        self.answerback_string.as_deref()
+    }
+
+    /// Set the answerback string sent in response to ENQ (0x05) control character
+    ///
+    /// The answerback string is sent back to the PTY when the terminal receives
+    /// an ENQ (enquiry, ASCII 0x05) character. This was historically used for
+    /// terminal identification in multi-terminal environments.
+    ///
+    /// # Security Note
+    /// Default is None (disabled) for security. Setting this may expose
+    /// terminal identification information to applications.
+    ///
+    /// # Arguments
+    /// * `answerback` - The string to send, or None to disable
+    pub fn set_answerback_string(&mut self, answerback: Option<String>) {
+        self.answerback_string = answerback;
     }
 
     /// Get pending notifications (OSC 9 / OSC 777)
@@ -6234,6 +6264,13 @@ impl Perform for Terminal {
             b'\r' => self.write_char('\r'),
             b'\t' => self.write_char('\t'),
             b'\x08' => self.write_char('\x08'),
+            b'\x05' => {
+                // ENQ (Enquiry) - send answerback string if configured
+                if let Some(ref answerback) = self.answerback_string {
+                    self.response_buffer
+                        .extend_from_slice(answerback.as_bytes());
+                }
+            }
             b'\x07' => {
                 // Bell - increment counter for visual bell support
                 self.bell_count = self.bell_count.wrapping_add(1);
