@@ -2624,6 +2624,65 @@ impl PyPtyTerminal {
         }
     }
 
+    /// Record output data
+    ///
+    /// Args:
+    ///     data: Output data bytes
+    fn record_output(&self, data: &[u8]) -> PyResult<()> {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            term.record_output(data);
+        }
+        Ok(())
+    }
+
+    /// Record input data
+    ///
+    /// Args:
+    ///     data: Input data bytes
+    fn record_input(&self, data: &[u8]) -> PyResult<()> {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            term.record_input(data);
+        }
+        Ok(())
+    }
+
+    /// Record terminal resize
+    ///
+    /// Args:
+    ///     cols: Number of columns
+    ///     rows: Number of rows
+    fn record_resize(&self, cols: usize, rows: usize) -> PyResult<()> {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            term.record_resize(cols, rows);
+        }
+        Ok(())
+    }
+
+    /// Add a marker/bookmark to the recording
+    ///
+    /// Args:
+    ///     label: Marker label
+    fn record_marker(&self, label: String) -> PyResult<()> {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            term.record_marker(label);
+        }
+        Ok(())
+    }
+
+    /// Get current recording session
+    ///
+    /// Returns:
+    ///     RecordingSession object if recording is active, None otherwise
+    fn get_recording_session(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            Ok(term
+                .get_recording_session()
+                .map(super::types::PyRecordingSession::from))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Export recording to asciicast v2 format
     ///
     /// Args:

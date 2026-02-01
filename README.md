@@ -13,6 +13,43 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.26.0
+
+### 🎬 Session Recording Enhancements
+
+Full Python API for session recording with event iteration and environment capture:
+
+```python
+from par_term_emu_core_rust import Terminal, RecordingEvent, RecordingSession
+
+term = Terminal(80, 24)
+
+# Start recording
+term.start_recording("demo session")
+term.process_str("echo hello\n")
+term.record_marker("checkpoint")
+session = term.stop_recording()
+
+# Access session metadata
+print(f"Duration: {session.get_duration_seconds()}s")
+print(f"Size: {session.get_size()}")
+print(f"Environment: {session.env}")
+
+# Iterate over recorded events
+for event in session.events:
+    print(f"{event.event_type} at {event.timestamp}ms: {event.get_data_str()}")
+```
+
+**New Exports:**
+- `RecordingEvent` and `RecordingSession` now directly importable from the module
+
+**New RecordingSession Properties:**
+- `session.events` - List of RecordingEvent objects
+- `session.env` - Dict of captured environment variables
+
+**New PtyTerminal Methods:**
+- `record_output()`, `record_input()`, `record_resize()`, `record_marker()`, `get_recording_session()`
+
 ## What's New in 0.25.0
 
 ### 🌐 Configurable Unicode Width

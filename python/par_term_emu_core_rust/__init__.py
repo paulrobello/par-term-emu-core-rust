@@ -28,6 +28,8 @@ from ._native import (
     ProgressBar,
     ProgressState,
     PtyTerminal,
+    RecordingEvent,
+    RecordingSession,
     ScreenSnapshot,
     ShellIntegration,
     Terminal,
@@ -82,7 +84,7 @@ except ImportError:
     encode_client_message = None
     decode_client_message = None
 
-__version__ = "0.25.0"
+__version__ = "0.26.0"
 __all__ = [
     "AmbiguousWidth",
     "Attributes",
@@ -94,6 +96,8 @@ __all__ = [
     "ProgressBar",
     "ProgressState",
     "PtyTerminal",
+    "RecordingEvent",
+    "RecordingSession",
     "ScreenSnapshot",
     "ShellIntegration",
     "Terminal",

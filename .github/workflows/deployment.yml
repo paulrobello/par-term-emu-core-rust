@@ -18,6 +18,48 @@ permissions:
   id-token: write
 
 jobs:
+  # Version sanity check - runs before all builds
+  version-check:
+    name: Verify Version Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check version consistency
+        id: check
+        run: |
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          PYTHON_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          INIT_VERSION=$(grep '^__version__' python/par_term_emu_core_rust/__init__.py | sed 's/__version__ = "\(.*\)"/\1/')
+
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "pyproject.toml version: $PYTHON_VERSION"
+          echo "__init__.py version: $INIT_VERSION"
+
+          ERRORS=""
+
+          if [ "$CARGO_VERSION" != "$PYTHON_VERSION" ]; then
+            ERRORS="${ERRORS}ERROR: Version mismatch between Cargo.toml ($CARGO_VERSION) and pyproject.toml ($PYTHON_VERSION)\n"
+          fi
+
+          if [ "$CARGO_VERSION" != "$INIT_VERSION" ]; then
+            ERRORS="${ERRORS}ERROR: Version mismatch between Cargo.toml ($CARGO_VERSION) and __init__.py ($INIT_VERSION)\n"
+          fi
+
+          if [ -n "$ERRORS" ]; then
+            echo -e "$ERRORS"
+            exit 1
+          fi
+
+          echo "✅ All versions match: $CARGO_VERSION"
+          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+
   # Publish to crates.io (after GitHub release)
   publish-crates:
     name: Publish to crates.io
@@ -71,6 +113,7 @@ jobs:
     name: Build streaming binary - ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
+    needs: [version-check]
     strategy:
       fail-fast: false
       matrix:
@@ -151,6 +194,7 @@ jobs:
     name: Linux ${{ matrix.target }} - Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: [version-check]
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -210,6 +254,7 @@ jobs:
     name: macOS - Python ${{ matrix.python-version }}
     runs-on: macos-latest
     timeout-minutes: 15
+    needs: [version-check]
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -257,6 +302,7 @@ jobs:
     name: Windows - Python ${{ matrix.python-version }}
     runs-on: windows-latest
     timeout-minutes: 15
+    needs: [version-check]
     strategy:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
@@ -305,6 +351,7 @@ jobs:
     name: Build source distribution
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [version-check]
     steps:
       - uses: actions/checkout@v4
 
@@ -325,6 +372,7 @@ jobs:
     name: Package web terminal frontend
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    needs: [version-check]
     steps:
       - uses: actions/checkout@v4
 

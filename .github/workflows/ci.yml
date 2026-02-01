@@ -7,10 +7,49 @@ permissions:
   contents: read
 
 jobs:
+  # Version sanity check - runs before all builds
+  version-check:
+    name: Verify Version Consistency
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Check version consistency
+        run: |
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps | jq -r '.packages[0].version')
+          PYTHON_VERSION=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          INIT_VERSION=$(grep '^__version__' python/par_term_emu_core_rust/__init__.py | sed 's/__version__ = "\(.*\)"/\1/')
+
+          echo "Cargo.toml version: $CARGO_VERSION"
+          echo "pyproject.toml version: $PYTHON_VERSION"
+          echo "__init__.py version: $INIT_VERSION"
+
+          ERRORS=""
+
+          if [ "$CARGO_VERSION" != "$PYTHON_VERSION" ]; then
+            ERRORS="${ERRORS}ERROR: Version mismatch between Cargo.toml ($CARGO_VERSION) and pyproject.toml ($PYTHON_VERSION)\n"
+          fi
+
+          if [ "$CARGO_VERSION" != "$INIT_VERSION" ]; then
+            ERRORS="${ERRORS}ERROR: Version mismatch between Cargo.toml ($CARGO_VERSION) and __init__.py ($INIT_VERSION)\n"
+          fi
+
+          if [ -n "$ERRORS" ]; then
+            echo -e "$ERRORS"
+            exit 1
+          fi
+
+          echo "✅ All versions match: $CARGO_VERSION"
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    needs: [version-check]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -65,7 +104,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
+    needs: [version-check]
     steps:
     - uses: actions/checkout@v4
 
@@ -106,6 +145,7 @@ jobs:
     name: Build wheels
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    needs: [version-check]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]

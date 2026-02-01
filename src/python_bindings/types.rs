@@ -2694,6 +2694,22 @@ impl PyRecordingSession {
     fn event_count(&self) -> usize {
         self.inner.events.len()
     }
+
+    /// Get all recorded events
+    #[getter]
+    fn events(&self) -> Vec<PyRecordingEvent> {
+        self.inner
+            .events
+            .iter()
+            .map(PyRecordingEvent::from)
+            .collect()
+    }
+
+    /// Get captured environment variables
+    #[getter]
+    fn env(&self) -> std::collections::HashMap<String, String> {
+        self.inner.env.clone()
+    }
 }
 
 impl From<&crate::terminal::RecordingSession> for PyRecordingSession {

@@ -216,6 +216,24 @@ session.duration         # Total duration in milliseconds
 session.start_time       # Unix timestamp (ms)
 session.initial_size     # Terminal size (cols, rows) when recording started
 session.title            # Optional recording title/name
+session.events           # List of RecordingEvent objects
+session.env              # Dict of environment variables captured at recording start
+
+# Helper methods
+session.get_size()              # Returns (cols, rows) tuple
+session.get_duration_seconds()  # Returns duration in seconds as float
+```
+
+**RecordingEvent Object:**
+```python
+# event properties
+event.timestamp   # Milliseconds since recording start
+event.event_type  # "Input", "Output", "Resize", or "Marker"
+event.data        # Raw bytes of the event data
+event.metadata    # Optional (cols, rows) for resize events
+
+# Helper methods
+event.get_data_str()  # Returns data as string (UTF-8 decoded)
 ```
 
 ### Rust Recording API

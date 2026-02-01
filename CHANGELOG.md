@@ -5,6 +5,41 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.26.0] - 2026-02-01
+
+### Added
+- **Session Recording Python Exports**: `RecordingEvent` and `RecordingSession` classes now exported from Python module
+  - Import directly: `from par_term_emu_core_rust import RecordingEvent, RecordingSession`
+  - Previously these types were registered but not exported in `__init__.py`
+
+- **RecordingSession Enhanced API**: New properties to access recorded events and environment
+  - `session.events` - List of `RecordingEvent` objects for iterating over recorded events
+  - `session.env` - Dict of environment variables captured at recording start (TERM, COLS, ROWS, etc.)
+  - Helper methods: `get_size()` returns (cols, rows), `get_duration_seconds()` returns float
+
+- **RecordingEvent Properties**: Full access to event data
+  - `event.timestamp` - Milliseconds since recording start
+  - `event.event_type` - "Input", "Output", "Resize", or "Marker"
+  - `event.data` - Raw bytes of the event
+  - `event.metadata` - Optional (cols, rows) for resize events
+  - `event.get_data_str()` - Helper to decode data as UTF-8 string
+
+- **PtyTerminal Recording Methods**: Added missing recording methods to match Terminal API
+  - `record_output(data)` - Record output data bytes
+  - `record_input(data)` - Record input data bytes
+  - `record_resize(cols, rows)` - Record terminal resize event
+  - `record_marker(label)` - Add marker/bookmark to recording
+  - `get_recording_session()` - Get current active recording session
+
+### Changed
+- **GitHub Workflows**: Added version consistency check that runs before all build jobs
+  - Validates Cargo.toml, pyproject.toml, and __init__.py versions match
+  - Fails fast before expensive builds if versions are out of sync
+  - Added to both CI and deployment workflows
+
+### Documentation
+- Updated `docs/MACROS.md` with complete `RecordingSession` and `RecordingEvent` API documentation
+
 ## [0.25.0] - 2026-01-31
 
 ### Added
