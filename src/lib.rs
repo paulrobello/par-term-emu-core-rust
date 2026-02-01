@@ -67,6 +67,11 @@ pub use unicode_width_config::{
     UnicodeVersion, WidthConfig,
 };
 
+// Re-export recording types for session logging/recording
+pub use terminal::{
+    RecordingEvent, RecordingEventType, RecordingExportFormat, RecordingFormat, RecordingSession,
+};
+
 #[cfg(feature = "python")]
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
 #[cfg(feature = "python")]
