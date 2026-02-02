@@ -72,3 +72,21 @@ make checkall    # All quality checks (run before commits)
 - when bumping project version make sure CHANGELOG.md is updated
 - be sure to note breaking changes in changelog and readme whats new sections
 - always run `make web-build-static` after updating the web terminal frontend
+
+### Version and Python Binding Sync (CRITICAL)
+
+**Version Sync**: When bumping version, update ALL of these files to the same version:
+- `Cargo.toml` (line 3: `version = "X.Y.Z"`)
+- `pyproject.toml` (line 9: `version = "X.Y.Z"`)
+
+**Python Binding Sync**: When adding/modifying Rust methods on `Terminal` or `PtySession`:
+1. **Add Python binding** in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`
+2. **Add docstrings** with Args, Returns, and Example sections (Google style)
+3. **Update API docs** in `docs/API_REFERENCE.md`
+4. **Update README.md** if it's a user-facing feature
+5. **Add Python tests** in `tests/` if the feature is testable from Python
+
+Files that must stay in sync:
+- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal.rs`)
+- Rust impl (`src/pty_session.rs`) ↔ Python binding (`src/python_bindings/pty.rs`)
+- Python binding ↔ API Reference (`docs/API_REFERENCE.md`)

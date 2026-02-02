@@ -13,6 +13,41 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.27.0
+
+### 🔄 Tmux Control Mode Auto-Detection
+
+Automatic detection and switching to tmux control mode to handle race conditions:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Enable auto-detection before starting tmux
+# Parser will automatically switch to control mode when %begin is seen
+term.set_tmux_auto_detect(True)
+
+# Or just call set_tmux_control_mode(True) which enables auto-detect automatically
+term.set_tmux_control_mode(True)
+
+# Process tmux output - auto-detects %begin and switches modes
+term.process_str("$ tmux -CC\n%begin 1234567890 1\n%output %1 Hello\n")
+
+# Check modes
+print(f"Control mode: {term.is_tmux_control_mode()}")
+print(f"Auto-detect: {term.is_tmux_auto_detect()}")
+```
+
+**New Methods:**
+- `set_tmux_auto_detect(enabled)` - Enable/disable auto-detection of tmux control mode
+- `is_tmux_auto_detect()` - Check if auto-detection is enabled
+
+**Behavior:**
+- When `%begin` notification is detected, parser automatically switches to control mode
+- Data before `%begin` is returned as `TerminalOutput` notification for normal display
+- Calling `set_tmux_control_mode(True)` now also enables auto-detect
+
 ## What's New in 0.26.0
 
 ### 🎬 Session Recording Enhancements

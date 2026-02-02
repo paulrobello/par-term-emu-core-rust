@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Handles race conditions where tmux output arrives before `set_tmux_control_mode(True)` is called
   - When `set_tmux_control_mode(True)` is called, auto-detect is automatically enabled
   - Data before `%begin` is returned as `TerminalOutput` notification, allowing normal terminal display
-  - Python bindings for both `Terminal` and `PtyTerminal` classes
+  - Python bindings for `Terminal` class (PtyTerminal accesses via `terminal()` method)
   - Comprehensive Rust tests for auto-detection scenarios
 
 ### Changed
