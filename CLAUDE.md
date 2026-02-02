@@ -78,6 +78,7 @@ make checkall    # All quality checks (run before commits)
 **Version Sync**: When bumping version, update ALL of these files to the same version:
 - `Cargo.toml` (line 3: `version = "X.Y.Z"`)
 - `pyproject.toml` (line 9: `version = "X.Y.Z"`)
+- `python/par_term_emu_core_rust/__init__.py` (line 87: `__version__ = "X.Y.Z"`)
 
 **Python Binding Sync**: When adding/modifying Rust methods on `Terminal` or `PtySession`:
 1. **Add Python binding** in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`
