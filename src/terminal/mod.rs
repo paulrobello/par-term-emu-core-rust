@@ -2770,8 +2770,12 @@ impl Terminal {
         debug::log_vt_input(data);
         self.update_activity();
 
-        // If tmux control mode is enabled, parse data through tmux control parser
-        if self.tmux_parser.is_control_mode() {
+        // If tmux control mode is enabled OR auto-detect is enabled,
+        // parse data through tmux control parser.
+        // The parser handles auto-detection of %begin and will switch
+        // to control mode automatically, returning TerminalOutput for
+        // any data that should be displayed normally.
+        if self.tmux_parser.is_control_mode() || self.tmux_parser.is_auto_detect() {
             let notifications = self.tmux_parser.parse(data);
             for notification in notifications {
                 match notification {
@@ -3522,6 +3526,10 @@ impl Terminal {
     ///
     /// When enabled, incoming data is parsed for tmux control protocol messages
     /// instead of being processed as raw terminal output.
+    ///
+    /// Note: Enabling control mode also enables auto-detection, which helps
+    /// handle race conditions where tmux output arrives before this method
+    /// is called.
     pub fn set_tmux_control_mode(&mut self, enabled: bool) {
         self.tmux_parser.set_control_mode(enabled);
     }
@@ -3529,6 +3537,23 @@ impl Terminal {
     /// Check if tmux control mode is enabled
     pub fn is_tmux_control_mode(&self) -> bool {
         self.tmux_parser.is_control_mode()
+    }
+
+    /// Enable or disable tmux control mode auto-detection
+    ///
+    /// When enabled, the parser will automatically switch to control mode
+    /// when it sees a `%begin` notification from tmux. This helps handle
+    /// race conditions where `set_tmux_control_mode(true)` is called after
+    /// tmux has already started outputting control protocol.
+    ///
+    /// This is automatically enabled when `set_tmux_control_mode(true)` is called.
+    pub fn set_tmux_auto_detect(&mut self, enabled: bool) {
+        self.tmux_parser.set_auto_detect(enabled);
+    }
+
+    /// Check if tmux control mode auto-detection is enabled
+    pub fn is_tmux_auto_detect(&self) -> bool {
+        self.tmux_parser.is_auto_detect()
     }
 
     /// Get tmux control protocol notifications

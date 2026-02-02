@@ -3277,3 +3277,138 @@ fn test_export_json() {
     assert!(json.contains("{"));
     assert!(json.contains("events") || json.contains("test"));
 }
+
+// =====================================================================
+// Tmux Control Mode Tests
+// =====================================================================
+
+#[test]
+fn test_tmux_control_mode_basic() {
+    let mut term = Terminal::new(80, 24);
+    assert!(!term.is_tmux_control_mode());
+
+    term.set_tmux_control_mode(true);
+    assert!(term.is_tmux_control_mode());
+
+    term.set_tmux_control_mode(false);
+    assert!(!term.is_tmux_control_mode());
+}
+
+#[test]
+fn test_tmux_control_mode_suppresses_raw_protocol() {
+    use crate::tmux_control::TmuxNotification;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_tmux_control_mode(true);
+
+    // Send tmux control protocol data
+    term.process(b"%begin 1234567890 1\n");
+    term.process(b"%output %1 Hello World\n");
+    term.process(b"%end 1234567890 1\n");
+
+    // The terminal should NOT display the raw protocol
+    let content = term.content();
+    assert!(
+        !content.contains("%begin"),
+        "Raw %begin should not be displayed"
+    );
+    assert!(
+        !content.contains("%output"),
+        "Raw %output should not be displayed"
+    );
+    assert!(
+        !content.contains("%end"),
+        "Raw %end should not be displayed"
+    );
+
+    // But notifications should be generated
+    let notifications = term.drain_tmux_notifications();
+    assert!(notifications.len() >= 2, "Should have at least Begin and Output notifications");
+
+    // Find and verify the Output notification
+    let output_notif = notifications
+        .iter()
+        .find(|n| matches!(n, TmuxNotification::Output { .. }));
+    assert!(output_notif.is_some(), "Should have Output notification");
+
+    if let Some(TmuxNotification::Output { pane_id, data }) = output_notif {
+        assert_eq!(pane_id, "%1");
+        assert_eq!(data, b"Hello World");
+    }
+}
+
+#[test]
+fn test_tmux_auto_detect_enabled_with_control_mode() {
+    let mut term = Terminal::new(80, 24);
+    assert!(!term.is_tmux_auto_detect());
+
+    // Enabling control mode should also enable auto-detect
+    term.set_tmux_control_mode(true);
+    assert!(term.is_tmux_auto_detect());
+}
+
+#[test]
+fn test_tmux_auto_detect_handles_race_condition() {
+    use crate::tmux_control::TmuxNotification;
+
+    let mut term = Terminal::new(80, 24);
+
+    // Enable auto-detect (simulating: user called set_tmux_control_mode(true)
+    // but control_mode flag hasn't been checked yet due to race)
+    term.set_tmux_auto_detect(true);
+    // Note: control_mode is still false here
+
+    // Data arrives with shell prompt followed by tmux protocol
+    term.process(b"$ tmux -CC\n%begin 1234567890 1\n%output %1 Test\n");
+
+    // The shell prompt should be displayed
+    let content = term.content();
+    assert!(
+        content.contains("$ tmux -CC"),
+        "Shell prompt should be displayed"
+    );
+
+    // But tmux protocol should NOT be displayed
+    assert!(
+        !content.contains("%begin"),
+        "Raw %begin should not be displayed"
+    );
+    assert!(
+        !content.contains("%output"),
+        "Raw %output should not be displayed"
+    );
+
+    // Control mode should have auto-enabled
+    assert!(
+        term.is_tmux_control_mode(),
+        "Control mode should be auto-enabled"
+    );
+
+    // Notifications should be generated
+    let notifications = term.drain_tmux_notifications();
+    assert!(!notifications.is_empty(), "Should have notifications");
+
+    // Verify we got the Output notification
+    let has_output = notifications
+        .iter()
+        .any(|n| matches!(n, TmuxNotification::Output { .. }));
+    assert!(has_output, "Should have Output notification");
+}
+
+#[test]
+fn test_tmux_terminal_output_still_displayed() {
+    let mut term = Terminal::new(80, 24);
+    term.set_tmux_control_mode(true);
+
+    // In control mode, non-% lines should still be displayed
+    // (this is for edge cases where regular output appears in control mode)
+    term.process(b"regular terminal output\n");
+
+    // Note: In strict control mode, this might be treated differently,
+    // but currently non-% lines in control mode are passed through as TerminalOutput
+    let content = term.content();
+    assert!(
+        content.contains("regular terminal output"),
+        "Non-protocol lines should be displayed as terminal output"
+    );
+}

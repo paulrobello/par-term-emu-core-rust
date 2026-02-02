@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.27.0] - 2026-02-01
+
+### Added
+- **Tmux Control Mode Auto-Detection**: Automatic detection and switching to tmux control mode
+  - New `set_tmux_auto_detect(enabled)` method to enable/disable auto-detection
+  - New `is_tmux_auto_detect()` method to check if auto-detection is enabled
+  - Parser automatically switches to control mode when `%begin` notification is detected
+  - Handles race conditions where tmux output arrives before `set_tmux_control_mode(True)` is called
+  - When `set_tmux_control_mode(True)` is called, auto-detect is automatically enabled
+  - Data before `%begin` is returned as `TerminalOutput` notification, allowing normal terminal display
+  - Python bindings for both `Terminal` and `PtyTerminal` classes
+  - Comprehensive Rust tests for auto-detection scenarios
+
+### Changed
+- `set_tmux_control_mode(true)` now also enables auto-detection for better race condition handling
+
 ## [0.26.0] - 2026-02-01
 
 ### Added

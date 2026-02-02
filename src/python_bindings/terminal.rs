@@ -2221,6 +2221,39 @@ impl PyTerminal {
         Ok(self.inner.is_tmux_control_mode())
     }
 
+    /// Enable or disable tmux control mode auto-detection
+    ///
+    /// When enabled, the parser will automatically switch to control mode
+    /// when it sees a `%begin` notification from tmux. This helps handle
+    /// race conditions where `set_tmux_control_mode(True)` is called after
+    /// tmux has already started outputting control protocol.
+    ///
+    /// Note: Auto-detection is automatically enabled when
+    /// `set_tmux_control_mode(True)` is called.
+    ///
+    /// Args:
+    ///     enabled: True to enable auto-detection, False to disable
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     # Enable auto-detection before starting tmux
+    ///     term.set_tmux_auto_detect(True)
+    ///     # Terminal will automatically switch to control mode when %begin is seen
+    ///     ```
+    fn set_tmux_auto_detect(&mut self, enabled: bool) -> PyResult<()> {
+        self.inner.set_tmux_auto_detect(enabled);
+        Ok(())
+    }
+
+    /// Check if tmux control mode auto-detection is enabled
+    ///
+    /// Returns:
+    ///     True if auto-detection is enabled, False otherwise
+    fn is_tmux_auto_detect(&self) -> PyResult<bool> {
+        Ok(self.inner.is_tmux_auto_detect())
+    }
+
     /// Get tmux control protocol notifications
     ///
     /// Returns a list of all pending tmux control protocol notifications.

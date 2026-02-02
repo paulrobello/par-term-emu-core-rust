@@ -463,8 +463,10 @@ Performance measurement and optimization tools:
 
 Terminal multiplexer integration:
 
-- `set_tmux_control_mode(enabled: bool)`: Enable/disable tmux control mode parsing
+- `set_tmux_control_mode(enabled: bool)`: Enable/disable tmux control mode parsing (also enables auto-detect)
 - `is_tmux_control_mode() -> bool`: Check if tmux control mode is active
+- `set_tmux_auto_detect(enabled: bool)`: Enable/disable auto-detection of tmux control mode (auto-switches when `%begin` is seen)
+- `is_tmux_auto_detect() -> bool`: Check if auto-detection is enabled
 - `drain_tmux_notifications() -> list[TmuxNotification]`: Get and clear tmux notifications
 - `get_tmux_notifications() -> list[TmuxNotification]`: Get tmux notifications without clearing
 - `has_tmux_notifications() -> bool`: Check if tmux notifications are pending
