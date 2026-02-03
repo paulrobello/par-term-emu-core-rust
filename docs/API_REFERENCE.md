@@ -140,6 +140,25 @@ Create a new terminal with specified dimensions.
 - `reset()`: Reset terminal to default state
 - `title() -> str`: Get terminal title
 
+#### Badge Format (OSC 1337 SetBadgeFormat)
+- `badge_format() -> str | None`: Get current badge format template
+- `set_badge_format(format: str | None)`: Set badge format template with `\(variable)` placeholders
+- `clear_badge_format()`: Clear badge format
+- `evaluate_badge() -> str | None`: Evaluate badge format with session variables
+- `get_badge_session_variable(name: str) -> str | None`: Get a session variable by name
+- `set_badge_session_variable(name: str, value: str)`: Set a custom session variable
+- `get_badge_session_variables() -> dict[str, str]`: Get all session variables
+
+**Built-in Variables:** `hostname`, `username`, `path`, `job`, `last_command`, `profile_name`, `tty`, `columns`, `rows`, `bell_count`, `selection`, `tmux_pane_title`, `session_name`, `title`
+
+**Example:**
+```python
+term.set_badge_format(r"\(username)@\(hostname)")
+term.set_badge_session_variable("username", "alice")
+term.set_badge_session_variable("hostname", "server1")
+badge = term.evaluate_badge()  # "alice@server1"
+```
+
 #### Cursor Control
 - `cursor_position() -> tuple[int, int]`: Get cursor position (col, row)
 - `cursor_visible() -> bool`: Check if cursor is visible

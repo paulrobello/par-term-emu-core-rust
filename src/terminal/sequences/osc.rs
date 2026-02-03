@@ -458,10 +458,15 @@ impl Terminal {
                                 Some('D') => {
                                     self.shell_integration
                                         .set_marker(ShellIntegrationMarker::CommandFinished);
-                                    // Extract exit code if present
-                                    if let Some(code_str) = marker.split(';').nth(1) {
-                                        if let Ok(code) = code_str.parse::<i32>() {
-                                            self.shell_integration.set_exit_code(code);
+
+                                    // Extract exit code from third OSC parameter when present:
+                                    // OSC 133 ; D ; <exit_code> ST
+                                    let exit_param = params.get(2).or_else(|| params.get(1));
+                                    if let Some(code_bytes) = exit_param {
+                                        if let Ok(code_str) = std::str::from_utf8(code_bytes) {
+                                            if let Ok(code) = code_str.parse::<i32>() {
+                                                self.shell_integration.set_exit_code(code);
+                                            }
                                         }
                                     }
                                 }
@@ -471,8 +476,9 @@ impl Terminal {
                     }
                 }
                 "1337" => {
-                    // iTerm2 inline images (OSC 1337)
-                    // Format: OSC 1337 ; File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST
+                    // iTerm2 OSC 1337 - multiple features
+                    // - File=...: Inline images
+                    // - SetBadgeFormat=<base64>: Badge format
                     // VTE splits on ; so we need to join params[1..] back together
                     if params.len() >= 2 {
                         // Join all remaining params with semicolons (VTE split them)
@@ -483,7 +489,14 @@ impl Terminal {
                             }
                         }
                         let data = data_parts.join(";");
-                        self.handle_iterm_image(&data);
+
+                        // Check for SetBadgeFormat
+                        if let Some(encoded) = data.strip_prefix("SetBadgeFormat=") {
+                            self.handle_set_badge_format(encoded);
+                        } else {
+                            // Default to inline image handling
+                            self.handle_iterm_image(&data);
+                        }
                     }
                 }
                 _ => {}
@@ -539,6 +552,47 @@ impl Terminal {
                 progress
             ),
         );
+    }
+
+    /// Handle OSC 1337 SetBadgeFormat sequence
+    ///
+    /// Format: OSC 1337 ; SetBadgeFormat=<base64-encoded-format> ST
+    ///
+    /// The format string can contain `\(variable)` placeholders that will be
+    /// evaluated against session variables. For example:
+    /// - `\(username)@\(hostname)`
+    /// - `\(session.path)`
+    ///
+    /// An empty encoded value clears the badge format.
+    fn handle_set_badge_format(&mut self, encoded: &str) {
+        let encoded = encoded.trim();
+
+        // Empty value clears the badge
+        if encoded.is_empty() {
+            self.badge_format = None;
+            debug::log(debug::DebugLevel::Debug, "OSC1337", "Cleared badge format");
+            return;
+        }
+
+        // Decode and validate the badge format
+        match crate::badge::decode_badge_format(encoded) {
+            Ok(format) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC1337",
+                    &format!("Set badge format: {:?}", format),
+                );
+                self.badge_format = Some(format);
+            }
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC1337",
+                    &format!("Invalid badge format: {}", e),
+                );
+                // Invalid formats are silently ignored (security)
+            }
+        }
     }
 }
 
@@ -993,6 +1047,190 @@ mod tests {
         assert_eq!(
             ProgressBar::error(100).to_escape_sequence(),
             "\x1b]9;4;4;100\x1b\\"
+        );
+    }
+
+    // === OSC 1337 SetBadgeFormat Tests ===
+
+    #[test]
+    fn test_set_badge_format_simple() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Simple text badge
+        let encoded = STANDARD.encode("Production");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        assert_eq!(term.badge_format(), Some("Production"));
+    }
+
+    #[test]
+    fn test_set_badge_format_with_variables() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Badge with variable interpolation
+        let encoded = STANDARD.encode(r"\(username)@\(hostname)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        assert_eq!(term.badge_format(), Some(r"\(username)@\(hostname)"));
+    }
+
+    #[test]
+    fn test_set_badge_format_with_session_prefix() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Badge with session.variable syntax
+        let encoded = STANDARD.encode(r"\(session.path)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        assert_eq!(term.badge_format(), Some(r"\(session.path)"));
+    }
+
+    #[test]
+    fn test_clear_badge_format() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Set a badge
+        let encoded = STANDARD.encode("Test Badge");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+        assert!(term.badge_format().is_some());
+
+        // Clear badge with empty value
+        term.process(b"\x1b]1337;SetBadgeFormat=\x1b\\");
+        assert!(term.badge_format().is_none());
+    }
+
+    #[test]
+    fn test_set_badge_format_rejects_unsafe() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Try to set a badge with shell command injection
+        let encoded = STANDARD.encode("$(whoami)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        // Should be rejected (badge should remain None)
+        assert!(term.badge_format().is_none());
+    }
+
+    #[test]
+    fn test_set_badge_format_rejects_escape_sequences() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Try to set a badge with escape sequences
+        let encoded = STANDARD.encode("\x1b[31mred\x1b[0m");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        // Should be rejected
+        assert!(term.badge_format().is_none());
+    }
+
+    #[test]
+    fn test_evaluate_badge() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Set badge format
+        let encoded = STANDARD.encode(r"\(username)@\(hostname)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        // Set session variables
+        term.session_variables_mut().set_username("alice");
+        term.session_variables_mut().set_hostname("server1");
+
+        // Evaluate badge
+        let result = term.evaluate_badge();
+        assert_eq!(result, Some("alice@server1".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_badge_with_dimensions() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(120, 40);
+
+        // Set badge format with dimensions
+        let encoded = STANDARD.encode(r"\(columns)x\(rows)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        // Dimensions should be available from session variables
+        let result = term.evaluate_badge();
+        assert_eq!(result, Some("120x40".to_string()));
+    }
+
+    #[test]
+    fn test_badge_dimensions_update_on_resize() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Set badge format with dimensions
+        let encoded = STANDARD.encode(r"\(columns)x\(rows)");
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x1b\\", encoded);
+        term.process(sequence.as_bytes());
+
+        // Initial evaluation
+        assert_eq!(term.evaluate_badge(), Some("80x24".to_string()));
+
+        // Resize terminal
+        term.resize(120, 40);
+
+        // Dimensions should update
+        assert_eq!(term.evaluate_badge(), Some("120x40".to_string()));
+    }
+
+    #[test]
+    fn test_evaluate_badge_none() {
+        let term = Terminal::new(80, 24);
+
+        // No badge format set
+        assert!(term.evaluate_badge().is_none());
+    }
+
+    #[test]
+    fn test_session_variables_sync_with_title() {
+        let mut term = Terminal::new(80, 24);
+
+        // Set title
+        term.set_title("My Terminal".to_string());
+
+        // Session variables should have the title
+        assert_eq!(
+            term.session_variables().get("title"),
+            Some("My Terminal".to_string())
+        );
+    }
+
+    #[test]
+    fn test_session_variables_bell_count() {
+        let mut term = Terminal::new(80, 24);
+
+        // Send some bells
+        term.process(b"\x07\x07\x07");
+
+        // Bell count should be tracked in session variables
+        assert_eq!(
+            term.session_variables().get("bell_count"),
+            Some("3".to_string())
         );
     }
 }

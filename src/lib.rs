@@ -35,6 +35,7 @@
 //! - Bell event tracking for visual bell implementations
 
 pub mod ansi_utils;
+pub mod badge;
 pub mod cell;
 pub mod color;
 pub mod color_utils;
@@ -70,6 +71,12 @@ pub use unicode_width_config::{
 // Re-export recording types for session logging/recording
 pub use terminal::{
     RecordingEvent, RecordingEventType, RecordingExportFormat, RecordingFormat, RecordingSession,
+};
+
+// Re-export badge types for badge format support
+pub use badge::{
+    decode_badge_format, evaluate_badge_format, BadgeFormatChanged, BadgeFormatError,
+    SessionVariables,
 };
 
 #[cfg(feature = "python")]

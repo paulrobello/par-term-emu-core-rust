@@ -1379,6 +1379,13 @@ pub struct Terminal {
 
     /// Unicode width configuration for character width calculations
     width_config: crate::unicode_width_config::WidthConfig,
+
+    // === Badge Support (OSC 1337 SetBadgeFormat) ===
+    /// Badge format string (from OSC 1337 SetBadgeFormat)
+    /// Contains template with \(variable) placeholders
+    badge_format: Option<String>,
+    /// Session variables for badge format evaluation
+    session_variables: crate::badge::SessionVariables,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1712,6 +1719,13 @@ impl Terminal {
 
             // Unicode width configuration - use defaults
             width_config: crate::unicode_width_config::WidthConfig::default(),
+
+            // Badge support
+            badge_format: None,
+            session_variables: crate::badge::SessionVariables::with_dimensions(
+                cols as u16,
+                rows as u16,
+            ),
         }
     }
 
@@ -1860,6 +1874,10 @@ impl Terminal {
         self.alt_cursor.col = self.alt_cursor.col.min(active_cols.saturating_sub(1));
         self.alt_cursor.row = self.alt_cursor.row.min(active_rows.saturating_sub(1));
 
+        // Update session variables for badge evaluation
+        self.session_variables
+            .set_dimensions(cols as u16, rows as u16);
+
         self.record_resize(cols, rows);
     }
 
@@ -1870,7 +1888,64 @@ impl Terminal {
 
     /// Set the title
     pub fn set_title(&mut self, title: String) {
+        // Also update session variables for badge evaluation
+        self.session_variables.title = Some(title.clone());
         self.title = title;
+    }
+
+    // === Badge Format Support ===
+
+    /// Get the current badge format template
+    ///
+    /// Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
+    /// The format may contain `\(variable)` placeholders for session variables.
+    pub fn badge_format(&self) -> Option<&str> {
+        self.badge_format.as_deref()
+    }
+
+    /// Set the badge format template
+    ///
+    /// This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
+    /// The format string should contain `\(variable)` placeholders.
+    pub fn set_badge_format(&mut self, format: Option<String>) {
+        self.badge_format = format;
+    }
+
+    /// Clear the badge format
+    pub fn clear_badge_format(&mut self) {
+        self.badge_format = None;
+    }
+
+    /// Get a reference to the session variables
+    ///
+    /// Session variables are used for badge format evaluation.
+    pub fn session_variables(&self) -> &crate::badge::SessionVariables {
+        &self.session_variables
+    }
+
+    /// Get a mutable reference to the session variables
+    ///
+    /// Use this to update session variables that will be used in badge evaluation.
+    pub fn session_variables_mut(&mut self) -> &mut crate::badge::SessionVariables {
+        &mut self.session_variables
+    }
+
+    /// Evaluate the current badge format with session variables
+    ///
+    /// Returns the evaluated badge string with all variables substituted,
+    /// or None if no badge format is set.
+    ///
+    /// # Example
+    /// ```ignore
+    /// terminal.set_badge_format(Some(r"\(username)@\(hostname)".to_string()));
+    /// terminal.session_variables_mut().set_username("alice");
+    /// terminal.session_variables_mut().set_hostname("server1");
+    /// assert_eq!(terminal.evaluate_badge(), Some("alice@server1".to_string()));
+    /// ```
+    pub fn evaluate_badge(&self) -> Option<String> {
+        self.badge_format
+            .as_ref()
+            .map(|format| crate::badge::evaluate_badge_format(format, &self.session_variables))
     }
 
     /// Check if alternate screen is active
@@ -6363,6 +6438,8 @@ impl Perform for Terminal {
             b'\x07' => {
                 // Bell - increment counter for visual bell support
                 self.bell_count = self.bell_count.wrapping_add(1);
+                // Also increment in session variables for badge evaluation
+                self.session_variables.increment_bell_count();
                 // Add bell event based on volume settings
                 let event = if self.warning_bell_volume > 0 {
                     BellEvent::WarningBell(self.warning_bell_volume)

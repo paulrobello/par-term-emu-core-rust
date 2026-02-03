@@ -13,6 +13,53 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.28.0
+
+### 🏷️ Badge Format Support (OSC 1337 SetBadgeFormat)
+
+iTerm2-style badge support for terminal overlays with variable interpolation:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Set badge format with variables
+term.set_badge_format(r"\(username)@\(hostname)")
+
+# Set session variables
+term.set_badge_session_variable("username", "alice")
+term.set_badge_session_variable("hostname", "server1")
+
+# Evaluate badge - returns "alice@server1"
+badge = term.evaluate_badge()
+print(f"Badge: {badge}")
+
+# Get all session variables
+vars = term.get_badge_session_variables()
+print(f"Columns: {vars['columns']}, Rows: {vars['rows']}")
+```
+
+**New Methods:**
+- `badge_format()` - Get current badge format template
+- `set_badge_format(format)` - Set badge format with `\(variable)` placeholders
+- `clear_badge_format()` - Clear badge format
+- `evaluate_badge()` - Evaluate badge with session variables
+- `get_badge_session_variable(name)` - Get a session variable value
+- `set_badge_session_variable(name, value)` - Set a custom session variable
+- `get_badge_session_variables()` - Get all session variables as a dictionary
+
+**Built-in Variables:**
+`hostname`, `username`, `path`, `job`, `last_command`, `profile_name`, `tty`, `columns`, `rows`, `bell_count`, `selection`, `tmux_pane_title`, `session_name`, `title`
+
+**Security:** Badge formats are validated to reject shell injection patterns (backticks, `$()`, pipes, etc.)
+
+### 🔧 Tmux Control Mode Fixes
+
+- Fixed CRLF line ending handling (strips `\r` from `\r\n` line endings)
+- Fixed `%output` notifications to preserve trailing spaces
+- Fixed OSC 133 exit code parsing from `OSC 133 ; D ; <exit_code> ST`
+
 ## What's New in 0.27.0
 
 ### 🔄 Tmux Control Mode Auto-Detection

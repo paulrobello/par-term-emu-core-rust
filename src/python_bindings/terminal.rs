@@ -4553,6 +4553,164 @@ impl PyTerminal {
             ))
         }
     }
+
+    // ========== Badge Format Support (OSC 1337 SetBadgeFormat) ==========
+
+    /// Get the current badge format template
+    ///
+    /// Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
+    /// The format may contain `\(variable)` placeholders for session variables.
+    ///
+    /// Returns:
+    ///     Optional string containing the badge format template, or None if not set
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     # After receiving OSC 1337 SetBadgeFormat sequence
+    ///     format = term.badge_format()  # e.g., r"\(username)@\(hostname)"
+    ///     ```
+    fn badge_format(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.badge_format().map(|s| s.to_string()))
+    }
+
+    /// Set the badge format template
+    ///
+    /// This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
+    /// The format string should contain `\(variable)` placeholders.
+    ///
+    /// Args:
+    ///     format: The badge format template string, or None to clear
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_badge_format(r"\(username)@\(hostname)")
+    ///     ```
+    fn set_badge_format(&mut self, format: Option<String>) -> PyResult<()> {
+        self.inner.set_badge_format(format);
+        Ok(())
+    }
+
+    /// Clear the badge format
+    ///
+    /// Removes any previously set badge format template.
+    fn clear_badge_format(&mut self) -> PyResult<()> {
+        self.inner.clear_badge_format();
+        Ok(())
+    }
+
+    /// Evaluate the current badge format with session variables
+    ///
+    /// Returns the evaluated badge string with all variables substituted,
+    /// or None if no badge format is set.
+    ///
+    /// Returns:
+    ///     Evaluated badge string with variables replaced, or None
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_badge_format(r"\(username)@\(hostname)")
+    ///     term.set_badge_session_variable("username", "alice")
+    ///     term.set_badge_session_variable("hostname", "server1")
+    ///     badge = term.evaluate_badge()  # Returns "alice@server1"
+    ///     ```
+    fn evaluate_badge(&self) -> PyResult<Option<String>> {
+        Ok(self.inner.evaluate_badge())
+    }
+
+    /// Get a session variable value by name
+    ///
+    /// Session variables are used for badge format evaluation.
+    /// Supports both `session.variable` and just `variable` syntax.
+    ///
+    /// Args:
+    ///     name: Variable name (e.g., "username", "hostname", "session.path")
+    ///
+    /// Returns:
+    ///     Variable value as string, or None if not set
+    fn get_badge_session_variable(&self, name: &str) -> PyResult<Option<String>> {
+        Ok(self.inner.session_variables().get(name))
+    }
+
+    /// Set a session variable for badge format evaluation
+    ///
+    /// Sets a custom session variable that can be referenced in badge formats.
+    ///
+    /// Args:
+    ///     name: Variable name
+    ///     value: Variable value
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_badge_session_variable("username", "alice")
+    ///     term.set_badge_session_variable("hostname", "server1")
+    ///     ```
+    fn set_badge_session_variable(&mut self, name: &str, value: &str) -> PyResult<()> {
+        self.inner.session_variables_mut().set_custom(name, value);
+        Ok(())
+    }
+
+    /// Get all session variables as a dictionary
+    ///
+    /// Returns all session variables that can be used in badge evaluation,
+    /// including built-in variables like columns, rows, bell_count, etc.
+    ///
+    /// Returns:
+    ///     Dictionary mapping variable names to their string values
+    fn get_badge_session_variables(&self) -> PyResult<HashMap<String, String>> {
+        let vars = self.inner.session_variables();
+        let mut result = HashMap::new();
+
+        // Add built-in variables
+        if let Some(hostname) = &vars.hostname {
+            result.insert("hostname".to_string(), hostname.clone());
+        }
+        if let Some(username) = &vars.username {
+            result.insert("username".to_string(), username.clone());
+        }
+        if let Some(path) = &vars.path {
+            result.insert("path".to_string(), path.clone());
+        }
+        if let Some(job) = &vars.job {
+            result.insert("job".to_string(), job.clone());
+        }
+        if let Some(last_command) = &vars.last_command {
+            result.insert("last_command".to_string(), last_command.clone());
+        }
+        if let Some(profile_name) = &vars.profile_name {
+            result.insert("profile_name".to_string(), profile_name.clone());
+        }
+        if let Some(tty) = &vars.tty {
+            result.insert("tty".to_string(), tty.clone());
+        }
+        if let Some(selection) = &vars.selection {
+            result.insert("selection".to_string(), selection.clone());
+        }
+        if let Some(tmux_pane_title) = &vars.tmux_pane_title {
+            result.insert("tmux_pane_title".to_string(), tmux_pane_title.clone());
+        }
+        if let Some(session_name) = &vars.session_name {
+            result.insert("session_name".to_string(), session_name.clone());
+        }
+        if let Some(title) = &vars.title {
+            result.insert("title".to_string(), title.clone());
+        }
+
+        // Always include dimension and bell count
+        result.insert("columns".to_string(), vars.columns.to_string());
+        result.insert("rows".to_string(), vars.rows.to_string());
+        result.insert("bell_count".to_string(), vars.bell_count.to_string());
+
+        // Add custom variables
+        for (k, v) in &vars.custom {
+            result.insert(k.clone(), v.clone());
+        }
+
+        Ok(result)
+    }
 }
 
 /// Helper function to parse clipboard slot from string

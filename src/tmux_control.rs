@@ -330,7 +330,13 @@ impl TmuxControlParser {
         while let Some(newline_pos) = self.line_buffer.iter().position(|&b| b == b'\n') {
             // Extract the line (without the newline)
             let line_bytes = self.line_buffer.drain(..=newline_pos).collect::<Vec<u8>>();
-            let line = String::from_utf8_lossy(&line_bytes[..line_bytes.len() - 1]).to_string();
+
+            // Strip trailing \n and also \r if present (tmux sends \r\n line endings)
+            let mut end = line_bytes.len() - 1; // Skip \n
+            if end > 0 && line_bytes[end - 1] == b'\r' {
+                end -= 1; // Also skip \r
+            }
+            let line = String::from_utf8_lossy(&line_bytes[..end]).to_string();
 
             // Parse the line
             if let Some(notification) = Self::parse_line(&line) {
@@ -343,7 +349,9 @@ impl TmuxControlParser {
 
     /// Parse a single line into a notification
     fn parse_line(line: &str) -> Option<TmuxNotification> {
-        let line = line.trim();
+        // Only trim leading whitespace - trailing whitespace may be significant
+        // for %output notifications where space is the actual output data.
+        let line = line.trim_start();
 
         // Empty lines are ignored
         if line.is_empty() {
@@ -763,6 +771,71 @@ mod tests {
             TmuxNotification::Output { pane_id, data } => {
                 assert_eq!(pane_id, "%1");
                 assert_eq!(data, b"Hello World");
+            }
+            _ => panic!("Expected Output notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_single_space() {
+        // Regression test: single space character should not be trimmed away
+        let mut parser = TmuxControlParser::new(true);
+        // Note: "%output %1  \n" has two spaces - one after %1 (separator) and one as data
+        let notifications = parser.parse(b"%output %1  \n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%1");
+                assert_eq!(data, b" ", "Space character should be preserved in output");
+            }
+            _ => panic!("Expected Output notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_trailing_spaces() {
+        // Ensure trailing spaces in output data are preserved
+        let mut parser = TmuxControlParser::new(true);
+        let notifications = parser.parse(b"%output %1 text   \n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%1");
+                assert_eq!(data, b"text   ", "Trailing spaces should be preserved");
+            }
+            _ => panic!("Expected Output notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_crlf_line_ending() {
+        // tmux sends \r\n line endings - ensure \r is stripped, not included in data
+        let mut parser = TmuxControlParser::new(true);
+        let notifications = parser.parse(b"%output %1 a\r\n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%1");
+                assert_eq!(data, b"a", "CR should be stripped from line ending");
+            }
+            _ => panic!("Expected Output notification"),
+        }
+    }
+
+    #[test]
+    fn test_parse_output_single_space_crlf() {
+        // Regression test: single space with \r\n line ending
+        let mut parser = TmuxControlParser::new(true);
+        let notifications = parser.parse(b"%output %1  \r\n");
+        assert_eq!(notifications.len(), 1);
+
+        match &notifications[0] {
+            TmuxNotification::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%1");
+                assert_eq!(data, b" ", "Space should be preserved with CRLF ending");
             }
             _ => panic!("Expected Output notification"),
         }

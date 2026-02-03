@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.28.0] - 2026-02-03
+
+### Added
+- **Badge Format Support (OSC 1337 SetBadgeFormat)**: iTerm2-style badge support for terminal overlays
+  - New `badge` module with `SessionVariables` struct for session information
+  - OSC 1337 SetBadgeFormat sequence parsing with base64-encoded format strings
+  - Variable interpolation using `\(variable)` syntax (e.g., `\(username)@\(hostname)`)
+  - Supports session prefix: `\(session.variable)` and direct: `\(variable)`
+  - Built-in variables: `hostname`, `username`, `path`, `job`, `last_command`, `profile_name`, `tty`, `columns`, `rows`, `bell_count`, `selection`, `tmux_pane_title`, `session_name`, `title`
+  - Custom variables via `set_custom(name, value)`
+  - Security validation rejects shell injection patterns (`$()`, backticks, pipes, etc.)
+  - Python bindings: `badge_format()`, `set_badge_format()`, `clear_badge_format()`, `evaluate_badge()`, `get_badge_session_variable()`, `set_badge_session_variable()`, `get_badge_session_variables()`
+  - Session variables auto-sync with terminal state (title, dimensions, bell count)
+  - Reference: [iTerm2 Badge Documentation](https://iterm2.com/documentation-badges.html)
+
+### Fixed
+- **Tmux Control Mode CRLF Handling**: Fixed parser to strip `\r` from `\r\n` line endings sent by tmux
+- **Tmux Output Trailing Spaces**: Fixed `%output` notifications to preserve trailing spaces (regression from `.trim()` call)
+- **OSC 133 Exit Code Parsing**: Fixed exit code extraction from `OSC 133 ; D ; <exit_code> ST` sequences
+
 ## [0.27.0] - 2026-02-01
 
 ### Added
@@ -782,6 +802,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.28.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.27.0...v0.28.0
+[0.27.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.25.0...v0.26.0
 [0.25.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.24.0...v0.25.0
 [0.24.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.23.0...v0.24.0
 [0.23.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.22.1...v0.23.0
