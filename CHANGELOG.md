@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.29.0] - 2026-02-04
+
+### Added
+- **OSC 7 Enhancements**: Percent-decoding, username/hostname parsing, port stripping, query/fragment removal, and path validation for `file://` URLs
+- **Session Variable Sync**: OSC 7 now updates badge/session variables (`path`, `hostname`, `username`) so badge formats immediately reflect directory changes
+- **CWD History Context**: CWD change log now records hostname and username; Python `CwdChange` exposes these fields
+- **CWD Change Events**: New `TerminalEvent::CwdChanged` (and Python `cwd_changed` poll_events entry) fires on OSC 7 or manual `record_cwd_change`
+- **Username Handling**: Shell integration stores optional username from `user@host` OSC 7 payloads
+
+### Changed
+- **API**: `record_cwd_change` now accepts optional `hostname` and `username` (defaults preserved); badge/session variables cleared when hostname/username unset
+- **Dependencies**: Added `percent-encoding` and `url` crates for robust OSC 7 parsing
+
+### Fixed
+- **Badge Accuracy**: Badge variables `\(path)` and `\(hostname)` now stay in sync when updated via OSC 7
+- **UTF-8 Paths**: Paths with spaces or Unicode characters from OSC 7 are correctly percent-decoded
+
 ## [0.28.0] - 2026-02-03
 
 ### Added

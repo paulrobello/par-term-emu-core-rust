@@ -256,9 +256,11 @@ These settings control potentially sensitive or insecure terminal features at th
 - Use in untrusted/sandboxed environments
 
 **OSC 7 Directory Tracking:**
-- Generally safe to keep enabled
-- Used for shell integration and smart directory tracking
-- Disable if you don't need this feature
+- Parses `file://[user@]host[:port]/path` URLs from shells (e.g., PROMPT_COMMAND)
+- Percent-decodes paths/usernames and strips query/fragment
+- Updates shell integration + badge/session variables (`\(path)`, `\(hostname)`, `\(username)`)
+- Records CWD history with timestamps and host/user context
+- Generally safe to keep enabled; disable if you don't need this feature
 
 ---
 

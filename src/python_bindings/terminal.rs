@@ -2403,7 +2403,158 @@ impl PyTerminal {
                         map.insert("first_row".to_string(), first.to_string());
                         map.insert("last_row".to_string(), last.to_string());
                     }
+                    TerminalEvent::CwdChanged(change) => {
+                        map.insert("type".to_string(), "cwd_changed".to_string());
+                        if let Some(old) = &change.old_cwd {
+                            map.insert("old_cwd".to_string(), old.clone());
+                        }
+                        map.insert("new_cwd".to_string(), change.new_cwd.clone());
+                        if let Some(host) = &change.hostname {
+                            map.insert("hostname".to_string(), host.clone());
+                        }
+                        if let Some(user) = &change.username {
+                            map.insert("username".to_string(), user.clone());
+                        }
+                        map.insert("timestamp".to_string(), change.timestamp.to_string());
+                    }
                 }
+                map
+            })
+            .collect())
+    }
+
+    /// Set event subscription filter
+    ///
+    /// Args:
+    ///     kinds: Optional list of event kinds to receive (strings).
+    ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
+    ///            graphics_added, hyperlink_added, dirty_region, cwd_changed.
+    #[pyo3(signature = (kinds=None))]
+    fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
+        use crate::terminal::TerminalEventKind;
+        let mapped = kinds.map(|items| {
+            items
+                .into_iter()
+                .filter_map(|k| match k.as_str() {
+                    "bell" => Some(TerminalEventKind::BellRang),
+                    "title_changed" => Some(TerminalEventKind::TitleChanged),
+                    "size_changed" => Some(TerminalEventKind::SizeChanged),
+                    "mode_changed" => Some(TerminalEventKind::ModeChanged),
+                    "graphics_added" => Some(TerminalEventKind::GraphicsAdded),
+                    "hyperlink_added" => Some(TerminalEventKind::HyperlinkAdded),
+                    "dirty_region" => Some(TerminalEventKind::DirtyRegion),
+                    "cwd_changed" => Some(TerminalEventKind::CwdChanged),
+                    _ => None,
+                })
+                .collect()
+        });
+        self.inner.set_event_subscription(mapped);
+        Ok(())
+    }
+
+    /// Clear event subscription filter (equivalent to receiving all events)
+    fn clear_event_subscription(&mut self) -> PyResult<()> {
+        self.inner.clear_event_subscription();
+        Ok(())
+    }
+
+    /// Drain events matching the current subscription
+    ///
+    /// Returns:
+    ///     List of event dictionaries (same shape as poll_events)
+    fn poll_subscribed_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
+        use crate::terminal::TerminalEvent;
+        let events = self.inner.poll_subscribed_events();
+        Ok(events
+            .iter()
+            .map(|e| {
+                let mut map = HashMap::new();
+                match e {
+                    TerminalEvent::BellRang(bell) => {
+                        map.insert("type".to_string(), "bell".to_string());
+                        match bell {
+                            crate::terminal::BellEvent::VisualBell => {
+                                map.insert("bell_type".to_string(), "visual".to_string());
+                            }
+                            crate::terminal::BellEvent::WarningBell(vol) => {
+                                map.insert("bell_type".to_string(), "warning".to_string());
+                                map.insert("volume".to_string(), vol.to_string());
+                            }
+                            crate::terminal::BellEvent::MarginBell(vol) => {
+                                map.insert("bell_type".to_string(), "margin".to_string());
+                                map.insert("volume".to_string(), vol.to_string());
+                            }
+                        }
+                    }
+                    TerminalEvent::TitleChanged(title) => {
+                        map.insert("type".to_string(), "title_changed".to_string());
+                        map.insert("title".to_string(), title.clone());
+                    }
+                    TerminalEvent::SizeChanged(cols, rows) => {
+                        map.insert("type".to_string(), "size_changed".to_string());
+                        map.insert("cols".to_string(), cols.to_string());
+                        map.insert("rows".to_string(), rows.to_string());
+                    }
+                    TerminalEvent::ModeChanged(mode, enabled) => {
+                        map.insert("type".to_string(), "mode_changed".to_string());
+                        map.insert("mode".to_string(), mode.clone());
+                        map.insert("enabled".to_string(), enabled.to_string());
+                    }
+                    TerminalEvent::GraphicsAdded(row) => {
+                        map.insert("type".to_string(), "graphics_added".to_string());
+                        map.insert("row".to_string(), row.to_string());
+                    }
+                    TerminalEvent::HyperlinkAdded(url) => {
+                        map.insert("type".to_string(), "hyperlink_added".to_string());
+                        map.insert("url".to_string(), url.clone());
+                    }
+                    TerminalEvent::DirtyRegion(first, last) => {
+                        map.insert("type".to_string(), "dirty_region".to_string());
+                        map.insert("first_row".to_string(), first.to_string());
+                        map.insert("last_row".to_string(), last.to_string());
+                    }
+                    TerminalEvent::CwdChanged(change) => {
+                        map.insert("type".to_string(), "cwd_changed".to_string());
+                        if let Some(old) = &change.old_cwd {
+                            map.insert("old_cwd".to_string(), old.clone());
+                        }
+                        map.insert("new_cwd".to_string(), change.new_cwd.clone());
+                        if let Some(host) = &change.hostname {
+                            map.insert("hostname".to_string(), host.clone());
+                        }
+                        if let Some(user) = &change.username {
+                            map.insert("username".to_string(), user.clone());
+                        }
+                        map.insert("timestamp".to_string(), change.timestamp.to_string());
+                    }
+                }
+                map
+            })
+            .collect())
+    }
+
+    /// Drain only CWD change events
+    ///
+    /// Returns:
+    ///     List of dicts: new_cwd, old_cwd (optional), hostname (optional),
+    ///     username (optional), timestamp
+    fn poll_cwd_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
+        let events = self.inner.poll_cwd_events();
+        Ok(events
+            .into_iter()
+            .map(|change| {
+                let mut map = HashMap::new();
+                if let Some(old) = change.old_cwd {
+                    map.insert("old_cwd".to_string(), old);
+                }
+                map.insert("new_cwd".to_string(), change.new_cwd);
+                if let Some(host) = change.hostname {
+                    map.insert("hostname".to_string(), host);
+                }
+                if let Some(user) = change.username {
+                    map.insert("username".to_string(), user);
+                }
+                map.insert("timestamp".to_string(), change.timestamp.to_string());
                 map
             })
             .collect())
@@ -4195,8 +4346,16 @@ impl PyTerminal {
     ///
     /// Args:
     ///     new_cwd: New working directory
-    fn record_cwd_change(&mut self, new_cwd: String) -> PyResult<()> {
-        self.inner.record_cwd_change(new_cwd);
+    ///     hostname: Optional hostname (None for localhost)
+    ///     username: Optional username (user@host form)
+    #[pyo3(signature = (new_cwd, hostname=None, username=None))]
+    fn record_cwd_change(
+        &mut self,
+        new_cwd: String,
+        hostname: Option<String>,
+        username: Option<String>,
+    ) -> PyResult<()> {
+        self.inner.record_cwd_change(new_cwd, hostname, username);
         Ok(())
     }
 

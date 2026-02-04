@@ -281,6 +281,7 @@ badge = term.evaluate_badge()  # "alice@server1"
 - `accept_osc7() -> bool`: Check if OSC 7 (CWD) is accepted
 - `set_accept_osc7(accept: bool)`: Set whether to accept OSC 7 sequences
 - `shell_integration_state() -> ShellIntegration`: Get shell integration state
+- `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Manually record a CWD change (updates history + session variables)
 - `disable_insecure_sequences() -> bool`: Check if insecure sequences are disabled
 - `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
 - `answerback_string() -> str | None`: Get the configured ENQ answerback payload (None if disabled)
@@ -409,10 +410,11 @@ Extended shell integration features beyond basic OSC 133:
 - `end_command_execution(exit_code: int)`: Mark end of command with exit code
 - `get_current_command() -> CommandExecution | None`: Get currently executing command
 - `get_shell_integration_stats() -> ShellIntegrationStats`: Get shell integration statistics
-- `get_cwd_changes() -> list[CwdChange]`: Get working directory change history
+- `get_cwd_changes() -> list[CwdChange]`: Get working directory change history (includes hostname/username)
 - `clear_cwd_history()`: Clear CWD history
 - `set_max_cwd_history(max: int)`: Set CWD history limit
-- `record_cwd_change(cwd: str)`: Record working directory change
+- `record_cwd_change(cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change
+- `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
 
 ### Clipboard Extended
 
@@ -529,6 +531,10 @@ VT compliance testing:
 - `use_alt_screen()`: Switch to alternate screen buffer (programmatic, not via escape codes)
 - `use_primary_screen()`: Switch to primary screen buffer (programmatic)
 - `poll_events() -> list[str]`: Poll for pending terminal events
+- `set_event_subscription(kinds: list[str] | None)`: Filter which terminal events are returned by `poll_subscribed_events()` (None clears filter)
+- `clear_event_subscription()`: Clear event filter (all events are returned)
+- `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter
+- `poll_cwd_events() -> list[dict]`: Drain only CWD change events (fields: new_cwd, old_cwd?, hostname?, username?, timestamp)
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
 - `debug_info() -> str`: Get debug information string
 - `detect_urls(text: str) -> list[DetectedItem]`: Detect URLs in text
@@ -897,7 +903,10 @@ Working directory change event.
 
 **Properties:**
 - `cwd: str`: New working directory path
-- `timestamp: int`: Change timestamp (Unix timestamp in seconds)
+- `old_cwd: str | None`: Previous working directory (if any)
+- `hostname: str | None`: Hostname associated with the new path (None for localhost)
+- `username: str | None`: Username from `user@host` portion of OSC 7 (if provided)
+- `timestamp: int`: Change timestamp (Unix timestamp in milliseconds)
 
 ### DamageRegion
 

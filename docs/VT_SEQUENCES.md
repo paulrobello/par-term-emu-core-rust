@@ -296,7 +296,7 @@ Operating System Command sequences for advanced features (format: `OSC Ps ; Pt S
 - `OSC 2;title ST` - Set window title only
 - `OSC 21;title ST` - Push title to stack (or `OSC 21 ST` to push current title)
 - `OSC 22 ST` / `OSC 23 ST` - Pop window/icon title from stack
-- `OSC 7;file://host/path ST` - Set current working directory (URL-encoded)
+- `OSC 7;file://[user@]host[:port]/path ST` - Set current working directory (percent-decoded; strips query/fragment; `localhost` is treated as None)
 
 ### Hyperlinks and Clipboard
 

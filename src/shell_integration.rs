@@ -24,6 +24,8 @@ pub struct ShellIntegration {
     cwd: Option<String>,
     /// Hostname from OSC 7 (None if localhost/implicit)
     hostname: Option<String>,
+    /// Username from OSC 7 (if provided as user@host)
+    username: Option<String>,
 }
 
 impl Default for ShellIntegration {
@@ -41,6 +43,7 @@ impl ShellIntegration {
             last_exit_code: None,
             cwd: None,
             hostname: None,
+            username: None,
         }
     }
 
@@ -93,6 +96,16 @@ impl ShellIntegration {
     /// Returns None if localhost (implicit in file:///path format)
     pub fn hostname(&self) -> Option<&str> {
         self.hostname.as_deref()
+    }
+
+    /// Set username from OSC 7
+    pub fn set_username(&mut self, username: Option<String>) {
+        self.username = username;
+    }
+
+    /// Get username from OSC 7
+    pub fn username(&self) -> Option<&str> {
+        self.username.as_deref()
     }
 
     /// Check if we're in a prompt
@@ -165,6 +178,7 @@ mod tests {
         assert!(si.exit_code().is_none());
         assert!(si.cwd().is_none());
         assert!(si.hostname().is_none());
+        assert!(si.username().is_none());
     }
 
     #[test]
@@ -314,6 +328,7 @@ mod tests {
         si.set_exit_code(0);
         si.set_cwd("/home".to_string());
         si.set_hostname(Some("remote-host".to_string()));
+        si.set_username(Some("alice".to_string()));
 
         let cloned = si.clone();
         assert_eq!(cloned.marker(), si.marker());
@@ -321,6 +336,7 @@ mod tests {
         assert_eq!(cloned.exit_code(), si.exit_code());
         assert_eq!(cloned.cwd(), si.cwd());
         assert_eq!(cloned.hostname(), si.hostname());
+        assert_eq!(cloned.username(), si.username());
     }
 
     #[test]
@@ -337,6 +353,19 @@ mod tests {
         // Clear hostname
         si.set_hostname(None);
         assert!(si.hostname().is_none());
+    }
+
+    #[test]
+    fn test_shell_integration_username() {
+        let mut si = ShellIntegration::new();
+
+        assert!(si.username().is_none());
+
+        si.set_username(Some("alice".to_string()));
+        assert_eq!(si.username(), Some("alice"));
+
+        si.set_username(None);
+        assert!(si.username().is_none());
     }
 
     #[test]

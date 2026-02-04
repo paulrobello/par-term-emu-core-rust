@@ -16,6 +16,8 @@ use crate::shell_integration::ShellIntegrationMarker;
 use crate::terminal::progress::{ProgressBar, ProgressState};
 use crate::terminal::{Notification, Terminal};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use percent_encoding::percent_decode_str;
+use url::Url;
 
 impl Terminal {
     /// Check if an OSC command should be filtered due to security settings
@@ -152,45 +154,17 @@ impl Terminal {
                     // Only process if accept_osc7 is enabled
                     if self.accept_osc7 && params.len() >= 2 {
                         if let Ok(cwd_url) = std::str::from_utf8(params[1]) {
-                            // Parse file:// URL to extract path and hostname
-                            // Format: file://hostname/path or file:///path (localhost)
-                            if let Some(remainder) = cwd_url.strip_prefix("file://") {
-                                // Handle both file://hostname/path and file:///path
-                                let (hostname, path) = if remainder.starts_with('/') {
-                                    // file:///path (localhost implicit)
-                                    (None, remainder)
-                                } else {
-                                    // file://hostname/path - extract hostname and path
-                                    if let Some(slash_idx) = remainder.find('/') {
-                                        let host = &remainder[..slash_idx];
-                                        let path = &remainder[slash_idx..];
-                                        // Treat empty hostname or "localhost" as None
-                                        let hostname = if host.is_empty()
-                                            || host.eq_ignore_ascii_case("localhost")
-                                        {
-                                            None
-                                        } else {
-                                            Some(host.to_string())
-                                        };
-                                        (hostname, path)
-                                    } else {
-                                        // No path found, just hostname - invalid format
-                                        (None, "")
-                                    }
-                                };
-
-                                if !path.is_empty() {
-                                    self.shell_integration.set_cwd(path.to_string());
-                                    self.shell_integration.set_hostname(hostname.clone());
-                                    debug::log(
-                                        debug::DebugLevel::Debug,
-                                        "OSC7",
-                                        &format!(
-                                            "Set directory to: {} (hostname: {:?})",
-                                            path, hostname
-                                        ),
-                                    );
-                                }
+                            if let Some((path, hostname, username)) = Self::parse_osc7_url(cwd_url)
+                            {
+                                self.record_cwd_change(path.clone(), hostname.clone(), username);
+                                debug::log(
+                                    debug::DebugLevel::Debug,
+                                    "OSC7",
+                                    &format!(
+                                        "Set directory to: {} (hostname: {:?})",
+                                        path, hostname
+                                    ),
+                                );
                             }
                         }
                     }
@@ -522,6 +496,105 @@ impl Terminal {
         }
     }
 
+    /// Parse OSC 7 payload and return decoded path, hostname, username
+    ///
+    /// Supports:
+    /// - file:///path (implicit localhost, no hostname)
+    /// - file://hostname/path
+    /// - file://user@hostname/path
+    /// - file://hostname:port/path (port ignored for hostname matching)
+    /// - Performs percent-decoding on path and username, strips query/fragment,
+    ///   and rejects non-absolute paths.
+    fn parse_osc7_url(url_str: &str) -> Option<(String, Option<String>, Option<String>)> {
+        // Prefer strict parsing when possible (handles IPv6 brackets, normalization, etc.)
+        if let Ok(url) = Url::parse(url_str) {
+            if url.scheme() == "file" {
+                let raw_path = url.path();
+                if !raw_path.is_empty() && raw_path.starts_with('/') {
+                    let path = percent_decode_str(raw_path).decode_utf8_lossy().to_string();
+
+                    let username = url.username();
+                    let username = if username.is_empty() {
+                        None
+                    } else {
+                        Some(percent_decode_str(username).decode_utf8_lossy().to_string())
+                    };
+
+                    let hostname = url.host_str().map(|h| h.to_string()).and_then(|h| {
+                        if h.is_empty() || h.eq_ignore_ascii_case("localhost") {
+                            None
+                        } else {
+                            Some(h)
+                        }
+                    });
+
+                    if path.starts_with('/') {
+                        return Some((path, hostname, username));
+                    }
+                }
+            }
+        }
+
+        // Fallback manual parser to handle relaxed/legacy forms
+        if !url_str.starts_with("file://") {
+            return None;
+        }
+
+        let mut remainder = &url_str[7..]; // strip "file://"
+        if remainder.is_empty() {
+            return None;
+        }
+
+        // Strip query/fragment
+        if let Some(idx) = remainder.find(['?', '#']) {
+            remainder = &remainder[..idx];
+        }
+
+        let mut username = None;
+        let hostname: Option<String>;
+        let path: String;
+
+        if remainder.starts_with('/') {
+            path = percent_decode_str(remainder)
+                .decode_utf8_lossy()
+                .to_string();
+            hostname = None;
+        } else {
+            let slash_idx = remainder.find('/')?;
+            let authority = &remainder[..slash_idx];
+            let path_part = &remainder[slash_idx..];
+
+            let (user_part, host_part) = match authority.rsplit_once('@') {
+                Some((user, host)) => (Some(user), host),
+                None => (None, authority),
+            };
+
+            if let Some(user) = user_part {
+                let decoded = percent_decode_str(user).decode_utf8_lossy().to_string();
+                if !decoded.is_empty() {
+                    username = Some(decoded);
+                }
+            }
+
+            let host_only = host_part.split(':').next().unwrap_or("");
+            if host_only.is_empty() || host_only.eq_ignore_ascii_case("localhost") {
+                hostname = None;
+            } else {
+                hostname = Some(host_only.to_string());
+            }
+
+            path = percent_decode_str(path_part)
+                .decode_utf8_lossy()
+                .to_string();
+        }
+
+        if path.is_empty() || !path.starts_with('/') {
+            return None;
+        }
+
+        Some((path, hostname, username))
+    }
+
     /// Handle OSC 9;4 progress bar sequences (ConEmu/Windows Terminal style)
     ///
     /// Format: OSC 9 ; 4 ; state [; progress] ST
@@ -761,10 +834,18 @@ mod tests {
         // OSC 7 with file:// URL (localhost)
         term.process(b"\x1b]7;file:///home/user/project\x1b\\");
         assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+        assert_eq!(
+            term.session_variables().path,
+            Some("/home/user/project".to_string())
+        );
 
         // OSC 7 with hostname
         term.process(b"\x1b]7;file://hostname/home/user/test\x1b\\");
         assert_eq!(term.shell_integration.cwd(), Some("/home/user/test"));
+        assert_eq!(
+            term.session_variables().hostname,
+            Some("hostname".to_string())
+        );
     }
 
     #[test]
@@ -798,6 +879,35 @@ mod tests {
     }
 
     #[test]
+    fn test_osc7_username_and_port_and_decoding() {
+        let mut term = Terminal::new(80, 24);
+
+        // Username and port should be parsed, port stripped from hostname
+        term.process(b"\x1b]7;file://alice@example.com:2222/home/alice/Work%20Dir\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/alice/Work Dir"));
+        assert_eq!(term.shell_integration.hostname(), Some("example.com"));
+        assert_eq!(term.shell_integration.username(), Some("alice"));
+        assert_eq!(
+            term.session_variables().path,
+            Some("/home/alice/Work Dir".to_string())
+        );
+        assert_eq!(
+            term.session_variables().hostname,
+            Some("example.com".to_string())
+        );
+        assert_eq!(term.session_variables().username, Some("alice".to_string()));
+
+        // Query/fragment stripped and percent-decoded unicode
+        term.process(b"\x1b]7;file://remote.host/home/alice/caf%C3%A9?foo=bar#frag\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/alice/café"));
+        assert_eq!(term.shell_integration.hostname(), Some("remote.host"));
+
+        // Non-file scheme should be ignored (no change)
+        term.process(b"\x1b]7;http://example.com/should_not_set\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/alice/café"));
+    }
+
+    #[test]
     fn test_osc7_hostname_updates() {
         let mut term = Terminal::new(80, 24);
 
@@ -812,6 +922,50 @@ mod tests {
         // Switch to different remote host
         term.process(b"\x1b]7;file://server2/home/user\x1b\\");
         assert_eq!(term.shell_integration.hostname(), Some("server2"));
+    }
+
+    #[test]
+    fn test_osc7_cwd_history_records_hostname() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]7;file://server1/home/user\x1b\\");
+        term.process(b"\x1b]7;file:///home/local\x1b\\");
+
+        let history = term.get_cwd_changes();
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].new_cwd, "/home/user");
+        assert_eq!(history[0].hostname.as_deref(), Some("server1"));
+        assert_eq!(history[1].hostname, None);
+    }
+
+    #[test]
+    fn test_osc7_emits_cwd_changed_event() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]7;file://server1/home/user\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::CwdChanged(change)
+                if change.new_cwd == "/home/user"
+                    && change.hostname.as_deref() == Some("server1")
+            )),
+            "CwdChanged event with hostname should be emitted",
+        );
+
+        // With subscription filter should still receive
+        term.set_event_subscription(Some(vec![crate::terminal::TerminalEventKind::CwdChanged]));
+        term.process(b"\x1b]7;file:///home/local\x1b\\");
+        let subscribed = term.poll_subscribed_events();
+        assert!(
+            subscribed.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::CwdChanged(change)
+                if change.new_cwd == "/home/local" && change.hostname.is_none()
+            )),
+            "Subscribed poll should return CwdChanged event"
+        );
     }
 
     #[test]

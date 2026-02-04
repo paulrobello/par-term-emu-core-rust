@@ -741,7 +741,7 @@ where `ST` is either `ESC \` or `BEL` (`\x07`)
 
 | Sequence | Operation | Notes |
 |----------|-----------|-------|
-| `OSC 7 ; file://host/cwd ST` | Set working directory | Can be disabled via `accept_osc7` |
+| `OSC 7 ; file://[user@]host[:port]/cwd ST` | Set working directory | Percent-decodes path/username, strips query/fragment, ignores `localhost`, records hostname & username in session variables, can be disabled via `accept_osc7` |
 
 **Format:** `file://hostname/path` (URL-encoded path)
 
@@ -1338,7 +1338,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | OSC 8 Hyperlinks | ✅ Full | `src/terminal/sequences/osc.rs` | With deduplication |
 | OSC 52 Clipboard | ✅ Full | `src/terminal/sequences/osc.rs` | Read/write with security controls |
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
-| OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | URL-encoded paths |
+| OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | Percent-decoded paths, username, hostname, session variable sync, CWD history |
 | OSC 9;4 Progress Bar | ✅ Full | `src/terminal/sequences/osc.rs`, `src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
 

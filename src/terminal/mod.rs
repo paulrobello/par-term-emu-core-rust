@@ -91,6 +91,21 @@ pub enum TerminalEvent {
     HyperlinkAdded(String),
     /// Dirty region (first_row, last_row)
     DirtyRegion(usize, usize),
+    /// Current working directory changed (from OSC 7 or manual record)
+    CwdChanged(CwdChange),
+}
+
+/// Kind of terminal event for subscription filters
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TerminalEventKind {
+    BellRang,
+    TitleChanged,
+    SizeChanged,
+    ModeChanged,
+    GraphicsAdded,
+    HyperlinkAdded,
+    DirtyRegion,
+    CwdChanged,
 }
 
 /// Hyperlink information with all its locations
@@ -930,12 +945,16 @@ pub struct ShellIntegrationStats {
 }
 
 /// CWD change notification
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CwdChange {
     /// Previous working directory
     pub old_cwd: Option<String>,
     /// New working directory
     pub new_cwd: String,
+    /// Hostname associated with new working directory (if remote)
+    pub hostname: Option<String>,
+    /// Username associated with new working directory (if provided)
+    pub username: Option<String>,
     /// Timestamp of change
     pub timestamp: u64,
 }
@@ -1386,6 +1405,8 @@ pub struct Terminal {
     badge_format: Option<String>,
     /// Session variables for badge format evaluation
     session_variables: crate::badge::SessionVariables,
+    /// Optional event subscription filter
+    event_subscription: Option<std::collections::HashSet<TerminalEventKind>>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1726,6 +1747,7 @@ impl Terminal {
                 cols as u16,
                 rows as u16,
             ),
+            event_subscription: None,
         }
     }
 
@@ -2493,6 +2515,73 @@ impl Terminal {
     /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
     pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
         std::mem::take(&mut self.terminal_events)
+    }
+
+    /// Set event subscription filter
+    ///
+    /// When set, `poll_subscribed_events()` will return only events whose kind matches
+    /// the provided list. Passing None clears the filter.
+    pub fn set_event_subscription(&mut self, kinds: Option<Vec<TerminalEventKind>>) {
+        self.event_subscription = kinds.map(|ks| ks.into_iter().collect());
+    }
+
+    /// Clear any event subscription filter
+    pub fn clear_event_subscription(&mut self) {
+        self.event_subscription = None;
+    }
+
+    /// Drain events matching the current subscription filter
+    ///
+    /// If no subscription is set, returns all events (same as `poll_events()`).
+    pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
+        if self.event_subscription.is_none() {
+            return self.poll_events();
+        }
+
+        let filter = self.event_subscription.as_ref().unwrap();
+        let mut wanted = Vec::new();
+        let mut remaining = Vec::new();
+
+        for event in std::mem::take(&mut self.terminal_events) {
+            if filter.contains(&Self::event_kind(&event)) {
+                wanted.push(event);
+            } else {
+                remaining.push(event);
+            }
+        }
+
+        self.terminal_events = remaining;
+        wanted
+    }
+
+    /// Convenience: drain only CwdChanged events
+    pub fn poll_cwd_events(&mut self) -> Vec<CwdChange> {
+        let mut cwd_events = Vec::new();
+        let mut remaining = Vec::new();
+
+        for event in std::mem::take(&mut self.terminal_events) {
+            match event {
+                TerminalEvent::CwdChanged(change) => cwd_events.push(change),
+                other => remaining.push(other),
+            }
+        }
+
+        self.terminal_events = remaining;
+        cwd_events
+    }
+
+    /// Helper: map event to its kind
+    fn event_kind(event: &TerminalEvent) -> TerminalEventKind {
+        match event {
+            TerminalEvent::BellRang(_) => TerminalEventKind::BellRang,
+            TerminalEvent::TitleChanged(_) => TerminalEventKind::TitleChanged,
+            TerminalEvent::SizeChanged(_, _) => TerminalEventKind::SizeChanged,
+            TerminalEvent::ModeChanged(_, _) => TerminalEventKind::ModeChanged,
+            TerminalEvent::GraphicsAdded(_) => TerminalEventKind::GraphicsAdded,
+            TerminalEvent::HyperlinkAdded(_) => TerminalEventKind::HyperlinkAdded,
+            TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
+            TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
+        }
     }
 
     // ========== Dirty Region Tracking ==========
@@ -5746,11 +5835,20 @@ impl Terminal {
     }
 
     /// Record a CWD change
-    pub fn record_cwd_change(&mut self, new_cwd: String) {
+    pub fn record_cwd_change(
+        &mut self,
+        new_cwd: String,
+        hostname: Option<String>,
+        username: Option<String>,
+    ) {
         let old_cwd = self.shell_integration.cwd().map(String::from);
+        let old_hostname = self.shell_integration.hostname().map(String::from);
+        let old_username = self.shell_integration.username().map(String::from);
+        let changed = old_cwd.as_deref() != Some(&new_cwd)
+            || old_hostname.as_deref() != hostname.as_deref()
+            || old_username.as_deref() != username.as_deref();
 
-        // Only record if CWD actually changed
-        if old_cwd.as_deref() != Some(&new_cwd) {
+        if changed {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -5759,8 +5857,14 @@ impl Terminal {
             let change = CwdChange {
                 old_cwd,
                 new_cwd: new_cwd.clone(),
+                hostname: hostname.clone(),
+                username: username.clone(),
                 timestamp,
             };
+
+            // Emit event for subscribers
+            self.terminal_events
+                .push(TerminalEvent::CwdChanged(change.clone()));
 
             self.cwd_changes.push(change);
 
@@ -5769,9 +5873,26 @@ impl Terminal {
                 self.cwd_changes
                     .drain(0..self.cwd_changes.len() - self.max_cwd_history);
             }
+        }
 
-            // Update shell integration
-            self.shell_integration.set_cwd(new_cwd);
+        // Update shell integration and session variables even if history not recorded
+        self.shell_integration.set_cwd(new_cwd.clone());
+        self.shell_integration.set_hostname(hostname.clone());
+        self.shell_integration.set_username(username.clone());
+
+        // Keep session variables in sync for badge evaluation and consumers
+        self.session_variables.set_path(new_cwd);
+        match hostname {
+            Some(host) => self.session_variables.set_hostname(host),
+            None => {
+                self.session_variables.hostname = None;
+            }
+        }
+        match username {
+            Some(user) => self.session_variables.set_username(user),
+            None => {
+                self.session_variables.username = None;
+            }
         }
     }
 

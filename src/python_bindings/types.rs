@@ -2440,13 +2440,20 @@ pub struct PyCwdChange {
     #[pyo3(get)]
     pub new_cwd: String,
     #[pyo3(get)]
+    pub hostname: Option<String>,
+    #[pyo3(get)]
+    pub username: Option<String>,
+    #[pyo3(get)]
     pub timestamp: u64,
 }
 
 #[pymethods]
 impl PyCwdChange {
     fn __repr__(&self) -> String {
-        format!("CwdChange(old={:?}, new={:?})", self.old_cwd, self.new_cwd)
+        format!(
+            "CwdChange(old={:?}, new={:?}, host={:?}, user={:?})",
+            self.old_cwd, self.new_cwd, self.hostname, self.username
+        )
     }
 }
 
@@ -2455,6 +2462,8 @@ impl From<&crate::terminal::CwdChange> for PyCwdChange {
         PyCwdChange {
             old_cwd: change.old_cwd.clone(),
             new_cwd: change.new_cwd.clone(),
+            hostname: change.hostname.clone(),
+            username: change.username.clone(),
             timestamp: change.timestamp,
         }
     }
