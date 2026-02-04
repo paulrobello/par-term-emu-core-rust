@@ -68,10 +68,7 @@ jobs:
       uses: ilammy/msvc-dev-cmd@v1
 
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
-      with:
-        toolchain: stable
-        override: true
+      uses: dtolnay/rust-toolchain@stable
 
     - name: Install uv
       run: pip install uv
@@ -114,11 +111,9 @@ jobs:
         python-version: "3.14"
 
     - name: Set up Rust
-      uses: actions-rs/toolchain@v1
+      uses: dtolnay/rust-toolchain@stable
       with:
-        toolchain: stable
         components: rustfmt, clippy
-        override: true
 
     - name: Install uv
       run: pip install uv

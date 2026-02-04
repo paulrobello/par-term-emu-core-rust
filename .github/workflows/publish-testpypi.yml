@@ -121,7 +121,7 @@ jobs:
         id: get_version
         run: |
           version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
       - name: Download all artifacts

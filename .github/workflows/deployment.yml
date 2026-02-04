@@ -58,7 +58,7 @@ jobs:
           fi
 
           echo "✅ All versions match: $CARGO_VERSION"
-          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
 
   # Publish to crates.io (after GitHub release)
   publish-crates:
@@ -85,7 +85,7 @@ jobs:
             exit 1
           fi
 
-          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Run Rust tests
         run: cargo test --lib --no-default-features
@@ -380,7 +380,7 @@ jobs:
         id: get_version
         run: |
           version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
       - name: Verify web_term directory exists
@@ -436,7 +436,7 @@ jobs:
         id: get_version
         run: |
           version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
       - name: Download Python wheel artifacts
@@ -545,7 +545,7 @@ jobs:
         id: get_version
         run: |
           version=$(grep '^version = ' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
-          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Package version: $version"
 
       - name: Download all artifacts

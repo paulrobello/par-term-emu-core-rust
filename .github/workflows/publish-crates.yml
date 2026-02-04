@@ -41,7 +41,7 @@ jobs:
             exit 1
           fi
 
-          echo "version=$CARGO_VERSION" >> $GITHUB_OUTPUT
+          echo "version=$CARGO_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check if version exists on crates.io
         id: check_version
@@ -51,10 +51,10 @@ jobs:
 
           # Search for the exact version
           if cargo search par-term-emu-core-rust --limit 1 | grep -q "par-term-emu-core-rust = \"$VERSION\""; then
-            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "⚠️  Version $VERSION already exists on crates.io"
           else
-            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "✓ Version $VERSION not found on crates.io, proceeding with publish"
           fi
 
