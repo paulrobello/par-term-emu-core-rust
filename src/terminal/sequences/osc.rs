@@ -152,25 +152,43 @@ impl Terminal {
                     // Only process if accept_osc7 is enabled
                     if self.accept_osc7 && params.len() >= 2 {
                         if let Ok(cwd_url) = std::str::from_utf8(params[1]) {
-                            // Parse file:// URL to extract just the path
+                            // Parse file:// URL to extract path and hostname
                             // Format: file://hostname/path or file:///path (localhost)
-                            if let Some(path) = cwd_url.strip_prefix("file://") {
-                                // Remove hostname part to get path
+                            if let Some(remainder) = cwd_url.strip_prefix("file://") {
                                 // Handle both file://hostname/path and file:///path
-                                let path = if path.starts_with('/') {
+                                let (hostname, path) = if remainder.starts_with('/') {
                                     // file:///path (localhost implicit)
-                                    path
+                                    (None, remainder)
                                 } else {
-                                    // file://hostname/path - skip to first /
-                                    path.find('/').map(|i| &path[i..]).unwrap_or("")
+                                    // file://hostname/path - extract hostname and path
+                                    if let Some(slash_idx) = remainder.find('/') {
+                                        let host = &remainder[..slash_idx];
+                                        let path = &remainder[slash_idx..];
+                                        // Treat empty hostname or "localhost" as None
+                                        let hostname = if host.is_empty()
+                                            || host.eq_ignore_ascii_case("localhost")
+                                        {
+                                            None
+                                        } else {
+                                            Some(host.to_string())
+                                        };
+                                        (hostname, path)
+                                    } else {
+                                        // No path found, just hostname - invalid format
+                                        (None, "")
+                                    }
                                 };
 
                                 if !path.is_empty() {
                                     self.shell_integration.set_cwd(path.to_string());
+                                    self.shell_integration.set_hostname(hostname.clone());
                                     debug::log(
                                         debug::DebugLevel::Debug,
                                         "OSC7",
-                                        &format!("Set directory to: {}", path),
+                                        &format!(
+                                            "Set directory to: {} (hostname: {:?})",
+                                            path, hostname
+                                        ),
                                     );
                                 }
                             }
@@ -747,6 +765,53 @@ mod tests {
         // OSC 7 with hostname
         term.process(b"\x1b]7;file://hostname/home/user/test\x1b\\");
         assert_eq!(term.shell_integration.cwd(), Some("/home/user/test"));
+    }
+
+    #[test]
+    fn test_osc7_hostname_extraction() {
+        let mut term = Terminal::new(80, 24);
+
+        // file:///path - localhost implicit, hostname should be None
+        term.process(b"\x1b]7;file:///home/user/project\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+        assert!(term.shell_integration.hostname().is_none());
+
+        // file://hostname/path - hostname should be extracted
+        term.process(b"\x1b]7;file://myserver/home/user/test\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/user/test"));
+        assert_eq!(term.shell_integration.hostname(), Some("myserver"));
+
+        // file://localhost/path - localhost should be treated as None
+        term.process(b"\x1b]7;file://localhost/var/log\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/var/log"));
+        assert!(term.shell_integration.hostname().is_none());
+
+        // file://LOCALHOST/path - case insensitive localhost check
+        term.process(b"\x1b]7;file://LOCALHOST/tmp\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/tmp"));
+        assert!(term.shell_integration.hostname().is_none());
+
+        // Remote host with full path
+        term.process(b"\x1b]7;file://remote.server.com/home/alice/work\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/alice/work"));
+        assert_eq!(term.shell_integration.hostname(), Some("remote.server.com"));
+    }
+
+    #[test]
+    fn test_osc7_hostname_updates() {
+        let mut term = Terminal::new(80, 24);
+
+        // Start with remote host
+        term.process(b"\x1b]7;file://server1/home/user\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("server1"));
+
+        // Switch to localhost
+        term.process(b"\x1b]7;file:///home/user\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+
+        // Switch to different remote host
+        term.process(b"\x1b]7;file://server2/home/user\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("server2"));
     }
 
     #[test]
