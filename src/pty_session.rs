@@ -1,3 +1,4 @@
+use crate::coprocess::{CoprocessConfig, CoprocessId, CoprocessManager};
 use crate::debug;
 use crate::pty_error::PtyError;
 use crate::terminal::Terminal;
@@ -42,6 +43,8 @@ pub struct PtySession {
     /// Optional callback for raw PTY output (for streaming, logging, etc.)
     /// Wrapped in Arc<Mutex> so it can be updated after the reader thread starts
     output_callback: Arc<Mutex<Option<OutputCallback>>>,
+    /// Coprocess manager for piping terminal output to external processes
+    coprocess_manager: Arc<Mutex<CoprocessManager>>,
 }
 
 impl PtySession {
@@ -76,6 +79,7 @@ impl PtySession {
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             output_callback: Arc::new(Mutex::new(None)),
+            coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
         }
     }
 
@@ -507,6 +511,7 @@ impl PtySession {
         let update_generation = Arc::clone(&self.update_generation);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
         let output_callback = Arc::clone(&self.output_callback);
+        let coprocess_manager = Arc::clone(&self.coprocess_manager);
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
@@ -529,6 +534,12 @@ impl PtySession {
                             }
                         }
 
+                        // Feed terminal output to coprocesses
+                        {
+                            let mgr = coprocess_manager.lock();
+                            mgr.feed_output(&buffer[..n]);
+                        }
+
                         // Process the bytes through the terminal
                         {
                             let mut term = terminal.lock();
@@ -537,6 +548,8 @@ impl PtySession {
                             term.process(&buffer[..n]);
                             // Record output for session recording
                             term.record_output(&buffer[..n]);
+                            // Process trigger scans on dirty rows
+                            term.process_trigger_scans();
                             let is_alt_screen = term.is_alt_screen_active();
 
                             // Check for device query responses and write them back to the PTY
@@ -1082,10 +1095,57 @@ impl PtySession {
     pub fn bell_count(&self) -> u64 {
         self.terminal.lock().bell_count()
     }
+
+    // === Coprocess Management ===
+
+    /// Start a new coprocess
+    ///
+    /// The coprocess receives terminal output on its stdin (if copy_terminal_output is true)
+    /// and its stdout is buffered for reading via `read_from_coprocess()`.
+    pub fn start_coprocess(&self, config: CoprocessConfig) -> Result<CoprocessId, String> {
+        let mut mgr = self.coprocess_manager.lock();
+        mgr.start(config)
+    }
+
+    /// Stop a coprocess by ID
+    pub fn stop_coprocess(&self, id: CoprocessId) -> Result<(), String> {
+        let mut mgr = self.coprocess_manager.lock();
+        mgr.stop(id)
+    }
+
+    /// Write data to a coprocess's stdin
+    pub fn write_to_coprocess(&self, id: CoprocessId, data: &[u8]) -> Result<(), String> {
+        let mgr = self.coprocess_manager.lock();
+        mgr.write(id, data)
+    }
+
+    /// Read buffered output from a coprocess (drains the buffer)
+    pub fn read_from_coprocess(&self, id: CoprocessId) -> Result<Vec<String>, String> {
+        let mgr = self.coprocess_manager.lock();
+        mgr.read(id)
+    }
+
+    /// List all coprocess IDs
+    pub fn list_coprocesses(&self) -> Vec<CoprocessId> {
+        let mgr = self.coprocess_manager.lock();
+        mgr.list()
+    }
+
+    /// Check if a coprocess is still running
+    pub fn coprocess_status(&self, id: CoprocessId) -> Option<bool> {
+        let mgr = self.coprocess_manager.lock();
+        mgr.status(id)
+    }
 }
 
 impl Drop for PtySession {
     fn drop(&mut self) {
+        // Stop all coprocesses
+        {
+            let mut mgr = self.coprocess_manager.lock();
+            mgr.stop_all();
+        }
+
         // Kill the child process if still running
         if self.is_running() {
             let _ = self.kill();

@@ -14,12 +14,18 @@ mod graphics;
 pub mod notification;
 pub mod progress;
 mod sequences;
+pub mod trigger;
 mod write;
 
 // Re-export Notification as it's part of the public API
 pub use notification::Notification;
 // Re-export progress types as they're part of the public API
 pub use progress::{ProgressBar, ProgressState};
+// Re-export trigger types as they're part of the public API
+pub use trigger::{
+    ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
+    TriggerRegistry,
+};
 
 // Imports
 use crate::cell::{Cell, CellFlags};
@@ -93,6 +99,8 @@ pub enum TerminalEvent {
     DirtyRegion(usize, usize),
     /// Current working directory changed (from OSC 7 or manual record)
     CwdChanged(CwdChange),
+    /// A trigger pattern matched terminal output
+    TriggerMatched(trigger::TriggerMatch),
 }
 
 /// Kind of terminal event for subscription filters
@@ -106,6 +114,7 @@ pub enum TerminalEventKind {
     HyperlinkAdded,
     DirtyRegion,
     CwdChanged,
+    TriggerMatched,
 }
 
 /// Hyperlink information with all its locations
@@ -1413,6 +1422,18 @@ pub struct Terminal {
     session_variables: crate::badge::SessionVariables,
     /// Optional event subscription filter
     event_subscription: Option<std::collections::HashSet<TerminalEventKind>>,
+
+    // === Feature 18: Triggers & Automation ===
+    /// Trigger registry for pattern matching on terminal output
+    trigger_registry: trigger::TriggerRegistry,
+    /// Active trigger highlight overlays
+    trigger_highlights: Vec<trigger::TriggerHighlight>,
+    /// Pending action results for frontend consumption
+    trigger_action_results: Vec<trigger::ActionResult>,
+    /// Maximum action results to retain
+    max_action_results: usize,
+    /// Rows pending trigger scan (populated from dirty_rows when triggers exist)
+    pending_trigger_rows: HashSet<usize>,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -1756,6 +1777,13 @@ impl Terminal {
                 rows as u16,
             ),
             event_subscription: None,
+
+            // Triggers & Automation
+            trigger_registry: trigger::TriggerRegistry::new(),
+            trigger_highlights: Vec::new(),
+            trigger_action_results: Vec::new(),
+            max_action_results: 1000,
+            pending_trigger_rows: HashSet::new(),
         }
     }
 
@@ -2615,6 +2643,7 @@ impl Terminal {
             TerminalEvent::HyperlinkAdded(_) => TerminalEventKind::HyperlinkAdded,
             TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
             TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
+            TerminalEvent::TriggerMatched(_) => TerminalEventKind::TriggerMatched,
         }
     }
 
@@ -2654,6 +2683,10 @@ impl Terminal {
         let (_cols, rows) = self.size();
         if row < rows {
             self.dirty_rows.insert(row);
+            // Track dirty rows for trigger scanning
+            if self.trigger_registry.has_active_triggers() {
+                self.pending_trigger_rows.insert(row);
+            }
         }
     }
 
@@ -6497,6 +6530,209 @@ impl Terminal {
 
         macro_data.duration = session.duration;
         macro_data
+    }
+
+    // === Feature 18: Triggers & Automation ===
+
+    /// Add a new trigger with the given name, regex pattern, and actions
+    ///
+    /// Returns the trigger ID on success, or an error if the regex is invalid.
+    pub fn add_trigger(
+        &mut self,
+        name: String,
+        pattern: String,
+        actions: Vec<trigger::TriggerAction>,
+    ) -> Result<trigger::TriggerId, String> {
+        self.trigger_registry.add(name, pattern, actions)
+    }
+
+    /// Remove a trigger by ID
+    pub fn remove_trigger(&mut self, id: trigger::TriggerId) -> bool {
+        self.trigger_registry.remove(id)
+    }
+
+    /// Enable or disable a trigger
+    pub fn set_trigger_enabled(&mut self, id: trigger::TriggerId, enabled: bool) -> bool {
+        self.trigger_registry.set_enabled(id, enabled)
+    }
+
+    /// List all registered triggers
+    pub fn list_triggers(&self) -> Vec<&trigger::Trigger> {
+        self.trigger_registry.list()
+    }
+
+    /// Get a trigger by ID
+    pub fn get_trigger(&self, id: trigger::TriggerId) -> Option<&trigger::Trigger> {
+        self.trigger_registry.get(id)
+    }
+
+    /// Drain all pending trigger match events
+    pub fn poll_trigger_matches(&mut self) -> Vec<trigger::TriggerMatch> {
+        self.trigger_registry.poll_matches()
+    }
+
+    /// Process trigger scans on pending dirty rows
+    ///
+    /// Called automatically in the PTY reader thread after `process()`.
+    /// Can also be called manually for non-PTY terminals.
+    pub fn process_trigger_scans(&mut self) {
+        if !self.trigger_registry.has_active_triggers() {
+            self.pending_trigger_rows.clear();
+            return;
+        }
+
+        let rows_to_scan: Vec<usize> = self.pending_trigger_rows.drain().collect();
+        let grid = self.active_grid();
+
+        // Collect row texts
+        let mut row_texts: Vec<(usize, String)> = Vec::new();
+        for row in &rows_to_scan {
+            let text = grid.row_text(*row);
+            if !text.trim().is_empty() {
+                row_texts.push((*row, text));
+            }
+        }
+
+        // Scan each row
+        for (row, text) in &row_texts {
+            let matches = self.trigger_registry.scan_line(*row, text);
+
+            for trigger_match in &matches {
+                // Execute actions for this match
+                self.execute_trigger_actions(trigger_match);
+
+                // Emit event
+                self.terminal_events
+                    .push(TerminalEvent::TriggerMatched(trigger_match.clone()));
+            }
+        }
+    }
+
+    /// Execute trigger actions for a match
+    fn execute_trigger_actions(&mut self, trigger_match: &trigger::TriggerMatch) {
+        let trigger_id = trigger_match.trigger_id;
+        let actions = match self.trigger_registry.get(trigger_id) {
+            Some(t) => t.actions.clone(),
+            None => return,
+        };
+
+        let now = unix_millis();
+
+        for action in &actions {
+            match action {
+                trigger::TriggerAction::Highlight {
+                    fg,
+                    bg,
+                    duration_ms,
+                } => {
+                    let expiry = if *duration_ms == 0 {
+                        u64::MAX
+                    } else {
+                        now.saturating_add(*duration_ms)
+                    };
+                    self.trigger_highlights.push(trigger::TriggerHighlight {
+                        row: trigger_match.row,
+                        col_start: trigger_match.col,
+                        col_end: trigger_match.end_col,
+                        fg: *fg,
+                        bg: *bg,
+                        expiry,
+                    });
+                }
+                trigger::TriggerAction::Notify { title, message } => {
+                    let title = trigger::substitute_captures(title, &trigger_match.captures);
+                    let message = trigger::substitute_captures(message, &trigger_match.captures);
+                    self.enqueue_notification(Notification::new(title, message));
+                }
+                trigger::TriggerAction::MarkLine { label } => {
+                    let label = label
+                        .as_ref()
+                        .map(|l| trigger::substitute_captures(l, &trigger_match.captures));
+                    self.add_bookmark(trigger_match.row as isize, label);
+                }
+                trigger::TriggerAction::SetVariable { name, value } => {
+                    let name = trigger::substitute_captures(name, &trigger_match.captures);
+                    let value = trigger::substitute_captures(value, &trigger_match.captures);
+                    self.session_variables.custom.insert(name, value);
+                }
+                trigger::TriggerAction::RunCommand { command, args } => {
+                    let command = trigger::substitute_captures(command, &trigger_match.captures);
+                    let args: Vec<String> = args
+                        .iter()
+                        .map(|a| trigger::substitute_captures(a, &trigger_match.captures))
+                        .collect();
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results
+                            .push(trigger::ActionResult::RunCommand {
+                                trigger_id,
+                                command,
+                                args,
+                            });
+                    }
+                }
+                trigger::TriggerAction::PlaySound { sound_id, volume } => {
+                    let sound_id = trigger::substitute_captures(sound_id, &trigger_match.captures);
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results
+                            .push(trigger::ActionResult::PlaySound {
+                                trigger_id,
+                                sound_id,
+                                volume: *volume,
+                            });
+                    }
+                }
+                trigger::TriggerAction::SendText { text, delay_ms } => {
+                    let text = trigger::substitute_captures(text, &trigger_match.captures);
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results
+                            .push(trigger::ActionResult::SendText {
+                                trigger_id,
+                                text,
+                                delay_ms: *delay_ms,
+                            });
+                    }
+                }
+                trigger::TriggerAction::StopPropagation => {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Get active trigger highlights (filters expired ones)
+    pub fn get_trigger_highlights(&self) -> Vec<trigger::TriggerHighlight> {
+        let now = unix_millis();
+        self.trigger_highlights
+            .iter()
+            .filter(|h| h.expiry > now)
+            .cloned()
+            .collect()
+    }
+
+    /// Clear all trigger highlights
+    pub fn clear_trigger_highlights(&mut self) {
+        self.trigger_highlights.clear();
+    }
+
+    /// Remove expired trigger highlights
+    pub fn clear_expired_highlights(&mut self) {
+        let now = unix_millis();
+        self.trigger_highlights.retain(|h| h.expiry > now);
+    }
+
+    /// Drain pending action results for frontend consumption
+    pub fn poll_action_results(&mut self) -> Vec<trigger::ActionResult> {
+        std::mem::take(&mut self.trigger_action_results)
+    }
+
+    /// Get access to the trigger registry
+    pub fn trigger_registry(&self) -> &trigger::TriggerRegistry {
+        &self.trigger_registry
+    }
+
+    /// Get mutable access to the trigger registry
+    pub fn trigger_registry_mut(&mut self) -> &mut trigger::TriggerRegistry {
+        &mut self.trigger_registry
     }
 }
 

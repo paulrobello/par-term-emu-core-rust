@@ -765,6 +765,10 @@ pub fn decode_server_message<'py>(
             initial_screen,
             session_id,
             theme,
+            badge,
+            faint_text_alpha,
+            cwd,
+            modify_other_keys,
         } => {
             dict.set_item("type", "connected")?;
             dict.set_item("cols", cols)?;
@@ -786,6 +790,10 @@ pub fn decode_server_message<'py>(
             } else {
                 dict.set_item("theme", py.None())?;
             }
+            dict.set_item("badge", badge)?;
+            dict.set_item("faint_text_alpha", faint_text_alpha)?;
+            dict.set_item("cwd", cwd)?;
+            dict.set_item("modify_other_keys", modify_other_keys)?;
         }
         ServerMessage::Refresh {
             cols,
@@ -802,6 +810,38 @@ pub fn decode_server_message<'py>(
             dict.set_item("col", col)?;
             dict.set_item("row", row)?;
             dict.set_item("visible", visible)?;
+        }
+        ServerMessage::CwdChanged {
+            old_cwd,
+            new_cwd,
+            hostname,
+            username,
+            timestamp,
+        } => {
+            dict.set_item("type", "cwd_changed")?;
+            dict.set_item("old_cwd", old_cwd)?;
+            dict.set_item("new_cwd", new_cwd)?;
+            dict.set_item("hostname", hostname)?;
+            dict.set_item("username", username)?;
+            dict.set_item("timestamp", timestamp)?;
+        }
+        ServerMessage::TriggerMatched {
+            trigger_id,
+            row,
+            col,
+            end_col,
+            text,
+            captures,
+            timestamp,
+        } => {
+            dict.set_item("type", "trigger_matched")?;
+            dict.set_item("trigger_id", trigger_id)?;
+            dict.set_item("row", row)?;
+            dict.set_item("col", col)?;
+            dict.set_item("end_col", end_col)?;
+            dict.set_item("text", text)?;
+            dict.set_item("captures", captures)?;
+            dict.set_item("timestamp", timestamp)?;
         }
         ServerMessage::Error { message, code } => {
             dict.set_item("type", "error")?;
@@ -954,6 +994,8 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Bell => "bell",
                     crate::streaming::protocol::EventType::Title => "title",
                     crate::streaming::protocol::EventType::Resize => "resize",
+                    crate::streaming::protocol::EventType::Cwd => "cwd",
+                    crate::streaming::protocol::EventType::Trigger => "trigger",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

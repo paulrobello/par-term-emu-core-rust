@@ -704,6 +704,35 @@ impl StreamingServer {
         }
     }
 
+    /// Build a Connected message from current terminal state
+    fn build_connect_message(&self, client_id: &str) -> ServerMessage {
+        let terminal = self.terminal.lock();
+        let (cols, rows) = terminal.size();
+
+        let initial_screen = if self.config.send_initial_screen {
+            Some(terminal.export_visible_screen_styled())
+        } else {
+            None
+        };
+
+        let badge = terminal.evaluate_badge();
+        let faint_alpha = Some(terminal.faint_text_alpha());
+        let cwd = terminal.current_directory().map(|s| s.to_string());
+        let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
+
+        ServerMessage::connected_full(
+            cols as u16,
+            rows as u16,
+            initial_screen,
+            client_id.to_string(),
+            self.theme.clone(),
+            badge,
+            faint_alpha,
+            cwd,
+            mok_mode,
+        )
+    }
+
     /// Handle a new WebSocket connection
     async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
         // Try to reserve a client slot (atomic check-and-increment)
@@ -722,38 +751,8 @@ impl StreamingServer {
         let mut client = Client::new(ws_stream, self.config.default_read_only);
         let client_id = client.id();
 
-        // Send initial connection message with visible screen snapshot
-        let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock();
-            let (cols, rows) = terminal.size();
-
-            let initial_screen = if self.config.send_initial_screen {
-                // Export only visible screen (no scrollback) with ANSI styling
-                Some(terminal.export_visible_screen_styled())
-            } else {
-                None
-            };
-
-            (cols as u16, rows as u16, initial_screen)
-        };
-
-        let connect_msg = match (initial_screen, self.theme.clone()) {
-            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
-                cols,
-                rows,
-                screen,
-                client_id.to_string(),
-                theme,
-            ),
-            (Some(screen), None) => {
-                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
-            }
-            (None, Some(theme)) => {
-                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
-            }
-            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
-        };
-
+        // Send initial connection message with full terminal state
+        let connect_msg = self.build_connect_message(&client_id.to_string());
         client.send(connect_msg).await?;
 
         crate::debug_info!(
@@ -918,36 +917,8 @@ impl StreamingServer {
         let client_id = uuid::Uuid::new_v4();
         let read_only = self.config.default_read_only;
 
-        // Send initial connection message with visible screen snapshot
-        let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock();
-            let (cols, rows) = terminal.size();
-
-            let initial_screen = if self.config.send_initial_screen {
-                Some(terminal.export_visible_screen_styled())
-            } else {
-                None
-            };
-
-            (cols as u16, rows as u16, initial_screen)
-        };
-
-        let connect_msg = match (initial_screen, self.theme.clone()) {
-            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
-                cols,
-                rows,
-                screen,
-                client_id.to_string(),
-                theme,
-            ),
-            (Some(screen), None) => {
-                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
-            }
-            (None, Some(theme)) => {
-                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
-            }
-            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
-        };
+        // Send initial connection message with full terminal state
+        let connect_msg = self.build_connect_message(&client_id.to_string());
 
         // Use futures to split and handle the WebSocket
         use futures_util::{SinkExt, StreamExt};
@@ -1191,6 +1162,37 @@ impl StreamingServer {
         self.broadcast(msg);
     }
 
+    /// Send a CWD changed event to all clients
+    pub fn send_cwd_changed(
+        &self,
+        old_cwd: Option<String>,
+        new_cwd: String,
+        hostname: Option<String>,
+        username: Option<String>,
+        timestamp: u64,
+    ) {
+        let msg = ServerMessage::cwd_changed_full(old_cwd, new_cwd, hostname, username, timestamp);
+        self.broadcast(msg);
+    }
+
+    /// Send a trigger matched event to all clients
+    #[allow(clippy::too_many_arguments)]
+    pub fn send_trigger_matched(
+        &self,
+        trigger_id: u64,
+        row: u16,
+        col: u16,
+        end_col: u16,
+        text: String,
+        captures: Vec<String>,
+        timestamp: u64,
+    ) {
+        let msg = ServerMessage::trigger_matched(
+            trigger_id, row, col, end_col, text, captures, timestamp,
+        );
+        self.broadcast(msg);
+    }
+
     /// Shutdown the server and disconnect all clients
     ///
     /// This broadcasts a shutdown message to all clients and signals
@@ -1222,36 +1224,8 @@ impl StreamingServer {
         // Split the WebSocket into sender and receiver
         let (mut ws_tx, mut ws_rx) = socket.split();
 
-        // Send initial connection message with visible screen snapshot
-        let (cols, rows, initial_screen) = {
-            let terminal = self.terminal.lock();
-            let (cols, rows) = terminal.size();
-
-            let initial_screen = if self.config.send_initial_screen {
-                Some(terminal.export_visible_screen_styled())
-            } else {
-                None
-            };
-
-            (cols as u16, rows as u16, initial_screen)
-        };
-
-        let connect_msg = match (initial_screen, self.theme.clone()) {
-            (Some(screen), Some(theme)) => ServerMessage::connected_with_screen_and_theme(
-                cols,
-                rows,
-                screen,
-                client_id.to_string(),
-                theme,
-            ),
-            (Some(screen), None) => {
-                ServerMessage::connected_with_screen(cols, rows, screen, client_id.to_string())
-            }
-            (None, Some(theme)) => {
-                ServerMessage::connected_with_theme(cols, rows, client_id.to_string(), theme)
-            }
-            (None, None) => ServerMessage::connected(cols, rows, client_id.to_string()),
-        };
+        // Send initial connection message with full terminal state
+        let connect_msg = self.build_connect_message(&client_id.to_string());
 
         // Send connection message as binary protobuf
         let msg_bytes = encode_server_message(&connect_msg)?;

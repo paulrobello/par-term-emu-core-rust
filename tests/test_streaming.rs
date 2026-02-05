@@ -81,6 +81,7 @@ mod streaming_tests {
                     initial_screen,
                     session_id,
                     theme,
+                    ..
                 } => {
                     assert_eq!(cols, 80);
                     assert_eq!(rows, 24);
@@ -107,6 +108,7 @@ mod streaming_tests {
                     initial_screen,
                     session_id,
                     theme,
+                    ..
                 } => {
                     assert_eq!(cols, 80);
                     assert_eq!(rows, 24);
@@ -312,6 +314,7 @@ mod streaming_tests {
                     session_id,
                     theme,
                     initial_screen,
+                    ..
                 } => {
                     assert_eq!(cols, 80);
                     assert_eq!(rows, 24);
@@ -343,6 +346,7 @@ mod streaming_tests {
                     session_id,
                     theme,
                     initial_screen,
+                    ..
                 } => {
                     assert_eq!(cols, 80);
                     assert_eq!(rows, 24);

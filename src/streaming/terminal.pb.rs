@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -57,6 +57,10 @@ pub mod server_message {
         Shutdown(super::Shutdown),
         #[prost(message, tag = "10")]
         Pong(super::Pong),
+        #[prost(message, tag = "11")]
+        CwdChanged(super::CwdChanged),
+        #[prost(message, tag = "12")]
+        TriggerMatched(super::TriggerMatched),
     }
 }
 /// Terminal output data (very high frequency)
@@ -97,6 +101,18 @@ pub struct Connected {
     pub session_id: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "5")]
     pub theme: ::core::option::Option<ThemeInfo>,
+    /// Current badge text
+    #[prost(string, optional, tag = "6")]
+    pub badge: ::core::option::Option<::prost::alloc::string::String>,
+    /// Dim text alpha (0.0-1.0)
+    #[prost(float, optional, tag = "7")]
+    pub faint_text_alpha: ::core::option::Option<f32>,
+    /// Current working directory
+    #[prost(string, optional, tag = "8")]
+    pub cwd: ::core::option::Option<::prost::alloc::string::String>,
+    /// modifyOtherKeys mode (0-2)
+    #[prost(uint32, optional, tag = "9")]
+    pub modify_other_keys: ::core::option::Option<u32>,
 }
 /// Full screen refresh response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -122,6 +138,38 @@ pub struct CursorPosition {
 /// Bell/alert event
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Bell {}
+/// CWD change notification (OSC 7)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct CwdChanged {
+    #[prost(string, optional, tag = "1")]
+    pub old_cwd: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, tag = "2")]
+    pub new_cwd: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub hostname: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub username: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "5")]
+    pub timestamp: ::core::option::Option<u64>,
+}
+/// Trigger pattern matched
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TriggerMatched {
+    #[prost(uint64, tag = "1")]
+    pub trigger_id: u64,
+    #[prost(uint32, tag = "2")]
+    pub row: u32,
+    #[prost(uint32, tag = "3")]
+    pub col: u32,
+    #[prost(uint32, tag = "4")]
+    pub end_col: u32,
+    #[prost(string, tag = "5")]
+    pub text: ::prost::alloc::string::String,
+    #[prost(string, repeated, tag = "6")]
+    pub captures: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(uint64, tag = "7")]
+    pub timestamp: u64,
+}
 /// Error notification
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Error {
@@ -197,6 +245,8 @@ pub enum EventType {
     Bell = 3,
     Title = 4,
     Resize = 5,
+    Cwd = 6,
+    Trigger = 7,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -211,6 +261,8 @@ impl EventType {
             Self::Bell => "EVENT_TYPE_BELL",
             Self::Title => "EVENT_TYPE_TITLE",
             Self::Resize => "EVENT_TYPE_RESIZE",
+            Self::Cwd => "EVENT_TYPE_CWD",
+            Self::Trigger => "EVENT_TYPE_TRIGGER",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -222,6 +274,8 @@ impl EventType {
             "EVENT_TYPE_BELL" => Some(Self::Bell),
             "EVENT_TYPE_TITLE" => Some(Self::Title),
             "EVENT_TYPE_RESIZE" => Some(Self::Resize),
+            "EVENT_TYPE_CWD" => Some(Self::Cwd),
+            "EVENT_TYPE_TRIGGER" => Some(Self::Trigger),
             _ => None,
         }
     }

@@ -34,6 +34,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Advanced Search and Regex](#advanced-search-and-regex)
   - [Mouse Tracking and Events](#mouse-tracking-and-events)
   - [Bookmarks](#bookmarks)
+  - [Triggers & Automation](#triggers--automation)
   - [Shell Integration Extended](#shell-integration-extended)
   - [Clipboard Extended](#clipboard-extended)
   - [Graphics Extended](#graphics-extended)
@@ -55,6 +56,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Update Tracking](#update-tracking)
   - [Appearance Settings](#appearance-settings-pty-specific)
   - [Macro Playback](#macro-playback-pty-specific)
+  - [Coprocess Management](#coprocess-management)
   - [Context Manager Support](#context-manager-support)
 - [Color Utilities](#color-utilities)
 - [Data Classes](#data-classes)
@@ -97,6 +99,10 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [ShellIntegrationStats](#shellintegrationstats)
   - [SnapshotDiff](#snapshotdiff)
   - [TmuxNotification](#tmuxnotification)
+  - [Trigger](#trigger)
+  - [TriggerAction](#triggeraction)
+  - [TriggerMatch](#triggermatch)
+  - [CoprocessConfig](#coprocessconfig)
   - [WindowLayout](#windowlayout)
   - [ColorHSL](#colorhsl)
   - [ColorHSV](#colorhsv)
@@ -411,6 +417,44 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `get_bookmarks() -> list[Bookmark]`: Get all bookmarks
 - `clear_bookmarks()`: Remove all bookmarks
 
+### Triggers & Automation
+
+Register regex patterns to automatically match terminal output and execute actions.
+
+#### Trigger Management
+
+- `add_trigger(name: str, pattern: str, actions: list[TriggerAction]) -> int`: Register a trigger with a regex pattern and actions. Returns trigger ID. Raises `ValueError` for invalid regex or action types.
+- `remove_trigger(trigger_id: int) -> bool`: Remove a trigger by ID. Returns `True` if found and removed.
+- `set_trigger_enabled(trigger_id: int, enabled: bool) -> bool`: Enable or disable a trigger. Returns `True` if trigger exists.
+- `list_triggers() -> list[Trigger]`: List all registered triggers.
+- `get_trigger(trigger_id: int) -> Trigger | None`: Get trigger by ID, or `None` if not found.
+
+#### Trigger Scanning & Matches
+
+- `process_trigger_scans()`: Scan dirty rows for trigger matches. Called automatically in PTY mode; call manually for non-PTY terminals.
+- `poll_trigger_matches() -> list[TriggerMatch]`: Get and clear pending trigger matches.
+- `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (RunCommand, PlaySound, SendText).
+
+#### Trigger Highlights
+
+- `get_trigger_highlights() -> list[tuple]`: Get active highlight overlays as `(row, col_start, col_end, fg, bg)` tuples. Expired highlights are filtered.
+- `clear_trigger_highlights()`: Remove all trigger highlight overlays.
+
+#### Action Types
+
+Actions are created using `TriggerAction(action_type, params)`:
+
+| Action Type | Parameters | Description |
+|-------------|-----------|-------------|
+| `"highlight"` | `bg_r`, `bg_g`, `bg_b`, `fg_r`, `fg_g`, `fg_b`, `duration_ms` | Highlight matched text with colors |
+| `"notify"` | `title`, `message` | Send notification (supports `$1`, `$2` capture substitution) |
+| `"mark_line"` | `label` | Add bookmark at matched line |
+| `"set_variable"` | `name`, `value` | Set session variable (supports capture substitution) |
+| `"run_command"` | `command`, `args` (comma-separated) | Emit command event for frontend |
+| `"play_sound"` | `sound_id`, `volume` | Emit sound event for frontend |
+| `"send_text"` | `text`, `delay_ms` | Emit text input event for frontend |
+| `"stop"` | *(none)* | Stop processing remaining actions |
+
 ### Shell Integration Extended
 
 Extended shell integration features beyond basic OSC 133:
@@ -667,6 +711,17 @@ Automate terminal interactions with recorded macros:
 - `list_macros() -> list[str]`: List all available macros
 - `load_macro(yaml_str: str) -> Macro`: Load macro from YAML string
 - `remove_macro(name: str)`: Remove macro by name
+
+#### Coprocess Management
+
+Run external processes alongside the terminal session, optionally feeding terminal output to their stdin.
+
+- `start_coprocess(config: CoprocessConfig) -> int`: Start a coprocess and return its ID.
+- `stop_coprocess(coprocess_id: int)`: Stop a coprocess by ID. Raises `ValueError` if not found.
+- `write_to_coprocess(coprocess_id: int, data: bytes)`: Write data to coprocess stdin. Raises `ValueError` if not found.
+- `read_from_coprocess(coprocess_id: int) -> list[str]`: Read buffered output lines from coprocess. Raises `ValueError` if not found.
+- `list_coprocesses() -> list[int]`: List active coprocess IDs.
+- `coprocess_status(coprocess_id: int) -> bool | None`: Check if coprocess is running. Returns `None` if not found.
 
 ### Context Manager Support
 
@@ -1139,6 +1194,51 @@ Tmux control mode notification.
 **Properties:**
 - `notification_type: str`: Notification type
 - `data: str`: Notification data
+
+### Trigger
+
+A registered trigger pattern.
+
+**Properties:**
+- `id: int`: Trigger ID
+- `name: str`: Trigger name
+- `pattern: str`: Regex pattern string
+- `enabled: bool`: Whether the trigger is active
+- `match_count: int`: Number of times this trigger has matched
+
+### TriggerAction
+
+Trigger action configuration. Constructed from Python with `TriggerAction(action_type, params)`.
+
+**Properties:**
+- `action_type: str`: Action type (e.g., "highlight", "notify", "mark_line", "set_variable", "run_command", "play_sound", "send_text", "stop")
+- `params: dict[str, str]`: Action parameters (keys depend on action type)
+
+### TriggerMatch
+
+A trigger match result from scanning terminal output.
+
+**Properties:**
+- `trigger_id: int`: ID of the trigger that matched
+- `row: int`: Row where the match occurred
+- `col: int`: Column start of the match
+- `end_col: int`: Column end of the match
+- `text: str`: Matched text
+- `captures: list[str]`: Capture groups (index 0 = full match, 1+ = groups)
+- `timestamp: int`: Match timestamp (Unix timestamp in seconds)
+
+### CoprocessConfig
+
+Configuration for starting a coprocess.
+
+**Constructor:** `CoprocessConfig(command, args=[], cwd=None, env={}, copy_terminal_output=True)`
+
+**Properties:**
+- `command: str`: Command to run
+- `args: list[str]`: Command arguments
+- `cwd: str | None`: Working directory
+- `env: dict[str, str]`: Environment variables
+- `copy_terminal_output: bool`: Whether to pipe terminal output to coprocess stdin
 
 ### WindowLayout
 

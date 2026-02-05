@@ -190,6 +190,20 @@ Features:
 - DEC VT340 compatible bitmap graphics
 - Integrated with unified graphics system
 
+**Triggers & Automation** (`src/terminal/trigger.rs`)
+- Regex-based pattern matching on terminal output
+- `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching
+- Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
+- Capture group substitution (`$1`, `$2`, etc.) in action parameters
+- Highlight overlays with optional expiry
+
+**Coprocess Management** (`src/coprocess.rs`)
+- `CoprocessManager` for spawning and managing external processes alongside terminal sessions
+- Terminal output piping to coprocess stdin (configurable per coprocess)
+- Line-buffered stdout reading via background reader threads
+- Thread-safe output buffering with `Arc<Mutex<>>` pattern
+- Integrated with PTY reader thread for automatic output feeding
+
 **Macros Module** (`src/macros.rs`)
 - Macro recording and playback
 - Screenshot triggers

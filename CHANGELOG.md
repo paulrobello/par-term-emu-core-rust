@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-02-05
+
+### Fixed
+- **Streaming Server Event Dispatch**: Terminal events (bell, title change, CWD change, trigger matches) are now actually dispatched to streaming clients
+  - Added `poll_terminal_events()` task to streaming server that polls terminal events at 20Hz
+  - Bell events, title changes, resize events, CWD changes, and trigger matches are now broadcast to all connected WebSocket clients
+  - Previously, broadcast helpers existed but were never called
+
+### Added
+- **Streaming Protocol: CWD Change Events (OSC 7)**: New `CwdChanged` message in the streaming protocol
+  - Includes old_cwd, new_cwd, hostname, username, and timestamp fields
+  - New `EVENT_TYPE_CWD` subscription type
+- **Streaming Protocol: Trigger Match Events**: New `TriggerMatched` message in the streaming protocol
+  - Includes trigger_id, row, col, end_col, text, captures, and timestamp fields
+  - New `EVENT_TYPE_TRIGGER` subscription type
+- **Streaming: Enhanced Connected Message**: Connection handshake now includes additional terminal state
+  - `badge`: Current badge text (from OSC 1337 badge format)
+  - `faint_text_alpha`: Dim text alpha for SGR 2 rendering (0.0-1.0)
+  - `cwd`: Current working directory (from OSC 7)
+  - `modify_other_keys`: Current modifyOtherKeys mode (0-2)
+- **Streaming: New broadcast helpers**: `send_cwd_changed()` and `send_trigger_matched()` on `StreamingServer`
+- **Triggers & Automation (Feature 18)**: Regex-based pattern matching on terminal output with automated actions
+  - `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching across terminal output
+  - Trigger actions: Highlight (with optional expiry), Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (emitted as events for frontend)
+  - Capture group substitution (`$1`, `$2`, etc.) in action parameters
+  - Trigger highlight overlays with time-based expiry
+  - `StopPropagation` action to short-circuit remaining actions
+  - New methods: `add_trigger()`, `remove_trigger()`, `set_trigger_enabled()`, `list_triggers()`, `get_trigger()`, `poll_trigger_matches()`, `process_trigger_scans()`, `get_trigger_highlights()`, `clear_trigger_highlights()`, `clear_expired_highlights()`, `poll_action_results()`
+  - New event: `TriggerMatched` in `poll_events()`
+- **Coprocess Management**: Run external processes alongside terminal sessions
+  - `CoprocessManager` for spawning, stopping, and communicating with coprocesses
+  - Automatic terminal output piping to coprocess stdin (configurable per coprocess)
+  - Line-buffered stdout reading via background reader threads
+  - Integrated with PTY reader thread for automatic output feeding
+  - New PTY methods: `start_coprocess()`, `stop_coprocess()`, `write_to_coprocess()`, `read_from_coprocess()`, `list_coprocesses()`, `coprocess_status()`
+- **Python Bindings**: Full PyO3 bindings for triggers and coprocesses
+  - New classes: `Trigger`, `TriggerAction`, `TriggerMatch`, `CoprocessConfig`
+  - Trigger methods on `Terminal` class
+  - Coprocess methods on `PtyTerminal` class
+
 ## [0.30.0] - 2026-02-04
 
 ### Added

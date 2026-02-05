@@ -13,6 +13,66 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.31.0
+
+### Triggers & Automation
+
+Register regex patterns to automatically match terminal output and execute actions — highlight matches, send notifications, set bookmarks, update session variables, or emit events for frontend handling:
+
+```python
+from par_term_emu_core_rust import Terminal, TriggerAction
+
+term = Terminal(80, 24)
+
+# Highlight errors in red
+highlight = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+term.add_trigger("errors", r"ERROR:\s+(\S+)", [highlight])
+
+# Set a session variable from matched output
+set_var = TriggerAction("set_variable", {"name": "last_status", "value": "$1"})
+term.add_trigger("status", r"STATUS: (\w+)", [set_var])
+
+# Process terminal output and scan for matches
+term.process_str("ERROR: diskfull\nSTATUS: RUNNING\n")
+term.process_trigger_scans()
+
+# Poll results
+matches = term.poll_trigger_matches()  # TriggerMatch objects with captures
+highlights = term.get_trigger_highlights()  # Active highlight overlays
+```
+
+**Trigger Actions:** `highlight`, `notify`, `mark_line`, `set_variable`, `run_command`, `play_sound`, `send_text`, `stop`
+
+**Features:**
+- `RegexSet`-based multi-pattern matching for efficient scanning
+- Capture group substitution (`$1`, `$2`) in action parameters
+- Highlight overlays with optional time-based expiry
+- Automatic scanning in PTY mode; manual `process_trigger_scans()` for non-PTY
+
+### Coprocess Management
+
+Run external processes alongside terminal sessions with automatic output piping:
+
+```python
+from par_term_emu_core_rust import PtyTerminal, CoprocessConfig
+
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell()
+
+    # Start a coprocess that receives terminal output
+    config = CoprocessConfig("grep", args=["ERROR"], copy_terminal_output=True)
+    cid = term.start_coprocess(config)
+
+    # Read coprocess output
+    lines = term.read_from_coprocess(cid)
+
+    # Check status and stop
+    term.coprocess_status(cid)  # True if running
+    term.stop_coprocess(cid)
+```
+
+**New Python Classes:** `Trigger`, `TriggerAction`, `TriggerMatch`, `CoprocessConfig`
+
 ## What's New in 0.30.0
 
 ### ⌨️ modifyOtherKeys Protocol Support

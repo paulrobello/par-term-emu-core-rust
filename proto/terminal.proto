@@ -29,6 +29,8 @@ enum EventType {
   EVENT_TYPE_BELL = 3;
   EVENT_TYPE_TITLE = 4;
   EVENT_TYPE_RESIZE = 5;
+  EVENT_TYPE_CWD = 6;
+  EVENT_TYPE_TRIGGER = 7;
 }
 
 // =============================================================================
@@ -47,6 +49,8 @@ message ServerMessage {
     Error error = 8;
     Shutdown shutdown = 9;
     Pong pong = 10;
+    CwdChanged cwd_changed = 11;
+    TriggerMatched trigger_matched = 12;
   }
 }
 
@@ -74,6 +78,10 @@ message Connected {
   optional bytes initial_screen = 3;  // ANSI styled screen content
   string session_id = 4;
   optional ThemeInfo theme = 5;
+  optional string badge = 6;              // Current badge text
+  optional float faint_text_alpha = 7;    // Dim text alpha (0.0-1.0)
+  optional string cwd = 8;               // Current working directory
+  optional uint32 modify_other_keys = 9;  // modifyOtherKeys mode (0-2)
 }
 
 // Full screen refresh response
@@ -92,6 +100,26 @@ message CursorPosition {
 
 // Bell/alert event
 message Bell {}
+
+// CWD change notification (OSC 7)
+message CwdChanged {
+  optional string old_cwd = 1;
+  string new_cwd = 2;
+  optional string hostname = 3;
+  optional string username = 4;
+  optional uint64 timestamp = 5;
+}
+
+// Trigger pattern matched
+message TriggerMatched {
+  uint64 trigger_id = 1;
+  uint32 row = 2;
+  uint32 col = 3;
+  uint32 end_col = 4;
+  string text = 5;
+  repeated string captures = 6;
+  uint64 timestamp = 7;
+}
 
 // Error notification
 message Error {

@@ -615,6 +615,60 @@ impl ServerState {
         info!("PTY status monitor exiting");
     }
 
+    /// Poll terminal events and broadcast to clients
+    async fn poll_terminal_events(&self) {
+        use par_term_emu_core_rust::terminal::TerminalEvent;
+
+        let mut interval = tokio::time::interval(Duration::from_millis(50)); // 20Hz polling
+        loop {
+            interval.tick().await;
+
+            let events = {
+                let session = self.pty_session.lock();
+                let terminal = session.terminal();
+                let mut term = terminal.lock();
+                term.poll_events()
+            };
+
+            for event in events {
+                match event {
+                    TerminalEvent::BellRang(_) => {
+                        self.streaming_server.send_bell();
+                    }
+                    TerminalEvent::TitleChanged(title) => {
+                        self.streaming_server.send_title(title);
+                    }
+                    TerminalEvent::SizeChanged(cols, rows) => {
+                        self.streaming_server.send_resize(cols as u16, rows as u16);
+                    }
+                    TerminalEvent::CwdChanged(cwd) => {
+                        self.streaming_server.send_cwd_changed(
+                            cwd.old_cwd,
+                            cwd.new_cwd,
+                            cwd.hostname,
+                            cwd.username,
+                            cwd.timestamp,
+                        );
+                    }
+                    TerminalEvent::TriggerMatched(tm) => {
+                        self.streaming_server.send_trigger_matched(
+                            tm.trigger_id,
+                            tm.row as u16,
+                            tm.col as u16,
+                            tm.end_col as u16,
+                            tm.text,
+                            tm.captures,
+                            tm.timestamp,
+                        );
+                    }
+                    // GraphicsAdded, HyperlinkAdded, DirtyRegion, ModeChanged
+                    // are not relevant for streaming clients
+                    _ => {}
+                }
+            }
+        }
+    }
+
     /// Run the main event loop
     async fn run(&self) -> Result<()> {
         let resize_handle = {
@@ -628,6 +682,13 @@ impl ServerState {
             let state = self.clone();
             tokio::spawn(async move {
                 state.handle_pty_status().await;
+            })
+        };
+
+        let event_handle = {
+            let state = self.clone();
+            tokio::spawn(async move {
+                state.poll_terminal_events().await;
             })
         };
 
@@ -648,6 +709,7 @@ impl ServerState {
 
         // Cancel background tasks
         resize_handle.abort();
+        event_handle.abort();
 
         Ok(())
     }

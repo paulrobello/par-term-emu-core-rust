@@ -40,6 +40,7 @@ pub mod cell;
 pub mod color;
 pub mod color_utils;
 pub mod conformance_level;
+pub mod coprocess;
 pub mod cursor;
 #[macro_use]
 pub mod debug;
@@ -95,16 +96,17 @@ pub use python_bindings::{
     py_rgb_to_hex, py_rgb_to_hsl, py_str_width, py_str_width_cjk, PyAmbiguousWidth, PyAttributes,
     PyBenchmarkResult, PyBenchmarkSuite, PyBookmark, PyClipboardEntry, PyClipboardHistoryEntry,
     PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
-    PyComplianceReport, PyComplianceTest, PyCursorStyle, PyCwdChange, PyDamageRegion,
-    PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic, PyImageFormat,
-    PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent,
-    PyMouseEncoding, PyMouseEvent, PyMousePosition, PyNotificationConfig, PyNotificationEvent,
-    PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState,
-    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
-    PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
-    PyStreamingServer, PyTerminal, PyTmuxNotification, PyUnderlineStyle, PyUnicodeVersion,
-    PyWidthConfig, PyWindowLayout,
+    PyComplianceReport, PyComplianceTest, PyCoprocessConfig, PyCursorStyle, PyCwdChange,
+    PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
+    PyImageFormat, PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro,
+    PyMacroEvent, PyMouseEncoding, PyMouseEvent, PyMousePosition, PyNotificationConfig,
+    PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar,
+    PyProgressState, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger,
+    PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
+    PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -202,6 +204,10 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnicodeVersion>()?;
     m.add_class::<PyAmbiguousWidth>()?;
     m.add_class::<PyWidthConfig>()?;
+    m.add_class::<PyTrigger>()?;
+    m.add_class::<PyTriggerMatch>()?;
+    m.add_class::<PyTriggerAction>()?;
+    m.add_class::<PyCoprocessConfig>()?;
 
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;

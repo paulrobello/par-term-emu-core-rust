@@ -2473,6 +2473,18 @@ impl PyTerminal {
                         }
                         map.insert("timestamp".to_string(), change.timestamp.to_string());
                     }
+                    TerminalEvent::TriggerMatched(trigger_match) => {
+                        map.insert("type".to_string(), "trigger_matched".to_string());
+                        map.insert(
+                            "trigger_id".to_string(),
+                            trigger_match.trigger_id.to_string(),
+                        );
+                        map.insert("row".to_string(), trigger_match.row.to_string());
+                        map.insert("col".to_string(), trigger_match.col.to_string());
+                        map.insert("end_col".to_string(), trigger_match.end_col.to_string());
+                        map.insert("text".to_string(), trigger_match.text.clone());
+                        map.insert("timestamp".to_string(), trigger_match.timestamp.to_string());
+                    }
                 }
                 map
             })
@@ -2484,7 +2496,8 @@ impl PyTerminal {
     /// Args:
     ///     kinds: Optional list of event kinds to receive (strings).
     ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
-    ///            graphics_added, hyperlink_added, dirty_region, cwd_changed.
+    ///            graphics_added, hyperlink_added, dirty_region, cwd_changed,
+    ///            trigger_matched.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         use crate::terminal::TerminalEventKind;
@@ -2500,6 +2513,7 @@ impl PyTerminal {
                     "hyperlink_added" => Some(TerminalEventKind::HyperlinkAdded),
                     "dirty_region" => Some(TerminalEventKind::DirtyRegion),
                     "cwd_changed" => Some(TerminalEventKind::CwdChanged),
+                    "trigger_matched" => Some(TerminalEventKind::TriggerMatched),
                     _ => None,
                 })
                 .collect()
@@ -2582,6 +2596,18 @@ impl PyTerminal {
                             map.insert("username".to_string(), user.clone());
                         }
                         map.insert("timestamp".to_string(), change.timestamp.to_string());
+                    }
+                    TerminalEvent::TriggerMatched(trigger_match) => {
+                        map.insert("type".to_string(), "trigger_matched".to_string());
+                        map.insert(
+                            "trigger_id".to_string(),
+                            trigger_match.trigger_id.to_string(),
+                        );
+                        map.insert("row".to_string(), trigger_match.row.to_string());
+                        map.insert("col".to_string(), trigger_match.col.to_string());
+                        map.insert("end_col".to_string(), trigger_match.end_col.to_string());
+                        map.insert("text".to_string(), trigger_match.text.clone());
+                        map.insert("timestamp".to_string(), trigger_match.timestamp.to_string());
                     }
                 }
                 map
@@ -4465,6 +4491,192 @@ impl PyTerminal {
     fn set_max_cwd_history(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_cwd_history(max);
         Ok(())
+    }
+
+    // === Feature 18: Triggers & Automation ===
+
+    /// Add a new trigger with a regex pattern and actions
+    ///
+    /// Args:
+    ///     name: Human-readable trigger name
+    ///     pattern: Regex pattern to match against terminal output lines
+    ///     actions: List of TriggerAction objects defining what happens on match
+    ///
+    /// Returns:
+    ///     int: Trigger ID for future reference
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> trigger_id = term.add_trigger("errors", r"ERROR:\s+(.+)", [action])
+    fn add_trigger(
+        &mut self,
+        name: String,
+        pattern: String,
+        actions: Vec<super::types::PyTriggerAction>,
+    ) -> PyResult<u64> {
+        let rust_actions: Result<Vec<_>, _> =
+            actions.iter().map(|a| a.to_trigger_action()).collect();
+        let rust_actions =
+            rust_actions.map_err(|e| PyValueError::new_err(format!("Invalid action: {}", e)))?;
+        self.inner
+            .add_trigger(name, pattern, rust_actions)
+            .map_err(PyValueError::new_err)
+    }
+
+    /// Remove a trigger by ID
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger to remove
+    ///
+    /// Returns:
+    ///     bool: True if trigger was found and removed
+    fn remove_trigger(&mut self, trigger_id: u64) -> PyResult<bool> {
+        Ok(self.inner.remove_trigger(trigger_id))
+    }
+
+    /// Enable or disable a trigger
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger
+    ///     enabled: Whether to enable (True) or disable (False)
+    ///
+    /// Returns:
+    ///     bool: True if trigger was found and updated
+    fn set_trigger_enabled(&mut self, trigger_id: u64, enabled: bool) -> PyResult<bool> {
+        Ok(self.inner.set_trigger_enabled(trigger_id, enabled))
+    }
+
+    /// List all registered triggers
+    ///
+    /// Returns:
+    ///     list[Trigger]: List of all triggers
+    fn list_triggers(&self) -> PyResult<Vec<super::types::PyTrigger>> {
+        Ok(self
+            .inner
+            .list_triggers()
+            .iter()
+            .map(|t| super::types::PyTrigger::from(*t))
+            .collect())
+    }
+
+    /// Get a trigger by ID
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger
+    ///
+    /// Returns:
+    ///     Trigger | None: Trigger if found, None otherwise
+    fn get_trigger(&self, trigger_id: u64) -> PyResult<Option<super::types::PyTrigger>> {
+        Ok(self
+            .inner
+            .get_trigger(trigger_id)
+            .map(super::types::PyTrigger::from))
+    }
+
+    /// Drain all pending trigger match events
+    ///
+    /// Returns:
+    ///     list[TriggerMatch]: List of matches since last poll
+    ///
+    /// Example:
+    ///     >>> matches = term.poll_trigger_matches()
+    ///     >>> for m in matches:
+    ///     ...     print(f"Trigger {m.trigger_id} matched '{m.text}' at row {m.row}")
+    fn poll_trigger_matches(&mut self) -> PyResult<Vec<super::types::PyTriggerMatch>> {
+        Ok(self
+            .inner
+            .poll_trigger_matches()
+            .iter()
+            .map(super::types::PyTriggerMatch::from)
+            .collect())
+    }
+
+    /// Process trigger scans on dirty rows
+    ///
+    /// Called automatically in PTY mode. Use manually for non-PTY terminals.
+    fn process_trigger_scans(&mut self) -> PyResult<()> {
+        self.inner.process_trigger_scans();
+        Ok(())
+    }
+
+    /// Get active trigger highlights (filters expired ones)
+    ///
+    /// Returns:
+    ///     list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
+    ///         where fg and bg are optional (r, g, b) tuples
+    #[allow(clippy::type_complexity)]
+    fn get_trigger_highlights(
+        &self,
+    ) -> PyResult<
+        Vec<(
+            usize,
+            usize,
+            usize,
+            Option<(u8, u8, u8)>,
+            Option<(u8, u8, u8)>,
+        )>,
+    > {
+        Ok(self
+            .inner
+            .get_trigger_highlights()
+            .iter()
+            .map(|h| (h.row, h.col_start, h.col_end, h.fg, h.bg))
+            .collect())
+    }
+
+    /// Clear all trigger highlights
+    fn clear_trigger_highlights(&mut self) -> PyResult<()> {
+        self.inner.clear_trigger_highlights();
+        Ok(())
+    }
+
+    /// Drain pending action results for frontend consumption
+    ///
+    /// Returns:
+    ///     list[dict]: List of action result dicts with 'type' and action-specific fields
+    fn poll_action_results(&mut self) -> PyResult<Vec<std::collections::HashMap<String, String>>> {
+        use crate::terminal::trigger::ActionResult;
+        Ok(self
+            .inner
+            .poll_action_results()
+            .iter()
+            .map(|ar| {
+                let mut map = std::collections::HashMap::new();
+                match ar {
+                    ActionResult::RunCommand {
+                        trigger_id,
+                        command,
+                        args,
+                    } => {
+                        map.insert("type".to_string(), "run_command".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert("command".to_string(), command.clone());
+                        map.insert("args".to_string(), args.join(","));
+                    }
+                    ActionResult::PlaySound {
+                        trigger_id,
+                        sound_id,
+                        volume,
+                    } => {
+                        map.insert("type".to_string(), "play_sound".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert("sound_id".to_string(), sound_id.clone());
+                        map.insert("volume".to_string(), volume.to_string());
+                    }
+                    ActionResult::SendText {
+                        trigger_id,
+                        text,
+                        delay_ms,
+                    } => {
+                        map.insert("type".to_string(), "send_text".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert("text".to_string(), text.clone());
+                        map.insert("delay_ms".to_string(), delay_ms.to_string());
+                    }
+                }
+                map
+            })
+            .collect())
     }
 
     // === Feature 37: Terminal Notifications ===

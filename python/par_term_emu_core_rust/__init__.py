@@ -20,6 +20,7 @@ This library provides a full-featured terminal emulator with support for:
 from ._native import (
     AmbiguousWidth,
     Attributes,
+    CoprocessConfig,
     CursorStyle,
     Graphic,
     Macro,
@@ -33,6 +34,9 @@ from ._native import (
     ScreenSnapshot,
     ShellIntegration,
     Terminal,
+    Trigger,
+    TriggerAction,
+    TriggerMatch,
     UnderlineStyle,
     UnicodeVersion,
     WidthConfig,
@@ -84,10 +88,11 @@ except ImportError:
     encode_client_message = None
     decode_client_message = None
 
-__version__ = "0.30.0"
+__version__ = "0.31.0"
 __all__ = [
     "AmbiguousWidth",
     "Attributes",
+    "CoprocessConfig",
     "CursorStyle",
     "Graphic",
     "Macro",
@@ -101,6 +106,9 @@ __all__ = [
     "ScreenSnapshot",
     "ShellIntegration",
     "Terminal",
+    "Trigger",
+    "TriggerAction",
+    "TriggerMatch",
     "UnderlineStyle",
     "UnicodeVersion",
     "WidthConfig",

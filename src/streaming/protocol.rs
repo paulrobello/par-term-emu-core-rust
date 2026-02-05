@@ -61,6 +61,18 @@ pub enum ServerMessage {
         /// Optional theme information
         #[serde(skip_serializing_if = "Option::is_none")]
         theme: Option<ThemeInfo>,
+        /// Current badge text (from OSC 1337)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        badge: Option<String>,
+        /// Faint text alpha for SGR 2 dim text (0.0-1.0)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        faint_text_alpha: Option<f32>,
+        /// Current working directory
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<String>,
+        /// modifyOtherKeys mode (0=disabled, 1=special keys, 2=all keys)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        modify_other_keys: Option<u32>,
     },
 
     /// Screen refresh response (full screen content)
@@ -86,6 +98,42 @@ pub enum ServerMessage {
 
     /// Bell event occurred
     Bell,
+
+    /// Current working directory changed (OSC 7)
+    CwdChanged {
+        /// Previous working directory
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_cwd: Option<String>,
+        /// New working directory
+        new_cwd: String,
+        /// Hostname (if remote)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hostname: Option<String>,
+        /// Username (if provided)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        /// Timestamp of change (Unix epoch milliseconds)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<u64>,
+    },
+
+    /// Trigger pattern matched terminal output
+    TriggerMatched {
+        /// ID of the trigger that matched
+        trigger_id: u64,
+        /// Row where the match occurred
+        row: u16,
+        /// Column where match starts
+        col: u16,
+        /// Column where match ends (exclusive)
+        end_col: u16,
+        /// Matched text
+        text: String,
+        /// Capture groups
+        captures: Vec<String>,
+        /// Timestamp when match occurred (Unix epoch milliseconds)
+        timestamp: u64,
+    },
 
     /// Error occurred
     Error {
@@ -152,6 +200,10 @@ pub enum EventType {
     Title,
     /// Resize events
     Resize,
+    /// CWD change events
+    Cwd,
+    /// Trigger match events
+    Trigger,
 }
 
 impl ServerMessage {
@@ -189,6 +241,10 @@ impl ServerMessage {
             initial_screen: None,
             session_id,
             theme: None,
+            badge: None,
+            faint_text_alpha: None,
+            cwd: None,
+            modify_other_keys: None,
         }
     }
 
@@ -205,6 +261,10 @@ impl ServerMessage {
             initial_screen: Some(initial_screen),
             session_id,
             theme: None,
+            badge: None,
+            faint_text_alpha: None,
+            cwd: None,
+            modify_other_keys: None,
         }
     }
 
@@ -221,6 +281,10 @@ impl ServerMessage {
             initial_screen: None,
             session_id,
             theme: Some(theme),
+            badge: None,
+            faint_text_alpha: None,
+            cwd: None,
+            modify_other_keys: None,
         }
     }
 
@@ -238,6 +302,36 @@ impl ServerMessage {
             initial_screen: Some(initial_screen),
             session_id,
             theme: Some(theme),
+            badge: None,
+            faint_text_alpha: None,
+            cwd: None,
+            modify_other_keys: None,
+        }
+    }
+
+    /// Create a fully-specified connected message with all terminal state
+    #[allow(clippy::too_many_arguments)]
+    pub fn connected_full(
+        cols: u16,
+        rows: u16,
+        initial_screen: Option<String>,
+        session_id: String,
+        theme: Option<ThemeInfo>,
+        badge: Option<String>,
+        faint_text_alpha: Option<f32>,
+        cwd: Option<String>,
+        modify_other_keys: Option<u32>,
+    ) -> Self {
+        Self::Connected {
+            cols,
+            rows,
+            initial_screen,
+            session_id,
+            theme,
+            badge,
+            faint_text_alpha,
+            cwd,
+            modify_other_keys,
         }
     }
 
@@ -279,6 +373,55 @@ impl ServerMessage {
     /// Create a shutdown message
     pub fn shutdown(reason: String) -> Self {
         Self::Shutdown { reason }
+    }
+
+    /// Create a CWD changed message
+    pub fn cwd_changed(new_cwd: String) -> Self {
+        Self::CwdChanged {
+            old_cwd: None,
+            new_cwd,
+            hostname: None,
+            username: None,
+            timestamp: None,
+        }
+    }
+
+    /// Create a fully-specified CWD changed message
+    pub fn cwd_changed_full(
+        old_cwd: Option<String>,
+        new_cwd: String,
+        hostname: Option<String>,
+        username: Option<String>,
+        timestamp: u64,
+    ) -> Self {
+        Self::CwdChanged {
+            old_cwd,
+            new_cwd,
+            hostname,
+            username,
+            timestamp: Some(timestamp),
+        }
+    }
+
+    /// Create a trigger matched message
+    pub fn trigger_matched(
+        trigger_id: u64,
+        row: u16,
+        col: u16,
+        end_col: u16,
+        text: String,
+        captures: Vec<String>,
+        timestamp: u64,
+    ) -> Self {
+        Self::TriggerMatched {
+            trigger_id,
+            row,
+            col,
+            end_col,
+            text,
+            captures,
+            timestamp,
+        }
     }
 
     /// Create a pong message (keepalive response)
@@ -470,5 +613,65 @@ mod tests {
         assert!(json.contains(r#""session_id":"session-123"#));
         assert!(json.contains(r#""theme":{"#));
         assert!(json.contains(r#""name":"test-theme"#));
+    }
+
+    #[test]
+    fn test_connected_full_serialization() {
+        let msg = ServerMessage::connected_full(
+            120,
+            40,
+            None,
+            "session-full".to_string(),
+            None,
+            Some("mybadge".to_string()),
+            Some(0.5),
+            Some("/home/user".to_string()),
+            Some(2),
+        );
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""badge":"mybadge"#));
+        assert!(json.contains(r#""faint_text_alpha":0.5"#));
+        assert!(json.contains(r#""cwd":"/home/user"#));
+        assert!(json.contains(r#""modify_other_keys":2"#));
+    }
+
+    #[test]
+    fn test_cwd_changed_serialization() {
+        let msg = ServerMessage::cwd_changed_full(
+            Some("/old/dir".to_string()),
+            "/new/dir".to_string(),
+            Some("myhost".to_string()),
+            Some("user".to_string()),
+            1234567890,
+        );
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"cwdchanged"#));
+        assert!(json.contains(r#""new_cwd":"/new/dir"#));
+        assert!(json.contains(r#""old_cwd":"/old/dir"#));
+    }
+
+    #[test]
+    fn test_trigger_matched_serialization() {
+        let msg = ServerMessage::trigger_matched(
+            42,
+            10,
+            5,
+            15,
+            "matched text".to_string(),
+            vec!["group1".to_string()],
+            9999999,
+        );
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"triggermatched"#));
+        assert!(json.contains(r#""trigger_id":42"#));
+        assert!(json.contains(r#""text":"matched text"#));
+    }
+
+    #[test]
+    fn test_event_type_cwd_trigger_serialization() {
+        let events = vec![EventType::Cwd, EventType::Trigger];
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(json.contains(r#""cwd"#));
+        assert!(json.contains(r#""trigger"#));
     }
 }

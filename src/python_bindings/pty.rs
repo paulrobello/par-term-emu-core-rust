@@ -957,6 +957,82 @@ impl PyPtyTerminal {
         Ok(self.inner.bell_count())
     }
 
+    // === Coprocess Management ===
+
+    /// Start a new coprocess
+    ///
+    /// The coprocess receives terminal output on its stdin (if copy_terminal_output
+    /// is True) and its stdout is buffered for reading via read_from_coprocess().
+    ///
+    /// Args:
+    ///     config: CoprocessConfig with command and options
+    ///
+    /// Returns:
+    ///     int: Coprocess ID for future reference
+    ///
+    /// Example:
+    ///     >>> config = CoprocessConfig("grep", args=["ERROR"])
+    ///     >>> coproc_id = pty.start_coprocess(config)
+    fn start_coprocess(&self, config: super::types::PyCoprocessConfig) -> PyResult<u64> {
+        let rust_config = crate::coprocess::CoprocessConfig::from(&config);
+        self.inner
+            .start_coprocess(rust_config)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Stop a coprocess by ID
+    ///
+    /// Args:
+    ///     coprocess_id: ID of the coprocess to stop
+    fn stop_coprocess(&self, coprocess_id: u64) -> PyResult<()> {
+        self.inner
+            .stop_coprocess(coprocess_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Write data to a coprocess's stdin
+    ///
+    /// Args:
+    ///     coprocess_id: ID of the coprocess
+    ///     data: Bytes to write
+    fn write_to_coprocess(&self, coprocess_id: u64, data: &[u8]) -> PyResult<()> {
+        self.inner
+            .write_to_coprocess(coprocess_id, data)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// Read buffered output from a coprocess (drains the buffer)
+    ///
+    /// Args:
+    ///     coprocess_id: ID of the coprocess
+    ///
+    /// Returns:
+    ///     list[str]: Lines of output from the coprocess
+    fn read_from_coprocess(&self, coprocess_id: u64) -> PyResult<Vec<String>> {
+        self.inner
+            .read_from_coprocess(coprocess_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
+    /// List all coprocess IDs
+    ///
+    /// Returns:
+    ///     list[int]: List of active coprocess IDs
+    fn list_coprocesses(&self) -> PyResult<Vec<u64>> {
+        Ok(self.inner.list_coprocesses())
+    }
+
+    /// Check if a coprocess is still running
+    ///
+    /// Args:
+    ///     coprocess_id: ID of the coprocess
+    ///
+    /// Returns:
+    ///     bool | None: True if running, False if exited, None if not found
+    fn coprocess_status(&self, coprocess_id: u64) -> PyResult<Option<bool>> {
+        Ok(self.inner.coprocess_status(coprocess_id))
+    }
+
     /// Get mouse tracking mode
     ///
     /// Returns:

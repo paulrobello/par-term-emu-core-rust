@@ -2600,6 +2600,291 @@ impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
     }
 }
 
+// === Feature 18: Triggers & Automation ===
+
+/// Trigger information (read-only view)
+#[pyclass(name = "Trigger")]
+#[derive(Clone)]
+pub struct PyTrigger {
+    #[pyo3(get)]
+    pub id: u64,
+    #[pyo3(get)]
+    pub name: String,
+    #[pyo3(get)]
+    pub pattern: String,
+    #[pyo3(get)]
+    pub enabled: bool,
+    #[pyo3(get)]
+    pub fire_once_per_line: bool,
+    #[pyo3(get)]
+    pub match_count: usize,
+}
+
+#[pymethods]
+impl PyTrigger {
+    fn __repr__(&self) -> String {
+        format!(
+            "Trigger(id={}, name={}, pattern={}, enabled={}, matches={})",
+            self.id, self.name, self.pattern, self.enabled, self.match_count
+        )
+    }
+}
+
+impl From<&crate::terminal::trigger::Trigger> for PyTrigger {
+    fn from(t: &crate::terminal::trigger::Trigger) -> Self {
+        PyTrigger {
+            id: t.id,
+            name: t.name.clone(),
+            pattern: t.pattern.clone(),
+            enabled: t.enabled,
+            fire_once_per_line: t.fire_once_per_line,
+            match_count: t.match_count,
+        }
+    }
+}
+
+/// Trigger match result
+#[pyclass(name = "TriggerMatch")]
+#[derive(Clone)]
+pub struct PyTriggerMatch {
+    #[pyo3(get)]
+    pub trigger_id: u64,
+    #[pyo3(get)]
+    pub row: usize,
+    #[pyo3(get)]
+    pub col: usize,
+    #[pyo3(get)]
+    pub end_col: usize,
+    #[pyo3(get)]
+    pub text: String,
+    #[pyo3(get)]
+    pub captures: Vec<String>,
+    #[pyo3(get)]
+    pub timestamp: u64,
+}
+
+#[pymethods]
+impl PyTriggerMatch {
+    fn __repr__(&self) -> String {
+        format!(
+            "TriggerMatch(trigger_id={}, row={}, col={}..{}, text={})",
+            self.trigger_id, self.row, self.col, self.end_col, self.text
+        )
+    }
+}
+
+impl From<&crate::terminal::trigger::TriggerMatch> for PyTriggerMatch {
+    fn from(m: &crate::terminal::trigger::TriggerMatch) -> Self {
+        PyTriggerMatch {
+            trigger_id: m.trigger_id,
+            row: m.row,
+            col: m.col,
+            end_col: m.end_col,
+            text: m.text.clone(),
+            captures: m.captures.clone(),
+            timestamp: m.timestamp,
+        }
+    }
+}
+
+/// Trigger action configuration (constructable from Python)
+#[pyclass(name = "TriggerAction")]
+#[derive(Clone)]
+pub struct PyTriggerAction {
+    /// Action type: "highlight", "notify", "mark_line", "set_variable",
+    /// "run_command", "play_sound", "send_text", "stop"
+    #[pyo3(get)]
+    pub action_type: String,
+    /// Action parameters (key-value pairs, type-specific)
+    #[pyo3(get)]
+    pub params: std::collections::HashMap<String, String>,
+}
+
+#[pymethods]
+impl PyTriggerAction {
+    /// Create a new trigger action
+    ///
+    /// Args:
+    ///     action_type: Action type string (highlight, notify, mark_line,
+    ///         set_variable, run_command, play_sound, send_text, stop)
+    ///     params: Dictionary of action parameters
+    ///
+    /// Returns:
+    ///     A new TriggerAction instance
+    ///
+    /// Example:
+    ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
+    ///     >>> action = TriggerAction("notify", {"title": "Alert", "message": "Error found: $1"})
+    #[new]
+    #[pyo3(signature = (action_type, params=None))]
+    fn new(action_type: String, params: Option<std::collections::HashMap<String, String>>) -> Self {
+        PyTriggerAction {
+            action_type,
+            params: params.unwrap_or_default(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TriggerAction(type={}, params={:?})",
+            self.action_type, self.params
+        )
+    }
+}
+
+impl PyTriggerAction {
+    /// Convert to Rust TriggerAction
+    pub fn to_trigger_action(&self) -> Result<crate::terminal::trigger::TriggerAction, String> {
+        use crate::terminal::trigger::TriggerAction;
+        match self.action_type.as_str() {
+            "highlight" => {
+                let fg = self.parse_color("fg");
+                let bg = self.parse_color("bg");
+                let duration_ms = self
+                    .params
+                    .get("duration_ms")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0);
+                Ok(TriggerAction::Highlight {
+                    fg,
+                    bg,
+                    duration_ms,
+                })
+            }
+            "notify" => Ok(TriggerAction::Notify {
+                title: self.params.get("title").cloned().unwrap_or_default(),
+                message: self.params.get("message").cloned().unwrap_or_default(),
+            }),
+            "mark_line" => Ok(TriggerAction::MarkLine {
+                label: self.params.get("label").cloned(),
+            }),
+            "set_variable" => Ok(TriggerAction::SetVariable {
+                name: self.params.get("name").cloned().unwrap_or_default(),
+                value: self.params.get("value").cloned().unwrap_or_default(),
+            }),
+            "run_command" => {
+                let args: Vec<String> = self
+                    .params
+                    .get("args")
+                    .map(|a| a.split(',').map(|s| s.trim().to_string()).collect())
+                    .unwrap_or_default();
+                Ok(TriggerAction::RunCommand {
+                    command: self.params.get("command").cloned().unwrap_or_default(),
+                    args,
+                })
+            }
+            "play_sound" => Ok(TriggerAction::PlaySound {
+                sound_id: self.params.get("sound_id").cloned().unwrap_or_default(),
+                volume: self
+                    .params
+                    .get("volume")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(100),
+            }),
+            "send_text" => Ok(TriggerAction::SendText {
+                text: self.params.get("text").cloned().unwrap_or_default(),
+                delay_ms: self
+                    .params
+                    .get("delay_ms")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0),
+            }),
+            "stop" => Ok(TriggerAction::StopPropagation),
+            _ => Err(format!("Unknown action type: {}", self.action_type)),
+        }
+    }
+
+    fn parse_color(&self, prefix: &str) -> Option<(u8, u8, u8)> {
+        let r = self
+            .params
+            .get(&format!("{}_r", prefix))
+            .and_then(|v| v.parse().ok());
+        let g = self
+            .params
+            .get(&format!("{}_g", prefix))
+            .and_then(|v| v.parse().ok());
+        let b = self
+            .params
+            .get(&format!("{}_b", prefix))
+            .and_then(|v| v.parse().ok());
+        match (r, g, b) {
+            (Some(r), Some(g), Some(b)) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+}
+
+/// Coprocess configuration (constructable from Python)
+#[pyclass(name = "CoprocessConfig")]
+#[derive(Clone)]
+pub struct PyCoprocessConfig {
+    #[pyo3(get, set)]
+    pub command: String,
+    #[pyo3(get, set)]
+    pub args: Vec<String>,
+    #[pyo3(get, set)]
+    pub cwd: Option<String>,
+    #[pyo3(get, set)]
+    pub env: std::collections::HashMap<String, String>,
+    #[pyo3(get, set)]
+    pub copy_terminal_output: bool,
+}
+
+#[pymethods]
+impl PyCoprocessConfig {
+    /// Create a new coprocess configuration
+    ///
+    /// Args:
+    ///     command: Command to execute
+    ///     args: Optional list of command arguments
+    ///     cwd: Optional working directory
+    ///     env: Optional environment variables dictionary
+    ///     copy_terminal_output: Whether to pipe terminal output to stdin (default: True)
+    ///
+    /// Returns:
+    ///     A new CoprocessConfig instance
+    ///
+    /// Example:
+    ///     >>> config = CoprocessConfig("grep", args=["ERROR"])
+    ///     >>> config = CoprocessConfig("cat", copy_terminal_output=True)
+    #[new]
+    #[pyo3(signature = (command, args=None, cwd=None, env=None, copy_terminal_output=true))]
+    fn new(
+        command: String,
+        args: Option<Vec<String>>,
+        cwd: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+        copy_terminal_output: bool,
+    ) -> Self {
+        PyCoprocessConfig {
+            command,
+            args: args.unwrap_or_default(),
+            cwd,
+            env: env.unwrap_or_default(),
+            copy_terminal_output,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "CoprocessConfig(command={}, args={:?}, copy_output={})",
+            self.command, self.args, self.copy_terminal_output
+        )
+    }
+}
+
+impl From<&PyCoprocessConfig> for crate::coprocess::CoprocessConfig {
+    fn from(config: &PyCoprocessConfig) -> Self {
+        crate::coprocess::CoprocessConfig {
+            command: config.command.clone(),
+            args: config.args.clone(),
+            cwd: config.cwd.clone(),
+            env: config.env.clone(),
+            copy_terminal_output: config.copy_terminal_output,
+        }
+    }
+}
+
 // === Feature 24: Terminal Replay/Recording ===
 
 /// Recording event

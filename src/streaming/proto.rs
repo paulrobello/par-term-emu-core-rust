@@ -181,12 +181,20 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 initial_screen,
                 session_id,
                 theme,
+                badge,
+                faint_text_alpha,
+                cwd,
+                modify_other_keys,
             } => Some(Message::Connected(pb::Connected {
                 cols: *cols as u32,
                 rows: *rows as u32,
                 initial_screen: initial_screen.as_ref().map(|s| s.as_bytes().to_vec()),
                 session_id: session_id.clone(),
                 theme: theme.as_ref().map(|t| t.into()),
+                badge: badge.clone(),
+                faint_text_alpha: *faint_text_alpha,
+                cwd: cwd.clone(),
+                modify_other_keys: *modify_other_keys,
             })),
             AppServerMessage::Refresh {
                 cols,
@@ -204,6 +212,36 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                     visible: *visible,
                 }))
             }
+            AppServerMessage::CwdChanged {
+                old_cwd,
+                new_cwd,
+                hostname,
+                username,
+                timestamp,
+            } => Some(Message::CwdChanged(pb::CwdChanged {
+                old_cwd: old_cwd.clone(),
+                new_cwd: new_cwd.clone(),
+                hostname: hostname.clone(),
+                username: username.clone(),
+                timestamp: *timestamp,
+            })),
+            AppServerMessage::TriggerMatched {
+                trigger_id,
+                row,
+                col,
+                end_col,
+                text,
+                captures,
+                timestamp,
+            } => Some(Message::TriggerMatched(pb::TriggerMatched {
+                trigger_id: *trigger_id,
+                row: *row as u32,
+                col: *col as u32,
+                end_col: *end_col as u32,
+                text: text.clone(),
+                captures: captures.clone(),
+                timestamp: *timestamp,
+            })),
             AppServerMessage::Bell => Some(Message::Bell(pb::Bell {})),
             AppServerMessage::Error { message, code } => Some(Message::Error(pb::Error {
                 message: message.clone(),
@@ -250,6 +288,8 @@ impl From<AppEventType> for i32 {
             AppEventType::Bell => pb::EventType::Bell as i32,
             AppEventType::Title => pb::EventType::Title as i32,
             AppEventType::Resize => pb::EventType::Resize as i32,
+            AppEventType::Cwd => pb::EventType::Cwd as i32,
+            AppEventType::Trigger => pb::EventType::Trigger as i32,
         }
     }
 }
@@ -326,6 +366,10 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                     .map(|s| String::from_utf8_lossy(&s).into_owned()),
                 session_id: connected.session_id,
                 theme: connected.theme.map(|t| t.try_into()).transpose()?,
+                badge: connected.badge,
+                faint_text_alpha: connected.faint_text_alpha,
+                cwd: connected.cwd,
+                modify_other_keys: connected.modify_other_keys,
             }),
             Some(Message::Refresh(refresh)) => Ok(AppServerMessage::Refresh {
                 cols: refresh.cols as u16,
@@ -336,6 +380,22 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 col: cursor.col as u16,
                 row: cursor.row as u16,
                 visible: cursor.visible,
+            }),
+            Some(Message::CwdChanged(cwd)) => Ok(AppServerMessage::CwdChanged {
+                old_cwd: cwd.old_cwd,
+                new_cwd: cwd.new_cwd,
+                hostname: cwd.hostname,
+                username: cwd.username,
+                timestamp: cwd.timestamp,
+            }),
+            Some(Message::TriggerMatched(tm)) => Ok(AppServerMessage::TriggerMatched {
+                trigger_id: tm.trigger_id,
+                row: tm.row as u16,
+                col: tm.col as u16,
+                end_col: tm.end_col as u16,
+                text: tm.text,
+                captures: tm.captures,
+                timestamp: tm.timestamp,
             }),
             Some(Message::Bell(_)) => Ok(AppServerMessage::Bell),
             Some(Message::Error(error)) => Ok(AppServerMessage::Error {
@@ -393,6 +453,8 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Bell => AppEventType::Bell,
             pb::EventType::Title => AppEventType::Title,
             pb::EventType::Resize => AppEventType::Resize,
+            pb::EventType::Cwd => AppEventType::Cwd,
+            pb::EventType::Trigger => AppEventType::Trigger,
         }
     }
 }
@@ -710,6 +772,10 @@ mod tests {
             initial_screen: Some("initial content".to_string()),
             session_id: "sess-abc".to_string(),
             theme: None,
+            badge: None,
+            faint_text_alpha: None,
+            cwd: None,
+            modify_other_keys: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -720,6 +786,7 @@ mod tests {
                 initial_screen,
                 session_id,
                 theme,
+                ..
             } => {
                 assert_eq!(cols, 80);
                 assert_eq!(rows, 24);
@@ -893,10 +960,163 @@ mod tests {
             AppEventType::from(pb::EventType::Resize),
             AppEventType::Resize
         ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Cwd),
+            AppEventType::Cwd
+        ));
+        assert!(matches!(
+            AppEventType::from(pb::EventType::Trigger),
+            AppEventType::Trigger
+        ));
         // Unspecified defaults to Output
         assert!(matches!(
             AppEventType::from(pb::EventType::Unspecified),
             AppEventType::Output
         ));
+    }
+
+    #[test]
+    fn test_encode_decode_cwd_changed() {
+        let msg = AppServerMessage::CwdChanged {
+            old_cwd: Some("/home/user".to_string()),
+            new_cwd: "/home/user/project".to_string(),
+            hostname: Some("myhost".to_string()),
+            username: Some("user".to_string()),
+            timestamp: Some(1234567890),
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::CwdChanged {
+                old_cwd,
+                new_cwd,
+                hostname,
+                username,
+                timestamp,
+            } => {
+                assert_eq!(old_cwd, Some("/home/user".to_string()));
+                assert_eq!(new_cwd, "/home/user/project");
+                assert_eq!(hostname, Some("myhost".to_string()));
+                assert_eq!(username, Some("user".to_string()));
+                assert_eq!(timestamp, Some(1234567890));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_cwd_changed_minimal() {
+        let msg = AppServerMessage::CwdChanged {
+            old_cwd: None,
+            new_cwd: "/tmp".to_string(),
+            hostname: None,
+            username: None,
+            timestamp: None,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::CwdChanged {
+                old_cwd,
+                new_cwd,
+                hostname,
+                username,
+                timestamp,
+            } => {
+                assert_eq!(old_cwd, None);
+                assert_eq!(new_cwd, "/tmp");
+                assert_eq!(hostname, None);
+                assert_eq!(username, None);
+                assert_eq!(timestamp, None);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_trigger_matched() {
+        let msg = AppServerMessage::TriggerMatched {
+            trigger_id: 42,
+            row: 10,
+            col: 5,
+            end_col: 20,
+            text: "error: something failed".to_string(),
+            captures: vec!["error".to_string(), "something failed".to_string()],
+            timestamp: 9876543210,
+        };
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::TriggerMatched {
+                trigger_id,
+                row,
+                col,
+                end_col,
+                text,
+                captures,
+                timestamp,
+            } => {
+                assert_eq!(trigger_id, 42);
+                assert_eq!(row, 10);
+                assert_eq!(col, 5);
+                assert_eq!(end_col, 20);
+                assert_eq!(text, "error: something failed");
+                assert_eq!(
+                    captures,
+                    vec!["error".to_string(), "something failed".to_string()]
+                );
+                assert_eq!(timestamp, 9876543210);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_connected_with_new_fields() {
+        let msg = AppServerMessage::connected_full(
+            80,
+            24,
+            Some("initial content".to_string()),
+            "sess-full".to_string(),
+            None,
+            Some("my badge".to_string()),
+            Some(0.5),
+            Some("/home/user".to_string()),
+            Some(2),
+        );
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::Connected {
+                cols,
+                rows,
+                initial_screen,
+                session_id,
+                theme,
+                badge,
+                faint_text_alpha,
+                cwd,
+                modify_other_keys,
+            } => {
+                assert_eq!(cols, 80);
+                assert_eq!(rows, 24);
+                assert_eq!(initial_screen, Some("initial content".to_string()));
+                assert_eq!(session_id, "sess-full");
+                assert!(theme.is_none());
+                assert_eq!(badge, Some("my badge".to_string()));
+                assert_eq!(faint_text_alpha, Some(0.5));
+                assert_eq!(cwd, Some("/home/user".to_string()));
+                assert_eq!(modify_other_keys, Some(2));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_event_type_cwd_trigger_conversions() {
+        let cwd_i32: i32 = AppEventType::Cwd.into();
+        let trigger_i32: i32 = AppEventType::Trigger.into();
+        assert_eq!(cwd_i32, pb::EventType::Cwd as i32);
+        assert_eq!(trigger_i32, pb::EventType::Trigger as i32);
     }
 }
