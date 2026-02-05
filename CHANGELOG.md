@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **modifyOtherKeys Protocol**: XTerm extension for enhanced keyboard input reporting
+  - State tracking for modifyOtherKeys mode (0=disabled, 1=special keys, 2=all keys)
+  - CSI sequence parsing: `CSI > 4 ; mode m` to set mode
+  - Query support: `CSI ? 4 m` returns `CSI > 4 ; mode m` response
+  - New methods: `modify_other_keys_mode()` getter, `set_modify_other_keys_mode()` setter
+  - Mode resets on terminal reset and alternate screen exit
+  - 9 new tests for modifyOtherKeys functionality
+
 ## [0.29.0] - 2026-02-04
 
 ### Added

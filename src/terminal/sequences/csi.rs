@@ -221,6 +221,63 @@ impl Terminal {
                 self.adjust_graphics_for_scroll_down(n, top, bottom);
             }
             'm' => {
+                // Check for modifyOtherKeys mode setting: CSI > 4 ; mode m
+                if intermediates.contains(&b'>') {
+                    // modifyOtherKeys mode setting: CSI > 4 ; mode m
+                    let mut param_iter = params.iter();
+                    let first_param = param_iter
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(0);
+
+                    if first_param == 4 {
+                        // CSI > 4 ; mode m - Set modifyOtherKeys mode
+                        let mode = param_iter
+                            .next()
+                            .and_then(|p| p.first())
+                            .copied()
+                            .unwrap_or(0) as u8;
+                        // Clamp to valid range (0-2)
+                        self.modify_other_keys_mode = mode.min(2);
+                        debug::log(
+                            debug::DebugLevel::Info,
+                            "CSI",
+                            &format!(
+                                "modifyOtherKeys mode set to {}",
+                                self.modify_other_keys_mode
+                            ),
+                        );
+                    }
+                    return;
+                }
+
+                // Check for modifyOtherKeys query: CSI ? 4 m
+                if private {
+                    let param = params
+                        .iter()
+                        .next()
+                        .and_then(|p| p.first())
+                        .copied()
+                        .unwrap_or(0);
+
+                    if param == 4 {
+                        // CSI ? 4 m - Query modifyOtherKeys mode
+                        // Response: CSI > 4 ; mode m
+                        let response = format!("\x1b[>4;{}m", self.modify_other_keys_mode);
+                        self.push_response(response.as_bytes());
+                        debug::log(
+                            debug::DebugLevel::Info,
+                            "CSI",
+                            &format!(
+                                "modifyOtherKeys query, responding with mode {}",
+                                self.modify_other_keys_mode
+                            ),
+                        );
+                    }
+                    return;
+                }
+
                 // SGR - Select Graphic Rendition
                 // Debug: Log SGR parameters for TMUX status bar debugging
                 if crate::debug::is_enabled(crate::debug::DebugLevel::Info) && !params.is_empty() {

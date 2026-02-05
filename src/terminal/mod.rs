@@ -1181,6 +1181,9 @@ pub struct Terminal {
     keyboard_stack: Vec<u16>,
     /// Stack for keyboard protocol flags (alternate screen)
     keyboard_stack_alt: Vec<u16>,
+    /// modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+    /// 0 = disabled, 1 = report modifiers for special keys, 2 = report modifiers for all keys
+    modify_other_keys_mode: u8,
     /// Response buffer for device queries (DA/DSR/etc)
     response_buffer: Vec<u8>,
     /// Hyperlink storage: ID -> URL mapping (for deduplication)
@@ -1608,6 +1611,7 @@ impl Terminal {
             keyboard_flags: 0,
             keyboard_stack: Vec::new(),
             keyboard_stack_alt: Vec::new(),
+            modify_other_keys_mode: 0,
             response_buffer: Vec::new(),
             hyperlinks: HashMap::new(),
             current_hyperlink_id: None,
@@ -2006,6 +2010,8 @@ impl Terminal {
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
             self.keyboard_flags = 0;
             self.keyboard_stack_alt.clear();
+            // Also reset modifyOtherKeys mode
+            self.modify_other_keys_mode = 0;
         }
     }
 
@@ -2256,6 +2262,18 @@ impl Terminal {
     /// Set Kitty keyboard protocol flags (for testing/direct control)
     pub fn set_keyboard_flags(&mut self, flags: u16) {
         self.keyboard_flags = flags;
+    }
+
+    /// Get modifyOtherKeys mode (XTerm extension)
+    /// 0 = disabled, 1 = report modifiers for special keys, 2 = report modifiers for all keys
+    pub fn modify_other_keys_mode(&self) -> u8 {
+        self.modify_other_keys_mode
+    }
+
+    /// Set modifyOtherKeys mode (for testing/direct control)
+    pub fn set_modify_other_keys_mode(&mut self, mode: u8) {
+        // Clamp to valid range (0-2)
+        self.modify_other_keys_mode = mode.min(2);
     }
 
     /// Get clipboard content (OSC 52)
@@ -3035,6 +3053,7 @@ impl Terminal {
         self.keyboard_flags = 0;
         self.keyboard_stack.clear();
         self.keyboard_stack_alt.clear();
+        self.modify_other_keys_mode = 0;
         self.response_buffer.clear();
         self.hyperlinks.clear();
         self.current_hyperlink_id = None;
