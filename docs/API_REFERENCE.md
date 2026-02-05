@@ -177,6 +177,16 @@ badge = term.evaluate_badge()  # "alice@server1"
 
 **Note:** Flags are maintained separately for main and alternate screen buffers with independent stacks. Automatically reset when exiting alternate screen.
 
+#### modifyOtherKeys (XTerm Extension)
+- `modify_other_keys_mode() -> int`: Get current mode (0=disabled, 1=special keys, 2=all keys)
+- `set_modify_other_keys_mode(mode: int)`: Set mode directly (values > 2 clamped to 2)
+
+**Sequences:**
+- `CSI > 4 ; mode m` - Set mode via escape sequence
+- `CSI ? 4 m` - Query mode (response: `CSI > 4 ; mode m` in drain_responses())
+
+**Note:** Mode resets to 0 on terminal reset and when exiting alternate screen.
+
 #### Clipboard Operations (OSC 52)
 - `clipboard() -> str | None`: Get clipboard content
 - `set_clipboard(content: str | None)`: Set clipboard content programmatically

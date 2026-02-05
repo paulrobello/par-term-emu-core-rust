@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-02-04
+
 ### Added
 - **modifyOtherKeys Protocol**: XTerm extension for enhanced keyboard input reporting
   - State tracking for modifyOtherKeys mode (0=disabled, 1=special keys, 2=all keys)

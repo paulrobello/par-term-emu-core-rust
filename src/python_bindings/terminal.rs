@@ -554,6 +554,36 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+    ///
+    /// Returns:
+    ///     Current mode: 0=disabled, 1=report modifiers for special keys, 2=report all keys
+    ///
+    /// Example:
+    ///     >>> term.modify_other_keys_mode()
+    ///     0
+    fn modify_other_keys_mode(&self) -> PyResult<u8> {
+        Ok(self.inner.modify_other_keys_mode())
+    }
+
+    /// Set modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+    ///
+    /// Args:
+    ///     mode: 0=disabled, 1=report modifiers for special keys, 2=report all keys
+    ///
+    /// Note:
+    ///     Values > 2 are clamped to 2. This directly sets the mode without
+    ///     sending escape sequences. Use process(b"\\x1b[>4;Nm") to set via sequence.
+    ///
+    /// Example:
+    ///     >>> term.set_modify_other_keys_mode(2)
+    ///     >>> term.modify_other_keys_mode()
+    ///     2
+    fn set_modify_other_keys_mode(&mut self, mode: u8) -> PyResult<()> {
+        self.inner.set_modify_other_keys_mode(mode);
+        Ok(())
+    }
+
     /// Get clipboard content (OSC 52)
     ///
     /// Returns:

@@ -13,6 +13,44 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.30.0
+
+### ⌨️ modifyOtherKeys Protocol Support
+
+XTerm extension for enhanced keyboard input reporting, enabling applications to receive modifier keys with regular characters:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Enable modifyOtherKeys mode via escape sequence
+term.process(b"\x1b[>4;2m")  # Mode 2: report all keys with modifiers
+print(f"Mode: {term.modify_other_keys_mode()}")  # Output: 2
+
+# Or set directly
+term.set_modify_other_keys_mode(1)  # Mode 1: special keys only
+
+# Query mode (response in drain_responses())
+term.process(b"\x1b[?4m")
+response = term.drain_responses()  # Returns b"\x1b[>4;1m"
+```
+
+**Modes:**
+- `0` - Disabled (default)
+- `1` - Report modifiers for special keys only
+- `2` - Report modifiers for all keys
+
+**New Methods:**
+- `modify_other_keys_mode()` - Get current mode
+- `set_modify_other_keys_mode(mode)` - Set mode directly (values > 2 clamped to 2)
+
+**Sequences:**
+- `CSI > 4 ; mode m` - Set mode
+- `CSI ? 4 m` - Query mode (response: `CSI > 4 ; mode m`)
+
+**Note:** Mode resets to 0 on terminal reset and when exiting alternate screen.
+
 ## What's New in 0.28.0
 
 ### 🏷️ Badge Format Support (OSC 1337 SetBadgeFormat)
