@@ -1278,6 +1278,9 @@ pub struct Terminal {
     use_selected_text_color: bool,
     /// Smart cursor color - auto-adjust based on background (iTerm2: "Smart Cursor Color")
     smart_cursor_color: bool,
+    /// Faint/dim text alpha multiplier (0.0-1.0, default 0.5)
+    /// Applied to SGR 2 (dim) text during rendering
+    faint_text_alpha: f32,
     /// Attribute change extent mode (DECSACE) - 0/1: stream, 2: rectangle (default)
     attribute_change_extent: u8,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
@@ -1662,6 +1665,7 @@ impl Terminal {
             use_cursor_guide: false,
             use_selected_text_color: false,
             smart_cursor_color: false,
+            faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
             // VT420 attribute change extent mode - default to rectangle (2)
             attribute_change_extent: 2,
             // VT520 conformance level - default to VT520 for maximum compatibility
@@ -2069,6 +2073,18 @@ impl Terminal {
     /// Set bold brightening mode
     pub fn set_bold_brightening(&mut self, enabled: bool) {
         self.bold_brightening = enabled;
+    }
+
+    /// Get faint/dim text alpha multiplier (0.0-1.0)
+    /// Applied to SGR 2 (dim) text during rendering
+    pub fn faint_text_alpha(&self) -> f32 {
+        self.faint_text_alpha
+    }
+
+    /// Set faint/dim text alpha multiplier (0.0-1.0)
+    /// Values are clamped to valid range
+    pub fn set_faint_text_alpha(&mut self, alpha: f32) {
+        self.faint_text_alpha = alpha.clamp(0.0, 1.0);
     }
 
     /// Get shell integration state
@@ -3580,6 +3596,7 @@ impl Terminal {
         }
         config.use_bold_color = self.use_bold_color;
         config.bold_brightening = self.bold_brightening;
+        config.faint_text_alpha = self.faint_text_alpha;
 
         // Use terminal's default background if not specified
         if config.background_color.is_none() {
@@ -3629,6 +3646,7 @@ impl Terminal {
         }
         config.use_bold_color = self.use_bold_color;
         config.bold_brightening = self.bold_brightening;
+        config.faint_text_alpha = self.faint_text_alpha;
 
         // Use terminal's default background if not specified
         if config.background_color.is_none() {

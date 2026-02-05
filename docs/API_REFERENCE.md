@@ -285,6 +285,8 @@ badge = term.evaluate_badge()  # "alice@server1"
 - `set_use_underline_color(use_underline: bool)`: Enable/disable custom underline color
 - `bold_brightening() -> bool`: Check if bold text with colors 0-7 is brightened to 8-15
 - `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (legacy behavior)
+- `faint_text_alpha() -> float`: Get alpha multiplier for SGR 2 (dim/faint) text (0.0-1.0, default 0.5)
+- `set_faint_text_alpha(alpha: float)`: Set alpha multiplier for dim text (clamped to 0.0-1.0)
 
 #### Shell Integration (OSC 133 & OSC 7)
 - `current_directory() -> str | None`: Get current working directory (OSC 7)
@@ -640,6 +642,8 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 
 #### Appearance Settings (PTY-Specific)
 - `set_bold_brightening(enabled: bool)`: Enable/disable bold brightening (ANSI colors 0-7 → 8-15)
+- `faint_text_alpha() -> float`: Get alpha multiplier for SGR 2 (dim/faint) text (0.0-1.0, default 0.5)
+- `set_faint_text_alpha(alpha: float)`: Set alpha multiplier for dim text (clamped to 0.0-1.0)
 
 **Note:** PtyTerminal inherits all Terminal methods, so you can also use all Terminal appearance settings like `set_default_fg()`, `set_default_bg()`, etc.
 

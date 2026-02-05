@@ -924,6 +924,32 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get faint/dim text alpha multiplier
+    ///
+    /// This value is applied to SGR 2 (dim/faint) text during rendering.
+    /// A value of 0.5 means 50% opacity (the default).
+    ///
+    /// Returns:
+    ///     Alpha multiplier between 0.0 and 1.0
+    fn faint_text_alpha(&self) -> PyResult<f32> {
+        Ok(self.inner.faint_text_alpha())
+    }
+
+    /// Set faint/dim text alpha multiplier
+    ///
+    /// This value is applied to SGR 2 (dim/faint) text during rendering.
+    /// Values are clamped to the range 0.0-1.0.
+    ///
+    /// Args:
+    ///     alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
+    ///
+    /// Example:
+    ///     >>> term.set_faint_text_alpha(0.3)  # 30% opacity for dim text
+    fn set_faint_text_alpha(&mut self, alpha: f32) -> PyResult<()> {
+        self.inner.set_faint_text_alpha(alpha);
+        Ok(())
+    }
+
     /// Get cursor style (DECSCUSR)
     ///
     /// Returns:

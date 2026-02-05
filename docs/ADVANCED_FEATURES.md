@@ -155,6 +155,42 @@ term.process_str("\x1b[1;31mThis appears regular red (bold)\x1b[0m\n")
 
 **Note**: Bold brightening only affects ANSI colors 0-7, not 256-color or RGB colors. When creating snapshots with `create_snapshot()` or taking screenshots with `screenshot()` / `screenshot_to_file()`, the bold brightening setting is automatically applied to the captured colors.
 
+## Faint/Dim Text Alpha (SGR 2)
+
+The faint text alpha controls how dim SGR 2 (faint/dim) text appears. This is the alpha multiplier applied to dim text during rendering.
+
+### Overview
+
+- **Range**: 0.0-1.0 where 0.0 = fully transparent, 1.0 = fully opaque
+- **Default**: 0.5 (50% opacity - text is blended with background)
+- **SGR Code**: Applied when text has the SGR 2 (dim/faint) attribute
+
+### Usage
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Check current faint text alpha (default 0.5)
+print(f"Alpha: {term.faint_text_alpha()}")  # Output: 0.5
+
+# Make dim text more transparent (more dimmed)
+term.set_faint_text_alpha(0.3)
+
+# Process text with dim attribute (SGR 2)
+term.process_str("\x1b[2mThis text is dimmed\x1b[0m\n")
+
+# Make dim text less transparent (less dimmed)
+term.set_faint_text_alpha(0.7)
+
+# Values are clamped to 0.0-1.0 range
+term.set_faint_text_alpha(1.5)  # Becomes 1.0
+term.set_faint_text_alpha(-0.5)  # Becomes 0.0
+```
+
+**Note**: The faint text alpha is automatically applied when taking screenshots with `screenshot()` / `screenshot_to_file()`. Frontends can query this value via `faint_text_alpha()` to apply consistent dimming during real-time rendering.
+
 ## Minimum Contrast Adjustment (iTerm2-Compatible)
 
 The minimum contrast feature automatically adjusts text colors to ensure readability against backgrounds, using the same algorithm as iTerm2.

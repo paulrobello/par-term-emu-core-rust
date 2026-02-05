@@ -1423,6 +1423,39 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Get faint/dim text alpha multiplier
+    ///
+    /// This value is applied to SGR 2 (dim/faint) text during rendering.
+    /// A value of 0.5 means 50% opacity (the default).
+    ///
+    /// Returns:
+    ///     Alpha multiplier between 0.0 and 1.0
+    fn faint_text_alpha(&self) -> PyResult<f32> {
+        let terminal = self.inner.terminal();
+        if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+            return Ok(term.faint_text_alpha());
+        }
+        Ok(0.5) // Default if lock fails
+    }
+
+    /// Set faint/dim text alpha multiplier
+    ///
+    /// This value is applied to SGR 2 (dim/faint) text during rendering.
+    /// Values are clamped to the range 0.0-1.0.
+    ///
+    /// Args:
+    ///     alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
+    ///
+    /// Example:
+    ///     >>> pty.set_faint_text_alpha(0.3)  # 30% opacity for dim text
+    fn set_faint_text_alpha(&mut self, alpha: f32) -> PyResult<()> {
+        let terminal = self.inner.terminal();
+        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+            term.set_faint_text_alpha(alpha);
+        }
+        Ok(())
+    }
+
     /// Enable/disable custom underline color
     ///
     /// When enabled, underlined text uses a custom underline color.

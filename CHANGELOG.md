@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New methods: `modify_other_keys_mode()` getter, `set_modify_other_keys_mode()` setter
   - Mode resets on terminal reset and alternate screen exit
   - 9 new tests for modifyOtherKeys functionality
+- **Faint Text Alpha**: Configurable alpha multiplier for SGR 2 (dim/faint) text
+  - New `faint_text_alpha` field in Terminal (default: 0.5 for 50% dimming)
+  - New methods: `faint_text_alpha()` getter, `set_faint_text_alpha(alpha)` setter
+  - Values clamped to 0.0-1.0 range
+  - Propagated to screenshot renderer for consistent rendering
+  - Python bindings for both Terminal and PtyTerminal classes
 
 ## [0.29.0] - 2026-02-04
 

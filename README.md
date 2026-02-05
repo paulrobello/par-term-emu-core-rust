@@ -51,6 +51,35 @@ response = term.drain_responses()  # Returns b"\x1b[>4;1m"
 
 **Note:** Mode resets to 0 on terminal reset and when exiting alternate screen.
 
+### 🎨 Faint Text Alpha Control
+
+Configurable alpha multiplier for SGR 2 (dim/faint) text, allowing fine-grained control over how dim text is rendered:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Get current faint text alpha (default: 0.5 = 50% dimming)
+print(f"Alpha: {term.faint_text_alpha()}")  # Output: 0.5
+
+# Set faint text to be more transparent (more dimmed)
+term.set_faint_text_alpha(0.3)  # 30% opacity
+
+# Set faint text to be less transparent (less dimmed)
+term.set_faint_text_alpha(0.7)  # 70% opacity
+
+# Values are clamped to 0.0-1.0 range
+term.set_faint_text_alpha(1.5)  # Clamped to 1.0
+term.set_faint_text_alpha(-0.5)  # Clamped to 0.0
+```
+
+**New Methods:**
+- `faint_text_alpha()` - Get current alpha multiplier (0.0-1.0)
+- `set_faint_text_alpha(alpha)` - Set alpha multiplier (clamped to valid range)
+
+**Usage:** This setting is used by the screenshot renderer and can be queried by frontends for consistent rendering of dim text (SGR 2).
+
 ## What's New in 0.28.0
 
 ### 🏷️ Badge Format Support (OSC 1337 SetBadgeFormat)
@@ -577,6 +606,7 @@ make streamer-build-release
   - Mouse encoding control: `mouse_encoding()`, `set_mouse_encoding()`
   - Mode setters: `set_focus_tracking()`, `set_bracketed_paste()`, `set_title()`
   - Bold brightening control: `bold_brightening()`, `set_bold_brightening()`
+  - Faint text alpha control: `faint_text_alpha()`, `set_faint_text_alpha()`
   - Color getters for all theme colors (link, bold, cursor guide, badge, match, selection)
 
 ## What's New in 0.12.0

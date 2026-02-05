@@ -418,6 +418,30 @@ mod tests {
     }
 
     #[test]
+    fn test_faint_text_alpha_get_set() {
+        let mut term = create_test_terminal();
+
+        // Default should be 0.5
+        assert!((term.faint_text_alpha() - 0.5).abs() < f32::EPSILON);
+
+        // Set to a different value
+        term.set_faint_text_alpha(0.3);
+        assert!((term.faint_text_alpha() - 0.3).abs() < f32::EPSILON);
+
+        // Test clamping above 1.0
+        term.set_faint_text_alpha(1.5);
+        assert!((term.faint_text_alpha() - 1.0).abs() < f32::EPSILON);
+
+        // Test clamping below 0.0
+        term.set_faint_text_alpha(-0.5);
+        assert!((term.faint_text_alpha() - 0.0).abs() < f32::EPSILON);
+
+        // Reset to default
+        term.set_faint_text_alpha(0.5);
+        assert!((term.faint_text_alpha() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
     fn test_set_ansi_palette_color_valid_indices() {
         let mut term = create_test_terminal();
 
