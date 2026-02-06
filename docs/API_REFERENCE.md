@@ -1221,8 +1221,8 @@ A trigger match result from scanning terminal output.
 **Properties:**
 - `trigger_id: int`: ID of the trigger that matched
 - `row: int`: Row where the match occurred
-- `col: int`: Column start of the match
-- `end_col: int`: Column end of the match
+- `col: int`: Grid column start of the match (accounts for wide and combining characters)
+- `end_col: int`: Grid column end of the match (exclusive; accounts for wide and combining characters)
 - `text: str`: Matched text
 - `captures: list[str]`: Capture groups (index 0 = full match, 1+ = groups)
 - `timestamp: int`: Match timestamp (Unix timestamp in seconds)

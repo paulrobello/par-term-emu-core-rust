@@ -244,7 +244,18 @@ impl TriggerRegistry {
     ///
     /// Uses RegexSet for efficient multi-pattern matching, then runs individual
     /// regexes only on patterns that matched to extract positions and captures.
-    pub fn scan_line(&mut self, row: usize, text: &str) -> Vec<TriggerMatch> {
+    ///
+    /// `char_to_grid_col` maps each character index in `text` to its grid column
+    /// index. When `None`, character indices are used directly (assumes ASCII-only,
+    /// no wide characters). Callers should provide this mapping when the text may
+    /// contain multi-byte UTF-8 characters or was built from grid cells with
+    /// wide character spacers filtered out.
+    pub fn scan_line(
+        &mut self,
+        row: usize,
+        text: &str,
+        char_to_grid_col: Option<&[usize]>,
+    ) -> Vec<TriggerMatch> {
         let regex_set = match &self.regex_set {
             Some(rs) => rs,
             None => return Vec::new(),
@@ -287,11 +298,18 @@ impl TriggerRegistry {
                     );
                 }
 
+                let (col, end_col) = byte_offsets_to_grid_cols(
+                    text,
+                    full_match.start(),
+                    full_match.end(),
+                    char_to_grid_col,
+                );
+
                 let trigger_match = TriggerMatch {
                     trigger_id,
                     row,
-                    col: full_match.start(),
-                    end_col: full_match.end(),
+                    col,
+                    end_col,
                     text: full_match.as_str().to_string(),
                     captures,
                     timestamp: now,
@@ -370,6 +388,95 @@ impl TriggerRegistry {
     }
 }
 
+/// Convert regex byte offsets to grid column indices
+///
+/// Regex `Match::start()` and `Match::end()` return byte offsets in the UTF-8
+/// string, not character or column indices. When the text contains multi-byte
+/// UTF-8 characters (e.g., `❯` = 3 bytes) or was built from grid cells with
+/// wide character spacers filtered out, byte offsets will not correspond to
+/// grid column positions.
+///
+/// This function converts a (start_byte, end_byte) pair to (start_col, end_col)
+/// grid column indices using an optional `char_to_grid_col` mapping.
+///
+/// When `char_to_grid_col` is `None`, it falls back to counting characters up to
+/// each byte offset (handles multi-byte UTF-8 but not wide character spacers).
+fn byte_offsets_to_grid_cols(
+    text: &str,
+    start_byte: usize,
+    end_byte: usize,
+    char_to_grid_col: Option<&[usize]>,
+) -> (usize, usize) {
+    match char_to_grid_col {
+        Some(mapping) => {
+            // Convert byte offsets to character indices, then look up grid columns
+            let start_char_idx = text[..start_byte].chars().count();
+            let end_char_idx = text[..end_byte].chars().count();
+
+            let start_col = mapping
+                .get(start_char_idx)
+                .copied()
+                .unwrap_or(start_char_idx);
+            // For end_col (exclusive), we need the column *after* the last matched char.
+            // If end_char_idx points past the last char, use one past the last mapped column.
+            let end_col = if end_char_idx > 0 && end_char_idx <= mapping.len() {
+                if end_char_idx < mapping.len() {
+                    // Next character's grid column = exclusive end
+                    mapping[end_char_idx]
+                } else {
+                    // Past the last character: use last mapped column + 1
+                    mapping[end_char_idx - 1] + 1
+                }
+            } else if end_char_idx == 0 {
+                mapping.first().copied().unwrap_or(0)
+            } else {
+                end_char_idx
+            };
+
+            (start_col, end_col)
+        }
+        None => {
+            // No mapping provided: convert byte offsets to character indices
+            // This handles multi-byte UTF-8 but not wide character spacers
+            let start_col = text[..start_byte].chars().count();
+            let end_col = text[..end_byte].chars().count();
+            (start_col, end_col)
+        }
+    }
+}
+
+/// Build a mapping from character index (in row_text output) to grid column index
+///
+/// `row_text()` filters out `wide_char_spacer` cells and concatenates graphemes
+/// from each remaining cell. Each cell may produce multiple characters (base char
+/// plus combining characters). This function mirrors that logic to build a
+/// `Vec<usize>` where index `i` is the grid column of the cell that produced the
+/// `i`-th character in the resulting text.
+///
+/// - `is_wide_char_spacer(col)` should return `true` for spacer cells
+/// - `grapheme_char_count(col)` should return the number of `char`s in the cell's
+///   grapheme cluster (1 + number of combining characters)
+pub fn build_char_to_grid_col_map<F, G>(
+    num_cols: usize,
+    is_wide_char_spacer: F,
+    grapheme_char_count: G,
+) -> Vec<usize>
+where
+    F: Fn(usize) -> bool,
+    G: Fn(usize) -> usize,
+{
+    let mut mapping = Vec::with_capacity(num_cols);
+    for col in 0..num_cols {
+        if !is_wide_char_spacer(col) {
+            let char_count = grapheme_char_count(col);
+            for _ in 0..char_count {
+                mapping.push(col);
+            }
+        }
+    }
+    mapping
+}
+
 /// Substitute capture groups in a template string
 ///
 /// Replaces `$0`, `$1`, `$2`, etc. with the corresponding capture group values.
@@ -412,7 +519,7 @@ mod tests {
             .add("error".into(), r"ERROR:\s+(.+)".into(), vec![])
             .unwrap();
 
-        let matches = registry.scan_line(5, "prefix ERROR: something went wrong");
+        let matches = registry.scan_line(5, "prefix ERROR: something went wrong", None);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].row, 5);
         assert_eq!(matches[0].text, "ERROR: something went wrong");
@@ -428,7 +535,7 @@ mod tests {
             .unwrap();
         registry.add("warn".into(), "WARN".into(), vec![]).unwrap();
 
-        let matches = registry.scan_line(0, "ERROR and WARN on same line");
+        let matches = registry.scan_line(0, "ERROR and WARN on same line", None);
         assert_eq!(matches.len(), 2);
     }
 
@@ -440,7 +547,7 @@ mod tests {
             .unwrap();
 
         // fire_once_per_line is true by default, so only first word match
-        let matches = registry.scan_line(0, "hello world foo");
+        let matches = registry.scan_line(0, "hello world foo", None);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].text, "hello");
     }
@@ -451,17 +558,17 @@ mod tests {
         let id = registry.add("test".into(), "MATCH".into(), vec![]).unwrap();
 
         // Enabled by default
-        let matches = registry.scan_line(0, "MATCH here");
+        let matches = registry.scan_line(0, "MATCH here", None);
         assert_eq!(matches.len(), 1);
 
         // Disable
         registry.set_enabled(id, false);
-        let matches = registry.scan_line(0, "MATCH here");
+        let matches = registry.scan_line(0, "MATCH here", None);
         assert_eq!(matches.len(), 0);
 
         // Re-enable
         registry.set_enabled(id, true);
-        let matches = registry.scan_line(0, "MATCH here");
+        let matches = registry.scan_line(0, "MATCH here", None);
         assert_eq!(matches.len(), 1);
     }
 
@@ -476,7 +583,7 @@ mod tests {
             )
             .unwrap();
 
-        let matches = registry.scan_line(0, "IP: 192.168.1.100");
+        let matches = registry.scan_line(0, "IP: 192.168.1.100", None);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].captures.len(), 5); // full match + 4 groups
         assert_eq!(matches[0].captures[0], "192.168.1.100");
@@ -505,8 +612,8 @@ mod tests {
         let mut registry = TriggerRegistry::new();
         registry.add("test".into(), "MATCH".into(), vec![]).unwrap();
 
-        registry.scan_line(0, "MATCH");
-        registry.scan_line(1, "MATCH");
+        registry.scan_line(0, "MATCH", None);
+        registry.scan_line(1, "MATCH", None);
 
         let matches = registry.poll_matches();
         assert_eq!(matches.len(), 2);
@@ -522,9 +629,9 @@ mod tests {
         registry.set_max_matches(2);
         registry.add("test".into(), "X".into(), vec![]).unwrap();
 
-        registry.scan_line(0, "X");
-        registry.scan_line(1, "X");
-        registry.scan_line(2, "X");
+        registry.scan_line(0, "X", None);
+        registry.scan_line(1, "X", None);
+        registry.scan_line(2, "X", None);
 
         let matches = registry.poll_matches();
         assert_eq!(matches.len(), 2);
@@ -536,5 +643,177 @@ mod tests {
     fn test_no_active_triggers() {
         let registry = TriggerRegistry::new();
         assert!(!registry.has_active_triggers());
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_no_mapping() {
+        // Without a mapping, byte offsets are converted to char indices
+        // ASCII: byte offset == char index
+        let text = "hello world";
+        let (start, end) = byte_offsets_to_grid_cols(text, 6, 11, None);
+        assert_eq!(start, 6);
+        assert_eq!(end, 11);
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_multibyte_no_mapping() {
+        // Multi-byte UTF-8 without mapping: byte offsets converted to char indices
+        // "❯ hello" where ❯ is 3 bytes (U+276F)
+        let text = "❯ hello";
+        // Byte layout: ❯(3 bytes) + ' '(1) + h(1) + e(1) + l(1) + l(1) + o(1) = 9 bytes
+        // "hello" starts at byte 4, ends at byte 9
+        let (start, end) = byte_offsets_to_grid_cols(text, 4, 9, None);
+        // char indices: ❯=0, ' '=1, h=2, e=3, l=4, l=5, o=6
+        // "hello" starts at char 2, ends at char 7
+        assert_eq!(start, 2);
+        assert_eq!(end, 7);
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_with_mapping_ascii() {
+        // ASCII with simple 1:1 mapping (no wide chars)
+        let text = "hello world";
+        // mapping: each char maps to its own grid column
+        let mapping: Vec<usize> = (0..11).collect();
+        let (start, end) = byte_offsets_to_grid_cols(text, 6, 11, Some(&mapping));
+        assert_eq!(start, 6);
+        assert_eq!(end, 11);
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_with_wide_chars() {
+        // Simulate: grid has cells [W][spacer][o][r][l][d]
+        // row_text produces "World" (W from wide char + "orld")
+        // But W is a wide character at grid column 0, spacer at column 1
+        // 'o' is at grid column 2, 'r' at 3, 'l' at 4, 'd' at 5
+        let text = "World";
+        // mapping: char_idx -> grid_col
+        // W(char 0) -> col 0 (wide char, spacer at col 1 filtered)
+        // o(char 1) -> col 2
+        // r(char 2) -> col 3
+        // l(char 3) -> col 4
+        // d(char 4) -> col 5
+        let mapping = vec![0, 2, 3, 4, 5];
+
+        // Match "orld" at bytes 1..5 (ASCII, so byte == char index here)
+        let (start, end) = byte_offsets_to_grid_cols(text, 1, 5, Some(&mapping));
+        // char 1 -> grid col 2, char 5 is past end -> last col + 1 = 5 + 1 = 6
+        assert_eq!(start, 2);
+        assert_eq!(end, 6);
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_multibyte_with_mapping() {
+        // "❯ hello" where ❯ is 3 bytes, occupies 1 grid column
+        let text = "❯ hello";
+        // Grid: [❯][space][h][e][l][l][o]
+        // No wide char spacers, but ❯ is multi-byte
+        let mapping: Vec<usize> = (0..7).collect();
+
+        // Match "hello" - starts at byte 5 (after ❯(3) + space(1) + h at byte 4... wait)
+        // ❯ = 3 bytes, space = 1 byte, so "hello" starts at byte 4
+        // Actually: ❯(3 bytes) + ' '(1 byte) = 4 bytes, then 'h' at byte 4
+        let (start, end) = byte_offsets_to_grid_cols(text, 4, 9, Some(&mapping));
+        // chars: ❯=0, ' '=1, h=2, e=3, l=4, l=5, o=6
+        // char 2 -> grid col 2, char 7 is past end -> last + 1 = 7
+        assert_eq!(start, 2);
+        assert_eq!(end, 7);
+    }
+
+    #[test]
+    fn test_byte_offsets_to_grid_cols_multibyte_with_wide_and_mapping() {
+        // Simulate prompt: "❯ " followed by "test"
+        // Grid: [❯(wide)][spacer][ ][t][e][s][t]
+        // row_text filters spacer: "❯ test"
+        // ❯ is 3-byte UTF-8 and a wide character occupying 2 grid columns
+        let text = "❯ test";
+        // mapping: char_idx -> grid_col
+        // ❯(char 0) -> col 0 (wide char, spacer at col 1 filtered)
+        // ' '(char 1) -> col 2
+        // t(char 2) -> col 3
+        // e(char 3) -> col 4
+        // s(char 4) -> col 5
+        // t(char 5) -> col 6
+        let mapping = vec![0, 2, 3, 4, 5, 6];
+
+        // Match "test": ❯ is 3 bytes, ' ' is 1 byte = 4 bytes, so "test" at bytes 4..8
+        let (start, end) = byte_offsets_to_grid_cols(text, 4, 8, Some(&mapping));
+        // char 2 -> grid col 3, char 6 is past end -> last + 1 = 7
+        assert_eq!(start, 3);
+        assert_eq!(end, 7);
+    }
+
+    #[test]
+    fn test_build_char_to_grid_col_map_no_spacers() {
+        // Simple case: 5 columns, no spacers, 1 char per cell
+        let mapping = build_char_to_grid_col_map(5, |_| false, |_| 1);
+        assert_eq!(mapping, vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_build_char_to_grid_col_map_with_spacer() {
+        // Grid: [W][spacer][a][b][c]
+        // W is wide at col 0, spacer at col 1
+        let mapping = build_char_to_grid_col_map(5, |col| col == 1, |_| 1);
+        assert_eq!(mapping, vec![0, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_build_char_to_grid_col_map_with_combining() {
+        // Grid: [e\u{0301}][a][b] where cell 0 has a combining accent (2 chars)
+        let mapping = build_char_to_grid_col_map(3, |_| false, |col| if col == 0 { 2 } else { 1 });
+        // Cell 0 produces 2 chars, both map to col 0
+        // Cell 1 produces 1 char mapping to col 1
+        // Cell 2 produces 1 char mapping to col 2
+        assert_eq!(mapping, vec![0, 0, 1, 2]);
+    }
+
+    #[test]
+    fn test_build_char_to_grid_col_map_wide_and_combining() {
+        // Grid: [W+combining][spacer][a][b]
+        // Cell 0: wide char with 1 combining char (2 chars total), grid col 0
+        // Cell 1: spacer, grid col 1 (filtered out)
+        // Cell 2: 'a', grid col 2
+        // Cell 3: 'b', grid col 3
+        let mapping =
+            build_char_to_grid_col_map(4, |col| col == 1, |col| if col == 0 { 2 } else { 1 });
+        assert_eq!(mapping, vec![0, 0, 2, 3]);
+    }
+
+    #[test]
+    fn test_scan_line_with_multibyte_chars_returns_grid_cols() {
+        // Verify that scan_line with a mapping returns grid column indices
+        let mut registry = TriggerRegistry::new();
+        registry.add("test".into(), "ERROR".into(), vec![]).unwrap();
+
+        // "❯ ERROR" where ❯ is 3 bytes
+        let text = "❯ ERROR";
+        // Mapping: ❯=col0, ' '=col1, E=col2, R=col3, R=col4, O=col5, R=col6
+        let mapping: Vec<usize> = (0..7).collect();
+
+        let matches = registry.scan_line(0, text, Some(&mapping));
+        assert_eq!(matches.len(), 1);
+        // "ERROR" in the string: byte 4 to 9 (❯ is 3 bytes + space is 1 byte)
+        // char index 2 to 7 -> grid cols 2 to 7
+        assert_eq!(matches[0].col, 2);
+        assert_eq!(matches[0].end_col, 7);
+    }
+
+    #[test]
+    fn test_scan_line_with_wide_char_mapping() {
+        let mut registry = TriggerRegistry::new();
+        registry.add("test".into(), "ERROR".into(), vec![]).unwrap();
+
+        // Simulate: wide char at col 0 (spacer at col 1), then " ERROR"
+        // row_text = "W ERROR" (W is 1 char from the wide cell)
+        let text = "W ERROR";
+        // mapping: W=col0 (spacer at col1 filtered), ' '=col2, E=col3, R=col4, R=col5, O=col6, R=col7
+        let mapping = vec![0, 2, 3, 4, 5, 6, 7];
+
+        let matches = registry.scan_line(0, text, Some(&mapping));
+        assert_eq!(matches.len(), 1);
+        // "ERROR" at bytes 2..7, chars 2..7 -> grid cols 3..8
+        assert_eq!(matches[0].col, 3);
+        assert_eq!(matches[0].end_col, 8);
     }
 }

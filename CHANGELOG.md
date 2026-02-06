@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-02-05
+
+### Fixed
+- **Trigger Column Mapping**: `TriggerMatch.col` and `TriggerMatch.end_col` now correctly report grid column positions for text containing wide characters (CJK, emoji) and multi-byte UTF-8 characters
+  - Previously, regex byte offsets were used directly, producing incorrect column values for non-ASCII text
+  - New `byte_offsets_to_grid_cols()` converts regex byte offsets to proper grid column indices
+  - New `build_char_to_grid_col_map()` builds character-to-grid-column mapping that accounts for wide character spacers and combining characters
+  - `process_trigger_scans()` now passes the column mapping to `scan_line()` for accurate position reporting
+  - Trigger highlights now correctly overlay the matched text even with wide/combining characters in the same row
+
 ## [0.31.0] - 2026-02-05
 
 ### Fixed

@@ -6583,19 +6583,35 @@ impl Terminal {
 
         let rows_to_scan: Vec<usize> = self.pending_trigger_rows.drain().collect();
         let grid = self.active_grid();
+        let cols = grid.cols();
 
-        // Collect row texts
-        let mut row_texts: Vec<(usize, String)> = Vec::new();
+        // Collect row texts and their char-to-grid-col mappings
+        let mut row_data: Vec<(usize, String, Vec<usize>)> = Vec::new();
         for row in &rows_to_scan {
             let text = grid.row_text(*row);
             if !text.trim().is_empty() {
-                row_texts.push((*row, text));
+                let r = *row;
+                let mapping = trigger::build_char_to_grid_col_map(
+                    cols,
+                    |col| {
+                        grid.get(col, r)
+                            .is_some_and(|cell| cell.flags.wide_char_spacer())
+                    },
+                    |col| {
+                        grid.get(col, r)
+                            .map(|cell| 1 + cell.combining.len())
+                            .unwrap_or(1)
+                    },
+                );
+                row_data.push((*row, text, mapping));
             }
         }
 
         // Scan each row
-        for (row, text) in &row_texts {
-            let matches = self.trigger_registry.scan_line(*row, text);
+        for (row, text, mapping) in &row_data {
+            let matches = self
+                .trigger_registry
+                .scan_line(*row, text, Some(mapping.as_slice()));
 
             for trigger_match in &matches {
                 // Execute actions for this match

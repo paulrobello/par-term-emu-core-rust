@@ -196,6 +196,7 @@ Features:
 - Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
 - Capture group substitution (`$1`, `$2`, etc.) in action parameters
 - Highlight overlays with optional expiry
+- Character-to-grid-column mapping for accurate match positions with wide/combining characters
 
 **Coprocess Management** (`src/coprocess.rs`)
 - `CoprocessManager` for spawning and managing external processes alongside terminal sessions

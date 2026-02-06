@@ -13,6 +13,12 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.31.1
+
+### Trigger Column Mapping Fix
+
+`TriggerMatch.col` and `TriggerMatch.end_col` now correctly report grid column positions for text containing wide characters (CJK, emoji) and multi-byte UTF-8 characters. Previously, regex byte offsets were used directly, producing incorrect column values for non-ASCII text. Trigger highlights now correctly overlay the matched text even when wide or combining characters appear in the same row.
+
 ## What's New in 0.31.0
 
 ### Triggers & Automation
