@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-02-06
+
+### Added
+- **Coprocess Restart Policies**: Coprocesses can now automatically restart when they exit
+  - New `RestartPolicy` enum: `Never` (default), `Always`, `OnFailure` (restart on non-zero exit)
+  - Configurable restart delay via `restart_delay_ms` to prevent tight restart loops
+  - Dead coprocesses with `Never` policy are automatically cleaned up from the manager
+  - Restart logic runs during `feed_output()` polling cycle
+- **Coprocess Stderr Capture**: Coprocess stderr is now captured in a separate buffer
+  - New `read_coprocess_errors()` / `read_errors()` methods on `PtySession` and `CoprocessManager`
+  - Stderr is read via a dedicated background thread (previously discarded)
+- **Trigger Notify/MarkLine as Frontend Events**: `Notify` and `MarkLine` trigger actions now emit `ActionResult` events instead of directly calling internal notification/bookmark methods
+  - Frontends receive `notify` and `mark_line` entries from `poll_action_results()` with trigger_id, allowing custom handling
+  - `MarkLine` action now supports an optional `color` parameter as RGB tuple (e.g., `"color": "255,128,0"`)
+- **Streaming Protocol: Action Result Events**: New `ActionNotify` and `ActionMarkLine` messages in the streaming protocol
+  - Frontends subscribed to `action` events receive trigger-driven notifications and line marks
+  - New protobuf messages: `ActionNotify`, `ActionMarkLine` with `Color` support
+  - New `EVENT_TYPE_ACTION` subscription type
+  - New server methods: `send_action_notify()`, `send_action_mark_line()`
+- **Python Bindings**: Updated `CoprocessConfig` with `restart_policy` and `restart_delay_ms` parameters; added `read_coprocess_errors()` to `PtyTerminal`; added `send_action_notify()` and `send_action_mark_line()` to `StreamingServer`
+
+### Changed
+- **Breaking**: `CoprocessManager.feed_output()` now takes `&mut self` instead of `&self` (manages restart lifecycle)
+- **Breaking**: `Notify` and `MarkLine` trigger actions no longer directly enqueue notifications or add bookmarks; they emit `ActionResult` events for frontend handling via `poll_action_results()`
+- **Breaking**: `TriggerAction::MarkLine` now has an additional `color: Option<(u8, u8, u8)>` field
+
 ## [0.31.1] - 2026-02-05
 
 ### Fixed

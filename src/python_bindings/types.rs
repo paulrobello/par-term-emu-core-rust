@@ -2757,6 +2757,15 @@ impl PyTriggerAction {
             }),
             "mark_line" => Ok(TriggerAction::MarkLine {
                 label: self.params.get("label").cloned(),
+                color: self.params.get("color").and_then(|c| {
+                    let parts: Vec<u8> =
+                        c.split(',').filter_map(|s| s.trim().parse().ok()).collect();
+                    if parts.len() == 3 {
+                        Some((parts[0], parts[1], parts[2]))
+                    } else {
+                        None
+                    }
+                }),
             }),
             "set_variable" => Ok(TriggerAction::SetVariable {
                 name: self.params.get("name").cloned().unwrap_or_default(),
@@ -2828,6 +2837,12 @@ pub struct PyCoprocessConfig {
     pub env: std::collections::HashMap<String, String>,
     #[pyo3(get, set)]
     pub copy_terminal_output: bool,
+    /// Restart policy: "never" (default), "always", or "on_failure"
+    #[pyo3(get, set)]
+    pub restart_policy: String,
+    /// Delay in milliseconds before restarting (0 = immediate)
+    #[pyo3(get, set)]
+    pub restart_delay_ms: u64,
 }
 
 #[pymethods]
@@ -2840,6 +2855,8 @@ impl PyCoprocessConfig {
     ///     cwd: Optional working directory
     ///     env: Optional environment variables dictionary
     ///     copy_terminal_output: Whether to pipe terminal output to stdin (default: True)
+    ///     restart_policy: Restart policy - "never" (default), "always", or "on_failure"
+    ///     restart_delay_ms: Delay in milliseconds before restarting (default: 0)
     ///
     /// Returns:
     ///     A new CoprocessConfig instance
@@ -2847,14 +2864,17 @@ impl PyCoprocessConfig {
     /// Example:
     ///     >>> config = CoprocessConfig("grep", args=["ERROR"])
     ///     >>> config = CoprocessConfig("cat", copy_terminal_output=True)
+    ///     >>> config = CoprocessConfig("watcher", restart_policy="always", restart_delay_ms=1000)
     #[new]
-    #[pyo3(signature = (command, args=None, cwd=None, env=None, copy_terminal_output=true))]
+    #[pyo3(signature = (command, args=None, cwd=None, env=None, copy_terminal_output=true, restart_policy="never", restart_delay_ms=0))]
     fn new(
         command: String,
         args: Option<Vec<String>>,
         cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
         copy_terminal_output: bool,
+        restart_policy: &str,
+        restart_delay_ms: u64,
     ) -> Self {
         PyCoprocessConfig {
             command,
@@ -2862,25 +2882,35 @@ impl PyCoprocessConfig {
             cwd,
             env: env.unwrap_or_default(),
             copy_terminal_output,
+            restart_policy: restart_policy.to_string(),
+            restart_delay_ms,
         }
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "CoprocessConfig(command={}, args={:?}, copy_output={})",
-            self.command, self.args, self.copy_terminal_output
+            "CoprocessConfig(command={}, args={:?}, copy_output={}, restart_policy={}, restart_delay_ms={})",
+            self.command, self.args, self.copy_terminal_output, self.restart_policy, self.restart_delay_ms
         )
     }
 }
 
 impl From<&PyCoprocessConfig> for crate::coprocess::CoprocessConfig {
     fn from(config: &PyCoprocessConfig) -> Self {
+        use crate::coprocess::RestartPolicy;
+        let restart_policy = match config.restart_policy.as_str() {
+            "always" => RestartPolicy::Always,
+            "on_failure" => RestartPolicy::OnFailure,
+            _ => RestartPolicy::Never,
+        };
         crate::coprocess::CoprocessConfig {
             command: config.command.clone(),
             args: config.args.clone(),
             cwd: config.cwd.clone(),
             env: config.env.clone(),
             copy_terminal_output: config.copy_terminal_output,
+            restart_policy,
+            restart_delay_ms: config.restart_delay_ms,
         }
     }
 }

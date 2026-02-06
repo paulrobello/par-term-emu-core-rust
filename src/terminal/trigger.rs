@@ -22,7 +22,10 @@ pub enum TriggerAction {
     /// Send a notification (reuses existing notification system)
     Notify { title: String, message: String },
     /// Add a bookmark/mark on the matched line
-    MarkLine { label: Option<String> },
+    MarkLine {
+        label: Option<String>,
+        color: Option<(u8, u8, u8)>,
+    },
     /// Set a session variable (reuses existing badge session_variables)
     SetVariable { name: String, value: String },
     /// Run an external command (emitted as event for frontend)
@@ -114,6 +117,19 @@ pub enum ActionResult {
         trigger_id: TriggerId,
         text: String,
         delay_ms: u64,
+    },
+    /// Frontend should display a notification
+    Notify {
+        trigger_id: TriggerId,
+        title: String,
+        message: String,
+    },
+    /// Frontend should add a scrollbar mark at the given row
+    MarkLine {
+        trigger_id: TriggerId,
+        row: usize,
+        label: Option<String>,
+        color: Option<(u8, u8, u8)>,
     },
 }
 

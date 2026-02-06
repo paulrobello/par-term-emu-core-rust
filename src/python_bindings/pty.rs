@@ -1033,6 +1033,24 @@ impl PyPtyTerminal {
         Ok(self.inner.coprocess_status(coprocess_id))
     }
 
+    /// Read buffered stderr output from a coprocess (drains the buffer)
+    ///
+    /// Args:
+    ///     coprocess_id: ID of the coprocess
+    ///
+    /// Returns:
+    ///     list[str]: Lines of stderr output from the coprocess
+    ///
+    /// Example:
+    ///     >>> errors = pty.read_coprocess_errors(coproc_id)
+    ///     >>> for line in errors:
+    ///     ...     print(f"ERROR: {line}")
+    fn read_coprocess_errors(&self, coprocess_id: u64) -> PyResult<Vec<String>> {
+        self.inner
+            .read_coprocess_errors(coprocess_id)
+            .map_err(PyRuntimeError::new_err)
+    }
+
     /// Get mouse tracking mode
     ///
     /// Returns:

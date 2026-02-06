@@ -31,6 +31,7 @@ enum EventType {
   EVENT_TYPE_RESIZE = 5;
   EVENT_TYPE_CWD = 6;
   EVENT_TYPE_TRIGGER = 7;
+  EVENT_TYPE_ACTION = 8;
 }
 
 // =============================================================================
@@ -51,6 +52,8 @@ message ServerMessage {
     Pong pong = 10;
     CwdChanged cwd_changed = 11;
     TriggerMatched trigger_matched = 12;
+    ActionNotify action_notify = 13;
+    ActionMarkLine action_mark_line = 14;
   }
 }
 
@@ -119,6 +122,21 @@ message TriggerMatched {
   string text = 5;
   repeated string captures = 6;
   uint64 timestamp = 7;
+}
+
+// Trigger action result: notification
+message ActionNotify {
+  uint64 trigger_id = 1;
+  string title = 2;
+  string message = 3;
+}
+
+// Trigger action result: mark/bookmark a line
+message ActionMarkLine {
+  uint64 trigger_id = 1;
+  uint32 row = 2;
+  optional string label = 3;
+  optional Color color = 4;
 }
 
 // Error notification

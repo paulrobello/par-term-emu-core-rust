@@ -10,11 +10,24 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use parking_lot::Mutex;
 
 /// Unique coprocess identifier
 pub type CoprocessId = u64;
+
+/// Policy for restarting a coprocess when it exits
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum RestartPolicy {
+    /// Never restart (default)
+    #[default]
+    Never,
+    /// Always restart regardless of exit code
+    Always,
+    /// Restart only on non-zero exit code (or killed by signal)
+    OnFailure,
+}
 
 /// Configuration for starting a coprocess
 #[derive(Debug, Clone)]
@@ -29,6 +42,10 @@ pub struct CoprocessConfig {
     pub env: HashMap<String, String>,
     /// Whether to copy terminal output to this coprocess's stdin
     pub copy_terminal_output: bool,
+    /// Restart policy when the coprocess exits
+    pub restart_policy: RestartPolicy,
+    /// Delay in milliseconds before restarting
+    pub restart_delay_ms: u64,
 }
 
 impl Default for CoprocessConfig {
@@ -39,19 +56,38 @@ impl Default for CoprocessConfig {
             cwd: None,
             env: HashMap::new(),
             copy_terminal_output: true,
+            restart_policy: RestartPolicy::Never,
+            restart_delay_ms: 0,
         }
     }
 }
 
 /// A running coprocess
 struct Coprocess {
-    _config: CoprocessConfig,
+    config: CoprocessConfig,
     child: Child,
     stdin_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
-    _reader_thread: Option<JoinHandle<()>>,
+    reader_thread: Option<JoinHandle<()>>,
+    stderr_thread: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
     output_buffer: Arc<Mutex<Vec<String>>>,
+    error_buffer: Arc<Mutex<Vec<String>>>,
     copy_terminal_output: bool,
+    restart_policy: RestartPolicy,
+    restart_delay_ms: u64,
+    /// When the process was first detected as dead (for delay tracking)
+    died_at: Option<Instant>,
+}
+
+/// Result of spawning a coprocess child
+struct SpawnResult {
+    child: Child,
+    stdin_writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
+    reader_thread: Option<JoinHandle<()>>,
+    stderr_thread: Option<JoinHandle<()>>,
+    running: Arc<AtomicBool>,
+    output_buffer: Arc<Mutex<Vec<String>>>,
+    error_buffer: Arc<Mutex<Vec<String>>>,
 }
 
 /// Manager for multiple coprocesses
@@ -87,12 +123,11 @@ impl CoprocessManager {
         }
     }
 
-    /// Start a new coprocess
-    pub fn start(&mut self, config: CoprocessConfig) -> Result<CoprocessId, String> {
-        if config.command.is_empty() {
-            return Err("Command must not be empty".to_string());
-        }
-
+    /// Spawn a child process with reader threads.
+    fn spawn_child(
+        config: &CoprocessConfig,
+        max_buffer_lines: usize,
+    ) -> Result<SpawnResult, String> {
         let mut cmd = Command::new(&config.command);
         cmd.args(&config.args);
 
@@ -106,7 +141,7 @@ impl CoprocessManager {
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::null()); // Discard stderr to avoid deadlocks
+        cmd.stderr(Stdio::piped());
 
         let mut child = cmd
             .spawn()
@@ -118,13 +153,14 @@ impl CoprocessManager {
         });
 
         let output_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let error_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(AtomicBool::new(true));
 
         // Start stdout reader thread
         let reader_thread = if let Some(stdout) = child.stdout.take() {
             let buffer_clone = Arc::clone(&output_buffer);
             let running_clone = Arc::clone(&running);
-            let max_lines = self.max_buffer_lines;
+            let max_lines = max_buffer_lines;
 
             Some(std::thread::spawn(move || {
                 let reader = BufReader::new(stdout);
@@ -146,18 +182,65 @@ impl CoprocessManager {
             None
         };
 
+        // Start stderr reader thread to capture error output
+        let stderr_thread = if let Some(stderr) = child.stderr.take() {
+            let err_buf_clone = Arc::clone(&error_buffer);
+            let max_lines = max_buffer_lines;
+
+            Some(std::thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    match line {
+                        Ok(text) => {
+                            let mut buf = err_buf_clone.lock();
+                            if buf.len() >= max_lines {
+                                buf.remove(0);
+                            }
+                            buf.push(text);
+                        }
+                        Err(_) => break,
+                    }
+                }
+            }))
+        } else {
+            None
+        };
+
+        Ok(SpawnResult {
+            child,
+            stdin_writer,
+            reader_thread,
+            stderr_thread,
+            running,
+            output_buffer,
+            error_buffer,
+        })
+    }
+
+    /// Start a new coprocess
+    pub fn start(&mut self, config: CoprocessConfig) -> Result<CoprocessId, String> {
+        if config.command.is_empty() {
+            return Err("Command must not be empty".to_string());
+        }
+
+        let spawn = Self::spawn_child(&config, self.max_buffer_lines)?;
+
         let id = self.next_id;
         self.next_id += 1;
 
-        let copy_terminal_output = config.copy_terminal_output;
         let coprocess = Coprocess {
-            _config: config,
-            child,
-            stdin_writer,
-            _reader_thread: reader_thread,
-            running,
-            output_buffer,
-            copy_terminal_output,
+            copy_terminal_output: config.copy_terminal_output,
+            restart_policy: config.restart_policy,
+            restart_delay_ms: config.restart_delay_ms,
+            config,
+            child: spawn.child,
+            stdin_writer: spawn.stdin_writer,
+            reader_thread: spawn.reader_thread,
+            stderr_thread: spawn.stderr_thread,
+            running: spawn.running,
+            output_buffer: spawn.output_buffer,
+            error_buffer: spawn.error_buffer,
+            died_at: None,
         };
 
         self.coprocesses.insert(id, coprocess);
@@ -230,14 +313,127 @@ impl CoprocessManager {
             .map(|c| c.running.load(Ordering::SeqCst))
     }
 
-    /// Feed terminal output to all coprocesses that have copy_terminal_output enabled
-    pub fn feed_output(&self, data: &[u8]) {
-        for coproc in self.coprocesses.values() {
-            if coproc.copy_terminal_output {
-                if let Some(ref writer) = coproc.stdin_writer {
-                    let mut w = writer.lock();
-                    let _ = w.write_all(data);
-                    let _ = w.flush();
+    /// Read buffered stderr output from a coprocess (drains the buffer)
+    pub fn read_errors(&self, id: CoprocessId) -> Result<Vec<String>, String> {
+        let coproc = self
+            .coprocesses
+            .get(&id)
+            .ok_or_else(|| format!("Coprocess {} not found", id))?;
+
+        let mut buf = coproc.error_buffer.lock();
+        Ok(std::mem::take(&mut *buf))
+    }
+
+    /// Determine if a dead coprocess should be restarted based on its exit status
+    fn should_restart(coproc: &mut Coprocess) -> bool {
+        match coproc.restart_policy {
+            RestartPolicy::Never => false,
+            RestartPolicy::Always => true,
+            RestartPolicy::OnFailure => {
+                // Check exit code
+                match coproc.child.try_wait() {
+                    Ok(Some(status)) => !status.success(),
+                    // Process hasn't finished waiting yet or error — treat as failure
+                    Ok(None) => true,
+                    Err(_) => true,
+                }
+            }
+        }
+    }
+
+    /// Feed terminal output to all coprocesses that have copy_terminal_output enabled.
+    ///
+    /// Also performs cleanup of dead coprocesses:
+    /// - Never policy: removes dead coprocesses from the map
+    /// - Always/OnFailure: restarts according to policy (with optional delay)
+    pub fn feed_output(&mut self, data: &[u8]) {
+        // Phase 1: Feed data to running coprocesses, collect dead IDs
+        let mut dead_ids: Vec<CoprocessId> = Vec::new();
+        for (&id, coproc) in &self.coprocesses {
+            if coproc.running.load(Ordering::SeqCst) {
+                if coproc.copy_terminal_output {
+                    if let Some(ref writer) = coproc.stdin_writer {
+                        let mut w = writer.lock();
+                        let _ = w.write_all(data);
+                        let _ = w.flush();
+                    }
+                }
+            } else {
+                dead_ids.push(id);
+            }
+        }
+
+        // Phase 2: Handle dead coprocesses
+        let mut to_remove: Vec<CoprocessId> = Vec::new();
+        for id in dead_ids {
+            let coproc = match self.coprocesses.get_mut(&id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            if !Self::should_restart(coproc) {
+                to_remove.push(id);
+                continue;
+            }
+
+            // Handle restart delay
+            if coproc.restart_delay_ms > 0 {
+                let now = Instant::now();
+                match coproc.died_at {
+                    None => {
+                        // First detection — record time, skip restart this cycle
+                        coproc.died_at = Some(now);
+                        continue;
+                    }
+                    Some(died) => {
+                        let elapsed = now.duration_since(died).as_millis() as u64;
+                        if elapsed < coproc.restart_delay_ms {
+                            continue; // Delay not elapsed yet
+                        }
+                    }
+                }
+            }
+
+            // Attempt restart
+            self.restart_coprocess_by_id(id);
+        }
+
+        // Phase 3: Remove dead coprocesses with Never policy
+        for id in to_remove {
+            self.coprocesses.remove(&id);
+        }
+    }
+
+    /// Helper to restart a coprocess by ID (avoids borrow issues with &mut self + &mut coproc)
+    fn restart_coprocess_by_id(&mut self, id: CoprocessId) {
+        // We need to temporarily remove the coprocess to avoid borrow conflicts
+        if let Some(mut coproc) = self.coprocesses.remove(&id) {
+            // Join old threads
+            if let Some(t) = coproc.reader_thread.take() {
+                let _ = t.join();
+            }
+            if let Some(t) = coproc.stderr_thread.take() {
+                let _ = t.join();
+            }
+            let _ = coproc.child.wait();
+
+            match Self::spawn_child(&coproc.config, self.max_buffer_lines) {
+                Ok(spawn) => {
+                    coproc.child = spawn.child;
+                    coproc.stdin_writer = spawn.stdin_writer;
+                    coproc.reader_thread = spawn.reader_thread;
+                    coproc.stderr_thread = spawn.stderr_thread;
+                    coproc.running = spawn.running;
+                    coproc.output_buffer = spawn.output_buffer;
+                    coproc.error_buffer = spawn.error_buffer;
+                    coproc.died_at = None;
+                    self.coprocesses.insert(id, coproc);
+                }
+                Err(_) => {
+                    // Failed to restart — mark as permanently dead and put back
+                    coproc.restart_policy = RestartPolicy::Never;
+                    coproc.died_at = None;
+                    self.coprocesses.insert(id, coproc);
                 }
             }
         }
@@ -259,6 +455,8 @@ mod tests {
         let config = CoprocessConfig::default();
         assert!(config.command.is_empty());
         assert!(config.copy_terminal_output);
+        assert_eq!(config.restart_policy, RestartPolicy::Never);
+        assert_eq!(config.restart_delay_ms, 0);
     }
 
     #[test]
@@ -348,6 +546,160 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         assert_eq!(mgr.status(id), Some(false));
+        mgr.stop(id).unwrap();
+    }
+
+    #[test]
+    fn test_coprocess_stderr_capture() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "echo error_msg >&2".to_string()],
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+
+        // Give process time to write stderr and exit
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        let errors = mgr.read_errors(id).unwrap();
+        assert!(errors.contains(&"error_msg".to_string()));
+        mgr.stop(id).unwrap();
+    }
+
+    #[test]
+    fn test_coprocess_read_errors_nonexistent() {
+        let mgr = CoprocessManager::new();
+        assert!(mgr.read_errors(999).is_err());
+    }
+
+    #[test]
+    fn test_coprocess_auto_cleanup_never_policy() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "true".to_string(), // exits immediately
+            restart_policy: RestartPolicy::Never,
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+        assert_eq!(mgr.list(), vec![id]);
+
+        // Wait for process to exit
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(mgr.status(id), Some(false));
+
+        // feed_output should clean up the dead process
+        mgr.feed_output(b"data\n");
+
+        // Process should be removed
+        assert!(mgr.list().is_empty());
+        assert_eq!(mgr.status(id), None);
+    }
+
+    #[test]
+    fn test_coprocess_restart_always_policy() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "echo restarted; exit 0".to_string()],
+            restart_policy: RestartPolicy::Always,
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+
+        // Wait for process to exit
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(mgr.status(id), Some(false));
+
+        // feed_output should restart the process (same ID preserved)
+        mgr.feed_output(b"data\n");
+
+        // Process should still exist with same ID (restarted in-place)
+        assert_eq!(mgr.list(), vec![id]);
+        // The restarted process exists — it may have already exited again since it's
+        // a short-lived command, but the key assertion is that it was restarted (still in map)
+        assert!(mgr.status(id).is_some());
+
+        mgr.stop(id).unwrap();
+    }
+
+    #[test]
+    fn test_coprocess_restart_on_failure_clean_exit() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "true".to_string(), // exits with code 0
+            restart_policy: RestartPolicy::OnFailure,
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+
+        // Wait for process to exit cleanly
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(mgr.status(id), Some(false));
+
+        // feed_output should remove it (clean exit, OnFailure policy)
+        mgr.feed_output(b"data\n");
+
+        assert!(mgr.list().is_empty());
+    }
+
+    #[test]
+    fn test_coprocess_restart_on_failure_nonzero_exit() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "false".to_string(), // exits with code 1
+            restart_policy: RestartPolicy::OnFailure,
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+
+        // Wait for process to exit with failure
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(mgr.status(id), Some(false));
+
+        // feed_output should restart it (non-zero exit, OnFailure policy)
+        mgr.feed_output(b"data\n");
+
+        // Process should still exist with same ID
+        assert_eq!(mgr.list(), vec![id]);
+
+        mgr.stop(id).unwrap();
+    }
+
+    #[test]
+    fn test_coprocess_restart_delay() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "true".to_string(), // exits immediately
+            restart_policy: RestartPolicy::Always,
+            restart_delay_ms: 300,
+            ..Default::default()
+        };
+        let id = mgr.start(config).unwrap();
+
+        // Wait for process to exit
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(mgr.status(id), Some(false));
+
+        // First feed_output should record died_at but NOT restart yet
+        mgr.feed_output(b"data\n");
+        // Process should still be in the map (not removed, not yet restarted)
+        assert_eq!(mgr.list(), vec![id]);
+        assert_eq!(mgr.status(id), Some(false)); // still dead
+
+        // Feed again before delay elapses — should still not restart
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        mgr.feed_output(b"data\n");
+        assert_eq!(mgr.status(id), Some(false)); // still dead
+
+        // Wait for delay to elapse and feed again
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        mgr.feed_output(b"data\n");
+
+        // Now it should have restarted
+        assert_eq!(mgr.list(), vec![id]);
+        // The new process may have already exited (it's `true`), but it was restarted
+
         mgr.stop(id).unwrap();
     }
 }

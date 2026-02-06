@@ -6658,13 +6658,24 @@ impl Terminal {
                 trigger::TriggerAction::Notify { title, message } => {
                     let title = trigger::substitute_captures(title, &trigger_match.captures);
                     let message = trigger::substitute_captures(message, &trigger_match.captures);
-                    self.enqueue_notification(Notification::new(title, message));
+                    self.trigger_action_results
+                        .push(trigger::ActionResult::Notify {
+                            trigger_id: trigger_match.trigger_id,
+                            title,
+                            message,
+                        });
                 }
-                trigger::TriggerAction::MarkLine { label } => {
+                trigger::TriggerAction::MarkLine { label, color } => {
                     let label = label
                         .as_ref()
                         .map(|l| trigger::substitute_captures(l, &trigger_match.captures));
-                    self.add_bookmark(trigger_match.row as isize, label);
+                    self.trigger_action_results
+                        .push(trigger::ActionResult::MarkLine {
+                            trigger_id: trigger_match.trigger_id,
+                            row: trigger_match.row,
+                            label,
+                            color: *color,
+                        });
                 }
                 trigger::TriggerAction::SetVariable { name, value } => {
                     let name = trigger::substitute_captures(name, &trigger_match.captures);

@@ -433,7 +433,7 @@ Register regex patterns to automatically match terminal output and execute actio
 
 - `process_trigger_scans()`: Scan dirty rows for trigger matches. Called automatically in PTY mode; call manually for non-PTY terminals.
 - `poll_trigger_matches() -> list[TriggerMatch]`: Get and clear pending trigger matches.
-- `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (RunCommand, PlaySound, SendText).
+- `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (Notify, MarkLine, RunCommand, PlaySound, SendText).
 
 #### Trigger Highlights
 
@@ -447,8 +447,8 @@ Actions are created using `TriggerAction(action_type, params)`:
 | Action Type | Parameters | Description |
 |-------------|-----------|-------------|
 | `"highlight"` | `bg_r`, `bg_g`, `bg_b`, `fg_r`, `fg_g`, `fg_b`, `duration_ms` | Highlight matched text with colors |
-| `"notify"` | `title`, `message` | Send notification (supports `$1`, `$2` capture substitution) |
-| `"mark_line"` | `label` | Add bookmark at matched line |
+| `"notify"` | `title`, `message` | Emit notification event for frontend (supports `$1`, `$2` capture substitution) |
+| `"mark_line"` | `label`, `color` (r,g,b string) | Emit mark event for frontend (with optional color) |
 | `"set_variable"` | `name`, `value` | Set session variable (supports capture substitution) |
 | `"run_command"` | `command`, `args` (comma-separated) | Emit command event for frontend |
 | `"play_sound"` | `sound_id`, `volume` | Emit sound event for frontend |
@@ -722,6 +722,7 @@ Run external processes alongside the terminal session, optionally feeding termin
 - `read_from_coprocess(coprocess_id: int) -> list[str]`: Read buffered output lines from coprocess. Raises `ValueError` if not found.
 - `list_coprocesses() -> list[int]`: List active coprocess IDs.
 - `coprocess_status(coprocess_id: int) -> bool | None`: Check if coprocess is running. Returns `None` if not found.
+- `read_coprocess_errors(coprocess_id: int) -> list[str]`: Read buffered stderr lines from coprocess (drains the buffer). Raises `ValueError` if not found.
 
 ### Context Manager Support
 
@@ -1231,7 +1232,7 @@ A trigger match result from scanning terminal output.
 
 Configuration for starting a coprocess.
 
-**Constructor:** `CoprocessConfig(command, args=[], cwd=None, env={}, copy_terminal_output=True)`
+**Constructor:** `CoprocessConfig(command, args=[], cwd=None, env={}, copy_terminal_output=True, restart_policy="never", restart_delay_ms=0)`
 
 **Properties:**
 - `command: str`: Command to run
@@ -1239,6 +1240,8 @@ Configuration for starting a coprocess.
 - `cwd: str | None`: Working directory
 - `env: dict[str, str]`: Environment variables
 - `copy_terminal_output: bool`: Whether to pipe terminal output to coprocess stdin
+- `restart_policy: str`: Restart policy - `"never"` (default), `"always"`, or `"on_failure"` (restart on non-zero exit)
+- `restart_delay_ms: int`: Delay in milliseconds before restarting (default: 0 = immediate)
 
 ### WindowLayout
 

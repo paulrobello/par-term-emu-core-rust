@@ -488,6 +488,44 @@ impl PyStreamingServer {
         }
     }
 
+    /// Send a trigger action notify event to all clients
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger that produced this action
+    ///     title: Notification title
+    ///     message: Notification message
+    fn send_action_notify(&self, trigger_id: u64, title: String, message: String) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_action_notify(trigger_id, title, message);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a trigger action mark line event to all clients
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger that produced this action
+    ///     row: Row to mark
+    ///     label: Optional label for the mark
+    ///     color: Optional RGB color tuple (r, g, b)
+    #[pyo3(signature = (trigger_id, row, label=None, color=None))]
+    fn send_action_mark_line(
+        &self,
+        trigger_id: u64,
+        row: u16,
+        label: Option<String>,
+        color: Option<(u8, u8, u8)>,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_action_mark_line(trigger_id, row, label, color);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
     /// Shutdown the server and disconnect all clients
     ///
     /// Args:
@@ -703,9 +741,34 @@ pub fn encode_server_message<'py>(
             let screen_content = get_str("screen_content").unwrap_or_default();
             ServerMessage::refresh(cols, rows, screen_content)
         }
+        "action_notify" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let trigger_id = get_u64("trigger_id").unwrap_or(0);
+            let title = get_str("title").unwrap_or_default();
+            let message = get_str("message").unwrap_or_default();
+            ServerMessage::action_notify(trigger_id, title, message)
+        }
+        "action_mark_line" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let trigger_id = get_u64("trigger_id").unwrap_or(0);
+            let row = get_u16("row").unwrap_or(0);
+            let label = get_str("label");
+            let color: Option<(u8, u8, u8)> = kwargs
+                .and_then(|k| k.get_item("color").ok().flatten())
+                .and_then(|v| v.extract().ok());
+            ServerMessage::action_mark_line(trigger_id, row, label, color)
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line",
                 message_type
             )));
         }
@@ -843,6 +906,28 @@ pub fn decode_server_message<'py>(
             dict.set_item("captures", captures)?;
             dict.set_item("timestamp", timestamp)?;
         }
+        ServerMessage::ActionNotify {
+            trigger_id,
+            title,
+            message,
+        } => {
+            dict.set_item("type", "action_notify")?;
+            dict.set_item("trigger_id", trigger_id)?;
+            dict.set_item("title", title)?;
+            dict.set_item("message", message)?;
+        }
+        ServerMessage::ActionMarkLine {
+            trigger_id,
+            row,
+            label,
+            color,
+        } => {
+            dict.set_item("type", "action_mark_line")?;
+            dict.set_item("trigger_id", trigger_id)?;
+            dict.set_item("row", row)?;
+            dict.set_item("label", label)?;
+            dict.set_item("color", color)?;
+        }
         ServerMessage::Error { message, code } => {
             dict.set_item("type", "error")?;
             dict.set_item("message", message)?;
@@ -925,6 +1010,9 @@ pub fn encode_client_message<'py>(
                     "bell" => Some(EventType::Bell),
                     "title" => Some(EventType::Title),
                     "resize" => Some(EventType::Resize),
+                    "cwd" => Some(EventType::Cwd),
+                    "trigger" => Some(EventType::Trigger),
+                    "action" => Some(EventType::Action),
                     _ => None,
                 })
                 .collect();
@@ -996,6 +1084,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Resize => "resize",
                     crate::streaming::protocol::EventType::Cwd => "cwd",
                     crate::streaming::protocol::EventType::Trigger => "trigger",
+                    crate::streaming::protocol::EventType::Action => "action",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

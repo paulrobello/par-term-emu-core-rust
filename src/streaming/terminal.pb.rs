@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -61,6 +61,10 @@ pub mod server_message {
         CwdChanged(super::CwdChanged),
         #[prost(message, tag = "12")]
         TriggerMatched(super::TriggerMatched),
+        #[prost(message, tag = "13")]
+        ActionNotify(super::ActionNotify),
+        #[prost(message, tag = "14")]
+        ActionMarkLine(super::ActionMarkLine),
     }
 }
 /// Terminal output data (very high frequency)
@@ -170,6 +174,28 @@ pub struct TriggerMatched {
     #[prost(uint64, tag = "7")]
     pub timestamp: u64,
 }
+/// Trigger action result: notification
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ActionNotify {
+    #[prost(uint64, tag = "1")]
+    pub trigger_id: u64,
+    #[prost(string, tag = "2")]
+    pub title: ::prost::alloc::string::String,
+    #[prost(string, tag = "3")]
+    pub message: ::prost::alloc::string::String,
+}
+/// Trigger action result: mark/bookmark a line
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ActionMarkLine {
+    #[prost(uint64, tag = "1")]
+    pub trigger_id: u64,
+    #[prost(uint32, tag = "2")]
+    pub row: u32,
+    #[prost(string, optional, tag = "3")]
+    pub label: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "4")]
+    pub color: ::core::option::Option<Color>,
+}
 /// Error notification
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Error {
@@ -247,6 +273,7 @@ pub enum EventType {
     Resize = 5,
     Cwd = 6,
     Trigger = 7,
+    Action = 8,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -263,6 +290,7 @@ impl EventType {
             Self::Resize => "EVENT_TYPE_RESIZE",
             Self::Cwd => "EVENT_TYPE_CWD",
             Self::Trigger => "EVENT_TYPE_TRIGGER",
+            Self::Action => "EVENT_TYPE_ACTION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -276,6 +304,7 @@ impl EventType {
             "EVENT_TYPE_RESIZE" => Some(Self::Resize),
             "EVENT_TYPE_CWD" => Some(Self::Cwd),
             "EVENT_TYPE_TRIGGER" => Some(Self::Trigger),
+            "EVENT_TYPE_ACTION" => Some(Self::Action),
             _ => None,
         }
     }

@@ -242,6 +242,30 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 captures: captures.clone(),
                 timestamp: *timestamp,
             })),
+            AppServerMessage::ActionNotify {
+                trigger_id,
+                title,
+                message,
+            } => Some(Message::ActionNotify(pb::ActionNotify {
+                trigger_id: *trigger_id,
+                title: title.clone(),
+                message: message.clone(),
+            })),
+            AppServerMessage::ActionMarkLine {
+                trigger_id,
+                row,
+                label,
+                color,
+            } => Some(Message::ActionMarkLine(pb::ActionMarkLine {
+                trigger_id: *trigger_id,
+                row: *row as u32,
+                label: label.clone(),
+                color: color.map(|(r, g, b)| pb::Color {
+                    r: r as u32,
+                    g: g as u32,
+                    b: b as u32,
+                }),
+            })),
             AppServerMessage::Bell => Some(Message::Bell(pb::Bell {})),
             AppServerMessage::Error { message, code } => Some(Message::Error(pb::Error {
                 message: message.clone(),
@@ -290,6 +314,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Resize => pb::EventType::Resize as i32,
             AppEventType::Cwd => pb::EventType::Cwd as i32,
             AppEventType::Trigger => pb::EventType::Trigger as i32,
+            AppEventType::Action => pb::EventType::Action as i32,
         }
     }
 }
@@ -397,6 +422,17 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 captures: tm.captures,
                 timestamp: tm.timestamp,
             }),
+            Some(Message::ActionNotify(an)) => Ok(AppServerMessage::ActionNotify {
+                trigger_id: an.trigger_id,
+                title: an.title,
+                message: an.message,
+            }),
+            Some(Message::ActionMarkLine(aml)) => Ok(AppServerMessage::ActionMarkLine {
+                trigger_id: aml.trigger_id,
+                row: aml.row as u16,
+                label: aml.label,
+                color: aml.color.map(|c| (c.r as u8, c.g as u8, c.b as u8)),
+            }),
             Some(Message::Bell(_)) => Ok(AppServerMessage::Bell),
             Some(Message::Error(error)) => Ok(AppServerMessage::Error {
                 message: error.message,
@@ -455,6 +491,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Resize => AppEventType::Resize,
             pb::EventType::Cwd => AppEventType::Cwd,
             pb::EventType::Trigger => AppEventType::Trigger,
+            pb::EventType::Action => AppEventType::Action,
         }
     }
 }

@@ -536,7 +536,7 @@ impl PtySession {
 
                         // Feed terminal output to coprocesses
                         {
-                            let mgr = coprocess_manager.lock();
+                            let mut mgr = coprocess_manager.lock();
                             mgr.feed_output(&buffer[..n]);
                         }
 
@@ -1135,6 +1135,12 @@ impl PtySession {
     pub fn coprocess_status(&self, id: CoprocessId) -> Option<bool> {
         let mgr = self.coprocess_manager.lock();
         mgr.status(id)
+    }
+
+    /// Read buffered stderr output from a coprocess (drains the buffer)
+    pub fn read_coprocess_errors(&self, id: CoprocessId) -> Result<Vec<String>, String> {
+        let mgr = self.coprocess_manager.lock();
+        mgr.read_errors(id)
     }
 }
 

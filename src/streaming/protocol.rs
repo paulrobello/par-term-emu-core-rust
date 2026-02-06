@@ -135,6 +135,30 @@ pub enum ServerMessage {
         timestamp: u64,
     },
 
+    /// Trigger action result: display notification
+    ActionNotify {
+        /// ID of the trigger that produced this action
+        trigger_id: u64,
+        /// Notification title
+        title: String,
+        /// Notification message
+        message: String,
+    },
+
+    /// Trigger action result: mark/bookmark a line
+    ActionMarkLine {
+        /// ID of the trigger that produced this action
+        trigger_id: u64,
+        /// Row to mark
+        row: u16,
+        /// Optional label for the mark
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        /// Optional RGB color for the mark
+        #[serde(skip_serializing_if = "Option::is_none")]
+        color: Option<(u8, u8, u8)>,
+    },
+
     /// Error occurred
     Error {
         /// Error message
@@ -204,6 +228,8 @@ pub enum EventType {
     Cwd,
     /// Trigger match events
     Trigger,
+    /// Trigger action result events (Notify, MarkLine)
+    Action,
 }
 
 impl ServerMessage {
@@ -421,6 +447,30 @@ impl ServerMessage {
             text,
             captures,
             timestamp,
+        }
+    }
+
+    /// Create an action notify message
+    pub fn action_notify(trigger_id: u64, title: String, message: String) -> Self {
+        Self::ActionNotify {
+            trigger_id,
+            title,
+            message,
+        }
+    }
+
+    /// Create an action mark line message
+    pub fn action_mark_line(
+        trigger_id: u64,
+        row: u16,
+        label: Option<String>,
+        color: Option<(u8, u8, u8)>,
+    ) -> Self {
+        Self::ActionMarkLine {
+            trigger_id,
+            row,
+            label,
+            color,
         }
     }
 

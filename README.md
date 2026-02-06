@@ -13,6 +13,43 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.32.0
+
+### Coprocess Restart Policies & Stderr Capture
+
+Coprocesses now support automatic restart when they exit, and stderr is captured separately:
+
+```python
+from par_term_emu_core_rust import PtyTerminal, CoprocessConfig
+
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell()
+
+    # Start a coprocess that auto-restarts on failure with a 1-second delay
+    config = CoprocessConfig(
+        "my-watcher",
+        restart_policy="on_failure",
+        restart_delay_ms=1000,
+    )
+    cid = term.start_coprocess(config)
+
+    # Read stderr separately from stdout
+    errors = term.read_coprocess_errors(cid)
+    output = term.read_from_coprocess(cid)
+```
+
+**Restart Policies:** `"never"` (default), `"always"`, `"on_failure"` (non-zero exit only)
+
+### Trigger Notify & MarkLine as Frontend Events
+
+`Notify` and `MarkLine` trigger actions now emit `ActionResult` events (via `poll_action_results()`) instead of directly modifying internal state. This gives frontends full control over how notifications and line marks are displayed. `MarkLine` also supports an optional `color` parameter:
+
+```python
+mark = TriggerAction("mark_line", {"label": "Error", "color": "255,0,0"})
+```
+
+**Breaking:** If you relied on `Notify` triggers adding to the notification queue or `MarkLine` triggers adding bookmarks directly, you must now handle these via `poll_action_results()`.
+
 ## What's New in 0.31.1
 
 ### Trigger Column Mapping Fix

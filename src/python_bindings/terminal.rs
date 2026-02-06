@@ -4673,6 +4673,32 @@ impl PyTerminal {
                         map.insert("text".to_string(), text.clone());
                         map.insert("delay_ms".to_string(), delay_ms.to_string());
                     }
+                    ActionResult::Notify {
+                        trigger_id,
+                        title,
+                        message,
+                    } => {
+                        map.insert("type".to_string(), "notify".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert("title".to_string(), title.clone());
+                        map.insert("message".to_string(), message.clone());
+                    }
+                    ActionResult::MarkLine {
+                        trigger_id,
+                        row,
+                        label,
+                        color,
+                    } => {
+                        map.insert("type".to_string(), "mark_line".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert("row".to_string(), row.to_string());
+                        if let Some(l) = label {
+                            map.insert("label".to_string(), l.clone());
+                        }
+                        if let Some((r, g, b)) = color {
+                            map.insert("color".to_string(), format!("{},{},{}", r, g, b));
+                        }
+                    }
                 }
                 map
             })

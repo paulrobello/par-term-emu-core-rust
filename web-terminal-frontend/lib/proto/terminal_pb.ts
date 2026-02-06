@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file terminal.proto.
  */
 export const file_terminal: GenFile = /*@__PURE__*/
-  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3Ii7AMKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAQgkKB21lc3NhZ2UiPAoGT3V0cHV0EgwKBGRhdGEYASABKAwSFgoJdGltZXN0YW1wGAIgASgESACIAQFCDAoKX3RpbWVzdGFtcCIkCgZSZXNpemUSDAoEY29scxgBIAEoDRIMCgRyb3dzGAIgASgNIhYKBVRpdGxlEg0KBXRpdGxlGAEgASgJIsACCglDb25uZWN0ZWQSDAoEY29scxgBIAEoDRIMCgRyb3dzGAIgASgNEhsKDmluaXRpYWxfc2NyZWVuGAMgASgMSACIAQESEgoKc2Vzc2lvbl9pZBgEIAEoCRInCgV0aGVtZRgFIAEoCzITLnRlcm1pbmFsLlRoZW1lSW5mb0gBiAEBEhIKBWJhZGdlGAYgASgJSAKIAQESHQoQZmFpbnRfdGV4dF9hbHBoYRgHIAEoAkgDiAEBEhAKA2N3ZBgIIAEoCUgEiAEBEh4KEW1vZGlmeV9vdGhlcl9rZXlzGAkgASgNSAWIAQFCEQoPX2luaXRpYWxfc2NyZWVuQggKBl90aGVtZUIICgZfYmFkZ2VCEwoRX2ZhaW50X3RleHRfYWxwaGFCBgoEX2N3ZEIUChJfbW9kaWZ5X290aGVyX2tleXMiPQoHUmVmcmVzaBIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0SFgoOc2NyZWVuX2NvbnRlbnQYAyABKAwiOwoOQ3Vyc29yUG9zaXRpb24SCwoDY29sGAEgASgNEgsKA3JvdxgCIAEoDRIPCgd2aXNpYmxlGAMgASgIIgYKBEJlbGwirQEKCkN3ZENoYW5nZWQSFAoHb2xkX2N3ZBgBIAEoCUgAiAEBEg8KB25ld19jd2QYAiABKAkSFQoIaG9zdG5hbWUYAyABKAlIAYgBARIVCgh1c2VybmFtZRgEIAEoCUgCiAEBEhYKCXRpbWVzdGFtcBgFIAEoBEgDiAEBQgoKCF9vbGRfY3dkQgsKCV9ob3N0bmFtZUILCglfdXNlcm5hbWVCDAoKX3RpbWVzdGFtcCKCAQoOVHJpZ2dlck1hdGNoZWQSEgoKdHJpZ2dlcl9pZBgBIAEoBBILCgNyb3cYAiABKA0SCwoDY29sGAMgASgNEg8KB2VuZF9jb2wYBCABKA0SDAoEdGV4dBgFIAEoCRIQCghjYXB0dXJlcxgGIAMoCRIRCgl0aW1lc3RhbXAYByABKAQiNAoFRXJyb3ISDwoHbWVzc2FnZRgBIAEoCRIRCgRjb2RlGAIgASgJSACIAQFCBwoFX2NvZGUiGgoIU2h1dGRvd24SDgoGcmVhc29uGAEgASgJIgYKBFBvbmci3QEKDUNsaWVudE1lc3NhZ2USIAoFaW5wdXQYASABKAsyDy50ZXJtaW5hbC5JbnB1dEgAEigKBnJlc2l6ZRgCIAEoCzIWLnRlcm1pbmFsLkNsaWVudFJlc2l6ZUgAEh4KBHBpbmcYAyABKAsyDi50ZXJtaW5hbC5QaW5nSAASKwoHcmVmcmVzaBgEIAEoCzIYLnRlcm1pbmFsLlJlcXVlc3RSZWZyZXNoSAASKAoJc3Vic2NyaWJlGAUgASgLMhMudGVybWluYWwuU3Vic2NyaWJlSABCCQoHbWVzc2FnZSIVCgVJbnB1dBIMCgRkYXRhGAEgASgMIioKDENsaWVudFJlc2l6ZRIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0iBgoEUGluZyIQCg5SZXF1ZXN0UmVmcmVzaCIwCglTdWJzY3JpYmUSIwoGZXZlbnRzGAEgAygOMhMudGVybWluYWwuRXZlbnRUeXBlKsMBCglFdmVudFR5cGUSGgoWRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEhUKEUVWRU5UX1RZUEVfT1VUUFVUEAESFQoRRVZFTlRfVFlQRV9DVVJTT1IQAhITCg9FVkVOVF9UWVBFX0JFTEwQAxIUChBFVkVOVF9UWVBFX1RJVExFEAQSFQoRRVZFTlRfVFlQRV9SRVNJWkUQBRISCg5FVkVOVF9UWVBFX0NXRBAGEhYKEkVWRU5UX1RZUEVfVFJJR0dFUhAHYgZwcm90bzM");
+  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3Ii0wQKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAEi8KDWFjdGlvbl9ub3RpZnkYDSABKAsyFi50ZXJtaW5hbC5BY3Rpb25Ob3RpZnlIABI0ChBhY3Rpb25fbWFya19saW5lGA4gASgLMhgudGVybWluYWwuQWN0aW9uTWFya0xpbmVIAEIJCgdtZXNzYWdlIjwKBk91dHB1dBIMCgRkYXRhGAEgASgMEhYKCXRpbWVzdGFtcBgCIAEoBEgAiAEBQgwKCl90aW1lc3RhbXAiJAoGUmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIWCgVUaXRsZRINCgV0aXRsZRgBIAEoCSLAAgoJQ29ubmVjdGVkEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDRIbCg5pbml0aWFsX3NjcmVlbhgDIAEoDEgAiAEBEhIKCnNlc3Npb25faWQYBCABKAkSJwoFdGhlbWUYBSABKAsyEy50ZXJtaW5hbC5UaGVtZUluZm9IAYgBARISCgViYWRnZRgGIAEoCUgCiAEBEh0KEGZhaW50X3RleHRfYWxwaGEYByABKAJIA4gBARIQCgNjd2QYCCABKAlIBIgBARIeChFtb2RpZnlfb3RoZXJfa2V5cxgJIAEoDUgFiAEBQhEKD19pbml0aWFsX3NjcmVlbkIICgZfdGhlbWVCCAoGX2JhZGdlQhMKEV9mYWludF90ZXh0X2FscGhhQgYKBF9jd2RCFAoSX21vZGlmeV9vdGhlcl9rZXlzIj0KB1JlZnJlc2gSDAoEY29scxgBIAEoDRIMCgRyb3dzGAIgASgNEhYKDnNjcmVlbl9jb250ZW50GAMgASgMIjsKDkN1cnNvclBvc2l0aW9uEgsKA2NvbBgBIAEoDRILCgNyb3cYAiABKA0SDwoHdmlzaWJsZRgDIAEoCCIGCgRCZWxsIq0BCgpDd2RDaGFuZ2VkEhQKB29sZF9jd2QYASABKAlIAIgBARIPCgduZXdfY3dkGAIgASgJEhUKCGhvc3RuYW1lGAMgASgJSAGIAQESFQoIdXNlcm5hbWUYBCABKAlIAogBARIWCgl0aW1lc3RhbXAYBSABKARIA4gBAUIKCghfb2xkX2N3ZEILCglfaG9zdG5hbWVCCwoJX3VzZXJuYW1lQgwKCl90aW1lc3RhbXAiggEKDlRyaWdnZXJNYXRjaGVkEhIKCnRyaWdnZXJfaWQYASABKAQSCwoDcm93GAIgASgNEgsKA2NvbBgDIAEoDRIPCgdlbmRfY29sGAQgASgNEgwKBHRleHQYBSABKAkSEAoIY2FwdHVyZXMYBiADKAkSEQoJdGltZXN0YW1wGAcgASgEIkIKDEFjdGlvbk5vdGlmeRISCgp0cmlnZ2VyX2lkGAEgASgEEg0KBXRpdGxlGAIgASgJEg8KB21lc3NhZ2UYAyABKAkifgoOQWN0aW9uTWFya0xpbmUSEgoKdHJpZ2dlcl9pZBgBIAEoBBILCgNyb3cYAiABKA0SEgoFbGFiZWwYAyABKAlIAIgBARIjCgVjb2xvchgEIAEoCzIPLnRlcm1pbmFsLkNvbG9ySAGIAQFCCAoGX2xhYmVsQggKBl9jb2xvciI0CgVFcnJvchIPCgdtZXNzYWdlGAEgASgJEhEKBGNvZGUYAiABKAlIAIgBAUIHCgVfY29kZSIaCghTaHV0ZG93bhIOCgZyZWFzb24YASABKAkiBgoEUG9uZyLdAQoNQ2xpZW50TWVzc2FnZRIgCgVpbnB1dBgBIAEoCzIPLnRlcm1pbmFsLklucHV0SAASKAoGcmVzaXplGAIgASgLMhYudGVybWluYWwuQ2xpZW50UmVzaXplSAASHgoEcGluZxgDIAEoCzIOLnRlcm1pbmFsLlBpbmdIABIrCgdyZWZyZXNoGAQgASgLMhgudGVybWluYWwuUmVxdWVzdFJlZnJlc2hIABIoCglzdWJzY3JpYmUYBSABKAsyEy50ZXJtaW5hbC5TdWJzY3JpYmVIAEIJCgdtZXNzYWdlIhUKBUlucHV0EgwKBGRhdGEYASABKAwiKgoMQ2xpZW50UmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIGCgRQaW5nIhAKDlJlcXVlc3RSZWZyZXNoIjAKCVN1YnNjcmliZRIjCgZldmVudHMYASADKA4yEy50ZXJtaW5hbC5FdmVudFR5cGUq2gEKCUV2ZW50VHlwZRIaChZFVkVOVF9UWVBFX1VOU1BFQ0lGSUVEEAASFQoRRVZFTlRfVFlQRV9PVVRQVVQQARIVChFFVkVOVF9UWVBFX0NVUlNPUhACEhMKD0VWRU5UX1RZUEVfQkVMTBADEhQKEEVWRU5UX1RZUEVfVElUTEUQBBIVChFFVkVOVF9UWVBFX1JFU0laRRAFEhIKDkVWRU5UX1RZUEVfQ1dEEAYSFgoSRVZFTlRfVFlQRV9UUklHR0VSEAcSFQoRRVZFTlRfVFlQRV9BQ1RJT04QCGIGcHJvdG8z");
 
 /**
  * RGB color (0-255 per channel)
@@ -166,6 +166,18 @@ export type ServerMessage = Message<"terminal.ServerMessage"> & {
      */
     value: TriggerMatched;
     case: "triggerMatched";
+  } | {
+    /**
+     * @generated from field: terminal.ActionNotify action_notify = 13;
+     */
+    value: ActionNotify;
+    case: "actionNotify";
+  } | {
+    /**
+     * @generated from field: terminal.ActionMarkLine action_mark_line = 14;
+     */
+    value: ActionMarkLine;
+    case: "actionMarkLine";
   } | { case: undefined; value?: undefined };
 };
 
@@ -480,6 +492,69 @@ export const TriggerMatchedSchema: GenMessage<TriggerMatched> = /*@__PURE__*/
   messageDesc(file_terminal, 11);
 
 /**
+ * Trigger action result: notification
+ *
+ * @generated from message terminal.ActionNotify
+ */
+export type ActionNotify = Message<"terminal.ActionNotify"> & {
+  /**
+   * @generated from field: uint64 trigger_id = 1;
+   */
+  triggerId: bigint;
+
+  /**
+   * @generated from field: string title = 2;
+   */
+  title: string;
+
+  /**
+   * @generated from field: string message = 3;
+   */
+  message: string;
+};
+
+/**
+ * Describes the message terminal.ActionNotify.
+ * Use `create(ActionNotifySchema)` to create a new message.
+ */
+export const ActionNotifySchema: GenMessage<ActionNotify> = /*@__PURE__*/
+  messageDesc(file_terminal, 12);
+
+/**
+ * Trigger action result: mark/bookmark a line
+ *
+ * @generated from message terminal.ActionMarkLine
+ */
+export type ActionMarkLine = Message<"terminal.ActionMarkLine"> & {
+  /**
+   * @generated from field: uint64 trigger_id = 1;
+   */
+  triggerId: bigint;
+
+  /**
+   * @generated from field: uint32 row = 2;
+   */
+  row: number;
+
+  /**
+   * @generated from field: optional string label = 3;
+   */
+  label?: string;
+
+  /**
+   * @generated from field: optional terminal.Color color = 4;
+   */
+  color?: Color;
+};
+
+/**
+ * Describes the message terminal.ActionMarkLine.
+ * Use `create(ActionMarkLineSchema)` to create a new message.
+ */
+export const ActionMarkLineSchema: GenMessage<ActionMarkLine> = /*@__PURE__*/
+  messageDesc(file_terminal, 13);
+
+/**
  * Error notification
  *
  * @generated from message terminal.Error
@@ -501,7 +576,7 @@ export type Error = Message<"terminal.Error"> & {
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_terminal, 12);
+  messageDesc(file_terminal, 14);
 
 /**
  * Server shutdown notification
@@ -520,7 +595,7 @@ export type Shutdown = Message<"terminal.Shutdown"> & {
  * Use `create(ShutdownSchema)` to create a new message.
  */
 export const ShutdownSchema: GenMessage<Shutdown> = /*@__PURE__*/
-  messageDesc(file_terminal, 13);
+  messageDesc(file_terminal, 15);
 
 /**
  * Keepalive pong response
@@ -535,7 +610,7 @@ export type Pong = Message<"terminal.Pong"> & {
  * Use `create(PongSchema)` to create a new message.
  */
 export const PongSchema: GenMessage<Pong> = /*@__PURE__*/
-  messageDesc(file_terminal, 14);
+  messageDesc(file_terminal, 16);
 
 /**
  * @generated from message terminal.ClientMessage
@@ -582,7 +657,7 @@ export type ClientMessage = Message<"terminal.ClientMessage"> & {
  * Use `create(ClientMessageSchema)` to create a new message.
  */
 export const ClientMessageSchema: GenMessage<ClientMessage> = /*@__PURE__*/
-  messageDesc(file_terminal, 15);
+  messageDesc(file_terminal, 17);
 
 /**
  * Keyboard input from client
@@ -603,7 +678,7 @@ export type Input = Message<"terminal.Input"> & {
  * Use `create(InputSchema)` to create a new message.
  */
 export const InputSchema: GenMessage<Input> = /*@__PURE__*/
-  messageDesc(file_terminal, 16);
+  messageDesc(file_terminal, 18);
 
 /**
  * Client requests terminal resize
@@ -627,7 +702,7 @@ export type ClientResize = Message<"terminal.ClientResize"> & {
  * Use `create(ClientResizeSchema)` to create a new message.
  */
 export const ClientResizeSchema: GenMessage<ClientResize> = /*@__PURE__*/
-  messageDesc(file_terminal, 17);
+  messageDesc(file_terminal, 19);
 
 /**
  * Keepalive ping request
@@ -642,7 +717,7 @@ export type Ping = Message<"terminal.Ping"> & {
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
-  messageDesc(file_terminal, 18);
+  messageDesc(file_terminal, 20);
 
 /**
  * Client requests full screen refresh
@@ -657,7 +732,7 @@ export type RequestRefresh = Message<"terminal.RequestRefresh"> & {
  * Use `create(RequestRefreshSchema)` to create a new message.
  */
 export const RequestRefreshSchema: GenMessage<RequestRefresh> = /*@__PURE__*/
-  messageDesc(file_terminal, 19);
+  messageDesc(file_terminal, 21);
 
 /**
  * Client subscribes to specific event types
@@ -676,7 +751,7 @@ export type Subscribe = Message<"terminal.Subscribe"> & {
  * Use `create(SubscribeSchema)` to create a new message.
  */
 export const SubscribeSchema: GenMessage<Subscribe> = /*@__PURE__*/
-  messageDesc(file_terminal, 20);
+  messageDesc(file_terminal, 22);
 
 /**
  * Event types for subscription
@@ -723,6 +798,11 @@ export enum EventType {
    * @generated from enum value: EVENT_TYPE_TRIGGER = 7;
    */
   TRIGGER = 7,
+
+  /**
+   * @generated from enum value: EVENT_TYPE_ACTION = 8;
+   */
+  ACTION = 8,
 }
 
 /**

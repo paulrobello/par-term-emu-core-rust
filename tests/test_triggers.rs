@@ -179,6 +179,7 @@ fn test_trigger_action_mark_line() {
         "BOOKMARK".into(),
         vec![TriggerAction::MarkLine {
             label: Some("Auto-bookmark".into()),
+            color: None,
         }],
     )
     .unwrap();
@@ -220,10 +221,12 @@ fn test_trigger_action_stop_propagation() {
         vec![
             TriggerAction::MarkLine {
                 label: Some("Before stop".into()),
+                color: None,
             },
             TriggerAction::StopPropagation,
             TriggerAction::MarkLine {
                 label: Some("After stop".into()),
+                color: None,
             },
         ],
     )

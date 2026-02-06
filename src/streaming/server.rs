@@ -1193,6 +1193,24 @@ impl StreamingServer {
         self.broadcast(msg);
     }
 
+    /// Send a trigger action notify event to all clients
+    pub fn send_action_notify(&self, trigger_id: u64, title: String, message: String) {
+        let msg = ServerMessage::action_notify(trigger_id, title, message);
+        self.broadcast(msg);
+    }
+
+    /// Send a trigger action mark line event to all clients
+    pub fn send_action_mark_line(
+        &self,
+        trigger_id: u64,
+        row: u16,
+        label: Option<String>,
+        color: Option<(u8, u8, u8)>,
+    ) {
+        let msg = ServerMessage::action_mark_line(trigger_id, row, label, color);
+        self.broadcast(msg);
+    }
+
     /// Shutdown the server and disconnect all clients
     ///
     /// This broadcasts a shutdown message to all clients and signals
