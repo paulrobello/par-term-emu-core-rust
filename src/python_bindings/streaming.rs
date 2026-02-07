@@ -793,9 +793,32 @@ pub fn encode_server_message<'py>(
                 .and_then(|v| v.extract().ok());
             ServerMessage::action_mark_line(trigger_id, row, label, color)
         }
+        "mode_changed" => {
+            let mode = get_str("mode").unwrap_or_default();
+            let enabled = get_bool("enabled").unwrap_or(false);
+            ServerMessage::mode_changed(mode, enabled)
+        }
+        "graphics_added" => {
+            let row = get_u16("row").unwrap_or(0);
+            let format = get_str("format");
+            match format {
+                Some(f) => ServerMessage::graphics_added_with_format(row, f),
+                None => ServerMessage::graphics_added(row),
+            }
+        }
+        "hyperlink_added" => {
+            let url = get_str("url").unwrap_or_default();
+            let row = get_u16("row").unwrap_or(0);
+            let col = get_u16("col").unwrap_or(0);
+            let id = get_str("id");
+            match id {
+                Some(i) => ServerMessage::hyperlink_added_with_id(url, row, col, i),
+                None => ServerMessage::hyperlink_added(url, row, col),
+            }
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added",
                 message_type
             )));
         }
@@ -971,6 +994,23 @@ pub fn decode_server_message<'py>(
         ServerMessage::Pong => {
             dict.set_item("type", "pong")?;
         }
+        ServerMessage::ModeChanged { mode, enabled } => {
+            dict.set_item("type", "mode_changed")?;
+            dict.set_item("mode", mode)?;
+            dict.set_item("enabled", enabled)?;
+        }
+        ServerMessage::GraphicsAdded { row, format } => {
+            dict.set_item("type", "graphics_added")?;
+            dict.set_item("row", row)?;
+            dict.set_item("format", format)?;
+        }
+        ServerMessage::HyperlinkAdded { url, row, col, id } => {
+            dict.set_item("type", "hyperlink_added")?;
+            dict.set_item("url", url)?;
+            dict.set_item("row", row)?;
+            dict.set_item("col", col)?;
+            dict.set_item("id", id)?;
+        }
     }
 
     Ok(dict)
@@ -1044,6 +1084,9 @@ pub fn encode_client_message<'py>(
                     "cwd" => Some(EventType::Cwd),
                     "trigger" => Some(EventType::Trigger),
                     "action" => Some(EventType::Action),
+                    "mode" => Some(EventType::Mode),
+                    "graphics" => Some(EventType::Graphics),
+                    "hyperlink" => Some(EventType::Hyperlink),
                     _ => None,
                 })
                 .collect();
@@ -1116,6 +1159,9 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Cwd => "cwd",
                     crate::streaming::protocol::EventType::Trigger => "trigger",
                     crate::streaming::protocol::EventType::Action => "action",
+                    crate::streaming::protocol::EventType::Mode => "mode",
+                    crate::streaming::protocol::EventType::Graphics => "graphics",
+                    crate::streaming::protocol::EventType::Hyperlink => "hyperlink",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

@@ -116,7 +116,12 @@ impl Terminal {
                     // Set window title
                     if params.len() >= 2 {
                         if let Ok(title) = std::str::from_utf8(params[1]) {
-                            self.title = title.to_string();
+                            let new_title = title.to_string();
+                            if self.title != new_title {
+                                self.title = new_title.clone();
+                                self.terminal_events
+                                    .push(crate::terminal::TerminalEvent::TitleChanged(new_title));
+                            }
                         }
                     }
                 }

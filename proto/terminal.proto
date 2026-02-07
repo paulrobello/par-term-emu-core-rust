@@ -32,6 +32,9 @@ enum EventType {
   EVENT_TYPE_CWD = 6;
   EVENT_TYPE_TRIGGER = 7;
   EVENT_TYPE_ACTION = 8;
+  EVENT_TYPE_MODE = 9;
+  EVENT_TYPE_GRAPHICS = 10;
+  EVENT_TYPE_HYPERLINK = 11;
 }
 
 // =============================================================================
@@ -54,6 +57,9 @@ message ServerMessage {
     TriggerMatched trigger_matched = 12;
     ActionNotify action_notify = 13;
     ActionMarkLine action_mark_line = 14;
+    ModeChanged mode_changed = 15;
+    GraphicsAdded graphics_added = 16;
+    HyperlinkAdded hyperlink_added = 17;
   }
 }
 
@@ -154,6 +160,26 @@ message Shutdown {
 
 // Keepalive pong response
 message Pong {}
+
+// Terminal mode changed (cursor visibility, mouse tracking, etc.)
+message ModeChanged {
+  string mode = 1;    // Mode name (e.g., "cursor_visible", "mouse_tracking")
+  bool enabled = 2;   // Whether the mode is enabled
+}
+
+// Graphics/image added to terminal (Sixel, iTerm2, Kitty)
+message GraphicsAdded {
+  uint32 row = 1;                   // Row where graphics were added
+  optional string format = 2;       // Graphics format ("sixel", "iterm2", "kitty")
+}
+
+// Hyperlink added (OSC 8)
+message HyperlinkAdded {
+  string url = 1;                   // The URL of the hyperlink
+  uint32 row = 2;                   // Row where the hyperlink appears
+  uint32 col = 3;                   // Column where hyperlink starts
+  optional string id = 4;           // Optional hyperlink ID from OSC 8
+}
 
 // =============================================================================
 // Client -> Server Messages

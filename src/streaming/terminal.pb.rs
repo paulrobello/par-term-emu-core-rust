@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -65,6 +65,12 @@ pub mod server_message {
         ActionNotify(super::ActionNotify),
         #[prost(message, tag = "14")]
         ActionMarkLine(super::ActionMarkLine),
+        #[prost(message, tag = "15")]
+        ModeChanged(super::ModeChanged),
+        #[prost(message, tag = "16")]
+        GraphicsAdded(super::GraphicsAdded),
+        #[prost(message, tag = "17")]
+        HyperlinkAdded(super::HyperlinkAdded),
     }
 }
 /// Terminal output data (very high frequency)
@@ -219,6 +225,42 @@ pub struct Shutdown {
 /// Keepalive pong response
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Pong {}
+/// Terminal mode changed (cursor visibility, mouse tracking, etc.)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ModeChanged {
+    /// Mode name (e.g., "cursor_visible", "mouse_tracking")
+    #[prost(string, tag = "1")]
+    pub mode: ::prost::alloc::string::String,
+    /// Whether the mode is enabled
+    #[prost(bool, tag = "2")]
+    pub enabled: bool,
+}
+/// Graphics/image added to terminal (Sixel, iTerm2, Kitty)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct GraphicsAdded {
+    /// Row where graphics were added
+    #[prost(uint32, tag = "1")]
+    pub row: u32,
+    /// Graphics format ("sixel", "iterm2", "kitty")
+    #[prost(string, optional, tag = "2")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Hyperlink added (OSC 8)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HyperlinkAdded {
+    /// The URL of the hyperlink
+    #[prost(string, tag = "1")]
+    pub url: ::prost::alloc::string::String,
+    /// Row where the hyperlink appears
+    #[prost(uint32, tag = "2")]
+    pub row: u32,
+    /// Column where hyperlink starts
+    #[prost(uint32, tag = "3")]
+    pub col: u32,
+    /// Optional hyperlink ID from OSC 8
+    #[prost(string, optional, tag = "4")]
+    pub id: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(oneof = "client_message::Message", tags = "1, 2, 3, 4, 5")]
@@ -280,6 +322,9 @@ pub enum EventType {
     Cwd = 6,
     Trigger = 7,
     Action = 8,
+    Mode = 9,
+    Graphics = 10,
+    Hyperlink = 11,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -297,6 +342,9 @@ impl EventType {
             Self::Cwd => "EVENT_TYPE_CWD",
             Self::Trigger => "EVENT_TYPE_TRIGGER",
             Self::Action => "EVENT_TYPE_ACTION",
+            Self::Mode => "EVENT_TYPE_MODE",
+            Self::Graphics => "EVENT_TYPE_GRAPHICS",
+            Self::Hyperlink => "EVENT_TYPE_HYPERLINK",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -311,6 +359,9 @@ impl EventType {
             "EVENT_TYPE_CWD" => Some(Self::Cwd),
             "EVENT_TYPE_TRIGGER" => Some(Self::Trigger),
             "EVENT_TYPE_ACTION" => Some(Self::Action),
+            "EVENT_TYPE_MODE" => Some(Self::Mode),
+            "EVENT_TYPE_GRAPHICS" => Some(Self::Graphics),
+            "EVENT_TYPE_HYPERLINK" => Some(Self::Hyperlink),
             _ => None,
         }
     }

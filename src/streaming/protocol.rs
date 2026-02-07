@@ -182,6 +182,36 @@ pub enum ServerMessage {
 
     /// Keepalive pong response
     Pong,
+
+    /// Terminal mode changed (cursor visibility, mouse tracking, etc.)
+    ModeChanged {
+        /// Mode name (e.g., "cursor_visible", "mouse_tracking", "bracketed_paste")
+        mode: String,
+        /// Whether the mode is enabled
+        enabled: bool,
+    },
+
+    /// Graphics/image added to terminal (Sixel, iTerm2, Kitty)
+    GraphicsAdded {
+        /// Row where graphics were added
+        row: u16,
+        /// Graphics format ("sixel", "iterm2", "kitty")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
+    },
+
+    /// Hyperlink added (OSC 8)
+    HyperlinkAdded {
+        /// The URL of the hyperlink
+        url: String,
+        /// Row where the hyperlink appears
+        row: u16,
+        /// Column where hyperlink starts
+        col: u16,
+        /// Optional hyperlink ID from OSC 8
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+    },
 }
 
 /// Messages sent from client to server
@@ -236,6 +266,12 @@ pub enum EventType {
     Trigger,
     /// Trigger action result events (Notify, MarkLine)
     Action,
+    /// Terminal mode change events
+    Mode,
+    /// Graphics/image events
+    Graphics,
+    /// Hyperlink events
+    Hyperlink,
 }
 
 impl ServerMessage {
@@ -495,6 +531,44 @@ impl ServerMessage {
     /// Create a pong message (keepalive response)
     pub fn pong() -> Self {
         Self::Pong
+    }
+
+    /// Create a mode changed message
+    pub fn mode_changed(mode: String, enabled: bool) -> Self {
+        Self::ModeChanged { mode, enabled }
+    }
+
+    /// Create a graphics added message
+    pub fn graphics_added(row: u16) -> Self {
+        Self::GraphicsAdded { row, format: None }
+    }
+
+    /// Create a graphics added message with format
+    pub fn graphics_added_with_format(row: u16, format: String) -> Self {
+        Self::GraphicsAdded {
+            row,
+            format: Some(format),
+        }
+    }
+
+    /// Create a hyperlink added message
+    pub fn hyperlink_added(url: String, row: u16, col: u16) -> Self {
+        Self::HyperlinkAdded {
+            url,
+            row,
+            col,
+            id: None,
+        }
+    }
+
+    /// Create a hyperlink added message with ID
+    pub fn hyperlink_added_with_id(url: String, row: u16, col: u16, id: String) -> Self {
+        Self::HyperlinkAdded {
+            url,
+            row,
+            col,
+            id: Some(id),
+        }
     }
 }
 

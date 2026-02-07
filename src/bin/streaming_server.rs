@@ -1074,7 +1074,36 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
-                        _ => {}
+                        TerminalEvent::ModeChanged(mode, enabled) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::mode_changed(
+                                    mode,
+                                    enabled,
+                                ),
+                            );
+                        }
+                        TerminalEvent::GraphicsAdded(row) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::graphics_added(
+                                    row as u16,
+                                ),
+                            );
+                        }
+                        TerminalEvent::HyperlinkAdded(url) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::hyperlink_added(
+                                    url,
+                                    0, // Row not provided in event
+                                    0, // Col not provided in event
+                                ),
+                            );
+                        }
+                        TerminalEvent::DirtyRegion(_, _) => {
+                            // Dirty region is a rendering optimization hint, not needed for streaming
+                        }
                     }
                 }
             }

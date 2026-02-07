@@ -279,6 +279,26 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 reason: reason.clone(),
             })),
             AppServerMessage::Pong => Some(Message::Pong(pb::Pong {})),
+            AppServerMessage::ModeChanged { mode, enabled } => {
+                Some(Message::ModeChanged(pb::ModeChanged {
+                    mode: mode.clone(),
+                    enabled: *enabled,
+                }))
+            }
+            AppServerMessage::GraphicsAdded { row, format } => {
+                Some(Message::GraphicsAdded(pb::GraphicsAdded {
+                    row: *row as u32,
+                    format: format.clone(),
+                }))
+            }
+            AppServerMessage::HyperlinkAdded { url, row, col, id } => {
+                Some(Message::HyperlinkAdded(pb::HyperlinkAdded {
+                    url: url.clone(),
+                    row: *row as u32,
+                    col: *col as u32,
+                    id: id.clone(),
+                }))
+            }
         };
 
         pb::ServerMessage { message }
@@ -319,6 +339,9 @@ impl From<AppEventType> for i32 {
             AppEventType::Cwd => pb::EventType::Cwd as i32,
             AppEventType::Trigger => pb::EventType::Trigger as i32,
             AppEventType::Action => pb::EventType::Action as i32,
+            AppEventType::Mode => pb::EventType::Mode as i32,
+            AppEventType::Graphics => pb::EventType::Graphics as i32,
+            AppEventType::Hyperlink => pb::EventType::Hyperlink as i32,
         }
     }
 }
@@ -448,6 +471,20 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 reason: shutdown.reason,
             }),
             Some(Message::Pong(_)) => Ok(AppServerMessage::Pong),
+            Some(Message::ModeChanged(mc)) => Ok(AppServerMessage::ModeChanged {
+                mode: mc.mode,
+                enabled: mc.enabled,
+            }),
+            Some(Message::GraphicsAdded(ga)) => Ok(AppServerMessage::GraphicsAdded {
+                row: ga.row as u16,
+                format: ga.format,
+            }),
+            Some(Message::HyperlinkAdded(ha)) => Ok(AppServerMessage::HyperlinkAdded {
+                url: ha.url,
+                row: ha.row as u16,
+                col: ha.col as u16,
+                id: ha.id,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -498,6 +535,9 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Cwd => AppEventType::Cwd,
             pb::EventType::Trigger => AppEventType::Trigger,
             pb::EventType::Action => AppEventType::Action,
+            pb::EventType::Mode => AppEventType::Mode,
+            pb::EventType::Graphics => AppEventType::Graphics,
+            pb::EventType::Hyperlink => AppEventType::Hyperlink,
         }
     }
 }

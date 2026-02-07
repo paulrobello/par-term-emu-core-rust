@@ -622,6 +622,13 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `refresh` | `cols`, `rows`, `screen_content: bytes` | Full screen content |
 | `cursor` | `col: uint32`, `row: uint32`, `visible: bool` | Cursor position |
 | `bell` | (none) | Bell event |
+| `cwd_changed` | `old_cwd?: string`, `new_cwd: string`, `hostname?: string`, `username?: string`, `timestamp?: uint64` | Working directory changed (OSC 7) |
+| `trigger_matched` | `trigger_id: uint64`, `row: uint32`, `col: uint32`, `end_col: uint32`, `text: string`, `captures: string[]`, `timestamp: uint64` | Trigger pattern matched |
+| `action_notify` | `trigger_id: uint64`, `title: string`, `message: string` | Trigger action: notification |
+| `action_mark_line` | `trigger_id: uint64`, `row: uint32`, `label?: string`, `color?: Color` | Trigger action: mark line |
+| `mode_changed` | `mode: string`, `enabled: bool` | Terminal mode changed (cursor visibility, mouse tracking, etc.) |
+| `graphics_added` | `row: uint32`, `format?: string` | Graphics/image added (Sixel, iTerm2, Kitty) |
+| `hyperlink_added` | `url: string`, `row: uint32`, `col: uint32`, `id?: string` | Hyperlink added (OSC 8) |
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
