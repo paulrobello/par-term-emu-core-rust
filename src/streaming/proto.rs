@@ -185,6 +185,8 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 faint_text_alpha,
                 cwd,
                 modify_other_keys,
+                client_id,
+                readonly,
             } => Some(Message::Connected(pb::Connected {
                 cols: *cols as u32,
                 rows: *rows as u32,
@@ -195,6 +197,8 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 faint_text_alpha: *faint_text_alpha,
                 cwd: cwd.clone(),
                 modify_other_keys: *modify_other_keys,
+                client_id: client_id.clone(),
+                readonly: *readonly,
             })),
             AppServerMessage::Refresh {
                 cols,
@@ -395,6 +399,8 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 faint_text_alpha: connected.faint_text_alpha,
                 cwd: connected.cwd,
                 modify_other_keys: connected.modify_other_keys,
+                client_id: connected.client_id,
+                readonly: connected.readonly,
             }),
             Some(Message::Refresh(refresh)) => Ok(AppServerMessage::Refresh {
                 cols: refresh.cols as u16,
@@ -813,6 +819,8 @@ mod tests {
             faint_text_alpha: None,
             cwd: None,
             modify_other_keys: None,
+            client_id: None,
+            readonly: None,
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1120,6 +1128,8 @@ mod tests {
             Some(0.5),
             Some("/home/user".to_string()),
             Some(2),
+            Some("client-42".to_string()),
+            Some(true),
         );
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
@@ -1134,6 +1144,8 @@ mod tests {
                 faint_text_alpha,
                 cwd,
                 modify_other_keys,
+                client_id,
+                readonly,
             } => {
                 assert_eq!(cols, 80);
                 assert_eq!(rows, 24);
@@ -1144,6 +1156,8 @@ mod tests {
                 assert_eq!(faint_text_alpha, Some(0.5));
                 assert_eq!(cwd, Some("/home/user".to_string()));
                 assert_eq!(modify_other_keys, Some(2));
+                assert_eq!(client_id, Some("client-42".to_string()));
+                assert_eq!(readonly, Some(true));
             }
             _ => panic!("Wrong message type"),
         }

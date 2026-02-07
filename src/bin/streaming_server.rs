@@ -77,11 +77,13 @@ use par_term_emu_core_rust::{
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
     pty_session::PtySession,
     streaming::{
-        protocol::ThemeInfo, HttpBasicAuthConfig, StreamingConfig, StreamingServer, TlsConfig,
+        protocol::ThemeInfo, HttpBasicAuthConfig, SessionFactory, SessionFactoryResult,
+        SessionState, StreamingConfig, StreamingServer, TlsConfig,
     },
     terminal::Terminal,
 };
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -333,6 +335,22 @@ fn parse_size(s: &str) -> Result<(u16, u16), String> {
     Ok((cols, rows))
 }
 
+/// Parse a preset in "name=command" format
+fn parse_preset(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("Invalid preset format '{}'. Expected name=command", s))?;
+    let name = s[..pos].to_string();
+    let command = s[pos + 1..].to_string();
+    if name.is_empty() {
+        return Err("Preset name cannot be empty".to_string());
+    }
+    if command.is_empty() {
+        return Err(format!("Preset '{}' command cannot be empty", name));
+    }
+    Ok((name, command))
+}
+
 /// Command line arguments
 #[derive(Parser, Debug)]
 #[command(name = "par-term-streamer")]
@@ -481,6 +499,21 @@ struct Args {
     /// Overrides --http-password and --http-password-hash
     #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
     http_password_file: Option<String>,
+
+    // Multi-session options
+    /// Maximum number of concurrent terminal sessions
+    #[arg(long, default_value = "10", env = "PAR_TERM_MAX_SESSIONS")]
+    max_sessions: usize,
+
+    /// Idle session timeout in seconds (0 = never timeout)
+    /// Sessions with no connected clients will be reaped after this duration
+    #[arg(long, default_value = "900", env = "PAR_TERM_SESSION_IDLE_TIMEOUT")]
+    session_idle_timeout: u64,
+
+    /// Shell presets (can specify multiple: --preset python=python3 --preset node=node)
+    /// Clients connect with ?preset=name to use a specific preset
+    #[arg(long, value_parser = parse_preset)]
+    preset: Vec<(String, String)>,
 }
 
 /// Main event loop state
@@ -723,6 +756,345 @@ impl Clone for ServerState {
             resize_rx: Arc::clone(&self.resize_rx),
             shell_command: self.shell_command.clone(),
             restart_shell: self.restart_shell,
+        }
+    }
+}
+
+// =============================================================================
+// Binary Session Factory (Multi-Session Support)
+// =============================================================================
+
+/// Factory for creating PTY-backed terminal sessions in the binary server.
+///
+/// Each session gets its own PtySession with an independent shell process.
+struct BinarySessionFactory {
+    /// Default shell command (None = auto-detect)
+    default_shell: Option<String>,
+    /// Scrollback buffer size for new terminals
+    scrollback: usize,
+    /// Theme to apply to new terminals
+    theme: Option<Theme>,
+    /// Whether to restart shells on exit
+    restart_shell: bool,
+    /// Per-session PTY sessions (session_id → PtySession)
+    pty_sessions: Arc<parking_lot::RwLock<HashMap<String, Arc<Mutex<PtySession>>>>>,
+    /// Reference to the streaming server (set after creation)
+    streaming_server: Arc<parking_lot::RwLock<Option<Arc<StreamingServer>>>>,
+}
+
+impl BinarySessionFactory {
+    fn new(
+        default_shell: Option<String>,
+        scrollback: usize,
+        theme: Option<Theme>,
+        restart_shell: bool,
+    ) -> Self {
+        Self {
+            default_shell,
+            scrollback,
+            theme,
+            restart_shell,
+            pty_sessions: Arc::new(parking_lot::RwLock::new(HashMap::new())),
+            streaming_server: Arc::new(parking_lot::RwLock::new(None)),
+        }
+    }
+
+    /// Set the streaming server reference (called after server creation)
+    fn set_streaming_server(&self, server: Arc<StreamingServer>) {
+        *self.streaming_server.write() = Some(server);
+    }
+}
+
+impl SessionFactory for BinarySessionFactory {
+    fn create_session(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        shell_command: Option<&str>,
+    ) -> std::result::Result<
+        SessionFactoryResult,
+        par_term_emu_core_rust::streaming::error::StreamingError,
+    > {
+        use par_term_emu_core_rust::streaming::error::StreamingError;
+
+        info!("Creating session '{}' ({}x{})", session_id, cols, rows);
+
+        // Create a new PtySession
+        let pty_session = PtySession::new(cols as usize, rows as usize, self.scrollback);
+
+        // Get the terminal and apply theme
+        let terminal = pty_session.terminal();
+        if let Some(ref theme) = self.theme {
+            let mut term = terminal.lock();
+            theme.apply(&mut term);
+        }
+
+        let pty_session = Arc::new(Mutex::new(pty_session));
+
+        // Spawn the shell
+        {
+            let mut session = pty_session.lock();
+            let shell_cmd = shell_command.or(self.default_shell.as_deref());
+            if let Some(cmd) = shell_cmd {
+                session.spawn(cmd, &[]).map_err(|e| {
+                    StreamingError::ServerError(format!(
+                        "Failed to spawn shell '{}' for session '{}': {}",
+                        cmd, session_id, e
+                    ))
+                })?;
+            } else {
+                session.spawn_shell().map_err(|e| {
+                    StreamingError::ServerError(format!(
+                        "Failed to spawn default shell for session '{}': {}",
+                        session_id, e
+                    ))
+                })?;
+            }
+        }
+
+        // Get PTY writer
+        let pty_writer = {
+            let session = pty_session.lock();
+            session.get_writer()
+        };
+
+        // Store PTY session
+        self.pty_sessions
+            .write()
+            .insert(session_id.to_string(), Arc::clone(&pty_session));
+
+        Ok(SessionFactoryResult {
+            terminal,
+            pty_writer,
+        })
+    }
+
+    fn setup_session(
+        &self,
+        session_id: &str,
+        session: &Arc<SessionState>,
+    ) -> std::result::Result<(), par_term_emu_core_rust::streaming::error::StreamingError> {
+        let pty_session = {
+            let sessions = self.pty_sessions.read();
+            sessions.get(session_id).cloned()
+        };
+
+        let pty_session = match pty_session {
+            Some(s) => s,
+            None => return Ok(()), // Already torn down
+        };
+
+        // Set up output callback
+        let output_sender = session.get_output_sender();
+        {
+            let mut ps = pty_session.lock();
+            ps.set_output_callback(Arc::new(move |data| {
+                let text = String::from_utf8_lossy(data).to_string();
+                let _ = output_sender.send(text);
+            }));
+        }
+
+        // Spawn resize handler for this session
+        let resize_rx = session.get_resize_receiver();
+        let pty_clone = Arc::clone(&pty_session);
+        let session_id_clone = session_id.to_string();
+        let server_ref = self.streaming_server.read().clone();
+        tokio::spawn(async move {
+            let mut rx = resize_rx.lock().await;
+            while let Some((cols, rows)) = rx.recv().await {
+                info!(
+                    "Resizing session '{}' to {}x{}",
+                    session_id_clone, cols, rows
+                );
+                let mut ps = pty_clone.lock();
+                if let Err(e) = ps.resize(cols, rows) {
+                    error!(
+                        "Failed to resize PTY for session '{}': {}",
+                        session_id_clone, e
+                    );
+                    continue;
+                }
+                // Broadcast resize to clients in this session
+                if let Some(ref server) = server_ref {
+                    server.send_to_session(
+                        &session_id_clone,
+                        par_term_emu_core_rust::streaming::protocol::ServerMessage::resize(
+                            cols, rows,
+                        ),
+                    );
+                }
+            }
+        });
+
+        // Spawn PTY status monitor (restart logic)
+        let pty_clone = Arc::clone(&pty_session);
+        let session_id_clone = session_id.to_string();
+        let restart_shell = self.restart_shell;
+        let default_shell = self.default_shell.clone();
+        let server_ref = self.streaming_server.read().clone();
+        tokio::spawn(async move {
+            loop {
+                let should_restart = {
+                    let ps = pty_clone.lock();
+                    if !ps.is_running() {
+                        info!(
+                            "Session '{}' shell exited (restart={})",
+                            session_id_clone, restart_shell
+                        );
+                        restart_shell
+                    } else {
+                        false
+                    }
+                };
+
+                if should_restart {
+                    time::sleep(Duration::from_millis(500)).await;
+                    info!("Restarting shell for session '{}'", session_id_clone);
+
+                    let restart_result = {
+                        let mut ps = pty_clone.lock();
+                        if let Some(ref shell) = default_shell {
+                            ps.spawn(shell, &[])
+                        } else {
+                            ps.spawn_shell()
+                        }
+                    };
+
+                    match restart_result {
+                        Ok(_) => {
+                            info!("Shell restarted for session '{}'", session_id_clone);
+                            // Update PTY writer
+                            let pty_writer = {
+                                let ps = pty_clone.lock();
+                                ps.get_writer()
+                            };
+                            if let Some(ref server) = server_ref {
+                                if let Some(session) = server.get_session(&session_id_clone) {
+                                    if let Some(writer) = pty_writer {
+                                        session.set_pty_writer(writer);
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!(
+                                "Failed to restart shell for session '{}': {} - retrying in 5s",
+                                session_id_clone, e
+                            );
+                            time::sleep(Duration::from_secs(5)).await;
+                        }
+                    }
+                } else if !restart_shell {
+                    let ps = pty_clone.lock();
+                    if !ps.is_running() {
+                        info!(
+                            "Session '{}' shell exited and restart disabled",
+                            session_id_clone
+                        );
+                        break;
+                    }
+                }
+
+                time::sleep(Duration::from_millis(500)).await;
+            }
+        });
+
+        // Spawn terminal event poller for this session
+        let pty_clone = Arc::clone(&pty_session);
+        let session_id_clone = session_id.to_string();
+        let server_ref = self.streaming_server.read().clone();
+        tokio::spawn(async move {
+            use par_term_emu_core_rust::terminal::TerminalEvent;
+
+            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                interval.tick().await;
+
+                let events = {
+                    let ps = pty_clone.lock();
+                    let terminal = ps.terminal();
+                    let mut term = terminal.lock();
+                    term.poll_events()
+                };
+
+                let server = match server_ref {
+                    Some(ref s) => s,
+                    None => continue,
+                };
+
+                for event in events {
+                    match event {
+                        TerminalEvent::BellRang(_) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::bell(),
+                            );
+                        }
+                        TerminalEvent::TitleChanged(title) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::title(
+                                    title,
+                                ),
+                            );
+                        }
+                        TerminalEvent::SizeChanged(cols, rows) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::resize(
+                                    cols as u16,
+                                    rows as u16,
+                                ),
+                            );
+                        }
+                        TerminalEvent::CwdChanged(cwd) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::cwd_changed_full(
+                                    cwd.old_cwd,
+                                    cwd.new_cwd,
+                                    cwd.hostname,
+                                    cwd.username,
+                                    cwd.timestamp,
+                                ),
+                            );
+                        }
+                        TerminalEvent::TriggerMatched(tm) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::trigger_matched(
+                                    tm.trigger_id,
+                                    tm.row as u16,
+                                    tm.col as u16,
+                                    tm.end_col as u16,
+                                    tm.text,
+                                    tm.captures,
+                                    tm.timestamp,
+                                ),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn teardown_session(&self, session_id: &str) {
+        info!("Tearing down session '{}'", session_id);
+        if let Some(pty_session) = self.pty_sessions.write().remove(session_id) {
+            // Try to gracefully exit the shell
+            let ps = pty_session.lock();
+            if ps.is_running() {
+                if let Some(writer) = ps.get_writer() {
+                    let mut w = writer.lock();
+                    let _ = w.write_all(b"exit\n");
+                    let _ = w.flush();
+                }
+            }
         }
     }
 }
@@ -1032,23 +1404,25 @@ async fn main() -> Result<()> {
         args.size.unwrap_or((args.cols, args.rows))
     };
 
-    // Create PTY session (this creates its own terminal internally)
-    info!("Creating PTY session ({}x{})", cols, rows);
-    let pty_session = PtySession::new(cols as usize, rows as usize, args.scrollback);
-
-    // Get the terminal from the PTY session
-    let terminal = pty_session.terminal();
-
-    // Apply theme to the terminal
+    // Resolve theme
     let theme = Theme::by_name(&args.theme)
         .ok_or_else(|| anyhow::anyhow!("Unknown theme: {}", args.theme))?;
-    info!("Applying theme: {}", theme.name);
-    {
-        let mut term = terminal.lock();
-        theme.apply(&mut term);
-    }
+    info!("Using theme: {}", theme.name);
 
-    let pty_session = Arc::new(Mutex::new(pty_session));
+    // Create PTY session for macro mode only
+    // In shell mode, the BinarySessionFactory creates PTY sessions on demand
+    let pty_session: Option<Arc<Mutex<PtySession>>> = if args.macro_file.is_some() {
+        info!("Creating PTY session for macro mode ({}x{})", cols, rows);
+        let ps = PtySession::new(cols as usize, rows as usize, args.scrollback);
+        let terminal = ps.terminal();
+        {
+            let mut term = terminal.lock();
+            theme.apply(&mut term);
+        }
+        Some(Arc::new(Mutex::new(ps)))
+    } else {
+        None
+    };
 
     // Load TLS configuration if provided
     let tls_config = if let Some(pem_path) = &args.tls_pem {
@@ -1069,6 +1443,15 @@ async fn main() -> Result<()> {
     // Resolve HTTP Basic Auth configuration
     let http_basic_auth = resolve_http_basic_auth(&args)?;
 
+    // Build presets map from CLI args
+    let presets: HashMap<String, String> = args.preset.iter().cloned().collect();
+    if !presets.is_empty() {
+        info!("Registered presets:");
+        for (name, cmd) in &presets {
+            info!("  {} → {}", name, cmd);
+        }
+    }
+
     // Create streaming server configuration
     let config = StreamingConfig {
         max_clients: args.max_clients,
@@ -1081,26 +1464,68 @@ async fn main() -> Result<()> {
         initial_rows: rows,
         tls: tls_config,
         http_basic_auth: http_basic_auth.clone(),
+        max_sessions: args.max_sessions,
+        session_idle_timeout: args.session_idle_timeout,
+        presets,
     };
 
     // Create streaming server
     let addr = format!("{}:{}", args.host, args.port);
     info!("Creating streaming server on {}", addr);
 
-    let mut streaming_server =
-        StreamingServer::with_config(Arc::clone(&terminal), addr.clone(), config);
+    let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
+    let is_macro_mode = args.macro_file.is_some();
+
+    // Create session factory for shell mode (multi-session support)
+    let factory: Option<Arc<BinarySessionFactory>> = if !is_macro_mode {
+        Some(Arc::new(BinarySessionFactory::new(
+            args.shell.clone(),
+            args.scrollback,
+            Some(theme.clone()),
+            restart_shell,
+        )))
+    } else {
+        None
+    };
+
+    let mut streaming_server = if let Some(ref factory) = factory {
+        // Multi-session mode with factory
+        StreamingServer::with_factory(
+            addr.clone(),
+            config,
+            Arc::clone(factory) as Arc<dyn SessionFactory>,
+        )
+    } else {
+        // Macro mode - single-session backward compatible
+        let terminal = {
+            let ps = pty_session
+                .as_ref()
+                .expect("PTY session required for macro mode");
+            let ps = ps.lock();
+            ps.terminal()
+        };
+        StreamingServer::with_config(terminal, addr.clone(), config)
+    };
 
     // Set theme on streaming server
     streaming_server.set_theme(theme.to_protocol());
 
-    // Get resize receiver for handling resize requests
-    let resize_rx = streaming_server.get_resize_receiver();
+    let streaming_server = Arc::new(streaming_server);
 
-    // Get output sender for the callback (before Arc)
-    let output_sender = streaming_server.get_output_sender();
+    // Wire factory's server reference (needed for per-session event broadcasting)
+    if let Some(ref factory) = factory {
+        factory.set_streaming_server(Arc::clone(&streaming_server));
+    }
 
     // Check if we should play back a macro or run a shell
     if let Some(macro_file) = &args.macro_file {
+        let macro_pty = pty_session
+            .as_ref()
+            .expect("PTY session required for macro mode");
+
+        // Get output sender for the callback
+        let output_sender = streaming_server.get_output_sender();
+
         info!("Loading macro file: {}", macro_file);
         let macro_data = Macro::load_yaml(macro_file)
             .context(format!("Failed to load macro file: {}", macro_file))?;
@@ -1116,7 +1541,7 @@ async fn main() -> Result<()> {
         }
 
         // Spawn macro playback task
-        let pty_session_clone = Arc::clone(&pty_session);
+        let pty_session_clone = Arc::clone(macro_pty);
         let output_sender_clone = output_sender.clone();
         let macro_speed = args.macro_speed;
         let macro_loop = args.macro_loop;
@@ -1166,7 +1591,7 @@ async fn main() -> Result<()> {
 
         // Set up output callback to send PTY output to streaming server
         {
-            let mut session = pty_session.lock();
+            let mut session = macro_pty.lock();
             session.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
                 let _ = output_sender_clone.send(text);
@@ -1175,40 +1600,15 @@ async fn main() -> Result<()> {
 
         // No PTY writer needed for macro playback
     } else {
-        // Start shell FIRST (so PTY writer becomes available)
-        info!("Starting shell");
-        {
-            let mut session = pty_session.lock();
-            if let Some(shell) = &args.shell {
-                session
-                    .spawn(shell, &[])
-                    .context(format!("Failed to start shell: {}", shell))?;
-            } else {
-                session.spawn_shell().context("Failed to start shell")?;
-            }
-        }
-
-        // Set up output callback to send PTY output to streaming server
-        {
-            let mut session = pty_session.lock();
-            session.set_output_callback(Arc::new(move |data| {
-                let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender.send(text);
-            }));
-        }
-
-        // Get PTY writer for client input (AFTER shell is spawned)
-        let pty_writer = {
-            let session = pty_session.lock();
-            session.get_writer()
-        };
-
-        if let Some(writer) = pty_writer {
-            streaming_server.set_pty_writer(writer);
-        }
+        // Shell mode: create the "default" session via factory
+        info!("Creating default session via factory");
+        let default_params =
+            par_term_emu_core_rust::streaming::ConnectionParams::from_query(&HashMap::new());
+        streaming_server
+            .resolve_session(&default_params)
+            .context("Failed to create default session")?;
+        info!("Default session created successfully");
     }
-
-    let streaming_server = Arc::new(streaming_server);
 
     // Print startup information
     let http_scheme = if use_tls { "https" } else { "http" };
@@ -1259,6 +1659,19 @@ async fn main() -> Result<()> {
     println!("\n  Theme: {}", theme.name);
     println!("  Terminal: {}x{}", cols, rows);
     println!("  Max clients: {}", args.max_clients);
+    println!("  Max sessions: {}", args.max_sessions);
+    if args.session_idle_timeout > 0 {
+        println!("  Session idle timeout: {}s", args.session_idle_timeout);
+    } else {
+        println!("  Session idle timeout: disabled");
+    }
+
+    if !args.preset.is_empty() {
+        println!("\n  Presets:");
+        for (name, cmd) in &args.preset {
+            println!("    {} → {}", name, cmd);
+        }
+    }
 
     if let Some(macro_file) = &args.macro_file {
         println!("\n  Mode: MACRO PLAYBACK");
@@ -1273,7 +1686,7 @@ async fn main() -> Result<()> {
             }
         );
     } else {
-        println!("\n  Mode: INTERACTIVE SHELL");
+        println!("\n  Mode: INTERACTIVE SHELL (multi-session)");
         if let Some(command) = &args.command {
             println!("  Initial command: {}", command);
         }
@@ -1285,21 +1698,13 @@ async fn main() -> Result<()> {
                 "enabled (default)"
             }
         );
+        if args.enable_http {
+            println!("  Sessions endpoint: {}://{}/sessions", http_scheme, addr);
+        }
     }
 
     println!("\n{}", "=".repeat(60));
     println!("\nPress Ctrl+C to stop the server\n");
-
-    // Create server state
-    // Shell restart only applies to shell mode, not macro mode
-    let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
-    let state = ServerState::new(
-        Arc::clone(&pty_session),
-        Arc::clone(&streaming_server),
-        resize_rx,
-        args.shell.clone(),
-        restart_shell,
-    );
 
     // Start streaming server in background
     let server_handle = {
@@ -1311,22 +1716,39 @@ async fn main() -> Result<()> {
         })
     };
 
-    // Send initial command after delay if specified (only for shell mode, not macro mode)
-    if let Some(command) = &args.command {
-        if args.macro_file.is_none() {
-            let pty_session_clone = Arc::clone(&pty_session);
+    if is_macro_mode {
+        // Macro mode: use ServerState for resize handling and PTY monitoring
+        let macro_pty = pty_session
+            .as_ref()
+            .expect("PTY session required for macro mode");
+        let resize_rx = streaming_server.get_resize_receiver();
+        let state = ServerState::new(
+            Arc::clone(macro_pty),
+            Arc::clone(&streaming_server),
+            resize_rx,
+            args.shell.clone(),
+            false, // no restart in macro mode
+        );
+
+        // Run main event loop (this blocks until Ctrl+C)
+        state.run().await?;
+    } else {
+        // Shell mode: factory handles per-session resize, PTY monitoring, and event polling.
+        // Send initial command to default session if specified
+        if let Some(command) = &args.command {
+            let factory_ref = factory.clone();
             let command = command.clone();
             tokio::spawn(async move {
                 // Wait 1 second for shell prompt to settle
                 time::sleep(Duration::from_secs(1)).await;
                 info!("Sending initial command: {}", command);
 
-                {
-                    let session = pty_session_clone.lock();
-                    if let Some(writer) = session.get_writer() {
-                        {
+                if let Some(ref factory) = factory_ref {
+                    let sessions = factory.pty_sessions.read();
+                    if let Some(pty_session) = sessions.get("default") {
+                        let session = pty_session.lock();
+                        if let Some(writer) = session.get_writer() {
                             let mut w = writer.lock();
-                            // Send command followed by newline
                             let cmd_with_newline = format!("{}\n", command);
                             if let Err(e) = w.write_all(cmd_with_newline.as_bytes()) {
                                 error!("Failed to send initial command: {}", e);
@@ -1337,10 +1759,13 @@ async fn main() -> Result<()> {
                 }
             });
         }
-    }
 
-    // Run main event loop (this blocks until Ctrl+C)
-    state.run().await?;
+        // Wait for Ctrl+C
+        signal::ctrl_c()
+            .await
+            .context("Failed to listen for Ctrl+C")?;
+        info!("Received shutdown signal");
+    }
 
     // Cleanup
     info!("Shutting down...");
@@ -1348,17 +1773,22 @@ async fn main() -> Result<()> {
     // Shutdown streaming server
     streaming_server.shutdown("Server shutting down".to_string());
 
-    // Stop PTY
-    {
-        let session = pty_session.lock();
+    // Teardown all factory sessions
+    if let Some(ref factory) = factory {
+        let session_ids: Vec<String> = factory.pty_sessions.read().keys().cloned().collect();
+        for id in session_ids {
+            factory.teardown_session(&id);
+        }
+    }
+
+    // Stop macro mode PTY
+    if let Some(ref macro_pty) = pty_session {
+        let session = macro_pty.lock();
         if session.is_running() {
-            // Try to gracefully exit the shell
             if let Some(writer) = session.get_writer() {
-                {
-                    let mut w = writer.lock();
-                    let _ = w.write_all(b"exit\n");
-                    let _ = w.flush();
-                }
+                let mut w = writer.lock();
+                let _ = w.write_all(b"exit\n");
+                let _ = w.flush();
             }
         }
     }

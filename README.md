@@ -13,6 +13,32 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.33.0
+
+### Multi-Session Streaming Server
+
+The streaming server now supports multiple concurrent terminal sessions. Each WebSocket client can connect to a named session, and new sessions are created on demand:
+
+```
+ws://host:port/ws?session=my-session     # Connect to (or create) a named session
+ws://host:port/ws?preset=python           # Create a session using a shell preset
+ws://host:port/ws                         # Connect to the default session
+```
+
+**Key features:**
+- **Session isolation**: Each session has its own terminal, PTY, and broadcast channels
+- **Shell presets**: Define named shell commands (`--preset python=python3 --preset node=node`)
+- **Idle timeout**: Sessions with no clients are automatically reaped (default: 15 minutes)
+- **Client identity**: Each client receives a unique `client_id` in the Connected handshake
+- **Read-only awareness**: The `readonly` field in Connected tells clients their permission level
+
+**Default limits:**
+- Max concurrent sessions: 10
+- Idle session timeout: 900 seconds (15 minutes)
+- Max clients per server: 100 (unchanged)
+
+**Breaking:** `StreamingConfig` has new required fields (`max_sessions`, `session_idle_timeout`, `presets`). `ServerMessage::Connected` now includes `client_id` and `readonly` fields.
+
 ## What's New in 0.32.0
 
 ### Coprocess Restart Policies & Stderr Capture

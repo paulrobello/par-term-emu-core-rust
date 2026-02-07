@@ -57,6 +57,9 @@ impl PyStreamingConfig {
                 initial_rows,
                 tls: None, // TLS configuration via set_tls_from_files/set_tls_from_pem
                 http_basic_auth: None, // HTTP Basic Auth not exposed to Python (use CLI flags instead)
+                max_sessions: 10,
+                session_idle_timeout: 900,
+                presets: std::collections::HashMap::new(),
             },
         }
     }
@@ -155,6 +158,30 @@ impl PyStreamingConfig {
     #[setter]
     fn set_web_root(&mut self, web_root: String) {
         self.inner.web_root = web_root;
+    }
+
+    /// Get the maximum number of concurrent sessions
+    #[getter]
+    fn max_sessions(&self) -> usize {
+        self.inner.max_sessions
+    }
+
+    /// Set the maximum number of concurrent sessions
+    #[setter]
+    fn set_max_sessions(&mut self, max_sessions: usize) {
+        self.inner.max_sessions = max_sessions;
+    }
+
+    /// Get the idle session timeout in seconds (0 = never timeout)
+    #[getter]
+    fn session_idle_timeout(&self) -> u64 {
+        self.inner.session_idle_timeout
+    }
+
+    /// Set the idle session timeout in seconds (0 = never timeout)
+    #[setter]
+    fn set_session_idle_timeout(&mut self, session_idle_timeout: u64) {
+        self.inner.session_idle_timeout = session_idle_timeout;
     }
 
     fn __repr__(&self) -> String {
@@ -832,6 +859,8 @@ pub fn decode_server_message<'py>(
             faint_text_alpha,
             cwd,
             modify_other_keys,
+            client_id,
+            readonly,
         } => {
             dict.set_item("type", "connected")?;
             dict.set_item("cols", cols)?;
@@ -857,6 +886,8 @@ pub fn decode_server_message<'py>(
             dict.set_item("faint_text_alpha", faint_text_alpha)?;
             dict.set_item("cwd", cwd)?;
             dict.set_item("modify_other_keys", modify_other_keys)?;
+            dict.set_item("client_id", client_id)?;
+            dict.set_item("readonly", readonly)?;
         }
         ServerMessage::Refresh {
             cols,

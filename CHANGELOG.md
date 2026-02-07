@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-02-06
+
+### Added
+- **Multi-Session Streaming Support**: The streaming server now supports multiple concurrent terminal sessions
+  - New `SessionState` struct encapsulates per-session terminal, broadcast channels, PTY writer, and client tracking
+  - New `SessionFactory` trait allows custom session creation (e.g., PTY-backed sessions in the binary server)
+  - New `SessionRegistry` for managing active sessions with idle timeout reaping
+  - New `ConnectionParams` struct for passing session/preset/client parameters during WebSocket upgrade
+  - New `SessionInfo` struct exposes session metadata (id, client_count, created_at)
+  - Clients connect to specific sessions via `?session=<id>` query parameter
+  - New sessions are auto-created on first connection (or via preset with `?preset=<name>`)
+  - Idle sessions (no connected clients) are automatically reaped after configurable timeout
+- **Shell Presets**: Named shell presets allow clients to request specific shell environments
+  - CLI: `--preset python=python3 --preset node=node`
+  - Clients connect with `?preset=name` to spawn a session with that shell
+- **Client Identity & Read-Only Mode**: Connected message now includes `client_id` and `readonly` fields
+  - Each WebSocket client receives a unique identifier
+  - Read-only status is communicated in the connection handshake
+- **Streaming Config Extensions**: New configuration options for multi-session support
+  - `max_sessions`: Maximum concurrent sessions (default: 10)
+  - `session_idle_timeout`: Seconds before idle sessions are reaped (default: 900, 0 = never)
+  - `presets`: HashMap of preset name → shell command
+- **New Error Variants**: `MaxSessionsReached`, `SessionNotFound`, `InvalidPreset` in `StreamingError`
+- **Python Bindings**: `StreamingConfig` gains `max_sessions` and `session_idle_timeout` getters/setters; `decode_server_message` includes `client_id` and `readonly` in Connected dict
+- **New Public Exports**: `ConnectionParams`, `SessionFactory`, `SessionFactoryResult`, `SessionInfo`, `SessionRegistry`, `SessionState` from `streaming` module
+
+### Changed
+- **Breaking**: `StreamingConfig` has three new required fields: `max_sessions`, `session_idle_timeout`, `presets`
+- **Breaking**: `ServerMessage::Connected` variant has two new fields: `client_id: Option<String>`, `readonly: Option<bool>`
+- **Breaking**: `ServerMessage::connected_full()` constructor takes two additional parameters (`client_id`, `readonly`)
+- **Breaking**: `StreamingServer` internals refactored from single-terminal to multi-session architecture
+- Binary server (`par-term-streamer`) refactored to use `BinarySessionFactory` for per-session PTY management
+
 ## [0.32.0] - 2026-02-06
 
 ### Added

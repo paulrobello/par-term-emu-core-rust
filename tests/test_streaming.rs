@@ -467,6 +467,9 @@ mod streaming_tests {
             assert_eq!(config.initial_rows, 0);
             assert!(config.tls.is_none());
             assert!(config.http_basic_auth.is_none());
+            assert_eq!(config.max_sessions, 10);
+            assert_eq!(config.session_idle_timeout, 900);
+            assert!(config.presets.is_empty());
         }
 
         #[test]
@@ -485,6 +488,9 @@ mod streaming_tests {
                     "admin".to_string(),
                     "pass".to_string(),
                 )),
+                max_sessions: 5,
+                session_idle_timeout: 600,
+                presets: std::collections::HashMap::new(),
             };
 
             assert_eq!(config.max_clients, 50);
@@ -496,6 +502,9 @@ mod streaming_tests {
             assert_eq!(config.initial_cols, 120);
             assert_eq!(config.initial_rows, 40);
             assert!(config.http_basic_auth.is_some());
+            assert_eq!(config.max_sessions, 5);
+            assert_eq!(config.session_idle_timeout, 600);
+            assert!(config.presets.is_empty());
         }
 
         #[test]

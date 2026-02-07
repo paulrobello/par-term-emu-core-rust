@@ -88,7 +88,7 @@ except ImportError:
     encode_client_message = None
     decode_client_message = None
 
-__version__ = "0.32.0"
+__version__ = "0.33.0"
 __all__ = [
     "AmbiguousWidth",
     "Attributes",

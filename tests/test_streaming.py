@@ -95,6 +95,8 @@ def test_streaming_config_creation():
     assert config.send_initial_screen is True
     assert config.keepalive_interval == 30
     assert config.default_read_only is False
+    assert config.max_sessions == 10
+    assert config.session_idle_timeout == 900
 
 
 def test_streaming_config_custom():
@@ -127,6 +129,12 @@ def test_streaming_config_setters():
 
     config.default_read_only = True
     assert config.default_read_only is True
+
+    config.max_sessions = 5
+    assert config.max_sessions == 5
+
+    config.session_idle_timeout = 600
+    assert config.session_idle_timeout == 600
 
 
 def test_streaming_config_repr():

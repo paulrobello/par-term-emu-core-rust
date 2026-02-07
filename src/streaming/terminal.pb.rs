@@ -117,6 +117,12 @@ pub struct Connected {
     /// modifyOtherKeys mode (0-2)
     #[prost(uint32, optional, tag = "9")]
     pub modify_other_keys: ::core::option::Option<u32>,
+    /// Unique client identifier
+    #[prost(string, optional, tag = "10")]
+    pub client_id: ::core::option::Option<::prost::alloc::string::String>,
+    /// Whether this connection is read-only
+    #[prost(bool, optional, tag = "11")]
+    pub readonly: ::core::option::Option<bool>,
 }
 /// Full screen refresh response
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

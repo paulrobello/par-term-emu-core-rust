@@ -38,6 +38,15 @@ pub enum StreamingError {
     /// Maximum clients reached
     MaxClientsReached,
 
+    /// Maximum sessions reached
+    MaxSessionsReached,
+
+    /// Session not found
+    SessionNotFound(String),
+
+    /// Invalid preset name
+    InvalidPreset(String),
+
     /// Authentication failed
     AuthenticationFailed(String),
 
@@ -61,6 +70,11 @@ impl fmt::Display for StreamingError {
             StreamingError::InvalidInput(msg) => write!(f, "Invalid input: {}", msg),
             StreamingError::RateLimitExceeded => write!(f, "Rate limit exceeded"),
             StreamingError::MaxClientsReached => write!(f, "Maximum number of clients reached"),
+            StreamingError::MaxSessionsReached => {
+                write!(f, "Maximum number of sessions reached")
+            }
+            StreamingError::SessionNotFound(id) => write!(f, "Session not found: {}", id),
+            StreamingError::InvalidPreset(name) => write!(f, "Invalid preset: {}", name),
             StreamingError::AuthenticationFailed(msg) => {
                 write!(f, "Authentication failed: {}", msg)
             }
@@ -164,6 +178,47 @@ mod tests {
     fn test_streaming_error_display_max_clients() {
         let err = StreamingError::MaxClientsReached;
         assert_eq!(err.to_string(), "Maximum number of clients reached");
+    }
+
+    #[test]
+    fn test_streaming_error_display_max_sessions() {
+        let err = StreamingError::MaxSessionsReached;
+        assert_eq!(err.to_string(), "Maximum number of sessions reached");
+    }
+
+    #[test]
+    fn test_streaming_error_display_session_not_found() {
+        let err = StreamingError::SessionNotFound("my-session".to_string());
+        assert_eq!(err.to_string(), "Session not found: my-session");
+    }
+
+    #[test]
+    fn test_streaming_error_display_invalid_preset() {
+        let err = StreamingError::InvalidPreset("nonexistent".to_string());
+        assert_eq!(err.to_string(), "Invalid preset: nonexistent");
+    }
+
+    #[test]
+    fn test_streaming_error_debug_max_sessions() {
+        let err = StreamingError::MaxSessionsReached;
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("MaxSessionsReached"));
+    }
+
+    #[test]
+    fn test_streaming_error_debug_session_not_found() {
+        let err = StreamingError::SessionNotFound("test-id".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("SessionNotFound"));
+        assert!(debug_str.contains("test-id"));
+    }
+
+    #[test]
+    fn test_streaming_error_debug_invalid_preset() {
+        let err = StreamingError::InvalidPreset("bad-preset".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("InvalidPreset"));
+        assert!(debug_str.contains("bad-preset"));
     }
 
     #[test]

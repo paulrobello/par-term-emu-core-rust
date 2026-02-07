@@ -6,6 +6,7 @@ use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ServerMessage, ThemeInfo};
 use crate::terminal::Terminal;
 use parking_lot::Mutex;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
@@ -272,6 +273,12 @@ pub struct StreamingConfig {
     pub tls: Option<TlsConfig>,
     /// HTTP Basic Authentication configuration (None = no auth)
     pub http_basic_auth: Option<HttpBasicAuthConfig>,
+    /// Maximum number of concurrent sessions (default: 10)
+    pub max_sessions: usize,
+    /// Idle session timeout in seconds (0 = never timeout, default: 300)
+    pub session_idle_timeout: u64,
+    /// Shell presets: name → shell command
+    pub presets: HashMap<String, String>,
 }
 
 impl Default for StreamingConfig {
@@ -287,94 +294,132 @@ impl Default for StreamingConfig {
             initial_rows: 0,
             tls: None,
             http_basic_auth: None,
+            max_sessions: 10,
+            session_idle_timeout: 900,
+            presets: HashMap::new(),
         }
     }
 }
 
-/// Guard that decrements client count when dropped
-struct ClientGuard<'a> {
-    server: &'a StreamingServer,
-}
+// =============================================================================
+// Session State
+// =============================================================================
 
-impl<'a> Drop for ClientGuard<'a> {
-    fn drop(&mut self) {
-        self.server.remove_client();
-    }
-}
-
-/// WebSocket streaming server for terminal sessions
-pub struct StreamingServer {
-    /// Atomic counter for tracking connected clients
-    client_count: AtomicUsize,
-    /// Shared terminal instance
-    terminal: Arc<Mutex<Terminal>>,
-    /// Server bind address
-    addr: String,
-    /// Server configuration
-    config: StreamingConfig,
-    /// Channel for sending output to broadcaster
-    output_tx: mpsc::UnboundedSender<String>,
-    /// Channel for receiving output from terminal
-    output_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>,
-    /// Broadcast channel for sending output to all clients
+/// Per-session state extracted from StreamingServer for multi-session support
+pub struct SessionState {
+    /// Unique session identifier
+    pub id: String,
+    /// Terminal instance for this session
+    pub terminal: Arc<Mutex<Terminal>>,
+    /// Broadcast channel for sending output to all clients in this session
     broadcast_tx: broadcast::Sender<ServerMessage>,
+    /// Channel for sending output data into the broadcaster loop
+    output_tx: mpsc::UnboundedSender<String>,
+    /// Receiver end of the output channel (consumed by broadcaster loop)
+    output_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
-    /// Wrapped in RwLock for interior mutability (allows updating through Arc)
     #[allow(clippy::type_complexity)]
     pty_writer: std::sync::RwLock<Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
-    /// Channel for sending resize requests to main thread
+    /// Channel for sending resize requests
     resize_tx: mpsc::UnboundedSender<(u16, u16)>,
-    /// Shared receiver for resize requests (wrapped for thread-safe access from Python)
+    /// Receiver for resize requests
     resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
-    /// Optional theme information to send to clients
-    theme: Option<ThemeInfo>,
-    /// Shutdown signal for broadcaster loop
+    /// Number of clients connected to this session
+    client_count: AtomicUsize,
+    /// When the last client disconnected (for idle timeout)
+    last_client_disconnect: parking_lot::RwLock<Option<tokio::time::Instant>>,
+    /// When this session was created (Unix epoch seconds)
+    created_at: u64,
+    /// Shutdown signal for this session's broadcaster loop
     shutdown: Arc<tokio::sync::Notify>,
+    /// Optional theme for this session
+    theme: Option<ThemeInfo>,
+    /// Whether to send initial screen content on connect
+    send_initial_screen: bool,
 }
 
-impl StreamingServer {
-    /// Create a new streaming server
-    pub fn new(terminal: Arc<Mutex<Terminal>>, addr: String) -> Self {
-        Self::with_config(terminal, addr, StreamingConfig::default())
-    }
-
-    /// Create a new streaming server with custom configuration
-    pub fn with_config(
+impl SessionState {
+    /// Create a new session state
+    pub fn new(
+        id: String,
         terminal: Arc<Mutex<Terminal>>,
-        addr: String,
-        config: StreamingConfig,
+        theme: Option<ThemeInfo>,
+        send_initial_screen: bool,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::unbounded_channel();
-        // Create broadcast channel for sending output to all clients (buffer 100 messages)
         let (broadcast_tx, _) = broadcast::channel(100);
-        // Create resize request channel
         let (resize_tx, resize_rx) = mpsc::unbounded_channel();
 
+        let created_at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
         Self {
-            client_count: AtomicUsize::new(0),
+            id,
             terminal,
-            addr,
-            config,
+            broadcast_tx,
             output_tx,
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
-            broadcast_tx,
             pty_writer: std::sync::RwLock::new(None),
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
-            theme: None,
+            client_count: AtomicUsize::new(0),
+            last_client_disconnect: parking_lot::RwLock::new(None),
+            created_at,
             shutdown: Arc::new(tokio::sync::Notify::new()),
+            theme,
+            send_initial_screen,
         }
     }
 
-    /// Set the theme to be sent to clients on connection
-    pub fn set_theme(&mut self, theme: ThemeInfo) {
-        self.theme = Some(theme);
+    /// Try to add a client to this session. Returns true if successful.
+    pub fn try_add_client(&self) -> bool {
+        self.client_count.fetch_add(1, Ordering::SeqCst);
+        true
+    }
+
+    /// Remove a client from this session.
+    pub fn remove_client(&self) {
+        let prev = self.client_count.fetch_sub(1, Ordering::SeqCst);
+        if prev == 1 {
+            // Was the last client - record disconnect time
+            *self.last_client_disconnect.write() = Some(tokio::time::Instant::now());
+        }
+    }
+
+    /// Build a Connected message from current terminal state
+    pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
+        let terminal = self.terminal.lock();
+        let (cols, rows) = terminal.size();
+
+        let initial_screen = if self.send_initial_screen {
+            Some(terminal.export_visible_screen_styled())
+        } else {
+            None
+        };
+
+        let badge = terminal.evaluate_badge();
+        let faint_alpha = Some(terminal.faint_text_alpha());
+        let cwd = terminal.current_directory().map(|s| s.to_string());
+        let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
+
+        ServerMessage::connected_full(
+            cols as u16,
+            rows as u16,
+            initial_screen,
+            self.id.clone(),
+            self.theme.clone(),
+            badge,
+            faint_alpha,
+            cwd,
+            mok_mode,
+            Some(client_id.to_string()),
+            Some(readonly),
+        )
     }
 
     /// Set the PTY writer for handling client input
-    ///
-    /// This should be called before starting the server if PTY input is supported.
-    /// Can be called multiple times (e.g., after shell restart) as it uses interior mutability.
     pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
         if let Ok(mut guard) = self.pty_writer.write() {
             *guard = Some(writer);
@@ -382,19 +427,500 @@ impl StreamingServer {
     }
 
     /// Get a clone of the output sender channel
-    ///
-    /// This can be used to send terminal output to all connected clients
     pub fn get_output_sender(&self) -> mpsc::UnboundedSender<String> {
         self.output_tx.clone()
     }
 
     /// Get a clone of the resize receiver
-    ///
-    /// This can be used by the main thread to poll for resize requests from clients
     pub fn get_resize_receiver(
         &self,
     ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
         Arc::clone(&self.resize_rx)
+    }
+
+    /// Broadcast a message to all clients in this session
+    pub fn broadcast(&self, msg: ServerMessage) {
+        let _ = self.broadcast_tx.send(msg);
+    }
+
+    /// Run the output broadcaster loop for this session
+    pub async fn output_broadcaster_loop(&self) {
+        let mut rx = self.output_rx.lock().await;
+        let mut buffer = String::new();
+        let mut last_flush = tokio::time::Instant::now();
+
+        const BATCH_WINDOW: Duration = Duration::from_millis(16);
+        const MAX_BATCH_SIZE: usize = 8192;
+
+        loop {
+            tokio::select! {
+                _ = self.shutdown.notified() => {
+                    crate::debug_info!("STREAMING", "Session {} broadcaster received shutdown signal", self.id);
+                    if !buffer.is_empty() {
+                        let msg = ServerMessage::output(buffer);
+                        let _ = self.broadcast_tx.send(msg);
+                    }
+                    break;
+                }
+                msg = rx.recv() => {
+                    match msg {
+                        Some(data) => {
+                            if !data.is_empty() {
+                                buffer.push_str(&data);
+                                if buffer.len() > MAX_BATCH_SIZE {
+                                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
+                                    let _ = self.broadcast_tx.send(msg);
+                                    last_flush = tokio::time::Instant::now();
+                                }
+                            }
+                        }
+                        None => {
+                            if !buffer.is_empty() {
+                                let msg = ServerMessage::output(buffer);
+                                let _ = self.broadcast_tx.send(msg);
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = tokio::time::sleep_until(last_flush + BATCH_WINDOW), if !buffer.is_empty() => {
+                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
+                    let _ = self.broadcast_tx.send(msg);
+                    last_flush = tokio::time::Instant::now();
+                }
+            }
+        }
+    }
+
+    /// Signal this session to shut down
+    pub fn shutdown(&self, reason: String) {
+        crate::debug_info!("STREAMING", "Shutting down session {}: {}", self.id, reason);
+        let msg = ServerMessage::shutdown(reason);
+        self.broadcast(msg);
+        self.shutdown.notify_waiters();
+    }
+
+    /// Get the number of clients connected to this session
+    pub fn client_count(&self) -> usize {
+        self.client_count.load(Ordering::Relaxed)
+    }
+
+    /// Check if this session is idle (no clients and past timeout)
+    pub fn is_idle(&self, timeout: Duration) -> bool {
+        if self.client_count() > 0 {
+            return false;
+        }
+        if let Some(last_disconnect) = *self.last_client_disconnect.read() {
+            last_disconnect.elapsed() >= timeout
+        } else {
+            false
+        }
+    }
+
+    /// Get session info for the /sessions endpoint
+    pub fn session_info(&self) -> SessionInfo {
+        let terminal = self.terminal.lock();
+        let (cols, rows) = terminal.size();
+        let cwd = terminal.current_directory().map(|s| s.to_string());
+
+        let idle_seconds = if self.client_count() == 0 {
+            self.last_client_disconnect
+                .read()
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        SessionInfo {
+            id: self.id.clone(),
+            created: self.created_at,
+            clients: self.client_count(),
+            idle_seconds,
+            cols: cols as u16,
+            rows: rows as u16,
+            cwd,
+        }
+    }
+}
+
+impl std::fmt::Debug for SessionState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionState")
+            .field("id", &self.id)
+            .field("client_count", &self.client_count())
+            .field("created_at", &self.created_at)
+            .field("send_initial_screen", &self.send_initial_screen)
+            .finish()
+    }
+}
+
+/// Session information returned by the /sessions endpoint
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionInfo {
+    /// Session identifier
+    pub id: String,
+    /// Creation timestamp (Unix epoch seconds)
+    pub created: u64,
+    /// Number of connected clients
+    pub clients: usize,
+    /// Seconds since last client disconnected (0 if clients are connected)
+    pub idle_seconds: u64,
+    /// Terminal columns
+    pub cols: u16,
+    /// Terminal rows
+    pub rows: u16,
+    /// Current working directory
+    pub cwd: Option<String>,
+}
+
+// =============================================================================
+// Session Registry
+// =============================================================================
+
+/// Thread-safe registry of active sessions
+pub struct SessionRegistry {
+    sessions: parking_lot::RwLock<HashMap<String, Arc<SessionState>>>,
+    max_sessions: usize,
+}
+
+impl SessionRegistry {
+    /// Create a new session registry
+    pub fn new(max_sessions: usize) -> Self {
+        Self {
+            sessions: parking_lot::RwLock::new(HashMap::new()),
+            max_sessions,
+        }
+    }
+
+    /// Get a session by ID
+    pub fn get(&self, id: &str) -> Option<Arc<SessionState>> {
+        self.sessions.read().get(id).cloned()
+    }
+
+    /// Insert a session. Returns error if max_sessions would be exceeded.
+    pub fn insert(&self, id: String, session: Arc<SessionState>) -> Result<()> {
+        let mut sessions = self.sessions.write();
+        if sessions.len() >= self.max_sessions && !sessions.contains_key(&id) {
+            return Err(StreamingError::MaxSessionsReached);
+        }
+        sessions.insert(id, session);
+        Ok(())
+    }
+
+    /// Remove a session by ID
+    pub fn remove(&self, id: &str) -> Option<Arc<SessionState>> {
+        self.sessions.write().remove(id)
+    }
+
+    /// Get the number of active sessions
+    pub fn session_count(&self) -> usize {
+        self.sessions.read().len()
+    }
+
+    /// Get IDs of sessions that are idle past the given timeout
+    pub fn idle_sessions(&self, timeout: Duration) -> Vec<String> {
+        self.sessions
+            .read()
+            .iter()
+            .filter(|(_, s)| s.is_idle(timeout))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// List all sessions for the /sessions endpoint
+    pub fn list_sessions(&self) -> Vec<SessionInfo> {
+        self.sessions
+            .read()
+            .values()
+            .map(|s| s.session_info())
+            .collect()
+    }
+}
+
+// =============================================================================
+// Session Factory
+// =============================================================================
+
+/// Result returned by SessionFactory::create_session
+pub struct SessionFactoryResult {
+    /// The terminal instance for the new session
+    pub terminal: Arc<Mutex<Terminal>>,
+    /// Optional PTY writer for the new session
+    pub pty_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
+}
+
+/// Trait for creating new sessions on demand
+///
+/// Implement this trait to customize how sessions are created (e.g., spawning
+/// PTY processes, configuring terminals, etc.)
+pub trait SessionFactory: Send + Sync {
+    /// Create a new session with the given parameters
+    ///
+    /// # Arguments
+    /// * `session_id` - Unique identifier for the session
+    /// * `cols` - Terminal columns
+    /// * `rows` - Terminal rows
+    /// * `shell_command` - Optional shell command (from preset resolution)
+    fn create_session(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        shell_command: Option<&str>,
+    ) -> std::result::Result<SessionFactoryResult, StreamingError>;
+
+    /// Setup a session after creation (e.g., spawn background tasks)
+    fn setup_session(
+        &self,
+        session_id: &str,
+        session: &Arc<SessionState>,
+    ) -> std::result::Result<(), StreamingError>;
+
+    /// Teardown a session (e.g., kill PTY process)
+    fn teardown_session(&self, session_id: &str);
+}
+
+/// Default session factory that wraps a single pre-existing terminal.
+/// Only allows the "default" session. Used for backward compatibility.
+#[allow(dead_code)]
+struct DefaultSessionFactory {
+    terminal: Arc<Mutex<Terminal>>,
+}
+
+impl SessionFactory for DefaultSessionFactory {
+    fn create_session(
+        &self,
+        session_id: &str,
+        _cols: u16,
+        _rows: u16,
+        _shell_command: Option<&str>,
+    ) -> std::result::Result<SessionFactoryResult, StreamingError> {
+        if session_id != "default" {
+            return Err(StreamingError::SessionNotFound(session_id.to_string()));
+        }
+        Ok(SessionFactoryResult {
+            terminal: Arc::clone(&self.terminal),
+            pty_writer: None,
+        })
+    }
+
+    fn setup_session(
+        &self,
+        _session_id: &str,
+        _session: &Arc<SessionState>,
+    ) -> std::result::Result<(), StreamingError> {
+        Ok(())
+    }
+
+    fn teardown_session(&self, _session_id: &str) {}
+}
+
+// =============================================================================
+// Connection Parameters
+// =============================================================================
+
+/// Parsed connection parameters from URL query string
+pub struct ConnectionParams {
+    /// Session ID (defaults to "default")
+    pub session_id: String,
+    /// Whether this connection is read-only
+    pub readonly: bool,
+    /// Preset name to use for session creation
+    pub preset: Option<String>,
+}
+
+impl ConnectionParams {
+    /// Parse connection parameters from a query string map
+    pub fn from_query(params: &HashMap<String, String>) -> Self {
+        let session_id = params
+            .get("session")
+            .cloned()
+            .unwrap_or_else(|| "default".to_string());
+        let readonly = params
+            .get("readonly")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+        let preset = params.get("preset").cloned();
+
+        Self {
+            session_id,
+            readonly,
+            preset,
+        }
+    }
+
+    /// Parse connection parameters from a URI query string
+    pub fn from_uri_query(query: Option<&str>) -> Self {
+        let params: HashMap<String, String> = query
+            .unwrap_or("")
+            .split('&')
+            .filter(|s| !s.is_empty())
+            .filter_map(|pair| {
+                let mut parts = pair.splitn(2, '=');
+                let key = parts.next()?.to_string();
+                let value = parts.next().unwrap_or("").to_string();
+                Some((key, value))
+            })
+            .collect();
+
+        Self::from_query(&params)
+    }
+}
+
+// =============================================================================
+// Guards
+// =============================================================================
+
+/// Guard that decrements session client count when dropped
+struct SessionClientGuard {
+    session: Arc<SessionState>,
+}
+
+impl Drop for SessionClientGuard {
+    fn drop(&mut self) {
+        self.session.remove_client();
+    }
+}
+
+/// Guard that decrements global client count when dropped
+struct GlobalClientGuard<'a> {
+    server: &'a StreamingServer,
+}
+
+impl<'a> Drop for GlobalClientGuard<'a> {
+    fn drop(&mut self) {
+        self.server.remove_client();
+    }
+}
+
+// =============================================================================
+// Streaming Server
+// =============================================================================
+
+/// WebSocket streaming server for terminal sessions
+pub struct StreamingServer {
+    /// Atomic counter for tracking total connected clients across all sessions
+    client_count: AtomicUsize,
+    /// Server bind address
+    addr: String,
+    /// Server configuration
+    config: StreamingConfig,
+    /// Registry of active sessions
+    sessions: SessionRegistry,
+    /// Factory for creating new sessions on demand
+    session_factory: Option<Arc<dyn SessionFactory>>,
+    /// Optional theme information to send to clients
+    theme: Option<ThemeInfo>,
+    /// Global shutdown signal
+    shutdown: Arc<tokio::sync::Notify>,
+    /// The default session (for backward-compatible single-session mode)
+    default_session: Option<Arc<SessionState>>,
+}
+
+impl StreamingServer {
+    /// Create a new streaming server (backward-compatible single-session mode)
+    pub fn new(terminal: Arc<Mutex<Terminal>>, addr: String) -> Self {
+        Self::with_config(terminal, addr, StreamingConfig::default())
+    }
+
+    /// Create a new streaming server with custom configuration (backward-compatible)
+    pub fn with_config(
+        terminal: Arc<Mutex<Terminal>>,
+        addr: String,
+        config: StreamingConfig,
+    ) -> Self {
+        let sessions = SessionRegistry::new(config.max_sessions);
+
+        // Create default session
+        let default_session = Arc::new(SessionState::new(
+            "default".to_string(),
+            terminal,
+            None,
+            config.send_initial_screen,
+        ));
+
+        // Insert into registry
+        let _ = sessions.insert("default".to_string(), Arc::clone(&default_session));
+
+        Self {
+            client_count: AtomicUsize::new(0),
+            addr,
+            config,
+            sessions,
+            session_factory: None,
+            theme: None,
+            shutdown: Arc::new(tokio::sync::Notify::new()),
+            default_session: Some(default_session),
+        }
+    }
+
+    /// Create a streaming server with a session factory for multi-session support
+    pub fn with_factory(
+        addr: String,
+        config: StreamingConfig,
+        factory: Arc<dyn SessionFactory>,
+    ) -> Self {
+        let sessions = SessionRegistry::new(config.max_sessions);
+
+        Self {
+            client_count: AtomicUsize::new(0),
+            addr,
+            config,
+            sessions,
+            session_factory: Some(factory),
+            theme: None,
+            shutdown: Arc::new(tokio::sync::Notify::new()),
+            default_session: None,
+        }
+    }
+
+    /// Set the theme to be sent to clients on connection
+    pub fn set_theme(&mut self, theme: ThemeInfo) {
+        self.theme = Some(theme.clone());
+        // Also update theme on any existing sessions
+        if let Some(ref session) = self.default_session {
+            // We can't directly modify the theme on SessionState without interior mutability,
+            // but new sessions created by the factory will pick up the theme from
+            // resolve_session. For the default session created in with_config, the theme
+            // is set at construction time. Since set_theme is called before start(), we
+            // need to recreate the default session with the theme.
+            // However, the simplest approach is to store theme on the server and use it
+            // when building connect messages from the default session.
+            let _ = session; // Theme is used via server.theme in build_connect_message fallback
+        }
+    }
+
+    // -- Backward-compatible single-session accessors --
+
+    /// Set the PTY writer for handling client input (routes to default session)
+    pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
+        if let Some(ref session) = self.default_session {
+            session.set_pty_writer(writer);
+        }
+    }
+
+    /// Get a clone of the output sender channel (routes to default session)
+    pub fn get_output_sender(&self) -> mpsc::UnboundedSender<String> {
+        if let Some(ref session) = self.default_session {
+            session.get_output_sender()
+        } else {
+            // Create a dummy channel that will never be read
+            let (tx, _rx) = mpsc::unbounded_channel();
+            tx
+        }
+    }
+
+    /// Get a clone of the resize receiver (routes to default session)
+    pub fn get_resize_receiver(
+        &self,
+    ) -> Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>> {
+        if let Some(ref session) = self.default_session {
+            session.get_resize_receiver()
+        } else {
+            let (_tx, rx) = mpsc::unbounded_channel();
+            Arc::new(tokio::sync::Mutex::new(rx))
+        }
     }
 
     /// Get the current number of connected clients
@@ -426,7 +952,7 @@ impl StreamingServer {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => return true,
-                Err(_) => continue, // Another thread modified, retry
+                Err(_) => continue,
             }
         }
     }
@@ -436,17 +962,109 @@ impl StreamingServer {
         self.client_count.fetch_sub(1, Ordering::SeqCst);
     }
 
-    /// Broadcast a message to all clients via the broadcast channel
+    /// Broadcast a message to all clients in the default session
     pub fn broadcast(&self, msg: ServerMessage) {
-        let _ = self.broadcast_tx.send(msg);
+        if let Some(ref session) = self.default_session {
+            session.broadcast(msg);
+        }
+    }
+
+    /// Send a message to a specific session
+    pub fn send_to_session(&self, session_id: &str, msg: ServerMessage) {
+        if let Some(session) = self.sessions.get(session_id) {
+            session.broadcast(msg);
+        }
+    }
+
+    /// Get a session by ID from the registry
+    pub fn get_session(&self, session_id: &str) -> Option<Arc<SessionState>> {
+        self.sessions.get(session_id)
+    }
+
+    /// Resolve a session from connection parameters
+    ///
+    /// 1. If session already exists in registry, return it
+    /// 2. If factory is available, create a new session
+    /// 3. If no factory and id == "default", return default session
+    /// 4. Otherwise, error
+    pub fn resolve_session(
+        self: &Arc<Self>,
+        params: &ConnectionParams,
+    ) -> Result<Arc<SessionState>> {
+        let session_id = &params.session_id;
+
+        // Check if session already exists
+        if let Some(session) = self.sessions.get(session_id) {
+            return Ok(session);
+        }
+
+        // Try to create via factory
+        if let Some(ref factory) = self.session_factory {
+            // Resolve shell command from preset if specified
+            let shell_command = if let Some(ref preset_name) = params.preset {
+                let cmd = self
+                    .config
+                    .presets
+                    .get(preset_name)
+                    .ok_or_else(|| StreamingError::InvalidPreset(preset_name.clone()))?;
+                Some(cmd.as_str())
+            } else {
+                None
+            };
+
+            // Get terminal size from config or defaults
+            let cols = if self.config.initial_cols > 0 {
+                self.config.initial_cols
+            } else {
+                80
+            };
+            let rows = if self.config.initial_rows > 0 {
+                self.config.initial_rows
+            } else {
+                24
+            };
+
+            let result = factory.create_session(session_id, cols, rows, shell_command)?;
+
+            let session = Arc::new(SessionState::new(
+                session_id.clone(),
+                result.terminal,
+                self.theme.clone(),
+                self.config.send_initial_screen,
+            ));
+
+            if let Some(writer) = result.pty_writer {
+                session.set_pty_writer(writer);
+            }
+
+            // Insert into registry
+            self.sessions
+                .insert(session_id.clone(), Arc::clone(&session))?;
+
+            // Setup session (spawn background tasks, etc.)
+            factory.setup_session(session_id, &session)?;
+
+            // Spawn broadcaster loop for this session
+            let session_clone = Arc::clone(&session);
+            tokio::spawn(async move {
+                session_clone.output_broadcaster_loop().await;
+            });
+
+            return Ok(session);
+        }
+
+        // No factory - check if asking for default
+        if session_id == "default" {
+            if let Some(ref default) = self.default_session {
+                return Ok(Arc::clone(default));
+            }
+        }
+
+        Err(StreamingError::SessionNotFound(session_id.clone()))
     }
 
     /// Start the streaming server
-    ///
-    /// This method will block until the server is stopped.
-    /// If TLS is configured, the server will use HTTPS/WSS instead of HTTP/WS.
     pub async fn start(self: Arc<Self>) -> Result<()> {
-        // Choose implementation based on config
         let use_tls = self.config.tls.is_some();
 
         if self.config.enable_http {
@@ -462,6 +1080,51 @@ impl StreamingServer {
         }
     }
 
+    /// Spawn the idle session reaper task
+    fn spawn_idle_reaper(self: &Arc<Self>) {
+        if self.config.session_idle_timeout == 0 {
+            return;
+        }
+        let server = Arc::clone(self);
+        tokio::spawn(async move {
+            server.idle_session_reaper().await;
+        });
+    }
+
+    /// Idle session reaper - periodically checks for and removes idle sessions
+    async fn idle_session_reaper(self: Arc<Self>) {
+        let timeout = Duration::from_secs(self.config.session_idle_timeout);
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+
+        loop {
+            interval.tick().await;
+            let idle_ids = self.sessions.idle_sessions(timeout);
+            for id in idle_ids {
+                // Never reap the default session
+                if id == "default" {
+                    continue;
+                }
+                if let Some(session) = self.sessions.remove(&id) {
+                    session.shutdown("Session idle timeout".to_string());
+                    if let Some(ref factory) = self.session_factory {
+                        factory.teardown_session(&id);
+                    }
+                    crate::debug_info!("STREAMING", "Reaped idle session: {}", id);
+                }
+            }
+        }
+    }
+
+    /// Spawn broadcaster loop for the default session
+    fn spawn_default_broadcaster(self: &Arc<Self>) {
+        if let Some(ref session) = self.default_session {
+            let session = Arc::clone(session);
+            tokio::spawn(async move {
+                session.output_broadcaster_loop().await;
+            });
+        }
+    }
+
     /// Start server with HTTP static file serving using Axum
     #[cfg(feature = "streaming")]
     async fn start_with_http(self: Arc<Self>) -> Result<()> {
@@ -470,15 +1133,13 @@ impl StreamingServer {
 
         crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
 
-        // Spawn output broadcaster task
-        let server_clone = self.clone();
-        tokio::spawn(async move {
-            server_clone.output_broadcaster_loop().await;
-        });
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
 
-        // Build router with optional basic auth middleware
+        // Build router
         let app = Router::new()
             .route("/ws", get(ws_handler))
+            .route("/sessions", get(sessions_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
 
@@ -524,15 +1185,13 @@ impl StreamingServer {
             self.addr
         );
 
-        // Spawn output broadcaster task
-        let server_clone = self.clone();
-        tokio::spawn(async move {
-            server_clone.output_broadcaster_loop().await;
-        });
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
 
-        // Build router with optional basic auth middleware
+        // Build router
         let app = Router::new()
             .route("/ws", get(ws_handler))
+            .route("/sessions", get(sessions_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
 
@@ -578,17 +1237,13 @@ impl StreamingServer {
             self.addr
         );
 
-        // Spawn output broadcaster task
-        let server_clone = self.clone();
-        tokio::spawn(async move {
-            server_clone.output_broadcaster_loop().await;
-        });
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
 
         // Accept WebSocket connections
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    // Check max_clients before accepting
                     if !self.can_accept_client() {
                         crate::debug_error!(
                             "STREAMING",
@@ -599,8 +1254,6 @@ impl StreamingServer {
                         continue;
                     }
 
-                    // Enable TCP_NODELAY for lower latency on small messages (keystrokes)
-                    // This disables Nagle's algorithm which can add up to 40ms delay
                     if let Err(e) = stream.set_nodelay(true) {
                         crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
                     }
@@ -608,7 +1261,9 @@ impl StreamingServer {
                     crate::debug_info!("STREAMING", "New connection from {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = server.handle_connection(stream).await {
+                        // Parse query from the WebSocket upgrade request
+                        let params = ConnectionParams::from_uri_query(None);
+                        if let Err(e) = server.handle_connection(stream, &params).await {
                             crate::debug_error!(
                                 "STREAMING",
                                 "Connection error from {}: {}",
@@ -643,17 +1298,13 @@ impl StreamingServer {
             self.addr
         );
 
-        // Spawn output broadcaster task
-        let server_clone = self.clone();
-        tokio::spawn(async move {
-            server_clone.output_broadcaster_loop().await;
-        });
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
 
         // Accept TLS connections
         loop {
             match listener.accept().await {
                 Ok((stream, addr)) => {
-                    // Check max_clients before accepting
                     if !self.can_accept_client() {
                         crate::debug_error!(
                             "STREAMING",
@@ -664,8 +1315,6 @@ impl StreamingServer {
                         continue;
                     }
 
-                    // Enable TCP_NODELAY for lower latency on small messages (keystrokes)
-                    // This disables Nagle's algorithm which can add up to 40ms delay
                     if let Err(e) = stream.set_nodelay(true) {
                         crate::debug_error!("STREAMING", "Failed to set TCP_NODELAY: {}", e);
                     }
@@ -674,10 +1323,12 @@ impl StreamingServer {
                     let server = self.clone();
                     let acceptor = acceptor.clone();
                     tokio::spawn(async move {
-                        // Perform TLS handshake
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
-                                if let Err(e) = server.handle_tls_connection(tls_stream).await {
+                                let params = ConnectionParams::from_uri_query(None);
+                                if let Err(e) =
+                                    server.handle_tls_connection(tls_stream, &params).await
+                                {
                                     crate::debug_error!(
                                         "STREAMING",
                                         "TLS connection error from {}: {}",
@@ -704,73 +1355,54 @@ impl StreamingServer {
         }
     }
 
-    /// Build a Connected message from current terminal state
-    fn build_connect_message(&self, client_id: &str) -> ServerMessage {
-        let terminal = self.terminal.lock();
-        let (cols, rows) = terminal.size();
-
-        let initial_screen = if self.config.send_initial_screen {
-            Some(terminal.export_visible_screen_styled())
-        } else {
-            None
-        };
-
-        let badge = terminal.evaluate_badge();
-        let faint_alpha = Some(terminal.faint_text_alpha());
-        let cwd = terminal.current_directory().map(|s| s.to_string());
-        let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
-
-        ServerMessage::connected_full(
-            cols as u16,
-            rows as u16,
-            initial_screen,
-            client_id.to_string(),
-            self.theme.clone(),
-            badge,
-            faint_alpha,
-            cwd,
-            mok_mode,
-        )
-    }
-
     /// Handle a new WebSocket connection
-    async fn handle_connection(&self, stream: TcpStream) -> Result<()> {
-        // Try to reserve a client slot (atomic check-and-increment)
+    async fn handle_connection(
+        self: &Arc<Self>,
+        stream: TcpStream,
+        params: &ConnectionParams,
+    ) -> Result<()> {
+        // Try to reserve a global client slot
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
+        let _global_guard = GlobalClientGuard { server: self };
 
-        // Ensure we decrement the count when we exit this function
-        let _guard = ClientGuard { server: self };
+        // Resolve session
+        let session = self.resolve_session(params)?;
+        session.try_add_client();
+        let _session_guard = SessionClientGuard {
+            session: Arc::clone(&session),
+        };
+
+        // Determine readonly
+        let read_only = params.readonly || self.config.default_read_only;
 
         // Upgrade to WebSocket
         let ws_stream = accept_async(stream)
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
-        let mut client = Client::new(ws_stream, self.config.default_read_only);
+        let mut client = Client::new(ws_stream, read_only);
         let client_id = client.id();
 
-        // Send initial connection message with full terminal state
-        let connect_msg = self.build_connect_message(&client_id.to_string());
+        // Send initial connection message
+        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
         client.send(connect_msg).await?;
 
         crate::debug_info!(
             "STREAMING",
-            "Client {} connected (total: {})",
+            "Client {} connected to session {} (total: {})",
             client_id,
+            session.id,
             self.client_count()
         );
 
-        let read_only = client.is_read_only();
+        // Subscribe to session broadcasts
+        let mut output_rx = session.broadcast_tx.subscribe();
 
-        // Subscribe to output broadcasts
-        let mut output_rx = self.broadcast_tx.subscribe();
+        let terminal_for_refresh = Arc::clone(&session.terminal);
 
-        // Clone terminal for screen refresh
-        let terminal_for_refresh = Arc::clone(&self.terminal);
-
-        // Setup keepalive timer if enabled
+        // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
         } else {
@@ -778,10 +1410,8 @@ impl StreamingServer {
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
 
-        // Handle client input and output in this task
         loop {
             tokio::select! {
-                // Receive message from client (input from web terminal)
                 msg = client.recv() => {
                     match msg {
                         Err(e) => {
@@ -792,14 +1422,10 @@ impl StreamingServer {
                         Some(client_msg) => {
                             match client_msg {
                                 crate::streaming::protocol::ClientMessage::Input { data } => {
-                                    // Check if client is allowed to send input
                                     if read_only {
-                                        // Silently ignore input from read-only clients
                                         continue;
                                     }
-
-                                    // Always fetch latest PTY writer (may be updated after shell restart)
-                                    if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                             use std::io::Write;
                                             let _ = w.write_all(data.as_bytes());
@@ -808,35 +1434,23 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                    // Send resize request to main thread
-                                    // The main thread will call pty_terminal.resize() which:
-                                    // 1. Resizes the terminal buffer
-                                    // 2. Resizes the PTY (sends SIGWINCH to shell)
-                                    let _ = self.resize_tx.send((cols, rows));
+                                    let _ = session.resize_tx.send((cols, rows));
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
-                                    // Send pong response
                                     if let Err(e) = client.send(ServerMessage::pong()).await {
                                         crate::debug_error!("STREAMING", "Failed to send pong to client {}: {}", client_id, e);
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    // Send current visible screen content to client as refresh message
                                     let refresh_msg = {
                                         if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
                                             let content = terminal.export_visible_screen_styled();
                                             let (cols, rows) = terminal.size();
-
-                                            Some(ServerMessage::refresh(
-                                                cols as u16,
-                                                rows as u16,
-                                                content
-                                            ))
+                                            Some(ServerMessage::refresh(cols as u16, rows as u16, content))
                                         } else {
                                             None
                                         }
                                     };
-
                                     if let Some(msg) = refresh_msg {
                                         if let Err(e) = client.send(msg).await {
                                             crate::debug_error!("STREAMING", "Failed to send refresh to client {}: {}", client_id, e);
@@ -849,15 +1463,13 @@ impl StreamingServer {
                             }
                         }
                         None => {
-                            // Client disconnected
-                            crate::debug_info!("STREAMING", "Client {} disconnected", client_id);
+                            crate::debug_info!("STREAMING", "Client {} disconnected from session {}", client_id, session.id);
                             break;
                         }
                         }
                     }
                 }
 
-                // Receive output to broadcast to client
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
                         if client.send(msg).await.is_err() {
@@ -866,12 +1478,10 @@ impl StreamingServer {
                     }
                 }
 
-                // Send keepalive ping if enabled
                 _ = async {
                     if let Some(ref mut timer) = keepalive_timer {
                         timer.tick().await
                     } else {
-                        // Never fires if keepalive is disabled
                         std::future::pending::<tokio::time::Instant>().await
                     }
                 } => {
@@ -895,38 +1505,42 @@ impl StreamingServer {
 
     /// Handle a new TLS WebSocket connection (WSS)
     async fn handle_tls_connection(
-        &self,
+        self: &Arc<Self>,
         stream: tokio_rustls::server::TlsStream<TcpStream>,
+        params: &ConnectionParams,
     ) -> Result<()> {
         use tokio_tungstenite::accept_async as accept_async_tls;
 
-        // Try to reserve a client slot (atomic check-and-increment)
+        // Try to reserve a global client slot
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
+        let _global_guard = GlobalClientGuard { server: self };
 
-        // Ensure we decrement the count when we exit this function
-        let _guard = ClientGuard { server: self };
+        // Resolve session
+        let session = self.resolve_session(params)?;
+        session.try_add_client();
+        let _session_guard = SessionClientGuard {
+            session: Arc::clone(&session),
+        };
+
+        let read_only = params.readonly || self.config.default_read_only;
 
         // Upgrade TLS stream to WebSocket
         let ws_stream = accept_async_tls(stream)
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
-        // Create a TLS client (different from regular Client due to stream type)
         let client_id = uuid::Uuid::new_v4();
-        let read_only = self.config.default_read_only;
 
-        // Send initial connection message with full terminal state
-        let connect_msg = self.build_connect_message(&client_id.to_string());
+        // Send initial connection message
+        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
 
-        // Use futures to split and handle the WebSocket
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
 
         let (mut ws_tx, mut ws_rx) = ws_stream.split();
 
-        // Send connection message
         let msg_bytes = encode_server_message(&connect_msg)?;
         ws_tx
             .send(Message::Binary(msg_bytes.into()))
@@ -935,19 +1549,19 @@ impl StreamingServer {
 
         crate::debug_info!(
             "STREAMING",
-            "TLS Client {} connected (total: {})",
+            "TLS Client {} connected to session {} (total: {})",
             client_id,
+            session.id,
             self.client_count()
         );
 
-        // Subscribe to output broadcasts
-        let mut output_rx = self.broadcast_tx.subscribe();
+        // Subscribe to session broadcasts
+        let mut output_rx = session.broadcast_tx.subscribe();
 
-        // Clone terminal for screen refresh
-        let terminal_for_refresh = Arc::clone(&self.terminal);
-        let resize_tx = self.resize_tx.clone();
+        let terminal_for_refresh = Arc::clone(&session.terminal);
+        let resize_tx = session.resize_tx.clone();
 
-        // Setup keepalive timer if enabled
+        // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
         } else {
@@ -955,10 +1569,8 @@ impl StreamingServer {
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
 
-        // Handle client input and output
         loop {
             tokio::select! {
-                // Receive message from client (binary protobuf)
                 msg = ws_rx.next() => {
                     match msg {
                         Some(Ok(Message::Binary(data))) => {
@@ -969,9 +1581,7 @@ impl StreamingServer {
                                             if read_only {
                                                 continue;
                                             }
-
-                                            // Pull the latest PTY writer each time so restarts are handled
-                                            if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                            if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());
@@ -983,7 +1593,6 @@ impl StreamingServer {
                                             let _ = resize_tx.send((cols, rows));
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
-                                            // Send pong response
                                             if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
                                                 let _ = ws_tx.send(Message::Binary(bytes.into())).await;
                                             }
@@ -998,7 +1607,6 @@ impl StreamingServer {
                                                     None
                                                 }
                                             };
-
                                             if let Some(msg) = refresh_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
                                                     let _ = ws_tx.send(Message::Binary(bytes.into())).await;
@@ -1021,16 +1629,12 @@ impl StreamingServer {
                         Some(Ok(Message::Ping(data))) => {
                             let _ = ws_tx.send(Message::Pong(data)).await;
                         }
-                        Some(Ok(Message::Pong(_))) => {
-                            // Pong received
-                        }
+                        Some(Ok(Message::Pong(_))) => {}
                         Some(Ok(Message::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "TLS Client {} disconnected", client_id);
+                            crate::debug_info!("STREAMING", "TLS Client {} disconnected from session {}", client_id, session.id);
                             break;
                         }
-                        Some(Ok(Message::Frame(_))) => {
-                            // Raw frames, ignore
-                        }
+                        Some(Ok(Message::Frame(_))) => {}
                         Some(Err(e)) => {
                             crate::debug_error!("STREAMING", "TLS WebSocket error: {}", e);
                             break;
@@ -1038,7 +1642,6 @@ impl StreamingServer {
                     }
                 }
 
-                // Receive output to broadcast to client (binary protobuf)
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
                         if let Ok(bytes) = encode_server_message(&msg) {
@@ -1049,7 +1652,6 @@ impl StreamingServer {
                     }
                 }
 
-                // Send keepalive ping if enabled
                 _ = async {
                     if let Some(ref mut timer) = keepalive_timer {
                         timer.tick().await
@@ -1075,73 +1677,20 @@ impl StreamingServer {
         Ok(())
     }
 
-    /// Output broadcaster loop - forwards terminal output to all clients
-    ///
-    /// Implements time-based batching to reduce message frequency:
-    /// - Collects output within a 16ms window (one frame at 60fps)
-    /// - Flushes immediately if buffer exceeds 8KB
-    /// - Reduces WebSocket message overhead by 50-80% during burst output
-    async fn output_broadcaster_loop(&self) {
-        let mut rx = self.output_rx.lock().await;
-        let mut buffer = String::new();
-        let mut last_flush = tokio::time::Instant::now();
-
-        // Batching configuration
-        const BATCH_WINDOW: Duration = Duration::from_millis(16); // One frame at 60fps
-        const MAX_BATCH_SIZE: usize = 8192; // 8KB max before forced flush
-
-        loop {
-            tokio::select! {
-                // Check for shutdown signal
-                _ = self.shutdown.notified() => {
-                    crate::debug_info!("STREAMING", "Broadcaster received shutdown signal");
-                    // Flush any remaining data before exiting
-                    if !buffer.is_empty() {
-                        let msg = ServerMessage::output(buffer);
-                        let _ = self.broadcast_tx.send(msg);
-                    }
-                    break;
-                }
-                // Receive new output data
-                msg = rx.recv() => {
-                    match msg {
-                        Some(data) => {
-                            if !data.is_empty() {
-                                buffer.push_str(&data);
-
-                                // Flush immediately if buffer is large
-                                if buffer.len() > MAX_BATCH_SIZE {
-                                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                                    let _ = self.broadcast_tx.send(msg);
-                                    last_flush = tokio::time::Instant::now();
-                                }
-                            }
-                        }
-                        None => {
-                            // Channel closed, flush remaining and exit
-                            if !buffer.is_empty() {
-                                let msg = ServerMessage::output(buffer);
-                                let _ = self.broadcast_tx.send(msg);
-                            }
-                            break;
-                        }
-                    }
-                }
-                // Timeout - flush batched output
-                _ = tokio::time::sleep_until(last_flush + BATCH_WINDOW), if !buffer.is_empty() => {
-                    let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                    let _ = self.broadcast_tx.send(msg);
-                    last_flush = tokio::time::Instant::now();
-                }
-            }
-        }
-    }
+    // -- Backward-compatible send helpers (route to default session) --
 
     /// Send terminal output to all connected clients
     pub fn send_output(&self, data: String) -> Result<()> {
-        self.output_tx
-            .send(data)
-            .map_err(|_| StreamingError::ServerError("Output channel closed".to_string()))
+        if let Some(ref session) = self.default_session {
+            session
+                .output_tx
+                .send(data)
+                .map_err(|_| StreamingError::ServerError("Output channel closed".to_string()))
+        } else {
+            Err(StreamingError::ServerError(
+                "No default session".to_string(),
+            ))
+        }
     }
 
     /// Send a resize event to all clients
@@ -1212,40 +1761,44 @@ impl StreamingServer {
     }
 
     /// Shutdown the server and disconnect all clients
-    ///
-    /// This broadcasts a shutdown message to all clients and signals
-    /// the broadcaster loop to exit gracefully.
     pub fn shutdown(&self, reason: String) {
         crate::debug_info!("STREAMING", "Shutting down server: {}", reason);
         let msg = ServerMessage::shutdown(reason);
         self.broadcast(msg);
-        // Signal the broadcaster loop to exit
         self.shutdown.notify_waiters();
     }
 
     /// Handle Axum WebSocket connection
     #[cfg(feature = "streaming")]
-    async fn handle_axum_websocket(&self, socket: axum::extract::ws::WebSocket) -> Result<()> {
+    async fn handle_axum_websocket(
+        self: &Arc<Self>,
+        socket: axum::extract::ws::WebSocket,
+        params: ConnectionParams,
+    ) -> Result<()> {
         use axum::extract::ws::Message as AxumMessage;
         use futures_util::{SinkExt, StreamExt};
 
-        // Try to reserve a client slot (atomic check-and-increment)
+        // Try to reserve a global client slot
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
+        let _global_guard = GlobalClientGuard { server: self };
 
-        // Ensure we decrement the count when we exit this function
-        let _guard = ClientGuard { server: self };
+        // Resolve session
+        let session = self.resolve_session(&params)?;
+        session.try_add_client();
+        let _session_guard = SessionClientGuard {
+            session: Arc::clone(&session),
+        };
+
+        let read_only = params.readonly || self.config.default_read_only;
 
         let client_id = uuid::Uuid::new_v4();
 
-        // Split the WebSocket into sender and receiver
         let (mut ws_tx, mut ws_rx) = socket.split();
 
-        // Send initial connection message with full terminal state
-        let connect_msg = self.build_connect_message(&client_id.to_string());
-
-        // Send connection message as binary protobuf
+        // Send initial connection message
+        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
         let msg_bytes = encode_server_message(&connect_msg)?;
         ws_tx
             .send(AxumMessage::Binary(msg_bytes.into()))
@@ -1254,21 +1807,19 @@ impl StreamingServer {
 
         crate::debug_info!(
             "STREAMING",
-            "Axum WebSocket client {} connected (total: {})",
+            "Axum WebSocket client {} connected to session {} (total: {})",
             client_id,
+            session.id,
             self.client_count()
         );
 
-        let read_only = self.config.default_read_only;
+        // Subscribe to session broadcasts
+        let mut output_rx = session.broadcast_tx.subscribe();
 
-        // Subscribe to output broadcasts
-        let mut output_rx = self.broadcast_tx.subscribe();
+        let terminal_for_refresh = Arc::clone(&session.terminal);
+        let resize_tx = session.resize_tx.clone();
 
-        // Clone terminal for screen refresh
-        let terminal_for_refresh = Arc::clone(&self.terminal);
-        let resize_tx = self.resize_tx.clone();
-
-        // Setup keepalive timer if enabled
+        // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
         } else {
@@ -1276,14 +1827,11 @@ impl StreamingServer {
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
 
-        // Handle client input and output
         loop {
             tokio::select! {
-                // Receive message from client (binary protobuf)
                 msg = ws_rx.next() => {
                     match msg {
                         Some(Ok(AxumMessage::Binary(data))) => {
-                            // Parse client message from binary protobuf
                             match decode_client_message(&data) {
                                 Ok(client_msg) => {
                                     match client_msg {
@@ -1291,9 +1839,7 @@ impl StreamingServer {
                                             if read_only {
                                                 continue;
                                             }
-
-                                            // Always grab latest PTY writer (shell may have restarted)
-                                            if let Some(writer) = self.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                            if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
                                                     let _ = w.write_all(data.as_bytes());
@@ -1305,7 +1851,6 @@ impl StreamingServer {
                                             let _ = resize_tx.send((cols, rows));
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
-                                            // Send pong response
                                             if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
                                                 let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
                                             }
@@ -1320,7 +1865,6 @@ impl StreamingServer {
                                                     None
                                                 }
                                             };
-
                                             if let Some(msg) = refresh_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
                                                     let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
@@ -1338,17 +1882,12 @@ impl StreamingServer {
                             }
                         }
                         Some(Ok(AxumMessage::Text(_))) => {
-                            // Text messages not supported in binary protocol
                             crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
                         }
-                        Some(Ok(AxumMessage::Ping(_))) => {
-                            // Axum handles pings automatically
-                        }
-                        Some(Ok(AxumMessage::Pong(_))) => {
-                            // Pong received
-                        }
+                        Some(Ok(AxumMessage::Ping(_))) => {}
+                        Some(Ok(AxumMessage::Pong(_))) => {}
                         Some(Ok(AxumMessage::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "Axum Client {} disconnected", client_id);
+                            crate::debug_info!("STREAMING", "Axum Client {} disconnected from session {}", client_id, session.id);
                             break;
                         }
                         Some(Err(e)) => {
@@ -1358,7 +1897,6 @@ impl StreamingServer {
                     }
                 }
 
-                // Receive output to broadcast to client (binary protobuf)
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
                         if let Ok(bytes) = encode_server_message(&msg) {
@@ -1369,7 +1907,6 @@ impl StreamingServer {
                     }
                 }
 
-                // Send keepalive ping if enabled
                 _ = async {
                     if let Some(ref mut timer) = keepalive_timer {
                         timer.tick().await
@@ -1397,9 +1934,6 @@ impl StreamingServer {
 }
 
 /// HTTP Basic Authentication middleware for Axum
-///
-/// Validates Authorization header with Basic credentials against the provided config.
-/// Returns 401 Unauthorized with WWW-Authenticate header if authentication fails.
 #[cfg(feature = "streaming")]
 async fn basic_auth_middleware(
     req: axum::http::Request<axum::body::Body>,
@@ -1409,24 +1943,19 @@ async fn basic_auth_middleware(
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
 
-    // Extract Authorization header
     let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok());
 
     if let Some(auth_value) = auth_header {
-        // Check if it's Basic auth
         if let Some(credentials) = auth_value.strip_prefix("Basic ") {
-            // Decode base64 credentials
             if let Ok(decoded) = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 credentials.trim(),
             ) {
                 if let Ok(credentials_str) = String::from_utf8(decoded) {
-                    // Split username:password
                     if let Some((username, password)) = credentials_str.split_once(':') {
-                        // Verify credentials
                         if auth_config.verify(username, password) {
                             return next.run(req).await;
                         }
@@ -1436,7 +1965,6 @@ async fn basic_auth_middleware(
         }
     }
 
-    // Return 401 Unauthorized with WWW-Authenticate header
     (
         StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, "Basic realm=\"Terminal Server\"")],
@@ -1445,17 +1973,34 @@ async fn basic_auth_middleware(
         .into_response()
 }
 
-/// Axum WebSocket handler
+/// Axum WebSocket handler (extracts query params for multi-session)
 #[cfg(feature = "streaming")]
 async fn ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
+    axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
+    let params = ConnectionParams::from_query(&query);
     ws.on_upgrade(move |socket| async move {
-        if let Err(e) = server.handle_axum_websocket(socket).await {
+        if let Err(e) = server.handle_axum_websocket(socket, params).await {
             crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
         }
     })
+}
+
+/// Sessions list HTTP handler
+#[cfg(feature = "streaming")]
+async fn sessions_handler(
+    axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
+) -> impl axum::response::IntoResponse {
+    let sessions = server.sessions.list_sessions();
+    let max = server.config.max_sessions;
+    let available = max.saturating_sub(sessions.len());
+    axum::Json(serde_json::json!({
+        "sessions": sessions,
+        "max_sessions": max,
+        "available": available,
+    }))
 }
 
 impl std::fmt::Debug for StreamingServer {
@@ -1486,6 +2031,9 @@ mod tests {
         assert!(config.send_initial_screen);
         assert_eq!(config.keepalive_interval, 30);
         assert!(!config.default_read_only);
+        assert_eq!(config.max_sessions, 10);
+        assert_eq!(config.session_idle_timeout, 900);
+        assert!(config.presets.is_empty());
     }
 
     #[tokio::test]
@@ -1495,5 +2043,177 @@ mod tests {
 
         let tx = server.get_output_sender();
         assert!(tx.send("test".to_string()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_session_state_creation() {
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = SessionState::new("test-session".to_string(), terminal, None, true);
+        assert_eq!(session.id, "test-session");
+        assert_eq!(session.client_count(), 0);
+        assert!(session.created_at > 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_state_client_count() {
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = SessionState::new("sess".to_string(), terminal, None, true);
+
+        assert_eq!(session.client_count(), 0);
+        session.try_add_client();
+        assert_eq!(session.client_count(), 1);
+        session.try_add_client();
+        assert_eq!(session.client_count(), 2);
+        session.remove_client();
+        assert_eq!(session.client_count(), 1);
+        session.remove_client();
+        assert_eq!(session.client_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_state_idle_detection() {
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = SessionState::new("sess".to_string(), terminal, None, true);
+
+        // No clients, no disconnect time yet → not idle
+        assert!(!session.is_idle(Duration::from_secs(1)));
+
+        // Add and remove a client to set disconnect time
+        session.try_add_client();
+        session.remove_client();
+
+        // Just disconnected, should not be idle with long timeout
+        assert!(!session.is_idle(Duration::from_secs(3600)));
+
+        // Should be idle with zero timeout
+        assert!(session.is_idle(Duration::from_secs(0)));
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_basic() {
+        let registry = SessionRegistry::new(10);
+        assert_eq!(registry.session_count(), 0);
+
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = Arc::new(SessionState::new("s1".to_string(), terminal, None, true));
+
+        registry
+            .insert("s1".to_string(), Arc::clone(&session))
+            .unwrap();
+        assert_eq!(registry.session_count(), 1);
+
+        let retrieved = registry.get("s1");
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().id, "s1");
+
+        assert!(registry.get("s2").is_none());
+
+        let removed = registry.remove("s1");
+        assert!(removed.is_some());
+        assert_eq!(registry.session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_max_sessions() {
+        let registry = SessionRegistry::new(2);
+
+        for i in 0..2 {
+            let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+            let session = Arc::new(SessionState::new(format!("s{}", i), terminal, None, true));
+            registry.insert(format!("s{}", i), session).unwrap();
+        }
+
+        // Third insert should fail
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = Arc::new(SessionState::new("s2".to_string(), terminal, None, true));
+        let result = registry.insert("s2".to_string(), session);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::MaxSessionsReached
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_list_sessions() {
+        let registry = SessionRegistry::new(10);
+
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = Arc::new(SessionState::new("s1".to_string(), terminal, None, true));
+        registry.insert("s1".to_string(), session).unwrap();
+
+        let sessions = registry.list_sessions();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, "s1");
+        assert_eq!(sessions[0].cols, 80);
+        assert_eq!(sessions[0].rows, 24);
+    }
+
+    #[tokio::test]
+    async fn test_connection_params_defaults() {
+        let params = ConnectionParams::from_uri_query(None);
+        assert_eq!(params.session_id, "default");
+        assert!(!params.readonly);
+        assert!(params.preset.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_connection_params_parsing() {
+        let params =
+            ConnectionParams::from_uri_query(Some("session=my-sess&readonly=true&preset=python"));
+        assert_eq!(params.session_id, "my-sess");
+        assert!(params.readonly);
+        assert_eq!(params.preset, Some("python".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_connection_params_partial() {
+        let params = ConnectionParams::from_uri_query(Some("readonly=1"));
+        assert_eq!(params.session_id, "default");
+        assert!(params.readonly);
+        assert!(params.preset.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_info_serialization() {
+        let info = SessionInfo {
+            id: "test".to_string(),
+            created: 1234567890,
+            clients: 2,
+            idle_seconds: 0,
+            cols: 80,
+            rows: 24,
+            cwd: Some("/home/user".to_string()),
+        };
+
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"id\":\"test\""));
+        assert!(json.contains("\"clients\":2"));
+        assert!(json.contains("\"cols\":80"));
+    }
+
+    #[tokio::test]
+    async fn test_default_session_exists() {
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+
+        let params = ConnectionParams::from_uri_query(None);
+        let session = server.resolve_session(&params);
+        assert!(session.is_ok());
+        assert_eq!(session.unwrap().id, "default");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_nonexistent_session_no_factory() {
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+
+        let params = ConnectionParams::from_uri_query(Some("session=nonexistent"));
+        let result = server.resolve_session(&params);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::SessionNotFound(_)
+        ));
     }
 }

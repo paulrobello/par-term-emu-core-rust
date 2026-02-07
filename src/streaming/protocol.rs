@@ -73,6 +73,12 @@ pub enum ServerMessage {
         /// modifyOtherKeys mode (0=disabled, 1=special keys, 2=all keys)
         #[serde(skip_serializing_if = "Option::is_none")]
         modify_other_keys: Option<u32>,
+        /// Unique client identifier for this connection
+        #[serde(skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
+        /// Whether this connection is read-only
+        #[serde(skip_serializing_if = "Option::is_none")]
+        readonly: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
@@ -271,6 +277,8 @@ impl ServerMessage {
             faint_text_alpha: None,
             cwd: None,
             modify_other_keys: None,
+            client_id: None,
+            readonly: None,
         }
     }
 
@@ -291,6 +299,8 @@ impl ServerMessage {
             faint_text_alpha: None,
             cwd: None,
             modify_other_keys: None,
+            client_id: None,
+            readonly: None,
         }
     }
 
@@ -311,6 +321,8 @@ impl ServerMessage {
             faint_text_alpha: None,
             cwd: None,
             modify_other_keys: None,
+            client_id: None,
+            readonly: None,
         }
     }
 
@@ -332,6 +344,8 @@ impl ServerMessage {
             faint_text_alpha: None,
             cwd: None,
             modify_other_keys: None,
+            client_id: None,
+            readonly: None,
         }
     }
 
@@ -347,6 +361,8 @@ impl ServerMessage {
         faint_text_alpha: Option<f32>,
         cwd: Option<String>,
         modify_other_keys: Option<u32>,
+        client_id: Option<String>,
+        readonly: Option<bool>,
     ) -> Self {
         Self::Connected {
             cols,
@@ -358,6 +374,8 @@ impl ServerMessage {
             faint_text_alpha,
             cwd,
             modify_other_keys,
+            client_id,
+            readonly,
         }
     }
 
@@ -677,6 +695,8 @@ mod tests {
             Some(0.5),
             Some("/home/user".to_string()),
             Some(2),
+            None,
+            None,
         );
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""badge":"mybadge"#));

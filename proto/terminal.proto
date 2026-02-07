@@ -85,6 +85,8 @@ message Connected {
   optional float faint_text_alpha = 7;    // Dim text alpha (0.0-1.0)
   optional string cwd = 8;               // Current working directory
   optional uint32 modify_other_keys = 9;  // modifyOtherKeys mode (0-2)
+  optional string client_id = 10;         // Unique client identifier
+  optional bool readonly = 11;            // Whether this connection is read-only
 }
 
 // Full screen refresh response
