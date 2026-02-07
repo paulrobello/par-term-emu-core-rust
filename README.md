@@ -37,6 +37,14 @@ ws://host:port/ws                         # Connect to the default session
 - Idle session timeout: 900 seconds (15 minutes)
 - Max clients per server: 100 (unchanged)
 
+### New Streaming Events: Mode, Graphics, and Hyperlink
+
+Three new event types allow streaming clients to react to terminal state changes:
+
+- **ModeChanged**: Fires when terminal modes toggle (e.g., cursor visibility, mouse tracking, bracketed paste). Subscribe with `"mode"`.
+- **GraphicsAdded**: Fires when images are rendered via Sixel, iTerm2, or Kitty protocols. Includes row position and format. Subscribe with `"graphics"`.
+- **HyperlinkAdded**: Fires when OSC 8 hyperlinks are added. Includes URL, row, column, and optional link ID. Subscribe with `"hyperlink"`.
+
 **Breaking:** `StreamingConfig` has new required fields (`max_sessions`, `session_idle_timeout`, `presets`). `ServerMessage::Connected` now includes `client_id` and `readonly` fields.
 
 ## What's New in 0.32.0

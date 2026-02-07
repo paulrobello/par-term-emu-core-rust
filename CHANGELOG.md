@@ -32,6 +32,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **New Error Variants**: `MaxSessionsReached`, `SessionNotFound`, `InvalidPreset` in `StreamingError`
 - **Python Bindings**: `StreamingConfig` gains `max_sessions` and `session_idle_timeout` getters/setters; `decode_server_message` includes `client_id` and `readonly` in Connected dict
 - **New Public Exports**: `ConnectionParams`, `SessionFactory`, `SessionFactoryResult`, `SessionInfo`, `SessionRegistry`, `SessionState` from `streaming` module
+- **Streaming Protocol: ModeChanged Events**: New `ModeChanged` message notifies clients when terminal modes change
+  - Includes `mode` name (e.g., "cursor_visible", "mouse_tracking", "bracketed_paste") and `enabled` boolean
+  - New `EVENT_TYPE_MODE` subscription type; Python subscription name: `"mode"`
+- **Streaming Protocol: GraphicsAdded Events**: New `GraphicsAdded` message notifies clients when images are added to the terminal
+  - Includes `row` position and optional `format` ("sixel", "iterm2", "kitty")
+  - New `EVENT_TYPE_GRAPHICS` subscription type; Python subscription name: `"graphics"`
+- **Streaming Protocol: HyperlinkAdded Events**: New `HyperlinkAdded` message notifies clients when OSC 8 hyperlinks are added
+  - Includes `url`, `row`, `col`, and optional `id` from the OSC 8 protocol
+  - New `EVENT_TYPE_HYPERLINK` subscription type; Python subscription name: `"hyperlink"`
 
 ### Changed
 - **Breaking**: `StreamingConfig` has three new required fields: `max_sessions`, `session_idle_timeout`, `presets`
