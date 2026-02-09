@@ -283,6 +283,10 @@ pub struct PyGraphic {
     #[pyo3(get)]
     pub height: usize,
     #[pyo3(get)]
+    pub original_width: usize,
+    #[pyo3(get)]
+    pub original_height: usize,
+    #[pyo3(get)]
     pub scroll_offset_rows: usize,
     #[pyo3(get)]
     pub cell_dimensions: Option<(u32, u32)>,
@@ -359,8 +363,15 @@ impl PyGraphic {
 
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "Graphic(id={}, protocol='{}', position=({},{}), size={}x{})",
-            self.id, self.protocol, self.position.0, self.position.1, self.width, self.height
+            "Graphic(id={}, protocol='{}', position=({},{}), size={}x{}, original_size={}x{})",
+            self.id,
+            self.protocol,
+            self.position.0,
+            self.position.1,
+            self.width,
+            self.height,
+            self.original_width,
+            self.original_height
         ))
     }
 }
@@ -373,6 +384,8 @@ impl From<&crate::sixel::SixelGraphic> for PyGraphic {
             position: graphic.position,
             width: graphic.width,
             height: graphic.height,
+            original_width: graphic.width,
+            original_height: graphic.height,
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
             was_compressed: false,
@@ -389,6 +402,8 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
             position: graphic.position,
             width: graphic.width,
             height: graphic.height,
+            original_width: graphic.original_width,
+            original_height: graphic.original_height,
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
             was_compressed: graphic.was_compressed,
@@ -3565,6 +3580,8 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            original_width: 2,
+            original_height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3585,6 +3602,8 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            original_width: 2,
+            original_height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3604,6 +3623,8 @@ mod tests {
             position: (5, 10),
             width: 3,
             height: 3,
+            original_width: 3,
+            original_height: 3,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3630,6 +3651,8 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 1,
+            original_width: 2,
+            original_height: 1,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3649,6 +3672,8 @@ mod tests {
             position: (10, 20),
             width: 100,
             height: 50,
+            original_width: 100,
+            original_height: 50,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3670,6 +3695,8 @@ mod tests {
             position: (5, 10),
             width: 20,
             height: 30,
+            original_width: 20,
+            original_height: 30,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3708,6 +3735,8 @@ mod tests {
             position: (0, 0),
             width: 2,
             height: 2,
+            original_width: 2,
+            original_height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
@@ -3834,6 +3863,8 @@ mod tests {
             position: (0, 0),
             width: 4,
             height: 1,
+            original_width: 4,
+            original_height: 1,
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,

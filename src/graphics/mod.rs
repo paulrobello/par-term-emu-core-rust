@@ -77,10 +77,14 @@ pub struct TerminalGraphic {
     pub protocol: GraphicProtocol,
     /// Position in terminal (col, row)
     pub position: (usize, usize),
-    /// Width in pixels
+    /// Width in pixels (may change during animation)
     pub width: usize,
-    /// Height in pixels
+    /// Height in pixels (may change during animation)
     pub height: usize,
+    /// Original width in pixels as decoded from source image
+    pub original_width: usize,
+    /// Original height in pixels as decoded from source image
+    pub original_height: usize,
     /// RGBA pixel data (Arc for Kitty sharing)
     pub pixels: Arc<Vec<u8>>,
     /// Cell dimensions (cell_width, cell_height) for rendering
@@ -125,6 +129,8 @@ impl TerminalGraphic {
             position,
             width,
             height,
+            original_width: width,
+            original_height: height,
             pixels: Arc::new(pixels),
             cell_dimensions: None,
             scroll_offset_rows: 0,
@@ -155,6 +161,8 @@ impl TerminalGraphic {
             position,
             width,
             height,
+            original_width: width,
+            original_height: height,
             pixels,
             cell_dimensions: None,
             scroll_offset_rows: 0,
@@ -754,6 +762,37 @@ mod tests {
         assert_eq!(graphic.position, (5, 10));
         assert_eq!(graphic.width, 10);
         assert_eq!(graphic.height, 1);
+        assert_eq!(graphic.original_width, 10);
+        assert_eq!(graphic.original_height, 1);
+    }
+
+    #[test]
+    fn test_original_dimensions_preserved_after_mutation() {
+        let pixels = vec![0u8; 200 * 100 * 4];
+        let mut graphic = TerminalGraphic::new(1, GraphicProtocol::Kitty, (0, 0), 200, 100, pixels);
+        assert_eq!(graphic.original_width, 200);
+        assert_eq!(graphic.original_height, 100);
+
+        // Simulate animation frame changing dimensions
+        graphic.width = 150;
+        graphic.height = 75;
+
+        // Original dimensions should remain unchanged
+        assert_eq!(graphic.original_width, 200);
+        assert_eq!(graphic.original_height, 100);
+        assert_eq!(graphic.width, 150);
+        assert_eq!(graphic.height, 75);
+    }
+
+    #[test]
+    fn test_original_dimensions_with_shared_pixels() {
+        let pixels = Arc::new(vec![0u8; 64 * 32 * 4]);
+        let graphic =
+            TerminalGraphic::with_shared_pixels(1, GraphicProtocol::Kitty, (0, 0), 64, 32, pixels);
+        assert_eq!(graphic.original_width, 64);
+        assert_eq!(graphic.original_height, 32);
+        assert_eq!(graphic.width, 64);
+        assert_eq!(graphic.height, 32);
     }
 
     #[test]

@@ -33,6 +33,39 @@ def test_sixel_raster_attributes_and_palette_parsing():
     assert a == 255 and r > 200 and g_ < 50 and b < 50
 
 
+def test_sixel_original_dimensions_exposed():
+    """Verify that original_width and original_height are exposed on Graphic objects."""
+
+    term = Terminal(80, 24)
+
+    # Build a 4x12 image (2 sixel characters wide, 2 sixel rows tall)
+    sixel = (
+        "\x1bPq"  # DCS Sixel start
+        '"1;1;4;12'  # raster: pan=1, pad=1, width=4, height=12
+        "#0;2;0;100;0"  # define color 0 = green (RGB 0%,100%,0%)
+        "#0"  # select color 0
+        "~~~~"  # four columns filled (first 6 rows)
+        "-"  # new line (move down 6 pixels)
+        "~~~~"  # four columns filled (next 6 rows)
+        "\x1b\\"  # ST
+    )
+
+    term.process_str(sixel)
+
+    assert term.graphics_count() >= 1
+    g = term.graphics_at_row(0)[0]
+
+    # Current dimensions should match original
+    assert g.width == 4
+    assert g.height == 12
+    assert g.original_width == 4
+    assert g.original_height == 12
+
+    # Verify repr includes original_size
+    repr_str = repr(g)
+    assert "original_size=4x12" in repr_str
+
+
 def test_sixel_limits_python_api():
     """Ensure Python get_sixel_limits/set_sixel_limits work and clamp safely."""
 
