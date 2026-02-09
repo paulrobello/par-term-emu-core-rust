@@ -15,6 +15,22 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### Image Metadata Serialization for Session Persistence
+
+Graphics state can now be serialized and restored for session persistence. All active placements, scrollback graphics, and animation state are captured in a versioned JSON snapshot with base64-encoded pixel data. External file references are also supported for compact on-disk storage.
+
+```python
+# Save graphics state
+json_str = terminal.export_graphics_json()
+with open("session_graphics.json", "w") as f:
+    f.write(json_str)
+
+# Restore graphics state in a new session
+with open("session_graphics.json") as f:
+    count = terminal.import_graphics_json(f.read())
+    print(f"Restored {count} graphics")
+```
+
 ### Image Placement Metadata
 
 All graphics protocols now expose unified `ImagePlacement` metadata on `Graphic.placement`, abstracting protocol-specific placement parameters so frontends can implement inline/cover/contain rendering. The Kitty protocol exposes columns/rows sizing, z-index for layering, and sub-cell offsets. The iTerm2 protocol exposes width/height with unit support (cells, pixels, percent, auto) and `preserveAspectRatio`. New `ImagePlacement` and `ImageDimension` classes are importable from the package.

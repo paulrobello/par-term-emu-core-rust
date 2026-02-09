@@ -15,9 +15,12 @@ pub mod animation;
 pub mod iterm;
 pub mod kitty;
 pub mod placeholder;
+pub mod serialization;
 
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
 
 // Re-export for convenience
 pub use animation::{Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode};
@@ -25,9 +28,10 @@ pub use iterm::ITermParser;
 pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
 };
+pub use serialization::{GraphicsSnapshot, ImageDataRef, SerializableGraphic};
 
 /// Image display mode for rendering
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImageDisplayMode {
     /// Render inline within the terminal grid (default)
     #[default]
@@ -47,7 +51,7 @@ impl ImageDisplayMode {
 }
 
 /// Unit for image dimension sizing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImageSizeUnit {
     /// Automatic sizing based on image dimensions (default)
     #[default]
@@ -73,7 +77,7 @@ impl ImageSizeUnit {
 }
 
 /// Image dimension with unit
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ImageDimension {
     /// Numeric value (0 means auto)
     pub value: f64,
@@ -130,7 +134,7 @@ impl ImageDimension {
 ///
 /// Abstracts placement info from Kitty and iTerm2 so the frontend can implement
 /// inline/cover/contain rendering without protocol-specific logic.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct ImagePlacement {
     /// Display mode (inline vs download)
     pub display_mode: ImageDisplayMode,
@@ -172,7 +176,7 @@ impl ImagePlacement {
 }
 
 /// Graphics protocol identifier
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphicProtocol {
     Sixel,
     ITermInline, // OSC 1337

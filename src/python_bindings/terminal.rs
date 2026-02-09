@@ -1555,6 +1555,48 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Export all graphics metadata as a JSON string for session persistence
+    ///
+    /// Serializes all active placements, scrollback graphics, and animation state
+    /// into a JSON string. Image pixel data is base64-encoded inline.
+    ///
+    /// Returns:
+    ///     JSON string containing the serialized graphics snapshot
+    ///
+    /// Example:
+    ///     >>> json_str = terminal.export_graphics_json()
+    ///     >>> with open("session_graphics.json", "w") as f:
+    ///     ...     f.write(json_str)
+    fn export_graphics_json(&self) -> PyResult<String> {
+        self.inner
+            .graphics_store()
+            .export_json()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Import graphics metadata from a JSON string to restore session state
+    ///
+    /// Deserializes graphics from JSON and restores active placements, scrollback
+    /// graphics, and animation state. Existing graphics are cleared first.
+    ///
+    /// Args:
+    ///     json: JSON string from a previous export_graphics_json() call
+    ///
+    /// Returns:
+    ///     Number of graphics restored
+    ///
+    /// Example:
+    ///     >>> with open("session_graphics.json") as f:
+    ///     ...     json_str = f.read()
+    ///     >>> count = terminal.import_graphics_json(json_str)
+    ///     >>> print(f"Restored {count} graphics")
+    fn import_graphics_json(&mut self, json: &str) -> PyResult<usize> {
+        self.inner
+            .graphics_store_mut()
+            .import_json(json)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Update all Kitty graphics animations and trigger refresh if frames changed
     ///
     /// This method should be called regularly (e.g., 60Hz) to advance animation frames.

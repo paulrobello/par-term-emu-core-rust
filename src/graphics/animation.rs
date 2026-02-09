@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
+
 /// Animation frame data
 #[derive(Debug, Clone)]
 pub struct AnimationFrame {
@@ -66,7 +68,7 @@ impl AnimationFrame {
 }
 
 /// Frame composition mode
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum CompositionMode {
     /// Alpha blend with previous frame
     #[default]
@@ -87,7 +89,7 @@ impl CompositionMode {
 }
 
 /// Animation state
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum AnimationState {
     /// Animation is stopped (default)
     #[default]
@@ -99,7 +101,7 @@ pub enum AnimationState {
 }
 
 /// Animation playback control (per Kitty graphics protocol spec)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AnimationControl {
     /// Stop the animation (s=1)
     Stop,
