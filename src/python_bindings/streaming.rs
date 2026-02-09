@@ -1011,6 +1011,16 @@ pub fn decode_server_message<'py>(
             dict.set_item("col", col)?;
             dict.set_item("id", id)?;
         }
+        ServerMessage::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } => {
+            dict.set_item("type", "user_var_changed")?;
+            dict.set_item("name", name)?;
+            dict.set_item("value", value)?;
+            dict.set_item("old_value", old_value)?;
+        }
     }
 
     Ok(dict)
@@ -1087,6 +1097,7 @@ pub fn encode_client_message<'py>(
                     "mode" => Some(EventType::Mode),
                     "graphics" => Some(EventType::Graphics),
                     "hyperlink" => Some(EventType::Hyperlink),
+                    "user_var" => Some(EventType::UserVar),
                     _ => None,
                 })
                 .collect();
@@ -1162,6 +1173,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Mode => "mode",
                     crate::streaming::protocol::EventType::Graphics => "graphics",
                     crate::streaming::protocol::EventType::Hyperlink => "hyperlink",
+                    crate::streaming::protocol::EventType::UserVar => "user_var",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

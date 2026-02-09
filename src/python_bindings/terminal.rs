@@ -2527,6 +2527,18 @@ impl PyTerminal {
                         map.insert("text".to_string(), trigger_match.text.clone());
                         map.insert("timestamp".to_string(), trigger_match.timestamp.to_string());
                     }
+                    TerminalEvent::UserVarChanged {
+                        name,
+                        value,
+                        old_value,
+                    } => {
+                        map.insert("type".to_string(), "user_var_changed".to_string());
+                        map.insert("name".to_string(), name.clone());
+                        map.insert("value".to_string(), value.clone());
+                        if let Some(old) = old_value {
+                            map.insert("old_value".to_string(), old.clone());
+                        }
+                    }
                 }
                 map
             })
@@ -2539,7 +2551,7 @@ impl PyTerminal {
     ///     kinds: Optional list of event kinds to receive (strings).
     ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
     ///            graphics_added, hyperlink_added, dirty_region, cwd_changed,
-    ///            trigger_matched.
+    ///            trigger_matched, user_var_changed.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         use crate::terminal::TerminalEventKind;
@@ -2556,6 +2568,7 @@ impl PyTerminal {
                     "dirty_region" => Some(TerminalEventKind::DirtyRegion),
                     "cwd_changed" => Some(TerminalEventKind::CwdChanged),
                     "trigger_matched" => Some(TerminalEventKind::TriggerMatched),
+                    "user_var_changed" => Some(TerminalEventKind::UserVarChanged),
                     _ => None,
                 })
                 .collect()
@@ -2650,6 +2663,18 @@ impl PyTerminal {
                         map.insert("end_col".to_string(), trigger_match.end_col.to_string());
                         map.insert("text".to_string(), trigger_match.text.clone());
                         map.insert("timestamp".to_string(), trigger_match.timestamp.to_string());
+                    }
+                    TerminalEvent::UserVarChanged {
+                        name,
+                        value,
+                        old_value,
+                    } => {
+                        map.insert("type".to_string(), "user_var_changed".to_string());
+                        map.insert("name".to_string(), name.clone());
+                        map.insert("value".to_string(), value.clone());
+                        if let Some(old) = old_value {
+                            map.insert("old_value".to_string(), old.clone());
+                        }
                     }
                 }
                 map
@@ -5205,6 +5230,44 @@ impl PyTerminal {
         }
 
         Ok(result)
+    }
+
+    /// Get a user variable value by name
+    ///
+    /// User variables are set via OSC 1337 SetUserVar sequences from
+    /// shell integration scripts. They report session information like
+    /// hostname and other custom key-value pairs.
+    ///
+    /// Args:
+    ///     name: Variable name (e.g., "hostname", "currentDir")
+    ///
+    /// Returns:
+    ///     Variable value as string, or None if not set
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     # After shell sends: OSC 1337 ; SetUserVar=hostname=<base64> ST
+    ///     host = term.get_user_var("hostname")
+    ///     ```
+    fn get_user_var(&self, name: &str) -> PyResult<Option<String>> {
+        Ok(self.inner.get_user_var(name).map(|s| s.to_string()))
+    }
+
+    /// Get all user variables as a dictionary
+    ///
+    /// Returns all user variables set via OSC 1337 SetUserVar sequences.
+    ///
+    /// Returns:
+    ///     Dictionary mapping variable names to their string values
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     user_vars = term.get_user_vars()  # e.g., {"hostname": "server1"}
+    ///     ```
+    fn get_user_vars(&self) -> PyResult<HashMap<String, String>> {
+        Ok(self.inner.get_user_vars().clone())
     }
 }
 

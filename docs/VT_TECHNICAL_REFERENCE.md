@@ -953,6 +953,32 @@ OSC 1337 ; File=inline=1:iVBORw0KGgoAAAA... ST
 
 **Note:** Graphics are converted to RGBA pixel data and stored in the unified `GraphicsStore` alongside Sixel and Kitty graphics.
 
+### iTerm2 User Variables (OSC 1337 SetUserVar)
+
+`OSC 1337 ; SetUserVar=<name>=<base64_value> ST`
+
+**Implementation:** `src/terminal/sequences/osc.rs` (handle_set_user_var)
+
+Shell integration scripts use this sequence to report session metadata such as hostname, username, and current directory. The value is base64-encoded UTF-8 text.
+
+**Behavior:**
+1. Payload is split on the first `=` to extract name and encoded value
+2. Value is base64-decoded (STANDARD alphabet) and validated as UTF-8
+3. Stored in `session_variables.custom` HashMap on the terminal
+4. A `UserVarChanged` event is emitted if the value actually changed (includes old value)
+5. No event is emitted if the new value equals the existing value
+
+**Example shell script:**
+```bash
+printf '\e]1337;SetUserVar=%s=%s\a' "hostname" "$(printf '%s' "$(hostname)" | base64 | tr -d '\n')"
+```
+
+**Error Handling:**
+- Missing `=` separator: silently ignored
+- Empty variable name: silently ignored
+- Invalid base64: silently ignored
+- Invalid UTF-8 after decoding: silently ignored
+
 ---
 
 ## DCS Sequences
@@ -1340,6 +1366,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
 | OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | Percent-decoded paths, username, hostname, session variable sync, CWD history |
 | OSC 9;4 Progress Bar | ✅ Full | `src/terminal/sequences/osc.rs`, `src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
+| OSC 1337 SetUserVar | ✅ Full | `src/terminal/sequences/osc.rs` | Shell integration user variables, base64 decoding, change events |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
 
 ### Unicode Support

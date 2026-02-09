@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -71,6 +71,8 @@ pub mod server_message {
         GraphicsAdded(super::GraphicsAdded),
         #[prost(message, tag = "17")]
         HyperlinkAdded(super::HyperlinkAdded),
+        #[prost(message, tag = "18")]
+        UserVarChanged(super::UserVarChanged),
     }
 }
 /// Terminal output data (very high frequency)
@@ -261,6 +263,19 @@ pub struct HyperlinkAdded {
     #[prost(string, optional, tag = "4")]
     pub id: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// User variable changed (OSC 1337 SetUserVar)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UserVarChanged {
+    /// Variable name
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    /// New value (base64-decoded)
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+    /// Previous value if it existed
+    #[prost(string, optional, tag = "3")]
+    pub old_value: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(oneof = "client_message::Message", tags = "1, 2, 3, 4, 5")]
@@ -325,6 +340,7 @@ pub enum EventType {
     Mode = 9,
     Graphics = 10,
     Hyperlink = 11,
+    UserVar = 12,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -345,6 +361,7 @@ impl EventType {
             Self::Mode => "EVENT_TYPE_MODE",
             Self::Graphics => "EVENT_TYPE_GRAPHICS",
             Self::Hyperlink => "EVENT_TYPE_HYPERLINK",
+            Self::UserVar => "EVENT_TYPE_USER_VAR",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -362,6 +379,7 @@ impl EventType {
             "EVENT_TYPE_MODE" => Some(Self::Mode),
             "EVENT_TYPE_GRAPHICS" => Some(Self::Graphics),
             "EVENT_TYPE_HYPERLINK" => Some(Self::Hyperlink),
+            "EVENT_TYPE_USER_VAR" => Some(Self::UserVar),
             _ => None,
         }
     }

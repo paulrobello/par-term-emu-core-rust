@@ -629,6 +629,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `mode_changed` | `mode: string`, `enabled: bool` | Terminal mode changed (cursor visibility, mouse tracking, etc.) |
 | `graphics_added` | `row: uint32`, `format?: string` | Graphics/image added (Sixel, iTerm2, Kitty) |
 | `hyperlink_added` | `url: string`, `row: uint32`, `col: uint32`, `id?: string` | Hyperlink added (OSC 8) |
+| `user_var_changed` | `name: string`, `value: string`, `old_value?: string` | User variable changed (OSC 1337 SetUserVar) |
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |

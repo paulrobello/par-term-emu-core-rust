@@ -15,6 +15,21 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### OSC 1337 SetUserVar Support
+
+Shell integration scripts can now send user variables via `OSC 1337 SetUserVar=<name>=<base64_value>` sequences. Variables are base64-decoded, stored on the terminal, and accessible via a dedicated API. A `UserVarChanged` event is emitted when values change, enabling features like remote host detection, automatic profile switching, and hostname display.
+
+```python
+# After shell sends: printf '\e]1337;SetUserVar=%s=%s\a' "hostname" "$(printf 'server1' | base64)"
+host = terminal.get_user_var("hostname")     # "server1"
+all_vars = terminal.get_user_vars()           # {"hostname": "server1", ...}
+
+# Event-driven: poll for changes
+for event in terminal.poll_events():
+    if event["type"] == "user_var_changed":
+        print(f"{event['name']} = {event['value']}")
+```
+
 ### Image Metadata Serialization for Session Persistence
 
 Graphics state can now be serialized and restored for session persistence. All active placements, scrollback graphics, and animation state are captured in a versioned JSON snapshot with base64-encoded pixel data. External file references are also supported for compact on-disk storage.
