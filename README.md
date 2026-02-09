@@ -13,6 +13,12 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New (Unreleased)
+
+### Kitty Graphics Compression Support
+
+The Kitty graphics protocol now supports zlib-compressed image payloads (`o=z` parameter). Compressed data is automatically decompressed before pixel decoding, reducing data sent over the PTY. A new `was_compressed` flag on the `Graphic` class allows frontends to track compression usage for diagnostics.
+
 ## What's New in 0.33.0
 
 ### Multi-Session Streaming Server
@@ -858,7 +864,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 
 - **Sixel Graphics** - DEC VT340 compatible bitmap graphics with half-block rendering
 - **iTerm2 Inline Images** - OSC 1337 protocol for PNG, JPEG, GIF images
-- **Kitty Graphics Protocol** - APC G protocol with image reuse, animations, and advanced placement
+- **Kitty Graphics Protocol** - APC G protocol with image reuse, animations, zlib compression (`o=z`), and advanced placement
 - **Unicode Placeholders** - Virtual placements insert U+10EEEE characters for inline image display
 - **Unified Graphics Store** - Protocol-agnostic storage with scrollback support
 - **Animation Support** - Frame-based animations with timing and composition control
