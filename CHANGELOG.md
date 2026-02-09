@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Image Metadata Serialization**: Support for persisting and restoring graphics state with terminal sessions (#18)
+  - New `serialization` module with `SerializableGraphic`, `GraphicsSnapshot`, and `ImageDataRef` types
+  - `ImageDataRef` supports inline base64-encoded pixel data or external file path references for compact storage
+  - `GraphicsStore.export_snapshot()` / `import_snapshot()` for full graphics state round-trip (placements, scrollback, animations)
+  - `GraphicsStore.export_json()` / `import_json()` convenience methods for JSON serialization
+  - Python `Terminal.export_graphics_json()` and `Terminal.import_graphics_json(json)` bindings
+  - Added `Serialize`/`Deserialize` derives to `GraphicProtocol`, `ImageDisplayMode`, `ImageSizeUnit`, `ImageDimension`, `ImagePlacement`, `CompositionMode`, `AnimationState`, `AnimationControl`
+  - Version-tagged snapshots (`GraphicsSnapshot.version`) for forward compatibility
 - **Image Placement Metadata**: Parse and expose unified image placement modes from graphics protocols (#16)
   - New `ImagePlacement` struct with display mode, sizing, z-index, and sub-cell offset fields
   - New `ImageDimension` struct with unit support (auto, cells, pixels, percent)

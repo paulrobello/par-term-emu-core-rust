@@ -346,6 +346,8 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `graphics_count() -> int`: Get count of graphics currently displayed
 - `graphics_at_row(row: int) -> list[Graphic]`: Get graphics at specific row
 - `clear_graphics()`: Clear all graphics
+- `export_graphics_json() -> str`: Export all graphics metadata as JSON for session persistence (includes placements, scrollback, animations with base64-encoded pixel data)
+- `import_graphics_json(json: str) -> int`: Import graphics from JSON string (clears existing graphics first, returns count restored)
 - `graphics_store() -> GraphicsStore`: Get immutable access to graphics store (Rust API only)
 - `graphics_store_mut() -> GraphicsStore`: Get mutable access to graphics store (Rust API only)
 
