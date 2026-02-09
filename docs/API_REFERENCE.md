@@ -809,8 +809,10 @@ Protocol-agnostic graphic representation (Sixel, iTerm2, or Kitty).
 - `id: int`: Unique placement ID
 - `protocol: str`: Graphics protocol used (`"sixel"`, `"iterm"`, or `"kitty"`)
 - `position: tuple[int, int]`: Position in terminal `(col, row)`
-- `width: int`: Width in pixels
-- `height: int`: Height in pixels
+- `width: int`: Width in pixels (may change during animation)
+- `height: int`: Height in pixels (may change during animation)
+- `original_width: int`: Original width in pixels as decoded from source image (immutable, for aspect ratio preservation)
+- `original_height: int`: Original height in pixels as decoded from source image (immutable, for aspect ratio preservation)
 - `scroll_offset_rows: int`: Rows scrolled off visible area (for partial rendering)
 - `cell_dimensions: tuple[int, int] | None`: Cell dimensions `(cell_width, cell_height)` for rendering
 - `was_compressed: bool`: Whether the original data was compressed (e.g., Kitty `o=z` zlib). Useful for diagnostics/logging.

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Original Image Dimensions**: All graphics protocols (Sixel, iTerm2, Kitty) now expose `original_width` and `original_height` on `TerminalGraphic` and Python `Graphic` objects
+  - These preserve the original decoded pixel dimensions even when `width`/`height` change during animation
+  - Enables frontends to calculate correct aspect ratios when scaling images to fit terminal cells
+  - Python `Graphic.__repr__()` now includes `original_size=WxH`
 - **Kitty Graphics Compression (o=z)**: Support for zlib-compressed image data in the Kitty graphics protocol
   - Parses the `o=z` transmission parameter to detect zlib-compressed payloads
   - Automatically decompresses data before pixel decoding (transparent to consumers)

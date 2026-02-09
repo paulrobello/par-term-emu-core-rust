@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### Original Image Dimensions for Aspect Ratio Preservation
+
+All graphics protocols (Sixel, iTerm2, Kitty) now expose `original_width` and `original_height` on `Graphic` objects. These fields preserve the original decoded pixel dimensions even when `width`/`height` change during animation, enabling frontends to calculate correct aspect ratios when scaling images to fit terminal cells.
+
 ### Kitty Graphics Compression Support
 
 The Kitty graphics protocol now supports zlib-compressed image payloads (`o=z` parameter). Compressed data is automatically decompressed before pixel decoding, reducing data sent over the PTY. A new `was_compressed` flag on the `Graphic` class allows frontends to track compression usage for diagnostics.
