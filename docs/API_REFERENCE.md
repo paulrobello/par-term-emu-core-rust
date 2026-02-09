@@ -167,6 +167,20 @@ term.set_badge_session_variable("hostname", "server1")
 badge = term.evaluate_badge()  # "alice@server1"
 ```
 
+#### User Variables (OSC 1337 SetUserVar)
+- `get_user_var(name: str) -> str | None`: Get a user variable set via OSC 1337 SetUserVar
+- `get_user_vars() -> dict[str, str]`: Get all user variables as a dictionary
+
+User variables are set automatically when the terminal processes `OSC 1337 ; SetUserVar=<name>=<base64_value> ST` sequences from shell integration scripts. They are also accessible as badge session variables.
+
+**Example:**
+```python
+# After shell sends SetUserVar sequences:
+host = term.get_user_var("hostname")   # "server1"
+user = term.get_user_var("username")   # "alice"
+all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "alice"}
+```
+
 #### Cursor Control
 - `cursor_position() -> tuple[int, int]`: Get cursor position (col, row)
 - `cursor_visible() -> bool`: Check if cursor is visible
@@ -475,6 +489,7 @@ Extended shell integration features beyond basic OSC 133:
 - `set_max_cwd_history(max: int)`: Set CWD history limit
 - `record_cwd_change(cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change
 - `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
+- `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
 
 ### Clipboard Extended
 
@@ -595,6 +610,11 @@ VT compliance testing:
 - `clear_event_subscription()`: Clear event filter (all events are returned)
 - `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter
 - `poll_cwd_events() -> list[dict]`: Drain only CWD change events (fields: new_cwd, old_cwd?, hostname?, username?, timestamp)
+
+**Event types returned by `poll_events()` / `poll_subscribed_events()`:**
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`
+
+The `user_var_changed` event dict contains: `name`, `value`, and optionally `old_value` (when updating an existing variable).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
 - `debug_info() -> str`: Get debug information string
 - `detect_urls(text: str) -> list[DetectedItem]`: Detect URLs in text

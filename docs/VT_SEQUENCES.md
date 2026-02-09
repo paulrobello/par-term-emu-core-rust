@@ -345,6 +345,12 @@ ConEmu/Windows Terminal style progress indicator:
 
 - `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - iTerm2 inline images
 
+### iTerm2 User Variables (OSC 1337)
+
+- `OSC 1337;SetUserVar=<name>=<base64_value> ST` - Set a user variable (value is base64-encoded)
+
+Shell integration scripts use this to report session information (hostname, username, etc.). Variables are decoded and stored on the terminal, accessible via `get_user_var()` / `get_user_vars()`. A `UserVarChanged` event is emitted when a variable changes.
+
 **Security:** Notifications, color changes, hyperlinks, and Sixel graphics can be disabled via `disable_insecure_sequences`.
 
 > See [VT_TECHNICAL_REFERENCE.md#osc-sequences](VT_TECHNICAL_REFERENCE.md#osc-sequences) for detailed format specifications and security controls.

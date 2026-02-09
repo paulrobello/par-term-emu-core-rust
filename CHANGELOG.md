@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OSC 1337 SetUserVar**: Parse `SetUserVar=<name>=<base64_value>` sequences from shell integration scripts (#25)
+  - Base64-decode values and store as user variables in terminal session state
+  - New `get_user_var(name)` and `get_user_vars()` API (Rust and Python)
+  - `UserVarChanged` terminal event emitted when a variable changes (includes old value)
+  - User variables are accessible via badge session variables for format evaluation
+  - New `user_var_changed` streaming protocol message and `user_var` event type
+  - Python `poll_events()` / `poll_subscribed_events()` return `user_var_changed` event dicts
+  - 9 Rust unit tests, 3 streaming protocol tests, 10 Python integration tests
 - **Image Metadata Serialization**: Support for persisting and restoring graphics state with terminal sessions (#18)
   - New `serialization` module with `SerializableGraphic`, `GraphicsSnapshot`, and `ImageDataRef` types
   - `ImageDataRef` supports inline base64-encoded pixel data or external file path references for compact storage
