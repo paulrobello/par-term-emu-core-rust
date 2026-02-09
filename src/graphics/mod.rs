@@ -105,6 +105,8 @@ pub struct TerminalGraphic {
     pub relative_x_offset: i32,
     /// Y offset relative to parent placement (in pixels)
     pub relative_y_offset: i32,
+    /// Whether the original data was compressed (for diagnostics)
+    pub was_compressed: bool,
 }
 
 impl TerminalGraphic {
@@ -134,6 +136,7 @@ impl TerminalGraphic {
             parent_placement_id: None,
             relative_x_offset: 0,
             relative_y_offset: 0,
+            was_compressed: false,
         }
     }
 
@@ -163,6 +166,7 @@ impl TerminalGraphic {
             parent_placement_id: None,
             relative_x_offset: 0,
             relative_y_offset: 0,
+            was_compressed: false,
         }
     }
 

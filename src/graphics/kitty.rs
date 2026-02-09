@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+
+use flate2::read::ZlibDecoder;
 
 use crate::graphics::{
     next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
@@ -87,6 +90,24 @@ impl KittyMedium {
     }
 }
 
+/// Kitty compression format (o= parameter)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum KittyCompression {
+    #[default]
+    None, // No compression (default)
+    Zlib, // zlib/deflate compression (o=z)
+}
+
+impl KittyCompression {
+    /// Parse compression character
+    pub fn from_char(c: char) -> Option<Self> {
+        match c {
+            'z' => Some(KittyCompression::Zlib),
+            _ => None,
+        }
+    }
+}
+
 /// Kitty delete target
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KittyDeleteTarget {
@@ -142,6 +163,8 @@ pub struct KittyParser {
     pub x_offset: Option<u32>,
     /// Y offset within cell
     pub y_offset: Option<u32>,
+    /// Compression format (o= parameter)
+    pub compression: KittyCompression,
     /// More chunks expected
     pub more_chunks: bool,
     /// Accumulated data chunks
@@ -300,6 +323,14 @@ impl KittyParser {
                             self.relative_y_offset = value.parse().ok();
                         }
                     }
+                    "o" => {
+                        // Compression format
+                        if let Some(c) = value.chars().next() {
+                            if let Some(comp) = KittyCompression::from_char(c) {
+                                self.compression = comp;
+                            }
+                        }
+                    }
                     "z" => {
                         // Frame delay in milliseconds (for animations)
                         self.frame_delay_ms = value.parse().ok();
@@ -341,9 +372,32 @@ impl KittyParser {
         }
     }
 
-    /// Get accumulated data
+    /// Get accumulated data, decompressing if necessary
     pub fn get_data(&self) -> Vec<u8> {
-        self.data_chunks.concat()
+        let raw = self.data_chunks.concat();
+        if self.compression == KittyCompression::Zlib {
+            match Self::decompress_zlib(&raw) {
+                Ok(decompressed) => decompressed,
+                Err(_) => raw, // Fall back to raw data on decompression failure
+            }
+        } else {
+            raw
+        }
+    }
+
+    /// Decompress zlib-compressed data
+    fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+        let mut decoder = ZlibDecoder::new(data);
+        let mut decompressed = Vec::new();
+        decoder
+            .read_to_end(&mut decompressed)
+            .map_err(|e| GraphicsError::KittyError(format!("Zlib decompression failed: {}", e)))?;
+        Ok(decompressed)
+    }
+
+    /// Check if data was compressed
+    pub fn is_compressed(&self) -> bool {
+        self.compression != KittyCompression::None
     }
 
     /// Build a TerminalGraphic from parsed data
@@ -441,6 +495,8 @@ impl KittyParser {
                     return Err(GraphicsError::KittyError("No image data".to_string()));
                 }
 
+                let compressed = self.is_compressed();
+
                 // Load image data based on transmission medium
                 let image_data = match self.medium {
                     KittyMedium::File | KittyMedium::TempFile => {
@@ -485,6 +541,7 @@ impl KittyParser {
                         graphic.kitty_image_id = Some(image_id);
                         graphic.kitty_placement_id = Some(placement_id);
                         graphic.is_virtual = true;
+                        graphic.was_compressed = compressed;
                         store.add_virtual_placement(graphic);
 
                         // Return virtual placement info for placeholder insertion
@@ -506,6 +563,7 @@ impl KittyParser {
                         );
                         graphic.kitty_image_id = self.image_id;
                         graphic.kitty_placement_id = self.placement_id;
+                        graphic.was_compressed = compressed;
 
                         // Handle relative positioning
                         if let Some(parent_img_id) = self.parent_image_id {
@@ -529,6 +587,8 @@ impl KittyParser {
                 if raw_data.is_empty() {
                     return Err(GraphicsError::KittyError("No frame data".to_string()));
                 }
+
+                let compressed = self.is_compressed();
 
                 let image_id = self.image_id.ok_or_else(|| {
                     GraphicsError::KittyError("Frame requires image ID".to_string())
@@ -584,6 +644,7 @@ impl KittyParser {
                     );
                     graphic.kitty_image_id = Some(image_id);
                     graphic.kitty_placement_id = self.placement_id;
+                    graphic.was_compressed = compressed;
 
                     // Handle relative positioning
                     if let Some(parent_img_id) = self.parent_image_id {
@@ -916,5 +977,218 @@ mod tests {
         let result = parser.load_file_data(nonexistent_path);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("File not found"));
+    }
+
+    #[test]
+    fn test_kitty_compression_from_char() {
+        assert_eq!(
+            KittyCompression::from_char('z'),
+            Some(KittyCompression::Zlib)
+        );
+        assert_eq!(KittyCompression::from_char('x'), None);
+    }
+
+    #[test]
+    fn test_kitty_compression_default() {
+        let parser = KittyParser::new();
+        assert_eq!(parser.compression, KittyCompression::None);
+        assert!(!parser.is_compressed());
+    }
+
+    #[test]
+    fn test_kitty_parse_compression_param() {
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=T,f=32,o=z,s=2,v=2;");
+        assert!(result.is_ok());
+        assert_eq!(parser.compression, KittyCompression::Zlib);
+        assert!(parser.is_compressed());
+    }
+
+    #[test]
+    fn test_kitty_zlib_decompression() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        // Create a 2x2 RGBA image (16 bytes)
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, // Red
+            0, 255, 0, 255, // Green
+            0, 0, 255, 255, // Blue
+            255, 255, 0, 255, // Yellow
+        ];
+
+        // Compress with zlib
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&pixel_data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Base64 encode the compressed data
+        let b64_compressed =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+
+        // Parse with o=z compression flag
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=32,o=z,s=2,v=2;{}", b64_compressed);
+        let result = parser.parse_chunk(&payload);
+        assert!(result.is_ok());
+        assert_eq!(parser.compression, KittyCompression::Zlib);
+
+        // get_data() should return decompressed data
+        let data = parser.get_data();
+        assert_eq!(data, pixel_data);
+    }
+
+    #[test]
+    fn test_kitty_zlib_build_graphic() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        // Create a 2x2 RGBA image (16 bytes)
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, // Red
+            0, 255, 0, 255, // Green
+            0, 0, 255, 255, // Blue
+            255, 255, 0, 255, // Yellow
+        ];
+
+        // Compress with zlib
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&pixel_data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        // Base64 encode
+        let b64_compressed =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+
+        // Parse and build graphic
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=32,o=z,s=2,v=2,i=42;{}", b64_compressed);
+        parser.parse_chunk(&payload).unwrap();
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_ok());
+
+        // Transmit-only, no display - should store the image
+        let stored = store.get_kitty_image(42);
+        assert!(stored.is_some());
+        let (w, h, pixels) = stored.unwrap();
+        assert_eq!(w, 2);
+        assert_eq!(h, 2);
+        assert_eq!(*pixels, pixel_data);
+    }
+
+    #[test]
+    fn test_kitty_zlib_transmit_display_sets_compressed_flag() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        // Create a 2x2 RGBA image (16 bytes)
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+
+        // Compress with zlib
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&pixel_data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let b64_compressed =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+
+        // TransmitDisplay with compression
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=32,o=z,s=2,v=2;{}", b64_compressed);
+        parser.parse_chunk(&payload).unwrap();
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((5, 10), &mut store).unwrap();
+
+        match result {
+            KittyGraphicResult::Graphic(graphic) => {
+                assert!(graphic.was_compressed, "was_compressed should be true");
+                assert_eq!(graphic.width, 2);
+                assert_eq!(graphic.height, 2);
+                assert_eq!(*graphic.pixels, pixel_data);
+            }
+            _ => panic!("Expected Graphic result"),
+        }
+    }
+
+    #[test]
+    fn test_kitty_no_compression_flag_unset() {
+        // Uncompressed RGBA data for a 2x2 image
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+
+        let b64_data =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=32,s=2,v=2;{}", b64_data);
+        parser.parse_chunk(&payload).unwrap();
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+
+        match result {
+            KittyGraphicResult::Graphic(graphic) => {
+                assert!(!graphic.was_compressed, "was_compressed should be false");
+            }
+            _ => panic!("Expected Graphic result"),
+        }
+    }
+
+    #[test]
+    fn test_kitty_zlib_chunked_transfer() {
+        use flate2::write::ZlibEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        // Create a 2x2 RGBA image (16 bytes)
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+
+        // Compress with zlib
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&pixel_data).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let b64_compressed =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &compressed);
+
+        // Split base64 into two chunks at a 4-byte boundary (base64 block size)
+        let mid = (b64_compressed.len() / 2) & !3; // Round down to nearest multiple of 4
+        let chunk1 = &b64_compressed[..mid];
+        let chunk2 = &b64_compressed[mid..];
+
+        // First chunk
+        let mut parser = KittyParser::new();
+        let payload1 = format!("a=T,f=32,o=z,s=2,v=2,m=1;{}", chunk1);
+        let more = parser.parse_chunk(&payload1).unwrap();
+        assert!(more);
+        assert_eq!(parser.compression, KittyCompression::Zlib);
+
+        // Second chunk
+        let payload2 = format!("m=0;{}", chunk2);
+        let more = parser.parse_chunk(&payload2).unwrap();
+        assert!(!more);
+
+        // Data should be decompressed correctly
+        let data = parser.get_data();
+        assert_eq!(data, pixel_data);
+    }
+
+    #[test]
+    fn test_kitty_decompress_zlib_invalid_data() {
+        // Test decompression with invalid zlib data falls back gracefully
+        let invalid_data = vec![0x00, 0x01, 0x02, 0x03];
+        let result = KittyParser::decompress_zlib(&invalid_data);
+        assert!(result.is_err());
     }
 }

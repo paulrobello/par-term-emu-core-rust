@@ -286,6 +286,8 @@ pub struct PyGraphic {
     pub scroll_offset_rows: usize,
     #[pyo3(get)]
     pub cell_dimensions: Option<(u32, u32)>,
+    #[pyo3(get)]
+    pub was_compressed: bool,
     pixels: Vec<u8>,
 }
 
@@ -373,6 +375,7 @@ impl From<&crate::sixel::SixelGraphic> for PyGraphic {
             height: graphic.height,
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
+            was_compressed: false,
             pixels: graphic.pixels.clone(),
         }
     }
@@ -388,6 +391,7 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
             height: graphic.height,
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
+            was_compressed: graphic.was_compressed,
             pixels: (*graphic.pixels).clone(),
         }
     }
@@ -3563,6 +3567,7 @@ mod tests {
             height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels,
         };
 
@@ -3582,6 +3587,7 @@ mod tests {
             height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels: vec![0; 16], // 2x2 RGBA
         };
 
@@ -3600,6 +3606,7 @@ mod tests {
             height: 3,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels: vec![128; 36], // 3x3 RGBA with all values at 128
         };
 
@@ -3625,6 +3632,7 @@ mod tests {
             height: 1,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels: original_pixels.clone(),
         };
 
@@ -3643,6 +3651,7 @@ mod tests {
             height: 50,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels: vec![],
         };
 
@@ -3663,6 +3672,7 @@ mod tests {
             height: 30,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels: vec![1, 2, 3, 4],
         };
 
@@ -3700,6 +3710,7 @@ mod tests {
             height: 2,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels,
         };
 
@@ -3825,6 +3836,7 @@ mod tests {
             height: 1,
             scroll_offset_rows: 0,
             cell_dimensions: None,
+            was_compressed: false,
             pixels,
         };
 
