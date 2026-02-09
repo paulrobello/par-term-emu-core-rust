@@ -350,7 +350,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 **Supported Protocols:**
 - **Sixel** (DCS): VT340 bitmap graphics via `DCS Pq ... ST`
 - **iTerm2** (OSC 1337): Inline images via `OSC 1337 ; File=... ST`
-- **Kitty** (APC G): Advanced graphics protocol with image reuse, animation, and Unicode placeholders
+- **Kitty** (APC G): Advanced graphics protocol with image reuse, animation, zlib compression (`o=z`), and Unicode placeholders
 
 **Unicode Placeholders** (Kitty Protocol):
 - Virtual placements (`U=1`) insert U+10EEEE placeholder characters in grid
@@ -803,14 +803,23 @@ Shell integration state (OSC 133 and OSC 7).
 
 ### Graphic
 
-Sixel graphic metadata.
+Protocol-agnostic graphic representation (Sixel, iTerm2, or Kitty).
 
 **Properties:**
-- `row: int`: Display row
-- `col: int`: Display column
+- `id: int`: Unique placement ID
+- `protocol: str`: Graphics protocol used (`"sixel"`, `"iterm"`, or `"kitty"`)
+- `position: tuple[int, int]`: Position in terminal `(col, row)`
 - `width: int`: Width in pixels
 - `height: int`: Height in pixels
-- `data: bytes`: Image data
+- `scroll_offset_rows: int`: Rows scrolled off visible area (for partial rendering)
+- `cell_dimensions: tuple[int, int] | None`: Cell dimensions `(cell_width, cell_height)` for rendering
+- `was_compressed: bool`: Whether the original data was compressed (e.g., Kitty `o=z` zlib). Useful for diagnostics/logging.
+
+**Methods:**
+- `get_pixel(x: int, y: int) -> tuple[int, int, int, int] | None`: Get RGBA color at pixel coordinates, or `None` if out of bounds
+- `pixels() -> bytes`: Get raw RGBA pixel data in row-major order
+- `cell_size(cell_width: int, cell_height: int) -> tuple[int, int]`: Get size in terminal cells `(cols, rows)`
+- `sample_half_block(cell_col: int, cell_row: int, cell_width: int, cell_height: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None`: Sample top/bottom half-block colors for rendering
 
 ### ScreenSnapshot
 

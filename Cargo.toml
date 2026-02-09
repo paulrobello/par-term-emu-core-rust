@@ -77,8 +77,10 @@ tracing-subscriber = { version = "0.3.22", optional = true }
 # HTTP client for downloading web frontend (using rustls for cross-compilation support)
 reqwest = { version = "0.13.1", default-features = false, features = ["json", "rustls"], optional = true }
 
+# Compression (used for Kitty graphics o=z zlib decompression + archive extraction)
+flate2 = "1.1.8"
+
 # Archive extraction
-flate2 = { version = "1.1.8", optional = true }
 tar = { version = "0.4.44", optional = true }
 
 # Protocol Buffers
@@ -122,7 +124,7 @@ tempfile = "3.24"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "flate2", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms

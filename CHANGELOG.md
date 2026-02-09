@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kitty Graphics Compression (o=z)**: Support for zlib-compressed image data in the Kitty graphics protocol
+  - Parses the `o=z` transmission parameter to detect zlib-compressed payloads
+  - Automatically decompresses data before pixel decoding (transparent to consumers)
+  - Works with all transmission types: direct, file, temp file, and chunked transfers
+  - New `was_compressed` metadata flag on `TerminalGraphic` for diagnostics/logging
+  - Python `Graphic.was_compressed` property exposed for frontend diagnostics
+  - 8 new Rust tests covering compression parsing, decompression, chunked transfers, and error handling
+
+### Changed
+- **Dependencies**: `flate2` is now a non-optional dependency (previously only available under `streaming` feature), required for Kitty `o=z` decompression
+
 ## [0.33.0] - 2026-02-06
 
 ### Added
