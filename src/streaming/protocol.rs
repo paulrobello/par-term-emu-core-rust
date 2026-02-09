@@ -212,6 +212,18 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<String>,
     },
+
+    /// User variable changed (OSC 1337 SetUserVar)
+    #[serde(rename = "user_var_changed")]
+    UserVarChanged {
+        /// Variable name
+        name: String,
+        /// New value (base64-decoded)
+        value: String,
+        /// Previous value if the variable already existed
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_value: Option<String>,
+    },
 }
 
 /// Messages sent from client to server
@@ -272,6 +284,9 @@ pub enum EventType {
     Graphics,
     /// Hyperlink events
     Hyperlink,
+    /// User variable change events
+    #[serde(rename = "user_var")]
+    UserVar,
 }
 
 impl ServerMessage {
@@ -568,6 +583,24 @@ impl ServerMessage {
             row,
             col,
             id: Some(id),
+        }
+    }
+
+    /// Create a user variable changed message
+    pub fn user_var_changed(name: String, value: String) -> Self {
+        Self::UserVarChanged {
+            name,
+            value,
+            old_value: None,
+        }
+    }
+
+    /// Create a user variable changed message with old value
+    pub fn user_var_changed_full(name: String, value: String, old_value: Option<String>) -> Self {
+        Self::UserVarChanged {
+            name,
+            value,
+            old_value,
         }
     }
 }

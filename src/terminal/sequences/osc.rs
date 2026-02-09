@@ -490,6 +490,8 @@ impl Terminal {
                         // Check for SetBadgeFormat
                         if let Some(encoded) = data.strip_prefix("SetBadgeFormat=") {
                             self.handle_set_badge_format(encoded);
+                        } else if let Some(payload) = data.strip_prefix("SetUserVar=") {
+                            self.handle_set_user_var(payload);
                         } else {
                             // Default to inline image handling
                             self.handle_iterm_image(&data);
@@ -689,6 +691,71 @@ impl Terminal {
                 // Invalid formats are silently ignored (security)
             }
         }
+    }
+
+    /// Handle OSC 1337 SetUserVar sequence
+    ///
+    /// Format: `OSC 1337 ; SetUserVar=<name>=<base64_value> ST`
+    ///
+    /// Decodes the base64-encoded value and stores it as a user variable
+    /// in the session variables. Emits a `UserVarChanged` event if the value changed.
+    fn handle_set_user_var(&mut self, payload: &str) {
+        let payload = payload.trim();
+
+        // Split on first '=' to get name and base64 value
+        let Some((name, encoded_value)) = payload.split_once('=') else {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "OSC1337",
+                &format!("SetUserVar: missing '=' separator in {:?}", payload),
+            );
+            return;
+        };
+
+        let name = name.trim();
+        if name.is_empty() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "OSC1337",
+                "SetUserVar: empty variable name",
+            );
+            return;
+        }
+
+        // Decode base64 value
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let decoded = match STANDARD.decode(encoded_value.trim()) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC1337",
+                    &format!("SetUserVar: base64 decode error for {:?}: {}", name, e),
+                );
+                return;
+            }
+        };
+
+        // Convert to UTF-8
+        let value = match String::from_utf8(decoded) {
+            Ok(s) => s,
+            Err(e) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC1337",
+                    &format!("SetUserVar: UTF-8 error for {:?}: {}", name, e),
+                );
+                return;
+            }
+        };
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "OSC1337",
+            &format!("SetUserVar: {}={:?}", name, value),
+        );
+
+        self.set_user_var(name.to_string(), value);
     }
 }
 
@@ -1455,6 +1522,190 @@ mod tests {
         assert_eq!(
             term.session_variables().get("bell_count"),
             Some("3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_set_user_var_basic() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Encode "myhost.example.com" as base64
+        let value = STANDARD.encode("myhost.example.com");
+        let seq = format!("\x1b]1337;SetUserVar=hostname={}\x07", value);
+        term.process(seq.as_bytes());
+
+        // Verify the variable was stored
+        assert_eq!(term.get_user_var("hostname"), Some("myhost.example.com"));
+    }
+
+    #[test]
+    fn test_set_user_var_event_emitted() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        let value = STANDARD.encode("alice");
+        let seq = format!("\x1b]1337;SetUserVar=username={}\x07", value);
+        term.process(seq.as_bytes());
+
+        let events = term.poll_events();
+        let user_var_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::UserVarChanged { .. }))
+            .collect();
+        assert_eq!(user_var_events.len(), 1);
+
+        if let crate::terminal::TerminalEvent::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } = &user_var_events[0]
+        {
+            assert_eq!(name, "username");
+            assert_eq!(value, "alice");
+            assert!(old_value.is_none());
+        } else {
+            panic!("Expected UserVarChanged event");
+        }
+    }
+
+    #[test]
+    fn test_set_user_var_update_with_old_value() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Set initial value
+        let value1 = STANDARD.encode("server1");
+        let seq1 = format!("\x1b]1337;SetUserVar=host={}\x07", value1);
+        term.process(seq1.as_bytes());
+        term.poll_events(); // drain
+
+        // Update value
+        let value2 = STANDARD.encode("server2");
+        let seq2 = format!("\x1b]1337;SetUserVar=host={}\x07", value2);
+        term.process(seq2.as_bytes());
+
+        let events = term.poll_events();
+        let user_var_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::UserVarChanged { .. }))
+            .collect();
+        assert_eq!(user_var_events.len(), 1);
+
+        if let crate::terminal::TerminalEvent::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } = &user_var_events[0]
+        {
+            assert_eq!(name, "host");
+            assert_eq!(value, "server2");
+            assert_eq!(old_value.as_deref(), Some("server1"));
+        }
+    }
+
+    #[test]
+    fn test_set_user_var_no_event_when_same_value() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        // Set value
+        let value = STANDARD.encode("same");
+        let seq = format!("\x1b]1337;SetUserVar=key={}\x07", value);
+        term.process(seq.as_bytes());
+        term.poll_events(); // drain
+
+        // Set the same value again
+        term.process(seq.as_bytes());
+
+        let events = term.poll_events();
+        let user_var_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::UserVarChanged { .. }))
+            .collect();
+        assert_eq!(user_var_events.len(), 0, "No event when value unchanged");
+    }
+
+    #[test]
+    fn test_set_user_var_multiple_variables() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        let host = STANDARD.encode("myhost");
+        let user = STANDARD.encode("myuser");
+        let dir = STANDARD.encode("/home/myuser");
+
+        let seq = format!(
+            "\x1b]1337;SetUserVar=hostname={}\x07\x1b]1337;SetUserVar=username={}\x07\x1b]1337;SetUserVar=currentDir={}\x07",
+            host, user, dir
+        );
+        term.process(seq.as_bytes());
+
+        assert_eq!(term.get_user_var("hostname"), Some("myhost"));
+        assert_eq!(term.get_user_var("username"), Some("myuser"));
+        assert_eq!(term.get_user_var("currentDir"), Some("/home/myuser"));
+
+        let vars = term.get_user_vars();
+        assert_eq!(vars.len(), 3);
+    }
+
+    #[test]
+    fn test_set_user_var_invalid_base64() {
+        let mut term = Terminal::new(80, 24);
+
+        // Invalid base64
+        let seq = b"\x1b]1337;SetUserVar=key=!!!invalid!!!\x07";
+        term.process(seq);
+
+        // Variable should not be set
+        assert!(term.get_user_var("key").is_none());
+    }
+
+    #[test]
+    fn test_set_user_var_missing_separator() {
+        let mut term = Terminal::new(80, 24);
+
+        // Missing = between name and value
+        let seq = b"\x1b]1337;SetUserVar=keyonly\x07";
+        term.process(seq);
+
+        // Nothing should be set
+        assert!(term.get_user_var("keyonly").is_none());
+    }
+
+    #[test]
+    fn test_set_user_var_empty_name() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        let value = STANDARD.encode("test");
+        let seq = format!("\x1b]1337;SetUserVar=={}\x07", value);
+        term.process(seq.as_bytes());
+
+        // Empty name should be rejected
+        assert!(term.get_user_vars().is_empty());
+    }
+
+    #[test]
+    fn test_set_user_var_available_in_session_variables() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut term = Terminal::new(80, 24);
+
+        let value = STANDARD.encode("testval");
+        let seq = format!("\x1b]1337;SetUserVar=myvar={}\x07", value);
+        term.process(seq.as_bytes());
+
+        // Should be accessible via session_variables.get() for badge evaluation
+        assert_eq!(
+            term.session_variables().get("myvar"),
+            Some("testval".to_string())
         );
     }
 }

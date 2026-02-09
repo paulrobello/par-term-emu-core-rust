@@ -101,6 +101,15 @@ pub enum TerminalEvent {
     CwdChanged(CwdChange),
     /// A trigger pattern matched terminal output
     TriggerMatched(trigger::TriggerMatch),
+    /// A user variable changed (from OSC 1337 SetUserVar)
+    UserVarChanged {
+        /// Variable name
+        name: String,
+        /// New value (base64-decoded)
+        value: String,
+        /// Previous value if the variable already existed
+        old_value: Option<String>,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -115,6 +124,7 @@ pub enum TerminalEventKind {
     DirtyRegion,
     CwdChanged,
     TriggerMatched,
+    UserVarChanged,
 }
 
 /// Hyperlink information with all its locations
@@ -2006,6 +2016,35 @@ impl Terminal {
             .map(|format| crate::badge::evaluate_badge_format(format, &self.session_variables))
     }
 
+    /// Get a user variable by name
+    ///
+    /// Returns the value of a user variable set via OSC 1337 SetUserVar,
+    /// or None if the variable is not set.
+    pub fn get_user_var(&self, name: &str) -> Option<&str> {
+        self.session_variables.custom.get(name).map(|s| s.as_str())
+    }
+
+    /// Get all user variables as a reference to the HashMap
+    pub fn get_user_vars(&self) -> &std::collections::HashMap<String, String> {
+        &self.session_variables.custom
+    }
+
+    /// Set a user variable, emitting a UserVarChanged event if the value changed
+    pub fn set_user_var(&mut self, name: String, value: String) {
+        let old_value = self.session_variables.custom.get(&name).cloned();
+        let changed = old_value.as_deref() != Some(&value);
+        self.session_variables
+            .custom
+            .insert(name.clone(), value.clone());
+        if changed {
+            self.terminal_events.push(TerminalEvent::UserVarChanged {
+                name,
+                value,
+                old_value,
+            });
+        }
+    }
+
     /// Check if alternate screen is active
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active
@@ -2644,6 +2683,7 @@ impl Terminal {
             TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
             TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
             TerminalEvent::TriggerMatched(_) => TerminalEventKind::TriggerMatched,
+            TerminalEvent::UserVarChanged { .. } => TerminalEventKind::UserVarChanged,
         }
     }
 

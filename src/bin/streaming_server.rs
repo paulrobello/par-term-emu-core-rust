@@ -1101,6 +1101,20 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
+                        TerminalEvent::UserVarChanged {
+                            name,
+                            value,
+                            old_value,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::user_var_changed_full(
+                                    name,
+                                    value,
+                                    old_value,
+                                ),
+                            );
+                        }
                         TerminalEvent::DirtyRegion(_, _) => {
                             // Dirty region is a rendering optimization hint, not needed for streaming
                         }

@@ -299,6 +299,15 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                     id: id.clone(),
                 }))
             }
+            AppServerMessage::UserVarChanged {
+                name,
+                value,
+                old_value,
+            } => Some(Message::UserVarChanged(pb::UserVarChanged {
+                name: name.clone(),
+                value: value.clone(),
+                old_value: old_value.clone(),
+            })),
         };
 
         pb::ServerMessage { message }
@@ -342,6 +351,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Mode => pb::EventType::Mode as i32,
             AppEventType::Graphics => pb::EventType::Graphics as i32,
             AppEventType::Hyperlink => pb::EventType::Hyperlink as i32,
+            AppEventType::UserVar => pb::EventType::UserVar as i32,
         }
     }
 }
@@ -485,6 +495,11 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 col: ha.col as u16,
                 id: ha.id,
             }),
+            Some(Message::UserVarChanged(uv)) => Ok(AppServerMessage::UserVarChanged {
+                name: uv.name,
+                value: uv.value,
+                old_value: uv.old_value,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -538,6 +553,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Mode => AppEventType::Mode,
             pb::EventType::Graphics => AppEventType::Graphics,
             pb::EventType::Hyperlink => AppEventType::Hyperlink,
+            pb::EventType::UserVar => AppEventType::UserVar,
         }
     }
 }
@@ -1209,5 +1225,53 @@ mod tests {
         let trigger_i32: i32 = AppEventType::Trigger.into();
         assert_eq!(cwd_i32, pb::EventType::Cwd as i32);
         assert_eq!(trigger_i32, pb::EventType::Trigger as i32);
+    }
+
+    #[test]
+    fn test_encode_decode_user_var_changed() {
+        let msg = AppServerMessage::user_var_changed("hostname".to_string(), "myhost".to_string());
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::UserVarChanged {
+                name,
+                value,
+                old_value,
+            } => {
+                assert_eq!(name, "hostname");
+                assert_eq!(value, "myhost");
+                assert_eq!(old_value, None);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_encode_decode_user_var_changed_with_old_value() {
+        let msg = AppServerMessage::user_var_changed_full(
+            "hostname".to_string(),
+            "newhost".to_string(),
+            Some("oldhost".to_string()),
+        );
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::UserVarChanged {
+                name,
+                value,
+                old_value,
+            } => {
+                assert_eq!(name, "hostname");
+                assert_eq!(value, "newhost");
+                assert_eq!(old_value, Some("oldhost".to_string()));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_event_type_user_var_conversion() {
+        let user_var_i32: i32 = AppEventType::UserVar.into();
+        assert_eq!(user_var_i32, pb::EventType::UserVar as i32);
     }
 }
