@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
-use crate::graphics::{next_graphic_id, GraphicProtocol, GraphicsError, TerminalGraphic};
+use crate::graphics::{
+    next_graphic_id, GraphicProtocol, GraphicsError, ImageDimension, ImageDisplayMode,
+    ImagePlacement, TerminalGraphic,
+};
 
 /// iTerm2 inline image parser
 #[derive(Debug, Default)]
@@ -66,7 +69,7 @@ impl ITermParser {
         let height = rgba.height() as usize;
         let pixels = rgba.into_raw();
 
-        let graphic = TerminalGraphic::new(
+        let mut graphic = TerminalGraphic::new(
             next_graphic_id(),
             GraphicProtocol::ITermInline,
             position,
@@ -75,8 +78,8 @@ impl ITermParser {
             pixels,
         );
 
-        // Apply size parameters if provided
-        // TODO: Handle width/height parameters for scaling
+        // Build placement metadata from parsed parameters
+        graphic.placement = self.build_placement();
 
         Ok(graphic)
     }
@@ -84,6 +87,74 @@ impl ITermParser {
     /// Get a parameter value
     pub fn get_param(&self, key: &str) -> Option<&str> {
         self.params.get(key).map(|s| s.as_str())
+    }
+
+    /// Build an ImagePlacement from the parsed parameters
+    pub fn build_placement(&self) -> ImagePlacement {
+        let display_mode = match self.params.get("inline") {
+            Some(v) if v == "1" => ImageDisplayMode::Inline,
+            _ => ImageDisplayMode::Download,
+        };
+
+        let requested_width = self
+            .params
+            .get("width")
+            .map(|s| Self::parse_dimension(s))
+            .unwrap_or_default();
+
+        let requested_height = self
+            .params
+            .get("height")
+            .map(|s| Self::parse_dimension(s))
+            .unwrap_or_default();
+
+        let preserve_aspect_ratio = self
+            .params
+            .get("preserveAspectRatio")
+            .map(|v| v != "0")
+            .unwrap_or(true); // Default is true per iTerm2 spec
+
+        ImagePlacement {
+            display_mode,
+            requested_width,
+            requested_height,
+            preserve_aspect_ratio,
+            ..Default::default()
+        }
+    }
+
+    /// Parse an iTerm2 dimension string (e.g., "100", "50px", "80%", "auto", "10")
+    ///
+    /// iTerm2 dimension format:
+    /// - N or Npx: N pixels
+    /// - N%: N percent of terminal
+    /// - "auto": automatic sizing
+    /// - Plain number without suffix: cells
+    fn parse_dimension(s: &str) -> ImageDimension {
+        let s = s.trim();
+
+        if s.eq_ignore_ascii_case("auto") || s == "0" {
+            return ImageDimension::auto();
+        }
+
+        if let Some(stripped) = s.strip_suffix('%') {
+            if let Ok(val) = stripped.parse::<f64>() {
+                return ImageDimension::percent(val);
+            }
+        }
+
+        if let Some(stripped) = s.strip_suffix("px") {
+            if let Ok(val) = stripped.parse::<f64>() {
+                return ImageDimension::pixels(val);
+            }
+        }
+
+        // Plain number = cells per iTerm2 spec
+        if let Ok(val) = s.parse::<f64>() {
+            return ImageDimension::cells(val);
+        }
+
+        ImageDimension::auto()
     }
 }
 
@@ -114,5 +185,108 @@ mod tests {
         assert_eq!(parser.get_param("size"), Some("1234"));
         assert_eq!(parser.get_param("width"), Some("100"));
         assert_eq!(parser.get_param("height"), Some("50"));
+    }
+
+    #[test]
+    fn test_parse_dimension_auto() {
+        let dim = ITermParser::parse_dimension("auto");
+        assert!(dim.is_auto());
+        assert_eq!(dim.unit, crate::graphics::ImageSizeUnit::Auto);
+    }
+
+    #[test]
+    fn test_parse_dimension_zero() {
+        let dim = ITermParser::parse_dimension("0");
+        assert!(dim.is_auto());
+    }
+
+    #[test]
+    fn test_parse_dimension_cells() {
+        let dim = ITermParser::parse_dimension("10");
+        assert_eq!(dim.value, 10.0);
+        assert_eq!(dim.unit, crate::graphics::ImageSizeUnit::Cells);
+    }
+
+    #[test]
+    fn test_parse_dimension_pixels() {
+        let dim = ITermParser::parse_dimension("200px");
+        assert_eq!(dim.value, 200.0);
+        assert_eq!(dim.unit, crate::graphics::ImageSizeUnit::Pixels);
+    }
+
+    #[test]
+    fn test_parse_dimension_percent() {
+        let dim = ITermParser::parse_dimension("50%");
+        assert_eq!(dim.value, 50.0);
+        assert_eq!(dim.unit, crate::graphics::ImageSizeUnit::Percent);
+    }
+
+    #[test]
+    fn test_parse_dimension_invalid() {
+        let dim = ITermParser::parse_dimension("invalid");
+        assert!(dim.is_auto());
+    }
+
+    #[test]
+    fn test_build_placement_basic() {
+        let mut parser = ITermParser::new();
+        parser.parse_params("inline=1").unwrap();
+        let placement = parser.build_placement();
+        assert_eq!(
+            placement.display_mode,
+            crate::graphics::ImageDisplayMode::Inline
+        );
+        assert!(placement.preserve_aspect_ratio);
+        assert!(placement.requested_width.is_auto());
+        assert!(placement.requested_height.is_auto());
+    }
+
+    #[test]
+    fn test_build_placement_with_dimensions() {
+        let mut parser = ITermParser::new();
+        parser
+            .parse_params("inline=1;width=100px;height=50%")
+            .unwrap();
+        let placement = parser.build_placement();
+
+        assert_eq!(placement.requested_width.value, 100.0);
+        assert_eq!(
+            placement.requested_width.unit,
+            crate::graphics::ImageSizeUnit::Pixels
+        );
+        assert_eq!(placement.requested_height.value, 50.0);
+        assert_eq!(
+            placement.requested_height.unit,
+            crate::graphics::ImageSizeUnit::Percent
+        );
+    }
+
+    #[test]
+    fn test_build_placement_preserve_aspect_ratio() {
+        let mut parser = ITermParser::new();
+        parser
+            .parse_params("inline=1;preserveAspectRatio=0")
+            .unwrap();
+        let placement = parser.build_placement();
+        assert!(!placement.preserve_aspect_ratio);
+
+        let mut parser2 = ITermParser::new();
+        parser2
+            .parse_params("inline=1;preserveAspectRatio=1")
+            .unwrap();
+        let placement2 = parser2.build_placement();
+        assert!(placement2.preserve_aspect_ratio);
+    }
+
+    #[test]
+    fn test_build_placement_download_mode() {
+        let mut parser = ITermParser::new();
+        // parse_params fails without inline=1, but build_placement works on whatever was parsed
+        parser.params.insert("inline".to_string(), "0".to_string());
+        let placement = parser.build_placement();
+        assert_eq!(
+            placement.display_mode,
+            crate::graphics::ImageDisplayMode::Download
+        );
     }
 }

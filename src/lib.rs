@@ -98,15 +98,15 @@ pub use python_bindings::{
     PyClipboardSyncEvent, PyColorHSL, PyColorHSV, PyColorPalette, PyCommandExecution,
     PyComplianceReport, PyComplianceTest, PyCoprocessConfig, PyCursorStyle, PyCwdChange,
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
-    PyImageFormat, PyImageProtocol, PyInlineImage, PyJoinedLines, PyLineDiff, PyMacro,
-    PyMacroEvent, PyMouseEncoding, PyMouseEvent, PyMousePosition, PyNotificationConfig,
-    PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar,
-    PyProgressState, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
-    PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
-    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger,
-    PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
-    PyWindowLayout,
+    PyImageDimension, PyImageFormat, PyImagePlacement, PyImageProtocol, PyInlineImage,
+    PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEncoding, PyMouseEvent,
+    PyMousePosition, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
+    PyProfilingData, PyProgressBar, PyProgressState, PyPtyTerminal, PyRecordingEvent,
+    PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot, PyScrollbackStats,
+    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
+    PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal,
+    PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch, PyUnderlineStyle,
+    PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -150,6 +150,8 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScreenSnapshot>()?;
     m.add_class::<PyShellIntegration>()?;
     m.add_class::<PyGraphic>()?;
+    m.add_class::<PyImagePlacement>()?;
+    m.add_class::<PyImageDimension>()?;
     m.add_class::<PyTmuxNotification>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;

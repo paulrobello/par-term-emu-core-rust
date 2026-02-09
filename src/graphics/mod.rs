@@ -21,9 +21,155 @@ use std::sync::Arc;
 
 // Re-export for convenience
 pub use animation::{Animation, AnimationControl, AnimationFrame, AnimationState, CompositionMode};
+pub use iterm::ITermParser;
 pub use placeholder::{
     create_placeholder_with_diacritics, number_to_diacritic, PlaceholderInfo, PLACEHOLDER_CHAR,
 };
+
+/// Image display mode for rendering
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageDisplayMode {
+    /// Render inline within the terminal grid (default)
+    #[default]
+    Inline,
+    /// Download/save rather than display (iTerm2 inline=0)
+    Download,
+}
+
+impl ImageDisplayMode {
+    /// Get display mode name as string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImageDisplayMode::Inline => "inline",
+            ImageDisplayMode::Download => "download",
+        }
+    }
+}
+
+/// Unit for image dimension sizing
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ImageSizeUnit {
+    /// Automatic sizing based on image dimensions (default)
+    #[default]
+    Auto,
+    /// Size in terminal cells
+    Cells,
+    /// Size in pixels
+    Pixels,
+    /// Size as percentage of terminal
+    Percent,
+}
+
+impl ImageSizeUnit {
+    /// Get unit name as string
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ImageSizeUnit::Auto => "auto",
+            ImageSizeUnit::Cells => "cells",
+            ImageSizeUnit::Pixels => "pixels",
+            ImageSizeUnit::Percent => "percent",
+        }
+    }
+}
+
+/// Image dimension with unit
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImageDimension {
+    /// Numeric value (0 means auto)
+    pub value: f64,
+    /// Unit for the value
+    pub unit: ImageSizeUnit,
+}
+
+impl Default for ImageDimension {
+    fn default() -> Self {
+        Self {
+            value: 0.0,
+            unit: ImageSizeUnit::Auto,
+        }
+    }
+}
+
+impl ImageDimension {
+    /// Create an auto dimension
+    pub fn auto() -> Self {
+        Self::default()
+    }
+
+    /// Create a dimension with cells unit
+    pub fn cells(value: f64) -> Self {
+        Self {
+            value,
+            unit: ImageSizeUnit::Cells,
+        }
+    }
+
+    /// Create a dimension with pixels unit
+    pub fn pixels(value: f64) -> Self {
+        Self {
+            value,
+            unit: ImageSizeUnit::Pixels,
+        }
+    }
+
+    /// Create a dimension with percent unit
+    pub fn percent(value: f64) -> Self {
+        Self {
+            value,
+            unit: ImageSizeUnit::Percent,
+        }
+    }
+
+    /// Check if this is an auto dimension
+    pub fn is_auto(&self) -> bool {
+        self.unit == ImageSizeUnit::Auto || self.value == 0.0
+    }
+}
+
+/// Unified image placement metadata across protocols
+///
+/// Abstracts placement info from Kitty and iTerm2 so the frontend can implement
+/// inline/cover/contain rendering without protocol-specific logic.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ImagePlacement {
+    /// Display mode (inline vs download)
+    pub display_mode: ImageDisplayMode,
+    /// Requested width for sizing
+    pub requested_width: ImageDimension,
+    /// Requested height for sizing
+    pub requested_height: ImageDimension,
+    /// Whether to preserve aspect ratio when scaling
+    pub preserve_aspect_ratio: bool,
+    /// Number of columns to display (Kitty c= parameter)
+    pub columns: Option<u32>,
+    /// Number of rows to display (Kitty r= parameter)
+    pub rows: Option<u32>,
+    /// Z-index for layering (Kitty z= parameter, 0 = default)
+    pub z_index: i32,
+    /// X offset within the cell in pixels (Kitty x= parameter)
+    pub x_offset: u32,
+    /// Y offset within the cell in pixels (Kitty y= parameter)
+    pub y_offset: u32,
+}
+
+impl ImagePlacement {
+    /// Create a default inline placement
+    pub fn inline() -> Self {
+        Self {
+            display_mode: ImageDisplayMode::Inline,
+            preserve_aspect_ratio: true,
+            ..Default::default()
+        }
+    }
+
+    /// Create a download-only placement (iTerm2 inline=0)
+    pub fn download() -> Self {
+        Self {
+            display_mode: ImageDisplayMode::Download,
+            ..Default::default()
+        }
+    }
+}
 
 /// Graphics protocol identifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +257,8 @@ pub struct TerminalGraphic {
     pub relative_y_offset: i32,
     /// Whether the original data was compressed (for diagnostics)
     pub was_compressed: bool,
+    /// Unified placement metadata (display mode, sizing, z-index, offsets)
+    pub placement: ImagePlacement,
 }
 
 impl TerminalGraphic {
@@ -143,6 +291,7 @@ impl TerminalGraphic {
             relative_x_offset: 0,
             relative_y_offset: 0,
             was_compressed: false,
+            placement: ImagePlacement::inline(),
         }
     }
 
@@ -175,6 +324,7 @@ impl TerminalGraphic {
             relative_x_offset: 0,
             relative_y_offset: 0,
             was_compressed: false,
+            placement: ImagePlacement::inline(),
         }
     }
 
@@ -841,5 +991,80 @@ mod tests {
 
         store.remove_kitty_image(42);
         assert!(store.get_kitty_image(42).is_none());
+    }
+
+    #[test]
+    fn test_image_display_mode() {
+        assert_eq!(ImageDisplayMode::Inline.as_str(), "inline");
+        assert_eq!(ImageDisplayMode::Download.as_str(), "download");
+        assert_eq!(ImageDisplayMode::default(), ImageDisplayMode::Inline);
+    }
+
+    #[test]
+    fn test_image_size_unit() {
+        assert_eq!(ImageSizeUnit::Auto.as_str(), "auto");
+        assert_eq!(ImageSizeUnit::Cells.as_str(), "cells");
+        assert_eq!(ImageSizeUnit::Pixels.as_str(), "pixels");
+        assert_eq!(ImageSizeUnit::Percent.as_str(), "percent");
+    }
+
+    #[test]
+    fn test_image_dimension_constructors() {
+        let auto = ImageDimension::auto();
+        assert!(auto.is_auto());
+        assert_eq!(auto.unit, ImageSizeUnit::Auto);
+
+        let cells = ImageDimension::cells(10.0);
+        assert!(!cells.is_auto());
+        assert_eq!(cells.value, 10.0);
+        assert_eq!(cells.unit, ImageSizeUnit::Cells);
+
+        let pixels = ImageDimension::pixels(100.0);
+        assert_eq!(pixels.value, 100.0);
+        assert_eq!(pixels.unit, ImageSizeUnit::Pixels);
+
+        let pct = ImageDimension::percent(50.0);
+        assert_eq!(pct.value, 50.0);
+        assert_eq!(pct.unit, ImageSizeUnit::Percent);
+    }
+
+    #[test]
+    fn test_image_dimension_zero_is_auto() {
+        let dim = ImageDimension::cells(0.0);
+        assert!(dim.is_auto());
+    }
+
+    #[test]
+    fn test_image_placement_defaults() {
+        let placement = ImagePlacement::default();
+        assert_eq!(placement.display_mode, ImageDisplayMode::Inline);
+        assert!(placement.requested_width.is_auto());
+        assert!(placement.requested_height.is_auto());
+        assert!(!placement.preserve_aspect_ratio); // Default struct is false
+        assert_eq!(placement.z_index, 0);
+        assert_eq!(placement.x_offset, 0);
+        assert_eq!(placement.y_offset, 0);
+        assert!(placement.columns.is_none());
+        assert!(placement.rows.is_none());
+    }
+
+    #[test]
+    fn test_image_placement_inline() {
+        let placement = ImagePlacement::inline();
+        assert_eq!(placement.display_mode, ImageDisplayMode::Inline);
+        assert!(placement.preserve_aspect_ratio);
+    }
+
+    #[test]
+    fn test_image_placement_download() {
+        let placement = ImagePlacement::download();
+        assert_eq!(placement.display_mode, ImageDisplayMode::Download);
+    }
+
+    #[test]
+    fn test_terminal_graphic_has_default_placement() {
+        let graphic = TerminalGraphic::new(1, GraphicProtocol::Sixel, (0, 0), 10, 10, vec![]);
+        assert_eq!(graphic.placement.display_mode, ImageDisplayMode::Inline);
+        assert!(graphic.placement.preserve_aspect_ratio);
     }
 }

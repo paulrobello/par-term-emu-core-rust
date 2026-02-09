@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### Image Placement Metadata
+
+All graphics protocols now expose unified `ImagePlacement` metadata on `Graphic.placement`, abstracting protocol-specific placement parameters so frontends can implement inline/cover/contain rendering. The Kitty protocol exposes columns/rows sizing, z-index for layering, and sub-cell offsets. The iTerm2 protocol exposes width/height with unit support (cells, pixels, percent, auto) and `preserveAspectRatio`. New `ImagePlacement` and `ImageDimension` classes are importable from the package.
+
 ### Original Image Dimensions for Aspect Ratio Preservation
 
 All graphics protocols (Sixel, iTerm2, Kitty) now expose `original_width` and `original_height` on `Graphic` objects. These fields preserve the original decoded pixel dimensions even when `width`/`height` change during animation, enabling frontends to calculate correct aspect ratios when scaling images to fit terminal cells.
