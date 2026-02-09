@@ -14,7 +14,7 @@ use flate2::read::ZlibDecoder;
 
 use crate::graphics::{
     next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
-    GraphicsError, GraphicsStore, TerminalGraphic,
+    GraphicsError, GraphicsStore, ImageDimension, ImagePlacement, TerminalGraphic,
 };
 
 /// Kitty graphics transmission action
@@ -192,6 +192,8 @@ pub struct KittyParser {
     /// Number of times to play animation (v= parameter)
     /// Per Kitty spec: v=0 ignored, v=1 infinite, v=N means play N times total
     pub num_plays: Option<u32>,
+    /// Z-index for layering (z= for placement commands)
+    pub z_index: Option<i32>,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -332,8 +334,12 @@ impl KittyParser {
                         }
                     }
                     "z" => {
-                        // Frame delay in milliseconds (for animations)
-                        self.frame_delay_ms = value.parse().ok();
+                        // z= is overloaded: frame delay for animations, z-index for placements
+                        if self.action == KittyAction::Frame {
+                            self.frame_delay_ms = value.parse().ok();
+                        } else {
+                            self.z_index = value.parse().ok();
+                        }
                     }
                     _ => {}
                 }
@@ -398,6 +404,35 @@ impl KittyParser {
     /// Check if data was compressed
     pub fn is_compressed(&self) -> bool {
         self.compression != KittyCompression::None
+    }
+
+    /// Build an ImagePlacement from the parsed Kitty parameters
+    pub fn build_placement(&self) -> ImagePlacement {
+        let mut placement = ImagePlacement::inline();
+
+        if let Some(cols) = self.columns {
+            placement.columns = Some(cols);
+            placement.requested_width = ImageDimension::cells(cols as f64);
+        }
+
+        if let Some(rows) = self.rows {
+            placement.rows = Some(rows);
+            placement.requested_height = ImageDimension::cells(rows as f64);
+        }
+
+        if let Some(z) = self.z_index {
+            placement.z_index = z;
+        }
+
+        if let Some(x) = self.x_offset {
+            placement.x_offset = x;
+        }
+
+        if let Some(y) = self.y_offset {
+            placement.y_offset = y;
+        }
+
+        placement
     }
 
     /// Build a TerminalGraphic from parsed data
@@ -475,6 +510,7 @@ impl KittyParser {
                     );
                     graphic.kitty_image_id = Some(image_id);
                     graphic.kitty_placement_id = self.placement_id;
+                    graphic.placement = self.build_placement();
 
                     // Handle relative positioning
                     if let Some(parent_img_id) = self.parent_image_id {
@@ -564,6 +600,7 @@ impl KittyParser {
                         graphic.kitty_image_id = self.image_id;
                         graphic.kitty_placement_id = self.placement_id;
                         graphic.was_compressed = compressed;
+                        graphic.placement = self.build_placement();
 
                         // Handle relative positioning
                         if let Some(parent_img_id) = self.parent_image_id {
@@ -645,6 +682,7 @@ impl KittyParser {
                     graphic.kitty_image_id = Some(image_id);
                     graphic.kitty_placement_id = self.placement_id;
                     graphic.was_compressed = compressed;
+                    graphic.placement = self.build_placement();
 
                     // Handle relative positioning
                     if let Some(parent_img_id) = self.parent_image_id {
@@ -1190,5 +1228,122 @@ mod tests {
         let invalid_data = vec![0x00, 0x01, 0x02, 0x03];
         let result = KittyParser::decompress_zlib(&invalid_data);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_kitty_build_placement_defaults() {
+        let parser = KittyParser::new();
+        let placement = parser.build_placement();
+        assert_eq!(
+            placement.display_mode,
+            crate::graphics::ImageDisplayMode::Inline
+        );
+        assert!(placement.preserve_aspect_ratio);
+        assert!(placement.columns.is_none());
+        assert!(placement.rows.is_none());
+        assert_eq!(placement.z_index, 0);
+        assert_eq!(placement.x_offset, 0);
+        assert_eq!(placement.y_offset, 0);
+    }
+
+    #[test]
+    fn test_kitty_build_placement_with_columns_rows() {
+        let mut parser = KittyParser::new();
+        parser.parse_chunk("a=T,f=100,c=10,r=5;").unwrap();
+        let placement = parser.build_placement();
+        assert_eq!(placement.columns, Some(10));
+        assert_eq!(placement.rows, Some(5));
+        assert_eq!(placement.requested_width.value, 10.0);
+        assert_eq!(
+            placement.requested_width.unit,
+            crate::graphics::ImageSizeUnit::Cells
+        );
+        assert_eq!(placement.requested_height.value, 5.0);
+        assert_eq!(
+            placement.requested_height.unit,
+            crate::graphics::ImageSizeUnit::Cells
+        );
+    }
+
+    #[test]
+    fn test_kitty_build_placement_with_offsets() {
+        let mut parser = KittyParser::new();
+        parser.parse_chunk("a=T,f=100,x=5,y=3;").unwrap();
+        let placement = parser.build_placement();
+        assert_eq!(placement.x_offset, 5);
+        assert_eq!(placement.y_offset, 3);
+    }
+
+    #[test]
+    fn test_kitty_z_index_for_placement() {
+        let mut parser = KittyParser::new();
+        parser.parse_chunk("a=p,i=1,z=-1;").unwrap();
+        let placement = parser.build_placement();
+        assert_eq!(placement.z_index, -1);
+    }
+
+    #[test]
+    fn test_kitty_z_as_frame_delay_for_frames() {
+        let mut parser = KittyParser::new();
+        parser.parse_chunk("a=f,i=1,z=100;").unwrap();
+        // For frames, z is frame_delay, not z_index
+        assert_eq!(parser.frame_delay_ms, Some(100));
+        assert!(parser.z_index.is_none());
+    }
+
+    #[test]
+    fn test_kitty_transmit_display_has_placement() {
+        let pixel_data: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+        let b64_data =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+
+        let mut parser = KittyParser::new();
+        let payload = format!("a=T,f=32,s=2,v=2,c=10,r=5,x=2,y=3;{}", b64_data);
+        parser.parse_chunk(&payload).unwrap();
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+
+        match result {
+            KittyGraphicResult::Graphic(graphic) => {
+                assert_eq!(graphic.placement.columns, Some(10));
+                assert_eq!(graphic.placement.rows, Some(5));
+                assert_eq!(graphic.placement.x_offset, 2);
+                assert_eq!(graphic.placement.y_offset, 3);
+                assert_eq!(
+                    graphic.placement.display_mode,
+                    crate::graphics::ImageDisplayMode::Inline
+                );
+            }
+            _ => panic!("Expected Graphic result"),
+        }
+    }
+
+    #[test]
+    fn test_kitty_put_placement_with_z_index() {
+        // First store an image
+        let pixel_data: Vec<u8> = vec![255, 0, 0, 255];
+        let b64_data =
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
+
+        let mut parser = KittyParser::new();
+        let payload = format!("a=t,f=32,s=1,v=1,i=42;{}", b64_data);
+        parser.parse_chunk(&payload).unwrap();
+        let mut store = GraphicsStore::new();
+        parser.build_graphic((0, 0), &mut store).unwrap();
+
+        // Now put with z-index
+        let mut parser2 = KittyParser::new();
+        parser2.parse_chunk("a=p,i=42,z=5;").unwrap();
+        let result = parser2.build_graphic((0, 0), &mut store).unwrap();
+
+        match result {
+            KittyGraphicResult::Graphic(graphic) => {
+                assert_eq!(graphic.placement.z_index, 5);
+            }
+            _ => panic!("Expected Graphic result"),
+        }
     }
 }

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Image Placement Metadata**: Parse and expose unified image placement modes from graphics protocols (#16)
+  - New `ImagePlacement` struct with display mode, sizing, z-index, and sub-cell offset fields
+  - New `ImageDimension` struct with unit support (auto, cells, pixels, percent)
+  - **Kitty protocol**: Extracts columns/rows sizing (`c=`/`r=`), z-index for layering (`z=`), and sub-cell offsets (`x=`/`y=`)
+  - **iTerm2 protocol**: Parses `width`/`height` with unit support (cells, `px`, `%`, auto), `preserveAspectRatio` flag, and `inline` flag
+  - Exposed to Python via `Graphic.placement` property returning `ImagePlacement` object
+  - New `ImagePlacement` and `ImageDimension` Python classes importable from the package
+  - Enables frontends to implement inline/cover/contain rendering without protocol-specific logic
 - **Original Image Dimensions**: All graphics protocols (Sixel, iTerm2, Kitty) now expose `original_width` and `original_height` on `TerminalGraphic` and Python `Graphic` objects
   - These preserve the original decoded pixel dimensions even when `width`/`height` change during animation
   - Enables frontends to calculate correct aspect ratios when scaling images to fit terminal cells

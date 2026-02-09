@@ -63,6 +63,8 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Attributes](#attributes)
   - [ShellIntegration](#shellintegration)
   - [Graphic](#graphic)
+  - [ImagePlacement](#imageplacement)
+  - [ImageDimension](#imagedimension)
   - [ScreenSnapshot](#screensnapshot)
   - [NotificationConfig](#notificationconfig)
   - [NotificationEvent](#notificationevent)
@@ -816,12 +818,39 @@ Protocol-agnostic graphic representation (Sixel, iTerm2, or Kitty).
 - `scroll_offset_rows: int`: Rows scrolled off visible area (for partial rendering)
 - `cell_dimensions: tuple[int, int] | None`: Cell dimensions `(cell_width, cell_height)` for rendering
 - `was_compressed: bool`: Whether the original data was compressed (e.g., Kitty `o=z` zlib). Useful for diagnostics/logging.
+- `placement: ImagePlacement`: Unified placement metadata (display mode, sizing, z-index, offsets)
 
 **Methods:**
 - `get_pixel(x: int, y: int) -> tuple[int, int, int, int] | None`: Get RGBA color at pixel coordinates, or `None` if out of bounds
 - `pixels() -> bytes`: Get raw RGBA pixel data in row-major order
 - `cell_size(cell_width: int, cell_height: int) -> tuple[int, int]`: Get size in terminal cells `(cols, rows)`
 - `sample_half_block(cell_col: int, cell_row: int, cell_width: int, cell_height: int) -> tuple[tuple[int, int, int, int], tuple[int, int, int, int]] | None`: Sample top/bottom half-block colors for rendering
+
+### ImagePlacement
+
+Unified image placement metadata across graphics protocols. Abstracts placement info from Kitty and iTerm2 so frontends can implement inline/cover/contain rendering without protocol-specific logic.
+
+**Properties:**
+- `display_mode: str`: Display mode (`"inline"` or `"download"`)
+- `requested_width: ImageDimension`: Requested width for sizing
+- `requested_height: ImageDimension`: Requested height for sizing
+- `preserve_aspect_ratio: bool`: Whether to preserve aspect ratio when scaling (default `True`)
+- `columns: int | None`: Number of columns to display (Kitty `c=` parameter)
+- `rows: int | None`: Number of rows to display (Kitty `r=` parameter)
+- `z_index: int`: Z-index for layering (Kitty `z=` parameter, 0 = default)
+- `x_offset: int`: X offset within the cell in pixels (Kitty `x=` parameter)
+- `y_offset: int`: Y offset within the cell in pixels (Kitty `y=` parameter)
+
+### ImageDimension
+
+Image dimension with unit for sizing.
+
+**Properties:**
+- `value: float`: Numeric value (0 means auto)
+- `unit: str`: Unit: `"auto"`, `"cells"`, `"pixels"`, or `"percent"`
+
+**Methods:**
+- `is_auto() -> bool`: Check if this is an auto dimension
 
 ### ScreenSnapshot
 

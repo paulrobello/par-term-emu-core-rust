@@ -268,6 +268,102 @@ impl From<&crate::terminal::ProgressBar> for PyProgressBar {
     }
 }
 
+/// Image dimension with unit for sizing
+#[pyclass(name = "ImageDimension")]
+#[derive(Clone)]
+pub struct PyImageDimension {
+    /// Numeric value (0 means auto)
+    #[pyo3(get)]
+    pub value: f64,
+    /// Unit: "auto", "cells", "pixels", or "percent"
+    #[pyo3(get)]
+    pub unit: String,
+}
+
+#[pymethods]
+impl PyImageDimension {
+    /// Check if this is an auto dimension
+    fn is_auto(&self) -> bool {
+        self.unit == "auto" || self.value == 0.0
+    }
+
+    fn __repr__(&self) -> PyResult<String> {
+        if self.is_auto() {
+            Ok("ImageDimension(auto)".to_string())
+        } else {
+            Ok(format!("ImageDimension({} {})", self.value, self.unit))
+        }
+    }
+}
+
+impl From<&crate::graphics::ImageDimension> for PyImageDimension {
+    fn from(dim: &crate::graphics::ImageDimension) -> Self {
+        Self {
+            value: dim.value,
+            unit: dim.unit.as_str().to_string(),
+        }
+    }
+}
+
+/// Image placement metadata for rendering
+#[pyclass(name = "ImagePlacement")]
+#[derive(Clone)]
+pub struct PyImagePlacement {
+    /// Display mode: "inline" or "download"
+    #[pyo3(get)]
+    pub display_mode: String,
+    /// Requested width dimension
+    #[pyo3(get)]
+    pub requested_width: PyImageDimension,
+    /// Requested height dimension
+    #[pyo3(get)]
+    pub requested_height: PyImageDimension,
+    /// Whether to preserve aspect ratio when scaling
+    #[pyo3(get)]
+    pub preserve_aspect_ratio: bool,
+    /// Number of columns to display (Kitty)
+    #[pyo3(get)]
+    pub columns: Option<u32>,
+    /// Number of rows to display (Kitty)
+    #[pyo3(get)]
+    pub rows: Option<u32>,
+    /// Z-index for layering
+    #[pyo3(get)]
+    pub z_index: i32,
+    /// X offset within the cell in pixels
+    #[pyo3(get)]
+    pub x_offset: u32,
+    /// Y offset within the cell in pixels
+    #[pyo3(get)]
+    pub y_offset: u32,
+}
+
+#[pymethods]
+impl PyImagePlacement {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "ImagePlacement(mode='{}', preserve_aspect_ratio={}, z_index={})",
+            self.display_mode, self.preserve_aspect_ratio, self.z_index
+        ))
+    }
+}
+
+impl From<&crate::graphics::ImagePlacement> for PyImagePlacement {
+    fn from(placement: &crate::graphics::ImagePlacement) -> Self {
+        Self {
+            display_mode: placement.display_mode.as_str().to_string(),
+            requested_width: PyImageDimension::from(&placement.requested_width),
+            requested_height: PyImageDimension::from(&placement.requested_height),
+            preserve_aspect_ratio: placement.preserve_aspect_ratio,
+            columns: placement.columns,
+            rows: placement.rows,
+            z_index: placement.z_index,
+            x_offset: placement.x_offset,
+            y_offset: placement.y_offset,
+        }
+    }
+}
+
 /// Graphics representation (Sixel, iTerm2, or Kitty)
 #[pyclass(name = "Graphic")]
 #[derive(Clone)]
@@ -292,6 +388,8 @@ pub struct PyGraphic {
     pub cell_dimensions: Option<(u32, u32)>,
     #[pyo3(get)]
     pub was_compressed: bool,
+    #[pyo3(get)]
+    pub placement: PyImagePlacement,
     pixels: Vec<u8>,
 }
 
@@ -389,6 +487,7 @@ impl From<&crate::sixel::SixelGraphic> for PyGraphic {
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: graphic.pixels.clone(),
         }
     }
@@ -407,6 +506,7 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
             scroll_offset_rows: graphic.scroll_offset_rows,
             cell_dimensions: graphic.cell_dimensions,
             was_compressed: graphic.was_compressed,
+            placement: PyImagePlacement::from(&graphic.placement),
             pixels: (*graphic.pixels).clone(),
         }
     }
@@ -3585,6 +3685,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels,
         };
 
@@ -3607,6 +3708,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: vec![0; 16], // 2x2 RGBA
         };
 
@@ -3628,6 +3730,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: vec![128; 36], // 3x3 RGBA with all values at 128
         };
 
@@ -3656,6 +3759,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: original_pixels.clone(),
         };
 
@@ -3677,6 +3781,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: vec![],
         };
 
@@ -3700,6 +3805,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels: vec![1, 2, 3, 4],
         };
 
@@ -3740,6 +3846,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels,
         };
 
@@ -3868,6 +3975,7 @@ mod tests {
             scroll_offset_rows: 0,
             cell_dimensions: None,
             was_compressed: false,
+            placement: PyImagePlacement::from(&crate::graphics::ImagePlacement::inline()),
             pixels,
         };
 
