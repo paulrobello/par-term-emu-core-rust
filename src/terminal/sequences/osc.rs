@@ -8,12 +8,13 @@
 //! - Shell integration (OSC 133)
 //! - Notifications (OSC 9, OSC 777)
 //! - Progress bar (OSC 9;4 - ConEmu/Windows Terminal style)
+//! - Named progress bars (OSC 934 - multiple concurrent progress bars)
 //! - Directory tracking (OSC 7)
 
 use crate::color::Color;
 use crate::debug;
 use crate::shell_integration::ShellIntegrationMarker;
-use crate::terminal::progress::{ProgressBar, ProgressState};
+use crate::terminal::progress::{ProgressBar, ProgressBarCommand, ProgressState};
 use crate::terminal::{Notification, Terminal};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use percent_encoding::percent_decode_str;
@@ -498,7 +499,62 @@ impl Terminal {
                         }
                     }
                 }
+                "934" => {
+                    // OSC 934 - Named progress bar protocol
+                    // Format: OSC 934 ; action ; id [; key=value ...] ST
+                    self.handle_osc934(params);
+                }
                 _ => {}
+            }
+        }
+    }
+
+    /// Handle OSC 934 named progress bar sequences
+    ///
+    /// Format: `OSC 934 ; action ; id [; key=value ...] ST`
+    ///
+    /// Actions:
+    /// - `set` — create or update a progress bar
+    /// - `remove` — remove a specific progress bar by ID
+    /// - `remove_all` — remove all progress bars
+    fn handle_osc934(&mut self, params: &[&[u8]]) {
+        match ProgressBarCommand::parse(params) {
+            Some(ProgressBarCommand::Set(bar)) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC934",
+                    &format!(
+                        "Set progress bar: id={}, state={}, percent={}, label={:?}",
+                        bar.id,
+                        bar.state.description(),
+                        bar.percent,
+                        bar.label
+                    ),
+                );
+                self.set_named_progress_bar(bar);
+            }
+            Some(ProgressBarCommand::Remove(id)) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC934",
+                    &format!("Remove progress bar: id={}", id),
+                );
+                self.remove_named_progress_bar(&id);
+            }
+            Some(ProgressBarCommand::RemoveAll) => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC934",
+                    "Remove all progress bars",
+                );
+                self.remove_all_named_progress_bars();
+            }
+            None => {
+                debug::log(
+                    debug::DebugLevel::Debug,
+                    "OSC934",
+                    "Failed to parse OSC 934 sequence",
+                );
             }
         }
     }
@@ -1707,5 +1763,266 @@ mod tests {
             term.session_variables().get("myvar"),
             Some("testval".to_string())
         );
+    }
+
+    // === OSC 934 Named Progress Bar Tests ===
+
+    #[test]
+    fn test_osc934_set_progress_bar() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 934 ; set ; dl-1 ; percent=50 ; label=Downloading ST
+        term.process(b"\x1b]934;set;dl-1;percent=50;label=Downloading\x1b\\");
+
+        let bars = term.named_progress_bars();
+        assert_eq!(bars.len(), 1);
+
+        let bar = bars.get("dl-1").unwrap();
+        assert_eq!(bar.id, "dl-1");
+        assert_eq!(bar.state, crate::terminal::ProgressState::Normal);
+        assert_eq!(bar.percent, 50);
+        assert_eq!(bar.label, Some("Downloading".to_string()));
+    }
+
+    #[test]
+    fn test_osc934_set_with_state() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;build;state=indeterminate;label=Compiling\x1b\\");
+
+        let bar = term.get_named_progress_bar("build").unwrap();
+        assert_eq!(bar.state, crate::terminal::ProgressState::Indeterminate);
+        assert_eq!(bar.label, Some("Compiling".to_string()));
+    }
+
+    #[test]
+    fn test_osc934_update_progress_bar() {
+        let mut term = Terminal::new(80, 24);
+
+        // Create
+        term.process(b"\x1b]934;set;dl-1;percent=10;label=Starting\x1b\\");
+        assert_eq!(term.get_named_progress_bar("dl-1").unwrap().percent, 10);
+
+        // Update
+        term.process(b"\x1b]934;set;dl-1;percent=75;label=Almost done\x1b\\");
+        let bar = term.get_named_progress_bar("dl-1").unwrap();
+        assert_eq!(bar.percent, 75);
+        assert_eq!(bar.label, Some("Almost done".to_string()));
+
+        // Still only one bar
+        assert_eq!(term.named_progress_bars().len(), 1);
+    }
+
+    #[test]
+    fn test_osc934_multiple_bars() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;dl-1;percent=30;label=File 1\x1b\\");
+        term.process(b"\x1b]934;set;dl-2;percent=60;label=File 2\x1b\\");
+        term.process(b"\x1b]934;set;build;state=indeterminate\x1b\\");
+
+        assert_eq!(term.named_progress_bars().len(), 3);
+        assert_eq!(term.get_named_progress_bar("dl-1").unwrap().percent, 30);
+        assert_eq!(term.get_named_progress_bar("dl-2").unwrap().percent, 60);
+        assert_eq!(
+            term.get_named_progress_bar("build").unwrap().state,
+            crate::terminal::ProgressState::Indeterminate
+        );
+    }
+
+    #[test]
+    fn test_osc934_remove_progress_bar() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;dl-1;percent=50\x1b\\");
+        term.process(b"\x1b]934;set;dl-2;percent=70\x1b\\");
+        assert_eq!(term.named_progress_bars().len(), 2);
+
+        term.process(b"\x1b]934;remove;dl-1\x1b\\");
+        assert_eq!(term.named_progress_bars().len(), 1);
+        assert!(term.get_named_progress_bar("dl-1").is_none());
+        assert!(term.get_named_progress_bar("dl-2").is_some());
+    }
+
+    #[test]
+    fn test_osc934_remove_all() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;a;percent=10\x1b\\");
+        term.process(b"\x1b]934;set;b;percent=20\x1b\\");
+        term.process(b"\x1b]934;set;c;percent=30\x1b\\");
+        assert_eq!(term.named_progress_bars().len(), 3);
+
+        term.process(b"\x1b]934;remove_all\x1b\\");
+        assert!(term.named_progress_bars().is_empty());
+    }
+
+    #[test]
+    fn test_osc934_event_emitted_on_set() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;dl-1;percent=42;label=Test\x1b\\");
+
+        let events = term.poll_events();
+        let pb_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ProgressBarChanged { .. }))
+            .collect();
+        assert_eq!(pb_events.len(), 1);
+
+        if let crate::terminal::TerminalEvent::ProgressBarChanged {
+            action,
+            id,
+            state,
+            percent,
+            label,
+        } = &pb_events[0]
+        {
+            assert_eq!(*action, crate::terminal::ProgressBarAction::Set);
+            assert_eq!(id, "dl-1");
+            assert_eq!(*state, Some(crate::terminal::ProgressState::Normal));
+            assert_eq!(*percent, Some(42));
+            assert_eq!(*label, Some("Test".to_string()));
+        } else {
+            panic!("Expected ProgressBarChanged event");
+        }
+    }
+
+    #[test]
+    fn test_osc934_event_emitted_on_remove() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;dl-1;percent=42\x1b\\");
+        term.poll_events(); // Clear set event
+
+        term.process(b"\x1b]934;remove;dl-1\x1b\\");
+        let events = term.poll_events();
+        let pb_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ProgressBarChanged { .. }))
+            .collect();
+        assert_eq!(pb_events.len(), 1);
+
+        if let crate::terminal::TerminalEvent::ProgressBarChanged { action, id, .. } = &pb_events[0]
+        {
+            assert_eq!(*action, crate::terminal::ProgressBarAction::Remove);
+            assert_eq!(id, "dl-1");
+        }
+    }
+
+    #[test]
+    fn test_osc934_event_emitted_on_remove_all() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;a;percent=10\x1b\\");
+        term.process(b"\x1b]934;set;b;percent=20\x1b\\");
+        term.poll_events(); // Clear set events
+
+        term.process(b"\x1b]934;remove_all\x1b\\");
+        let events = term.poll_events();
+        let pb_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ProgressBarChanged { .. }))
+            .collect();
+        assert_eq!(pb_events.len(), 1);
+
+        if let crate::terminal::TerminalEvent::ProgressBarChanged { action, .. } = &pb_events[0] {
+            assert_eq!(*action, crate::terminal::ProgressBarAction::RemoveAll);
+        }
+    }
+
+    #[test]
+    fn test_osc934_no_event_on_remove_nonexistent() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;remove;nonexistent\x1b\\");
+        let events = term.poll_events();
+        let pb_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ProgressBarChanged { .. }))
+            .collect();
+        assert_eq!(pb_events.len(), 0);
+    }
+
+    #[test]
+    fn test_osc934_no_event_on_remove_all_empty() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;remove_all\x1b\\");
+        let events = term.poll_events();
+        let pb_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ProgressBarChanged { .. }))
+            .collect();
+        assert_eq!(pb_events.len(), 0);
+    }
+
+    #[test]
+    fn test_osc934_invalid_sequence_ignored() {
+        let mut term = Terminal::new(80, 24);
+
+        // Invalid action
+        term.process(b"\x1b]934;invalid\x1b\\");
+        assert!(term.named_progress_bars().is_empty());
+
+        // Missing ID for set
+        term.process(b"\x1b]934;set\x1b\\");
+        assert!(term.named_progress_bars().is_empty());
+
+        // Missing ID for remove
+        term.process(b"\x1b]934;remove\x1b\\");
+        assert!(term.named_progress_bars().is_empty());
+    }
+
+    #[test]
+    fn test_osc934_bell_terminated() {
+        let mut term = Terminal::new(80, 24);
+
+        // BEL-terminated variant
+        term.process(b"\x1b]934;set;dl-1;percent=99;label=Done\x07");
+
+        let bar = term.get_named_progress_bar("dl-1").unwrap();
+        assert_eq!(bar.percent, 99);
+        assert_eq!(bar.label, Some("Done".to_string()));
+    }
+
+    #[test]
+    fn test_osc934_warning_state() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;job;state=warning;percent=80;label=Disk space low\x1b\\");
+
+        let bar = term.get_named_progress_bar("job").unwrap();
+        assert_eq!(bar.state, crate::terminal::ProgressState::Warning);
+        assert_eq!(bar.percent, 80);
+        assert_eq!(bar.label, Some("Disk space low".to_string()));
+    }
+
+    #[test]
+    fn test_osc934_error_state() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]934;set;build;state=error;label=Build failed\x1b\\");
+
+        let bar = term.get_named_progress_bar("build").unwrap();
+        assert_eq!(bar.state, crate::terminal::ProgressState::Error);
+        assert_eq!(bar.label, Some("Build failed".to_string()));
+    }
+
+    #[test]
+    fn test_osc934_does_not_affect_osc94() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4 and OSC 934 are independent
+        term.process(b"\x1b]9;4;1;50\x1b\\");
+        term.process(b"\x1b]934;set;dl-1;percent=75\x1b\\");
+
+        // OSC 9;4 state should be unchanged
+        assert!(term.has_progress());
+        assert_eq!(term.progress_value(), 50);
+
+        // OSC 934 state should be independent
+        assert_eq!(term.named_progress_bars().len(), 1);
+        assert_eq!(term.get_named_progress_bar("dl-1").unwrap().percent, 75);
     }
 }

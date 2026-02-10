@@ -341,6 +341,19 @@ ConEmu/Windows Terminal style progress indicator:
 - `OSC 9;4;3;N ST` - Warning progress at N%
 - `OSC 9;4;4;N ST` - Error progress at N%
 
+### Named Progress Bars (OSC 934)
+
+Multiple concurrent progress bars with IDs and labels:
+
+- `OSC 934;set;ID;percent=N;label=TEXT;state=STATE ST` - Create/update a progress bar
+- `OSC 934;remove;ID ST` - Remove a specific progress bar
+- `OSC 934;remove_all ST` - Remove all progress bars
+
+Parameters for `set`:
+- `percent=N` — progress percentage (0-100, clamped)
+- `label=TEXT` — descriptive label
+- `state=STATE` — one of: `normal`, `indeterminate`, `warning`, `error`, `hidden`
+
 ### iTerm2 Inline Images
 
 - `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - iTerm2 inline images

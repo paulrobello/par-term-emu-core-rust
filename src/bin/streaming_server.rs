@@ -1115,6 +1115,24 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
+                        TerminalEvent::ProgressBarChanged {
+                            action,
+                            id,
+                            state,
+                            percent,
+                            label,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::progress_bar_changed(
+                                    action,
+                                    id,
+                                    state,
+                                    percent,
+                                    label,
+                                ),
+                            );
+                        }
                         TerminalEvent::DirtyRegion(_, _) => {
                             // Dirty region is a rendering optimization hint, not needed for streaming
                         }

@@ -20,7 +20,9 @@ mod write;
 // Re-export Notification as it's part of the public API
 pub use notification::Notification;
 // Re-export progress types as they're part of the public API
-pub use progress::{ProgressBar, ProgressState};
+pub use progress::{
+    NamedProgressBar, ProgressBar, ProgressBarAction, ProgressBarCommand, ProgressState,
+};
 // Re-export trigger types as they're part of the public API
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
@@ -110,6 +112,19 @@ pub enum TerminalEvent {
         /// Previous value if the variable already existed
         old_value: Option<String>,
     },
+    /// A named progress bar was created, updated, or removed (from OSC 934)
+    ProgressBarChanged {
+        /// The action that occurred
+        action: ProgressBarAction,
+        /// Progress bar ID
+        id: String,
+        /// Progress bar state (only for Set action)
+        state: Option<ProgressState>,
+        /// Progress percentage 0-100 (only for Set action)
+        percent: Option<u8>,
+        /// Optional label (only for Set action)
+        label: Option<String>,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -125,6 +140,7 @@ pub enum TerminalEventKind {
     CwdChanged,
     TriggerMatched,
     UserVarChanged,
+    ProgressBarChanged,
 }
 
 /// Hyperlink information with all its locations
@@ -1247,6 +1263,8 @@ pub struct Terminal {
     notifications: Vec<Notification>,
     /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
     progress_bar: ProgressBar,
+    /// Named progress bars from OSC 934 sequences (keyed by ID)
+    named_progress_bars: HashMap<String, NamedProgressBar>,
     /// Bell event counter - incremented each time bell (BEL/\x07) is received
     bell_count: u64,
     /// VTE parser instance (maintains state across process() calls)
@@ -1670,6 +1688,7 @@ impl Terminal {
             color_stack: Vec::new(),
             notifications: Vec::new(),
             progress_bar: ProgressBar::default(),
+            named_progress_bars: HashMap::new(),
             bell_count: 0,
             parser: vte::Parser::new(),
             pending_wrap: false,
@@ -2620,6 +2639,71 @@ impl Terminal {
         self.progress_bar = ProgressBar::hidden();
     }
 
+    // Named progress bar methods (OSC 934)
+
+    /// Get all named progress bars
+    ///
+    /// Returns the map of active named progress bars set via OSC 934 sequences.
+    pub fn named_progress_bars(&self) -> &HashMap<String, NamedProgressBar> {
+        &self.named_progress_bars
+    }
+
+    /// Get a specific named progress bar by ID
+    pub fn get_named_progress_bar(&self, id: &str) -> Option<&NamedProgressBar> {
+        self.named_progress_bars.get(id)
+    }
+
+    /// Set or update a named progress bar and emit an event
+    pub fn set_named_progress_bar(&mut self, bar: NamedProgressBar) {
+        let id = bar.id.clone();
+        let state = bar.state;
+        let percent = bar.percent;
+        let label = bar.label.clone();
+        self.named_progress_bars.insert(id.clone(), bar);
+        self.terminal_events
+            .push(TerminalEvent::ProgressBarChanged {
+                action: ProgressBarAction::Set,
+                id,
+                state: Some(state),
+                percent: Some(percent),
+                label,
+            });
+    }
+
+    /// Remove a named progress bar by ID and emit an event
+    ///
+    /// Returns true if the bar existed and was removed.
+    pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
+        if self.named_progress_bars.remove(id).is_some() {
+            self.terminal_events
+                .push(TerminalEvent::ProgressBarChanged {
+                    action: ProgressBarAction::Remove,
+                    id: id.to_string(),
+                    state: None,
+                    percent: None,
+                    label: None,
+                });
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove all named progress bars and emit an event
+    pub fn remove_all_named_progress_bars(&mut self) {
+        if !self.named_progress_bars.is_empty() {
+            self.named_progress_bars.clear();
+            self.terminal_events
+                .push(TerminalEvent::ProgressBarChanged {
+                    action: ProgressBarAction::RemoveAll,
+                    id: String::new(),
+                    state: None,
+                    percent: None,
+                    label: None,
+                });
+        }
+    }
+
     /// Get the current bell count
     ///
     /// This counter increments each time the terminal receives a bell character (BEL/\x07).
@@ -2711,6 +2795,7 @@ impl Terminal {
             TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
             TerminalEvent::TriggerMatched(_) => TerminalEventKind::TriggerMatched,
             TerminalEvent::UserVarChanged { .. } => TerminalEventKind::UserVarChanged,
+            TerminalEvent::ProgressBarChanged { .. } => TerminalEventKind::ProgressBarChanged,
         }
     }
 

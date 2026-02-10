@@ -150,6 +150,161 @@ impl ProgressBar {
     }
 }
 
+/// Action for an OSC 934 progress bar operation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgressBarAction {
+    /// Create or update a progress bar
+    Set,
+    /// Remove a progress bar by ID
+    Remove,
+    /// Remove all progress bars
+    RemoveAll,
+}
+
+/// A named progress bar from OSC 934 sequences
+///
+/// OSC 934 supports multiple concurrent progress bars, each identified by a
+/// unique string ID. Each bar has a state, percentage, and optional label.
+///
+/// ## Protocol Format
+///
+/// `OSC 934 ; action ; id [; key=value ...] ST`
+///
+/// Actions:
+/// - `set` — create or update a progress bar
+/// - `remove` — remove a specific progress bar
+/// - `remove_all` — remove all progress bars
+///
+/// Key-value parameters (for `set`):
+/// - `percent=N` — progress percentage (0-100, clamped)
+/// - `label=text` — descriptive label for the progress bar
+/// - `state=S` — state name: `normal`, `indeterminate`, `warning`, `error`
+///
+/// ## Examples
+///
+/// ```text
+/// \x1b]934;set;dl-1;percent=50;label=Downloading\x1b\\
+/// \x1b]934;set;dl-1;percent=100;state=normal\x1b\\
+/// \x1b]934;set;build;state=indeterminate;label=Compiling\x1b\\
+/// \x1b]934;set;build;state=error;label=Build failed\x1b\\
+/// \x1b]934;remove;dl-1\x1b\\
+/// \x1b]934;remove_all\x1b\\
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedProgressBar {
+    /// Unique identifier for the progress bar
+    pub id: String,
+    /// Current progress state
+    pub state: ProgressState,
+    /// Progress percentage (0-100), only meaningful for Normal/Warning/Error states
+    pub percent: u8,
+    /// Optional descriptive label
+    pub label: Option<String>,
+}
+
+impl NamedProgressBar {
+    /// Create a new named progress bar
+    pub fn new(id: String, state: ProgressState, percent: u8, label: Option<String>) -> Self {
+        Self {
+            id,
+            state,
+            percent: percent.min(100),
+            label,
+        }
+    }
+}
+
+/// Result of parsing an OSC 934 sequence
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgressBarCommand {
+    /// Create or update a named progress bar
+    Set(NamedProgressBar),
+    /// Remove a progress bar by ID
+    Remove(String),
+    /// Remove all progress bars
+    RemoveAll,
+}
+
+impl ProgressBarCommand {
+    /// Parse an OSC 934 parameter list into a ProgressBarCommand
+    ///
+    /// Expected format after the "934" prefix:
+    /// params[0] = "934" (already consumed by caller)
+    /// params[1] = action ("set", "remove", "remove_all")
+    /// params[2] = id (for "set" and "remove")
+    /// params[3..] = key=value pairs (for "set")
+    pub fn parse(params: &[&[u8]]) -> Option<Self> {
+        // params[0] is "934", params[1] is the action
+        if params.len() < 2 {
+            return None;
+        }
+
+        let action = std::str::from_utf8(params[1]).ok()?.trim();
+
+        match action {
+            "set" => {
+                // Need at least an ID
+                if params.len() < 3 {
+                    return None;
+                }
+                let id = std::str::from_utf8(params[2]).ok()?.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+
+                let mut state = ProgressState::Normal;
+                let mut percent: u8 = 0;
+                let mut label: Option<String> = None;
+
+                // Parse key=value pairs
+                for param in &params[3..] {
+                    if let Ok(kv) = std::str::from_utf8(param) {
+                        let kv = kv.trim();
+                        if let Some((key, value)) = kv.split_once('=') {
+                            match key.trim() {
+                                "percent" => {
+                                    if let Ok(p) = value.trim().parse::<u16>() {
+                                        percent = (p.min(100)) as u8;
+                                    }
+                                }
+                                "label" => {
+                                    let v = value.trim();
+                                    if !v.is_empty() {
+                                        label = Some(v.to_string());
+                                    }
+                                }
+                                "state" => match value.trim() {
+                                    "normal" => state = ProgressState::Normal,
+                                    "indeterminate" => state = ProgressState::Indeterminate,
+                                    "warning" => state = ProgressState::Warning,
+                                    "error" => state = ProgressState::Error,
+                                    "hidden" => state = ProgressState::Hidden,
+                                    _ => {}
+                                },
+                                _ => {} // Ignore unknown keys
+                            }
+                        }
+                    }
+                }
+
+                Some(Self::Set(NamedProgressBar::new(id, state, percent, label)))
+            }
+            "remove" => {
+                if params.len() < 3 {
+                    return None;
+                }
+                let id = std::str::from_utf8(params[2]).ok()?.trim().to_string();
+                if id.is_empty() {
+                    return None;
+                }
+                Some(Self::Remove(id))
+            }
+            "remove_all" => Some(Self::RemoveAll),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,5 +439,183 @@ mod tests {
         let debug_str = format!("{:?}", pb);
         assert!(debug_str.contains("Normal"));
         assert!(debug_str.contains("50"));
+    }
+
+    // === OSC 934 Named Progress Bar Tests ===
+
+    #[test]
+    fn test_named_progress_bar_new() {
+        let bar = NamedProgressBar::new(
+            "dl-1".to_string(),
+            ProgressState::Normal,
+            50,
+            Some("Downloading".to_string()),
+        );
+        assert_eq!(bar.id, "dl-1");
+        assert_eq!(bar.state, ProgressState::Normal);
+        assert_eq!(bar.percent, 50);
+        assert_eq!(bar.label, Some("Downloading".to_string()));
+    }
+
+    #[test]
+    fn test_named_progress_bar_clamps_percent() {
+        let bar = NamedProgressBar::new("x".to_string(), ProgressState::Normal, 200, None);
+        assert_eq!(bar.percent, 100);
+    }
+
+    #[test]
+    fn test_parse_osc934_set_basic() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"dl-1", b"percent=50", b"label=Downloading"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.id, "dl-1");
+                assert_eq!(bar.state, ProgressState::Normal);
+                assert_eq!(bar.percent, 50);
+                assert_eq!(bar.label, Some("Downloading".to_string()));
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_set_with_state() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"build", b"state=indeterminate"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.id, "build");
+                assert_eq!(bar.state, ProgressState::Indeterminate);
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_set_warning() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"job", b"state=warning", b"percent=80"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.state, ProgressState::Warning);
+                assert_eq!(bar.percent, 80);
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_set_error() {
+        let params: Vec<&[u8]> = vec![
+            b"934",
+            b"set",
+            b"build",
+            b"state=error",
+            b"label=Build failed",
+        ];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.state, ProgressState::Error);
+                assert_eq!(bar.label, Some("Build failed".to_string()));
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_set_minimal() {
+        // Just ID, no extra params — defaults to Normal state at 0%
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"x"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.id, "x");
+                assert_eq!(bar.state, ProgressState::Normal);
+                assert_eq!(bar.percent, 0);
+                assert_eq!(bar.label, None);
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_remove() {
+        let params: Vec<&[u8]> = vec![b"934", b"remove", b"dl-1"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        assert_eq!(cmd, ProgressBarCommand::Remove("dl-1".to_string()));
+    }
+
+    #[test]
+    fn test_parse_osc934_remove_all() {
+        let params: Vec<&[u8]> = vec![b"934", b"remove_all"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        assert_eq!(cmd, ProgressBarCommand::RemoveAll);
+    }
+
+    #[test]
+    fn test_parse_osc934_missing_action() {
+        let params: Vec<&[u8]> = vec![b"934"];
+        assert!(ProgressBarCommand::parse(&params).is_none());
+    }
+
+    #[test]
+    fn test_parse_osc934_invalid_action() {
+        let params: Vec<&[u8]> = vec![b"934", b"invalid"];
+        assert!(ProgressBarCommand::parse(&params).is_none());
+    }
+
+    #[test]
+    fn test_parse_osc934_set_missing_id() {
+        let params: Vec<&[u8]> = vec![b"934", b"set"];
+        assert!(ProgressBarCommand::parse(&params).is_none());
+    }
+
+    #[test]
+    fn test_parse_osc934_set_empty_id() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b""];
+        assert!(ProgressBarCommand::parse(&params).is_none());
+    }
+
+    #[test]
+    fn test_parse_osc934_remove_missing_id() {
+        let params: Vec<&[u8]> = vec![b"934", b"remove"];
+        assert!(ProgressBarCommand::parse(&params).is_none());
+    }
+
+    #[test]
+    fn test_parse_osc934_percent_clamped() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"x", b"percent=999"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.percent, 100);
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_unknown_keys_ignored() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"x", b"foo=bar", b"percent=42"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.percent, 42);
+            }
+            _ => panic!("Expected Set command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_osc934_invalid_percent_ignored() {
+        let params: Vec<&[u8]> = vec![b"934", b"set", b"x", b"percent=abc"];
+        let cmd = ProgressBarCommand::parse(&params).unwrap();
+        match cmd {
+            ProgressBarCommand::Set(bar) => {
+                assert_eq!(bar.percent, 0); // Stays at default
+            }
+            _ => panic!("Expected Set command"),
+        }
     }
 }

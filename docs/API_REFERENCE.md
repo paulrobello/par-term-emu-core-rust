@@ -1449,6 +1449,21 @@ Progress bar state (OSC 9;4).
 - `ProgressState.Paused`: Progress bar is paused
 - `ProgressState.Error`: Progress bar shows error state
 
+### Named Progress Bars (OSC 934)
+
+The terminal supports multiple concurrent named progress bars via OSC 934 sequences.
+
+**Methods:**
+- `named_progress_bars() -> dict[str, dict]`: Get all named progress bars as `{id: {id, state, percent, label}}`
+- `get_named_progress_bar(id: str) -> dict | None`: Get a specific bar by ID
+- `set_named_progress_bar(id: str, state: str = "normal", percent: int = 0, label: str | None = None)`: Create/update a bar
+- `remove_named_progress_bar(id: str) -> bool`: Remove a bar (returns True if it existed)
+- `remove_all_named_progress_bars()`: Remove all bars
+
+**Events:**
+- Event type: `"progress_bar_changed"` (subscribe with `set_event_subscription(["progress_bar_changed"])`)
+- Event dict keys: `action` ("set"/"remove"/"remove_all"), `id`, `state`, `percent`, `label`
+
 ## See Also
 
 - [VT Sequences Reference](VT_SEQUENCES.md) - Complete list of supported ANSI/VT sequences
