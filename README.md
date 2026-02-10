@@ -13,7 +13,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## What's New (Unreleased)
+## What's New in 0.34.0
 
 ### OSC 1337 RemoteHost Support
 
@@ -99,6 +99,12 @@ All graphics protocols (Sixel, iTerm2, Kitty) now expose `original_width` and `o
 ### Kitty Graphics Compression Support
 
 The Kitty graphics protocol now supports zlib-compressed image payloads (`o=z` parameter). Compressed data is automatically decompressed before pixel decoding, reducing data sent over the PTY. A new `was_compressed` flag on the `Graphic` class allows frontends to track compression usage for diagnostics.
+
+### Dependencies
+
+- Migrated to **PyO3 0.28** from 0.23, updating all Python binding patterns to the latest API
+- `flate2` is now a non-optional dependency (required for Kitty `o=z` decompression)
+- Added `unicode-normalization` v0.1.25 for Unicode text normalization support
 
 ## What's New in 0.33.0
 

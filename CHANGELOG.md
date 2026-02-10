@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-02-09
+
 ### Fixed
 - **Terminal Mode Sync on Connect**: Clients connecting to existing streaming sessions now receive `ModeChanged` messages for all active non-default terminal modes (#31)
   - New `SessionState::build_mode_sync_messages()` sends mode state after `Connected` message in all WebSocket handlers (plain, TLS, Axum)
@@ -77,8 +79,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 8 new Rust tests covering compression parsing, decompression, chunked transfers, and error handling
 
 ### Changed
+- **Dependencies**: Migrated to PyO3 0.28 from 0.23, updating all Python binding patterns to the latest API
 - **Dependencies**: `flate2` is now a non-optional dependency (previously only available under `streaming` feature), required for Kitty `o=z` decompression
 - **Dependencies**: Added `unicode-normalization` v0.1.25 for Unicode text normalization support
+- **Dependencies**: Updated multiple dependency versions across the project
 
 ## [0.33.0] - 2026-02-06
 
@@ -1029,6 +1033,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.34.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.32.0...v0.33.0
+[0.32.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.31.1...v0.32.0
+[0.31.1]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.31.0...v0.31.1
+[0.31.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.28.0...v0.29.0
 [0.28.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.27.0...v0.28.0
 [0.27.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.26.0...v0.27.0
 [0.26.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.25.0...v0.26.0
