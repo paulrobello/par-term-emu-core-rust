@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -73,6 +73,8 @@ pub mod server_message {
         HyperlinkAdded(super::HyperlinkAdded),
         #[prost(message, tag = "18")]
         UserVarChanged(super::UserVarChanged),
+        #[prost(message, tag = "19")]
+        ProgressBarChanged(super::ProgressBarChanged),
     }
 }
 /// Terminal output data (very high frequency)
@@ -276,6 +278,25 @@ pub struct UserVarChanged {
     #[prost(string, optional, tag = "3")]
     pub old_value: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// Named progress bar changed (OSC 934)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ProgressBarChanged {
+    /// "set", "remove", or "remove_all"
+    #[prost(string, tag = "1")]
+    pub action: ::prost::alloc::string::String,
+    /// Progress bar identifier
+    #[prost(string, tag = "2")]
+    pub id: ::prost::alloc::string::String,
+    /// State name (only for "set")
+    #[prost(string, optional, tag = "3")]
+    pub state: ::core::option::Option<::prost::alloc::string::String>,
+    /// Progress percentage 0-100 (only for "set")
+    #[prost(uint32, optional, tag = "4")]
+    pub percent: ::core::option::Option<u32>,
+    /// Descriptive label (only for "set")
+    #[prost(string, optional, tag = "5")]
+    pub label: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(oneof = "client_message::Message", tags = "1, 2, 3, 4, 5")]
@@ -341,6 +362,7 @@ pub enum EventType {
     Graphics = 10,
     Hyperlink = 11,
     UserVar = 12,
+    ProgressBar = 13,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -362,6 +384,7 @@ impl EventType {
             Self::Graphics => "EVENT_TYPE_GRAPHICS",
             Self::Hyperlink => "EVENT_TYPE_HYPERLINK",
             Self::UserVar => "EVENT_TYPE_USER_VAR",
+            Self::ProgressBar => "EVENT_TYPE_PROGRESS_BAR",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -380,6 +403,7 @@ impl EventType {
             "EVENT_TYPE_GRAPHICS" => Some(Self::Graphics),
             "EVENT_TYPE_HYPERLINK" => Some(Self::Hyperlink),
             "EVENT_TYPE_USER_VAR" => Some(Self::UserVar),
+            "EVENT_TYPE_PROGRESS_BAR" => Some(Self::ProgressBar),
             _ => None,
         }
     }

@@ -1021,6 +1021,20 @@ pub fn decode_server_message<'py>(
             dict.set_item("value", value)?;
             dict.set_item("old_value", old_value)?;
         }
+        ServerMessage::ProgressBarChanged {
+            action,
+            id,
+            state,
+            percent,
+            label,
+        } => {
+            dict.set_item("type", "progress_bar_changed")?;
+            dict.set_item("action", action)?;
+            dict.set_item("id", id)?;
+            dict.set_item("state", state)?;
+            dict.set_item("percent", percent)?;
+            dict.set_item("label", label)?;
+        }
     }
 
     Ok(dict)
@@ -1098,6 +1112,7 @@ pub fn encode_client_message<'py>(
                     "graphics" => Some(EventType::Graphics),
                     "hyperlink" => Some(EventType::Hyperlink),
                     "user_var" => Some(EventType::UserVar),
+                    "progress_bar" => Some(EventType::ProgressBar),
                     _ => None,
                 })
                 .collect();
@@ -1174,6 +1189,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Graphics => "graphics",
                     crate::streaming::protocol::EventType::Hyperlink => "hyperlink",
                     crate::streaming::protocol::EventType::UserVar => "user_var",
+                    crate::streaming::protocol::EventType::ProgressBar => "progress_bar",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

@@ -224,6 +224,24 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         old_value: Option<String>,
     },
+
+    /// Named progress bar changed (OSC 934)
+    #[serde(rename = "progress_bar_changed")]
+    ProgressBarChanged {
+        /// Action: "set", "remove", or "remove_all"
+        action: String,
+        /// Progress bar identifier
+        id: String,
+        /// State name (only for "set"): normal, indeterminate, warning, error
+        #[serde(skip_serializing_if = "Option::is_none")]
+        state: Option<String>,
+        /// Progress percentage 0-100 (only for "set")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        percent: Option<u8>,
+        /// Descriptive label (only for "set")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+    },
 }
 
 /// Messages sent from client to server
@@ -287,6 +305,9 @@ pub enum EventType {
     /// User variable change events
     #[serde(rename = "user_var")]
     UserVar,
+    /// Named progress bar events
+    #[serde(rename = "progress_bar")]
+    ProgressBar,
 }
 
 impl ServerMessage {
@@ -601,6 +622,28 @@ impl ServerMessage {
             name,
             value,
             old_value,
+        }
+    }
+
+    /// Create a progress bar changed message from terminal event data
+    pub fn progress_bar_changed(
+        action: crate::terminal::ProgressBarAction,
+        id: String,
+        state: Option<crate::terminal::ProgressState>,
+        percent: Option<u8>,
+        label: Option<String>,
+    ) -> Self {
+        let action_str = match action {
+            crate::terminal::ProgressBarAction::Set => "set",
+            crate::terminal::ProgressBarAction::Remove => "remove",
+            crate::terminal::ProgressBarAction::RemoveAll => "remove_all",
+        };
+        Self::ProgressBarChanged {
+            action: action_str.to_string(),
+            id,
+            state: state.map(|s| s.description().to_string()),
+            percent,
+            label,
         }
     }
 }

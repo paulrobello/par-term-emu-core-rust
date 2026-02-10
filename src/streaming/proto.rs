@@ -308,6 +308,19 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 value: value.clone(),
                 old_value: old_value.clone(),
             })),
+            AppServerMessage::ProgressBarChanged {
+                action,
+                id,
+                state,
+                percent,
+                label,
+            } => Some(Message::ProgressBarChanged(pb::ProgressBarChanged {
+                action: action.clone(),
+                id: id.clone(),
+                state: state.clone(),
+                percent: percent.map(|p| p as u32),
+                label: label.clone(),
+            })),
         };
 
         pb::ServerMessage { message }
@@ -352,6 +365,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Graphics => pb::EventType::Graphics as i32,
             AppEventType::Hyperlink => pb::EventType::Hyperlink as i32,
             AppEventType::UserVar => pb::EventType::UserVar as i32,
+            AppEventType::ProgressBar => pb::EventType::ProgressBar as i32,
         }
     }
 }
@@ -500,6 +514,13 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 value: uv.value,
                 old_value: uv.old_value,
             }),
+            Some(Message::ProgressBarChanged(pbc)) => Ok(AppServerMessage::ProgressBarChanged {
+                action: pbc.action,
+                id: pbc.id,
+                state: pbc.state,
+                percent: pbc.percent.map(|p| p.min(100) as u8),
+                label: pbc.label,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -554,6 +575,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Graphics => AppEventType::Graphics,
             pb::EventType::Hyperlink => AppEventType::Hyperlink,
             pb::EventType::UserVar => AppEventType::UserVar,
+            pb::EventType::ProgressBar => AppEventType::ProgressBar,
         }
     }
 }

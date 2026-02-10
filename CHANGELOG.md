@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OSC 934 Named Progress Bars**: Parse and manage multiple concurrent named progress bars (#22)
+  - Protocol format: `OSC 934 ; action ; id [; key=value ...] ST` with `set`, `remove`, `remove_all` actions
+  - Each bar has a unique ID, state (normal/indeterminate/warning/error), percentage (0-100), and optional label
+  - New `named_progress_bars()`, `get_named_progress_bar(id)`, `set_named_progress_bar()`, `remove_named_progress_bar(id)`, `remove_all_named_progress_bars()` API (Rust and Python)
+  - `ProgressBarChanged` terminal event emitted on create, update, and remove with action/id/state/percent/label
+  - New `progress_bar_changed` streaming protocol message and `progress_bar` event type
+  - Independent from existing OSC 9;4 single progress bar
+  - 15 parser unit tests, 16 integration tests, 4 streaming tests, 17 Python integration tests
 - **Unicode Normalization**: Configurable Unicode normalization (NFC/NFD/NFKC/NFKD) for text stored in terminal cells (#21)
   - New `NormalizationForm` enum with five forms: `None` (disabled), `NFC` (default), `NFD`, `NFKC`, `NFKD`
   - Terminal defaults to NFC (Canonical Composition) for consistent text storage

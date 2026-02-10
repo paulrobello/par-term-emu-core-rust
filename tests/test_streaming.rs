@@ -1028,6 +1028,62 @@ mod streaming_tests {
             // theme should not be present when None
             assert!(!json.contains("theme"), "theme should be omitted when None");
         }
+
+        #[test]
+        fn test_progress_bar_changed_set() {
+            let msg = ServerMessage::ProgressBarChanged {
+                action: "set".to_string(),
+                id: "dl-1".to_string(),
+                state: Some("normal".to_string()),
+                percent: Some(50),
+                label: Some("Downloading".to_string()),
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("progress_bar_changed"));
+            assert!(json.contains("dl-1"));
+            assert!(json.contains("Downloading"));
+        }
+
+        #[test]
+        fn test_progress_bar_changed_remove() {
+            let msg = ServerMessage::ProgressBarChanged {
+                action: "remove".to_string(),
+                id: "dl-1".to_string(),
+                state: None,
+                percent: None,
+                label: None,
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("progress_bar_changed"));
+            assert!(json.contains("remove"));
+            assert!(json.contains("dl-1"));
+            // None fields should be omitted
+            assert!(!json.contains("state"));
+            assert!(!json.contains("percent"));
+            assert!(!json.contains("label"));
+        }
+
+        #[test]
+        fn test_progress_bar_changed_remove_all() {
+            let msg = ServerMessage::ProgressBarChanged {
+                action: "remove_all".to_string(),
+                id: String::new(),
+                state: None,
+                percent: None,
+                label: None,
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("remove_all"));
+        }
+
+        #[test]
+        fn test_event_type_progress_bar() {
+            let msg = ClientMessage::Subscribe {
+                events: vec![EventType::ProgressBar],
+            };
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains("progress_bar"));
+        }
     }
 }
 

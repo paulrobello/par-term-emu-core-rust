@@ -1729,6 +1729,111 @@ impl PyTerminal {
         Ok(())
     }
 
+    // Named progress bar methods (OSC 934)
+
+    /// Get all named progress bars as a dictionary
+    ///
+    /// Returns a dictionary mapping progress bar IDs to their state.
+    /// Each value is a dict with keys: id, state, percent, label.
+    ///
+    /// Returns:
+    ///     Dictionary of {id: {id, state, percent, label}} for all active bars
+    ///
+    /// Example:
+    ///     ```python
+    ///     bars = term.named_progress_bars()
+    ///     for bar_id, bar in bars.items():
+    ///         print(f"{bar_id}: {bar['percent']}% - {bar.get('label', '')}")
+    ///     ```
+    fn named_progress_bars(&self) -> PyResult<HashMap<String, HashMap<String, String>>> {
+        Ok(self
+            .inner
+            .named_progress_bars()
+            .iter()
+            .map(|(id, bar)| {
+                let mut map = HashMap::new();
+                map.insert("id".to_string(), bar.id.clone());
+                map.insert("state".to_string(), bar.state.description().to_string());
+                map.insert("percent".to_string(), bar.percent.to_string());
+                if let Some(label) = &bar.label {
+                    map.insert("label".to_string(), label.clone());
+                }
+                (id.clone(), map)
+            })
+            .collect())
+    }
+
+    /// Get a specific named progress bar by ID
+    ///
+    /// Args:
+    ///     id: The progress bar identifier
+    ///
+    /// Returns:
+    ///     Dict with keys: id, state, percent, label (optional), or None if not found
+    fn get_named_progress_bar(&self, id: &str) -> PyResult<Option<HashMap<String, String>>> {
+        Ok(self.inner.get_named_progress_bar(id).map(|bar| {
+            let mut map = HashMap::new();
+            map.insert("id".to_string(), bar.id.clone());
+            map.insert("state".to_string(), bar.state.description().to_string());
+            map.insert("percent".to_string(), bar.percent.to_string());
+            if let Some(label) = &bar.label {
+                map.insert("label".to_string(), label.clone());
+            }
+            map
+        }))
+    }
+
+    /// Manually set or update a named progress bar
+    ///
+    /// Args:
+    ///     id: Unique identifier for the progress bar
+    ///     state: State string (normal, indeterminate, warning, error)
+    ///     percent: Progress percentage (0-100, clamped if out of range)
+    ///     label: Optional descriptive label
+    #[pyo3(signature = (id, state="normal", percent=0, label=None))]
+    fn set_named_progress_bar(
+        &mut self,
+        id: &str,
+        state: &str,
+        percent: u8,
+        label: Option<String>,
+    ) -> PyResult<()> {
+        let progress_state = match state {
+            "normal" => crate::terminal::ProgressState::Normal,
+            "indeterminate" => crate::terminal::ProgressState::Indeterminate,
+            "warning" => crate::terminal::ProgressState::Warning,
+            "error" => crate::terminal::ProgressState::Error,
+            "hidden" => crate::terminal::ProgressState::Hidden,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Invalid state: {}. Valid: normal, indeterminate, warning, error, hidden",
+                    state
+                )));
+            }
+        };
+        let bar =
+            crate::terminal::NamedProgressBar::new(id.to_string(), progress_state, percent, label);
+        self.inner.set_named_progress_bar(bar);
+        Ok(())
+    }
+
+    /// Remove a named progress bar by ID
+    ///
+    /// Args:
+    ///     id: The progress bar identifier to remove
+    ///
+    /// Returns:
+    ///     True if the bar existed and was removed, False otherwise
+    fn remove_named_progress_bar(&mut self, id: &str) -> PyResult<bool> {
+        Ok(self.inner.remove_named_progress_bar(id))
+    }
+
+    /// Remove all named progress bars
+    fn remove_all_named_progress_bars(&mut self) -> PyResult<()> {
+        self.inner.remove_all_named_progress_bars();
+        Ok(())
+    }
+
     /// Get a debug snapshot of the current buffer state
     ///
     /// Returns:
@@ -2564,6 +2669,31 @@ impl PyTerminal {
                             map.insert("old_value".to_string(), old.clone());
                         }
                     }
+                    TerminalEvent::ProgressBarChanged {
+                        action,
+                        id,
+                        state,
+                        percent,
+                        label,
+                    } => {
+                        map.insert("type".to_string(), "progress_bar_changed".to_string());
+                        let action_str = match action {
+                            crate::terminal::ProgressBarAction::Set => "set",
+                            crate::terminal::ProgressBarAction::Remove => "remove",
+                            crate::terminal::ProgressBarAction::RemoveAll => "remove_all",
+                        };
+                        map.insert("action".to_string(), action_str.to_string());
+                        map.insert("id".to_string(), id.clone());
+                        if let Some(s) = state {
+                            map.insert("state".to_string(), s.description().to_string());
+                        }
+                        if let Some(p) = percent {
+                            map.insert("percent".to_string(), p.to_string());
+                        }
+                        if let Some(l) = label {
+                            map.insert("label".to_string(), l.clone());
+                        }
+                    }
                 }
                 map
             })
@@ -2576,7 +2706,7 @@ impl PyTerminal {
     ///     kinds: Optional list of event kinds to receive (strings).
     ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
     ///            graphics_added, hyperlink_added, dirty_region, cwd_changed,
-    ///            trigger_matched, user_var_changed.
+    ///            trigger_matched, user_var_changed, progress_bar_changed.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         use crate::terminal::TerminalEventKind;
@@ -2594,6 +2724,7 @@ impl PyTerminal {
                     "cwd_changed" => Some(TerminalEventKind::CwdChanged),
                     "trigger_matched" => Some(TerminalEventKind::TriggerMatched),
                     "user_var_changed" => Some(TerminalEventKind::UserVarChanged),
+                    "progress_bar_changed" => Some(TerminalEventKind::ProgressBarChanged),
                     _ => None,
                 })
                 .collect()
@@ -2699,6 +2830,31 @@ impl PyTerminal {
                         map.insert("value".to_string(), value.clone());
                         if let Some(old) = old_value {
                             map.insert("old_value".to_string(), old.clone());
+                        }
+                    }
+                    TerminalEvent::ProgressBarChanged {
+                        action,
+                        id,
+                        state,
+                        percent,
+                        label,
+                    } => {
+                        map.insert("type".to_string(), "progress_bar_changed".to_string());
+                        let action_str = match action {
+                            crate::terminal::ProgressBarAction::Set => "set",
+                            crate::terminal::ProgressBarAction::Remove => "remove",
+                            crate::terminal::ProgressBarAction::RemoveAll => "remove_all",
+                        };
+                        map.insert("action".to_string(), action_str.to_string());
+                        map.insert("id".to_string(), id.clone());
+                        if let Some(s) = state {
+                            map.insert("state".to_string(), s.description().to_string());
+                        }
+                        if let Some(p) = percent {
+                            map.insert("percent".to_string(), p.to_string());
+                        }
+                        if let Some(l) = label {
+                            map.insert("label".to_string(), l.clone());
                         }
                     }
                 }
