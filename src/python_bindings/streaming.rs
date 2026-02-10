@@ -15,7 +15,7 @@ type ResizeReceiver =
 
 /// Python wrapper for StreamingConfig
 #[cfg(feature = "streaming")]
-#[pyclass(name = "StreamingConfig")]
+#[pyclass(name = "StreamingConfig", from_py_object)]
 pub struct PyStreamingConfig {
     inner: StreamingConfig,
 }

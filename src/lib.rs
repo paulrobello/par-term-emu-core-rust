@@ -140,7 +140,7 @@ impl From<pty_error::PtyError> for PyErr {
 
 /// A comprehensive terminal emulator library
 #[cfg(feature = "python")]
-#[pymodule]
+#[pymodule(gil_used = true)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sixel rendering mode constants
     m.add("SIXEL_DISABLED", "disabled")?;

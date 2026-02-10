@@ -20,7 +20,7 @@ pub type LineCellData = Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
 type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
 
 /// Cell attributes
-#[pyclass(name = "Attributes")]
+#[pyclass(name = "Attributes", from_py_object)]
 #[derive(Clone)]
 pub struct PyAttributes {
     #[pyo3(get)]
@@ -166,7 +166,7 @@ impl PyScreenSnapshot {
 }
 
 /// Shell integration state
-#[pyclass(name = "ShellIntegration")]
+#[pyclass(name = "ShellIntegration", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegration {
     #[pyo3(get)]
@@ -219,7 +219,7 @@ impl PyShellIntegration {
 /// print(f"Progress: {pb.progress}%")  # Output: Progress: 50%
 /// print(f"State: {pb.state}")  # Output: State: ProgressState.NORMAL
 /// ```
-#[pyclass(name = "ProgressBar")]
+#[pyclass(name = "ProgressBar", from_py_object)]
 #[derive(Clone)]
 pub struct PyProgressBar {
     /// Current progress state
@@ -274,7 +274,7 @@ impl From<&crate::terminal::ProgressBar> for PyProgressBar {
 }
 
 /// Image dimension with unit for sizing
-#[pyclass(name = "ImageDimension")]
+#[pyclass(name = "ImageDimension", from_py_object)]
 #[derive(Clone)]
 pub struct PyImageDimension {
     /// Numeric value (0 means auto)
@@ -311,7 +311,7 @@ impl From<&crate::graphics::ImageDimension> for PyImageDimension {
 }
 
 /// Image placement metadata for rendering
-#[pyclass(name = "ImagePlacement")]
+#[pyclass(name = "ImagePlacement", from_py_object)]
 #[derive(Clone)]
 pub struct PyImagePlacement {
     /// Display mode: "inline" or "download"
@@ -370,7 +370,7 @@ impl From<&crate::graphics::ImagePlacement> for PyImagePlacement {
 }
 
 /// Graphics representation (Sixel, iTerm2, or Kitty)
-#[pyclass(name = "Graphic")]
+#[pyclass(name = "Graphic", from_py_object)]
 #[derive(Clone)]
 pub struct PyGraphic {
     #[pyo3(get)]
@@ -518,7 +518,7 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
 }
 
 /// Tmux control protocol notification
-#[pyclass(name = "TmuxNotification")]
+#[pyclass(name = "TmuxNotification", from_py_object)]
 #[derive(Clone)]
 pub struct PyTmuxNotification {
     /// Notification type (e.g., "output", "window-add", "session-changed")
@@ -1167,7 +1167,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
 }
 
 /// Search match result
-#[pyclass(name = "SearchMatch")]
+#[pyclass(name = "SearchMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PySearchMatch {
     /// Row index (negative for scrollback, 0+ for visible screen)
@@ -1195,7 +1195,7 @@ impl PySearchMatch {
 }
 
 /// Detected semantic item
-#[pyclass(name = "DetectedItem")]
+#[pyclass(name = "DetectedItem", from_py_object)]
 #[derive(Clone)]
 pub struct PyDetectedItem {
     /// Item type: "url", "filepath", "git_hash", "ip", or "email"
@@ -1226,7 +1226,7 @@ impl PyDetectedItem {
 }
 
 /// Selection mode
-#[pyclass(name = "SelectionMode")]
+#[pyclass(name = "SelectionMode", from_py_object)]
 #[derive(Clone)]
 pub enum PySelectionMode {
     Character,
@@ -1235,7 +1235,7 @@ pub enum PySelectionMode {
 }
 
 /// Selection state
-#[pyclass(name = "Selection")]
+#[pyclass(name = "Selection", from_py_object)]
 #[derive(Clone)]
 pub struct PySelection {
     /// Start position (col, row)
@@ -1260,7 +1260,7 @@ impl PySelection {
 }
 
 /// Scrollback statistics
-#[pyclass(name = "ScrollbackStats")]
+#[pyclass(name = "ScrollbackStats", from_py_object)]
 #[derive(Clone)]
 pub struct PyScrollbackStats {
     /// Total number of scrollback lines
@@ -1285,7 +1285,7 @@ impl PyScrollbackStats {
 }
 
 /// Bookmark
-#[pyclass(name = "Bookmark")]
+#[pyclass(name = "Bookmark", from_py_object)]
 #[derive(Clone)]
 pub struct PyBookmark {
     /// Bookmark ID
@@ -1312,7 +1312,7 @@ impl PyBookmark {
 // === Feature 7: Performance Metrics ===
 
 /// Performance metrics
-#[pyclass(name = "PerformanceMetrics")]
+#[pyclass(name = "PerformanceMetrics", from_py_object)]
 #[derive(Clone)]
 pub struct PyPerformanceMetrics {
     #[pyo3(get)]
@@ -1350,7 +1350,7 @@ impl PyPerformanceMetrics {
 }
 
 /// Frame timing
-#[pyclass(name = "FrameTiming")]
+#[pyclass(name = "FrameTiming", from_py_object)]
 #[derive(Clone)]
 pub struct PyFrameTiming {
     #[pyo3(get)]
@@ -1376,7 +1376,7 @@ impl PyFrameTiming {
 // === Feature 8: Advanced Color Operations ===
 
 /// HSV color
-#[pyclass(name = "ColorHSV")]
+#[pyclass(name = "ColorHSV", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSV {
     #[pyo3(get)]
@@ -1403,7 +1403,7 @@ impl PyColorHSV {
 }
 
 /// HSL color
-#[pyclass(name = "ColorHSL")]
+#[pyclass(name = "ColorHSL", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSL {
     #[pyo3(get)]
@@ -1430,7 +1430,7 @@ impl PyColorHSL {
 }
 
 /// Color palette
-#[pyclass(name = "ColorPalette")]
+#[pyclass(name = "ColorPalette", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorPalette {
     #[pyo3(get)]
@@ -1455,7 +1455,7 @@ impl PyColorPalette {
 // === Feature 9: Line Wrapping Utilities ===
 
 /// Joined lines result
-#[pyclass(name = "JoinedLines")]
+#[pyclass(name = "JoinedLines", from_py_object)]
 #[derive(Clone)]
 pub struct PyJoinedLines {
     #[pyo3(get)]
@@ -1484,7 +1484,7 @@ impl PyJoinedLines {
 // === Feature 10: Clipboard Integration ===
 
 /// Clipboard entry
-#[pyclass(name = "ClipboardEntry")]
+#[pyclass(name = "ClipboardEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardEntry {
     #[pyo3(get)]
@@ -1509,7 +1509,7 @@ impl PyClipboardEntry {
 // === Feature 17: Advanced Mouse Support ===
 
 /// Mouse event
-#[pyclass(name = "MouseEvent")]
+#[pyclass(name = "MouseEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMouseEvent {
     #[pyo3(get)]
@@ -1576,7 +1576,7 @@ impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
 }
 
 /// Mouse position
-#[pyclass(name = "MousePosition")]
+#[pyclass(name = "MousePosition", from_py_object)]
 #[derive(Clone)]
 pub struct PyMousePosition {
     #[pyo3(get)]
@@ -1610,7 +1610,7 @@ impl From<&crate::terminal::MousePosition> for PyMousePosition {
 // === Feature 19: Custom Rendering Hints ===
 
 /// Damage region
-#[pyclass(name = "DamageRegion")]
+#[pyclass(name = "DamageRegion", from_py_object)]
 #[derive(Clone)]
 pub struct PyDamageRegion {
     #[pyo3(get)]
@@ -1645,7 +1645,7 @@ impl From<&crate::terminal::DamageRegion> for PyDamageRegion {
 }
 
 /// Rendering hint
-#[pyclass(name = "RenderingHint")]
+#[pyclass(name = "RenderingHint", from_py_object)]
 #[derive(Clone)]
 pub struct PyRenderingHint {
     #[pyo3(get)]
@@ -1700,7 +1700,7 @@ impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
 // === Feature 16: Performance Profiling ===
 
 /// Escape sequence profile
-#[pyclass(name = "EscapeSequenceProfile")]
+#[pyclass(name = "EscapeSequenceProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyEscapeSequenceProfile {
     #[pyo3(get)]
@@ -1735,7 +1735,7 @@ impl From<&crate::terminal::EscapeSequenceProfile> for PyEscapeSequenceProfile {
 }
 
 /// Profiling data
-#[pyclass(name = "ProfilingData")]
+#[pyclass(name = "ProfilingData", from_py_object)]
 #[derive(Clone)]
 pub struct PyProfilingData {
     #[pyo3(get)]
@@ -1790,7 +1790,7 @@ impl From<&crate::terminal::ProfilingData> for PyProfilingData {
 // === Feature 14: Snapshot Diffing ===
 
 /// Line diff
-#[pyclass(name = "LineDiff")]
+#[pyclass(name = "LineDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PyLineDiff {
     #[pyo3(get)]
@@ -1838,7 +1838,7 @@ impl From<&crate::terminal::LineDiff> for PyLineDiff {
 }
 
 /// Snapshot diff
-#[pyclass(name = "SnapshotDiff")]
+#[pyclass(name = "SnapshotDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PySnapshotDiff {
     #[pyo3(get)]
@@ -1878,7 +1878,7 @@ impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
 // === Feature 15: Regex Search ===
 
 /// Regex match
-#[pyclass(name = "RegexMatch")]
+#[pyclass(name = "RegexMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyRegexMatch {
     #[pyo3(get)]
@@ -1921,7 +1921,7 @@ impl From<&crate::terminal::RegexMatch> for PyRegexMatch {
 // === Feature 13: Multiplexing ===
 
 /// Pane state
-#[pyclass(name = "PaneState")]
+#[pyclass(name = "PaneState", from_py_object)]
 #[derive(Clone)]
 pub struct PyPaneState {
     #[pyo3(get)]
@@ -1977,7 +1977,7 @@ impl From<&crate::terminal::PaneState> for PyPaneState {
 }
 
 /// Window layout
-#[pyclass(name = "WindowLayout")]
+#[pyclass(name = "WindowLayout", from_py_object)]
 #[derive(Clone)]
 pub struct PyWindowLayout {
     #[pyo3(get)]
@@ -2028,7 +2028,7 @@ impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
 }
 
 /// Session state
-#[pyclass(name = "SessionState")]
+#[pyclass(name = "SessionState", from_py_object)]
 #[derive(Clone)]
 pub struct PySessionState {
     #[pyo3(get)]
@@ -2077,7 +2077,7 @@ impl From<&crate::terminal::SessionState> for PySessionState {
 // === Feature 21: Image Protocol Support ===
 
 /// Image protocol
-#[pyclass(name = "ImageProtocol")]
+#[pyclass(name = "ImageProtocol", from_py_object)]
 #[derive(Clone)]
 pub enum PyImageProtocol {
     Sixel,
@@ -2086,7 +2086,7 @@ pub enum PyImageProtocol {
 }
 
 /// Image format
-#[pyclass(name = "ImageFormat")]
+#[pyclass(name = "ImageFormat", from_py_object)]
 #[derive(Clone)]
 pub enum PyImageFormat {
     PNG,
@@ -2098,7 +2098,7 @@ pub enum PyImageFormat {
 }
 
 /// Inline image
-#[pyclass(name = "InlineImage")]
+#[pyclass(name = "InlineImage", from_py_object)]
 #[derive(Clone)]
 pub struct PyInlineImage {
     #[pyo3(get)]
@@ -2169,7 +2169,7 @@ impl From<&crate::terminal::InlineImage> for PyInlineImage {
 // === Feature 28: Benchmarking Suite ===
 
 /// Benchmark result
-#[pyclass(name = "BenchmarkResult")]
+#[pyclass(name = "BenchmarkResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkResult {
     #[pyo3(get)]
@@ -2231,7 +2231,7 @@ impl From<&crate::terminal::BenchmarkResult> for PyBenchmarkResult {
 }
 
 /// Benchmark suite
-#[pyclass(name = "BenchmarkSuite")]
+#[pyclass(name = "BenchmarkSuite", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkSuite {
     #[pyo3(get)]
@@ -2267,7 +2267,7 @@ impl From<&crate::terminal::BenchmarkSuite> for PyBenchmarkSuite {
 // === Feature 29: Terminal Compliance Testing ===
 
 /// Compliance test
-#[pyclass(name = "ComplianceTest")]
+#[pyclass(name = "ComplianceTest", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceTest {
     #[pyo3(get)]
@@ -2308,7 +2308,7 @@ impl From<&crate::terminal::ComplianceTest> for PyComplianceTest {
 }
 
 /// Compliance report
-#[pyclass(name = "ComplianceReport")]
+#[pyclass(name = "ComplianceReport", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceReport {
     #[pyo3(get)]
@@ -2367,7 +2367,7 @@ impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
 // === Feature 30: OSC 52 Clipboard Sync ===
 
 /// Clipboard sync event
-#[pyclass(name = "ClipboardSyncEvent")]
+#[pyclass(name = "ClipboardSyncEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardSyncEvent {
     #[pyo3(get)]
@@ -2422,7 +2422,7 @@ impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
 }
 
 /// Clipboard history entry
-#[pyclass(name = "ClipboardHistoryEntry")]
+#[pyclass(name = "ClipboardHistoryEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardHistoryEntry {
     #[pyo3(get)]
@@ -2471,7 +2471,7 @@ impl From<&crate::terminal::ClipboardHistoryEntry> for PyClipboardHistoryEntry {
 // === Feature 31: Shell Integration++ ===
 
 /// Command execution record
-#[pyclass(name = "CommandExecution")]
+#[pyclass(name = "CommandExecution", from_py_object)]
 #[derive(Clone)]
 pub struct PyCommandExecution {
     #[pyo3(get)]
@@ -2515,7 +2515,7 @@ impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
 }
 
 /// Shell integration statistics
-#[pyclass(name = "ShellIntegrationStats")]
+#[pyclass(name = "ShellIntegrationStats", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegrationStats {
     #[pyo3(get)]
@@ -2556,7 +2556,7 @@ impl From<&crate::terminal::ShellIntegrationStats> for PyShellIntegrationStats {
 }
 
 /// CWD change notification
-#[pyclass(name = "CwdChange")]
+#[pyclass(name = "CwdChange", from_py_object)]
 #[derive(Clone)]
 pub struct PyCwdChange {
     #[pyo3(get)]
@@ -2596,7 +2596,7 @@ impl From<&crate::terminal::CwdChange> for PyCwdChange {
 // === Feature 37: Terminal Notifications ===
 
 /// Notification event
-#[pyclass(name = "NotificationEvent")]
+#[pyclass(name = "NotificationEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyNotificationEvent {
     #[pyo3(get)]
@@ -2647,7 +2647,7 @@ impl From<&crate::terminal::NotificationEvent> for PyNotificationEvent {
 }
 
 /// Notification configuration
-#[pyclass(name = "NotificationConfig")]
+#[pyclass(name = "NotificationConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyNotificationConfig {
     #[pyo3(get, set)]
@@ -2727,7 +2727,7 @@ impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
 // === Feature 18: Triggers & Automation ===
 
 /// Trigger information (read-only view)
-#[pyclass(name = "Trigger")]
+#[pyclass(name = "Trigger", from_py_object)]
 #[derive(Clone)]
 pub struct PyTrigger {
     #[pyo3(get)]
@@ -2768,7 +2768,7 @@ impl From<&crate::terminal::trigger::Trigger> for PyTrigger {
 }
 
 /// Trigger match result
-#[pyclass(name = "TriggerMatch")]
+#[pyclass(name = "TriggerMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyTriggerMatch {
     #[pyo3(get)]
@@ -2812,7 +2812,7 @@ impl From<&crate::terminal::trigger::TriggerMatch> for PyTriggerMatch {
 }
 
 /// Trigger action configuration (constructable from Python)
-#[pyclass(name = "TriggerAction")]
+#[pyclass(name = "TriggerAction", from_py_object)]
 #[derive(Clone)]
 pub struct PyTriggerAction {
     /// Action type: "highlight", "notify", "mark_line", "set_variable",
@@ -2948,7 +2948,7 @@ impl PyTriggerAction {
 }
 
 /// Coprocess configuration (constructable from Python)
-#[pyclass(name = "CoprocessConfig")]
+#[pyclass(name = "CoprocessConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCoprocessConfig {
     #[pyo3(get, set)]
@@ -3042,7 +3042,7 @@ impl From<&PyCoprocessConfig> for crate::coprocess::CoprocessConfig {
 // === Feature 24: Terminal Replay/Recording ===
 
 /// Recording event
-#[pyclass(name = "RecordingEvent")]
+#[pyclass(name = "RecordingEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyRecordingEvent {
     #[pyo3(get)]
@@ -3091,7 +3091,7 @@ impl From<&crate::terminal::RecordingEvent> for PyRecordingEvent {
 }
 
 /// Recording session
-#[pyclass(name = "RecordingSession")]
+#[pyclass(name = "RecordingSession", from_py_object)]
 #[derive(Clone)]
 pub struct PyRecordingSession {
     pub(crate) inner: crate::terminal::RecordingSession,
@@ -3175,7 +3175,7 @@ impl From<crate::terminal::RecordingSession> for PyRecordingSession {
 }
 
 /// Macro event
-#[pyclass(name = "MacroEvent")]
+#[pyclass(name = "MacroEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMacroEvent {
     #[pyo3(get)]
@@ -3245,7 +3245,7 @@ impl From<&crate::macros::MacroEvent> for PyMacroEvent {
 }
 
 /// Macro recording
-#[pyclass(name = "Macro")]
+#[pyclass(name = "Macro", from_py_object)]
 #[derive(Clone)]
 pub struct PyMacro {
     pub(crate) inner: crate::macros::Macro,

@@ -6,7 +6,7 @@
 use pyo3::prelude::*;
 
 /// Cursor style/shape (DECSCUSR)
-#[pyclass(name = "CursorStyle")]
+#[pyclass(name = "CursorStyle", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyCursorStyle {
     /// Blinking block (default)
@@ -37,7 +37,7 @@ impl From<crate::cursor::CursorStyle> for PyCursorStyle {
 }
 
 /// Underline style for text decoration (SGR 4:x)
-#[pyclass(name = "UnderlineStyle")]
+#[pyclass(name = "UnderlineStyle", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyUnderlineStyle {
     /// No underline
@@ -68,7 +68,7 @@ impl From<crate::cell::UnderlineStyle> for PyUnderlineStyle {
 }
 
 /// Mouse encoding format for mouse event reporting
-#[pyclass(name = "MouseEncoding")]
+#[pyclass(name = "MouseEncoding", from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyMouseEncoding {
     /// Default X11 encoding (values 32-255)
@@ -111,7 +111,7 @@ impl From<PyMouseEncoding> for crate::mouse::MouseEncoding {
 /// - Indeterminate: Busy/loading indicator (no specific percentage)
 /// - Warning: Progress with warning status (e.g., yellow)
 /// - Error: Progress with error status (e.g., red)
-#[pyclass(name = "ProgressState", eq)]
+#[pyclass(name = "ProgressState", eq, skip_from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyProgressState {
     /// Progress bar is hidden (state 0)
@@ -124,6 +124,15 @@ pub enum PyProgressState {
     Warning = 3,
     /// Error state - operation failed (state 4)
     Error = 4,
+}
+
+impl<'a, 'py> FromPyObject<'a, 'py> for PyProgressState {
+    type Error = PyErr;
+    fn extract(ob: pyo3::Borrowed<'a, 'py, PyAny>) -> PyResult<Self> {
+        let bound: &Bound<'py, PyAny> = &ob;
+        let val: &Bound<'py, Self> = bound.cast()?;
+        Ok(*val.borrow())
+    }
 }
 
 impl PyProgressState {
@@ -187,7 +196,7 @@ impl From<PyProgressState> for crate::terminal::ProgressState {
 ///
 /// Different Unicode versions have different character width assignments,
 /// particularly for newly added emoji and other characters.
-#[pyclass(name = "UnicodeVersion", eq)]
+#[pyclass(name = "UnicodeVersion", eq, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyUnicodeVersion {
     /// Unicode 9.0 (June 2016) - Pre-emoji standardization
@@ -285,7 +294,7 @@ impl From<PyUnicodeVersion> for crate::unicode_width_config::UnicodeVersion {
 ///
 /// Ambiguous characters include Greek/Cyrillic letters, some symbols, and
 /// other characters that may display as either 1 or 2 cells depending on context.
-#[pyclass(name = "AmbiguousWidth", eq)]
+#[pyclass(name = "AmbiguousWidth", eq, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyAmbiguousWidth {
     /// Narrow (1 cell) - Western/default terminal behavior
@@ -344,7 +353,7 @@ impl From<PyAmbiguousWidth> for crate::unicode_width_config::AmbiguousWidth {
 ///
 /// This class combines Unicode version and ambiguous width settings
 /// to control how character widths are calculated in the terminal.
-#[pyclass(name = "WidthConfig")]
+#[pyclass(name = "WidthConfig", from_py_object)]
 #[derive(Debug, Clone)]
 pub struct PyWidthConfig {
     /// Unicode version for width tables
@@ -438,7 +447,7 @@ impl From<&PyWidthConfig> for crate::unicode_width_config::WidthConfig {
 ///
 /// Controls how Unicode text is normalized before being stored in terminal cells.
 /// Normalization ensures consistent representation for search and comparison.
-#[pyclass(name = "NormalizationForm", eq)]
+#[pyclass(name = "NormalizationForm", eq, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyNormalizationForm {
     /// No normalization - store text as received
