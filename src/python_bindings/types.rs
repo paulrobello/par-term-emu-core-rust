@@ -191,8 +191,9 @@ pub struct PyShellIntegration {
 impl PyShellIntegration {
     fn __repr__(&self) -> PyResult<String> {
         Ok(format!(
-            "ShellIntegration(in_prompt={}, in_command_input={}, in_command_output={})",
-            self.in_prompt, self.in_command_input, self.in_command_output
+            "ShellIntegration(in_prompt={}, in_command_input={}, in_command_output={}, hostname={:?}, username={:?})",
+            self.in_prompt, self.in_command_input, self.in_command_output,
+            self.hostname, self.username
         ))
     }
 }

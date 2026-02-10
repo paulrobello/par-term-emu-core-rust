@@ -829,7 +829,7 @@ Represents text attributes for a cell.
 
 ### ShellIntegration
 
-Shell integration state (OSC 133 and OSC 7).
+Shell integration state (OSC 133, OSC 7, and OSC 1337 RemoteHost).
 
 **Properties:**
 - `in_prompt: bool`: True if currently in prompt (marker A)
@@ -838,6 +838,8 @@ Shell integration state (OSC 133 and OSC 7).
 - `current_command: str | None`: The command that was executed
 - `last_exit_code: int | None`: Exit code from last command (marker D)
 - `cwd: str | None`: Current working directory from OSC 7
+- `hostname: str | None`: Remote hostname from OSC 7 or OSC 1337 RemoteHost (None for localhost)
+- `username: str | None`: Username from OSC 7 or OSC 1337 RemoteHost
 
 ### Graphic
 

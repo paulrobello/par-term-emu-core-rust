@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **OSC 1337 RemoteHost**: Parse `RemoteHost=user@hostname` sequences for remote host integration (#29)
+  - Supports `user@hostname` format (username is optional)
+  - Updates `ShellIntegration` hostname and username fields
+  - Treats `localhost`, `127.0.0.1`, and `::1` as local (clears hostname)
+  - Emits `CwdChanged` event so frontends can react to remote host changes
+  - Reuses existing streaming protocol `CwdChanged` message (no protocol changes needed)
+  - `ShellIntegration` Python object now exposes `hostname` and `username` attributes
+  - 14 Rust unit tests, 9 Python integration tests
 - **OSC 934 Named Progress Bars**: Parse and manage multiple concurrent named progress bars (#22)
   - Protocol format: `OSC 934 ; action ; id [; key=value ...] ST` with `set`, `remove`, `remove_all` actions
   - Each bar has a unique ID, state (normal/indeterminate/warning/error), percentage (0-100), and optional label

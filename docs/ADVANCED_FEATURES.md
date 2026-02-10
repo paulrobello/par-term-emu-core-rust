@@ -787,12 +787,36 @@ print(f"CWD: {state.cwd}")
 ### Working Directory Tracking
 
 ```python
-# Set current working directory
-term.process_str("\x1b]7;/home/user/project\x07")
+# Set current working directory via OSC 7
+term.process_str("\x1b]7;file:///home/user/project\x07")
 
 state = term.shell_integration_state()
 print(f"CWD: {state.cwd}")  # "/home/user/project"
 ```
+
+### Remote Host Detection
+
+Remote host information can be reported via OSC 7 (with `user@host` in the URL) or via the dedicated iTerm2 `RemoteHost` sequence:
+
+```python
+# OSC 1337 RemoteHost - iTerm2 shell integration
+term.process_str("\x1b]1337;RemoteHost=alice@server1.example.com\x07")
+
+state = term.shell_integration_state()
+print(f"Hostname: {state.hostname}")  # "server1.example.com"
+print(f"Username: {state.username}")  # "alice"
+
+# Also available via badge session variables
+vars = term.get_badge_session_variables()
+print(f"Host: {vars.get('hostname')}")
+```
+
+The `RemoteHost` sequence supports:
+- `user@hostname` — sets both username and hostname
+- `hostname` — sets hostname only (no username)
+- `user@localhost` — clears hostname (treats localhost as local)
+
+A `cwd_changed` event is emitted when the remote host changes, allowing frontends to update their UI.
 
 ### Benefits
 
@@ -801,6 +825,7 @@ print(f"CWD: {state.cwd}")  # "/home/user/project"
 3. **Smart selection**: Click to select commands or output
 4. **Command rerun**: Right-click to rerun commands
 5. **Directory tracking**: Open new tabs in same directory
+6. **Remote host awareness**: Detect SSH sessions and display host info
 6. **Duration tracking**: Measure command execution time
 
 ### Supported Terminals
