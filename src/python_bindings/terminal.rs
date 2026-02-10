@@ -1515,6 +1515,8 @@ impl PyTerminal {
             current_command: si.command().map(|s| s.to_string()),
             last_exit_code: si.exit_code(),
             cwd: si.cwd().map(|s| s.to_string()),
+            hostname: si.hostname().map(|s| s.to_string()),
+            username: si.username().map(|s| s.to_string()),
         })
     }
 

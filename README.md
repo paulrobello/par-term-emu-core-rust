@@ -15,6 +15,19 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### OSC 1337 RemoteHost Support
+
+Parse `OSC 1337 ; RemoteHost=user@hostname ST` sequences for remote host detection. This is iTerm2's dedicated mechanism for reporting remote host information, commonly emitted by shell integration scripts on remote hosts. The `ShellIntegration` state now includes `hostname` and `username` attributes, and a `cwd_changed` event is emitted when the remote host changes.
+
+```python
+# After SSH to a remote host with iTerm2 shell integration:
+# The shell sends: printf '\e]1337;RemoteHost=%s@%s\a' "$USER" "$HOSTNAME"
+
+state = terminal.shell_integration_state()
+print(f"Host: {state.hostname}")    # "remote-server.example.com"
+print(f"User: {state.username}")    # "alice"
+```
+
 ### 🔤 Unicode Normalization (NFC/NFD/NFKC/NFKD)
 
 Configurable Unicode normalization ensures consistent text storage for search, comparison, and cursor movement. Unicode characters can have multiple binary representations that look identical (e.g., `é` can be precomposed U+00E9 or decomposed U+0065 + U+0301). Normalization eliminates this ambiguity.
@@ -923,7 +936,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **OSC 8 Hyperlinks** - Clickable URLs in terminal (full TUI support)
 - **OSC 52 Clipboard** - Copy/paste over SSH without X11
 - **OSC 9/777 Notifications** - Desktop-style alerts and notifications
-- **Shell Integration** - OSC 133 (iTerm2/VSCode compatible)
+- **Shell Integration** - OSC 133 (iTerm2/VSCode compatible), OSC 1337 RemoteHost for remote host detection
 - **Kitty Keyboard Protocol** - Progressive keyboard enhancement with auto-reset on alternate screen exit
 - **Synchronized Updates (DEC 2026)** - Flicker-free rendering
 - **Tmux Control Protocol** - Control mode integration support
