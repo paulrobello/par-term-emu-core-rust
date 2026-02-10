@@ -1424,6 +1424,9 @@ pub struct Terminal {
     /// Unicode width configuration for character width calculations
     width_config: crate::unicode_width_config::WidthConfig,
 
+    /// Unicode normalization form for text stored in cells
+    normalization_form: crate::unicode_normalization_config::NormalizationForm,
+
     // === Badge Support (OSC 1337 SetBadgeFormat) ===
     /// Badge format string (from OSC 1337 SetBadgeFormat)
     /// Contains template with \(variable) placeholders
@@ -1779,6 +1782,9 @@ impl Terminal {
 
             // Unicode width configuration - use defaults
             width_config: crate::unicode_width_config::WidthConfig::default(),
+
+            // Unicode normalization form - default to NFC
+            normalization_form: crate::unicode_normalization_config::NormalizationForm::default(),
 
             // Badge support
             badge_format: None,
@@ -2494,6 +2500,27 @@ impl Terminal {
     #[inline]
     pub fn char_width(&self, c: char) -> usize {
         crate::unicode_width_config::char_width(c, &self.width_config)
+    }
+
+    /// Get the current Unicode normalization form
+    ///
+    /// Returns the normalization form used for text stored in terminal cells.
+    pub fn normalization_form(&self) -> crate::unicode_normalization_config::NormalizationForm {
+        self.normalization_form
+    }
+
+    /// Set the Unicode normalization form
+    ///
+    /// Controls how Unicode text is normalized before being stored in cells.
+    /// Default is NFC (Canonical Decomposition, followed by Canonical Composition).
+    ///
+    /// # Arguments
+    /// * `form` - The normalization form to use
+    pub fn set_normalization_form(
+        &mut self,
+        form: crate::unicode_normalization_config::NormalizationForm,
+    ) {
+        self.normalization_form = form;
     }
 
     /// Get pending notifications (OSC 9 / OSC 777)
@@ -6879,7 +6906,20 @@ pub fn diff_screen_lines(old_lines: &[String], new_lines: &[String]) -> Snapshot
 impl Perform for Terminal {
     fn print(&mut self, c: char) {
         debug::log_print(c, self.cursor.col, self.cursor.row);
-        self.write_char(c);
+
+        // Apply Unicode normalization if configured
+        if !self.normalization_form.is_none() {
+            let normalized = self.normalization_form.normalize_char(c);
+            let mut chars = normalized.chars();
+            if let Some(first) = chars.next() {
+                self.write_char(first);
+                for ch in chars {
+                    self.write_char(ch);
+                }
+            }
+        } else {
+            self.write_char(c);
+        }
     }
 
     fn execute(&mut self, byte: u8) {

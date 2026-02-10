@@ -1862,6 +1862,31 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get the current Unicode normalization form
+    ///
+    /// Returns:
+    ///     NormalizationForm: The current normalization form (default: NFC)
+    fn normalization_form(&self) -> PyResult<super::enums::PyNormalizationForm> {
+        Ok(self.inner.normalization_form().into())
+    }
+
+    /// Set the Unicode normalization form
+    ///
+    /// Controls how Unicode text is normalized before being stored in cells.
+    /// Default is NFC (Canonical Decomposition, followed by Canonical Composition).
+    ///
+    /// Args:
+    ///     form: NormalizationForm enum value (e.g., NormalizationForm.NFC)
+    ///
+    /// Example:
+    ///     >>> term.set_normalization_form(NormalizationForm.NFC)  # Compose characters
+    ///     >>> term.set_normalization_form(NormalizationForm.NFD)  # Decompose characters
+    ///     >>> term.set_normalization_form(NormalizationForm.None) # No normalization
+    fn set_normalization_form(&mut self, form: super::enums::PyNormalizationForm) -> PyResult<()> {
+        self.inner.set_normalization_form(form.into());
+        Ok(())
+    }
+
     /// Calculate the display width of a character using the terminal's width config
     ///
     /// Args:

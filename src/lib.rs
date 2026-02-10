@@ -61,7 +61,11 @@ pub mod streaming;
 pub mod terminal;
 pub mod text_utils;
 pub mod tmux_control;
+pub mod unicode_normalization_config;
 pub mod unicode_width_config;
+
+// Re-export commonly used types from unicode_normalization_config
+pub use unicode_normalization_config::NormalizationForm;
 
 // Re-export commonly used types from unicode_width_config
 pub use unicode_width_config::{
@@ -100,13 +104,13 @@ pub use python_bindings::{
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
     PyImageDimension, PyImageFormat, PyImagePlacement, PyImageProtocol, PyInlineImage,
     PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEncoding, PyMouseEvent,
-    PyMousePosition, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
-    PyProfilingData, PyProgressBar, PyProgressState, PyPtyTerminal, PyRecordingEvent,
-    PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot, PyScrollbackStats,
-    PySearchMatch, PySelection, PySelectionMode, PySessionState, PyShellIntegration,
-    PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal,
-    PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch, PyUnderlineStyle,
-    PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
+    PyMousePosition, PyNormalizationForm, PyNotificationConfig, PyNotificationEvent, PyPaneState,
+    PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState, PyPtyTerminal,
+    PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
+    PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode, PySessionState,
+    PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
+    PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch,
+    PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr
@@ -206,6 +210,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyUnicodeVersion>()?;
     m.add_class::<PyAmbiguousWidth>()?;
     m.add_class::<PyWidthConfig>()?;
+    m.add_class::<PyNormalizationForm>()?;
     m.add_class::<PyTrigger>()?;
     m.add_class::<PyTriggerMatch>()?;
     m.add_class::<PyTriggerAction>()?;
