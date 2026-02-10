@@ -694,6 +694,14 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             break;
           }
 
+          case 'modeChanged': {
+            const mc = msg.message.value;
+            console.log(`Mode changed: ${mc.mode} = ${mc.enabled}`);
+            // Currently logged for debugging; downstream consumers
+            // (like TermNexus) can act on these to sync xterm.js state
+            break;
+          }
+
           case 'pong':
             // Pong received - update last pong time for heartbeat tracking
             lastPongRef.current = Date.now();
@@ -701,7 +709,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             break;
 
           default:
-            console.warn('Unknown message type:', msg.message.case);
+            // Silently ignore other message types (cwdChanged, triggerMatched, etc.)
+            break;
         }
       } catch (err) {
         console.error('Failed to decode message:', err);

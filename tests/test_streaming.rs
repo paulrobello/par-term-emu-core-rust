@@ -1085,6 +1085,253 @@ mod streaming_tests {
             assert!(json.contains("progress_bar"));
         }
     }
+
+    // =========================================================================
+    // Mode Sync on Connect Tests
+    // =========================================================================
+
+    mod mode_sync {
+        use par_term_emu_core_rust::streaming::protocol::ServerMessage;
+        use par_term_emu_core_rust::streaming::SessionState;
+        use par_term_emu_core_rust::terminal::Terminal;
+        use parking_lot::Mutex;
+        use std::sync::Arc;
+
+        fn create_session_with_terminal(term: Terminal) -> SessionState {
+            SessionState::new(
+                "test-session".to_string(),
+                Arc::new(Mutex::new(term)),
+                None,
+                false,
+            )
+        }
+
+        /// Helper to extract (mode, enabled) pairs from mode sync messages
+        fn extract_modes(messages: &[ServerMessage]) -> Vec<(String, bool)> {
+            messages
+                .iter()
+                .filter_map(|msg| match msg {
+                    ServerMessage::ModeChanged { mode, enabled } => Some((mode.clone(), *enabled)),
+                    _ => None,
+                })
+                .collect()
+        }
+
+        #[test]
+        fn test_no_mode_sync_for_default_terminal() {
+            let term = Terminal::new(80, 24);
+            let session = create_session_with_terminal(term);
+            let messages = session.build_mode_sync_messages();
+            // Default terminal should have no non-default modes
+            assert!(
+                messages.is_empty(),
+                "Expected no mode sync messages for default terminal, got: {:?}",
+                extract_modes(&messages)
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_mouse_normal() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1000h"); // Enable normal mouse tracking
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("mouse_normal".to_string(), true)),
+                "Expected mouse_normal mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_mouse_any_event() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1003h"); // Enable any-event mouse tracking
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("mouse_any_event".to_string(), true)),
+                "Expected mouse_any_event mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_mouse_sgr_encoding() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1006h"); // SGR mouse encoding
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("mouse_sgr".to_string(), true)),
+                "Expected mouse_sgr mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_bracketed_paste() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?2004h"); // Enable bracketed paste
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("bracketed_paste".to_string(), true)),
+                "Expected bracketed_paste mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_application_cursor() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1h"); // Enable application cursor keys
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("application_cursor".to_string(), true)),
+                "Expected application_cursor mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_focus_tracking() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1004h"); // Enable focus tracking
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("focus_tracking".to_string(), true)),
+                "Expected focus_tracking mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_cursor_hidden() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?25l"); // Hide cursor
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("cursor_visible".to_string(), false)),
+                "Expected cursor_visible=false mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_alternate_screen() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1049h"); // Enter alternate screen
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("alternate_screen".to_string(), true)),
+                "Expected alternate_screen mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_insert_mode() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[4h"); // Enable insert mode
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("insert_mode".to_string(), true)),
+                "Expected insert_mode mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_auto_wrap_disabled() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?7l"); // Disable auto-wrap (default is on)
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            assert!(
+                modes.contains(&("auto_wrap".to_string(), false)),
+                "Expected auto_wrap=false mode, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_multiple_modes() {
+            let mut term = Terminal::new(80, 24);
+            // Enable several modes at once (like a TUI app would)
+            term.process(b"\x1b[?1003h"); // Any-event mouse
+            term.process(b"\x1b[?1006h"); // SGR encoding
+            term.process(b"\x1b[?2004h"); // Bracketed paste
+            term.process(b"\x1b[?1004h"); // Focus tracking
+            term.process(b"\x1b[?1049h"); // Alt screen (saves/restores cursor state)
+            term.process(b"\x1b[?25l"); // Hide cursor (after alt screen to avoid restore)
+
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+
+            assert!(modes.contains(&("mouse_any_event".to_string(), true)));
+            assert!(modes.contains(&("mouse_sgr".to_string(), true)));
+            assert!(modes.contains(&("bracketed_paste".to_string(), true)));
+            assert!(modes.contains(&("focus_tracking".to_string(), true)));
+            assert!(modes.contains(&("cursor_visible".to_string(), false)));
+            assert!(modes.contains(&("alternate_screen".to_string(), true)));
+            assert_eq!(modes.len(), 6, "Expected exactly 6 mode sync messages");
+        }
+
+        #[test]
+        fn test_mode_sync_after_mode_reset() {
+            let mut term = Terminal::new(80, 24);
+            // Enable and then disable a mode
+            term.process(b"\x1b[?1003h"); // Enable any-event mouse
+            term.process(b"\x1b[?1003l"); // Disable it
+            let session = create_session_with_terminal(term);
+            let modes = extract_modes(&session.build_mode_sync_messages());
+            // No mouse mode should be synced since it was reset
+            assert!(
+                !modes.iter().any(|(m, _)| m.starts_with("mouse_")),
+                "Expected no mouse mode after reset, got: {:?}",
+                modes
+            );
+        }
+
+        #[test]
+        fn test_mode_sync_messages_are_valid_server_messages() {
+            let mut term = Terminal::new(80, 24);
+            term.process(b"\x1b[?1003h"); // Any-event mouse
+            term.process(b"\x1b[?1006h"); // SGR encoding
+            let session = create_session_with_terminal(term);
+            let messages = session.build_mode_sync_messages();
+
+            // Verify all messages can be encoded/decoded via protobuf
+            for msg in &messages {
+                let encoded =
+                    par_term_emu_core_rust::streaming::encode_server_message(msg).unwrap();
+                let decoded =
+                    par_term_emu_core_rust::streaming::decode_server_message(&encoded).unwrap();
+                match (&msg, &decoded) {
+                    (
+                        ServerMessage::ModeChanged {
+                            mode: m1,
+                            enabled: e1,
+                        },
+                        ServerMessage::ModeChanged {
+                            mode: m2,
+                            enabled: e2,
+                        },
+                    ) => {
+                        assert_eq!(m1, m2);
+                        assert_eq!(e1, e2);
+                    }
+                    _ => panic!("Expected ModeChanged after round-trip"),
+                }
+            }
+        }
+    }
 }
 
 // Tests that work without streaming feature

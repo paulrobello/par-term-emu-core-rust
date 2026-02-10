@@ -1,5 +1,6 @@
 //! WebSocket streaming server implementation
 
+use crate::mouse::{MouseEncoding, MouseMode};
 use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
@@ -417,6 +418,98 @@ impl SessionState {
             Some(client_id.to_string()),
             Some(readonly),
         )
+    }
+
+    /// Build ModeChanged messages for all active (non-default) terminal modes.
+    ///
+    /// Used to sync terminal mode state to clients connecting to existing sessions.
+    /// Returns a list of `ServerMessage::ModeChanged` for each mode that differs
+    /// from its default value.
+    pub fn build_mode_sync_messages(&self) -> Vec<ServerMessage> {
+        let terminal = self.terminal.lock();
+        let mut messages = Vec::new();
+
+        // Mouse tracking mode
+        let mouse_mode = terminal.mouse_mode();
+        if mouse_mode != MouseMode::Off {
+            let mode_name = match mouse_mode {
+                MouseMode::X10 => "mouse_x10",
+                MouseMode::Normal => "mouse_normal",
+                MouseMode::ButtonEvent => "mouse_button_event",
+                MouseMode::AnyEvent => "mouse_any_event",
+                MouseMode::Off => unreachable!(),
+            };
+            messages.push(ServerMessage::mode_changed(mode_name.to_string(), true));
+        }
+
+        // Mouse encoding (if not default)
+        let mouse_encoding = terminal.mouse_encoding();
+        if mouse_encoding != MouseEncoding::Default {
+            let encoding_name = match mouse_encoding {
+                MouseEncoding::Utf8 => "mouse_utf8",
+                MouseEncoding::Sgr => "mouse_sgr",
+                MouseEncoding::Urxvt => "mouse_urxvt",
+                MouseEncoding::Default => unreachable!(),
+            };
+            messages.push(ServerMessage::mode_changed(encoding_name.to_string(), true));
+        }
+
+        // Bracketed paste mode (DECSET 2004)
+        if terminal.bracketed_paste() {
+            messages.push(ServerMessage::mode_changed(
+                "bracketed_paste".to_string(),
+                true,
+            ));
+        }
+
+        // Application cursor keys (DECCKM)
+        if terminal.application_cursor() {
+            messages.push(ServerMessage::mode_changed(
+                "application_cursor".to_string(),
+                true,
+            ));
+        }
+
+        // Focus tracking (DECSET 1004)
+        if terminal.focus_tracking() {
+            messages.push(ServerMessage::mode_changed(
+                "focus_tracking".to_string(),
+                true,
+            ));
+        }
+
+        // Cursor visibility (DECTCEM) - default is visible, so send if hidden
+        if !terminal.cursor().visible {
+            messages.push(ServerMessage::mode_changed(
+                "cursor_visible".to_string(),
+                false,
+            ));
+        }
+
+        // Alternate screen buffer
+        if terminal.is_alt_screen_active() {
+            messages.push(ServerMessage::mode_changed(
+                "alternate_screen".to_string(),
+                true,
+            ));
+        }
+
+        // Origin mode (DECOM)
+        if terminal.origin_mode() {
+            messages.push(ServerMessage::mode_changed("origin_mode".to_string(), true));
+        }
+
+        // Insert mode (IRM)
+        if terminal.insert_mode() {
+            messages.push(ServerMessage::mode_changed("insert_mode".to_string(), true));
+        }
+
+        // Auto-wrap mode (DECAWM) - default is true, so send if disabled
+        if !terminal.auto_wrap_mode() {
+            messages.push(ServerMessage::mode_changed("auto_wrap".to_string(), false));
+        }
+
+        messages
     }
 
     /// Set the PTY writer for handling client input
@@ -1389,6 +1482,11 @@ impl StreamingServer {
         let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
         client.send(connect_msg).await?;
 
+        // Sync terminal mode state for existing sessions
+        for mode_msg in session.build_mode_sync_messages() {
+            client.send(mode_msg).await?;
+        }
+
         crate::debug_info!(
             "STREAMING",
             "Client {} connected to session {} (total: {})",
@@ -1546,6 +1644,15 @@ impl StreamingServer {
             .send(Message::Binary(msg_bytes.into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+
+        // Sync terminal mode state for existing sessions
+        for mode_msg in session.build_mode_sync_messages() {
+            let mode_bytes = encode_server_message(&mode_msg)?;
+            ws_tx
+                .send(Message::Binary(mode_bytes.into()))
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
 
         crate::debug_info!(
             "STREAMING",
@@ -1804,6 +1911,15 @@ impl StreamingServer {
             .send(AxumMessage::Binary(msg_bytes.into()))
             .await
             .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+
+        // Sync terminal mode state for existing sessions
+        for mode_msg in session.build_mode_sync_messages() {
+            let mode_bytes = encode_server_message(&mode_msg)?;
+            ws_tx
+                .send(AxumMessage::Binary(mode_bytes.into()))
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
 
         crate::debug_info!(
             "STREAMING",
