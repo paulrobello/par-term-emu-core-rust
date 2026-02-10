@@ -25,8 +25,8 @@ pub use color_utils::{
     py_rgb_to_hex, py_rgb_to_hsl, py_str_width, py_str_width_cjk,
 };
 pub use enums::{
-    PyAmbiguousWidth, PyCursorStyle, PyMouseEncoding, PyProgressState, PyUnderlineStyle,
-    PyUnicodeVersion, PyWidthConfig,
+    PyAmbiguousWidth, PyCursorStyle, PyMouseEncoding, PyNormalizationForm, PyProgressState,
+    PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
 };
 pub use pty::PyPtyTerminal;
 pub use streaming::{

@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Unicode Normalization**: Configurable Unicode normalization (NFC/NFD/NFKC/NFKD) for text stored in terminal cells (#21)
+  - New `NormalizationForm` enum with five forms: `None` (disabled), `NFC` (default), `NFD`, `NFKC`, `NFKD`
+  - Terminal defaults to NFC (Canonical Composition) for consistent text storage
+  - Normalization applied in VTE `print()` for decomposition and in `write_char()` for composition
+  - New `normalization_form()` and `set_normalization_form(form)` Rust API
+  - Python `NormalizationForm` enum (`Disabled`, `NFC`, `NFD`, `NFKC`, `NFKD`) with `Terminal.normalization_form()` and `Terminal.set_normalization_form()` methods
+  - New `Cell::from_grapheme_normalized()` method for direct cell construction
+  - 17 Rust unit tests, 13 Python integration tests
 - **OSC 1337 SetUserVar**: Parse `SetUserVar=<name>=<base64_value>` sequences from shell integration scripts (#25)
   - Base64-decode values and store as user variables in terminal session state
   - New `get_user_var(name)` and `get_user_vars()` API (Rust and Python)
@@ -46,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Dependencies**: `flate2` is now a non-optional dependency (previously only available under `streaming` feature), required for Kitty `o=z` decompression
+- **Dependencies**: Added `unicode-normalization` v0.1.25 for Unicode text normalization support
 
 ## [0.33.0] - 2026-02-06
 

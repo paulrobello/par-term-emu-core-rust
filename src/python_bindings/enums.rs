@@ -434,6 +434,87 @@ impl From<&PyWidthConfig> for crate::unicode_width_config::WidthConfig {
     }
 }
 
+/// Unicode normalization form for terminal text.
+///
+/// Controls how Unicode text is normalized before being stored in terminal cells.
+/// Normalization ensures consistent representation for search and comparison.
+#[pyclass(name = "NormalizationForm", eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PyNormalizationForm {
+    /// No normalization - store text as received
+    Disabled = 0,
+    /// Canonical Decomposition, followed by Canonical Composition (default)
+    NFC = 1,
+    /// Canonical Decomposition
+    NFD = 2,
+    /// Compatibility Decomposition, followed by Canonical Composition
+    NFKC = 3,
+    /// Compatibility Decomposition
+    NFKD = 4,
+}
+
+#[pymethods]
+impl PyNormalizationForm {
+    /// Get a human-readable name for the normalization form
+    fn name(&self) -> &'static str {
+        match self {
+            PyNormalizationForm::Disabled => "none",
+            PyNormalizationForm::NFC => "NFC",
+            PyNormalizationForm::NFD => "NFD",
+            PyNormalizationForm::NFKC => "NFKC",
+            PyNormalizationForm::NFKD => "NFKD",
+        }
+    }
+
+    /// Check if normalization is disabled
+    fn is_none(&self) -> bool {
+        matches!(self, PyNormalizationForm::Disabled)
+    }
+
+    fn __repr__(&self) -> String {
+        match self {
+            PyNormalizationForm::Disabled => "NormalizationForm.Disabled".to_string(),
+            _ => format!("NormalizationForm.{}", self.name()),
+        }
+    }
+}
+
+impl From<crate::unicode_normalization_config::NormalizationForm> for PyNormalizationForm {
+    fn from(form: crate::unicode_normalization_config::NormalizationForm) -> Self {
+        match form {
+            crate::unicode_normalization_config::NormalizationForm::None => {
+                PyNormalizationForm::Disabled
+            }
+            crate::unicode_normalization_config::NormalizationForm::NFC => PyNormalizationForm::NFC,
+            crate::unicode_normalization_config::NormalizationForm::NFD => PyNormalizationForm::NFD,
+            crate::unicode_normalization_config::NormalizationForm::NFKC => {
+                PyNormalizationForm::NFKC
+            }
+            crate::unicode_normalization_config::NormalizationForm::NFKD => {
+                PyNormalizationForm::NFKD
+            }
+        }
+    }
+}
+
+impl From<PyNormalizationForm> for crate::unicode_normalization_config::NormalizationForm {
+    fn from(form: PyNormalizationForm) -> Self {
+        match form {
+            PyNormalizationForm::Disabled => {
+                crate::unicode_normalization_config::NormalizationForm::None
+            }
+            PyNormalizationForm::NFC => crate::unicode_normalization_config::NormalizationForm::NFC,
+            PyNormalizationForm::NFD => crate::unicode_normalization_config::NormalizationForm::NFD,
+            PyNormalizationForm::NFKC => {
+                crate::unicode_normalization_config::NormalizationForm::NFKC
+            }
+            PyNormalizationForm::NFKD => {
+                crate::unicode_normalization_config::NormalizationForm::NFKD
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

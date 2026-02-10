@@ -140,9 +140,28 @@ impl Terminal {
                     return;
                 };
 
+            // Copy normalization form before mutable borrow
+            let norm_form = self.normalization_form;
+
             // Add combining character to the target cell
             if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
                 target_cell.combining.push(c);
+
+                // Apply Unicode normalization if NFC or NFKC (composition forms)
+                // This composes base + combining into precomposed form when possible
+                if matches!(
+                    norm_form,
+                    crate::unicode_normalization_config::NormalizationForm::NFC
+                        | crate::unicode_normalization_config::NormalizationForm::NFKC
+                ) {
+                    let grapheme = target_cell.get_grapheme();
+                    let normalized = norm_form.normalize(&grapheme);
+                    let mut chars = normalized.chars();
+                    if let Some(base) = chars.next() {
+                        target_cell.c = base;
+                        target_cell.combining = chars.collect();
+                    }
+                }
 
                 // Recalculate width if needed (e.g., emoji with variation selector)
                 let grapheme = target_cell.get_grapheme();

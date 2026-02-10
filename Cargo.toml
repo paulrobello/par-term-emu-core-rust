@@ -103,6 +103,7 @@ parking_lot = "0.12.5"
 
 # Unicode text handling
 unicode-segmentation = "1.12"
+unicode-normalization = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.180"

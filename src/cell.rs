@@ -365,6 +365,28 @@ impl Cell {
         }
     }
 
+    /// Create a cell from a grapheme cluster with normalization and width configuration
+    ///
+    /// Normalizes the grapheme string using the specified form before storing.
+    pub fn from_grapheme_normalized(
+        grapheme: &str,
+        normalization: crate::unicode_normalization_config::NormalizationForm,
+        config: &WidthConfig,
+    ) -> Self {
+        let normalized = normalization.normalize(grapheme);
+        let mut chars = normalized.chars();
+        let base_char = chars.next().unwrap_or(' ');
+        let combining: Vec<char> = chars.collect();
+        let width = str_width(&normalized, config).max(1) as u8;
+
+        Self {
+            c: base_char,
+            combining,
+            width,
+            ..Default::default()
+        }
+    }
+
     /// Recalculate the width of this cell using the given configuration
     ///
     /// This is useful when the width configuration changes and cells need to be updated.
