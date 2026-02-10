@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Terminal Mode Sync on Connect**: Clients connecting to existing streaming sessions now receive `ModeChanged` messages for all active non-default terminal modes (#31)
+  - New `SessionState::build_mode_sync_messages()` sends mode state after `Connected` message in all WebSocket handlers (plain, TLS, Axum)
+  - Synced modes: mouse tracking (x10/normal/button_event/any_event), mouse encoding (utf8/sgr/urxvt), bracketed paste, application cursor, focus tracking, cursor visibility, alternate screen, origin mode, insert mode, auto-wrap
+  - Fixes mouse tracking and other modes not working when reconnecting to sessions where a TUI is already running
+  - 16 new streaming integration tests, 13 new Rust unit tests
+
 ### Added
+- **Terminal Mode Change Events**: DECSET/DECRST processing now emits `TerminalEvent::ModeChanged` events for real-time mode change broadcasting to connected clients
 - **OSC 1337 RemoteHost**: Parse `RemoteHost=user@hostname` sequences for remote host integration (#29)
   - Supports `user@hostname` format (username is optional)
   - Updates `ShellIntegration` hostname and username fields
