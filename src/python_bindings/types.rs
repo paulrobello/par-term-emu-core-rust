@@ -181,6 +181,10 @@ pub struct PyShellIntegration {
     pub last_exit_code: Option<i32>,
     #[pyo3(get)]
     pub cwd: Option<String>,
+    #[pyo3(get)]
+    pub hostname: Option<String>,
+    #[pyo3(get)]
+    pub username: Option<String>,
 }
 
 #[pymethods]
@@ -3618,6 +3622,8 @@ mod tests {
             current_command: Some("ls -la".to_string()),
             last_exit_code: Some(0),
             cwd: Some("/home/user".to_string()),
+            hostname: None,
+            username: None,
         };
 
         let repr = shell_int.__repr__().unwrap();
@@ -3635,6 +3641,8 @@ mod tests {
             current_command: None,
             last_exit_code: None,
             cwd: None,
+            hostname: None,
+            username: None,
         };
 
         assert!(!shell_int.in_prompt);
@@ -3643,6 +3651,8 @@ mod tests {
         assert_eq!(shell_int.current_command, None);
         assert_eq!(shell_int.last_exit_code, None);
         assert_eq!(shell_int.cwd, None);
+        assert_eq!(shell_int.hostname, None);
+        assert_eq!(shell_int.username, None);
     }
 
     #[test]
@@ -3654,6 +3664,8 @@ mod tests {
             current_command: Some("echo test".to_string()),
             last_exit_code: Some(1),
             cwd: Some("/tmp".to_string()),
+            hostname: Some("remote-server".to_string()),
+            username: Some("alice".to_string()),
         };
 
         let shell_int2 = shell_int1.clone();
@@ -3662,6 +3674,8 @@ mod tests {
         assert_eq!(shell_int1.current_command, shell_int2.current_command);
         assert_eq!(shell_int1.last_exit_code, shell_int2.last_exit_code);
         assert_eq!(shell_int1.cwd, shell_int2.cwd);
+        assert_eq!(shell_int1.hostname, shell_int2.hostname);
+        assert_eq!(shell_int1.username, shell_int2.username);
     }
 
     #[test]

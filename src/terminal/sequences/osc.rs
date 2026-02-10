@@ -493,6 +493,8 @@ impl Terminal {
                             self.handle_set_badge_format(encoded);
                         } else if let Some(payload) = data.strip_prefix("SetUserVar=") {
                             self.handle_set_user_var(payload);
+                        } else if let Some(payload) = data.strip_prefix("RemoteHost=") {
+                            self.handle_remote_host(payload);
                         } else {
                             // Default to inline image handling
                             self.handle_iterm_image(&data);
@@ -812,6 +814,71 @@ impl Terminal {
         );
 
         self.set_user_var(name.to_string(), value);
+    }
+
+    /// Handle OSC 1337 RemoteHost sequence
+    ///
+    /// Format: `OSC 1337 ; RemoteHost=username@hostname ST`
+    ///
+    /// Updates `ShellIntegration.hostname` and `ShellIntegration.username`,
+    /// then emits a `CwdChanged` event so the frontend can react to the
+    /// remote host change. The username part is optional.
+    fn handle_remote_host(&mut self, payload: &str) {
+        let payload = payload.trim();
+
+        if payload.is_empty() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "OSC1337",
+                "RemoteHost: empty payload",
+            );
+            return;
+        }
+
+        // Parse user@hostname format (username is optional)
+        let (username, hostname) = match payload.split_once('@') {
+            Some((user, host)) => {
+                let user = if user.is_empty() { None } else { Some(user) };
+                (user, host)
+            }
+            None => {
+                // No '@' means the whole payload is the hostname
+                (None, payload)
+            }
+        };
+
+        if hostname.is_empty() {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "OSC1337",
+                "RemoteHost: empty hostname",
+            );
+            return;
+        }
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "OSC1337",
+            &format!("RemoteHost: username={:?}, hostname={}", username, hostname),
+        );
+
+        // Determine if localhost (treat as no remote host)
+        let resolved_hostname = if hostname.eq_ignore_ascii_case("localhost")
+            || hostname == "127.0.0.1"
+            || hostname == "::1"
+        {
+            None
+        } else {
+            Some(hostname.to_string())
+        };
+
+        let resolved_username = username.map(|u| u.to_string());
+
+        // Use the current cwd (or empty if none set yet) so the CwdChanged event
+        // carries the host/user change. This mirrors how OSC 7 works.
+        let current_cwd = self.shell_integration.cwd().unwrap_or("").to_string();
+
+        self.record_cwd_change(current_cwd, resolved_hostname, resolved_username);
     }
 }
 
@@ -2024,5 +2091,184 @@ mod tests {
         // OSC 934 state should be independent
         assert_eq!(term.named_progress_bars().len(), 1);
         assert_eq!(term.get_named_progress_bar("dl-1").unwrap().percent, 75);
+    }
+
+    // === OSC 1337 RemoteHost Tests ===
+
+    #[test]
+    fn test_remote_host_user_and_hostname() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 1337 ; RemoteHost=alice@server1.example.com ST
+        term.process(b"\x1b]1337;RemoteHost=alice@server1.example.com\x1b\\");
+
+        assert_eq!(
+            term.shell_integration.hostname(),
+            Some("server1.example.com")
+        );
+        assert_eq!(term.shell_integration.username(), Some("alice"));
+    }
+
+    #[test]
+    fn test_remote_host_hostname_only() {
+        let mut term = Terminal::new(80, 24);
+
+        // No username, just hostname
+        term.process(b"\x1b]1337;RemoteHost=myserver\x1b\\");
+
+        assert_eq!(term.shell_integration.hostname(), Some("myserver"));
+        assert!(term.shell_integration.username().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_empty_user_at_hostname() {
+        let mut term = Terminal::new(80, 24);
+
+        // Empty username with @ prefix
+        term.process(b"\x1b]1337;RemoteHost=@myserver\x1b\\");
+
+        assert_eq!(term.shell_integration.hostname(), Some("myserver"));
+        assert!(term.shell_integration.username().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_localhost_clears_hostname() {
+        let mut term = Terminal::new(80, 24);
+
+        // First set a remote host
+        term.process(b"\x1b]1337;RemoteHost=alice@remote\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("remote"));
+
+        // Then switch back to localhost
+        term.process(b"\x1b]1337;RemoteHost=alice@localhost\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+        assert_eq!(term.shell_integration.username(), Some("alice"));
+    }
+
+    #[test]
+    fn test_remote_host_localhost_case_insensitive() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]1337;RemoteHost=user@LOCALHOST\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+
+        term.process(b"\x1b]1337;RemoteHost=user@Localhost\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_emits_cwd_changed_event() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]1337;RemoteHost=alice@remote-server\x1b\\");
+
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::CwdChanged(change)
+                if change.hostname.as_deref() == Some("remote-server")
+                    && change.username.as_deref() == Some("alice")
+            )),
+            "CwdChanged event with hostname and username should be emitted",
+        );
+    }
+
+    #[test]
+    fn test_remote_host_bell_terminated() {
+        let mut term = Terminal::new(80, 24);
+
+        // BEL-terminated variant
+        term.process(b"\x1b]1337;RemoteHost=bob@host2\x07");
+
+        assert_eq!(term.shell_integration.hostname(), Some("host2"));
+        assert_eq!(term.shell_integration.username(), Some("bob"));
+    }
+
+    #[test]
+    fn test_remote_host_session_variables_updated() {
+        let mut term = Terminal::new(80, 24);
+
+        term.process(b"\x1b]1337;RemoteHost=alice@server1\x1b\\");
+
+        let vars = term.session_variables();
+        assert_eq!(vars.hostname, Some("server1".to_string()));
+        assert_eq!(vars.username, Some("alice".to_string()));
+    }
+
+    #[test]
+    fn test_remote_host_empty_payload_ignored() {
+        let mut term = Terminal::new(80, 24);
+
+        // Empty payload should be ignored
+        term.process(b"\x1b]1337;RemoteHost=\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+        assert!(term.shell_integration.username().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_empty_hostname_ignored() {
+        let mut term = Terminal::new(80, 24);
+
+        // user@ with no hostname
+        term.process(b"\x1b]1337;RemoteHost=alice@\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+        assert!(term.shell_integration.username().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_overrides_osc7_hostname() {
+        let mut term = Terminal::new(80, 24);
+
+        // Set hostname via OSC 7
+        term.process(b"\x1b]7;file://server1/home/user\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("server1"));
+
+        // Override via RemoteHost
+        term.process(b"\x1b]1337;RemoteHost=bob@server2\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("server2"));
+        assert_eq!(term.shell_integration.username(), Some("bob"));
+    }
+
+    #[test]
+    fn test_remote_host_updates_sequence() {
+        let mut term = Terminal::new(80, 24);
+
+        // First remote host
+        term.process(b"\x1b]1337;RemoteHost=alice@host1\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("host1"));
+        assert_eq!(term.shell_integration.username(), Some("alice"));
+
+        // Second remote host
+        term.process(b"\x1b]1337;RemoteHost=bob@host2\x1b\\");
+        assert_eq!(term.shell_integration.hostname(), Some("host2"));
+        assert_eq!(term.shell_integration.username(), Some("bob"));
+    }
+
+    #[test]
+    fn test_remote_host_loopback_addresses() {
+        let mut term = Terminal::new(80, 24);
+
+        // IPv4 loopback
+        term.process(b"\x1b]1337;RemoteHost=user@127.0.0.1\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+
+        // IPv6 loopback
+        term.process(b"\x1b]1337;RemoteHost=user@::1\x1b\\");
+        assert!(term.shell_integration.hostname().is_none());
+    }
+
+    #[test]
+    fn test_remote_host_preserves_existing_cwd() {
+        let mut term = Terminal::new(80, 24);
+
+        // Set cwd via OSC 7
+        term.process(b"\x1b]7;file:///home/user/project\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+
+        // Set remote host - should not clear cwd
+        term.process(b"\x1b]1337;RemoteHost=alice@remote\x1b\\");
+        assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+        assert_eq!(term.shell_integration.hostname(), Some("remote"));
     }
 }
