@@ -15,7 +15,7 @@ use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
 use crate::debug;
 use crate::mouse::{MouseEncoding, MouseMode};
-use crate::terminal::Terminal;
+use crate::terminal::{Terminal, TerminalEvent};
 use vte::Params;
 
 impl Terminal {
@@ -591,9 +591,21 @@ impl Terminal {
                     for param in params.iter() {
                         if let Some(&n) = param.first() {
                             match n {
-                                1 => self.application_cursor = true, // Application cursor keys (DECCKM)
-                                5 => self.reverse_video = true,      // Reverse video (DECSCNM)
-                                6 => self.origin_mode = true,        // Origin mode (DECOM)
+                                1 => {
+                                    self.application_cursor = true; // Application cursor keys (DECCKM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "application_cursor".to_string(),
+                                        true,
+                                    ));
+                                }
+                                5 => self.reverse_video = true, // Reverse video (DECSCNM)
+                                6 => {
+                                    self.origin_mode = true; // Origin mode (DECOM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "origin_mode".to_string(),
+                                        true,
+                                    ));
+                                }
                                 69 => {
                                     // DECLRMM - enable left/right margins
                                     self.use_lr_margins = true;
@@ -604,9 +616,27 @@ impl Terminal {
                                         self.right_margin = cols.saturating_sub(1);
                                     }
                                 }
-                                7 => self.auto_wrap = true, // Auto wrap mode (DECAWM)
-                                25 => self.cursor.show(),   // Show cursor (DECTCEM)
-                                47 | 1047 => self.use_alt_screen(), // Alternate screen
+                                7 => {
+                                    self.auto_wrap = true; // Auto wrap mode (DECAWM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "auto_wrap".to_string(),
+                                        true,
+                                    ));
+                                }
+                                25 => {
+                                    self.cursor.show(); // Show cursor (DECTCEM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "cursor_visible".to_string(),
+                                        true,
+                                    ));
+                                }
+                                47 | 1047 => {
+                                    self.use_alt_screen(); // Alternate screen
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "alternate_screen".to_string(),
+                                        true,
+                                    ));
+                                }
                                 1048 => {
                                     // Save cursor (often used with alt screen)
                                     self.saved_cursor = Some(self.cursor);
@@ -623,15 +653,67 @@ impl Terminal {
                                     self.saved_underline_color = self.underline_color;
                                     self.saved_flags = self.flags;
                                     self.use_alt_screen();
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "alternate_screen".to_string(),
+                                        true,
+                                    ));
                                 }
-                                1000 => self.mouse_mode = MouseMode::Normal, // X11 mouse
-                                1002 => self.mouse_mode = MouseMode::ButtonEvent, // Button event mode
-                                1003 => self.mouse_mode = MouseMode::AnyEvent,    // Any event mode
-                                1004 => self.focus_tracking = true,               // Focus tracking
-                                1005 => self.mouse_encoding = MouseEncoding::Utf8, // UTF-8 mouse
-                                1006 => self.mouse_encoding = MouseEncoding::Sgr, // SGR mouse
-                                1015 => self.mouse_encoding = MouseEncoding::Urxvt, // URXVT mouse
-                                2004 => self.bracketed_paste = true,              // Bracketed paste
+                                1000 => {
+                                    self.mouse_mode = MouseMode::Normal; // X11 mouse
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_normal".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1002 => {
+                                    self.mouse_mode = MouseMode::ButtonEvent; // Button event mode
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_button_event".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1003 => {
+                                    self.mouse_mode = MouseMode::AnyEvent; // Any event mode
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_any_event".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1004 => {
+                                    self.focus_tracking = true; // Focus tracking
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "focus_tracking".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1005 => {
+                                    self.mouse_encoding = MouseEncoding::Utf8; // UTF-8 mouse
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_utf8".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1006 => {
+                                    self.mouse_encoding = MouseEncoding::Sgr; // SGR mouse
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_sgr".to_string(),
+                                        true,
+                                    ));
+                                }
+                                1015 => {
+                                    self.mouse_encoding = MouseEncoding::Urxvt; // URXVT mouse
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "mouse_urxvt".to_string(),
+                                        true,
+                                    ));
+                                }
+                                2004 => {
+                                    self.bracketed_paste = true; // Bracketed paste
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "bracketed_paste".to_string(),
+                                        true,
+                                    ));
+                                }
                                 2026 => self.synchronized_updates = true, // Synchronized updates
                                 _ => {}
                             }
@@ -642,7 +724,13 @@ impl Terminal {
                     for param in params.iter() {
                         if let Some(&n) = param.first() {
                             match n {
-                                4 => self.insert_mode = true,              // Insert mode (IRM)
+                                4 => {
+                                    self.insert_mode = true; // Insert mode (IRM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "insert_mode".to_string(),
+                                        true,
+                                    ));
+                                }
                                 20 => self.line_feed_new_line_mode = true, // Line feed/new line mode (LNM)
                                 _ => {}
                             }
@@ -657,9 +745,21 @@ impl Terminal {
                     for param in params.iter() {
                         if let Some(&n) = param.first() {
                             match n {
-                                1 => self.application_cursor = false, // Normal cursor keys
-                                5 => self.reverse_video = false,      // Normal video (DECSCNM)
-                                6 => self.origin_mode = false,        // Normal addressing mode
+                                1 => {
+                                    self.application_cursor = false; // Normal cursor keys
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "application_cursor".to_string(),
+                                        false,
+                                    ));
+                                }
+                                5 => self.reverse_video = false, // Normal video (DECSCNM)
+                                6 => {
+                                    self.origin_mode = false; // Normal addressing mode
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "origin_mode".to_string(),
+                                        false,
+                                    ));
+                                }
                                 69 => {
                                     // DECLRMM off
                                     self.use_lr_margins = false;
@@ -667,9 +767,27 @@ impl Terminal {
                                     self.left_margin = 0;
                                     self.right_margin = cols.saturating_sub(1);
                                 }
-                                7 => self.auto_wrap = false, // Disable auto wrap (DECAWM)
-                                25 => self.cursor.hide(),    // Hide cursor (DECTCEM)
-                                47 | 1047 => self.use_primary_screen(), // Primary screen
+                                7 => {
+                                    self.auto_wrap = false; // Disable auto wrap (DECAWM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "auto_wrap".to_string(),
+                                        false,
+                                    ));
+                                }
+                                25 => {
+                                    self.cursor.hide(); // Hide cursor (DECTCEM)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "cursor_visible".to_string(),
+                                        false,
+                                    ));
+                                }
+                                47 | 1047 => {
+                                    self.use_primary_screen(); // Primary screen
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "alternate_screen".to_string(),
+                                        false,
+                                    ));
+                                }
                                 1048 => {
                                     // Restore cursor
                                     if let Some(saved) = self.saved_cursor {
@@ -690,11 +808,58 @@ impl Terminal {
                                         self.underline_color = self.saved_underline_color;
                                         self.flags = self.saved_flags;
                                     }
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "alternate_screen".to_string(),
+                                        false,
+                                    ));
                                 }
-                                1000 | 1002 | 1003 => self.mouse_mode = MouseMode::Off, // Disable mouse
-                                1004 => self.focus_tracking = false, // Focus tracking off
-                                1005 | 1006 | 1015 => self.mouse_encoding = MouseEncoding::Default, // Default encoding
-                                2004 => self.bracketed_paste = false, // Bracketed paste off
+                                1000 | 1002 | 1003 => {
+                                    let old_mode = self.mouse_mode;
+                                    self.mouse_mode = MouseMode::Off; // Disable mouse
+                                    if old_mode != MouseMode::Off {
+                                        let mode_name = match old_mode {
+                                            MouseMode::Normal => "mouse_normal",
+                                            MouseMode::ButtonEvent => "mouse_button_event",
+                                            MouseMode::AnyEvent => "mouse_any_event",
+                                            MouseMode::X10 => "mouse_x10",
+                                            MouseMode::Off => unreachable!(),
+                                        };
+                                        self.terminal_events.push(TerminalEvent::ModeChanged(
+                                            mode_name.to_string(),
+                                            false,
+                                        ));
+                                    }
+                                }
+                                1004 => {
+                                    self.focus_tracking = false; // Focus tracking off
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "focus_tracking".to_string(),
+                                        false,
+                                    ));
+                                }
+                                1005 | 1006 | 1015 => {
+                                    let old_encoding = self.mouse_encoding;
+                                    self.mouse_encoding = MouseEncoding::Default; // Default encoding
+                                    if old_encoding != MouseEncoding::Default {
+                                        let encoding_name = match old_encoding {
+                                            MouseEncoding::Utf8 => "mouse_utf8",
+                                            MouseEncoding::Sgr => "mouse_sgr",
+                                            MouseEncoding::Urxvt => "mouse_urxvt",
+                                            MouseEncoding::Default => unreachable!(),
+                                        };
+                                        self.terminal_events.push(TerminalEvent::ModeChanged(
+                                            encoding_name.to_string(),
+                                            false,
+                                        ));
+                                    }
+                                }
+                                2004 => {
+                                    self.bracketed_paste = false; // Bracketed paste off
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "bracketed_paste".to_string(),
+                                        false,
+                                    ));
+                                }
                                 2026 => {
                                     // Synchronized updates off - flush buffer first
                                     self.flush_synchronized_updates();
@@ -709,7 +874,13 @@ impl Terminal {
                     for param in params.iter() {
                         if let Some(&n) = param.first() {
                             match n {
-                                4 => self.insert_mode = false,              // Replace mode (IRM off)
+                                4 => {
+                                    self.insert_mode = false; // Replace mode (IRM off)
+                                    self.terminal_events.push(TerminalEvent::ModeChanged(
+                                        "insert_mode".to_string(),
+                                        false,
+                                    ));
+                                }
                                 20 => self.line_feed_new_line_mode = false, // Line feed mode (LNM off)
                                 _ => {}
                             }
@@ -1724,7 +1895,7 @@ mod tests {
     use crate::color::{Color, NamedColor};
     use crate::cursor::CursorStyle;
     use crate::mouse::{MouseEncoding, MouseMode};
-    use crate::terminal::Terminal;
+    use crate::terminal::{Terminal, TerminalEvent};
 
     // ========== Cursor Movement Tests ==========
 
@@ -2245,5 +2416,235 @@ mod tests {
         // Disable insert mode
         term.process(b"\x1b[4l");
         assert!(!term.insert_mode);
+    }
+
+    // ========== Mode Changed Event Tests ==========
+
+    /// Helper: drain events and find ModeChanged events matching a mode name
+    fn find_mode_events(term: &mut Terminal, mode: &str) -> Vec<(String, bool)> {
+        term.poll_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                TerminalEvent::ModeChanged(m, enabled) if m == mode => Some((m, enabled)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_mode_changed_event_mouse_normal() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events(); // Clear any initial events
+
+        // Enable normal mouse tracking
+        term.process(b"\x1b[?1000h");
+        let events = find_mode_events(&mut term, "mouse_normal");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1); // enabled = true
+
+        // Disable mouse tracking
+        term.process(b"\x1b[?1000l");
+        let events = find_mode_events(&mut term, "mouse_normal");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1); // enabled = false
+    }
+
+    #[test]
+    fn test_mode_changed_event_mouse_button_event() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?1002h");
+        let events = find_mode_events(&mut term, "mouse_button_event");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?1002l");
+        let events = find_mode_events(&mut term, "mouse_button_event");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_mouse_any_event() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?1003h");
+        let events = find_mode_events(&mut term, "mouse_any_event");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?1003l");
+        let events = find_mode_events(&mut term, "mouse_any_event");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_mouse_encoding() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        // Enable SGR encoding
+        term.process(b"\x1b[?1006h");
+        let events = find_mode_events(&mut term, "mouse_sgr");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        // Disable SGR encoding
+        term.process(b"\x1b[?1006l");
+        let events = find_mode_events(&mut term, "mouse_sgr");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_bracketed_paste() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?2004h");
+        let events = find_mode_events(&mut term, "bracketed_paste");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?2004l");
+        let events = find_mode_events(&mut term, "bracketed_paste");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_application_cursor() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?1h");
+        let events = find_mode_events(&mut term, "application_cursor");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?1l");
+        let events = find_mode_events(&mut term, "application_cursor");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_focus_tracking() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?1004h");
+        let events = find_mode_events(&mut term, "focus_tracking");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?1004l");
+        let events = find_mode_events(&mut term, "focus_tracking");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_cursor_visible() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        // Hide cursor
+        term.process(b"\x1b[?25l");
+        let events = find_mode_events(&mut term, "cursor_visible");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+
+        // Show cursor
+        term.process(b"\x1b[?25h");
+        let events = find_mode_events(&mut term, "cursor_visible");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_alternate_screen() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        // Enter alt screen
+        term.process(b"\x1b[?1049h");
+        let events = find_mode_events(&mut term, "alternate_screen");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        // Leave alt screen
+        term.process(b"\x1b[?1049l");
+        let events = find_mode_events(&mut term, "alternate_screen");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_origin_mode() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[?6h");
+        let events = find_mode_events(&mut term, "origin_mode");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[?6l");
+        let events = find_mode_events(&mut term, "origin_mode");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_auto_wrap() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        // Disable auto-wrap (default is on)
+        term.process(b"\x1b[?7l");
+        let events = find_mode_events(&mut term, "auto_wrap");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+
+        // Re-enable auto-wrap
+        term.process(b"\x1b[?7h");
+        let events = find_mode_events(&mut term, "auto_wrap");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_event_insert_mode() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        term.process(b"\x1b[4h");
+        let events = find_mode_events(&mut term, "insert_mode");
+        assert_eq!(events.len(), 1);
+        assert!(events[0].1);
+
+        term.process(b"\x1b[4l");
+        let events = find_mode_events(&mut term, "insert_mode");
+        assert_eq!(events.len(), 1);
+        assert!(!events[0].1);
+    }
+
+    #[test]
+    fn test_mode_changed_no_event_when_mouse_already_off() {
+        let mut term = Terminal::new(80, 24);
+        term.poll_events();
+
+        // Mouse is already off, resetting should not emit an event
+        term.process(b"\x1b[?1000l");
+        let all_events: Vec<_> = term
+            .poll_events()
+            .into_iter()
+            .filter(|e| matches!(e, TerminalEvent::ModeChanged(..)))
+            .collect();
+        assert!(all_events.is_empty());
     }
 }
