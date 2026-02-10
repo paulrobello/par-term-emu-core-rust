@@ -2624,9 +2624,14 @@ impl PyTerminal {
                         map.insert("type".to_string(), "graphics_added".to_string());
                         map.insert("row".to_string(), row.to_string());
                     }
-                    TerminalEvent::HyperlinkAdded(url) => {
+                    TerminalEvent::HyperlinkAdded { url, row, col, id } => {
                         map.insert("type".to_string(), "hyperlink_added".to_string());
                         map.insert("url".to_string(), url.clone());
+                        map.insert("row".to_string(), row.to_string());
+                        map.insert("col".to_string(), col.to_string());
+                        if let Some(id) = id {
+                            map.insert("id".to_string(), id.to_string());
+                        }
                     }
                     TerminalEvent::DirtyRegion(first, last) => {
                         map.insert("type".to_string(), "dirty_region".to_string());
@@ -2696,6 +2701,30 @@ impl PyTerminal {
                             map.insert("label".to_string(), l.clone());
                         }
                     }
+                    TerminalEvent::BadgeChanged(badge) => {
+                        map.insert("type".to_string(), "badge_changed".to_string());
+                        if let Some(b) = badge {
+                            map.insert("badge".to_string(), b.clone());
+                        }
+                    }
+                    TerminalEvent::ShellIntegrationEvent {
+                        event_type,
+                        command,
+                        exit_code,
+                        timestamp,
+                    } => {
+                        map.insert("type".to_string(), "shell_integration".to_string());
+                        map.insert("event_type".to_string(), event_type.clone());
+                        if let Some(cmd) = command {
+                            map.insert("command".to_string(), cmd.clone());
+                        }
+                        if let Some(code) = exit_code {
+                            map.insert("exit_code".to_string(), code.to_string());
+                        }
+                        if let Some(ts) = timestamp {
+                            map.insert("timestamp".to_string(), ts.to_string());
+                        }
+                    }
                 }
                 map
             })
@@ -2727,6 +2756,8 @@ impl PyTerminal {
                     "trigger_matched" => Some(TerminalEventKind::TriggerMatched),
                     "user_var_changed" => Some(TerminalEventKind::UserVarChanged),
                     "progress_bar_changed" => Some(TerminalEventKind::ProgressBarChanged),
+                    "badge_changed" => Some(TerminalEventKind::BadgeChanged),
+                    "shell_integration" => Some(TerminalEventKind::ShellIntegrationEvent),
                     _ => None,
                 })
                 .collect()
@@ -2787,9 +2818,14 @@ impl PyTerminal {
                         map.insert("type".to_string(), "graphics_added".to_string());
                         map.insert("row".to_string(), row.to_string());
                     }
-                    TerminalEvent::HyperlinkAdded(url) => {
+                    TerminalEvent::HyperlinkAdded { url, row, col, id } => {
                         map.insert("type".to_string(), "hyperlink_added".to_string());
                         map.insert("url".to_string(), url.clone());
+                        map.insert("row".to_string(), row.to_string());
+                        map.insert("col".to_string(), col.to_string());
+                        if let Some(id) = id {
+                            map.insert("id".to_string(), id.to_string());
+                        }
                     }
                     TerminalEvent::DirtyRegion(first, last) => {
                         map.insert("type".to_string(), "dirty_region".to_string());
@@ -2857,6 +2893,30 @@ impl PyTerminal {
                         }
                         if let Some(l) = label {
                             map.insert("label".to_string(), l.clone());
+                        }
+                    }
+                    TerminalEvent::BadgeChanged(badge) => {
+                        map.insert("type".to_string(), "badge_changed".to_string());
+                        if let Some(b) = badge {
+                            map.insert("badge".to_string(), b.clone());
+                        }
+                    }
+                    TerminalEvent::ShellIntegrationEvent {
+                        event_type,
+                        command,
+                        exit_code,
+                        timestamp,
+                    } => {
+                        map.insert("type".to_string(), "shell_integration".to_string());
+                        map.insert("event_type".to_string(), event_type.clone());
+                        if let Some(cmd) = command {
+                            map.insert("command".to_string(), cmd.clone());
+                        }
+                        if let Some(code) = exit_code {
+                            map.insert("exit_code".to_string(), code.to_string());
+                        }
+                        if let Some(ts) = timestamp {
+                            map.insert("timestamp".to_string(), ts.to_string());
                         }
                     }
                 }

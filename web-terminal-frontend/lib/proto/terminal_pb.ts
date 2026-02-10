@@ -13,7 +13,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file terminal.proto.
  */
 export const file_terminal: GenFile = /*@__PURE__*/
-  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3Ii3gYKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAEi8KDWFjdGlvbl9ub3RpZnkYDSABKAsyFi50ZXJtaW5hbC5BY3Rpb25Ob3RpZnlIABI0ChBhY3Rpb25fbWFya19saW5lGA4gASgLMhgudGVybWluYWwuQWN0aW9uTWFya0xpbmVIABItCgxtb2RlX2NoYW5nZWQYDyABKAsyFS50ZXJtaW5hbC5Nb2RlQ2hhbmdlZEgAEjEKDmdyYXBoaWNzX2FkZGVkGBAgASgLMhcudGVybWluYWwuR3JhcGhpY3NBZGRlZEgAEjMKD2h5cGVybGlua19hZGRlZBgRIAEoCzIYLnRlcm1pbmFsLkh5cGVybGlua0FkZGVkSAASNAoQdXNlcl92YXJfY2hhbmdlZBgSIAEoCzIYLnRlcm1pbmFsLlVzZXJWYXJDaGFuZ2VkSAASPAoUcHJvZ3Jlc3NfYmFyX2NoYW5nZWQYEyABKAsyHC50ZXJtaW5hbC5Qcm9ncmVzc0JhckNoYW5nZWRIAEIJCgdtZXNzYWdlIjwKBk91dHB1dBIMCgRkYXRhGAEgASgMEhYKCXRpbWVzdGFtcBgCIAEoBEgAiAEBQgwKCl90aW1lc3RhbXAiJAoGUmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIWCgVUaXRsZRINCgV0aXRsZRgBIAEoCSKKAwoJQ29ubmVjdGVkEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDRIbCg5pbml0aWFsX3NjcmVlbhgDIAEoDEgAiAEBEhIKCnNlc3Npb25faWQYBCABKAkSJwoFdGhlbWUYBSABKAsyEy50ZXJtaW5hbC5UaGVtZUluZm9IAYgBARISCgViYWRnZRgGIAEoCUgCiAEBEh0KEGZhaW50X3RleHRfYWxwaGEYByABKAJIA4gBARIQCgNjd2QYCCABKAlIBIgBARIeChFtb2RpZnlfb3RoZXJfa2V5cxgJIAEoDUgFiAEBEhYKCWNsaWVudF9pZBgKIAEoCUgGiAEBEhUKCHJlYWRvbmx5GAsgASgISAeIAQFCEQoPX2luaXRpYWxfc2NyZWVuQggKBl90aGVtZUIICgZfYmFkZ2VCEwoRX2ZhaW50X3RleHRfYWxwaGFCBgoEX2N3ZEIUChJfbW9kaWZ5X290aGVyX2tleXNCDAoKX2NsaWVudF9pZEILCglfcmVhZG9ubHkiPQoHUmVmcmVzaBIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0SFgoOc2NyZWVuX2NvbnRlbnQYAyABKAwiOwoOQ3Vyc29yUG9zaXRpb24SCwoDY29sGAEgASgNEgsKA3JvdxgCIAEoDRIPCgd2aXNpYmxlGAMgASgIIgYKBEJlbGwirQEKCkN3ZENoYW5nZWQSFAoHb2xkX2N3ZBgBIAEoCUgAiAEBEg8KB25ld19jd2QYAiABKAkSFQoIaG9zdG5hbWUYAyABKAlIAYgBARIVCgh1c2VybmFtZRgEIAEoCUgCiAEBEhYKCXRpbWVzdGFtcBgFIAEoBEgDiAEBQgoKCF9vbGRfY3dkQgsKCV9ob3N0bmFtZUILCglfdXNlcm5hbWVCDAoKX3RpbWVzdGFtcCKCAQoOVHJpZ2dlck1hdGNoZWQSEgoKdHJpZ2dlcl9pZBgBIAEoBBILCgNyb3cYAiABKA0SCwoDY29sGAMgASgNEg8KB2VuZF9jb2wYBCABKA0SDAoEdGV4dBgFIAEoCRIQCghjYXB0dXJlcxgGIAMoCRIRCgl0aW1lc3RhbXAYByABKAQiQgoMQWN0aW9uTm90aWZ5EhIKCnRyaWdnZXJfaWQYASABKAQSDQoFdGl0bGUYAiABKAkSDwoHbWVzc2FnZRgDIAEoCSJ+Cg5BY3Rpb25NYXJrTGluZRISCgp0cmlnZ2VyX2lkGAEgASgEEgsKA3JvdxgCIAEoDRISCgVsYWJlbBgDIAEoCUgAiAEBEiMKBWNvbG9yGAQgASgLMg8udGVybWluYWwuQ29sb3JIAYgBAUIICgZfbGFiZWxCCAoGX2NvbG9yIjQKBUVycm9yEg8KB21lc3NhZ2UYASABKAkSEQoEY29kZRgCIAEoCUgAiAEBQgcKBV9jb2RlIhoKCFNodXRkb3duEg4KBnJlYXNvbhgBIAEoCSIGCgRQb25nIiwKC01vZGVDaGFuZ2VkEgwKBG1vZGUYASABKAkSDwoHZW5hYmxlZBgCIAEoCCI8Cg1HcmFwaGljc0FkZGVkEgsKA3JvdxgBIAEoDRITCgZmb3JtYXQYAiABKAlIAIgBAUIJCgdfZm9ybWF0Ik8KDkh5cGVybGlua0FkZGVkEgsKA3VybBgBIAEoCRILCgNyb3cYAiABKA0SCwoDY29sGAMgASgNEg8KAmlkGAQgASgJSACIAQFCBQoDX2lkIlMKDlVzZXJWYXJDaGFuZ2VkEgwKBG5hbWUYASABKAkSDQoFdmFsdWUYAiABKAkSFgoJb2xkX3ZhbHVlGAMgASgJSACIAQFCDAoKX29sZF92YWx1ZSKOAQoSUHJvZ3Jlc3NCYXJDaGFuZ2VkEg4KBmFjdGlvbhgBIAEoCRIKCgJpZBgCIAEoCRISCgVzdGF0ZRgDIAEoCUgAiAEBEhQKB3BlcmNlbnQYBCABKA1IAYgBARISCgVsYWJlbBgFIAEoCUgCiAEBQggKBl9zdGF0ZUIKCghfcGVyY2VudEIICgZfbGFiZWwi3QEKDUNsaWVudE1lc3NhZ2USIAoFaW5wdXQYASABKAsyDy50ZXJtaW5hbC5JbnB1dEgAEigKBnJlc2l6ZRgCIAEoCzIWLnRlcm1pbmFsLkNsaWVudFJlc2l6ZUgAEh4KBHBpbmcYAyABKAsyDi50ZXJtaW5hbC5QaW5nSAASKwoHcmVmcmVzaBgEIAEoCzIYLnRlcm1pbmFsLlJlcXVlc3RSZWZyZXNoSAASKAoJc3Vic2NyaWJlGAUgASgLMhMudGVybWluYWwuU3Vic2NyaWJlSABCCQoHbWVzc2FnZSIVCgVJbnB1dBIMCgRkYXRhGAEgASgMIioKDENsaWVudFJlc2l6ZRIMCgRjb2xzGAEgASgNEgwKBHJvd3MYAiABKA0iBgoEUGluZyIQCg5SZXF1ZXN0UmVmcmVzaCIwCglTdWJzY3JpYmUSIwoGZXZlbnRzGAEgAygOMhMudGVybWluYWwuRXZlbnRUeXBlKtgCCglFdmVudFR5cGUSGgoWRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEhUKEUVWRU5UX1RZUEVfT1VUUFVUEAESFQoRRVZFTlRfVFlQRV9DVVJTT1IQAhITCg9FVkVOVF9UWVBFX0JFTEwQAxIUChBFVkVOVF9UWVBFX1RJVExFEAQSFQoRRVZFTlRfVFlQRV9SRVNJWkUQBRISCg5FVkVOVF9UWVBFX0NXRBAGEhYKEkVWRU5UX1RZUEVfVFJJR0dFUhAHEhUKEUVWRU5UX1RZUEVfQUNUSU9OEAgSEwoPRVZFTlRfVFlQRV9NT0RFEAkSFwoTRVZFTlRfVFlQRV9HUkFQSElDUxAKEhgKFEVWRU5UX1RZUEVfSFlQRVJMSU5LEAsSFwoTRVZFTlRfVFlQRV9VU0VSX1ZBUhAMEhsKF0VWRU5UX1RZUEVfUFJPR1JFU1NfQkFSEA1iBnByb3RvMw");
+  fileDesc("Cg50ZXJtaW5hbC5wcm90bxIIdGVybWluYWwiKAoFQ29sb3ISCQoBchgBIAEoDRIJCgFnGAIgASgNEgkKAWIYAyABKA0ipQEKCVRoZW1lSW5mbxIMCgRuYW1lGAEgASgJEiMKCmJhY2tncm91bmQYAiABKAsyDy50ZXJtaW5hbC5Db2xvchIjCgpmb3JlZ3JvdW5kGAMgASgLMg8udGVybWluYWwuQ29sb3ISHwoGbm9ybWFsGAQgAygLMg8udGVybWluYWwuQ29sb3ISHwoGYnJpZ2h0GAUgAygLMg8udGVybWluYWwuQ29sb3IivwgKDVNlcnZlck1lc3NhZ2USIgoGb3V0cHV0GAEgASgLMhAudGVybWluYWwuT3V0cHV0SAASIgoGcmVzaXplGAIgASgLMhAudGVybWluYWwuUmVzaXplSAASIAoFdGl0bGUYAyABKAsyDy50ZXJtaW5hbC5UaXRsZUgAEigKCWNvbm5lY3RlZBgEIAEoCzITLnRlcm1pbmFsLkNvbm5lY3RlZEgAEiQKB3JlZnJlc2gYBSABKAsyES50ZXJtaW5hbC5SZWZyZXNoSAASKgoGY3Vyc29yGAYgASgLMhgudGVybWluYWwuQ3Vyc29yUG9zaXRpb25IABIeCgRiZWxsGAcgASgLMg4udGVybWluYWwuQmVsbEgAEiAKBWVycm9yGAggASgLMg8udGVybWluYWwuRXJyb3JIABImCghzaHV0ZG93bhgJIAEoCzISLnRlcm1pbmFsLlNodXRkb3duSAASHgoEcG9uZxgKIAEoCzIOLnRlcm1pbmFsLlBvbmdIABIrCgtjd2RfY2hhbmdlZBgLIAEoCzIULnRlcm1pbmFsLkN3ZENoYW5nZWRIABIzCg90cmlnZ2VyX21hdGNoZWQYDCABKAsyGC50ZXJtaW5hbC5UcmlnZ2VyTWF0Y2hlZEgAEi8KDWFjdGlvbl9ub3RpZnkYDSABKAsyFi50ZXJtaW5hbC5BY3Rpb25Ob3RpZnlIABI0ChBhY3Rpb25fbWFya19saW5lGA4gASgLMhgudGVybWluYWwuQWN0aW9uTWFya0xpbmVIABItCgxtb2RlX2NoYW5nZWQYDyABKAsyFS50ZXJtaW5hbC5Nb2RlQ2hhbmdlZEgAEjEKDmdyYXBoaWNzX2FkZGVkGBAgASgLMhcudGVybWluYWwuR3JhcGhpY3NBZGRlZEgAEjMKD2h5cGVybGlua19hZGRlZBgRIAEoCzIYLnRlcm1pbmFsLkh5cGVybGlua0FkZGVkSAASNAoQdXNlcl92YXJfY2hhbmdlZBgSIAEoCzIYLnRlcm1pbmFsLlVzZXJWYXJDaGFuZ2VkSAASPAoUcHJvZ3Jlc3NfYmFyX2NoYW5nZWQYEyABKAsyHC50ZXJtaW5hbC5Qcm9ncmVzc0JhckNoYW5nZWRIABIvCg1iYWRnZV9jaGFuZ2VkGBQgASgLMhYudGVybWluYWwuQmFkZ2VDaGFuZ2VkSAASNwoRc2VsZWN0aW9uX2NoYW5nZWQYFSABKAsyGi50ZXJtaW5hbC5TZWxlY3Rpb25DaGFuZ2VkSAASMQoOY2xpcGJvYXJkX3N5bmMYFiABKAsyFy50ZXJtaW5hbC5DbGlwYm9hcmRTeW5jSAASQgoXc2hlbGxfaW50ZWdyYXRpb25fZXZlbnQYFyABKAsyHy50ZXJtaW5hbC5TaGVsbEludGVncmF0aW9uRXZlbnRIAEIJCgdtZXNzYWdlIjwKBk91dHB1dBIMCgRkYXRhGAEgASgMEhYKCXRpbWVzdGFtcBgCIAEoBEgAiAEBQgwKCl90aW1lc3RhbXAiJAoGUmVzaXplEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDSIWCgVUaXRsZRINCgV0aXRsZRgBIAEoCSKKAwoJQ29ubmVjdGVkEgwKBGNvbHMYASABKA0SDAoEcm93cxgCIAEoDRIbCg5pbml0aWFsX3NjcmVlbhgDIAEoDEgAiAEBEhIKCnNlc3Npb25faWQYBCABKAkSJwoFdGhlbWUYBSABKAsyEy50ZXJtaW5hbC5UaGVtZUluZm9IAYgBARISCgViYWRnZRgGIAEoCUgCiAEBEh0KEGZhaW50X3RleHRfYWxwaGEYByABKAJIA4gBARIQCgNjd2QYCCABKAlIBIgBARIeChFtb2RpZnlfb3RoZXJfa2V5cxgJIAEoDUgFiAEBEhYKCWNsaWVudF9pZBgKIAEoCUgGiAEBEhUKCHJlYWRvbmx5GAsgASgISAeIAQFCEQoPX2luaXRpYWxfc2NyZWVuQggKBl90aGVtZUIICgZfYmFkZ2VCEwoRX2ZhaW50X3RleHRfYWxwaGFCBgoEX2N3ZEIU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CgRwaW5nGAMgASgLMg4udGVybWluYWwuUGluZ0gAEisKB3JlZnJlc2gYBCABKAsyGC50ZXJtaW5hbC5SZXF1ZXN0UmVmcmVzaEgAEigKCXN1YnNjcmliZRgFIAEoCzITLnRlcm1pbmFsLlN1YnNjcmliZUgAEiUKBW1vdXNlGAYgASgLMhQudGVybWluYWwuTW91c2VJbnB1dEgAEiYKBWZvY3VzGAcgASgLMhUudGVybWluYWwuRm9jdXNDaGFuZ2VIABIlCgVwYXN0ZRgIIAEoCzIULnRlcm1pbmFsLlBhc3RlSW5wdXRIABIvCglzZWxlY3Rpb24YCSABKAsyGi50ZXJtaW5hbC5TZWxlY3Rpb25SZXF1ZXN0SAASLwoJY2xpcGJvYXJkGAogASgLMhoudGVybWluYWwuQ2xpcGJvYXJkUmVxdWVzdEgAQgkKB21lc3NhZ2UiFQoFSW5wdXQSDAoEZGF0YRgBIAEoDCIqCgxDbGllbnRSZXNpemUSDAoEY29scxgBIAEoDRIMCgRyb3dzGAIgASgNIgYKBFBpbmciEAoOUmVxdWVzdFJlZnJlc2giMAoJU3Vic2NyaWJlEiMKBmV2ZW50cxgBIAMoDjITLnRlcm1pbmFsLkV2ZW50VHlwZSJ0CgpNb3VzZUlucHV0EgsKA2NvbBgBIAEoDRILCgNyb3cYAiABKA0SDgoGYnV0dG9uGAMgASgNEg0KBXNoaWZ0GAQgASgIEgwKBGN0cmwYBSABKAgSCwoDYWx0GAYgASgIEhIKCmV2ZW50X3R5cGUYByABKAkiHgoLRm9jdXNDaGFuZ2USDwoHZm9jdXNlZBgBIAEoCCIdCgpQYXN0ZUlucHV0Eg8KB2NvbnRlbnQYASABKAkiaAoQU2VsZWN0aW9uUmVxdWVzdBIRCglzdGFydF9jb2wYASABKA0SEQoJc3RhcnRfcm93GAIgASgNEg8KB2VuZF9jb2wYAyABKA0SDwoHZW5kX3JvdxgEIAEoDRIMCgRtb2RlGAUgASgJImcKEENsaXBib2FyZFJlcXVlc3QSEQoJb3BlcmF0aW9uGAEgASgJEhQKB2NvbnRlbnQYAiABKAlIAIgBARITCgZ0YXJnZXQYAyABKAlIAYgBAUIKCghfY29udGVudEIJCgdfdGFyZ2V0KrgDCglFdmVudFR5cGUSGgoWRVZFTlRfVFlQRV9VTlNQRUNJRklFRBAAEhUKEUVWRU5UX1RZUEVfT1VUUFVUEAESFQoRRVZFTlRfVFlQRV9DVVJTT1IQAhITCg9FVkVOVF9UWVBFX0JFTEwQAxIUChBFVkVOVF9UWVBFX1RJVExFEAQSFQoRRVZFTlRfVFlQRV9SRVNJWkUQBRISCg5FVkVOVF9UWVBFX0NXRBAGEhYKEkVWRU5UX1RZUEVfVFJJR0dFUhAHEhUKEUVWRU5UX1RZUEVfQUNUSU9OEAgSEwoPRVZFTlRfVFlQRV9NT0RFEAkSFwoTRVZFTlRfVFlQRV9HUkFQSElDUxAKEhgKFEVWRU5UX1RZUEVfSFlQRVJMSU5LEAsSFwoTRVZFTlRfVFlQRV9VU0VSX1ZBUhAMEhsKF0VWRU5UX1RZUEVfUFJPR1JFU1NfQkFSEA0SFAoQRVZFTlRfVFlQRV9CQURHRRAOEhgKFEVWRU5UX1RZUEVfU0VMRUNUSU9OEA8SGAoURVZFTlRfVFlQRV9DTElQQk9BUkQQEBIUChBFVkVOVF9UWVBFX1NIRUxMEBFiBnByb3RvMw");
 
 /**
  * RGB color (0-255 per channel)
@@ -208,6 +208,30 @@ export type ServerMessage = Message<"terminal.ServerMessage"> & {
      */
     value: ProgressBarChanged;
     case: "progressBarChanged";
+  } | {
+    /**
+     * @generated from field: terminal.BadgeChanged badge_changed = 20;
+     */
+    value: BadgeChanged;
+    case: "badgeChanged";
+  } | {
+    /**
+     * @generated from field: terminal.SelectionChanged selection_changed = 21;
+     */
+    value: SelectionChanged;
+    case: "selectionChanged";
+  } | {
+    /**
+     * @generated from field: terminal.ClipboardSync clipboard_sync = 22;
+     */
+    value: ClipboardSync;
+    case: "clipboardSync";
+  } | {
+    /**
+     * @generated from field: terminal.ShellIntegrationEvent shell_integration_event = 23;
+     */
+    value: ShellIntegrationEvent;
+    case: "shellIntegrationEvent";
   } | { case: undefined; value?: undefined };
 };
 
@@ -839,6 +863,155 @@ export const ProgressBarChangedSchema: GenMessage<ProgressBarChanged> = /*@__PUR
   messageDesc(file_terminal, 21);
 
 /**
+ * Badge text changed (OSC 1337 SetBadgeFormat)
+ *
+ * @generated from message terminal.BadgeChanged
+ */
+export type BadgeChanged = Message<"terminal.BadgeChanged"> & {
+  /**
+   * New badge text (empty if cleared)
+   *
+   * @generated from field: optional string badge = 1;
+   */
+  badge?: string;
+};
+
+/**
+ * Describes the message terminal.BadgeChanged.
+ * Use `create(BadgeChangedSchema)` to create a new message.
+ */
+export const BadgeChangedSchema: GenMessage<BadgeChanged> = /*@__PURE__*/
+  messageDesc(file_terminal, 22);
+
+/**
+ * Selection changed
+ *
+ * @generated from message terminal.SelectionChanged
+ */
+export type SelectionChanged = Message<"terminal.SelectionChanged"> & {
+  /**
+   * @generated from field: optional uint32 start_col = 1;
+   */
+  startCol?: number;
+
+  /**
+   * @generated from field: optional uint32 start_row = 2;
+   */
+  startRow?: number;
+
+  /**
+   * @generated from field: optional uint32 end_col = 3;
+   */
+  endCol?: number;
+
+  /**
+   * @generated from field: optional uint32 end_row = 4;
+   */
+  endRow?: number;
+
+  /**
+   * Selected text content
+   *
+   * @generated from field: optional string text = 5;
+   */
+  text?: string;
+
+  /**
+   * "chars", "line", "block"
+   *
+   * @generated from field: string mode = 6;
+   */
+  mode: string;
+
+  /**
+   * True if selection was cleared
+   *
+   * @generated from field: bool cleared = 7;
+   */
+  cleared: boolean;
+};
+
+/**
+ * Describes the message terminal.SelectionChanged.
+ * Use `create(SelectionChangedSchema)` to create a new message.
+ */
+export const SelectionChangedSchema: GenMessage<SelectionChanged> = /*@__PURE__*/
+  messageDesc(file_terminal, 23);
+
+/**
+ * Clipboard sync event (OSC 52)
+ *
+ * @generated from message terminal.ClipboardSync
+ */
+export type ClipboardSync = Message<"terminal.ClipboardSync"> & {
+  /**
+   * "set", "get_response"
+   *
+   * @generated from field: string operation = 1;
+   */
+  operation: string;
+
+  /**
+   * @generated from field: string content = 2;
+   */
+  content: string;
+
+  /**
+   * "clipboard", "primary", "select"
+   *
+   * @generated from field: optional string target = 3;
+   */
+  target?: string;
+};
+
+/**
+ * Describes the message terminal.ClipboardSync.
+ * Use `create(ClipboardSyncSchema)` to create a new message.
+ */
+export const ClipboardSyncSchema: GenMessage<ClipboardSync> = /*@__PURE__*/
+  messageDesc(file_terminal, 24);
+
+/**
+ * Shell integration event (FinalTerm sequences)
+ *
+ * @generated from message terminal.ShellIntegrationEvent
+ */
+export type ShellIntegrationEvent = Message<"terminal.ShellIntegrationEvent"> & {
+  /**
+   * "prompt_start", "command_start", "command_executed", "command_finished"
+   *
+   * @generated from field: string event_type = 1;
+   */
+  eventType: string;
+
+  /**
+   * The command text (for command_start)
+   *
+   * @generated from field: optional string command = 2;
+   */
+  command?: string;
+
+  /**
+   * Exit code (for command_finished)
+   *
+   * @generated from field: optional int32 exit_code = 3;
+   */
+  exitCode?: number;
+
+  /**
+   * @generated from field: optional uint64 timestamp = 4;
+   */
+  timestamp?: bigint;
+};
+
+/**
+ * Describes the message terminal.ShellIntegrationEvent.
+ * Use `create(ShellIntegrationEventSchema)` to create a new message.
+ */
+export const ShellIntegrationEventSchema: GenMessage<ShellIntegrationEvent> = /*@__PURE__*/
+  messageDesc(file_terminal, 25);
+
+/**
  * @generated from message terminal.ClientMessage
  */
 export type ClientMessage = Message<"terminal.ClientMessage"> & {
@@ -875,6 +1048,36 @@ export type ClientMessage = Message<"terminal.ClientMessage"> & {
      */
     value: Subscribe;
     case: "subscribe";
+  } | {
+    /**
+     * @generated from field: terminal.MouseInput mouse = 6;
+     */
+    value: MouseInput;
+    case: "mouse";
+  } | {
+    /**
+     * @generated from field: terminal.FocusChange focus = 7;
+     */
+    value: FocusChange;
+    case: "focus";
+  } | {
+    /**
+     * @generated from field: terminal.PasteInput paste = 8;
+     */
+    value: PasteInput;
+    case: "paste";
+  } | {
+    /**
+     * @generated from field: terminal.SelectionRequest selection = 9;
+     */
+    value: SelectionRequest;
+    case: "selection";
+  } | {
+    /**
+     * @generated from field: terminal.ClipboardRequest clipboard = 10;
+     */
+    value: ClipboardRequest;
+    case: "clipboard";
   } | { case: undefined; value?: undefined };
 };
 
@@ -883,7 +1086,7 @@ export type ClientMessage = Message<"terminal.ClientMessage"> & {
  * Use `create(ClientMessageSchema)` to create a new message.
  */
 export const ClientMessageSchema: GenMessage<ClientMessage> = /*@__PURE__*/
-  messageDesc(file_terminal, 22);
+  messageDesc(file_terminal, 26);
 
 /**
  * Keyboard input from client
@@ -904,7 +1107,7 @@ export type Input = Message<"terminal.Input"> & {
  * Use `create(InputSchema)` to create a new message.
  */
 export const InputSchema: GenMessage<Input> = /*@__PURE__*/
-  messageDesc(file_terminal, 23);
+  messageDesc(file_terminal, 27);
 
 /**
  * Client requests terminal resize
@@ -928,7 +1131,7 @@ export type ClientResize = Message<"terminal.ClientResize"> & {
  * Use `create(ClientResizeSchema)` to create a new message.
  */
 export const ClientResizeSchema: GenMessage<ClientResize> = /*@__PURE__*/
-  messageDesc(file_terminal, 24);
+  messageDesc(file_terminal, 28);
 
 /**
  * Keepalive ping request
@@ -943,7 +1146,7 @@ export type Ping = Message<"terminal.Ping"> & {
  * Use `create(PingSchema)` to create a new message.
  */
 export const PingSchema: GenMessage<Ping> = /*@__PURE__*/
-  messageDesc(file_terminal, 25);
+  messageDesc(file_terminal, 29);
 
 /**
  * Client requests full screen refresh
@@ -958,7 +1161,7 @@ export type RequestRefresh = Message<"terminal.RequestRefresh"> & {
  * Use `create(RequestRefreshSchema)` to create a new message.
  */
 export const RequestRefreshSchema: GenMessage<RequestRefresh> = /*@__PURE__*/
-  messageDesc(file_terminal, 26);
+  messageDesc(file_terminal, 30);
 
 /**
  * Client subscribes to specific event types
@@ -977,7 +1180,174 @@ export type Subscribe = Message<"terminal.Subscribe"> & {
  * Use `create(SubscribeSchema)` to create a new message.
  */
 export const SubscribeSchema: GenMessage<Subscribe> = /*@__PURE__*/
-  messageDesc(file_terminal, 27);
+  messageDesc(file_terminal, 31);
+
+/**
+ * Mouse input from client
+ *
+ * @generated from message terminal.MouseInput
+ */
+export type MouseInput = Message<"terminal.MouseInput"> & {
+  /**
+   * @generated from field: uint32 col = 1;
+   */
+  col: number;
+
+  /**
+   * @generated from field: uint32 row = 2;
+   */
+  row: number;
+
+  /**
+   * 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+   *
+   * @generated from field: uint32 button = 3;
+   */
+  button: number;
+
+  /**
+   * @generated from field: bool shift = 4;
+   */
+  shift: boolean;
+
+  /**
+   * @generated from field: bool ctrl = 5;
+   */
+  ctrl: boolean;
+
+  /**
+   * @generated from field: bool alt = 6;
+   */
+  alt: boolean;
+
+  /**
+   * "press", "release", "move", "scroll"
+   *
+   * @generated from field: string event_type = 7;
+   */
+  eventType: string;
+};
+
+/**
+ * Describes the message terminal.MouseInput.
+ * Use `create(MouseInputSchema)` to create a new message.
+ */
+export const MouseInputSchema: GenMessage<MouseInput> = /*@__PURE__*/
+  messageDesc(file_terminal, 32);
+
+/**
+ * Focus change from client
+ *
+ * @generated from message terminal.FocusChange
+ */
+export type FocusChange = Message<"terminal.FocusChange"> & {
+  /**
+   * @generated from field: bool focused = 1;
+   */
+  focused: boolean;
+};
+
+/**
+ * Describes the message terminal.FocusChange.
+ * Use `create(FocusChangeSchema)` to create a new message.
+ */
+export const FocusChangeSchema: GenMessage<FocusChange> = /*@__PURE__*/
+  messageDesc(file_terminal, 33);
+
+/**
+ * Paste input from client
+ *
+ * @generated from message terminal.PasteInput
+ */
+export type PasteInput = Message<"terminal.PasteInput"> & {
+  /**
+   * @generated from field: string content = 1;
+   */
+  content: string;
+};
+
+/**
+ * Describes the message terminal.PasteInput.
+ * Use `create(PasteInputSchema)` to create a new message.
+ */
+export const PasteInputSchema: GenMessage<PasteInput> = /*@__PURE__*/
+  messageDesc(file_terminal, 34);
+
+/**
+ * Selection request from client
+ *
+ * @generated from message terminal.SelectionRequest
+ */
+export type SelectionRequest = Message<"terminal.SelectionRequest"> & {
+  /**
+   * @generated from field: uint32 start_col = 1;
+   */
+  startCol: number;
+
+  /**
+   * @generated from field: uint32 start_row = 2;
+   */
+  startRow: number;
+
+  /**
+   * @generated from field: uint32 end_col = 3;
+   */
+  endCol: number;
+
+  /**
+   * @generated from field: uint32 end_row = 4;
+   */
+  endRow: number;
+
+  /**
+   * "chars", "line", "block", "word", "clear"
+   *
+   * @generated from field: string mode = 5;
+   */
+  mode: string;
+};
+
+/**
+ * Describes the message terminal.SelectionRequest.
+ * Use `create(SelectionRequestSchema)` to create a new message.
+ */
+export const SelectionRequestSchema: GenMessage<SelectionRequest> = /*@__PURE__*/
+  messageDesc(file_terminal, 35);
+
+/**
+ * Clipboard request from client
+ *
+ * @generated from message terminal.ClipboardRequest
+ */
+export type ClipboardRequest = Message<"terminal.ClipboardRequest"> & {
+  /**
+   * "set", "get"
+   *
+   * @generated from field: string operation = 1;
+   */
+  operation: string;
+
+  /**
+   * Content for "set" operations
+   *
+   * @generated from field: optional string content = 2;
+   */
+  content?: string;
+
+  /**
+   * "clipboard", "primary", "select"
+   *
+   * @generated from field: optional string target = 3;
+   */
+  target?: string;
+};
+
+/**
+ * Describes the message terminal.ClipboardRequest.
+ * Use `create(ClipboardRequestSchema)` to create a new message.
+ */
+export const ClipboardRequestSchema: GenMessage<ClipboardRequest> = /*@__PURE__*/
+  messageDesc(file_terminal, 36);
 
 /**
  * Event types for subscription
@@ -1054,6 +1424,26 @@ export enum EventType {
    * @generated from enum value: EVENT_TYPE_PROGRESS_BAR = 13;
    */
   PROGRESS_BAR = 13,
+
+  /**
+   * @generated from enum value: EVENT_TYPE_BADGE = 14;
+   */
+  BADGE = 14,
+
+  /**
+   * @generated from enum value: EVENT_TYPE_SELECTION = 15;
+   */
+  SELECTION = 15,
+
+  /**
+   * @generated from enum value: EVENT_TYPE_CLIPBOARD = 16;
+   */
+  CLIPBOARD = 16,
+
+  /**
+   * @generated from enum value: EVENT_TYPE_SHELL = 17;
+   */
+  SHELL = 17,
 }
 
 /**

@@ -321,6 +321,48 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 percent: percent.map(|p| p as u32),
                 label: label.clone(),
             })),
+            AppServerMessage::BadgeChanged { badge } => {
+                Some(Message::BadgeChanged(pb::BadgeChanged {
+                    badge: badge.clone(),
+                }))
+            }
+            AppServerMessage::SelectionChanged {
+                start_col,
+                start_row,
+                end_col,
+                end_row,
+                text,
+                mode,
+                cleared,
+            } => Some(Message::SelectionChanged(pb::SelectionChanged {
+                start_col: start_col.map(|c| c as u32),
+                start_row: start_row.map(|r| r as u32),
+                end_col: end_col.map(|c| c as u32),
+                end_row: end_row.map(|r| r as u32),
+                text: text.clone(),
+                mode: mode.clone(),
+                cleared: *cleared,
+            })),
+            AppServerMessage::ClipboardSync {
+                operation,
+                content,
+                target,
+            } => Some(Message::ClipboardSync(pb::ClipboardSync {
+                operation: operation.clone(),
+                content: content.clone(),
+                target: target.clone(),
+            })),
+            AppServerMessage::ShellIntegrationEvent {
+                event_type,
+                command,
+                exit_code,
+                timestamp,
+            } => Some(Message::ShellIntegrationEvent(pb::ShellIntegrationEvent {
+                event_type: event_type.clone(),
+                command: command.clone(),
+                exit_code: *exit_code,
+                timestamp: *timestamp,
+            })),
         };
 
         pb::ServerMessage { message }
@@ -344,6 +386,51 @@ impl From<&AppClientMessage> for pb::ClientMessage {
             AppClientMessage::Subscribe { events } => Some(Message::Subscribe(pb::Subscribe {
                 events: events.iter().map(|e| e.clone().into()).collect(),
             })),
+            AppClientMessage::Mouse {
+                col,
+                row,
+                button,
+                shift,
+                ctrl,
+                alt,
+                event_type,
+            } => Some(Message::Mouse(pb::MouseInput {
+                col: *col as u32,
+                row: *row as u32,
+                button: *button as u32,
+                shift: *shift,
+                ctrl: *ctrl,
+                alt: *alt,
+                event_type: event_type.clone(),
+            })),
+            AppClientMessage::FocusChange { focused } => {
+                Some(Message::Focus(pb::FocusChange { focused: *focused }))
+            }
+            AppClientMessage::Paste { content } => Some(Message::Paste(pb::PasteInput {
+                content: content.clone(),
+            })),
+            AppClientMessage::SelectionRequest {
+                start_col,
+                start_row,
+                end_col,
+                end_row,
+                mode,
+            } => Some(Message::Selection(pb::SelectionRequest {
+                start_col: *start_col as u32,
+                start_row: *start_row as u32,
+                end_col: *end_col as u32,
+                end_row: *end_row as u32,
+                mode: mode.clone(),
+            })),
+            AppClientMessage::ClipboardRequest {
+                operation,
+                content,
+                target,
+            } => Some(Message::Clipboard(pb::ClipboardRequest {
+                operation: operation.clone(),
+                content: content.clone(),
+                target: target.clone(),
+            })),
         };
 
         pb::ClientMessage { message }
@@ -366,6 +453,10 @@ impl From<AppEventType> for i32 {
             AppEventType::Hyperlink => pb::EventType::Hyperlink as i32,
             AppEventType::UserVar => pb::EventType::UserVar as i32,
             AppEventType::ProgressBar => pb::EventType::ProgressBar as i32,
+            AppEventType::Badge => pb::EventType::Badge as i32,
+            AppEventType::Selection => pb::EventType::Selection as i32,
+            AppEventType::Clipboard => pb::EventType::Clipboard as i32,
+            AppEventType::Shell => pb::EventType::Shell as i32,
         }
     }
 }
@@ -521,6 +612,31 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 percent: pbc.percent.map(|p| p.min(100) as u8),
                 label: pbc.label,
             }),
+            Some(Message::BadgeChanged(bc)) => {
+                Ok(AppServerMessage::BadgeChanged { badge: bc.badge })
+            }
+            Some(Message::SelectionChanged(sc)) => Ok(AppServerMessage::SelectionChanged {
+                start_col: sc.start_col.map(|c| c as u16),
+                start_row: sc.start_row.map(|r| r as u16),
+                end_col: sc.end_col.map(|c| c as u16),
+                end_row: sc.end_row.map(|r| r as u16),
+                text: sc.text,
+                mode: sc.mode,
+                cleared: sc.cleared,
+            }),
+            Some(Message::ClipboardSync(cs)) => Ok(AppServerMessage::ClipboardSync {
+                operation: cs.operation,
+                content: cs.content,
+                target: cs.target,
+            }),
+            Some(Message::ShellIntegrationEvent(sie)) => {
+                Ok(AppServerMessage::ShellIntegrationEvent {
+                    event_type: sie.event_type,
+                    command: sie.command,
+                    exit_code: sie.exit_code,
+                    timestamp: sie.timestamp,
+                })
+            }
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -552,6 +668,33 @@ impl TryFrom<pb::ClientMessage> for AppClientMessage {
                     .map(|e| e.into())
                     .collect(),
             }),
+            Some(Message::Mouse(mouse)) => Ok(AppClientMessage::Mouse {
+                col: mouse.col as u16,
+                row: mouse.row as u16,
+                button: mouse.button.min(255) as u8,
+                shift: mouse.shift,
+                ctrl: mouse.ctrl,
+                alt: mouse.alt,
+                event_type: mouse.event_type,
+            }),
+            Some(Message::Focus(focus)) => Ok(AppClientMessage::FocusChange {
+                focused: focus.focused,
+            }),
+            Some(Message::Paste(paste)) => Ok(AppClientMessage::Paste {
+                content: paste.content,
+            }),
+            Some(Message::Selection(sel)) => Ok(AppClientMessage::SelectionRequest {
+                start_col: sel.start_col as u16,
+                start_row: sel.start_row as u16,
+                end_col: sel.end_col as u16,
+                end_row: sel.end_row as u16,
+                mode: sel.mode,
+            }),
+            Some(Message::Clipboard(clip)) => Ok(AppClientMessage::ClipboardRequest {
+                operation: clip.operation,
+                content: clip.content,
+                target: clip.target,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty client message".into(),
             )),
@@ -576,6 +719,10 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Hyperlink => AppEventType::Hyperlink,
             pb::EventType::UserVar => AppEventType::UserVar,
             pb::EventType::ProgressBar => AppEventType::ProgressBar,
+            pb::EventType::Badge => AppEventType::Badge,
+            pb::EventType::Selection => AppEventType::Selection,
+            pb::EventType::Clipboard => AppEventType::Clipboard,
+            pb::EventType::Shell => AppEventType::Shell,
         }
     }
 }

@@ -21,6 +21,8 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Server Messages](#server-messages)
   - [Client Messages](#client-messages)
   - [Connection Flow](#connection-flow)
+  - [Event Subscription](#event-subscription)
+  - [Mouse, Focus, and Paste](#mouse-focus-and-paste)
 - [Usage Examples](#usage-examples)
   - [Rust Server](#rust-server)
   - [Python Server](#python-server)
@@ -53,6 +55,12 @@ The streaming system enables real-time terminal viewing and interaction through 
 - Automatic resize handling
 - Graphics protocol support (Sixel, Kitty, iTerm2)
 - Unicode and emoji support
+- Mouse event forwarding (all modes and encodings)
+- Focus tracking and bracketed paste support
+- Selection and clipboard synchronization
+- Shell integration event streaming (FinalTerm/OSC 133)
+- Per-client event subscription filtering
+- Badge change notifications
 
 ## Architecture
 
@@ -477,7 +485,8 @@ npm run proto:generate
 **Component Overview:**
 
 - `app/page.tsx`: Main application UI with connection controls and status indicator
-- `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling
+- `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
+- `lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, etc.)
 - `lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
 - `next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
@@ -618,7 +627,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `output` | `data: bytes`, `timestamp?: uint64` | Terminal output data |
 | `resize` | `cols: uint32`, `rows: uint32` | Terminal size changed |
 | `title` | `title: string` | Terminal title changed |
-| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo` | Connection established |
+| `connected` | `cols`, `rows`, `initial_screen?: bytes`, `session_id: string`, `theme?: ThemeInfo`, `badge?: string`, `faint_text_alpha?: float`, `cwd?: string`, `modify_other_keys?: uint32`, `client_id?: string`, `readonly?: bool` | Connection established |
 | `refresh` | `cols`, `rows`, `screen_content: bytes` | Full screen content |
 | `cursor` | `col: uint32`, `row: uint32`, `visible: bool` | Cursor position |
 | `bell` | (none) | Bell event |
@@ -630,6 +639,11 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `graphics_added` | `row: uint32`, `format?: string` | Graphics/image added (Sixel, iTerm2, Kitty) |
 | `hyperlink_added` | `url: string`, `row: uint32`, `col: uint32`, `id?: string` | Hyperlink added (OSC 8) |
 | `user_var_changed` | `name: string`, `value: string`, `old_value?: string` | User variable changed (OSC 1337 SetUserVar) |
+| `progress_bar_changed` | `action: string`, `id: string`, `state?: string`, `percent?: uint32`, `label?: string` | Named progress bar changed (OSC 934) |
+| `badge_changed` | `badge?: string` | Badge text changed (OSC 1337 SetBadgeFormat) |
+| `selection_changed` | `start_col?: uint32`, `start_row?: uint32`, `end_col?: uint32`, `end_row?: uint32`, `text?: string`, `mode: string`, `cleared: bool` | Selection state changed |
+| `clipboard_sync` | `operation: string`, `content: string`, `target?: string` | Clipboard content sync (OSC 52) |
+| `shell_integration_event` | `event_type: string`, `command?: string`, `exit_code?: int32`, `timestamp?: uint64` | Shell integration marker (FinalTerm OSC 133) |
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
@@ -642,7 +656,12 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `resize` | `cols: uint32`, `rows: uint32` | Request terminal resize |
 | `ping` | (none) | Keepalive ping |
 | `refresh` | (none) | Request full screen refresh |
-| `subscribe` | `events: EventType[]` | Subscribe to event types |
+| `subscribe` | `events: EventType[]` | Subscribe to specific event types (filters server messages) |
+| `mouse` | `col: uint32`, `row: uint32`, `button: uint32`, `shift: bool`, `ctrl: bool`, `alt: bool`, `event_type: string` | Mouse input (press/release/move/scroll) |
+| `focus` | `focused: bool` | Window focus change (in/out) |
+| `paste` | `content: string` | Paste content (auto-wrapped in bracketed paste when active) |
+| `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
+| `clipboard` | `operation: string`, `content?: string`, `target?: string` | Clipboard get/set request |
 
 ### ThemeInfo Structure
 
@@ -698,9 +717,70 @@ stateDiagram-v2
         - Terminal output
         - User input
         - Resize events
+        - Mouse/Focus/Paste
+        - Selection/Clipboard
+        - Shell integration
         - Control messages
     end note
 ```
+
+### Event Subscription
+
+Clients can subscribe to specific event types to filter server messages and reduce bandwidth. By default, clients receive all events.
+
+**EventType Values:**
+
+| EventType | Value | Description |
+|-----------|-------|-------------|
+| `UNSPECIFIED` | 0 | Reserved |
+| `OUTPUT` | 1 | Terminal output data |
+| `CURSOR` | 2 | Cursor position updates |
+| `BELL` | 3 | Bell events |
+| `TITLE` | 4 | Title changes |
+| `RESIZE` | 5 | Resize events |
+| `CWD` | 6 | Working directory changes |
+| `TRIGGER` | 7 | Trigger matches |
+| `ACTION` | 8 | Trigger action results |
+| `MODE` | 9 | Terminal mode changes |
+| `GRAPHICS` | 10 | Graphics events |
+| `HYPERLINK` | 11 | Hyperlink events |
+| `USER_VAR` | 12 | User variable changes |
+| `PROGRESS_BAR` | 13 | Progress bar changes |
+| `BADGE` | 14 | Badge text changes |
+| `SELECTION` | 15 | Selection changes |
+| `CLIPBOARD` | 16 | Clipboard events |
+| `SHELL` | 17 | Shell integration events |
+
+**Example (TypeScript):**
+```typescript
+import { EventType } from '@/lib/proto/terminal_pb';
+import { createSubscribeMessage, encodeClientMessage } from '@/lib/protocol';
+
+// Subscribe only to output, resize, and mode changes
+const msg = createSubscribeMessage([
+  EventType.OUTPUT,
+  EventType.RESIZE,
+  EventType.MODE,
+]);
+ws.send(encodeClientMessage(msg));
+```
+
+### Mouse, Focus, and Paste
+
+The web frontend automatically handles mouse, focus, and paste events based on terminal mode state:
+
+**Mouse Events:**
+- When the server sends `modeChanged` with `mode: "mouse_tracking"` and `enabled: true`, the frontend captures mouse events (click, release, move, scroll) on the terminal element and sends `MouseInput` messages
+- Mouse coordinates are translated from pixel positions to terminal cell coordinates
+- Button values: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+- Modifiers: shift, ctrl, alt bitmask
+
+**Focus Events:**
+- When the server sends `modeChanged` with `mode: "focus_tracking"` and `enabled: true`, the frontend sends `FocusChange` messages on window focus/blur
+
+**Paste Events:**
+- When the server sends `modeChanged` with `mode: "bracketed_paste"` and `enabled: true`, paste events are intercepted and sent as `PasteInput` messages (server wraps in bracketed paste escape sequences)
+- When bracketed paste is not active, xterm.js handles paste normally as keyboard input
 
 ## Usage Examples
 

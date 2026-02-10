@@ -48,7 +48,7 @@ const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
 const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 
 #[inline]
-fn unix_millis() -> u64 {
+pub(crate) fn unix_millis() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -95,8 +95,17 @@ pub enum TerminalEvent {
     ModeChanged(String, bool),
     /// Graphics added at row
     GraphicsAdded(usize),
-    /// Hyperlink added
-    HyperlinkAdded(String),
+    /// Hyperlink added with URL, position, and optional internal ID
+    HyperlinkAdded {
+        /// The URL of the hyperlink
+        url: String,
+        /// Row where hyperlink starts
+        row: usize,
+        /// Column where hyperlink starts
+        col: usize,
+        /// Internal hyperlink ID
+        id: Option<u32>,
+    },
     /// Dirty region (first_row, last_row)
     DirtyRegion(usize, usize),
     /// Current working directory changed (from OSC 7 or manual record)
@@ -125,6 +134,19 @@ pub enum TerminalEvent {
         /// Optional label (only for Set action)
         label: Option<String>,
     },
+    /// Badge text changed (from OSC 1337 SetBadgeFormat)
+    BadgeChanged(Option<String>),
+    /// Shell integration event (FinalTerm sequences)
+    ShellIntegrationEvent {
+        /// Event type: "prompt_start", "command_start", "command_executed", "command_finished"
+        event_type: String,
+        /// The command text (for command_start)
+        command: Option<String>,
+        /// Exit code (for command_finished)
+        exit_code: Option<i32>,
+        /// Timestamp (Unix epoch milliseconds)
+        timestamp: Option<u64>,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -141,6 +163,8 @@ pub enum TerminalEventKind {
     TriggerMatched,
     UserVarChanged,
     ProgressBarChanged,
+    BadgeChanged,
+    ShellIntegrationEvent,
 }
 
 /// Hyperlink information with all its locations
@@ -2790,12 +2814,14 @@ impl Terminal {
             TerminalEvent::SizeChanged(_, _) => TerminalEventKind::SizeChanged,
             TerminalEvent::ModeChanged(_, _) => TerminalEventKind::ModeChanged,
             TerminalEvent::GraphicsAdded(_) => TerminalEventKind::GraphicsAdded,
-            TerminalEvent::HyperlinkAdded(_) => TerminalEventKind::HyperlinkAdded,
+            TerminalEvent::HyperlinkAdded { .. } => TerminalEventKind::HyperlinkAdded,
             TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
             TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
             TerminalEvent::TriggerMatched(_) => TerminalEventKind::TriggerMatched,
             TerminalEvent::UserVarChanged { .. } => TerminalEventKind::UserVarChanged,
             TerminalEvent::ProgressBarChanged { .. } => TerminalEventKind::ProgressBarChanged,
+            TerminalEvent::BadgeChanged(_) => TerminalEventKind::BadgeChanged,
+            TerminalEvent::ShellIntegrationEvent { .. } => TerminalEventKind::ShellIntegrationEvent,
         }
     }
 

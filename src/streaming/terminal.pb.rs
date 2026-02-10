@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -75,6 +75,14 @@ pub mod server_message {
         UserVarChanged(super::UserVarChanged),
         #[prost(message, tag = "19")]
         ProgressBarChanged(super::ProgressBarChanged),
+        #[prost(message, tag = "20")]
+        BadgeChanged(super::BadgeChanged),
+        #[prost(message, tag = "21")]
+        SelectionChanged(super::SelectionChanged),
+        #[prost(message, tag = "22")]
+        ClipboardSync(super::ClipboardSync),
+        #[prost(message, tag = "23")]
+        ShellIntegrationEvent(super::ShellIntegrationEvent),
     }
 }
 /// Terminal output data (very high frequency)
@@ -297,9 +305,67 @@ pub struct ProgressBarChanged {
     #[prost(string, optional, tag = "5")]
     pub label: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// Badge text changed (OSC 1337 SetBadgeFormat)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct BadgeChanged {
+    /// New badge text (empty if cleared)
+    #[prost(string, optional, tag = "1")]
+    pub badge: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Selection changed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SelectionChanged {
+    #[prost(uint32, optional, tag = "1")]
+    pub start_col: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "2")]
+    pub start_row: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "3")]
+    pub end_col: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag = "4")]
+    pub end_row: ::core::option::Option<u32>,
+    /// Selected text content
+    #[prost(string, optional, tag = "5")]
+    pub text: ::core::option::Option<::prost::alloc::string::String>,
+    /// "chars", "line", "block"
+    #[prost(string, tag = "6")]
+    pub mode: ::prost::alloc::string::String,
+    /// True if selection was cleared
+    #[prost(bool, tag = "7")]
+    pub cleared: bool,
+}
+/// Clipboard sync event (OSC 52)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClipboardSync {
+    /// "set", "get_response"
+    #[prost(string, tag = "1")]
+    pub operation: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub content: ::prost::alloc::string::String,
+    /// "clipboard", "primary", "select"
+    #[prost(string, optional, tag = "3")]
+    pub target: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Shell integration event (FinalTerm sequences)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ShellIntegrationEvent {
+    /// "prompt_start", "command_start", "command_executed", "command_finished"
+    #[prost(string, tag = "1")]
+    pub event_type: ::prost::alloc::string::String,
+    /// The command text (for command_start)
+    #[prost(string, optional, tag = "2")]
+    pub command: ::core::option::Option<::prost::alloc::string::String>,
+    /// Exit code (for command_finished)
+    #[prost(int32, optional, tag = "3")]
+    pub exit_code: ::core::option::Option<i32>,
+    #[prost(uint64, optional, tag = "4")]
+    pub timestamp: ::core::option::Option<u64>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
-    #[prost(oneof = "client_message::Message", tags = "1, 2, 3, 4, 5")]
+    #[prost(
+        oneof = "client_message::Message",
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10"
+    )]
     pub message: ::core::option::Option<client_message::Message>,
 }
 /// Nested message and enum types in `ClientMessage`.
@@ -316,6 +382,16 @@ pub mod client_message {
         Refresh(super::RequestRefresh),
         #[prost(message, tag = "5")]
         Subscribe(super::Subscribe),
+        #[prost(message, tag = "6")]
+        Mouse(super::MouseInput),
+        #[prost(message, tag = "7")]
+        Focus(super::FocusChange),
+        #[prost(message, tag = "8")]
+        Paste(super::PasteInput),
+        #[prost(message, tag = "9")]
+        Selection(super::SelectionRequest),
+        #[prost(message, tag = "10")]
+        Clipboard(super::ClipboardRequest),
     }
 }
 /// Keyboard input from client
@@ -345,6 +421,66 @@ pub struct Subscribe {
     #[prost(enumeration = "EventType", repeated, tag = "1")]
     pub events: ::prost::alloc::vec::Vec<i32>,
 }
+/// Mouse input from client
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MouseInput {
+    #[prost(uint32, tag = "1")]
+    pub col: u32,
+    #[prost(uint32, tag = "2")]
+    pub row: u32,
+    /// 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+    #[prost(uint32, tag = "3")]
+    pub button: u32,
+    #[prost(bool, tag = "4")]
+    pub shift: bool,
+    #[prost(bool, tag = "5")]
+    pub ctrl: bool,
+    #[prost(bool, tag = "6")]
+    pub alt: bool,
+    /// "press", "release", "move", "scroll"
+    #[prost(string, tag = "7")]
+    pub event_type: ::prost::alloc::string::String,
+}
+/// Focus change from client
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FocusChange {
+    #[prost(bool, tag = "1")]
+    pub focused: bool,
+}
+/// Paste input from client
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PasteInput {
+    #[prost(string, tag = "1")]
+    pub content: ::prost::alloc::string::String,
+}
+/// Selection request from client
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SelectionRequest {
+    #[prost(uint32, tag = "1")]
+    pub start_col: u32,
+    #[prost(uint32, tag = "2")]
+    pub start_row: u32,
+    #[prost(uint32, tag = "3")]
+    pub end_col: u32,
+    #[prost(uint32, tag = "4")]
+    pub end_row: u32,
+    /// "chars", "line", "block", "word", "clear"
+    #[prost(string, tag = "5")]
+    pub mode: ::prost::alloc::string::String,
+}
+/// Clipboard request from client
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ClipboardRequest {
+    /// "set", "get"
+    #[prost(string, tag = "1")]
+    pub operation: ::prost::alloc::string::String,
+    /// Content for "set" operations
+    #[prost(string, optional, tag = "2")]
+    pub content: ::core::option::Option<::prost::alloc::string::String>,
+    /// "clipboard", "primary", "select"
+    #[prost(string, optional, tag = "3")]
+    pub target: ::core::option::Option<::prost::alloc::string::String>,
+}
 /// Event types for subscription
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -363,6 +499,10 @@ pub enum EventType {
     Hyperlink = 11,
     UserVar = 12,
     ProgressBar = 13,
+    Badge = 14,
+    Selection = 15,
+    Clipboard = 16,
+    Shell = 17,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -385,6 +525,10 @@ impl EventType {
             Self::Hyperlink => "EVENT_TYPE_HYPERLINK",
             Self::UserVar => "EVENT_TYPE_USER_VAR",
             Self::ProgressBar => "EVENT_TYPE_PROGRESS_BAR",
+            Self::Badge => "EVENT_TYPE_BADGE",
+            Self::Selection => "EVENT_TYPE_SELECTION",
+            Self::Clipboard => "EVENT_TYPE_CLIPBOARD",
+            Self::Shell => "EVENT_TYPE_SHELL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -404,6 +548,10 @@ impl EventType {
             "EVENT_TYPE_HYPERLINK" => Some(Self::Hyperlink),
             "EVENT_TYPE_USER_VAR" => Some(Self::UserVar),
             "EVENT_TYPE_PROGRESS_BAR" => Some(Self::ProgressBar),
+            "EVENT_TYPE_BADGE" => Some(Self::Badge),
+            "EVENT_TYPE_SELECTION" => Some(Self::Selection),
+            "EVENT_TYPE_CLIPBOARD" => Some(Self::Clipboard),
+            "EVENT_TYPE_SHELL" => Some(Self::Shell),
             _ => None,
         }
     }

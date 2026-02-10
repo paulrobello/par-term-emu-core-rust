@@ -5,7 +5,7 @@ use crate::streaming::client::Client;
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ServerMessage, ThemeInfo};
-use crate::terminal::Terminal;
+use crate::terminal::{SelectionMode, Terminal};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::fs::File;
@@ -1069,6 +1069,15 @@ impl StreamingServer {
         }
     }
 
+    /// Broadcast a message to all clients of a specific session
+    pub fn broadcast_to_session(&self, session_id: &str, msg: ServerMessage) {
+        if let Some(session) = self.sessions.get(session_id) {
+            let _ = session.broadcast_tx.send(msg);
+        } else if let Some(ref session) = self.default_session {
+            let _ = session.broadcast_tx.send(msg);
+        }
+    }
+
     /// Get a session by ID from the registry
     pub fn get_session(&self, session_id: &str) -> Option<Arc<SessionState>> {
         self.sessions.get(session_id)
@@ -1507,6 +1516,9 @@ impl StreamingServer {
             None
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
+        let mut subscriptions: Option<
+            std::collections::HashSet<crate::streaming::protocol::EventType>,
+        > = None;
 
         loop {
             tokio::select! {
@@ -1555,8 +1567,178 @@ impl StreamingServer {
                                         }
                                     }
                                 }
-                                crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
-                                    // TODO: Implement subscription handling
+                                crate::streaming::protocol::ClientMessage::Subscribe { events } => {
+                                    subscriptions = Some(events.into_iter().collect());
+                                }
+                                crate::streaming::protocol::ClientMessage::Mouse {
+                                    col, row, button, shift, ctrl, alt, event_type,
+                                } => {
+                                    if read_only { continue; }
+                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                        let bytes = {
+                                            let mut terminal = session.terminal.lock();
+                                            // Build modifiers bitmask: shift=1, meta/alt=2, ctrl=4
+                                            let mods = if shift { 1u8 } else { 0 }
+                                                | if alt { 2 } else { 0 }
+                                                | if ctrl { 4 } else { 0 };
+                                            let pressed = event_type != "release";
+                                            let mouse_event = crate::mouse::MouseEvent::new(
+                                                button,
+                                                col as usize,
+                                                row as usize,
+                                                pressed,
+                                                mods,
+                                            );
+                                            terminal.report_mouse(mouse_event)
+                                        };
+                                        if !bytes.is_empty() {
+                                            if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
+                                                use std::io::Write;
+                                                let _ = w.write_all(&bytes);
+                                                let _ = w.flush();
+                                            }
+                                        }
+                                    }
+                                }
+                                crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
+                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                        let bytes = {
+                                            let terminal = session.terminal.lock();
+                                            if terminal.focus_tracking() {
+                                                if focused {
+                                                    terminal.report_focus_in()
+                                                } else {
+                                                    terminal.report_focus_out()
+                                                }
+                                            } else {
+                                                Vec::new()
+                                            }
+                                        };
+                                        if !bytes.is_empty() {
+                                            if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
+                                                use std::io::Write;
+                                                let _ = w.write_all(&bytes);
+                                                let _ = w.flush();
+                                            }
+                                        }
+                                    }
+                                }
+                                crate::streaming::protocol::ClientMessage::Paste { content } => {
+                                    if read_only { continue; }
+                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                        let terminal = session.terminal.lock();
+                                        if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
+                                            use std::io::Write;
+                                            if terminal.bracketed_paste() {
+                                                let _ = w.write_all(terminal.bracketed_paste_start());
+                                                let _ = w.write_all(content.as_bytes());
+                                                let _ = w.write_all(terminal.bracketed_paste_end());
+                                            } else {
+                                                let _ = w.write_all(content.as_bytes());
+                                            }
+                                            let _ = w.flush();
+                                        }
+                                    }
+                                }
+                                crate::streaming::protocol::ClientMessage::SelectionRequest {
+                                    start_col, start_row, end_col, end_row, mode,
+                                } => {
+                                    let selection_msg = {
+                                        let mut terminal = session.terminal.lock();
+                                        if mode == "clear" {
+                                            terminal.clear_selection();
+                                            Some(ServerMessage::selection_cleared())
+                                        } else if mode == "word" {
+                                            terminal.select_word_at(start_col as usize, start_row as usize);
+                                            if let Some(sel) = terminal.get_selection() {
+                                                let text = terminal.get_selected_text();
+                                                Some(ServerMessage::selection_changed(
+                                                    Some(sel.start.0 as u16),
+                                                    Some(sel.start.1 as u16),
+                                                    Some(sel.end.0 as u16),
+                                                    Some(sel.end.1 as u16),
+                                                    text,
+                                                    "chars".to_string(),
+                                                    false,
+                                                ))
+                                            } else {
+                                                None
+                                            }
+                                        } else if mode == "line" {
+                                            terminal.select_line(start_row as usize);
+                                            if let Some(sel) = terminal.get_selection() {
+                                                let text = terminal.get_selected_text();
+                                                Some(ServerMessage::selection_changed(
+                                                    Some(sel.start.0 as u16),
+                                                    Some(sel.start.1 as u16),
+                                                    Some(sel.end.0 as u16),
+                                                    Some(sel.end.1 as u16),
+                                                    text,
+                                                    "line".to_string(),
+                                                    false,
+                                                ))
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            let sel_mode = match mode.as_str() {
+                                                "block" => SelectionMode::Block,
+                                                "line" => SelectionMode::Line,
+                                                _ => SelectionMode::Character,
+                                            };
+                                            terminal.set_selection(
+                                                (start_col as usize, start_row as usize),
+                                                (end_col as usize, end_row as usize),
+                                                sel_mode,
+                                            );
+                                            let text = terminal.get_selected_text();
+                                            Some(ServerMessage::selection_changed(
+                                                Some(start_col),
+                                                Some(start_row),
+                                                Some(end_col),
+                                                Some(end_row),
+                                                text,
+                                                mode,
+                                                false,
+                                            ))
+                                        }
+                                    };
+                                    if let Some(msg) = selection_msg {
+                                        self.broadcast_to_session(&session.id, msg);
+                                    }
+                                }
+                                crate::streaming::protocol::ClientMessage::ClipboardRequest {
+                                    operation, content, target,
+                                } => {
+                                    match operation.as_str() {
+                                        "set" => {
+                                            if let Some(ref text) = content {
+                                                let mut terminal = session.terminal.lock();
+                                                terminal.set_clipboard(Some(text.clone()));
+                                                self.broadcast_to_session(
+                                                    &session.id,
+                                                    ServerMessage::clipboard_sync(
+                                                        "set".to_string(),
+                                                        text.clone(),
+                                                        target,
+                                                    ),
+                                                );
+                                            }
+                                        }
+                                        "get" => {
+                                            let clipboard = {
+                                                let terminal = session.terminal.lock();
+                                                terminal.clipboard().unwrap_or_default().to_string()
+                                            };
+                                            let response = ServerMessage::clipboard_sync(
+                                                "get_response".to_string(),
+                                                clipboard,
+                                                target,
+                                            );
+                                            let _ = client.send(response).await;
+                                        }
+                                        _ => {}
+                                    }
                                 }
                             }
                         }
@@ -1570,9 +1752,10 @@ impl StreamingServer {
 
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
-                        if client.send(msg).await.is_err() {
-                            break;
-                        }
+                        if should_send(&msg, &subscriptions)
+                            && client.send(msg).await.is_err() {
+                                break;
+                            }
                     }
                 }
 
@@ -1675,6 +1858,9 @@ impl StreamingServer {
             None
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
+        let mut subscriptions: Option<
+            std::collections::HashSet<crate::streaming::protocol::EventType>,
+        > = None;
 
         loop {
             tokio::select! {
@@ -1720,9 +1906,11 @@ impl StreamingServer {
                                                 }
                                             }
                                         }
-                                        crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
-                                            // TODO: Implement subscription handling
+                                        crate::streaming::protocol::ClientMessage::Subscribe { events } => {
+                                            subscriptions = Some(events.into_iter().collect());
                                         }
+                                        // Mouse, Focus, Paste, Selection, Clipboard handled only in primary handlers
+                                        _ => {}
                                     }
                                 }
                                 Err(e) => {
@@ -1751,9 +1939,11 @@ impl StreamingServer {
 
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
-                        if let Ok(bytes) = encode_server_message(&msg) {
-                            if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
-                                break;
+                        if should_send(&msg, &subscriptions) {
+                            if let Ok(bytes) = encode_server_message(&msg) {
+                                if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1867,6 +2057,58 @@ impl StreamingServer {
         self.broadcast(msg);
     }
 
+    /// Send a mode changed event to all clients
+    pub fn send_mode_changed(&self, mode: String, enabled: bool) {
+        let msg = ServerMessage::mode_changed(mode, enabled);
+        self.broadcast(msg);
+    }
+
+    /// Send a graphics added event to all clients
+    pub fn send_graphics_added(&self, row: u16) {
+        let msg = ServerMessage::graphics_added(row);
+        self.broadcast(msg);
+    }
+
+    /// Send a hyperlink added event to all clients
+    pub fn send_hyperlink_added(&self, url: String, row: u16, col: u16, id: Option<String>) {
+        let msg = match id {
+            Some(id) => ServerMessage::hyperlink_added_with_id(url, row, col, id),
+            None => ServerMessage::hyperlink_added(url, row, col),
+        };
+        self.broadcast(msg);
+    }
+
+    /// Send a user variable changed event to all clients
+    pub fn send_user_var_changed(&self, name: String, value: String, old_value: Option<String>) {
+        let msg = ServerMessage::user_var_changed_full(name, value, old_value);
+        self.broadcast(msg);
+    }
+
+    /// Send a progress bar changed event to all clients
+    pub fn send_progress_bar_changed(
+        &self,
+        action: crate::terminal::ProgressBarAction,
+        id: String,
+        state: Option<crate::terminal::ProgressState>,
+        percent: Option<u8>,
+        label: Option<String>,
+    ) {
+        let msg = ServerMessage::progress_bar_changed(action, id, state, percent, label);
+        self.broadcast(msg);
+    }
+
+    /// Send a cursor position event to all clients
+    pub fn send_cursor_position(&self, col: u16, row: u16, visible: bool) {
+        let msg = ServerMessage::cursor(col, row, visible);
+        self.broadcast(msg);
+    }
+
+    /// Send a badge changed event to all clients
+    pub fn send_badge_changed(&self, badge: Option<String>) {
+        let msg = ServerMessage::badge_changed(badge);
+        self.broadcast(msg);
+    }
+
     /// Shutdown the server and disconnect all clients
     pub fn shutdown(&self, reason: String) {
         crate::debug_info!("STREAMING", "Shutting down server: {}", reason);
@@ -1942,6 +2184,9 @@ impl StreamingServer {
             None
         };
         let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
+        let mut subscriptions: Option<
+            std::collections::HashSet<crate::streaming::protocol::EventType>,
+        > = None;
 
         loop {
             tokio::select! {
@@ -1987,9 +2232,11 @@ impl StreamingServer {
                                                 }
                                             }
                                         }
-                                        crate::streaming::protocol::ClientMessage::Subscribe { .. } => {
-                                            // TODO: Implement subscription handling
+                                        crate::streaming::protocol::ClientMessage::Subscribe { events } => {
+                                            subscriptions = Some(events.into_iter().collect());
                                         }
+                                        // Mouse, Focus, Paste, Selection, Clipboard handled only in primary handlers
+                                        _ => {}
                                     }
                                 }
                                 Err(e) => {
@@ -2015,9 +2262,11 @@ impl StreamingServer {
 
                 output_msg = output_rx.recv() => {
                     if let Ok(msg) = output_msg {
-                        if let Ok(bytes) = encode_server_message(&msg) {
-                            if ws_tx.send(AxumMessage::Binary(bytes.into())).await.is_err() {
-                                break;
+                        if should_send(&msg, &subscriptions) {
+                            if let Ok(bytes) = encode_server_message(&msg) {
+                                if ws_tx.send(AxumMessage::Binary(bytes.into())).await.is_err() {
+                                    break;
+                                }
                             }
                         }
                     }
@@ -2046,6 +2295,46 @@ impl StreamingServer {
         );
 
         Ok(())
+    }
+}
+
+/// Check if a message should be sent based on client's subscription filter
+fn should_send(
+    msg: &ServerMessage,
+    subscriptions: &Option<std::collections::HashSet<crate::streaming::protocol::EventType>>,
+) -> bool {
+    use crate::streaming::protocol::EventType;
+    let subs = match subscriptions {
+        Some(s) => s,
+        None => return true, // No filter = send everything
+    };
+
+    match msg {
+        ServerMessage::Output { .. } => subs.contains(&EventType::Output),
+        ServerMessage::CursorPosition { .. } => subs.contains(&EventType::Cursor),
+        ServerMessage::Bell => subs.contains(&EventType::Bell),
+        ServerMessage::Title { .. } => subs.contains(&EventType::Title),
+        ServerMessage::Resize { .. } => subs.contains(&EventType::Resize),
+        ServerMessage::CwdChanged { .. } => subs.contains(&EventType::Cwd),
+        ServerMessage::TriggerMatched { .. } => subs.contains(&EventType::Trigger),
+        ServerMessage::ActionNotify { .. } | ServerMessage::ActionMarkLine { .. } => {
+            subs.contains(&EventType::Action)
+        }
+        ServerMessage::ModeChanged { .. } => subs.contains(&EventType::Mode),
+        ServerMessage::GraphicsAdded { .. } => subs.contains(&EventType::Graphics),
+        ServerMessage::HyperlinkAdded { .. } => subs.contains(&EventType::Hyperlink),
+        ServerMessage::UserVarChanged { .. } => subs.contains(&EventType::UserVar),
+        ServerMessage::ProgressBarChanged { .. } => subs.contains(&EventType::ProgressBar),
+        ServerMessage::BadgeChanged { .. } => subs.contains(&EventType::Badge),
+        ServerMessage::SelectionChanged { .. } => subs.contains(&EventType::Selection),
+        ServerMessage::ClipboardSync { .. } => subs.contains(&EventType::Clipboard),
+        ServerMessage::ShellIntegrationEvent { .. } => subs.contains(&EventType::Shell),
+        // Always send system messages
+        ServerMessage::Connected { .. }
+        | ServerMessage::Refresh { .. }
+        | ServerMessage::Error { .. }
+        | ServerMessage::Shutdown { .. }
+        | ServerMessage::Pong => true,
     }
 }
 

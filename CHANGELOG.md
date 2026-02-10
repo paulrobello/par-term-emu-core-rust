@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Standalone Event Poller**: Fixed standalone mode's `poll_terminal_events()` silently dropping `ModeChanged`, `GraphicsAdded`, `HyperlinkAdded`, `UserVarChanged`, and `ProgressBarChanged` events via a `_ => {}` catch-all
+- **HyperlinkAdded Event**: `TerminalEvent::HyperlinkAdded` now carries position data (`row`, `col`, `id`) and is actually emitted from the OSC 8 handler (was previously defined but never pushed to the event queue)
+
+### Added
+- **Streaming Protocol: Mouse Input**: Clients can send mouse events (`MouseInput` message) with column, row, button, modifiers, and event type. Server translates to terminal escape sequences based on active mouse mode/encoding
+- **Streaming Protocol: Focus Change**: Clients can send focus in/out events (`FocusChange` message). Server generates focus tracking escape sequences when focus tracking mode is active
+- **Streaming Protocol: Paste Input**: Clients can send paste content (`PasteInput` message). Server wraps content in bracketed paste sequences when bracketed paste mode is active, or writes raw content otherwise
+- **Streaming Protocol: Selection Sync**: Bidirectional selection synchronization via `SelectionChanged` (server→client) and `SelectionRequest` (client→server) messages supporting character, line, block, and word selection modes
+- **Streaming Protocol: Clipboard Sharing**: Bidirectional clipboard access via `ClipboardSync` (server→client) and `ClipboardRequest` (client→server) messages for set/get operations with target support (clipboard, primary, select)
+- **Streaming Protocol: Shell Integration Events**: `ShellIntegrationEvent` server message streams FinalTerm shell integration markers (`prompt_start`, `command_start`, `command_executed`, `command_finished`) with command text, exit codes, and timestamps
+- **Streaming Protocol: Badge Changes**: `BadgeChanged` server message streams badge text updates from `OSC 1337 SetBadgeFormat` sequences
+- **Streaming Protocol: Event Subscription**: `Subscribe` client message now fully implemented with per-client `HashSet<EventType>` filtering. Clients can subscribe to specific event types; unsubscribed events are filtered before broadcast. Applied in all 3 client loops (plain, TLS, Axum)
+- **Streaming Server: New send_* Methods**: Added `send_mode_changed()`, `send_graphics_added()`, `send_hyperlink_added()`, `send_user_var_changed()`, `send_progress_bar_changed()`, `send_cursor_position()`, `send_badge_changed()`, `broadcast_to_session()` convenience methods to `StreamingServer`
+- **Python Bindings: Streaming Server Methods**: All new `send_*` methods exposed on `PyStreamingServer`. New server/client message types supported in `encode`/`decode` functions
+- **Web Frontend: Mouse Support**: Terminal.tsx now captures mouse events (click, release, move, scroll) and sends `MouseInput` messages when mouse tracking mode is active
+- **Web Frontend: Focus Tracking**: Window focus/blur events sent as `FocusChange` messages when focus tracking mode is active
+- **Web Frontend: Bracketed Paste**: Paste events intercepted and sent as `PasteInput` messages when bracketed paste mode is active
+- **Web Frontend: Mode State Tracking**: `modeChanged` messages now update local state for `mouse_tracking`, `focus_tracking`, and `bracketed_paste` modes
+- **New EventType Variants**: `Badge`, `Selection`, `Clipboard`, `Shell` added to subscription filtering system
+- **New TerminalEvent Variants**: `BadgeChanged(Option<String>)`, `ShellIntegrationEvent { event_type, command, exit_code, timestamp }` added to core terminal event system
+
+### Changed
+- **BREAKING**: `TerminalEvent::HyperlinkAdded` changed from `HyperlinkAdded(String)` to struct variant `HyperlinkAdded { url: String, row: usize, col: usize, id: Option<u32> }`. All match sites must use struct destructuring
+- **Protobuf Schema**: `proto/terminal.proto` expanded with 9 new message types and 4 new `EventType` enum values
+
 ## [0.34.0] - 2026-02-09
 
 ### Fixed

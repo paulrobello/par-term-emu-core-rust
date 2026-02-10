@@ -515,6 +515,80 @@ impl PyStreamingServer {
         }
     }
 
+    /// Send a mode changed event to all clients
+    fn send_mode_changed(&self, mode: String, enabled: bool) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_mode_changed(mode, enabled);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a graphics added event to all clients
+    fn send_graphics_added(&self, row: u16) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_graphics_added(row);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a hyperlink added event to all clients
+    #[pyo3(signature = (url, row, col, id=None))]
+    fn send_hyperlink_added(
+        &self,
+        url: String,
+        row: u16,
+        col: u16,
+        id: Option<String>,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_hyperlink_added(url, row, col, id);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a user variable changed event to all clients
+    #[pyo3(signature = (name, value, old_value=None))]
+    fn send_user_var_changed(
+        &self,
+        name: String,
+        value: String,
+        old_value: Option<String>,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_user_var_changed(name, value, old_value);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a cursor position event to all clients
+    fn send_cursor_position(&self, col: u16, row: u16, visible: bool) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_cursor_position(col, row, visible);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a badge changed event to all clients
+    #[pyo3(signature = (badge=None))]
+    fn send_badge_changed(&self, badge: Option<String>) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_badge_changed(badge);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
     /// Send a trigger action notify event to all clients
     ///
     /// Args:
@@ -816,9 +890,48 @@ pub fn encode_server_message<'py>(
                 None => ServerMessage::hyperlink_added(url, row, col),
             }
         }
+        "badge_changed" => {
+            let badge = get_str("badge");
+            ServerMessage::badge_changed(badge)
+        }
+        "selection_changed" => {
+            let start_col = get_u16("start_col");
+            let start_row = get_u16("start_row");
+            let end_col = get_u16("end_col");
+            let end_row = get_u16("end_row");
+            let text = get_str("text");
+            let mode = get_str("mode").unwrap_or_else(|| "chars".to_string());
+            let cleared = get_bool("cleared").unwrap_or(false);
+            ServerMessage::selection_changed(
+                start_col, start_row, end_col, end_row, text, mode, cleared,
+            )
+        }
+        "clipboard_sync" => {
+            let operation = get_str("operation").unwrap_or_default();
+            let content = get_str("content").unwrap_or_default();
+            let target = get_str("target");
+            ServerMessage::clipboard_sync(operation, content, target)
+        }
+        "shell_integration" => {
+            let get_i32 = |key: &str| -> Option<i32> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let event_type = get_str("event_type").unwrap_or_default();
+            let command = get_str("command");
+            let exit_code = get_i32("exit_code");
+            let timestamp = get_u64("timestamp");
+            ServerMessage::shell_integration_event(event_type, command, exit_code, timestamp)
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration",
                 message_type
             )));
         }
@@ -1035,6 +1148,50 @@ pub fn decode_server_message<'py>(
             dict.set_item("percent", percent)?;
             dict.set_item("label", label)?;
         }
+        ServerMessage::BadgeChanged { badge } => {
+            dict.set_item("type", "badge_changed")?;
+            dict.set_item("badge", badge)?;
+        }
+        ServerMessage::SelectionChanged {
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+            text,
+            mode,
+            cleared,
+        } => {
+            dict.set_item("type", "selection_changed")?;
+            dict.set_item("start_col", start_col)?;
+            dict.set_item("start_row", start_row)?;
+            dict.set_item("end_col", end_col)?;
+            dict.set_item("end_row", end_row)?;
+            dict.set_item("text", text)?;
+            dict.set_item("mode", mode)?;
+            dict.set_item("cleared", cleared)?;
+        }
+        ServerMessage::ClipboardSync {
+            operation,
+            content,
+            target,
+        } => {
+            dict.set_item("type", "clipboard_sync")?;
+            dict.set_item("operation", operation)?;
+            dict.set_item("content", content)?;
+            dict.set_item("target", target)?;
+        }
+        ServerMessage::ShellIntegrationEvent {
+            event_type,
+            command,
+            exit_code,
+            timestamp,
+        } => {
+            dict.set_item("type", "shell_integration")?;
+            dict.set_item("event_type", event_type)?;
+            dict.set_item("command", command)?;
+            dict.set_item("exit_code", exit_code)?;
+            dict.set_item("timestamp", timestamp)?;
+        }
     }
 
     Ok(dict)
@@ -1082,6 +1239,11 @@ pub fn encode_client_message<'py>(
             .and_then(|k| k.get_item(key).ok().flatten())
             .and_then(|v| v.extract().ok())
     };
+    let get_bool = |key: &str| -> Option<bool> {
+        kwargs
+            .and_then(|k| k.get_item(key).ok().flatten())
+            .and_then(|v| v.extract().ok())
+    };
 
     let msg = match message_type {
         "input" => {
@@ -1113,14 +1275,55 @@ pub fn encode_client_message<'py>(
                     "hyperlink" => Some(EventType::Hyperlink),
                     "user_var" => Some(EventType::UserVar),
                     "progress_bar" => Some(EventType::ProgressBar),
+                    "badge" => Some(EventType::Badge),
+                    "selection" => Some(EventType::Selection),
+                    "clipboard" => Some(EventType::Clipboard),
+                    "shell" => Some(EventType::Shell),
                     _ => None,
                 })
                 .collect();
             ClientMessage::subscribe(events)
         }
+        "mouse" => {
+            let get_u8 = |key: &str| -> Option<u8> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let col = get_u16("col").unwrap_or(0);
+            let row = get_u16("row").unwrap_or(0);
+            let button = get_u8("button").unwrap_or(0);
+            let shift = get_bool("shift").unwrap_or(false);
+            let ctrl = get_bool("ctrl").unwrap_or(false);
+            let alt = get_bool("alt").unwrap_or(false);
+            let event_type = get_str("event_type").unwrap_or_else(|| "press".to_string());
+            ClientMessage::mouse(col, row, button, shift, ctrl, alt, event_type)
+        }
+        "focus_change" => {
+            let focused = get_bool("focused").unwrap_or(true);
+            ClientMessage::focus_change(focused)
+        }
+        "paste" => {
+            let content = get_str("content").unwrap_or_default();
+            ClientMessage::paste(content)
+        }
+        "selection_request" => {
+            let start_col = get_u16("start_col").unwrap_or(0);
+            let start_row = get_u16("start_row").unwrap_or(0);
+            let end_col = get_u16("end_col").unwrap_or(0);
+            let end_row = get_u16("end_row").unwrap_or(0);
+            let mode = get_str("mode").unwrap_or_else(|| "chars".to_string());
+            ClientMessage::selection_request(start_col, start_row, end_col, end_row, mode)
+        }
+        "clipboard_request" => {
+            let operation = get_str("operation").unwrap_or_default();
+            let content = get_str("content");
+            let target = get_str("target");
+            ClientMessage::clipboard_request(operation, content, target)
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: input, resize, ping, refresh, subscribe",
+                "Unknown message type: {}. Valid types: input, resize, ping, refresh, subscribe, mouse, focus_change, paste, selection_request, clipboard_request",
                 message_type
             )));
         }
@@ -1190,9 +1393,63 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Hyperlink => "hyperlink",
                     crate::streaming::protocol::EventType::UserVar => "user_var",
                     crate::streaming::protocol::EventType::ProgressBar => "progress_bar",
+                    crate::streaming::protocol::EventType::Badge => "badge",
+                    crate::streaming::protocol::EventType::Selection => "selection",
+                    crate::streaming::protocol::EventType::Clipboard => "clipboard",
+                    crate::streaming::protocol::EventType::Shell => "shell",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;
+        }
+        ClientMessage::Mouse {
+            col,
+            row,
+            button,
+            shift,
+            ctrl,
+            alt,
+            event_type,
+        } => {
+            dict.set_item("type", "mouse")?;
+            dict.set_item("col", col)?;
+            dict.set_item("row", row)?;
+            dict.set_item("button", button)?;
+            dict.set_item("shift", shift)?;
+            dict.set_item("ctrl", ctrl)?;
+            dict.set_item("alt", alt)?;
+            dict.set_item("event_type", event_type)?;
+        }
+        ClientMessage::FocusChange { focused } => {
+            dict.set_item("type", "focus_change")?;
+            dict.set_item("focused", focused)?;
+        }
+        ClientMessage::Paste { content } => {
+            dict.set_item("type", "paste")?;
+            dict.set_item("content", content)?;
+        }
+        ClientMessage::SelectionRequest {
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+            mode,
+        } => {
+            dict.set_item("type", "selection_request")?;
+            dict.set_item("start_col", start_col)?;
+            dict.set_item("start_row", start_row)?;
+            dict.set_item("end_col", end_col)?;
+            dict.set_item("end_row", end_row)?;
+            dict.set_item("mode", mode)?;
+        }
+        ClientMessage::ClipboardRequest {
+            operation,
+            content,
+            target,
+        } => {
+            dict.set_item("type", "clipboard_request")?;
+            dict.set_item("operation", operation)?;
+            dict.set_item("content", content)?;
+            dict.set_item("target", target)?;
         }
     }
 

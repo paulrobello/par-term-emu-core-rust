@@ -694,9 +694,56 @@ impl ServerState {
                             tm.timestamp,
                         );
                     }
-                    // GraphicsAdded, HyperlinkAdded, DirtyRegion, ModeChanged
-                    // are not relevant for streaming clients
-                    _ => {}
+                    TerminalEvent::ModeChanged(mode, enabled) => {
+                        self.streaming_server.send_mode_changed(mode, enabled);
+                    }
+                    TerminalEvent::GraphicsAdded(row) => {
+                        self.streaming_server.send_graphics_added(row as u16);
+                    }
+                    TerminalEvent::HyperlinkAdded { url, row, col, id } => {
+                        self.streaming_server.send_hyperlink_added(
+                            url,
+                            row as u16,
+                            col as u16,
+                            id.map(|i| i.to_string()),
+                        );
+                    }
+                    TerminalEvent::UserVarChanged {
+                        name,
+                        value,
+                        old_value,
+                    } => {
+                        self.streaming_server
+                            .send_user_var_changed(name, value, old_value);
+                    }
+                    TerminalEvent::ProgressBarChanged {
+                        action,
+                        id,
+                        state,
+                        percent,
+                        label,
+                    } => {
+                        self.streaming_server
+                            .send_progress_bar_changed(action, id, state, percent, label);
+                    }
+                    TerminalEvent::BadgeChanged(badge) => {
+                        self.streaming_server.send_badge_changed(badge);
+                    }
+                    TerminalEvent::ShellIntegrationEvent {
+                        event_type,
+                        command,
+                        exit_code,
+                        timestamp,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::shell_integration_event(
+                                event_type, command, exit_code, timestamp,
+                            ),
+                        );
+                    }
+                    TerminalEvent::DirtyRegion(_, _) => {
+                        // Dirty region is a rendering optimization hint, not needed for streaming
+                    }
                 }
             }
         }
@@ -1091,15 +1138,22 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
-                        TerminalEvent::HyperlinkAdded(url) => {
-                            server.send_to_session(
-                                &session_id_clone,
+                        TerminalEvent::HyperlinkAdded { url, row, col, id } => {
+                            let msg = if let Some(id) = id {
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::hyperlink_added_with_id(
+                                    url,
+                                    row as u16,
+                                    col as u16,
+                                    id.to_string(),
+                                )
+                            } else {
                                 par_term_emu_core_rust::streaming::protocol::ServerMessage::hyperlink_added(
                                     url,
-                                    0, // Row not provided in event
-                                    0, // Col not provided in event
-                                ),
-                            );
+                                    row as u16,
+                                    col as u16,
+                                )
+                            };
+                            server.send_to_session(&session_id_clone, msg);
                         }
                         TerminalEvent::UserVarChanged {
                             name,
@@ -1130,6 +1184,25 @@ impl SessionFactory for BinarySessionFactory {
                                     state,
                                     percent,
                                     label,
+                                ),
+                            );
+                        }
+                        TerminalEvent::BadgeChanged(badge) => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::badge_changed(badge),
+                            );
+                        }
+                        TerminalEvent::ShellIntegrationEvent {
+                            event_type,
+                            command,
+                            exit_code,
+                            timestamp,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::shell_integration_event(
+                                    event_type, command, exit_code, timestamp,
                                 ),
                             );
                         }

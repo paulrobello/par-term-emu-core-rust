@@ -214,13 +214,13 @@ Features:
 - **WebSocket-based terminal streaming with Protocol Buffers**
 - **Submodules**:
   - `mod.rs` - Core streaming types
-  - `server.rs` - Axum-based WebSocket server with TLS support
+  - `server.rs` - Axum-based WebSocket server with TLS support, per-client subscription filtering
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions (app-level)
+  - `protocol.rs` - Streaming protocol definitions (app-level): 23 server message types, 10 client message types, 18 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
   - `error.rs` - Streaming-specific errors
-- **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression
+- **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events, per-client event subscription filtering, badge change streaming
 - **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
 
 **Utility Modules**

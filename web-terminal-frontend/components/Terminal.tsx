@@ -14,6 +14,9 @@ import {
   createResizeMessage,
   createRefreshMessage,
   createPingMessage,
+  createMouseMessage,
+  createFocusMessage,
+  createPasteMessage,
   themeToXtermOptions,
 } from '@/lib/protocol';
 
@@ -100,6 +103,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const lastPongRef = useRef<number>(0);
   const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
   const HEARTBEAT_TIMEOUT_MS = 10000; // Consider stale if no pong within 10 seconds
+
+  // Terminal mode tracking (from server modeChanged messages)
+  const mouseTrackingRef = useRef<boolean>(false);
+  const focusTrackingRef = useRef<boolean>(false);
+  const bracketedPasteRef = useRef<boolean>(false);
 
   // Track previous wsUrl to detect changes
   const prevWsUrlRef = useRef<string>(wsUrl);
@@ -482,6 +490,87 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       }
     });
 
+    // Reference to the terminal DOM element for event handlers
+    const termElement = terminalRef.current;
+
+    // Handle mouse events - send MouseInput when mouse tracking is active
+    const getCellCoords = (e: MouseEvent): { col: number; row: number } | null => {
+      const coreElement = term.element?.querySelector('.xterm-screen');
+      if (!coreElement) return null;
+      const rect = coreElement.getBoundingClientRect();
+      const cellWidth = rect.width / term.cols;
+      const cellHeight = rect.height / term.rows;
+      const col = Math.floor((e.clientX - rect.left) / cellWidth);
+      const row = Math.floor((e.clientY - rect.top) / cellHeight);
+      if (col < 0 || col >= term.cols || row < 0 || row >= term.rows) return null;
+      return { col, row };
+    };
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      const coords = getCellCoords(e);
+      if (!coords) return;
+      wsRef.current.send(encodeClientMessage(createMouseMessage(
+        coords.col, coords.row, e.button, 'press', e.shiftKey, e.ctrlKey, e.altKey,
+      )));
+    };
+    const handleMouseUp = (e: MouseEvent) => {
+      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      const coords = getCellCoords(e);
+      if (!coords) return;
+      wsRef.current.send(encodeClientMessage(createMouseMessage(
+        coords.col, coords.row, 3, 'release', e.shiftKey, e.ctrlKey, e.altKey,
+      )));
+    };
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      const coords = getCellCoords(e);
+      if (!coords) return;
+      wsRef.current.send(encodeClientMessage(createMouseMessage(
+        coords.col, coords.row, 0, 'move', e.shiftKey, e.ctrlKey, e.altKey,
+      )));
+    };
+    const handleWheel = (e: WheelEvent) => {
+      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      const coords = getCellCoords(e);
+      if (!coords) return;
+      const button = e.deltaY < 0 ? 4 : 5; // 4=scroll_up, 5=scroll_down
+      wsRef.current.send(encodeClientMessage(createMouseMessage(
+        coords.col, coords.row, button, 'scroll', e.shiftKey, e.ctrlKey, e.altKey,
+      )));
+    };
+    termElement?.addEventListener('mousedown', handleMouseDown);
+    termElement?.addEventListener('mouseup', handleMouseUp);
+    termElement?.addEventListener('mousemove', handleMouseMove);
+    termElement?.addEventListener('wheel', handleWheel);
+
+    // Handle focus/blur events - send FocusChange when focus tracking is active
+    const handleFocusIn = () => {
+      if (focusTrackingRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(encodeClientMessage(createFocusMessage(true)));
+      }
+    };
+    const handleFocusOut = () => {
+      if (focusTrackingRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(encodeClientMessage(createFocusMessage(false)));
+      }
+    };
+    window.addEventListener('focus', handleFocusIn);
+    window.addEventListener('blur', handleFocusOut);
+
+    // Handle paste events - send PasteInput when bracketed paste mode is active
+    const handlePaste = (e: ClipboardEvent) => {
+      if (bracketedPasteRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        const text = e.clipboardData?.getData('text');
+        if (text) {
+          e.preventDefault();
+          wsRef.current.send(encodeClientMessage(createPasteMessage(text)));
+        }
+      }
+      // When not in bracketed paste mode, let xterm.js handle it normally
+    };
+    termElement?.addEventListener('paste', handlePaste);
+
     // Cleanup function
     // Note: In StrictMode, React unmounts then immediately remounts.
     // We preserve the terminal to restore it on remount, then dispose after a delay if not restored.
@@ -489,6 +578,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       clearTimeout(resizeTimeout);
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleOrientationChange);
+      window.removeEventListener('focus', handleFocusIn);
+      window.removeEventListener('blur', handleFocusOut);
+      termElement?.removeEventListener('paste', handlePaste);
+      termElement?.removeEventListener('mousedown', handleMouseDown);
+      termElement?.removeEventListener('mouseup', handleMouseUp);
+      termElement?.removeEventListener('mousemove', handleMouseMove);
+      termElement?.removeEventListener('wheel', handleWheel);
       onDataDisposable.dispose();
       onResizeDisposable.dispose();
 
@@ -612,6 +708,10 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
             // Clear any pending local echo from previous session
             pendingEchoRef.current = [];
+            // Reset mode tracking for new session
+            mouseTrackingRef.current = false;
+            focusTrackingRef.current = false;
+            bracketedPasteRef.current = false;
 
             // Send our size to server, then request a fresh snapshot
             if (ws.readyState === WebSocket.OPEN) {
@@ -697,8 +797,14 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'modeChanged': {
             const mc = msg.message.value;
             console.log(`Mode changed: ${mc.mode} = ${mc.enabled}`);
-            // Currently logged for debugging; downstream consumers
-            // (like TermNexus) can act on these to sync xterm.js state
+            // Track mode state for mouse/focus/paste handling
+            if (mc.mode === 'mouse_tracking') {
+              mouseTrackingRef.current = mc.enabled;
+            } else if (mc.mode === 'focus_tracking') {
+              focusTrackingRef.current = mc.enabled;
+            } else if (mc.mode === 'bracketed_paste') {
+              bracketedPasteRef.current = mc.enabled;
+            }
             break;
           }
 

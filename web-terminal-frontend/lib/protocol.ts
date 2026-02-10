@@ -22,6 +22,10 @@ import {
   ClientResizeSchema,
   PingSchema,
   RequestRefreshSchema,
+  MouseInputSchema,
+  FocusChangeSchema,
+  PasteInputSchema,
+  SubscribeSchema,
   type ThemeInfo,
 } from './proto/terminal_pb';
 import pako from 'pako';
@@ -156,6 +160,70 @@ export function createRefreshMessage(): ClientMessage {
     message: {
       case: 'refresh',
       value: create(RequestRefreshSchema, {}),
+    },
+  });
+}
+
+/**
+ * Create a mouse input message
+ */
+export function createMouseMessage(
+  col: number,
+  row: number,
+  button: number,
+  eventType: string,
+  shift: boolean = false,
+  ctrl: boolean = false,
+  alt: boolean = false,
+): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'mouse',
+      value: create(MouseInputSchema, {
+        col,
+        row,
+        button,
+        eventType,
+        shift,
+        ctrl,
+        alt,
+      }),
+    },
+  });
+}
+
+/**
+ * Create a focus change message
+ */
+export function createFocusMessage(focused: boolean): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'focus',
+      value: create(FocusChangeSchema, { focused }),
+    },
+  });
+}
+
+/**
+ * Create a paste input message
+ */
+export function createPasteMessage(content: string): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'paste',
+      value: create(PasteInputSchema, { content }),
+    },
+  });
+}
+
+/**
+ * Create a subscribe message for specific event types
+ */
+export function createSubscribeMessage(events: number[]): ClientMessage {
+  return create(ClientMessageSchema, {
+    message: {
+      case: 'subscribe',
+      value: create(SubscribeSchema, { events }),
     },
   });
 }

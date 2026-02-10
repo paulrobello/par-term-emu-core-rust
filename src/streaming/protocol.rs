@@ -242,6 +242,66 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         label: Option<String>,
     },
+
+    /// Badge text changed (OSC 1337 SetBadgeFormat)
+    #[serde(rename = "badge_changed")]
+    BadgeChanged {
+        /// New badge text (None if cleared)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        badge: Option<String>,
+    },
+
+    /// Selection changed
+    #[serde(rename = "selection_changed")]
+    SelectionChanged {
+        /// Start column (None if cleared)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_col: Option<u16>,
+        /// Start row (None if cleared)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        start_row: Option<u16>,
+        /// End column (None if cleared)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        end_col: Option<u16>,
+        /// End row (None if cleared)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        end_row: Option<u16>,
+        /// Selected text content
+        #[serde(skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        /// Selection mode: "chars", "line", "block"
+        mode: String,
+        /// True if selection was cleared
+        cleared: bool,
+    },
+
+    /// Clipboard sync event (OSC 52)
+    #[serde(rename = "clipboard_sync")]
+    ClipboardSync {
+        /// Operation: "set", "get_response"
+        operation: String,
+        /// Clipboard content
+        content: String,
+        /// Clipboard target: "clipboard", "primary", "select"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
+
+    /// Shell integration event (FinalTerm sequences)
+    #[serde(rename = "shell_integration")]
+    ShellIntegrationEvent {
+        /// Event type: "prompt_start", "command_start", "command_executed", "command_finished"
+        event_type: String,
+        /// The command text (for command_start)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        command: Option<String>,
+        /// Exit code (for command_finished)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+        /// Timestamp (Unix epoch milliseconds)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<u64>,
+    },
 }
 
 /// Messages sent from client to server
@@ -273,6 +333,62 @@ pub enum ClientMessage {
     Subscribe {
         /// Event types to subscribe to
         events: Vec<EventType>,
+    },
+
+    /// Mouse input from client
+    Mouse {
+        /// Column position
+        col: u16,
+        /// Row position
+        row: u16,
+        /// Button: 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+        button: u8,
+        /// Shift key held
+        shift: bool,
+        /// Ctrl key held
+        ctrl: bool,
+        /// Alt key held
+        alt: bool,
+        /// Event type: "press", "release", "move", "scroll"
+        event_type: String,
+    },
+
+    /// Focus change from client
+    FocusChange {
+        /// Whether the terminal is focused
+        focused: bool,
+    },
+
+    /// Paste content from client
+    Paste {
+        /// Content to paste
+        content: String,
+    },
+
+    /// Selection request from client
+    SelectionRequest {
+        /// Start column
+        start_col: u16,
+        /// Start row
+        start_row: u16,
+        /// End column
+        end_col: u16,
+        /// End row
+        end_row: u16,
+        /// Selection mode: "chars", "line", "block", "word", "clear"
+        mode: String,
+    },
+
+    /// Clipboard request from client
+    ClipboardRequest {
+        /// Operation: "set", "get"
+        operation: String,
+        /// Content for "set" operations
+        #[serde(skip_serializing_if = "Option::is_none")]
+        content: Option<String>,
+        /// Clipboard target: "clipboard", "primary", "select"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
     },
 }
 
@@ -308,6 +424,14 @@ pub enum EventType {
     /// Named progress bar events
     #[serde(rename = "progress_bar")]
     ProgressBar,
+    /// Badge change events
+    Badge,
+    /// Selection events
+    Selection,
+    /// Clipboard sync events
+    Clipboard,
+    /// Shell integration events
+    Shell,
 }
 
 impl ServerMessage {
@@ -625,6 +749,70 @@ impl ServerMessage {
         }
     }
 
+    /// Create a badge changed message
+    pub fn badge_changed(badge: Option<String>) -> Self {
+        Self::BadgeChanged { badge }
+    }
+
+    /// Create a selection changed message
+    #[allow(clippy::too_many_arguments)]
+    pub fn selection_changed(
+        start_col: Option<u16>,
+        start_row: Option<u16>,
+        end_col: Option<u16>,
+        end_row: Option<u16>,
+        text: Option<String>,
+        mode: String,
+        cleared: bool,
+    ) -> Self {
+        Self::SelectionChanged {
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+            text,
+            mode,
+            cleared,
+        }
+    }
+
+    /// Create a selection cleared message
+    pub fn selection_cleared() -> Self {
+        Self::SelectionChanged {
+            start_col: None,
+            start_row: None,
+            end_col: None,
+            end_row: None,
+            text: None,
+            mode: "chars".to_string(),
+            cleared: true,
+        }
+    }
+
+    /// Create a clipboard sync message
+    pub fn clipboard_sync(operation: String, content: String, target: Option<String>) -> Self {
+        Self::ClipboardSync {
+            operation,
+            content,
+            target,
+        }
+    }
+
+    /// Create a shell integration event message
+    pub fn shell_integration_event(
+        event_type: String,
+        command: Option<String>,
+        exit_code: Option<i32>,
+        timestamp: Option<u64>,
+    ) -> Self {
+        Self::ShellIntegrationEvent {
+            event_type,
+            command,
+            exit_code,
+            timestamp,
+        }
+    }
+
     /// Create a progress bar changed message from terminal event data
     pub fn progress_bar_changed(
         action: crate::terminal::ProgressBarAction,
@@ -672,6 +860,68 @@ impl ClientMessage {
     /// Create a subscribe message
     pub fn subscribe(events: Vec<EventType>) -> Self {
         Self::Subscribe { events }
+    }
+
+    /// Create a mouse input message
+    #[allow(clippy::too_many_arguments)]
+    pub fn mouse(
+        col: u16,
+        row: u16,
+        button: u8,
+        shift: bool,
+        ctrl: bool,
+        alt: bool,
+        event_type: String,
+    ) -> Self {
+        Self::Mouse {
+            col,
+            row,
+            button,
+            shift,
+            ctrl,
+            alt,
+            event_type,
+        }
+    }
+
+    /// Create a focus change message
+    pub fn focus_change(focused: bool) -> Self {
+        Self::FocusChange { focused }
+    }
+
+    /// Create a paste message
+    pub fn paste(content: String) -> Self {
+        Self::Paste { content }
+    }
+
+    /// Create a selection request message
+    pub fn selection_request(
+        start_col: u16,
+        start_row: u16,
+        end_col: u16,
+        end_row: u16,
+        mode: String,
+    ) -> Self {
+        Self::SelectionRequest {
+            start_col,
+            start_row,
+            end_col,
+            end_row,
+            mode,
+        }
+    }
+
+    /// Create a clipboard request message
+    pub fn clipboard_request(
+        operation: String,
+        content: Option<String>,
+        target: Option<String>,
+    ) -> Self {
+        Self::ClipboardRequest {
+            operation,
+            content,
+            target,
+        }
     }
 }
 

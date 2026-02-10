@@ -201,6 +201,16 @@ impl Terminal {
                                     });
 
                                 self.current_hyperlink_id = Some(id);
+
+                                // Emit hyperlink event with position data
+                                self.terminal_events.push(
+                                    crate::terminal::TerminalEvent::HyperlinkAdded {
+                                        url: url.to_string(),
+                                        row: self.cursor.row,
+                                        col: self.cursor.col,
+                                        id: Some(id),
+                                    },
+                                );
                             }
                         }
                     } else if params.len() == 2 {
@@ -440,18 +450,49 @@ impl Terminal {
                     // Shell integration (iTerm2/VSCode)
                     if params.len() >= 2 {
                         if let Ok(marker) = std::str::from_utf8(params[1]) {
+                            let ts = crate::terminal::unix_millis();
                             match marker.chars().next() {
                                 Some('A') => {
                                     self.shell_integration
                                         .set_marker(ShellIntegrationMarker::PromptStart);
+                                    self.terminal_events.push(
+                                        crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                                            event_type: "prompt_start".to_string(),
+                                            command: None,
+                                            exit_code: None,
+                                            timestamp: Some(ts),
+                                        },
+                                    );
                                 }
                                 Some('B') => {
                                     self.shell_integration
                                         .set_marker(ShellIntegrationMarker::CommandStart);
+                                    self.terminal_events.push(
+                                        crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                                            event_type: "command_start".to_string(),
+                                            command: self
+                                                .shell_integration
+                                                .command()
+                                                .map(|s| s.to_string()),
+                                            exit_code: None,
+                                            timestamp: Some(ts),
+                                        },
+                                    );
                                 }
                                 Some('C') => {
                                     self.shell_integration
                                         .set_marker(ShellIntegrationMarker::CommandExecuted);
+                                    self.terminal_events.push(
+                                        crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                                            event_type: "command_executed".to_string(),
+                                            command: self
+                                                .shell_integration
+                                                .command()
+                                                .map(|s| s.to_string()),
+                                            exit_code: None,
+                                            timestamp: Some(ts),
+                                        },
+                                    );
                                 }
                                 Some('D') => {
                                     self.shell_integration
@@ -460,13 +501,23 @@ impl Terminal {
                                     // Extract exit code from third OSC parameter when present:
                                     // OSC 133 ; D ; <exit_code> ST
                                     let exit_param = params.get(2).or_else(|| params.get(1));
+                                    let mut parsed_code: Option<i32> = None;
                                     if let Some(code_bytes) = exit_param {
                                         if let Ok(code_str) = std::str::from_utf8(code_bytes) {
                                             if let Ok(code) = code_str.parse::<i32>() {
                                                 self.shell_integration.set_exit_code(code);
+                                                parsed_code = Some(code);
                                             }
                                         }
                                     }
+                                    self.terminal_events.push(
+                                        crate::terminal::TerminalEvent::ShellIntegrationEvent {
+                                            event_type: "command_finished".to_string(),
+                                            command: None,
+                                            exit_code: parsed_code,
+                                            timestamp: Some(ts),
+                                        },
+                                    );
                                 }
                                 _ => {}
                             }
@@ -726,6 +777,8 @@ impl Terminal {
         // Empty value clears the badge
         if encoded.is_empty() {
             self.badge_format = None;
+            self.terminal_events
+                .push(crate::terminal::TerminalEvent::BadgeChanged(None));
             debug::log(debug::DebugLevel::Debug, "OSC1337", "Cleared badge format");
             return;
         }
@@ -738,7 +791,11 @@ impl Terminal {
                     "OSC1337",
                     &format!("Set badge format: {:?}", format),
                 );
-                self.badge_format = Some(format);
+                self.badge_format = Some(format.clone());
+                // Emit badge changed event with evaluated badge text
+                let badge_text = self.evaluate_badge();
+                self.terminal_events
+                    .push(crate::terminal::TerminalEvent::BadgeChanged(badge_text));
             }
             Err(e) => {
                 debug::log(

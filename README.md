@@ -13,6 +13,41 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New (Unreleased)
+
+### Streaming Server Audit & Protocol Expansion
+
+Major audit of the streaming server fixing bugs, implementing TODOs, and closing gaps between core terminal capabilities and the streaming protocol.
+
+**Bug Fixes:**
+- Fixed standalone event poller silently dropping 5 event types (`ModeChanged`, `GraphicsAdded`, `HyperlinkAdded`, `UserVarChanged`, `ProgressBarChanged`)
+- Fixed `HyperlinkAdded` event never being emitted from OSC 8 handler; now includes position data (`row`, `col`, `id`)
+
+**New Client→Server Messages:**
+- **Mouse Input** - Send mouse events (press, release, move, scroll) with button, modifiers, and cell coordinates
+- **Focus Change** - Send window focus/blur events for terminal focus tracking
+- **Paste Input** - Send paste content with automatic bracketed paste wrapping
+- **Selection Request** - Request text selection (character, line, block, word, clear)
+- **Clipboard Request** - Get/set clipboard content with target support
+
+**New Server→Client Messages:**
+- **Badge Changed** - Badge text updates from OSC 1337 SetBadgeFormat
+- **Selection Changed** - Selection state synchronization with text content
+- **Clipboard Sync** - Clipboard content from OSC 52 sequences
+- **Shell Integration Event** - FinalTerm markers (prompt_start, command_start, command_executed, command_finished)
+
+**Subscribe Filtering:**
+- `Subscribe` message now fully implemented with per-client event filtering
+- 4 new event types: `Badge`, `Selection`, `Clipboard`, `Shell`
+
+**Web Frontend:**
+- Mouse events forwarded when mouse tracking mode is active
+- Focus in/out sent when focus tracking is active
+- Paste intercepted for bracketed paste mode
+- Mode state tracked from `modeChanged` messages
+
+**Breaking:** `TerminalEvent::HyperlinkAdded` changed from tuple to struct variant with `url`, `row`, `col`, `id` fields.
+
 ## What's New in 0.34.0
 
 ### OSC 1337 RemoteHost Support

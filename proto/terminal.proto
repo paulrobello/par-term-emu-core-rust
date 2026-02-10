@@ -37,6 +37,10 @@ enum EventType {
   EVENT_TYPE_HYPERLINK = 11;
   EVENT_TYPE_USER_VAR = 12;
   EVENT_TYPE_PROGRESS_BAR = 13;
+  EVENT_TYPE_BADGE = 14;
+  EVENT_TYPE_SELECTION = 15;
+  EVENT_TYPE_CLIPBOARD = 16;
+  EVENT_TYPE_SHELL = 17;
 }
 
 // =============================================================================
@@ -64,6 +68,10 @@ message ServerMessage {
     HyperlinkAdded hyperlink_added = 17;
     UserVarChanged user_var_changed = 18;
     ProgressBarChanged progress_bar_changed = 19;
+    BadgeChanged badge_changed = 20;
+    SelectionChanged selection_changed = 21;
+    ClipboardSync clipboard_sync = 22;
+    ShellIntegrationEvent shell_integration_event = 23;
   }
 }
 
@@ -201,6 +209,37 @@ message ProgressBarChanged {
   optional string label = 5;        // Descriptive label (only for "set")
 }
 
+// Badge text changed (OSC 1337 SetBadgeFormat)
+message BadgeChanged {
+  optional string badge = 1;            // New badge text (empty if cleared)
+}
+
+// Selection changed
+message SelectionChanged {
+  optional uint32 start_col = 1;
+  optional uint32 start_row = 2;
+  optional uint32 end_col = 3;
+  optional uint32 end_row = 4;
+  optional string text = 5;             // Selected text content
+  string mode = 6;                      // "chars", "line", "block"
+  bool cleared = 7;                     // True if selection was cleared
+}
+
+// Clipboard sync event (OSC 52)
+message ClipboardSync {
+  string operation = 1;                 // "set", "get_response"
+  string content = 2;
+  optional string target = 3;           // "clipboard", "primary", "select"
+}
+
+// Shell integration event (FinalTerm sequences)
+message ShellIntegrationEvent {
+  string event_type = 1;               // "prompt_start", "command_start", "command_executed", "command_finished"
+  optional string command = 2;          // The command text (for command_start)
+  optional int32 exit_code = 3;         // Exit code (for command_finished)
+  optional uint64 timestamp = 4;
+}
+
 // =============================================================================
 // Client -> Server Messages
 // =============================================================================
@@ -212,6 +251,11 @@ message ClientMessage {
     Ping ping = 3;
     RequestRefresh refresh = 4;
     Subscribe subscribe = 5;
+    MouseInput mouse = 6;
+    FocusChange focus = 7;
+    PasteInput paste = 8;
+    SelectionRequest selection = 9;
+    ClipboardRequest clipboard = 10;
   }
 }
 
@@ -235,4 +279,41 @@ message RequestRefresh {}
 // Client subscribes to specific event types
 message Subscribe {
   repeated EventType events = 1;
+}
+
+// Mouse input from client
+message MouseInput {
+  uint32 col = 1;
+  uint32 row = 2;
+  uint32 button = 3;                   // 0=left, 1=middle, 2=right, 3=release, 4=scroll_up, 5=scroll_down
+  bool shift = 4;
+  bool ctrl = 5;
+  bool alt = 6;
+  string event_type = 7;               // "press", "release", "move", "scroll"
+}
+
+// Focus change from client
+message FocusChange {
+  bool focused = 1;
+}
+
+// Paste input from client
+message PasteInput {
+  string content = 1;
+}
+
+// Selection request from client
+message SelectionRequest {
+  uint32 start_col = 1;
+  uint32 start_row = 2;
+  uint32 end_col = 3;
+  uint32 end_row = 4;
+  string mode = 5;                     // "chars", "line", "block", "word", "clear"
+}
+
+// Clipboard request from client
+message ClipboardRequest {
+  string operation = 1;                // "set", "get"
+  optional string content = 2;         // Content for "set" operations
+  optional string target = 3;          // "clipboard", "primary", "select"
 }
