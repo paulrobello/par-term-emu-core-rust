@@ -8,17 +8,17 @@
 //! `OSC 9 ; 4 ; state ; progress ST`
 //!
 //! Where:
-//! - `state` is one of: 0 (hidden), 1 (normal), 2 (indeterminate), 3 (warning), 4 (error)
-//! - `progress` is 0-100 (percentage, only required for states 1, 3, 4)
+//! - `state` is one of: 0 (hidden), 1 (normal), 2 (error), 3 (indeterminate), 4 (warning/paused)
+//! - `progress` is 0-100 (percentage, only required for states 1, 2, 4)
 //!
 //! ## Examples
 //!
 //! ```text
 //! \x1b]9;4;1;50\x1b\\   # Set progress to 50%
 //! \x1b]9;4;0\x1b\\      # Hide progress bar
-//! \x1b]9;4;2\x1b\\      # Show indeterminate progress
-//! \x1b]9;4;3;75\x1b\\   # Show warning state at 75%
-//! \x1b]9;4;4;100\x1b\\  # Show error state at 100%
+//! \x1b]9;4;2;100\x1b\\  # Show error state at 100%
+//! \x1b]9;4;3\x1b\\      # Show indeterminate progress
+//! \x1b]9;4;4;75\x1b\\   # Show warning/paused state at 75%
 //! ```
 
 /// Progress bar state from OSC 9;4 sequences
@@ -29,12 +29,12 @@ pub enum ProgressState {
     Hidden,
     /// Normal progress display (state 1)
     Normal,
-    /// Indeterminate/busy indicator (state 2)
-    Indeterminate,
-    /// Warning state - operation may have issues (state 3)
-    Warning,
-    /// Error state - operation failed (state 4)
+    /// Error state - operation failed (state 2)
     Error,
+    /// Indeterminate/busy indicator (state 3)
+    Indeterminate,
+    /// Warning/paused state - operation may have issues (state 4)
+    Warning,
 }
 
 impl ProgressState {
@@ -43,9 +43,9 @@ impl ProgressState {
         match param {
             0 => Self::Hidden,
             1 => Self::Normal,
-            2 => Self::Indeterminate,
-            3 => Self::Warning,
-            4 => Self::Error,
+            2 => Self::Error,
+            3 => Self::Indeterminate,
+            4 => Self::Warning,
             _ => Self::Hidden, // Invalid state defaults to hidden
         }
     }
@@ -55,9 +55,9 @@ impl ProgressState {
         match self {
             Self::Hidden => 0,
             Self::Normal => 1,
-            Self::Indeterminate => 2,
-            Self::Warning => 3,
-            Self::Error => 4,
+            Self::Error => 2,
+            Self::Indeterminate => 3,
+            Self::Warning => 4,
         }
     }
 
@@ -68,7 +68,7 @@ impl ProgressState {
 
     /// Check if the state requires a progress percentage
     pub fn requires_progress(self) -> bool {
-        matches!(self, Self::Normal | Self::Warning | Self::Error)
+        matches!(self, Self::Normal | Self::Error | Self::Warning)
     }
 
     /// Get a human-readable description of the state
@@ -313,9 +313,9 @@ mod tests {
     fn test_progress_state_from_param() {
         assert_eq!(ProgressState::from_param(0), ProgressState::Hidden);
         assert_eq!(ProgressState::from_param(1), ProgressState::Normal);
-        assert_eq!(ProgressState::from_param(2), ProgressState::Indeterminate);
-        assert_eq!(ProgressState::from_param(3), ProgressState::Warning);
-        assert_eq!(ProgressState::from_param(4), ProgressState::Error);
+        assert_eq!(ProgressState::from_param(2), ProgressState::Error);
+        assert_eq!(ProgressState::from_param(3), ProgressState::Indeterminate);
+        assert_eq!(ProgressState::from_param(4), ProgressState::Warning);
         // Invalid values default to Hidden
         assert_eq!(ProgressState::from_param(5), ProgressState::Hidden);
         assert_eq!(ProgressState::from_param(255), ProgressState::Hidden);
@@ -325,9 +325,9 @@ mod tests {
     fn test_progress_state_to_param() {
         assert_eq!(ProgressState::Hidden.to_param(), 0);
         assert_eq!(ProgressState::Normal.to_param(), 1);
-        assert_eq!(ProgressState::Indeterminate.to_param(), 2);
-        assert_eq!(ProgressState::Warning.to_param(), 3);
-        assert_eq!(ProgressState::Error.to_param(), 4);
+        assert_eq!(ProgressState::Error.to_param(), 2);
+        assert_eq!(ProgressState::Indeterminate.to_param(), 3);
+        assert_eq!(ProgressState::Warning.to_param(), 4);
     }
 
     #[test]
@@ -404,16 +404,16 @@ mod tests {
             "\x1b]9;4;1;50\x1b\\"
         );
         assert_eq!(
+            ProgressBar::error(100).to_escape_sequence(),
+            "\x1b]9;4;2;100\x1b\\"
+        );
+        assert_eq!(
             ProgressBar::indeterminate().to_escape_sequence(),
-            "\x1b]9;4;2\x1b\\"
+            "\x1b]9;4;3\x1b\\"
         );
         assert_eq!(
             ProgressBar::warning(75).to_escape_sequence(),
-            "\x1b]9;4;3;75\x1b\\"
-        );
-        assert_eq!(
-            ProgressBar::error(100).to_escape_sequence(),
-            "\x1b]9;4;4;100\x1b\\"
+            "\x1b]9;4;4;75\x1b\\"
         );
     }
 

@@ -1174,6 +1174,13 @@ impl Terminal {
                         _ => {} // Unknown mode, ignore
                     }
                 }
+                // XTVERSION: CSI > q - Report terminal name and version
+                // Response: DCS > | par-term(version) ST
+                else if intermediates.contains(&b'>') {
+                    let version = env!("CARGO_PKG_VERSION");
+                    let response = format!("\x1bP>|par-term({})\x1b\\", version);
+                    self.push_response(response.as_bytes());
+                }
                 // Note: CSI q without intermediates is not standard
             }
             'r' => {
@@ -1303,9 +1310,9 @@ impl Terminal {
                     // Response varies based on conformance level:
                     // ESC [ ? {id} ; {features} c where:
                     // id: 1=VT100, 62=VT220, 63=VT320, 64=VT420, 65=VT520
-                    // features: 1=132cols, 4=Sixel, 6=Selective erase, 9=NRC, 15=Technical, 22=ANSI color
+                    // features: 1=132cols, 4=Sixel, 6=Selective erase, 9=NRC, 15=Technical, 22=ANSI color, 52=OSC 52 clipboard
                     let da_id = self.conformance_level.da_identifier();
-                    let response = format!("\x1b[?{};1;4;6;9;15;22c", da_id);
+                    let response = format!("\x1b[?{};1;4;6;9;15;22;52c", da_id);
                     self.push_response(response.as_bytes());
                 }
             }
@@ -2276,15 +2283,38 @@ mod tests {
     fn test_device_attributes() {
         let mut term = Terminal::new(80, 24);
 
-        // Primary DA
+        // Primary DA - should include parameter 52 for OSC 52 clipboard
         term.process(b"\x1b[c");
         let response = term.drain_responses();
-        assert!(response.starts_with(b"\x1b[?"));
+        let response_str = std::str::from_utf8(&response).unwrap();
+        assert!(response_str.starts_with("\x1b[?"));
+        assert!(
+            response_str.contains(";52"),
+            "DA1 should advertise OSC 52 clipboard (param 52)"
+        );
 
         // Secondary DA
         term.process(b"\x1b[>c");
         let response = term.drain_responses();
         assert_eq!(response, b"\x1b[>82;10000;0c");
+    }
+
+    #[test]
+    fn test_xtversion() {
+        let mut term = Terminal::new(80, 24);
+
+        // XTVERSION: CSI > q
+        term.process(b"\x1b[>q");
+        let response = term.drain_responses();
+        let response_str = std::str::from_utf8(&response).unwrap();
+        assert!(
+            response_str.starts_with("\x1bP>|par-term("),
+            "XTVERSION should respond with par-term version"
+        );
+        assert!(
+            response_str.ends_with(")\x1b\\"),
+            "XTVERSION should end with ST"
+        );
     }
 
     // ========== Scroll Region and Tab Tests ==========

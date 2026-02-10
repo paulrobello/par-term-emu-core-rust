@@ -1398,11 +1398,23 @@ mod tests {
     }
 
     #[test]
+    fn test_progress_bar_error() {
+        let mut term = Terminal::new(80, 24);
+
+        // OSC 9;4;2;100 - Error progress at 100%
+        term.process(b"\x1b]9;4;2;100\x1b\\");
+
+        assert!(term.has_progress());
+        assert_eq!(term.progress_state(), crate::terminal::ProgressState::Error);
+        assert_eq!(term.progress_value(), 100);
+    }
+
+    #[test]
     fn test_progress_bar_indeterminate() {
         let mut term = Terminal::new(80, 24);
 
-        // OSC 9;4;2 - Indeterminate progress
-        term.process(b"\x1b]9;4;2\x1b\\");
+        // OSC 9;4;3 - Indeterminate progress
+        term.process(b"\x1b]9;4;3\x1b\\");
 
         assert!(term.has_progress());
         assert_eq!(
@@ -1416,8 +1428,8 @@ mod tests {
     fn test_progress_bar_warning() {
         let mut term = Terminal::new(80, 24);
 
-        // OSC 9;4;3;80 - Warning progress at 80%
-        term.process(b"\x1b]9;4;3;80\x1b\\");
+        // OSC 9;4;4;80 - Warning/paused progress at 80%
+        term.process(b"\x1b]9;4;4;80\x1b\\");
 
         assert!(term.has_progress());
         assert_eq!(
@@ -1425,18 +1437,6 @@ mod tests {
             crate::terminal::ProgressState::Warning
         );
         assert_eq!(term.progress_value(), 80);
-    }
-
-    #[test]
-    fn test_progress_bar_error() {
-        let mut term = Terminal::new(80, 24);
-
-        // OSC 9;4;4;100 - Error progress at 100%
-        term.process(b"\x1b]9;4;4;100\x1b\\");
-
-        assert!(term.has_progress());
-        assert_eq!(term.progress_state(), crate::terminal::ProgressState::Error);
-        assert_eq!(term.progress_value(), 100);
     }
 
     #[test]
@@ -1508,16 +1508,16 @@ mod tests {
             "\x1b]9;4;1;50\x1b\\"
         );
         assert_eq!(
+            ProgressBar::error(100).to_escape_sequence(),
+            "\x1b]9;4;2;100\x1b\\"
+        );
+        assert_eq!(
             ProgressBar::indeterminate().to_escape_sequence(),
-            "\x1b]9;4;2\x1b\\"
+            "\x1b]9;4;3\x1b\\"
         );
         assert_eq!(
             ProgressBar::warning(75).to_escape_sequence(),
-            "\x1b]9;4;3;75\x1b\\"
-        );
-        assert_eq!(
-            ProgressBar::error(100).to_escape_sequence(),
-            "\x1b]9;4;4;100\x1b\\"
+            "\x1b]9;4;4;75\x1b\\"
         );
     }
 

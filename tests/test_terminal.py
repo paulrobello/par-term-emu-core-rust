@@ -794,7 +794,7 @@ def test_da_primary():
 
     # Drain and check the response
     response = term.drain_responses()
-    assert response == b"\x1b[?62;1;4;6;9;15;22c"
+    assert response == b"\x1b[?62;1;4;6;9;15;22;52c"
 
     # After draining, no more responses
     assert not term.has_pending_responses()
@@ -807,7 +807,7 @@ def test_da_primary_with_param():
     term.process(b"\x1b[0c")
 
     response = term.drain_responses()
-    assert response == b"\x1b[?62;1;4;6;9;15;22c"
+    assert response == b"\x1b[?62;1;4;6;9;15;22;52c"
 
 
 def test_da_secondary():
@@ -985,7 +985,7 @@ def test_multiple_queries():
 
     # Drain all responses
     responses = term.drain_responses()
-    expected = b"\x1b[0n\x1b[1;1R\x1b[?62;1;4;6;9;15;22c"
+    expected = b"\x1b[0n\x1b[1;1R\x1b[?62;1;4;6;9;15;22;52c"
     assert responses == expected
 
 
@@ -2158,45 +2158,45 @@ def test_progress_bar_hidden():
     assert term.progress_state() == ProgressState.Hidden
 
 
-def test_progress_bar_indeterminate():
-    """Test indeterminate progress bar via OSC 9;4;2"""
+def test_progress_bar_error():
+    """Test error progress bar via OSC 9;4;2"""
     from par_term_emu_core_rust import ProgressState
 
     term = Terminal(80, 24)
 
-    # OSC 9;4;2 - Indeterminate progress
-    term.process(b"\x1b]9;4;2\x1b\\")
+    # OSC 9;4;2;100 - Error progress at 100%
+    term.process(b"\x1b]9;4;2;100\x1b\\")
+
+    assert term.has_progress()
+    assert term.progress_state() == ProgressState.Error
+    assert term.progress_value() == 100
+
+
+def test_progress_bar_indeterminate():
+    """Test indeterminate progress bar via OSC 9;4;3"""
+    from par_term_emu_core_rust import ProgressState
+
+    term = Terminal(80, 24)
+
+    # OSC 9;4;3 - Indeterminate progress
+    term.process(b"\x1b]9;4;3\x1b\\")
 
     assert term.has_progress()
     assert term.progress_state() == ProgressState.Indeterminate
 
 
 def test_progress_bar_warning():
-    """Test warning progress bar via OSC 9;4;3"""
+    """Test warning/paused progress bar via OSC 9;4;4"""
     from par_term_emu_core_rust import ProgressState
 
     term = Terminal(80, 24)
 
-    # OSC 9;4;3;80 - Warning progress at 80%
-    term.process(b"\x1b]9;4;3;80\x1b\\")
+    # OSC 9;4;4;80 - Warning/paused progress at 80%
+    term.process(b"\x1b]9;4;4;80\x1b\\")
 
     assert term.has_progress()
     assert term.progress_state() == ProgressState.Warning
     assert term.progress_value() == 80
-
-
-def test_progress_bar_error():
-    """Test error progress bar via OSC 9;4;4"""
-    from par_term_emu_core_rust import ProgressState
-
-    term = Terminal(80, 24)
-
-    # OSC 9;4;4;100 - Error progress at 100%
-    term.process(b"\x1b]9;4;4;100\x1b\\")
-
-    assert term.has_progress()
-    assert term.progress_state() == ProgressState.Error
-    assert term.progress_value() == 100
 
 
 def test_progress_bar_manual_set():

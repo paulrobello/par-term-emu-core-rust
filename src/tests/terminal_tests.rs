@@ -702,7 +702,7 @@ fn test_da_primary() {
     term.process(b"\x1b[c"); // Primary DA
 
     let response = term.drain_responses();
-    assert_eq!(response, b"\x1b[?62;1;4;6;9;15;22c");
+    assert_eq!(response, b"\x1b[?62;1;4;6;9;15;22;52c");
 }
 
 #[test]
@@ -712,7 +712,7 @@ fn test_da_primary_with_param() {
     term.process(b"\x1b[0c"); // Primary DA with param 0
 
     let response = term.drain_responses();
-    assert_eq!(response, b"\x1b[?62;1;4;6;9;15;22c");
+    assert_eq!(response, b"\x1b[?62;1;4;6;9;15;22;52c");
 }
 
 #[test]
@@ -929,7 +929,7 @@ fn test_multiple_queries() {
     term.process(b"\x1b[c"); // Primary DA
 
     let response = term.drain_responses();
-    assert_eq!(response, b"\x1b[0n\x1b[1;1R\x1b[?62;1;4;6;9;15;22c");
+    assert_eq!(response, b"\x1b[0n\x1b[1;1R\x1b[?62;1;4;6;9;15;22;52c");
 
     // After draining, buffer should be empty
     assert!(!term.has_pending_responses());
@@ -2271,7 +2271,7 @@ fn test_vt520_device_attributes_vt520() {
     // Should report VT520 (id=65)
     assert!(response.starts_with("\x1b[?65;"));
     // Should include features: 1;4;6;9;15;22
-    assert!(response.contains("1;4;6;9;15;22c"));
+    assert!(response.contains("1;4;6;9;15;22;52c"));
 }
 
 #[test]

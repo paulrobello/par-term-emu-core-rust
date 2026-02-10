@@ -108,9 +108,9 @@ impl From<PyMouseEncoding> for crate::mouse::MouseEncoding {
 /// This enum represents the different visual states of a progress bar:
 /// - Hidden: Progress bar is not displayed
 /// - Normal: Standard progress indicator (0-100%)
-/// - Indeterminate: Busy/loading indicator (no specific percentage)
-/// - Warning: Progress with warning status (e.g., yellow)
 /// - Error: Progress with error status (e.g., red)
+/// - Indeterminate: Busy/loading indicator (no specific percentage)
+/// - Warning: Progress with warning/paused status (e.g., yellow)
 #[pyclass(name = "ProgressState", eq, skip_from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PyProgressState {
@@ -118,12 +118,12 @@ pub enum PyProgressState {
     Hidden = 0,
     /// Normal progress display (state 1)
     Normal = 1,
-    /// Indeterminate/busy indicator (state 2)
-    Indeterminate = 2,
-    /// Warning state - operation may have issues (state 3)
-    Warning = 3,
-    /// Error state - operation failed (state 4)
-    Error = 4,
+    /// Error state - operation failed (state 2)
+    Error = 2,
+    /// Indeterminate/busy indicator (state 3)
+    Indeterminate = 3,
+    /// Warning/paused state - operation may have issues (state 4)
+    Warning = 4,
 }
 
 impl<'a, 'py> FromPyObject<'a, 'py> for PyProgressState {
