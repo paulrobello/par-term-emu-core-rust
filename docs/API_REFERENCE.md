@@ -44,6 +44,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Session Management](#session-management)
   - [Advanced Text Operations](#advanced-text-operations)
   - [Testing and Compliance](#testing-and-compliance)
+  - [Unicode Normalization](#unicode-normalization)
   - [Utility Methods](#utility-methods)
   - [Debug and Snapshot Methods](#debug-and-snapshot-methods)
   - [Text Extraction and Selection](#text-extraction-and-selection)
@@ -104,6 +105,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Trigger](#trigger)
   - [TriggerAction](#triggeraction)
   - [TriggerMatch](#triggermatch)
+  - [NormalizationForm](#normalizationform)
   - [CoprocessConfig](#coprocessconfig)
   - [WindowLayout](#windowlayout)
   - [ColorHSL](#colorhsl)
@@ -600,6 +602,18 @@ VT compliance testing:
 
 - `test_compliance() -> ComplianceReport`: Run VT compliance tests
 - `format_compliance_report(report: ComplianceReport) -> str`: Format compliance report for display
+
+### Unicode Normalization
+
+- `normalization_form() -> NormalizationForm`: Get the current Unicode normalization form (default: NFC)
+- `set_normalization_form(form: NormalizationForm)`: Set the Unicode normalization form for text stored in cells
+
+**Normalization forms:**
+- `NormalizationForm.NFC` - Canonical Composition (default): composes base + combining into precomposed form
+- `NormalizationForm.NFD` - Canonical Decomposition: decomposes precomposed into base + combining marks
+- `NormalizationForm.NFKC` - Compatibility Composition: NFC + replaces compatibility characters
+- `NormalizationForm.NFKD` - Compatibility Decomposition: NFD + replaces compatibility characters
+- `NormalizationForm.Disabled` - No normalization, store text as received from PTY
 
 ### Utility Methods
 
@@ -1289,6 +1303,21 @@ A trigger match result from scanning terminal output.
 - `text: str`: Matched text
 - `captures: list[str]`: Capture groups (index 0 = full match, 1+ = groups)
 - `timestamp: int`: Match timestamp (Unix timestamp in seconds)
+
+### NormalizationForm
+
+Unicode normalization form for terminal text storage.
+
+**Enum Values:**
+- `NormalizationForm.Disabled` (0): No normalization
+- `NormalizationForm.NFC` (1): Canonical Decomposition, followed by Canonical Composition (default)
+- `NormalizationForm.NFD` (2): Canonical Decomposition
+- `NormalizationForm.NFKC` (3): Compatibility Decomposition, followed by Canonical Composition
+- `NormalizationForm.NFKD` (4): Compatibility Decomposition
+
+**Methods:**
+- `name() -> str`: Get human-readable name (`"none"`, `"NFC"`, `"NFD"`, `"NFKC"`, `"NFKD"`)
+- `is_none() -> bool`: Check if normalization is disabled
 
 ### CoprocessConfig
 

@@ -15,6 +15,35 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New (Unreleased)
 
+### 🔤 Unicode Normalization (NFC/NFD/NFKC/NFKD)
+
+Configurable Unicode normalization ensures consistent text storage for search, comparison, and cursor movement. Unicode characters can have multiple binary representations that look identical (e.g., `é` can be precomposed U+00E9 or decomposed U+0065 + U+0301). Normalization eliminates this ambiguity.
+
+```python
+from par_term_emu_core_rust import Terminal, NormalizationForm
+
+term = Terminal(80, 24)
+
+# Default is NFC (Canonical Composition) - most common form
+assert term.normalization_form() == NormalizationForm.NFC
+
+# Switch to NFD (Canonical Decomposition) for macOS HFS+ compatibility
+term.set_normalization_form(NormalizationForm.NFD)
+
+# NFKC replaces compatibility characters (e.g., ﬁ ligature → fi)
+term.set_normalization_form(NormalizationForm.NFKC)
+
+# Disable normalization entirely
+term.set_normalization_form(NormalizationForm.Disabled)
+```
+
+**Normalization Forms:**
+- `NormalizationForm.NFC` - Canonical Composition (default): composes `e` + combining accent → `é`
+- `NormalizationForm.NFD` - Canonical Decomposition: decomposes `é` → `e` + combining accent
+- `NormalizationForm.NFKC` - Compatibility Composition: NFC + replaces compatibility chars (`ﬁ` → `fi`)
+- `NormalizationForm.NFKD` - Compatibility Decomposition: NFD + replaces compatibility chars
+- `NormalizationForm.Disabled` - No normalization, store text as received
+
 ### OSC 1337 SetUserVar Support
 
 Shell integration scripts can now send user variables via `OSC 1337 SetUserVar=<name>=<base64_value>` sequences. Variables are base64-decoded, stored on the terminal, and accessible via a dedicated API. A `UserVarChanged` event is emitted when values change, enabling features like remote host detection, automatic profile switching, and hostname display.
