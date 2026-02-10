@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-02-10
+
 ### Fixed
 - **Standalone Event Poller**: Fixed standalone mode's `poll_terminal_events()` silently dropping `ModeChanged`, `GraphicsAdded`, `HyperlinkAdded`, `UserVarChanged`, and `ProgressBarChanged` events via a `_ => {}` catch-all
 - **HyperlinkAdded Event**: `TerminalEvent::HyperlinkAdded` now carries position data (`row`, `col`, `id`) and is actually emitted from the OSC 8 handler (was previously defined but never pushed to the event queue)
 - **BREAKING: OSC 9;4 Progress Bar State Numbering**: Fixed `ProgressState` enum to match ConEmu/Windows Terminal spec - state 2 is now Error (was Indeterminate), state 3 is Indeterminate (was Warning), state 4 is Warning/Paused (was Error). Python `PyProgressState` discriminants updated to match
+- **Python Streaming Bindings**: Added missing `encode_server_message` handlers for `cwd_changed`, `trigger_matched`, `user_var_changed`, and `progress_bar_changed` message types (decode already supported all variants)
 
 ### Added
 - **XTVERSION Response**: Terminal now responds to `CSI > q` with `DCS > | par-term(version) ST`

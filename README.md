@@ -13,7 +13,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## What's New (Unreleased)
+## What's New in 0.35.0
 
 ### Streaming Server Audit & Protocol Expansion
 
@@ -22,6 +22,12 @@ Major audit of the streaming server fixing bugs, implementing TODOs, and closing
 **Bug Fixes:**
 - Fixed standalone event poller silently dropping 5 event types (`ModeChanged`, `GraphicsAdded`, `HyperlinkAdded`, `UserVarChanged`, `ProgressBarChanged`)
 - Fixed `HyperlinkAdded` event never being emitted from OSC 8 handler; now includes position data (`row`, `col`, `id`)
+- Fixed `ProgressState` enum numbering to match ConEmu/Windows Terminal spec (state 2=Error, 3=Indeterminate, 4=Warning)
+- Fixed Python streaming `encode_server_message` missing handlers for `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`
+
+**Terminal Improvements:**
+- **XTVERSION Response** - Terminal responds to `CSI > q` with `DCS > | par-term(version) ST`
+- **DA1 OSC 52 Advertisement** - Primary Device Attributes now includes parameter 52 for clipboard support
 
 **New Client→Server Messages:**
 - **Mouse Input** - Send mouse events (press, release, move, scroll) with button, modifiers, and cell coordinates
@@ -46,7 +52,9 @@ Major audit of the streaming server fixing bugs, implementing TODOs, and closing
 - Paste intercepted for bracketed paste mode
 - Mode state tracked from `modeChanged` messages
 
-**Breaking:** `TerminalEvent::HyperlinkAdded` changed from tuple to struct variant with `url`, `row`, `col`, `id` fields.
+**Breaking Changes:**
+- `TerminalEvent::HyperlinkAdded` changed from tuple to struct variant with `url`, `row`, `col`, `id` fields
+- `ProgressState` enum values renumbered: Error=2, Indeterminate=3, Warning=4 (was 2=Indeterminate, 3=Warning, 4=Error)
 
 ## What's New in 0.34.0
 

@@ -119,6 +119,9 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [CursorStyle](#cursorstyle)
   - [UnderlineStyle](#underlinestyle)
   - [ProgressState](#progressstate)
+- [Streaming Functions](#streaming-functions)
+  - [encode_server_message](#encode_server_message)
+  - [decode_server_message](#decode_server_message)
 
 ## Terminal Class
 
@@ -335,6 +338,11 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 #### Terminal Responses
 - `drain_responses() -> list[str]`: Drain all pending terminal responses (DA, DSR, etc.)
 - `has_pending_responses() -> bool`: Check if responses are pending
+
+**Device Queries:**
+- **Primary DA** (`CSI c` / `CSI 0 c`): Responds with `CSI ? {id} ; 1 ; 4 ; 6 ; 9 ; 15 ; 22 ; 52 c` where `{id}` is the conformance level identifier (1=VT100, 62=VT220, 63=VT320, 64=VT420, 65=VT520). Parameter 52 advertises OSC 52 clipboard support.
+- **Secondary DA** (`CSI > c` / `CSI > 0 c`): Responds with `CSI > 82 ; 10000 ; 0 c` (82 = 'P' for par-term-emu).
+- **XTVERSION** (`CSI > q`): Responds with `DCS > | par-term(version) ST` where `version` is the library version string.
 
 #### Notifications (OSC 9/777)
 - `drain_notifications() -> list[tuple[str, str]]`: Drain notifications (title, message)
@@ -1445,11 +1453,11 @@ Text underline styles.
 Progress bar state (OSC 9;4).
 
 **Values:**
-- `ProgressState.Hidden`: Progress bar is hidden
-- `ProgressState.Indeterminate`: Progress bar shows indeterminate/spinner state
-- `ProgressState.Normal`: Progress bar shows normal progress
-- `ProgressState.Paused`: Progress bar is paused
-- `ProgressState.Error`: Progress bar shows error state
+- `ProgressState.Hidden`: Progress bar is hidden (state 0)
+- `ProgressState.Normal`: Progress bar shows normal progress (state 1)
+- `ProgressState.Error`: Progress bar shows error state (state 2)
+- `ProgressState.Indeterminate`: Progress bar shows indeterminate/spinner state (state 3)
+- `ProgressState.Warning`: Progress bar shows warning/paused state (state 4)
 
 ### Named Progress Bars (OSC 934)
 
@@ -1465,6 +1473,64 @@ The terminal supports multiple concurrent named progress bars via OSC 934 sequen
 **Events:**
 - Event type: `"progress_bar_changed"` (subscribe with `set_event_subscription(["progress_bar_changed"])`)
 - Event dict keys: `action` ("set"/"remove"/"remove_all"), `id`, `state`, `percent`, `label`
+
+## Streaming Functions
+
+These functions are available when the `streaming` feature is enabled. They encode and decode protobuf messages for the streaming terminal server protocol.
+
+### encode_server_message
+
+```python
+encode_server_message(message_type: str, **kwargs) -> bytes
+```
+
+Encode a server message into binary protobuf format.
+
+**Supported message types:**
+
+| Message Type | Required kwargs | Description |
+|---|---|---|
+| `"output"` | `data` | Terminal output data |
+| `"resize"` | `cols`, `rows` | Terminal resize event |
+| `"title"` | `title` | Title change |
+| `"bell"` | *(none)* | Bell event |
+| `"pong"` | *(none)* | Ping response |
+| `"connected"` | `cols`, `rows`, `session_id`, `initial_screen`, `theme` | Connection acknowledgement |
+| `"error"` | `message`, `code` | Error message |
+| `"shutdown"` | `reason` | Server shutdown |
+| `"cursor"` | `col`, `row`, `visible` | Cursor position update |
+| `"refresh"` | `cols`, `rows`, `screen_content` | Full screen refresh |
+| `"action_notify"` | `trigger_id`, `title`, `message` | Trigger notification action |
+| `"action_mark_line"` | `trigger_id`, `row`, `label`, `color` | Trigger mark line action |
+| `"mode_changed"` | `mode`, `enabled` | Terminal mode change |
+| `"graphics_added"` | `row`, `format` | Graphics added event |
+| `"hyperlink_added"` | `url`, `row`, `col`, `id` | Hyperlink added event |
+| `"badge_changed"` | `badge` | Badge change event |
+| `"selection_changed"` | `start_col`, `start_row`, `end_col`, `end_row`, `text`, `mode`, `cleared` | Selection change event |
+| `"clipboard_sync"` | `operation`, `content`, `target` | Clipboard sync event |
+| `"shell_integration"` | `event_type`, `command`, `exit_code`, `timestamp` | Shell integration event |
+| `"cwd_changed"` | `new_cwd`, `old_cwd`, `hostname`, `username`, `timestamp` | Working directory changed |
+| `"trigger_matched"` | `trigger_id`, `row`, `col`, `end_col`, `text`, `captures`, `timestamp` | Trigger pattern matched |
+| `"user_var_changed"` | `name`, `value`, `old_value` | User variable changed (OSC 1337 SetUserVar) |
+| `"progress_bar_changed"` | `action`, `id`, `state`, `percent`, `label` | Progress bar state changed (OSC 9;4 / OSC 934) |
+
+**Example:**
+```python
+from par_term_emu_core_rust import encode_server_message
+
+msg = encode_server_message("output", data="Hello, world!")
+msg = encode_server_message("cwd_changed", new_cwd="/home/user", hostname="server1")
+msg = encode_server_message("trigger_matched", trigger_id=1, row=5, col=0, end_col=10, text="error", captures=["error"], timestamp=1234567890)
+msg = encode_server_message("progress_bar_changed", action="set", id="dl-1", state="normal", percent=50, label="Downloading")
+```
+
+### decode_server_message
+
+```python
+decode_server_message(data: bytes) -> dict
+```
+
+Decode a binary protobuf server message into a Python dict with a `"type"` key and message-specific fields.
 
 ## See Also
 

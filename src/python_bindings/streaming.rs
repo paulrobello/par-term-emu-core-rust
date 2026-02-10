@@ -929,9 +929,73 @@ pub fn encode_server_message<'py>(
             let timestamp = get_u64("timestamp");
             ServerMessage::shell_integration_event(event_type, command, exit_code, timestamp)
         }
+        "cwd_changed" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let new_cwd = get_str("new_cwd").unwrap_or_default();
+            let old_cwd = get_str("old_cwd");
+            let hostname = get_str("hostname");
+            let username = get_str("username");
+            let timestamp = get_u64("timestamp");
+            match timestamp {
+                Some(ts) => {
+                    ServerMessage::cwd_changed_full(old_cwd, new_cwd, hostname, username, ts)
+                }
+                None => ServerMessage::cwd_changed(new_cwd),
+            }
+        }
+        "trigger_matched" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let trigger_id = get_u64("trigger_id").unwrap_or(0);
+            let row = get_u16("row").unwrap_or(0);
+            let col = get_u16("col").unwrap_or(0);
+            let end_col = get_u16("end_col").unwrap_or(0);
+            let text = get_str("text").unwrap_or_default();
+            let captures: Vec<String> = kwargs
+                .and_then(|k| k.get_item("captures").ok().flatten())
+                .and_then(|v| v.extract().ok())
+                .unwrap_or_default();
+            let timestamp = get_u64("timestamp").unwrap_or(0);
+            ServerMessage::trigger_matched(trigger_id, row, col, end_col, text, captures, timestamp)
+        }
+        "user_var_changed" => {
+            let name = get_str("name").unwrap_or_default();
+            let value = get_str("value").unwrap_or_default();
+            let old_value = get_str("old_value");
+            match old_value {
+                Some(_) => ServerMessage::user_var_changed_full(name, value, old_value),
+                None => ServerMessage::user_var_changed(name, value),
+            }
+        }
+        "progress_bar_changed" => {
+            let get_u8 = |key: &str| -> Option<u8> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let action = get_str("action").unwrap_or_else(|| "set".to_string());
+            let id = get_str("id").unwrap_or_default();
+            let state = get_str("state");
+            let percent = get_u8("percent");
+            let label = get_str("label");
+            ServerMessage::ProgressBarChanged {
+                action,
+                id,
+                state,
+                percent,
+                label,
+            }
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed",
                 message_type
             )));
         }
