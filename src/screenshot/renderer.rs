@@ -58,12 +58,24 @@ impl Renderer {
 
         // Add emoji font if available
         if let Some(emoji_data) = font_cache.emoji_font_data() {
-            let _ = shaper.set_emoji_font(emoji_data);
+            if let Err(e) = shaper.set_emoji_font(emoji_data) {
+                crate::debug::log(
+                    crate::debug::DebugLevel::Error,
+                    "SCREENSHOT",
+                    &format!("Failed to load emoji font: {e} - emoji rendering may be degraded"),
+                );
+            }
         }
 
         // Add CJK font if available
         if let Some(cjk_data) = font_cache.cjk_font_data() {
-            let _ = shaper.set_cjk_font(cjk_data);
+            if let Err(e) = shaper.set_cjk_font(cjk_data) {
+                crate::debug::log(
+                    crate::debug::DebugLevel::Error,
+                    "SCREENSHOT",
+                    &format!("Failed to load CJK font: {e} - CJK rendering may be degraded"),
+                );
+            }
         }
 
         Ok(shaper)

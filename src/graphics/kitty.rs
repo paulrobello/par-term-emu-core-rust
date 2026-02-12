@@ -453,7 +453,43 @@ impl KittyParser {
                         KittyDeleteTarget::ByPlacement(iid, pid) => {
                             store.delete_kitty_graphics(Some(*iid), *pid);
                         }
-                        _ => {} // TODO: implement other delete targets
+                        KittyDeleteTarget::AtCursor => {
+                            let (cursor_col, cursor_row) = position;
+                            store
+                                .placements
+                                .retain(|g| g.position != (cursor_col, cursor_row));
+                        }
+                        KittyDeleteTarget::InCell => {
+                            // Same as AtCursor in our context since we use the cursor position
+                            let (cursor_col, cursor_row) = position;
+                            store
+                                .placements
+                                .retain(|g| g.position != (cursor_col, cursor_row));
+                        }
+                        KittyDeleteTarget::OnScreen => {
+                            // Remove all visible placements but preserve shared images
+                            store.placements.clear();
+                        }
+                        KittyDeleteTarget::ByColumn(col) => {
+                            let target_col = *col as usize;
+                            store.placements.retain(|g| {
+                                let start_col = g.position.0;
+                                let cell_width =
+                                    g.cell_dimensions.map(|(w, _)| w as usize).unwrap_or(1);
+                                let end_col = start_col + g.width.div_ceil(cell_width);
+                                target_col < start_col || target_col >= end_col
+                            });
+                        }
+                        KittyDeleteTarget::ByRow(row) => {
+                            let target_row = *row as usize;
+                            store.placements.retain(|g| {
+                                let start_row = g.position.1;
+                                let cell_height =
+                                    g.cell_dimensions.map(|(_, h)| h as usize).unwrap_or(2);
+                                let end_row = start_row + g.height.div_ceil(cell_height);
+                                target_row < start_row || target_row >= end_row
+                            });
+                        }
                     }
                 }
                 Ok(KittyGraphicResult::None)

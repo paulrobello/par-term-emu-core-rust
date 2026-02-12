@@ -3235,7 +3235,7 @@ impl PyPtyTerminal {
 }
 
 // Rust-only methods (not exposed to Python)
-#[allow(dead_code)] // Used by streaming feature
+#[cfg(feature = "streaming")]
 impl PyPtyTerminal {
     /// Get a clone of the terminal Arc (for use in streaming server)
     pub(crate) fn get_terminal_arc(

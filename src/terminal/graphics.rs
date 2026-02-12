@@ -131,11 +131,12 @@ impl Terminal {
                     msb,
                 );
 
-                // For now, just insert the base placeholder character
-                // TODO: Handle diacritics properly in Cell structure
+                // Extract combining diacritics from the placeholder string
+                let combining: Vec<char> = placeholder_str.chars().skip(1).collect();
+
                 let cell = Cell {
                     c: PLACEHOLDER_CHAR,
-                    combining: Vec::new(),
+                    combining,
                     fg: image_id_color,
                     bg: self.bg, // Use current background
                     underline_color: Some(placement_id_color),

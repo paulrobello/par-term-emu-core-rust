@@ -905,41 +905,6 @@ pub trait SessionFactory: Send + Sync {
     }
 }
 
-/// Default session factory that wraps a single pre-existing terminal.
-/// Only allows the "default" session. Used for backward compatibility.
-#[allow(dead_code)]
-struct DefaultSessionFactory {
-    terminal: Arc<Mutex<Terminal>>,
-}
-
-impl SessionFactory for DefaultSessionFactory {
-    fn create_session(
-        &self,
-        session_id: &str,
-        _cols: u16,
-        _rows: u16,
-        _shell_command: Option<&str>,
-    ) -> std::result::Result<SessionFactoryResult, StreamingError> {
-        if session_id != "default" {
-            return Err(StreamingError::SessionNotFound(session_id.to_string()));
-        }
-        Ok(SessionFactoryResult {
-            terminal: Arc::clone(&self.terminal),
-            pty_writer: None,
-        })
-    }
-
-    fn setup_session(
-        &self,
-        _session_id: &str,
-        _session: &Arc<SessionState>,
-    ) -> std::result::Result<(), StreamingError> {
-        Ok(())
-    }
-
-    fn teardown_session(&self, _session_id: &str) {}
-}
-
 // =============================================================================
 // Connection Parameters
 // =============================================================================
@@ -1156,7 +1121,8 @@ impl StreamingServer {
             // need to recreate the default session with the theme.
             // However, the simplest approach is to store theme on the server and use it
             // when building connect messages from the default session.
-            let _ = session; // Theme is used via server.theme in build_connect_message fallback
+            // Theme is used via server.theme in build_connect_message fallback
+            let _session = session;
         }
     }
 

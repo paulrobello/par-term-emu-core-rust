@@ -17,12 +17,6 @@ pub struct ShapedGlyph {
     pub x_offset: i32,
     /// Vertical offset from the current position
     pub y_offset: i32,
-    /// Horizontal advance to next glyph position
-    #[allow(dead_code)]
-    pub x_advance: i32,
-    /// Vertical advance to next glyph position (usually 0 for LTR text)
-    #[allow(dead_code)]
-    pub y_advance: i32,
 }
 
 /// Font type indicator for shaped text
@@ -179,8 +173,6 @@ impl TextShaper {
                         cluster: (cluster.source.start as usize + cluster_offset) as u32,
                         x_offset: glyph.x as i32,
                         y_offset: glyph.y as i32,
-                        x_advance: glyph.advance as i32,
-                        y_advance: 0, // Swash doesn't provide y_advance for horizontal text
                     },
                     font_type,
                 });

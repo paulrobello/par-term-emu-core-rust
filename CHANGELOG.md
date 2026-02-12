@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Kitty Graphics: Chunked Transmission**: Large images split across multiple DCS sequences are now properly accumulated and processed. Parser state persists on `Terminal` between chunks (`m=1` continues, `m=0` finalizes)
+- **Kitty Graphics: Complete Delete Targets**: Implemented remaining `KittyDeleteTarget` variants — `AtCursor`, `InCell`, `OnScreen`, `ByColumn`, and `ByRow` now correctly remove graphics placements by position
+- **Kitty Graphics: Placeholder Diacritics**: Unicode placeholder cells now include combining diacritics encoding row/column/MSB offsets in `Cell.combining`, enabling frontends to reconstruct full placeholder sequences
+- **Screenshot: Synthetic Bold Rendering**: Bold text in screenshots is now visually emboldened using swash's `Render::embolden()` API (previously the `bold` parameter was accepted but ignored)
+- **Screenshot: Font Load Failure Logging**: Emoji and CJK font load failures in the screenshot renderer now log error-level messages instead of being silently ignored
+
+### Changed
+- **Streaming: `PyPtyTerminal` methods gated with `#[cfg(feature = "streaming")]`** instead of `#[allow(dead_code)]` for clearer intent
+
+### Removed
+- Dead `DefaultSessionFactory` struct from streaming server (defined but never instantiated)
+- Unused `advance_height` field from `GlyphMetrics` in screenshot font cache
+- Unused `x_advance` and `y_advance` fields from `ShapedGlyph` in screenshot shaper
+
 ## [0.36.0] - 2026-02-11
 
 ### Added

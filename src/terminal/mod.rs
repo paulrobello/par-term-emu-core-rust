@@ -1273,6 +1273,8 @@ pub struct Terminal {
     cell_dimensions: (u32, u32),
     /// Current Sixel parser (active during DCS)
     sixel_parser: Option<sixel::SixelParser>,
+    /// In-progress Kitty graphics parser for chunked transmission
+    kitty_parser: Option<crate::graphics::kitty::KittyParser>,
     /// Buffer for DCS data accumulation
     dcs_buffer: Vec<u8>,
     /// DCS active flag
@@ -1711,6 +1713,7 @@ impl Terminal {
             sixel_limits: sixel::SixelLimits::default(),
             cell_dimensions: (1, 2), // Default for TUI half-block rendering
             sixel_parser: None,
+            kitty_parser: None,
             dcs_buffer: Vec::new(),
             dcs_active: false,
             dcs_action: None,

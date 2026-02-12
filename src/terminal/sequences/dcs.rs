@@ -3,7 +3,6 @@
 //! Handles DCS sequences for Sixel graphics and APC sequences for Kitty graphics.
 
 use crate::debug;
-use crate::graphics::kitty::KittyParser;
 use crate::sixel;
 use crate::terminal::Terminal;
 use vte::Params;
@@ -328,18 +327,15 @@ impl Terminal {
             }
         };
 
-        let mut parser = KittyParser::new();
+        // Use existing parser for continuation or create a new one
+        let mut parser = self.kitty_parser.take().unwrap_or_default();
 
         // Parse the payload (may be chunked)
         match parser.parse_chunk(payload) {
             Ok(more_chunks) => {
                 if more_chunks {
-                    // TODO: Support chunked transmission by storing parser state
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "KITTY",
-                        "Chunked Kitty graphics not yet fully supported",
-                    );
+                    // Store parser state for next chunk
+                    self.kitty_parser = Some(parser);
                     return;
                 }
             }
@@ -349,6 +345,8 @@ impl Terminal {
                     "KITTY",
                     &format!("Failed to parse Kitty graphics: {}", e),
                 );
+                // Clear any partial state on error
+                self.kitty_parser = None;
                 return;
             }
         }

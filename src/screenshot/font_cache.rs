@@ -39,14 +39,11 @@ pub enum BitmapFormat {
 /// Glyph metrics matching fontdue's Metrics structure
 #[derive(Clone, Debug)]
 pub struct GlyphMetrics {
-    #[allow(dead_code)]
     pub xmin: i32,
     pub ymin: i32,
     pub width: usize,
     pub height: usize,
     pub advance_width: f32,
-    #[allow(dead_code)]
-    pub advance_height: f32,
 }
 
 /// Cached glyph data
@@ -325,13 +322,19 @@ impl FontCache {
         // 2. Color bitmap (for bitmap color emoji fonts)
         // 3. Outline (for regular TrueType/OpenType outline fonts)
         // 4. Bitmap (for bitmap fonts)
-        let image = Render::new(&[
+        let mut render = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
             Source::Bitmap(StrikeWith::BestFit),
-        ])
-        .render(&mut font_scaler, glyph_id);
+        ]);
+
+        // Apply synthetic bold via swash emboldening
+        if bold {
+            render.embolden(font_size * 0.02);
+        }
+
+        let image = render.render(&mut font_scaler, glyph_id);
 
         let image = match image {
             Some(img) => img,
@@ -344,7 +347,6 @@ impl FontCache {
                         width: 0,
                         height: 0,
                         advance_width: 0.0,
-                        advance_height: 0.0,
                     },
                     vec![],
                     BitmapFormat::Grayscale,
@@ -385,16 +387,12 @@ impl FontCache {
             }
         };
 
-        // Apply bold if requested (not used currently, but kept for API compatibility)
-        let _ = bold;
-
         let glyph_metrics = GlyphMetrics {
             xmin: placement.left,
             ymin: -placement.top,
             width: placement.width as usize,
             height: placement.height as usize,
             advance_width,
-            advance_height: 0.0,
         };
 
         Ok((glyph_metrics, final_bitmap, bitmap_format))
@@ -421,7 +419,6 @@ impl FontCache {
                             width: 0,
                             height: 0,
                             advance_width: 0.0,
-                            advance_height: 0.0,
                         },
                         vec![],
                         BitmapFormat::Grayscale,
@@ -612,13 +609,19 @@ impl FontCache {
         let mut font_scaler = scaler.builder(font_ref).size(font_size).hint(true).build();
 
         // Use Render to automatically try different glyph sources in order
-        let image = Render::new(&[
+        let mut render = Render::new(&[
             Source::ColorOutline(0),
             Source::ColorBitmap(StrikeWith::BestFit),
             Source::Outline,
             Source::Bitmap(StrikeWith::BestFit),
-        ])
-        .render(&mut font_scaler, glyph_id);
+        ]);
+
+        // Apply synthetic bold via swash emboldening
+        if bold {
+            render.embolden(font_size * 0.02);
+        }
+
+        let image = render.render(&mut font_scaler, glyph_id);
 
         let image = match image {
             Some(img) => img,
@@ -630,7 +633,6 @@ impl FontCache {
                         width: 0,
                         height: 0,
                         advance_width: 0.0,
-                        advance_height: 0.0,
                     },
                     vec![],
                     BitmapFormat::Grayscale,
@@ -665,15 +667,12 @@ impl FontCache {
             }
         };
 
-        let _ = bold;
-
         let glyph_metrics = GlyphMetrics {
             xmin: placement.left,
             ymin: -placement.top,
             width: placement.width as usize,
             height: placement.height as usize,
             advance_width,
-            advance_height: 0.0,
         };
 
         Ok((glyph_metrics, final_bitmap, bitmap_format))
