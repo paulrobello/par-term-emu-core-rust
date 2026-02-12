@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web Frontend: SelectionChanged Handler**: Terminal.tsx now handles `selectionChanged` server messages, syncing selection state to xterm.js (character and line modes) with automatic clipboard copy, and exposing an `onSelectionChanged` callback
 - **Web Frontend: State Tracking**: page.tsx wires new callbacks to store hyperlinks (sliding window of 100) and user vars as React state for future UI consumption
 - **Python Bindings: New Config Properties**: `PyStreamingConfig` now exposes `max_clients_per_session` and `input_rate_limit_bytes_per_sec` as constructor params and getter/setter properties
+- **Shell Integration: `cursor_line` Field**: `TerminalEvent::ShellIntegrationEvent` now captures the absolute cursor line (`scrollback_len + cursor_row`) at the exact moment each OSC 133 marker is parsed. This enables correct per-marker positioning even when multiple markers arrive in a single frame
+- **Shell Integration: `poll_shell_integration_events()`**: New convenience method on `Terminal` drains only shell integration events (keeping others queued), returning `ShellEvent` tuples with cursor position data
+- **Shell Integration: `ShellEvent` Type Alias**: New `ShellEvent` type alias `(String, Option<String>, Option<i32>, Option<u64>, Option<usize>)` for typed shell event tuples
+- **Streaming Protocol: `cursor_line` in `ShellIntegrationEvent`**: Protobuf and JSON protocol now include `cursor_line` field in shell integration events, propagated through all layers (proto, protocol, server, Python bindings)
 
 ### Fixed
 - **Streaming Server: Shell Exit Deadlock**: Fixed potential deadlock when shell exits by dropping the PTY mutex guard before calling `close_session()`, and now properly notifies clients with a shutdown message

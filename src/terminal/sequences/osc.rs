@@ -451,6 +451,7 @@ impl Terminal {
                     if params.len() >= 2 {
                         if let Ok(marker) = std::str::from_utf8(params[1]) {
                             let ts = crate::terminal::unix_millis();
+                            let abs_line = self.active_grid().scrollback_len() + self.cursor.row;
                             match marker.chars().next() {
                                 Some('A') => {
                                     self.shell_integration
@@ -461,6 +462,7 @@ impl Terminal {
                                             command: None,
                                             exit_code: None,
                                             timestamp: Some(ts),
+                                            cursor_line: Some(abs_line),
                                         },
                                     );
                                 }
@@ -476,6 +478,7 @@ impl Terminal {
                                                 .map(|s| s.to_string()),
                                             exit_code: None,
                                             timestamp: Some(ts),
+                                            cursor_line: Some(abs_line),
                                         },
                                     );
                                 }
@@ -491,6 +494,7 @@ impl Terminal {
                                                 .map(|s| s.to_string()),
                                             exit_code: None,
                                             timestamp: Some(ts),
+                                            cursor_line: Some(abs_line),
                                         },
                                     );
                                 }
@@ -516,6 +520,7 @@ impl Terminal {
                                             command: None,
                                             exit_code: parsed_code,
                                             timestamp: Some(ts),
+                                            cursor_line: Some(abs_line),
                                         },
                                     );
                                 }

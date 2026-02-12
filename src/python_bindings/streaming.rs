@@ -955,7 +955,14 @@ pub fn encode_server_message<'py>(
             let command = get_str("command");
             let exit_code = get_i32("exit_code");
             let timestamp = get_u64("timestamp");
-            ServerMessage::shell_integration_event(event_type, command, exit_code, timestamp)
+            let cursor_line = get_u64("cursor_line");
+            ServerMessage::shell_integration_event(
+                event_type,
+                command,
+                exit_code,
+                timestamp,
+                cursor_line,
+            )
         }
         "cwd_changed" => {
             let get_u64 = |key: &str| -> Option<u64> {
@@ -1277,12 +1284,14 @@ pub fn decode_server_message<'py>(
             command,
             exit_code,
             timestamp,
+            cursor_line,
         } => {
             dict.set_item("type", "shell_integration")?;
             dict.set_item("event_type", event_type)?;
             dict.set_item("command", command)?;
             dict.set_item("exit_code", exit_code)?;
             dict.set_item("timestamp", timestamp)?;
+            dict.set_item("cursor_line", cursor_line)?;
         }
     }
 

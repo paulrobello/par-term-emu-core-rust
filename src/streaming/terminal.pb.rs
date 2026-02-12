@@ -359,6 +359,9 @@ pub struct ShellIntegrationEvent {
     pub exit_code: ::core::option::Option<i32>,
     #[prost(uint64, optional, tag = "4")]
     pub timestamp: ::core::option::Option<u64>,
+    /// Absolute cursor line (scrollback_len + cursor_row) at marker time
+    #[prost(uint64, optional, tag = "5")]
+    pub cursor_line: ::core::option::Option<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {

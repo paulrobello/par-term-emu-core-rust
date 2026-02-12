@@ -742,10 +742,12 @@ impl ServerState {
                         command,
                         exit_code,
                         timestamp,
+                        cursor_line,
                     } => {
                         self.streaming_server.broadcast(
                             par_term_emu_core_rust::streaming::protocol::ServerMessage::shell_integration_event(
                                 event_type, command, exit_code, timestamp,
+                                cursor_line.map(|l| l as u64),
                             ),
                         );
                     }
@@ -1210,11 +1212,13 @@ impl SessionFactory for BinarySessionFactory {
                             command,
                             exit_code,
                             timestamp,
+                            cursor_line,
                         } => {
                             server.send_to_session(
                                 &session_id_clone,
                                 par_term_emu_core_rust::streaming::protocol::ServerMessage::shell_integration_event(
                                     event_type, command, exit_code, timestamp,
+                                    cursor_line.map(|l| l as u64),
                                 ),
                             );
                         }

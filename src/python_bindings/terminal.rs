@@ -2712,6 +2712,7 @@ impl PyTerminal {
                         command,
                         exit_code,
                         timestamp,
+                        cursor_line,
                     } => {
                         map.insert("type".to_string(), "shell_integration".to_string());
                         map.insert("event_type".to_string(), event_type.clone());
@@ -2720,6 +2721,9 @@ impl PyTerminal {
                         }
                         if let Some(code) = exit_code {
                             map.insert("exit_code".to_string(), code.to_string());
+                        }
+                        if let Some(line) = cursor_line {
+                            map.insert("cursor_line".to_string(), line.to_string());
                         }
                         if let Some(ts) = timestamp {
                             map.insert("timestamp".to_string(), ts.to_string());
@@ -2906,6 +2910,7 @@ impl PyTerminal {
                         command,
                         exit_code,
                         timestamp,
+                        cursor_line,
                     } => {
                         map.insert("type".to_string(), "shell_integration".to_string());
                         map.insert("event_type".to_string(), event_type.clone());
@@ -2914,6 +2919,9 @@ impl PyTerminal {
                         }
                         if let Some(code) = exit_code {
                             map.insert("exit_code".to_string(), code.to_string());
+                        }
+                        if let Some(line) = cursor_line {
+                            map.insert("cursor_line".to_string(), line.to_string());
                         }
                         if let Some(ts) = timestamp {
                             map.insert("timestamp".to_string(), ts.to_string());
@@ -2947,6 +2955,38 @@ impl PyTerminal {
                     map.insert("username".to_string(), user);
                 }
                 map.insert("timestamp".to_string(), change.timestamp.to_string());
+                map
+            })
+            .collect())
+    }
+
+    /// Drain only shell integration events, keeping other events queued
+    ///
+    /// Returns events with their captured cursor_line so callers can process
+    /// each marker at the correct absolute line (scrollback_len + cursor_row
+    /// at the time the OSC 133 sequence was parsed).
+    ///
+    /// Returns:
+    ///     List of dicts with keys: event_type, command, exit_code, timestamp, cursor_line
+    fn poll_shell_integration_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
+        let events = self.inner.poll_shell_integration_events();
+        Ok(events
+            .into_iter()
+            .map(|(event_type, command, exit_code, timestamp, cursor_line)| {
+                let mut map = HashMap::new();
+                map.insert("event_type".to_string(), event_type);
+                if let Some(cmd) = command {
+                    map.insert("command".to_string(), cmd);
+                }
+                if let Some(code) = exit_code {
+                    map.insert("exit_code".to_string(), code.to_string());
+                }
+                if let Some(ts) = timestamp {
+                    map.insert("timestamp".to_string(), ts.to_string());
+                }
+                if let Some(line) = cursor_line {
+                    map.insert("cursor_line".to_string(), line.to_string());
+                }
                 map
             })
             .collect())

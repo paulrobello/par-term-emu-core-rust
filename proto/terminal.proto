@@ -238,6 +238,7 @@ message ShellIntegrationEvent {
   optional string command = 2;          // The command text (for command_start)
   optional int32 exit_code = 3;         // Exit code (for command_finished)
   optional uint64 timestamp = 4;
+  optional uint64 cursor_line = 5;     // Absolute cursor line (scrollback_len + cursor_row) at marker time
 }
 
 // =============================================================================

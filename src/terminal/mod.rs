@@ -42,6 +42,15 @@ use crate::sixel;
 use std::collections::{HashMap, HashSet};
 use vte::{Params, Perform};
 
+/// A drained shell integration event: (event_type, command, exit_code, timestamp, cursor_line).
+pub type ShellEvent = (
+    String,
+    Option<String>,
+    Option<i32>,
+    Option<u64>,
+    Option<usize>,
+);
+
 const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
 const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
 const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
@@ -146,6 +155,9 @@ pub enum TerminalEvent {
         exit_code: Option<i32>,
         /// Timestamp (Unix epoch milliseconds)
         timestamp: Option<u64>,
+        /// Absolute cursor line (scrollback_len + cursor_row) at the time the marker was emitted.
+        /// This captures the exact position before subsequent output moves the cursor.
+        cursor_line: Option<usize>,
     },
 }
 
@@ -2804,6 +2816,36 @@ impl Terminal {
 
         self.terminal_events = remaining;
         cwd_events
+    }
+
+    /// Convenience: drain only ShellIntegrationEvent events, keeping others queued.
+    ///
+    /// Returns events with their captured cursor_line so callers can process each
+    /// marker at the correct absolute line (scrollback_len + cursor_row at the time
+    /// the OSC 133 sequence was parsed). This is critical for multi-marker batches
+    /// that arrive within a single frame — each marker records the cursor position
+    /// at its exact moment of arrival, not the final position after all markers.
+    pub fn poll_shell_integration_events(&mut self) -> Vec<ShellEvent> {
+        let mut shell_events = Vec::new();
+        let mut remaining = Vec::new();
+
+        for event in std::mem::take(&mut self.terminal_events) {
+            match event {
+                TerminalEvent::ShellIntegrationEvent {
+                    event_type,
+                    command,
+                    exit_code,
+                    timestamp,
+                    cursor_line,
+                } => {
+                    shell_events.push((event_type, command, exit_code, timestamp, cursor_line));
+                }
+                other => remaining.push(other),
+            }
+        }
+
+        self.terminal_events = remaining;
+        shell_events
     }
 
     /// Helper: map event to its kind

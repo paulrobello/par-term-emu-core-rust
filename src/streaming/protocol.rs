@@ -301,6 +301,9 @@ pub enum ServerMessage {
         /// Timestamp (Unix epoch milliseconds)
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<u64>,
+        /// Absolute cursor line (scrollback_len + cursor_row) at marker time
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cursor_line: Option<u64>,
     },
 }
 
@@ -804,12 +807,14 @@ impl ServerMessage {
         command: Option<String>,
         exit_code: Option<i32>,
         timestamp: Option<u64>,
+        cursor_line: Option<u64>,
     ) -> Self {
         Self::ShellIntegrationEvent {
             event_type,
             command,
             exit_code,
             timestamp,
+            cursor_line,
         }
     }
 

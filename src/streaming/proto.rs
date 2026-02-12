@@ -357,11 +357,13 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 command,
                 exit_code,
                 timestamp,
+                cursor_line,
             } => Some(Message::ShellIntegrationEvent(pb::ShellIntegrationEvent {
                 event_type: event_type.clone(),
                 command: command.clone(),
                 exit_code: *exit_code,
                 timestamp: *timestamp,
+                cursor_line: *cursor_line,
             })),
         };
 
@@ -635,6 +637,7 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                     command: sie.command,
                     exit_code: sie.exit_code,
                     timestamp: sie.timestamp,
+                    cursor_line: sie.cursor_line,
                 })
             }
             None => Err(StreamingError::InvalidMessage(
