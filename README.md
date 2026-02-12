@@ -13,6 +13,40 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New in 0.36.0
+
+### Streaming Server Hardening & Shell Integration Improvements
+
+Major hardening pass on the streaming server with rate limiting, client limits, session metrics, and dead session cleanup. Plus shell integration events now capture exact cursor positions.
+
+**Streaming Server Hardening:**
+- **Per-Session Client Limits** - New `--max-clients-per-session` flag caps concurrent clients per session (0 = unlimited)
+- **Input Rate Limiting** - New `--input-rate-limit` flag for per-client token bucket rate limiting (bytes/sec, 2x burst)
+- **Session Metrics** - `SessionMetrics` tracks `messages_sent`, `bytes_sent`, `input_bytes`, `errors`, `dropped_messages` per session
+- **Terminal Size Validation** - Resize requests enforced to bounds (2-1000 cols, 1-500 rows)
+- **Dead Session Reaping** - Automatic cleanup of sessions whose PTY process has exited with no connected clients
+- **Broadcaster Health Check** - Warnings logged when sessions have active clients but no broadcast activity for 30+ seconds
+- **`close_session()` Method** - New public method for graceful session shutdown with delayed factory teardown
+- **WebSocket Query Parsing** - Plain/TLS listeners now parse `?session=`, `?preset=`, `?readonly` from handshake URI
+- **Bounded Output Channel** - Output channel uses `mpsc::channel(1000)` for backpressure instead of unbounded
+
+**Shell Integration:**
+- **`cursor_line` Field** - `ShellIntegrationEvent` now captures the absolute cursor line at each OSC 133 marker, enabling correct per-marker positioning even when multiple markers arrive in a single frame
+- **`poll_shell_integration_events()`** - New convenience method drains only shell integration events (keeping others queued), returning `ShellEvent` tuples with cursor position data
+
+**Web Frontend:**
+- HyperlinkAdded, UserVarChanged, SelectionChanged message handlers with callbacks
+- State tracking for hyperlinks (sliding window of 100) and user vars
+
+**Bug Fixes:**
+- Fixed potential deadlock when shell exits by dropping PTY mutex guard before `close_session()`
+- All PTY write paths now log errors and increment metrics instead of silently ignoring failures
+
+**Breaking Changes:**
+- `SessionState::try_add_client()` now takes a `max_per_session: usize` parameter
+- `SessionInfo` includes five additional metrics fields
+- Output channel changed from unbounded to bounded (1000-message buffer)
+
 ## What's New in 0.35.0
 
 ### Streaming Server Audit & Protocol Expansion

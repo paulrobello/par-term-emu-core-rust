@@ -220,7 +220,7 @@ Features:
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
   - `error.rs` - Streaming-specific errors
-- **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events, per-client event subscription filtering, badge change streaming
+- **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
 - **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
 
 **Utility Modules**

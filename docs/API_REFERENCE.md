@@ -500,6 +500,8 @@ Extended shell integration features beyond basic OSC 133:
 - `record_cwd_change(cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change
 - `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
 - `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
+- `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
+- `poll_events()` and `poll_subscribed_events()`: Shell integration events now include `cursor_line` field
 
 ### Clipboard Extended
 
