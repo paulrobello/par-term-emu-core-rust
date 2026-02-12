@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Streaming Server: Per-Session Client Limits**: New `--max-clients-per-session` CLI flag and `PAR_TERM_MAX_CLIENTS_PER_SESSION` env var to cap concurrent clients per session (0 = unlimited). Enforced atomically via CAS loop in `try_add_client()`
+- **Streaming Server: Input Rate Limiting**: New `--input-rate-limit` CLI flag and `PAR_TERM_INPUT_RATE_LIMIT` env var for per-client token bucket rate limiting (bytes/sec, 2x burst capacity). Applied to `Input` and `Paste` messages across all three WebSocket handlers (plain, TLS, Axum)
+- **Streaming Server: Session Metrics**: New `SessionMetrics` struct tracks `messages_sent`, `bytes_sent`, `input_bytes`, `errors`, and `dropped_messages` per session with atomic counters. Metrics are included in `SessionInfo` for observability
+- **Streaming Server: Terminal Size Validation**: `validate_terminal_size()` enforces bounds (2-1000 cols, 1-500 rows) on client resize requests and session creation. Invalid resize requests are logged and rejected
+- **Streaming Server: Dead Session Reaping**: Session reaper now detects and cleans up sessions whose PTY process has exited and have no connected clients, via new `SessionFactory::is_session_alive()` trait method
+- **Streaming Server: Broadcaster Health Check**: Reaper logs warnings when a session has active clients but no broadcast activity for 30+ seconds, aiding stalled broadcaster diagnosis
+- **Streaming Server: `close_session()` Method**: New public method on `StreamingServer` handles session shutdown with delayed (500ms) factory teardown so clients receive the shutdown message
+- **Streaming Server: WebSocket Query Parsing**: Plain and TLS listeners now use `accept_hdr_async` to capture URI query parameters during WebSocket handshake, enabling `?session=`, `?preset=`, and `?readonly` for non-Axum connections
+- **Web Frontend: HyperlinkAdded Handler**: Terminal.tsx now handles `hyperlinkAdded` server messages, tracking hyperlinks by row and exposing an `onHyperlinkAdded` callback
+- **Web Frontend: UserVarChanged Handler**: Terminal.tsx now handles `userVarChanged` server messages, maintaining a live Map of user variables and exposing an `onUserVarChanged` callback
+- **Web Frontend: SelectionChanged Handler**: Terminal.tsx now handles `selectionChanged` server messages, syncing selection state to xterm.js (character and line modes) with automatic clipboard copy, and exposing an `onSelectionChanged` callback
+- **Web Frontend: State Tracking**: page.tsx wires new callbacks to store hyperlinks (sliding window of 100) and user vars as React state for future UI consumption
+- **Python Bindings: New Config Properties**: `PyStreamingConfig` now exposes `max_clients_per_session` and `input_rate_limit_bytes_per_sec` as constructor params and getter/setter properties
+
+### Fixed
+- **Streaming Server: Shell Exit Deadlock**: Fixed potential deadlock when shell exits by dropping the PTY mutex guard before calling `close_session()`, and now properly notifies clients with a shutdown message
+- **Streaming Server: PTY Write Error Handling**: All PTY write paths (input, mouse, focus, paste) now log errors and increment session error metrics instead of silently ignoring write failures
+
+### Changed
+- **BREAKING: `SessionState::try_add_client()`**: Now takes a `max_per_session: usize` parameter (0 = unlimited) instead of unconditionally accepting clients
+- **BREAKING: `SessionInfo`**: Now includes five additional metrics fields (`messages_sent`, `bytes_sent`, `input_bytes`, `errors`, `dropped_messages`)
+- **Streaming Server: Bounded Output Channel**: Output channel changed from `mpsc::unbounded_channel` to `mpsc::channel(1000)` for backpressure. All senders use `try_send()` instead of `send()`, dropping messages gracefully when the buffer is full
+- **Streaming Server: Broadcast Metrics**: `SessionState::broadcast()` now tracks `messages_sent` and `dropped_messages` counters
+- **Streaming Server: Idle Reaper Refactored**: Reaper now always runs (not gated by idle timeout config) to support dead session cleanup. Idle timeout reaping is conditional within the unified reaper loop
+
 ## [0.35.0] - 2026-02-10
 
 ### Fixed

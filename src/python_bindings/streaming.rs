@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term"))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -44,6 +44,8 @@ impl PyStreamingConfig {
         initial_rows: u16,
         enable_http: bool,
         web_root: &str,
+        max_clients_per_session: usize,
+        input_rate_limit_bytes_per_sec: usize,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -60,6 +62,8 @@ impl PyStreamingConfig {
                 max_sessions: 10,
                 session_idle_timeout: 900,
                 presets: std::collections::HashMap::new(),
+                max_clients_per_session,
+                input_rate_limit_bytes_per_sec,
             },
         }
     }
@@ -182,6 +186,30 @@ impl PyStreamingConfig {
     #[setter]
     fn set_session_idle_timeout(&mut self, session_idle_timeout: u64) {
         self.inner.session_idle_timeout = session_idle_timeout;
+    }
+
+    /// Get the maximum clients per session (0 = unlimited)
+    #[getter]
+    fn max_clients_per_session(&self) -> usize {
+        self.inner.max_clients_per_session
+    }
+
+    /// Set the maximum clients per session (0 = unlimited)
+    #[setter]
+    fn set_max_clients_per_session(&mut self, max_clients_per_session: usize) {
+        self.inner.max_clients_per_session = max_clients_per_session;
+    }
+
+    /// Get the input rate limit in bytes per second (0 = unlimited)
+    #[getter]
+    fn input_rate_limit_bytes_per_sec(&self) -> usize {
+        self.inner.input_rate_limit_bytes_per_sec
+    }
+
+    /// Set the input rate limit in bytes per second (0 = unlimited)
+    #[setter]
+    fn set_input_rate_limit_bytes_per_sec(&mut self, input_rate_limit_bytes_per_sec: usize) {
+        self.inner.input_rate_limit_bytes_per_sec = input_rate_limit_bytes_per_sec;
     }
 
     fn __repr__(&self) -> String {
@@ -319,7 +347,7 @@ impl PyStreamingServer {
                         // All bytes are valid UTF-8
                         let output = valid_str.to_string();
                         buffer.clear();
-                        let _ = output_sender.send(output);
+                        let _ = output_sender.try_send(output);
                     }
                     Err(error) => {
                         // Find how much is valid
@@ -329,7 +357,7 @@ impl PyStreamingServer {
                             // Send the valid portion
                             let valid_str = std::str::from_utf8(&buffer[..valid_up_to]).unwrap();
                             let output = valid_str.to_string();
-                            let _ = output_sender.send(output);
+                            let _ = output_sender.try_send(output);
 
                             // Keep only the incomplete sequence for next time
                             buffer.drain(..valid_up_to);
@@ -340,7 +368,7 @@ impl PyStreamingServer {
                         if buffer.len() > 100 {
                             let output = String::from_utf8_lossy(&buffer).to_string();
                             buffer.clear();
-                            let _ = output_sender.send(output);
+                            let _ = output_sender.try_send(output);
                         }
                     }
                 }

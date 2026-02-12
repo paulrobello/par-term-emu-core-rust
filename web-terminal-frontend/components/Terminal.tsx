@@ -30,6 +30,9 @@ interface TerminalProps {
   onRetryingChange?: (isRetrying: boolean) => void;
   onConnectControl?: (control: { connect: () => void; disconnect: () => void; cancelRetry: () => void }) => void;
   onSendInput?: (sendFn: (data: string) => void) => void;
+  onHyperlinkAdded?: (url: string, row: number, col: number, id?: string) => void;
+  onUserVarChanged?: (name: string, value: string, oldValue?: string) => void;
+  onSelectionChanged?: (text: string | undefined, cleared: boolean) => void;
 }
 
 // Module-level storage to preserve terminal across StrictMode unmount/remount
@@ -72,7 +75,7 @@ const sharedDecoder = new TextDecoder();
 // Maximum snapshot size (1MB) to prevent UI freeze from large payloads
 const MAX_SNAPSHOT_SIZE = 1024 * 1024;
 
-export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput }: TerminalProps) {
+export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChange, onRefit, onFocus, onRetryingChange, onConnectControl, onSendInput, onHyperlinkAdded, onUserVarChanged, onSelectionChanged }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
@@ -108,6 +111,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const mouseTrackingRef = useRef<boolean>(false);
   const focusTrackingRef = useRef<boolean>(false);
   const bracketedPasteRef = useRef<boolean>(false);
+
+  // Track hyperlinks: Map<row, {url, col, id}[]>
+  const hyperlinksRef = useRef<Map<number, Array<{url: string; col: number; id?: string}>>>(new Map());
+  // Track user vars: Map<name, value>
+  const userVarsRef = useRef<Map<string, string>>(new Map());
 
   // Track previous wsUrl to detect changes
   const prevWsUrlRef = useRef<string>(wsUrl);
@@ -712,6 +720,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             mouseTrackingRef.current = false;
             focusTrackingRef.current = false;
             bracketedPasteRef.current = false;
+            // Clear tracked hyperlinks and user vars for new session
+            hyperlinksRef.current.clear();
+            userVarsRef.current.clear();
 
             // Send our size to server, then request a fresh snapshot
             if (ws.readyState === WebSocket.OPEN) {
@@ -789,8 +800,19 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
           case 'shutdown': {
             const shutdown = msg.message.value;
+            const reason = (shutdown.reason || '').toLowerCase();
             console.log('Server shutdown:', shutdown.reason);
-            term.write(`\r\n\x1b[1;33mServer shutdown: ${shutdown.reason}\x1b[0m\r\n`);
+
+            if (reason.includes('shell exited') || reason.includes('dead session')) {
+              term.write(`\r\n\x1b[1;31mSession ended: ${shutdown.reason}\x1b[0m\r\n`);
+              retryCancelledRef.current = true; // Don't auto-reconnect
+            } else if (reason.includes('idle timeout')) {
+              term.write(`\r\n\x1b[1;33mSession timed out due to inactivity\x1b[0m\r\n`);
+              // Allow reconnect — will create new session
+            } else {
+              term.write(`\r\n\x1b[1;33mServer: ${shutdown.reason}\x1b[0m\r\n`);
+              // Allow reconnect for server restarts
+            }
             break;
           }
 
@@ -813,6 +835,69 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             lastPongRef.current = Date.now();
             console.log('Heartbeat pong received');
             break;
+
+          case 'hyperlinkAdded': {
+            const link = msg.message.value;
+            const entry = { url: link.url, col: link.col, id: link.id };
+            const rowLinks = hyperlinksRef.current.get(link.row) || [];
+            rowLinks.push(entry);
+            hyperlinksRef.current.set(link.row, rowLinks);
+            onHyperlinkAdded?.(link.url, link.row, link.col, link.id);
+            break;
+          }
+
+          case 'userVarChanged': {
+            const uv = msg.message.value;
+            if (uv.value === '') {
+              userVarsRef.current.delete(uv.name);
+            } else {
+              userVarsRef.current.set(uv.name, uv.value);
+            }
+            onUserVarChanged?.(uv.name, uv.value, uv.oldValue);
+            break;
+          }
+
+          case 'selectionChanged': {
+            const sel = msg.message.value;
+            if (!term) break;
+
+            if (sel.cleared) {
+              term.clearSelection();
+            } else if (
+              sel.startCol !== undefined &&
+              sel.startRow !== undefined &&
+              sel.endCol !== undefined &&
+              sel.endRow !== undefined
+            ) {
+              if (sel.mode === 'line') {
+                term.selectLines(sel.startRow, sel.endRow);
+              } else {
+                // Compute character-span length for select()
+                const cols = term.cols;
+                let length: number;
+                if (sel.startRow === sel.endRow) {
+                  length = sel.endCol - sel.startCol;
+                } else {
+                  length = (cols - sel.startCol)
+                    + (sel.endRow - sel.startRow - 1) * cols
+                    + sel.endCol;
+                }
+                if (length > 0) {
+                  term.select(sel.startCol, sel.startRow, length);
+                }
+              }
+
+              // Copy to clipboard if text is provided
+              if (sel.text) {
+                navigator.clipboard.writeText(sel.text).catch(() => {
+                  // Clipboard write may fail without user gesture — silent fallback
+                });
+              }
+            }
+
+            onSelectionChanged?.(sel.text, sel.cleared);
+            break;
+          }
 
           default:
             // Silently ignore other message types (cwdChanged, triggerMatched, etc.)

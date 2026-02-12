@@ -514,6 +514,14 @@ struct Args {
     /// Clients connect with ?preset=name to use a specific preset
     #[arg(long, value_parser = parse_preset)]
     preset: Vec<(String, String)>,
+
+    /// Maximum clients per session (0 = unlimited)
+    #[arg(long, default_value = "0", env = "PAR_TERM_MAX_CLIENTS_PER_SESSION")]
+    max_clients_per_session: usize,
+
+    /// Input rate limit in bytes per second (0 = unlimited)
+    #[arg(long, default_value = "0", env = "PAR_TERM_INPUT_RATE_LIMIT")]
+    input_rate_limit: usize,
 }
 
 /// Main event loop state
@@ -938,7 +946,7 @@ impl SessionFactory for BinarySessionFactory {
             let mut ps = pty_session.lock();
             ps.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender.send(text);
+                let _ = output_sender.try_send(text);
             }));
         }
 
@@ -1039,6 +1047,10 @@ impl SessionFactory for BinarySessionFactory {
                             "Session '{}' shell exited and restart disabled",
                             session_id_clone
                         );
+                        drop(ps); // Drop mutex guard before close_session to avoid deadlock
+                        if let Some(ref server) = server_ref {
+                            server.close_session(&session_id_clone, "Shell exited".to_string());
+                        }
                         break;
                     }
                 }
@@ -1215,6 +1227,14 @@ impl SessionFactory for BinarySessionFactory {
         });
 
         Ok(())
+    }
+
+    fn is_session_alive(&self, session_id: &str) -> bool {
+        self.pty_sessions
+            .read()
+            .get(session_id)
+            .map(|ps| ps.lock().is_running())
+            .unwrap_or(false)
     }
 
     fn teardown_session(&self, session_id: &str) {
@@ -1601,6 +1621,8 @@ async fn main() -> Result<()> {
         max_sessions: args.max_sessions,
         session_idle_timeout: args.session_idle_timeout,
         presets,
+        max_clients_per_session: args.max_clients_per_session,
+        input_rate_limit_bytes_per_sec: args.input_rate_limit,
     };
 
     // Create streaming server
@@ -1728,7 +1750,7 @@ async fn main() -> Result<()> {
             let mut session = macro_pty.lock();
             session.set_output_callback(Arc::new(move |data| {
                 let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender_clone.send(text);
+                let _ = output_sender_clone.try_send(text);
             }));
         }
 

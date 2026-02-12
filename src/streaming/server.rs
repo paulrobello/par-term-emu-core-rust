@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -19,7 +19,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
 use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::accept_async;
+use tokio_tungstenite::accept_hdr_async;
 
 /// TLS/SSL configuration for secure connections
 ///
@@ -280,6 +280,10 @@ pub struct StreamingConfig {
     pub session_idle_timeout: u64,
     /// Shell presets: name → shell command
     pub presets: HashMap<String, String>,
+    /// Maximum clients per session (0 = unlimited)
+    pub max_clients_per_session: usize,
+    /// Input rate limit in bytes per second (0 = unlimited)
+    pub input_rate_limit_bytes_per_sec: usize,
 }
 
 impl Default for StreamingConfig {
@@ -298,6 +302,74 @@ impl Default for StreamingConfig {
             max_sessions: 10,
             session_idle_timeout: 900,
             presets: HashMap::new(),
+            max_clients_per_session: 0,
+            input_rate_limit_bytes_per_sec: 0,
+        }
+    }
+}
+
+// =============================================================================
+// Terminal Size Validation
+// =============================================================================
+
+/// Minimum terminal columns
+pub const MIN_COLS: u16 = 2;
+/// Minimum terminal rows
+pub const MIN_ROWS: u16 = 1;
+/// Maximum terminal columns
+pub const MAX_COLS: u16 = 1000;
+/// Maximum terminal rows
+pub const MAX_ROWS: u16 = 500;
+
+/// Validate terminal size is within acceptable bounds
+pub fn validate_terminal_size(cols: u16, rows: u16) -> Result<(u16, u16)> {
+    if !(MIN_COLS..=MAX_COLS).contains(&cols) || !(MIN_ROWS..=MAX_ROWS).contains(&rows) {
+        return Err(StreamingError::InvalidInput(format!(
+            "Terminal size {}x{} out of range ({}-{}x{}-{})",
+            cols, rows, MIN_COLS, MAX_COLS, MIN_ROWS, MAX_ROWS
+        )));
+    }
+    Ok((cols, rows))
+}
+
+/// Get current time as epoch milliseconds
+fn now_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+// =============================================================================
+// Session Metrics
+// =============================================================================
+
+/// Per-session metrics for observability
+pub struct SessionMetrics {
+    /// Total messages sent to clients
+    pub messages_sent: AtomicUsize,
+    /// Total output bytes sent to clients
+    pub bytes_sent: AtomicUsize,
+    /// Total input bytes received from clients
+    pub input_bytes: AtomicUsize,
+    /// Total errors encountered
+    pub errors: AtomicUsize,
+    /// Total messages dropped (e.g., no receivers)
+    pub dropped_messages: AtomicUsize,
+    /// Last broadcast time (epoch millis)
+    pub last_broadcast_time: AtomicU64,
+}
+
+impl SessionMetrics {
+    /// Create new zeroed metrics
+    fn new() -> Self {
+        Self {
+            messages_sent: AtomicUsize::new(0),
+            bytes_sent: AtomicUsize::new(0),
+            input_bytes: AtomicUsize::new(0),
+            errors: AtomicUsize::new(0),
+            dropped_messages: AtomicUsize::new(0),
+            last_broadcast_time: AtomicU64::new(0),
         }
     }
 }
@@ -314,10 +386,10 @@ pub struct SessionState {
     pub terminal: Arc<Mutex<Terminal>>,
     /// Broadcast channel for sending output to all clients in this session
     broadcast_tx: broadcast::Sender<ServerMessage>,
-    /// Channel for sending output data into the broadcaster loop
-    output_tx: mpsc::UnboundedSender<String>,
+    /// Channel for sending output data into the broadcaster loop (bounded for backpressure)
+    output_tx: mpsc::Sender<String>,
     /// Receiver end of the output channel (consumed by broadcaster loop)
-    output_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<String>>>,
+    output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
     #[allow(clippy::type_complexity)]
     pty_writer: std::sync::RwLock<Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
@@ -337,6 +409,8 @@ pub struct SessionState {
     theme: Option<ThemeInfo>,
     /// Whether to send initial screen content on connect
     send_initial_screen: bool,
+    /// Per-session metrics
+    pub metrics: SessionMetrics,
 }
 
 impl SessionState {
@@ -347,7 +421,7 @@ impl SessionState {
         theme: Option<ThemeInfo>,
         send_initial_screen: bool,
     ) -> Self {
-        let (output_tx, output_rx) = mpsc::unbounded_channel();
+        let (output_tx, output_rx) = mpsc::channel(1000);
         let (broadcast_tx, _) = broadcast::channel(100);
         let (resize_tx, resize_rx) = mpsc::unbounded_channel();
 
@@ -371,13 +445,30 @@ impl SessionState {
             shutdown: Arc::new(tokio::sync::Notify::new()),
             theme,
             send_initial_screen,
+            metrics: SessionMetrics::new(),
         }
     }
 
     /// Try to add a client to this session. Returns true if successful.
-    pub fn try_add_client(&self) -> bool {
-        self.client_count.fetch_add(1, Ordering::SeqCst);
-        true
+    /// When `max_per_session > 0`, uses CAS loop to enforce the limit atomically.
+    pub fn try_add_client(&self, max_per_session: usize) -> bool {
+        if max_per_session == 0 {
+            self.client_count.fetch_add(1, Ordering::SeqCst);
+            return true;
+        }
+        loop {
+            let current = self.client_count.load(Ordering::Relaxed);
+            if current >= max_per_session {
+                return false;
+            }
+            if self
+                .client_count
+                .compare_exchange(current, current + 1, Ordering::SeqCst, Ordering::Relaxed)
+                .is_ok()
+            {
+                return true;
+            }
+        }
     }
 
     /// Remove a client from this session.
@@ -520,7 +611,7 @@ impl SessionState {
     }
 
     /// Get a clone of the output sender channel
-    pub fn get_output_sender(&self) -> mpsc::UnboundedSender<String> {
+    pub fn get_output_sender(&self) -> mpsc::Sender<String> {
         self.output_tx.clone()
     }
 
@@ -533,7 +624,17 @@ impl SessionState {
 
     /// Broadcast a message to all clients in this session
     pub fn broadcast(&self, msg: ServerMessage) {
-        let _ = self.broadcast_tx.send(msg);
+        match self.broadcast_tx.send(msg) {
+            Ok(_) => {
+                self.metrics.messages_sent.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.metrics
+                    .dropped_messages
+                    .fetch_add(1, Ordering::Relaxed);
+                // No receivers — normal when 0 clients connected
+            }
+        }
     }
 
     /// Run the output broadcaster loop for this session
@@ -550,8 +651,10 @@ impl SessionState {
                 _ = self.shutdown.notified() => {
                     crate::debug_info!("STREAMING", "Session {} broadcaster received shutdown signal", self.id);
                     if !buffer.is_empty() {
+                        let data_len = buffer.len();
                         let msg = ServerMessage::output(buffer);
-                        let _ = self.broadcast_tx.send(msg);
+                        self.broadcast(msg);
+                        self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
                     }
                     break;
                 }
@@ -561,24 +664,32 @@ impl SessionState {
                             if !data.is_empty() {
                                 buffer.push_str(&data);
                                 if buffer.len() > MAX_BATCH_SIZE {
+                                    let data_len = buffer.len();
                                     let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                                    let _ = self.broadcast_tx.send(msg);
+                                    self.broadcast(msg);
+                                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                                    self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                                     last_flush = tokio::time::Instant::now();
                                 }
                             }
                         }
                         None => {
                             if !buffer.is_empty() {
+                                let data_len = buffer.len();
                                 let msg = ServerMessage::output(buffer);
-                                let _ = self.broadcast_tx.send(msg);
+                                self.broadcast(msg);
+                                self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
                             }
                             break;
                         }
                     }
                 }
                 _ = tokio::time::sleep_until(last_flush + BATCH_WINDOW), if !buffer.is_empty() => {
+                    let data_len = buffer.len();
                     let msg = ServerMessage::output(std::mem::take(&mut buffer));
-                    let _ = self.broadcast_tx.send(msg);
+                    self.broadcast(msg);
+                    self.metrics.bytes_sent.fetch_add(data_len, Ordering::Relaxed);
+                    self.metrics.last_broadcast_time.store(now_millis(), Ordering::Relaxed);
                     last_flush = tokio::time::Instant::now();
                 }
             }
@@ -633,6 +744,11 @@ impl SessionState {
             cols: cols as u16,
             rows: rows as u16,
             cwd,
+            messages_sent: self.metrics.messages_sent.load(Ordering::Relaxed),
+            bytes_sent: self.metrics.bytes_sent.load(Ordering::Relaxed),
+            input_bytes: self.metrics.input_bytes.load(Ordering::Relaxed),
+            errors: self.metrics.errors.load(Ordering::Relaxed),
+            dropped_messages: self.metrics.dropped_messages.load(Ordering::Relaxed),
         }
     }
 }
@@ -665,6 +781,16 @@ pub struct SessionInfo {
     pub rows: u16,
     /// Current working directory
     pub cwd: Option<String>,
+    /// Total messages sent to clients
+    pub messages_sent: usize,
+    /// Total output bytes sent
+    pub bytes_sent: usize,
+    /// Total input bytes received
+    pub input_bytes: usize,
+    /// Total errors encountered
+    pub errors: usize,
+    /// Total messages dropped
+    pub dropped_messages: usize,
 }
 
 // =============================================================================
@@ -772,6 +898,11 @@ pub trait SessionFactory: Send + Sync {
 
     /// Teardown a session (e.g., kill PTY process)
     fn teardown_session(&self, session_id: &str);
+
+    /// Check if a session's backing process is still alive
+    fn is_session_alive(&self, _session_id: &str) -> bool {
+        true
+    }
 }
 
 /// Default session factory that wraps a single pre-existing terminal.
@@ -858,6 +989,51 @@ impl ConnectionParams {
             .collect();
 
         Self::from_query(&params)
+    }
+}
+
+// =============================================================================
+// Input Rate Limiter
+// =============================================================================
+
+/// Token bucket rate limiter for per-client input
+struct InputRateLimiter {
+    tokens: f64,
+    max_tokens: f64,
+    rate: f64,
+    last_check: tokio::time::Instant,
+}
+
+impl InputRateLimiter {
+    /// Create a new rate limiter with the given bytes-per-second rate.
+    /// Burst capacity is 2x the rate.
+    fn new(bytes_per_sec: usize) -> Self {
+        let rate = bytes_per_sec as f64;
+        let max_tokens = rate * 2.0;
+        Self {
+            tokens: max_tokens,
+            max_tokens,
+            rate,
+            last_check: tokio::time::Instant::now(),
+        }
+    }
+
+    /// Try to consume `bytes` tokens. Returns true if allowed.
+    fn try_consume(&mut self, bytes: usize) -> bool {
+        let now = tokio::time::Instant::now();
+        let elapsed = now.duration_since(self.last_check).as_secs_f64();
+        self.last_check = now;
+
+        // Replenish tokens
+        self.tokens = (self.tokens + elapsed * self.rate).min(self.max_tokens);
+
+        let cost = bytes as f64;
+        if self.tokens >= cost {
+            self.tokens -= cost;
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -994,12 +1170,12 @@ impl StreamingServer {
     }
 
     /// Get a clone of the output sender channel (routes to default session)
-    pub fn get_output_sender(&self) -> mpsc::UnboundedSender<String> {
+    pub fn get_output_sender(&self) -> mpsc::Sender<String> {
         if let Some(ref session) = self.default_session {
             session.get_output_sender()
         } else {
             // Create a dummy channel that will never be read
-            let (tx, _rx) = mpsc::unbounded_channel();
+            let (tx, _rx) = mpsc::channel(1);
             tx
         }
     }
@@ -1083,6 +1259,26 @@ impl StreamingServer {
         self.sessions.get(session_id)
     }
 
+    /// Close a session: remove from registry, shut it down, and tear down factory resources.
+    /// Factory teardown is delayed 500ms so clients receive the shutdown message.
+    pub fn close_session(&self, session_id: &str, reason: String) -> bool {
+        if let Some(session) = self.sessions.remove(session_id) {
+            session.shutdown(reason);
+            if let Some(ref factory) = self.session_factory {
+                let factory = Arc::clone(factory);
+                let id = session_id.to_string();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    factory.teardown_session(&id);
+                });
+            }
+            crate::debug_info!("STREAMING", "Closed session: {}", session_id);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Resolve a session from connection parameters
     ///
     /// 1. If session already exists in registry, return it
@@ -1125,6 +1321,8 @@ impl StreamingServer {
             } else {
                 24
             };
+
+            let (cols, rows) = validate_terminal_size(cols, rows)?;
 
             let result = factory.create_session(session_id, cols, rows, shell_command)?;
 
@@ -1182,36 +1380,84 @@ impl StreamingServer {
         }
     }
 
-    /// Spawn the idle session reaper task
+    /// Spawn the session reaper task (always runs for dead session cleanup)
     fn spawn_idle_reaper(self: &Arc<Self>) {
-        if self.config.session_idle_timeout == 0 {
-            return;
-        }
         let server = Arc::clone(self);
         tokio::spawn(async move {
-            server.idle_session_reaper().await;
+            server.session_reaper().await;
         });
     }
 
-    /// Idle session reaper - periodically checks for and removes idle sessions
-    async fn idle_session_reaper(self: Arc<Self>) {
-        let timeout = Duration::from_secs(self.config.session_idle_timeout);
+    /// Session reaper - periodically checks for idle and dead sessions
+    async fn session_reaper(self: Arc<Self>) {
+        let idle_timeout = if self.config.session_idle_timeout > 0 {
+            Some(Duration::from_secs(self.config.session_idle_timeout))
+        } else {
+            None
+        };
         let mut interval = tokio::time::interval(Duration::from_secs(30));
 
         loop {
             interval.tick().await;
-            let idle_ids = self.sessions.idle_sessions(timeout);
-            for id in idle_ids {
-                // Never reap the default session
-                if id == "default" {
-                    continue;
-                }
-                if let Some(session) = self.sessions.remove(&id) {
-                    session.shutdown("Session idle timeout".to_string());
-                    if let Some(ref factory) = self.session_factory {
-                        factory.teardown_session(&id);
+
+            // Idle timeout reaping (if configured)
+            if let Some(timeout) = idle_timeout {
+                let idle_ids = self.sessions.idle_sessions(timeout);
+                for id in idle_ids {
+                    // Allow reaping default in factory mode only
+                    if id == "default" && self.session_factory.is_none() {
+                        continue;
                     }
-                    crate::debug_info!("STREAMING", "Reaped idle session: {}", id);
+                    if self.close_session(&id, "Session idle timeout".to_string()) {
+                        crate::debug_info!("STREAMING", "Reaped idle session: {}", id);
+                    }
+                }
+            }
+
+            // Dead session reaping (always)
+            self.reap_dead_sessions();
+
+            // Broadcaster health check
+            self.check_broadcaster_health();
+        }
+    }
+
+    /// Reap sessions whose PTY process has exited and have no clients
+    fn reap_dead_sessions(&self) {
+        if let Some(ref factory) = self.session_factory {
+            let session_ids: Vec<String> = self
+                .sessions
+                .list_sessions()
+                .iter()
+                .filter(|s| s.clients == 0)
+                .map(|s| s.id.clone())
+                .collect();
+            for id in session_ids {
+                if !factory.is_session_alive(&id)
+                    && self.close_session(&id, "Dead session (PTY exited)".to_string())
+                {
+                    crate::debug_info!("STREAMING", "Reaped dead session: {}", id);
+                }
+            }
+        }
+    }
+
+    /// Check broadcaster health — warn if no broadcasts for 30s with active clients
+    fn check_broadcaster_health(&self) {
+        let now = now_millis();
+        for info in self.sessions.list_sessions() {
+            if info.clients > 0 {
+                if let Some(session) = self.sessions.get(&info.id) {
+                    let last = session.metrics.last_broadcast_time.load(Ordering::Relaxed);
+                    if last > 0 && now.saturating_sub(last) > 30_000 {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Session {} broadcaster may be stalled ({}s since last broadcast, {} clients)",
+                            info.id,
+                            (now - last) / 1000,
+                            info.clients
+                        );
+                    }
                 }
             }
         }
@@ -1363,15 +1609,40 @@ impl StreamingServer {
                     crate::debug_info!("STREAMING", "New connection from {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
-                        // Parse query from the WebSocket upgrade request
-                        let params = ConnectionParams::from_uri_query(None);
-                        if let Err(e) = server.handle_connection(stream, &params).await {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "Connection error from {}: {}",
-                                addr,
-                                e
-                            );
+                        // Accept WebSocket with header callback to capture URI query
+                        let uri_query = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+                        let uri_query_clone = std::sync::Arc::clone(&uri_query);
+
+                        let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
+                            if let Some(q) = req.uri().query() {
+                                *uri_query_clone.lock().unwrap() = Some(q.to_string());
+                            }
+                            Ok(resp)
+                        }).await;
+
+                        match ws_result {
+                            Ok(ws_stream) => {
+                                let query_str = uri_query.lock().unwrap().take();
+                                let params = ConnectionParams::from_uri_query(query_str.as_deref());
+                                if let Err(e) =
+                                    server.handle_connection_ws(ws_stream, &params).await
+                                {
+                                    crate::debug_error!(
+                                        "STREAMING",
+                                        "Connection error from {}: {}",
+                                        addr,
+                                        e
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "WebSocket handshake failed from {}: {}",
+                                    addr,
+                                    e
+                                );
+                            }
                         }
                     });
                 }
@@ -1427,16 +1698,52 @@ impl StreamingServer {
                     tokio::spawn(async move {
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
-                                let params = ConnectionParams::from_uri_query(None);
-                                if let Err(e) =
-                                    server.handle_tls_connection(tls_stream, &params).await
-                                {
-                                    crate::debug_error!(
-                                        "STREAMING",
-                                        "TLS connection error from {}: {}",
-                                        addr,
-                                        e
-                                    );
+                                // Accept WebSocket with header callback to capture URI query
+                                let uri_query =
+                                    std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+                                let uri_query_clone = std::sync::Arc::clone(&uri_query);
+
+                                let ws_result = accept_hdr_async(
+                                    tls_stream,
+                                    move |req: &tokio_tungstenite::tungstenite::http::Request<
+                                        (),
+                                    >,
+                                          resp: tokio_tungstenite::tungstenite::http::Response<
+                                        (),
+                                    >| {
+                                        if let Some(q) = req.uri().query() {
+                                            *uri_query_clone.lock().unwrap() = Some(q.to_string());
+                                        }
+                                        Ok(resp)
+                                    },
+                                )
+                                .await;
+
+                                match ws_result {
+                                    Ok(ws_stream) => {
+                                        let query_str = uri_query.lock().unwrap().take();
+                                        let params =
+                                            ConnectionParams::from_uri_query(query_str.as_deref());
+                                        if let Err(e) = server
+                                            .handle_tls_connection_ws(ws_stream, &params)
+                                            .await
+                                        {
+                                            crate::debug_error!(
+                                                "STREAMING",
+                                                "TLS connection error from {}: {}",
+                                                addr,
+                                                e
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        crate::debug_error!(
+                                            "STREAMING",
+                                            "TLS WebSocket handshake failed from {}: {}",
+                                            addr,
+                                            e
+                                        );
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -1457,32 +1764,31 @@ impl StreamingServer {
         }
     }
 
-    /// Handle a new WebSocket connection
-    async fn handle_connection(
+    /// Handle a new WebSocket connection (already upgraded)
+    async fn handle_connection_ws(
         self: &Arc<Self>,
-        stream: TcpStream,
+        ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
         params: &ConnectionParams,
     ) -> Result<()> {
+        // Resolve session first (before reserving client slots)
+        let session = self.resolve_session(params)?;
+
         // Try to reserve a global client slot
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
         let _global_guard = GlobalClientGuard { server: self };
 
-        // Resolve session
-        let session = self.resolve_session(params)?;
-        session.try_add_client();
+        // Try to add client to session
+        if !session.try_add_client(self.config.max_clients_per_session) {
+            return Err(StreamingError::MaxClientsReached);
+        }
         let _session_guard = SessionClientGuard {
             session: Arc::clone(&session),
         };
 
         // Determine readonly
         let read_only = params.readonly || self.config.default_read_only;
-
-        // Upgrade to WebSocket
-        let ws_stream = accept_async(stream)
-            .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
         let mut client = Client::new(ws_stream, read_only);
         let client_id = client.id();
@@ -1519,6 +1825,13 @@ impl StreamingServer {
         let mut subscriptions: Option<
             std::collections::HashSet<crate::streaming::protocol::EventType>,
         > = None;
+        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
+            Some(InputRateLimiter::new(
+                self.config.input_rate_limit_bytes_per_sec,
+            ))
+        } else {
+            None
+        };
 
         loop {
             tokio::select! {
@@ -1535,16 +1848,29 @@ impl StreamingServer {
                                     if read_only {
                                         continue;
                                     }
+                                    if let Some(ref mut limiter) = rate_limiter {
+                                        if !limiter.try_consume(data.len()) {
+                                            crate::debug_error!("STREAMING", "Rate limit exceeded for client {}", client_id);
+                                            continue;
+                                        }
+                                    }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                        session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
                                         if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                             use std::io::Write;
-                                            let _ = w.write_all(data.as_bytes());
-                                            let _ = w.flush();
+                                            if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                                crate::debug_error!("STREAMING", "PTY write error for session {}: {}", session.id, e);
+                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                            }
                                         }
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                    let _ = session.resize_tx.send((cols, rows));
+                                    if let Err(e) = validate_terminal_size(cols, rows) {
+                                        crate::debug_error!("STREAMING", "Client {} sent invalid resize: {}", client_id, e);
+                                    } else {
+                                        let _ = session.resize_tx.send((cols, rows));
+                                    }
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
                                     if let Err(e) = client.send(ServerMessage::pong()).await {
@@ -1592,10 +1918,13 @@ impl StreamingServer {
                                             terminal.report_mouse(mouse_event)
                                         };
                                         if !bytes.is_empty() {
+                                            session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
                                             if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                 use std::io::Write;
-                                                let _ = w.write_all(&bytes);
-                                                let _ = w.flush();
+                                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                                    crate::debug_error!("STREAMING", "PTY mouse write error for session {}: {}", session.id, e);
+                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                                }
                                             }
                                         }
                                     }
@@ -1615,28 +1944,43 @@ impl StreamingServer {
                                             }
                                         };
                                         if !bytes.is_empty() {
+                                            session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
                                             if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                 use std::io::Write;
-                                                let _ = w.write_all(&bytes);
-                                                let _ = w.flush();
+                                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                                    crate::debug_error!("STREAMING", "PTY focus write error for session {}: {}", session.id, e);
+                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                                }
                                             }
                                         }
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Paste { content } => {
                                     if read_only { continue; }
+                                    if let Some(ref mut limiter) = rate_limiter {
+                                        if !limiter.try_consume(content.len()) {
+                                            crate::debug_error!("STREAMING", "Rate limit exceeded for client {}", client_id);
+                                            continue;
+                                        }
+                                    }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         let terminal = session.terminal.lock();
+                                        session.metrics.input_bytes.fetch_add(content.len(), Ordering::Relaxed);
                                         if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                             use std::io::Write;
-                                            if terminal.bracketed_paste() {
-                                                let _ = w.write_all(terminal.bracketed_paste_start());
-                                                let _ = w.write_all(content.as_bytes());
-                                                let _ = w.write_all(terminal.bracketed_paste_end());
+                                            let result = if terminal.bracketed_paste() {
+                                                w.write_all(terminal.bracketed_paste_start())
+                                                    .and_then(|_| w.write_all(content.as_bytes()))
+                                                    .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
+                                                    .and_then(|_| w.flush())
                                             } else {
-                                                let _ = w.write_all(content.as_bytes());
+                                                w.write_all(content.as_bytes())
+                                                    .and_then(|_| w.flush())
+                                            };
+                                            if let Err(e) = result {
+                                                crate::debug_error!("STREAMING", "PTY paste write error for session {}: {}", session.id, e);
+                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                             }
-                                            let _ = w.flush();
                                         }
                                     }
                                 }
@@ -1784,13 +2128,14 @@ impl StreamingServer {
         Ok(())
     }
 
-    /// Handle a new TLS WebSocket connection (WSS)
-    async fn handle_tls_connection(
+    /// Handle a new TLS WebSocket connection (already upgraded)
+    async fn handle_tls_connection_ws(
         self: &Arc<Self>,
-        stream: tokio_rustls::server::TlsStream<TcpStream>,
+        ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
         params: &ConnectionParams,
     ) -> Result<()> {
-        use tokio_tungstenite::accept_async as accept_async_tls;
+        // Resolve session first
+        let session = self.resolve_session(params)?;
 
         // Try to reserve a global client slot
         if !self.try_add_client() {
@@ -1798,19 +2143,15 @@ impl StreamingServer {
         }
         let _global_guard = GlobalClientGuard { server: self };
 
-        // Resolve session
-        let session = self.resolve_session(params)?;
-        session.try_add_client();
+        // Try to add client to session
+        if !session.try_add_client(self.config.max_clients_per_session) {
+            return Err(StreamingError::MaxClientsReached);
+        }
         let _session_guard = SessionClientGuard {
             session: Arc::clone(&session),
         };
 
         let read_only = params.readonly || self.config.default_read_only;
-
-        // Upgrade TLS stream to WebSocket
-        let ws_stream = accept_async_tls(stream)
-            .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
 
         let client_id = uuid::Uuid::new_v4();
 
@@ -1861,6 +2202,13 @@ impl StreamingServer {
         let mut subscriptions: Option<
             std::collections::HashSet<crate::streaming::protocol::EventType>,
         > = None;
+        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
+            Some(InputRateLimiter::new(
+                self.config.input_rate_limit_bytes_per_sec,
+            ))
+        } else {
+            None
+        };
 
         loop {
             tokio::select! {
@@ -1874,16 +2222,29 @@ impl StreamingServer {
                                             if read_only {
                                                 continue;
                                             }
+                                            if let Some(ref mut limiter) = rate_limiter {
+                                                if !limiter.try_consume(data.len()) {
+                                                    crate::debug_error!("STREAMING", "Rate limit exceeded for TLS client {}", client_id);
+                                                    continue;
+                                                }
+                                            }
                                             if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                                session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
                                                 if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
-                                                    let _ = w.write_all(data.as_bytes());
-                                                    let _ = w.flush();
+                                                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                                        crate::debug_error!("STREAMING", "PTY write error for TLS session {}: {}", session.id, e);
+                                                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                                    }
                                                 }
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                            let _ = resize_tx.send((cols, rows));
+                                            if let Err(e) = validate_terminal_size(cols, rows) {
+                                                crate::debug_error!("STREAMING", "TLS client {} sent invalid resize: {}", client_id, e);
+                                            } else {
+                                                let _ = resize_tx.send((cols, rows));
+                                            }
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
                                             if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
@@ -1979,10 +2340,19 @@ impl StreamingServer {
     /// Send terminal output to all connected clients
     pub fn send_output(&self, data: String) -> Result<()> {
         if let Some(ref session) = self.default_session {
-            session
-                .output_tx
-                .send(data)
-                .map_err(|_| StreamingError::ServerError("Output channel closed".to_string()))
+            match session.output_tx.try_send(data) {
+                Ok(()) => Ok(()),
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    session
+                        .metrics
+                        .dropped_messages
+                        .fetch_add(1, Ordering::Relaxed);
+                    Ok(()) // Drop silently under backpressure
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => Err(StreamingError::ServerError(
+                    "Output channel closed".to_string(),
+                )),
+            }
         } else {
             Err(StreamingError::ServerError(
                 "No default session".to_string(),
@@ -2127,15 +2497,19 @@ impl StreamingServer {
         use axum::extract::ws::Message as AxumMessage;
         use futures_util::{SinkExt, StreamExt};
 
+        // Resolve session first
+        let session = self.resolve_session(&params)?;
+
         // Try to reserve a global client slot
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
         let _global_guard = GlobalClientGuard { server: self };
 
-        // Resolve session
-        let session = self.resolve_session(&params)?;
-        session.try_add_client();
+        // Try to add client to session
+        if !session.try_add_client(self.config.max_clients_per_session) {
+            return Err(StreamingError::MaxClientsReached);
+        }
         let _session_guard = SessionClientGuard {
             session: Arc::clone(&session),
         };
@@ -2187,6 +2561,13 @@ impl StreamingServer {
         let mut subscriptions: Option<
             std::collections::HashSet<crate::streaming::protocol::EventType>,
         > = None;
+        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
+            Some(InputRateLimiter::new(
+                self.config.input_rate_limit_bytes_per_sec,
+            ))
+        } else {
+            None
+        };
 
         loop {
             tokio::select! {
@@ -2200,16 +2581,29 @@ impl StreamingServer {
                                             if read_only {
                                                 continue;
                                             }
+                                            if let Some(ref mut limiter) = rate_limiter {
+                                                if !limiter.try_consume(data.len()) {
+                                                    crate::debug_error!("STREAMING", "Rate limit exceeded for Axum client {}", client_id);
+                                                    continue;
+                                                }
+                                            }
                                             if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                                                session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
                                                 if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
                                                     use std::io::Write;
-                                                    let _ = w.write_all(data.as_bytes());
-                                                    let _ = w.flush();
+                                                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                                        crate::debug_error!("STREAMING", "PTY write error for Axum session {}: {}", session.id, e);
+                                                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                                    }
                                                 }
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                            let _ = resize_tx.send((cols, rows));
+                                            if let Err(e) = validate_terminal_size(cols, rows) {
+                                                crate::debug_error!("STREAMING", "Axum client {} sent invalid resize: {}", client_id, e);
+                                            } else {
+                                                let _ = resize_tx.send((cols, rows));
+                                            }
                                         }
                                         crate::streaming::protocol::ClientMessage::Ping => {
                                             if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
@@ -2439,6 +2833,8 @@ mod tests {
         assert_eq!(config.max_sessions, 10);
         assert_eq!(config.session_idle_timeout, 900);
         assert!(config.presets.is_empty());
+        assert_eq!(config.max_clients_per_session, 0);
+        assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
     }
 
     #[tokio::test]
@@ -2447,7 +2843,7 @@ mod tests {
         let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
 
         let tx = server.get_output_sender();
-        assert!(tx.send("test".to_string()).is_ok());
+        assert!(tx.try_send("test".to_string()).is_ok());
     }
 
     #[tokio::test]
@@ -2465,9 +2861,9 @@ mod tests {
         let session = SessionState::new("sess".to_string(), terminal, None, true);
 
         assert_eq!(session.client_count(), 0);
-        session.try_add_client();
+        assert!(session.try_add_client(0)); // 0 = unlimited
         assert_eq!(session.client_count(), 1);
-        session.try_add_client();
+        assert!(session.try_add_client(0));
         assert_eq!(session.client_count(), 2);
         session.remove_client();
         assert_eq!(session.client_count(), 1);
@@ -2484,7 +2880,7 @@ mod tests {
         assert!(!session.is_idle(Duration::from_secs(1)));
 
         // Add and remove a client to set disconnect time
-        session.try_add_client();
+        session.try_add_client(0);
         session.remove_client();
 
         // Just disconnected, should not be idle with long timeout
@@ -2589,6 +2985,11 @@ mod tests {
             cols: 80,
             rows: 24,
             cwd: Some("/home/user".to_string()),
+            messages_sent: 0,
+            bytes_sent: 0,
+            input_bytes: 0,
+            errors: 0,
+            dropped_messages: 0,
         };
 
         let json = serde_json::to_string(&info).unwrap();

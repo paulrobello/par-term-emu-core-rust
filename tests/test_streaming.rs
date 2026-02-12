@@ -491,6 +491,8 @@ mod streaming_tests {
                 max_sessions: 5,
                 session_idle_timeout: 600,
                 presets: std::collections::HashMap::new(),
+                max_clients_per_session: 0,
+                input_rate_limit_bytes_per_sec: 0,
             };
 
             assert_eq!(config.max_clients, 50);

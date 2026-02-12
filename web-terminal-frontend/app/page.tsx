@@ -83,6 +83,8 @@ export default function Home() {
   const [sendInput, setSendInput] = useState<((data: string) => void) | null>(null);
   const [showKeyboard, setShowKeyboard] = useState(false);
   const [fontSize, setFontSize] = useState<number>(DEFAULT_FONT_SIZE);
+  const [hyperlinks, setHyperlinks] = useState<Array<{url: string; row: number; col: number; id?: string}>>([]);
+  const [userVars, setUserVars] = useState<Map<string, string>>(new Map());
 
   // Load persisted UI state from localStorage on mount
   useEffect(() => {
@@ -259,6 +261,20 @@ export default function Home() {
           onRetryingChange={setIsRetrying}
           onConnectControl={setConnectControl}
           onSendInput={(fn) => setSendInput(() => fn)}
+          onHyperlinkAdded={(url, row, col, id) => {
+            setHyperlinks(prev => [...prev.slice(-99), { url, row, col, id }]);
+          }}
+          onUserVarChanged={(name, value) => {
+            setUserVars(prev => {
+              const next = new Map(prev);
+              if (value === '') {
+                next.delete(name);
+              } else {
+                next.set(name, value);
+              }
+              return next;
+            });
+          }}
         />
       </div>
 
