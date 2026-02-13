@@ -1460,6 +1460,7 @@ impl StreamingServer {
         let app = Router::new()
             .route("/ws", get(ws_handler))
             .route("/sessions", get(sessions_handler))
+            .route("/stats", get(stats_ws_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
 
@@ -1512,6 +1513,7 @@ impl StreamingServer {
         let app = Router::new()
             .route("/ws", get(ws_handler))
             .route("/sessions", get(sessions_handler))
+            .route("/stats", get(stats_ws_handler))
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone());
 
@@ -2773,6 +2775,143 @@ async fn sessions_handler(
         "max_sessions": max,
         "available": available,
     }))
+}
+
+/// System stats WebSocket handler
+#[cfg(feature = "streaming")]
+async fn stats_ws_handler(
+    ws: axum::extract::ws::WebSocketUpgrade,
+    axum::extract::Query(_query): axum::extract::Query<HashMap<String, String>>,
+    axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
+) -> impl axum::response::IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    // Check if system stats are enabled
+    if !server.config.enable_system_stats {
+        return (StatusCode::NOT_FOUND, "System stats not enabled").into_response();
+    }
+
+    // Note: API key auth is handled by the basic_auth middleware if configured
+    let interval_secs = server.config.system_stats_interval_secs.max(1);
+
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = handle_stats_websocket(socket, interval_secs).await {
+            crate::debug_error!("STREAMING", "Stats WebSocket error: {}", e);
+        }
+    })
+    .into_response()
+}
+
+/// Handle stats-only WebSocket connection
+#[cfg(feature = "streaming")]
+async fn handle_stats_websocket(
+    socket: axum::extract::ws::WebSocket,
+    interval_secs: u64,
+) -> Result<()> {
+    use axum::extract::ws::Message as AxumMessage;
+    use futures_util::{SinkExt, StreamExt};
+    use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind};
+
+    let (mut sender, mut receiver) = socket.split();
+
+    let refresh_kind = RefreshKind::nothing()
+        .with_cpu(CpuRefreshKind::everything())
+        .with_memory(MemoryRefreshKind::everything());
+    let mut sys = sysinfo::System::new_with_specifics(refresh_kind);
+    let mut disks = Disks::new_with_refreshed_list();
+    let mut networks = Networks::new_with_refreshed_list();
+
+    // Collect static info once
+    let hostname = sysinfo::System::host_name();
+    let os_name = sysinfo::System::name();
+    let os_version = sysinfo::System::os_version();
+    let kernel_version = sysinfo::System::kernel_version();
+
+    // Initial CPU refresh for baseline
+    sys.refresh_specifics(refresh_kind);
+
+    let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+    interval.tick().await; // Skip first tick
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                // Refresh all metrics
+                sys.refresh_specifics(refresh_kind);
+                disks.refresh(true);
+                networks.refresh(true);
+
+                // Build stats JSON
+                let stats = serde_json::json!({
+                    "cpu": {
+                        "overall_usage_percent": sys.global_cpu_usage() as f64,
+                        "physical_core_count": sysinfo::System::physical_core_count().unwrap_or(0),
+                        "per_core_usage_percent": sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect::<Vec<_>>(),
+                        "brand": sys.cpus().first().map(|c| c.brand().to_string()),
+                        "frequency_mhz": sys.cpus().first().map(|c| c.frequency()),
+                    },
+                    "memory": {
+                        "total_bytes": sys.total_memory(),
+                        "used_bytes": sys.used_memory(),
+                        "available_bytes": sys.available_memory(),
+                        "swap_total_bytes": sys.total_swap(),
+                        "swap_used_bytes": sys.used_swap(),
+                    },
+                    "disks": disks.iter().map(|d| serde_json::json!({
+                        "name": d.name().to_string_lossy(),
+                        "mount_point": d.mount_point().to_string_lossy(),
+                        "total_bytes": d.total_space(),
+                        "available_bytes": d.available_space(),
+                        "kind": format!("{:?}", d.kind()),
+                        "file_system": d.file_system().to_string_lossy(),
+                        "is_removable": d.is_removable(),
+                    })).collect::<Vec<_>>(),
+                    "networks": networks.iter().map(|(name, data)| serde_json::json!({
+                        "name": name,
+                        "received_bytes": data.received(),
+                        "transmitted_bytes": data.transmitted(),
+                        "total_received_bytes": data.total_received(),
+                        "total_transmitted_bytes": data.total_transmitted(),
+                        "packets_received": data.packets_received(),
+                        "packets_transmitted": data.packets_transmitted(),
+                        "errors_received": data.errors_on_received(),
+                        "errors_transmitted": data.errors_on_transmitted(),
+                    })).collect::<Vec<_>>(),
+                    "load_average": {
+                        "one_minute": sysinfo::System::load_average().one,
+                        "five_minutes": sysinfo::System::load_average().five,
+                        "fifteen_minutes": sysinfo::System::load_average().fifteen,
+                    },
+                    "hostname": hostname,
+                    "os_name": os_name,
+                    "os_version": os_version,
+                    "kernel_version": kernel_version,
+                    "uptime_secs": sysinfo::System::uptime(),
+                    "timestamp": std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                });
+
+                let json = serde_json::to_string(&stats).unwrap_or_default();
+                if sender.send(AxumMessage::Text(json.into())).await.is_err() {
+                    break; // Client disconnected
+                }
+            }
+            msg = receiver.next() => {
+                match msg {
+                    Some(Ok(AxumMessage::Close(_))) | None => break,
+                    Some(Ok(AxumMessage::Ping(data))) => {
+                        let _ = sender.send(AxumMessage::Pong(data)).await;
+                    }
+                    _ => {} // Ignore other messages
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 impl std::fmt::Debug for StreamingServer {

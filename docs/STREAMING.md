@@ -27,6 +27,10 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Rust Server](#rust-server)
   - [Python Server](#python-server)
   - [Frontend Connection](#frontend-connection)
+- [HTTP Endpoints](#http-endpoints)
+  - [Terminal WebSocket](#terminal-websocket-ws)
+  - [Sessions Endpoint](#sessions-endpoint-sessions)
+  - [System Stats WebSocket](#system-stats-websocket-stats)
 - [Advanced Features](#advanced-features)
   - [Multiple Viewers](#multiple-viewers)
   - [Read-Only Mode](#read-only-mode)
@@ -270,6 +274,10 @@ par-term-streamer --enable-http
 | `PAR_TERM_ENABLE_HTTP` | `--enable-http` | Enable HTTP serving |
 | `PAR_TERM_WEB_ROOT` | `--web-root` | Static files directory |
 | `PAR_TERM_API_KEY` | `--api-key` | WebSocket API key |
+| `PAR_TERM_MAX_SESSIONS` | `--max-sessions` | Maximum concurrent sessions |
+| `PAR_TERM_SESSION_IDLE_TIMEOUT` | `--session-idle-timeout` | Idle session timeout (seconds) |
+| `PAR_TERM_ENABLE_SYSTEM_STATS` | `--enable-system-stats` | Enable system stats collection |
+| `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
 
 **Download Web Frontend:**
 
@@ -347,6 +355,13 @@ streaming_server.shutdown("Server stopping")
 | `initial_rows` | u16 | 0 | Initial terminal rows (0=use terminal's current size) |
 | `tls` | Option\<TlsConfig\> | None | TLS configuration for HTTPS/WSS (see [TLS Configuration](#tlsssl-configuration)). Uses rustls for cross-platform compatibility |
 | `http_basic_auth` | Option\<HttpBasicAuthConfig\> | None | HTTP Basic Authentication for web frontend protection (username + password/hash) |
+| `max_sessions` | usize | 10 | Maximum concurrent terminal sessions |
+| `session_idle_timeout` | u64 | 900 | Idle session timeout in seconds (0=never timeout) |
+| `presets` | HashMap | {} | Shell presets: name → command mapping |
+| `max_clients_per_session` | usize | 0 | Maximum clients per session (0=unlimited) |
+| `input_rate_limit_bytes_per_sec` | usize | 0 | Input rate limit (0=unlimited) |
+| `enable_system_stats` | bool | false | Enable system resource statistics collection (CPU, memory, disk, network) |
+| `system_stats_interval_secs` | u64 | 5 | System stats collection interval in seconds |
 
 > **Note:** WebSocket API key authentication (`--api-key`) is configured separately at the CLI level and is not part of `StreamingConfig` or Python bindings.
 
@@ -1085,6 +1100,139 @@ terminal.onData((data) => {
   ws.send(encodeClientMessage(inputMsg));
 });
 ```
+
+## HTTP Endpoints
+
+When running with `--enable-http`, the streaming server exposes the following endpoints:
+
+| Endpoint | Protocol | Description |
+|----------|----------|-------------|
+| `/` | HTTP | Static files from web root directory |
+| `/ws` | WebSocket | Terminal streaming connection |
+| `/sessions` | HTTP | List active terminal sessions (JSON) |
+| `/stats` | WebSocket | System resource statistics stream (requires `--enable-system-stats`) |
+
+### Terminal WebSocket (`/ws`)
+
+The main terminal streaming endpoint. Clients connect here for bidirectional terminal communication.
+
+```javascript
+// Connect to terminal
+const ws = new WebSocket('ws://localhost:8081/ws');
+
+// With session selection
+const ws = new WebSocket('ws://localhost:8081/ws?session=my-session');
+
+// With shell preset
+const ws = new WebSocket('ws://localhost:8081/ws?preset=zsh');
+
+// With API key authentication
+const ws = new WebSocket('ws://localhost:8081/ws?api_key=your-key');
+```
+
+### Sessions Endpoint (`/sessions`)
+
+Returns JSON with active sessions info:
+
+```bash
+curl http://localhost:8081/sessions
+```
+
+Response:
+```json
+{
+  "sessions": [
+    {
+      "id": "default",
+      "clients": 1,
+      "cols": 120,
+      "rows": 40,
+      "created": 1707840000,
+      "idle_seconds": 5
+    }
+  ],
+  "max_sessions": 10,
+  "available": 9
+}
+```
+
+### System Stats WebSocket (`/stats`)
+
+Streams system resource statistics as JSON over WebSocket. Requires `--enable-system-stats` flag.
+
+```bash
+# Enable system stats when starting server
+par-term-streamer --enable-http --enable-system-stats --system-stats-interval 5
+```
+
+```javascript
+// Connect to stats stream
+const ws = new WebSocket('ws://localhost:8081/stats');
+
+ws.onmessage = (event) => {
+  const stats = JSON.parse(event.data);
+  console.log('CPU:', stats.cpu.overall_usage_percent, '%');
+  console.log('Memory:', stats.memory.used_bytes, '/', stats.memory.total_bytes);
+};
+```
+
+**Stats JSON Schema:**
+
+```json
+{
+  "cpu": {
+    "overall_usage_percent": 25.5,
+    "physical_core_count": 8,
+    "per_core_usage_percent": [30.0, 20.0, 25.0, 28.0, 22.0, 26.0, 24.0, 27.0],
+    "brand": "Apple M1 Pro",
+    "frequency_mhz": 3200
+  },
+  "memory": {
+    "total_bytes": 17179869184,
+    "used_bytes": 8589934592,
+    "available_bytes": 8589934592,
+    "swap_total_bytes": 2147483648,
+    "swap_used_bytes": 0
+  },
+  "disks": [
+    {
+      "name": "disk0s1",
+      "mount_point": "/",
+      "total_bytes": 500000000000,
+      "available_bytes": 250000000000,
+      "kind": "SSD",
+      "file_system": "APFS",
+      "is_removable": false
+    }
+  ],
+  "networks": [
+    {
+      "name": "en0",
+      "received_bytes": 1024000,
+      "transmitted_bytes": 512000,
+      "total_received_bytes": 10240000,
+      "total_transmitted_bytes": 5120000,
+      "packets_received": 10000,
+      "packets_transmitted": 5000,
+      "errors_received": 0,
+      "errors_transmitted": 0
+    }
+  ],
+  "load_average": {
+    "one_minute": 2.5,
+    "five_minutes": 2.0,
+    "fifteen_minutes": 1.8
+  },
+  "hostname": "my-server",
+  "os_name": "macOS",
+  "os_version": "14.0",
+  "kernel_version": "23.0.0",
+  "uptime_secs": 86400,
+  "timestamp": 1707840000000
+}
+```
+
+**Note:** System stats are also broadcast to all connected terminal WebSocket clients when enabled, in addition to being available via the dedicated `/stats` endpoint.
 
 ## Advanced Features
 
