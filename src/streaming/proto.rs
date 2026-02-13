@@ -13,8 +13,10 @@
 
 use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::{
-    ClientMessage as AppClientMessage, EventType as AppEventType,
-    ServerMessage as AppServerMessage, ThemeInfo as AppThemeInfo,
+    ClientMessage as AppClientMessage, CpuStats as AppCpuStats, DiskStats as AppDiskStats,
+    EventType as AppEventType, LoadAverage as AppLoadAverage, MemoryStats as AppMemoryStats,
+    NetworkInterfaceStats as AppNetworkInterfaceStats, ServerMessage as AppServerMessage,
+    ThemeInfo as AppThemeInfo,
 };
 use flate2::read::ZlibDecoder;
 use flate2::write::ZlibEncoder;
@@ -365,6 +367,71 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 timestamp: *timestamp,
                 cursor_line: *cursor_line,
             })),
+            AppServerMessage::SystemStats {
+                cpu,
+                memory,
+                disks,
+                networks,
+                load_average,
+                hostname,
+                os_name,
+                os_version,
+                kernel_version,
+                uptime_secs,
+                timestamp,
+            } => Some(Message::SystemStats(pb::SystemStats {
+                cpu: cpu.as_ref().map(|c| pb::CpuStats {
+                    overall_usage_percent: c.overall_usage_percent,
+                    physical_core_count: c.physical_core_count,
+                    per_core_usage_percent: c.per_core_usage_percent.clone(),
+                    brand: c.brand.clone(),
+                    frequency_mhz: c.frequency_mhz,
+                }),
+                memory: memory.as_ref().map(|m| pb::MemoryStats {
+                    total_bytes: m.total_bytes,
+                    used_bytes: m.used_bytes,
+                    available_bytes: m.available_bytes,
+                    swap_total_bytes: m.swap_total_bytes,
+                    swap_used_bytes: m.swap_used_bytes,
+                }),
+                disks: disks
+                    .iter()
+                    .map(|d| pb::DiskStats {
+                        name: d.name.clone(),
+                        mount_point: d.mount_point.clone(),
+                        total_bytes: d.total_bytes,
+                        available_bytes: d.available_bytes,
+                        kind: d.kind.clone(),
+                        file_system: d.file_system.clone(),
+                        is_removable: d.is_removable,
+                    })
+                    .collect(),
+                networks: networks
+                    .iter()
+                    .map(|n| pb::NetworkInterfaceStats {
+                        name: n.name.clone(),
+                        received_bytes: n.received_bytes,
+                        transmitted_bytes: n.transmitted_bytes,
+                        total_received_bytes: n.total_received_bytes,
+                        total_transmitted_bytes: n.total_transmitted_bytes,
+                        packets_received: n.packets_received,
+                        packets_transmitted: n.packets_transmitted,
+                        errors_received: n.errors_received,
+                        errors_transmitted: n.errors_transmitted,
+                    })
+                    .collect(),
+                load_average: load_average.as_ref().map(|la| pb::LoadAverage {
+                    one_minute: la.one_minute,
+                    five_minutes: la.five_minutes,
+                    fifteen_minutes: la.fifteen_minutes,
+                }),
+                hostname: hostname.clone(),
+                os_name: os_name.clone(),
+                os_version: os_version.clone(),
+                kernel_version: kernel_version.clone(),
+                uptime_secs: *uptime_secs,
+                timestamp: *timestamp,
+            })),
         };
 
         pb::ServerMessage { message }
@@ -459,6 +526,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Selection => pb::EventType::Selection as i32,
             AppEventType::Clipboard => pb::EventType::Clipboard as i32,
             AppEventType::Shell => pb::EventType::Shell as i32,
+            AppEventType::SystemStats => pb::EventType::SystemStats as i32,
         }
     }
 }
@@ -640,6 +708,61 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                     cursor_line: sie.cursor_line,
                 })
             }
+            Some(Message::SystemStats(ss)) => Ok(AppServerMessage::SystemStats {
+                cpu: ss.cpu.map(|c| AppCpuStats {
+                    overall_usage_percent: c.overall_usage_percent,
+                    physical_core_count: c.physical_core_count,
+                    per_core_usage_percent: c.per_core_usage_percent,
+                    brand: c.brand,
+                    frequency_mhz: c.frequency_mhz,
+                }),
+                memory: ss.memory.map(|m| AppMemoryStats {
+                    total_bytes: m.total_bytes,
+                    used_bytes: m.used_bytes,
+                    available_bytes: m.available_bytes,
+                    swap_total_bytes: m.swap_total_bytes,
+                    swap_used_bytes: m.swap_used_bytes,
+                }),
+                disks: ss
+                    .disks
+                    .into_iter()
+                    .map(|d| AppDiskStats {
+                        name: d.name,
+                        mount_point: d.mount_point,
+                        total_bytes: d.total_bytes,
+                        available_bytes: d.available_bytes,
+                        kind: d.kind,
+                        file_system: d.file_system,
+                        is_removable: d.is_removable,
+                    })
+                    .collect(),
+                networks: ss
+                    .networks
+                    .into_iter()
+                    .map(|n| AppNetworkInterfaceStats {
+                        name: n.name,
+                        received_bytes: n.received_bytes,
+                        transmitted_bytes: n.transmitted_bytes,
+                        total_received_bytes: n.total_received_bytes,
+                        total_transmitted_bytes: n.total_transmitted_bytes,
+                        packets_received: n.packets_received,
+                        packets_transmitted: n.packets_transmitted,
+                        errors_received: n.errors_received,
+                        errors_transmitted: n.errors_transmitted,
+                    })
+                    .collect(),
+                load_average: ss.load_average.map(|la| AppLoadAverage {
+                    one_minute: la.one_minute,
+                    five_minutes: la.five_minutes,
+                    fifteen_minutes: la.fifteen_minutes,
+                }),
+                hostname: ss.hostname,
+                os_name: ss.os_name,
+                os_version: ss.os_version,
+                kernel_version: ss.kernel_version,
+                uptime_secs: ss.uptime_secs,
+                timestamp: ss.timestamp,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -726,6 +849,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Selection => AppEventType::Selection,
             pb::EventType::Clipboard => AppEventType::Clipboard,
             pb::EventType::Shell => AppEventType::Shell,
+            pb::EventType::SystemStats => AppEventType::SystemStats,
         }
     }
 }

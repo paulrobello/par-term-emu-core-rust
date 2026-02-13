@@ -96,6 +96,9 @@ axum-server = { version = "0.8.0", features = ["tls-rustls"], optional = true }
 htpasswd-verify = { version = "0.3.0", optional = true }
 headers = { version = "0.4.1", optional = true }
 
+# System resource monitoring
+sysinfo = { version = "0.34", optional = true }
+
 # Screenshot support - using pure Rust swash for cross-platform compatibility
 image = "0.25.9"
 swash = "0.2.6"
@@ -125,7 +128,7 @@ tempfile = "3.25"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers", "sysinfo"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms

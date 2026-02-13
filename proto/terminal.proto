@@ -41,6 +41,7 @@ enum EventType {
   EVENT_TYPE_SELECTION = 15;
   EVENT_TYPE_CLIPBOARD = 16;
   EVENT_TYPE_SHELL = 17;
+  EVENT_TYPE_SYSTEM_STATS = 18;
 }
 
 // =============================================================================
@@ -72,6 +73,7 @@ message ServerMessage {
     SelectionChanged selection_changed = 21;
     ClipboardSync clipboard_sync = 22;
     ShellIntegrationEvent shell_integration_event = 23;
+    SystemStats system_stats = 24;
   }
 }
 
@@ -239,6 +241,70 @@ message ShellIntegrationEvent {
   optional int32 exit_code = 3;         // Exit code (for command_finished)
   optional uint64 timestamp = 4;
   optional uint64 cursor_line = 5;     // Absolute cursor line (scrollback_len + cursor_row) at marker time
+}
+
+// CPU statistics
+message CpuStats {
+  double overall_usage_percent = 1;
+  uint32 physical_core_count = 2;
+  repeated double per_core_usage_percent = 3;
+  optional string brand = 4;
+  optional uint64 frequency_mhz = 5;
+}
+
+// Memory statistics
+message MemoryStats {
+  uint64 total_bytes = 1;
+  uint64 used_bytes = 2;
+  uint64 available_bytes = 3;
+  uint64 swap_total_bytes = 4;
+  uint64 swap_used_bytes = 5;
+}
+
+// Individual disk statistics
+message DiskStats {
+  string name = 1;
+  string mount_point = 2;
+  uint64 total_bytes = 3;
+  uint64 available_bytes = 4;
+  string kind = 5;
+  string file_system = 6;
+  bool is_removable = 7;
+}
+
+// Network interface statistics
+message NetworkInterfaceStats {
+  string name = 1;
+  uint64 received_bytes = 2;
+  uint64 transmitted_bytes = 3;
+  uint64 total_received_bytes = 4;
+  uint64 total_transmitted_bytes = 5;
+  uint64 packets_received = 6;
+  uint64 packets_transmitted = 7;
+  uint64 errors_received = 8;
+  uint64 errors_transmitted = 9;
+}
+
+// System load averages
+message LoadAverage {
+  double one_minute = 1;
+  double five_minutes = 2;
+  double fifteen_minutes = 3;
+}
+
+// Combined system resource statistics
+message SystemStats {
+  optional CpuStats cpu = 1;
+  optional MemoryStats memory = 2;
+  repeated DiskStats disks = 3;
+  repeated NetworkInterfaceStats networks = 4;
+  optional LoadAverage load_average = 5;
+  optional string hostname = 6;
+  optional string os_name = 7;
+  optional string os_version = 8;
+  optional string kernel_version = 9;
+  optional uint64 uptime_secs = 10;
+  optional uint64 timestamp = 11;
 }
 
 // =============================================================================

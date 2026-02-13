@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -46,6 +46,8 @@ impl PyStreamingConfig {
         web_root: &str,
         max_clients_per_session: usize,
         input_rate_limit_bytes_per_sec: usize,
+        enable_system_stats: bool,
+        system_stats_interval_secs: u64,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -64,6 +66,8 @@ impl PyStreamingConfig {
                 presets: std::collections::HashMap::new(),
                 max_clients_per_session,
                 input_rate_limit_bytes_per_sec,
+                enable_system_stats,
+                system_stats_interval_secs,
             },
         }
     }
@@ -212,6 +216,30 @@ impl PyStreamingConfig {
         self.inner.input_rate_limit_bytes_per_sec = input_rate_limit_bytes_per_sec;
     }
 
+    /// Get whether system stats collection is enabled
+    #[getter]
+    fn enable_system_stats(&self) -> bool {
+        self.inner.enable_system_stats
+    }
+
+    /// Set whether system stats collection is enabled
+    #[setter]
+    fn set_enable_system_stats(&mut self, enable_system_stats: bool) {
+        self.inner.enable_system_stats = enable_system_stats;
+    }
+
+    /// Get the system stats collection interval in seconds
+    #[getter]
+    fn system_stats_interval_secs(&self) -> u64 {
+        self.inner.system_stats_interval_secs
+    }
+
+    /// Set the system stats collection interval in seconds
+    #[setter]
+    fn set_system_stats_interval_secs(&mut self, system_stats_interval_secs: u64) {
+        self.inner.system_stats_interval_secs = system_stats_interval_secs;
+    }
+
     fn __repr__(&self) -> String {
         let tls_status = if self.inner.tls.is_some() {
             ", tls=enabled"
@@ -219,7 +247,7 @@ impl PyStreamingConfig {
             ""
         };
         format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{})",
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}, enable_system_stats={}, system_stats_interval_secs={})",
             self.inner.max_clients,
             self.inner.send_initial_screen,
             self.inner.keepalive_interval,
@@ -228,7 +256,9 @@ impl PyStreamingConfig {
             self.inner.initial_rows,
             self.inner.enable_http,
             self.inner.web_root,
-            tls_status
+            tls_status,
+            self.inner.enable_system_stats,
+            self.inner.system_stats_interval_secs,
         )
     }
 
@@ -1028,9 +1058,25 @@ pub fn encode_server_message<'py>(
                 label,
             }
         }
+        "system_stats" => {
+            // system_stats is typically server-generated, but support encoding for completeness
+            ServerMessage::system_stats(
+                None,
+                None,
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed, system_stats",
                 message_type
             )));
         }
@@ -1293,6 +1339,84 @@ pub fn decode_server_message<'py>(
             dict.set_item("timestamp", timestamp)?;
             dict.set_item("cursor_line", cursor_line)?;
         }
+        ServerMessage::SystemStats {
+            cpu,
+            memory,
+            disks,
+            networks,
+            load_average,
+            hostname,
+            os_name,
+            os_version,
+            kernel_version,
+            uptime_secs,
+            timestamp,
+        } => {
+            dict.set_item("type", "system_stats")?;
+            if let Some(cpu) = cpu {
+                let cpu_dict = PyDict::new(py);
+                cpu_dict.set_item("overall_usage_percent", cpu.overall_usage_percent)?;
+                cpu_dict.set_item("physical_core_count", cpu.physical_core_count)?;
+                cpu_dict.set_item("per_core_usage_percent", &cpu.per_core_usage_percent)?;
+                cpu_dict.set_item("brand", &cpu.brand)?;
+                cpu_dict.set_item("frequency_mhz", cpu.frequency_mhz)?;
+                dict.set_item("cpu", cpu_dict)?;
+            }
+            if let Some(memory) = memory {
+                let mem_dict = PyDict::new(py);
+                mem_dict.set_item("total_bytes", memory.total_bytes)?;
+                mem_dict.set_item("used_bytes", memory.used_bytes)?;
+                mem_dict.set_item("available_bytes", memory.available_bytes)?;
+                mem_dict.set_item("swap_total_bytes", memory.swap_total_bytes)?;
+                mem_dict.set_item("swap_used_bytes", memory.swap_used_bytes)?;
+                dict.set_item("memory", mem_dict)?;
+            }
+            if !disks.is_empty() {
+                let disk_list = pyo3::types::PyList::empty(py);
+                for d in disks {
+                    let dd = PyDict::new(py);
+                    dd.set_item("name", &d.name)?;
+                    dd.set_item("mount_point", &d.mount_point)?;
+                    dd.set_item("total_bytes", d.total_bytes)?;
+                    dd.set_item("available_bytes", d.available_bytes)?;
+                    dd.set_item("kind", &d.kind)?;
+                    dd.set_item("file_system", &d.file_system)?;
+                    dd.set_item("is_removable", d.is_removable)?;
+                    disk_list.append(dd)?;
+                }
+                dict.set_item("disks", disk_list)?;
+            }
+            if !networks.is_empty() {
+                let net_list = pyo3::types::PyList::empty(py);
+                for n in networks {
+                    let nd = PyDict::new(py);
+                    nd.set_item("name", &n.name)?;
+                    nd.set_item("received_bytes", n.received_bytes)?;
+                    nd.set_item("transmitted_bytes", n.transmitted_bytes)?;
+                    nd.set_item("total_received_bytes", n.total_received_bytes)?;
+                    nd.set_item("total_transmitted_bytes", n.total_transmitted_bytes)?;
+                    nd.set_item("packets_received", n.packets_received)?;
+                    nd.set_item("packets_transmitted", n.packets_transmitted)?;
+                    nd.set_item("errors_received", n.errors_received)?;
+                    nd.set_item("errors_transmitted", n.errors_transmitted)?;
+                    net_list.append(nd)?;
+                }
+                dict.set_item("networks", net_list)?;
+            }
+            if let Some(la) = load_average {
+                let la_dict = PyDict::new(py);
+                la_dict.set_item("one_minute", la.one_minute)?;
+                la_dict.set_item("five_minutes", la.five_minutes)?;
+                la_dict.set_item("fifteen_minutes", la.fifteen_minutes)?;
+                dict.set_item("load_average", la_dict)?;
+            }
+            dict.set_item("hostname", hostname)?;
+            dict.set_item("os_name", os_name)?;
+            dict.set_item("os_version", os_version)?;
+            dict.set_item("kernel_version", kernel_version)?;
+            dict.set_item("uptime_secs", uptime_secs)?;
+            dict.set_item("timestamp", timestamp)?;
+        }
     }
 
     Ok(dict)
@@ -1380,6 +1504,7 @@ pub fn encode_client_message<'py>(
                     "selection" => Some(EventType::Selection),
                     "clipboard" => Some(EventType::Clipboard),
                     "shell" => Some(EventType::Shell),
+                    "system_stats" => Some(EventType::SystemStats),
                     _ => None,
                 })
                 .collect();
@@ -1498,6 +1623,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Selection => "selection",
                     crate::streaming::protocol::EventType::Clipboard => "clipboard",
                     crate::streaming::protocol::EventType::Shell => "shell",
+                    crate::streaming::protocol::EventType::SystemStats => "system_stats",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

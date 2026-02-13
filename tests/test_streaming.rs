@@ -493,6 +493,8 @@ mod streaming_tests {
                 presets: std::collections::HashMap::new(),
                 max_clients_per_session: 0,
                 input_rate_limit_bytes_per_sec: 0,
+                enable_system_stats: false,
+                system_stats_interval_secs: 5,
             };
 
             assert_eq!(config.max_clients, 50);
@@ -1332,6 +1334,329 @@ mod streaming_tests {
                     _ => panic!("Expected ModeChanged after round-trip"),
                 }
             }
+        }
+    }
+
+    mod system_stats_tests {
+        use super::*;
+        use par_term_emu_core_rust::streaming::protocol::{
+            CpuStats, DiskStats, LoadAverage, MemoryStats, NetworkInterfaceStats,
+        };
+
+        fn sample_cpu_stats() -> CpuStats {
+            CpuStats {
+                overall_usage_percent: 42.5,
+                physical_core_count: 8,
+                per_core_usage_percent: vec![30.0, 50.0, 40.0, 55.0],
+                brand: Some("TestCPU".to_string()),
+                frequency_mhz: Some(3600),
+            }
+        }
+
+        fn sample_memory_stats() -> MemoryStats {
+            MemoryStats {
+                total_bytes: 16_000_000_000,
+                used_bytes: 8_000_000_000,
+                available_bytes: 8_000_000_000,
+                swap_total_bytes: 4_000_000_000,
+                swap_used_bytes: 1_000_000_000,
+            }
+        }
+
+        fn sample_disk_stats() -> Vec<DiskStats> {
+            vec![DiskStats {
+                name: "sda1".to_string(),
+                mount_point: "/".to_string(),
+                total_bytes: 500_000_000_000,
+                available_bytes: 200_000_000_000,
+                kind: "SSD".to_string(),
+                file_system: "ext4".to_string(),
+                is_removable: false,
+            }]
+        }
+
+        fn sample_network_stats() -> Vec<NetworkInterfaceStats> {
+            vec![NetworkInterfaceStats {
+                name: "eth0".to_string(),
+                received_bytes: 1024,
+                transmitted_bytes: 2048,
+                total_received_bytes: 1_000_000,
+                total_transmitted_bytes: 500_000,
+                packets_received: 100,
+                packets_transmitted: 50,
+                errors_received: 0,
+                errors_transmitted: 0,
+            }]
+        }
+
+        fn sample_load_average() -> LoadAverage {
+            LoadAverage {
+                one_minute: 1.5,
+                five_minutes: 2.0,
+                fifteen_minutes: 1.8,
+            }
+        }
+
+        #[test]
+        fn test_system_stats_constructor() {
+            let msg = ServerMessage::system_stats(
+                Some(sample_cpu_stats()),
+                Some(sample_memory_stats()),
+                sample_disk_stats(),
+                sample_network_stats(),
+                Some(sample_load_average()),
+                Some("testhost".to_string()),
+                Some("Linux".to_string()),
+                Some("6.1.0".to_string()),
+                Some("6.1.0-generic".to_string()),
+                Some(86400),
+                Some(1700000000000),
+            );
+            match msg {
+                ServerMessage::SystemStats {
+                    cpu,
+                    memory,
+                    hostname,
+                    uptime_secs,
+                    ..
+                } => {
+                    assert!(cpu.is_some());
+                    assert!(memory.is_some());
+                    assert_eq!(hostname, Some("testhost".to_string()));
+                    assert_eq!(uptime_secs, Some(86400));
+                }
+                _ => panic!("Expected SystemStats"),
+            }
+        }
+
+        #[test]
+        fn test_system_stats_json_roundtrip() {
+            let msg = ServerMessage::system_stats(
+                Some(sample_cpu_stats()),
+                Some(sample_memory_stats()),
+                sample_disk_stats(),
+                sample_network_stats(),
+                Some(sample_load_average()),
+                Some("testhost".to_string()),
+                Some("Linux".to_string()),
+                Some("6.1.0".to_string()),
+                Some("6.1.0-generic".to_string()),
+                Some(86400),
+                Some(1700000000000),
+            );
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"system_stats"#));
+            assert!(json.contains(r#""overall_usage_percent":42.5"#));
+            assert!(json.contains(r#""total_bytes":16000000000"#));
+            assert!(json.contains(r#""hostname":"testhost"#));
+
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::SystemStats {
+                    cpu,
+                    memory,
+                    disks,
+                    networks,
+                    load_average,
+                    hostname,
+                    os_name,
+                    ..
+                } => {
+                    let cpu = cpu.unwrap();
+                    assert!((cpu.overall_usage_percent - 42.5).abs() < f64::EPSILON);
+                    assert_eq!(cpu.physical_core_count, 8);
+                    assert_eq!(cpu.per_core_usage_percent.len(), 4);
+                    assert_eq!(cpu.brand, Some("TestCPU".to_string()));
+                    assert_eq!(cpu.frequency_mhz, Some(3600));
+
+                    let memory = memory.unwrap();
+                    assert_eq!(memory.total_bytes, 16_000_000_000);
+                    assert_eq!(memory.used_bytes, 8_000_000_000);
+
+                    assert_eq!(disks.len(), 1);
+                    assert_eq!(disks[0].name, "sda1");
+                    assert_eq!(disks[0].file_system, "ext4");
+                    assert!(!disks[0].is_removable);
+
+                    assert_eq!(networks.len(), 1);
+                    assert_eq!(networks[0].name, "eth0");
+                    assert_eq!(networks[0].received_bytes, 1024);
+
+                    let la = load_average.unwrap();
+                    assert!((la.one_minute - 1.5).abs() < f64::EPSILON);
+
+                    assert_eq!(hostname, Some("testhost".to_string()));
+                    assert_eq!(os_name, Some("Linux".to_string()));
+                }
+                _ => panic!("Expected SystemStats"),
+            }
+        }
+
+        #[test]
+        fn test_system_stats_proto_roundtrip() {
+            let msg = ServerMessage::system_stats(
+                Some(sample_cpu_stats()),
+                Some(sample_memory_stats()),
+                sample_disk_stats(),
+                sample_network_stats(),
+                Some(sample_load_average()),
+                Some("testhost".to_string()),
+                Some("Linux".to_string()),
+                Some("6.1.0".to_string()),
+                Some("6.1.0-generic".to_string()),
+                Some(86400),
+                Some(1700000000000),
+            );
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::SystemStats {
+                    cpu,
+                    memory,
+                    disks,
+                    networks,
+                    load_average,
+                    hostname,
+                    os_name,
+                    os_version,
+                    kernel_version,
+                    uptime_secs,
+                    timestamp,
+                } => {
+                    let cpu = cpu.unwrap();
+                    assert!((cpu.overall_usage_percent - 42.5).abs() < f64::EPSILON);
+                    assert_eq!(cpu.physical_core_count, 8);
+                    assert_eq!(cpu.per_core_usage_percent.len(), 4);
+                    assert_eq!(cpu.brand, Some("TestCPU".to_string()));
+                    assert_eq!(cpu.frequency_mhz, Some(3600));
+
+                    let memory = memory.unwrap();
+                    assert_eq!(memory.total_bytes, 16_000_000_000);
+                    assert_eq!(memory.available_bytes, 8_000_000_000);
+                    assert_eq!(memory.swap_total_bytes, 4_000_000_000);
+                    assert_eq!(memory.swap_used_bytes, 1_000_000_000);
+
+                    assert_eq!(disks.len(), 1);
+                    assert_eq!(disks[0].mount_point, "/");
+                    assert_eq!(disks[0].total_bytes, 500_000_000_000);
+
+                    assert_eq!(networks.len(), 1);
+                    assert_eq!(networks[0].total_received_bytes, 1_000_000);
+                    assert_eq!(networks[0].packets_received, 100);
+
+                    let la = load_average.unwrap();
+                    assert!((la.five_minutes - 2.0).abs() < f64::EPSILON);
+                    assert!((la.fifteen_minutes - 1.8).abs() < f64::EPSILON);
+
+                    assert_eq!(hostname, Some("testhost".to_string()));
+                    assert_eq!(os_name, Some("Linux".to_string()));
+                    assert_eq!(os_version, Some("6.1.0".to_string()));
+                    assert_eq!(kernel_version, Some("6.1.0-generic".to_string()));
+                    assert_eq!(uptime_secs, Some(86400));
+                    assert_eq!(timestamp, Some(1700000000000));
+                }
+                _ => panic!("Expected SystemStats"),
+            }
+        }
+
+        #[test]
+        fn test_system_stats_event_type_conversion() {
+            let i32_val: i32 = EventType::SystemStats.into();
+            assert_eq!(i32_val, 18);
+        }
+
+        #[test]
+        fn test_system_stats_config_defaults() {
+            let config = StreamingConfig::default();
+            assert!(!config.enable_system_stats);
+            assert_eq!(config.system_stats_interval_secs, 5);
+        }
+
+        #[test]
+        fn test_system_stats_empty_roundtrip() {
+            let msg = ServerMessage::system_stats(
+                None,
+                None,
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"system_stats"#));
+
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::SystemStats {
+                    cpu,
+                    memory,
+                    disks,
+                    networks,
+                    load_average,
+                    hostname,
+                    ..
+                } => {
+                    assert!(cpu.is_none());
+                    assert!(memory.is_none());
+                    assert!(disks.is_empty());
+                    assert!(networks.is_empty());
+                    assert!(load_average.is_none());
+                    assert!(hostname.is_none());
+                }
+                _ => panic!("Expected SystemStats"),
+            }
+        }
+
+        #[test]
+        fn test_system_stats_empty_proto_roundtrip() {
+            let msg = ServerMessage::system_stats(
+                None,
+                None,
+                vec![],
+                vec![],
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            );
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::SystemStats {
+                    cpu,
+                    memory,
+                    disks,
+                    networks,
+                    load_average,
+                    hostname,
+                    ..
+                } => {
+                    assert!(cpu.is_none());
+                    assert!(memory.is_none());
+                    assert!(disks.is_empty());
+                    assert!(networks.is_empty());
+                    assert!(load_average.is_none());
+                    assert!(hostname.is_none());
+                }
+                _ => panic!("Expected SystemStats"),
+            }
+        }
+
+        #[test]
+        fn test_system_stats_event_type_json_roundtrip() {
+            let event = EventType::SystemStats;
+            let json = serde_json::to_string(&event).unwrap();
+            assert_eq!(json, r#""system_stats""#);
+            let deserialized: EventType = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized, EventType::SystemStats);
         }
     }
 }

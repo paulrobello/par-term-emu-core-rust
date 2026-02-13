@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -83,6 +83,8 @@ pub mod server_message {
         ClipboardSync(super::ClipboardSync),
         #[prost(message, tag = "23")]
         ShellIntegrationEvent(super::ShellIntegrationEvent),
+        #[prost(message, tag = "24")]
+        SystemStats(super::SystemStats),
     }
 }
 /// Terminal output data (very high frequency)
@@ -363,6 +365,110 @@ pub struct ShellIntegrationEvent {
     #[prost(uint64, optional, tag = "5")]
     pub cursor_line: ::core::option::Option<u64>,
 }
+/// CPU statistics
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct CpuStats {
+    #[prost(double, tag = "1")]
+    pub overall_usage_percent: f64,
+    #[prost(uint32, tag = "2")]
+    pub physical_core_count: u32,
+    #[prost(double, repeated, tag = "3")]
+    pub per_core_usage_percent: ::prost::alloc::vec::Vec<f64>,
+    #[prost(string, optional, tag = "4")]
+    pub brand: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "5")]
+    pub frequency_mhz: ::core::option::Option<u64>,
+}
+/// Memory statistics
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct MemoryStats {
+    #[prost(uint64, tag = "1")]
+    pub total_bytes: u64,
+    #[prost(uint64, tag = "2")]
+    pub used_bytes: u64,
+    #[prost(uint64, tag = "3")]
+    pub available_bytes: u64,
+    #[prost(uint64, tag = "4")]
+    pub swap_total_bytes: u64,
+    #[prost(uint64, tag = "5")]
+    pub swap_used_bytes: u64,
+}
+/// Individual disk statistics
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DiskStats {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub mount_point: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub total_bytes: u64,
+    #[prost(uint64, tag = "4")]
+    pub available_bytes: u64,
+    #[prost(string, tag = "5")]
+    pub kind: ::prost::alloc::string::String,
+    #[prost(string, tag = "6")]
+    pub file_system: ::prost::alloc::string::String,
+    #[prost(bool, tag = "7")]
+    pub is_removable: bool,
+}
+/// Network interface statistics
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct NetworkInterfaceStats {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub received_bytes: u64,
+    #[prost(uint64, tag = "3")]
+    pub transmitted_bytes: u64,
+    #[prost(uint64, tag = "4")]
+    pub total_received_bytes: u64,
+    #[prost(uint64, tag = "5")]
+    pub total_transmitted_bytes: u64,
+    #[prost(uint64, tag = "6")]
+    pub packets_received: u64,
+    #[prost(uint64, tag = "7")]
+    pub packets_transmitted: u64,
+    #[prost(uint64, tag = "8")]
+    pub errors_received: u64,
+    #[prost(uint64, tag = "9")]
+    pub errors_transmitted: u64,
+}
+/// System load averages
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct LoadAverage {
+    #[prost(double, tag = "1")]
+    pub one_minute: f64,
+    #[prost(double, tag = "2")]
+    pub five_minutes: f64,
+    #[prost(double, tag = "3")]
+    pub fifteen_minutes: f64,
+}
+/// Combined system resource statistics
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SystemStats {
+    #[prost(message, optional, tag = "1")]
+    pub cpu: ::core::option::Option<CpuStats>,
+    #[prost(message, optional, tag = "2")]
+    pub memory: ::core::option::Option<MemoryStats>,
+    #[prost(message, repeated, tag = "3")]
+    pub disks: ::prost::alloc::vec::Vec<DiskStats>,
+    #[prost(message, repeated, tag = "4")]
+    pub networks: ::prost::alloc::vec::Vec<NetworkInterfaceStats>,
+    #[prost(message, optional, tag = "5")]
+    pub load_average: ::core::option::Option<LoadAverage>,
+    #[prost(string, optional, tag = "6")]
+    pub hostname: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "7")]
+    pub os_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "8")]
+    pub os_version: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "9")]
+    pub kernel_version: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "10")]
+    pub uptime_secs: ::core::option::Option<u64>,
+    #[prost(uint64, optional, tag = "11")]
+    pub timestamp: ::core::option::Option<u64>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(
@@ -506,6 +612,7 @@ pub enum EventType {
     Selection = 15,
     Clipboard = 16,
     Shell = 17,
+    SystemStats = 18,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -532,6 +639,7 @@ impl EventType {
             Self::Selection => "EVENT_TYPE_SELECTION",
             Self::Clipboard => "EVENT_TYPE_CLIPBOARD",
             Self::Shell => "EVENT_TYPE_SHELL",
+            Self::SystemStats => "EVENT_TYPE_SYSTEM_STATS",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -555,6 +663,7 @@ impl EventType {
             "EVENT_TYPE_SELECTION" => Some(Self::Selection),
             "EVENT_TYPE_CLIPBOARD" => Some(Self::Clipboard),
             "EVENT_TYPE_SHELL" => Some(Self::Shell),
+            "EVENT_TYPE_SYSTEM_STATS" => Some(Self::SystemStats),
             _ => None,
         }
     }

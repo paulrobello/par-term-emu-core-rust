@@ -284,6 +284,10 @@ pub struct StreamingConfig {
     pub max_clients_per_session: usize,
     /// Input rate limit in bytes per second (0 = unlimited)
     pub input_rate_limit_bytes_per_sec: usize,
+    /// Enable system resource statistics collection
+    pub enable_system_stats: bool,
+    /// System stats collection interval in seconds
+    pub system_stats_interval_secs: u64,
 }
 
 impl Default for StreamingConfig {
@@ -304,6 +308,8 @@ impl Default for StreamingConfig {
             presets: HashMap::new(),
             max_clients_per_session: 0,
             input_rate_limit_bytes_per_sec: 0,
+            enable_system_stats: false,
+            system_stats_interval_secs: 5,
         }
     }
 }
@@ -2689,6 +2695,7 @@ fn should_send(
         ServerMessage::SelectionChanged { .. } => subs.contains(&EventType::Selection),
         ServerMessage::ClipboardSync { .. } => subs.contains(&EventType::Clipboard),
         ServerMessage::ShellIntegrationEvent { .. } => subs.contains(&EventType::Shell),
+        ServerMessage::SystemStats { .. } => subs.contains(&EventType::SystemStats),
         // Always send system messages
         ServerMessage::Connected { .. }
         | ServerMessage::Refresh { .. }

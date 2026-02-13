@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Streaming Server: System Resource Statistics**: New optional system stats collection pushes CPU, memory, disk, network, and load average data to subscribed WebSocket clients. Enabled via `--enable-system-stats` CLI flag (env: `PAR_TERM_ENABLE_SYSTEM_STATS`) with configurable interval via `--system-stats-interval` (default 5s, env: `PAR_TERM_SYSTEM_STATS_INTERVAL`). Disabled by default
+- **Streaming Protocol: `SystemStats` Message**: New `system_stats` server message type with nested `CpuStats`, `MemoryStats`, `DiskStats`, `NetworkInterfaceStats`, and `LoadAverage` structures. Includes static host info (hostname, OS name/version, kernel version) and dynamic metrics (CPU usage, memory, disk space, network I/O, load averages, uptime)
+- **Streaming Protocol: `system_stats` Event Type**: New `EVENT_TYPE_SYSTEM_STATS = 18` for subscription filtering. Clients must subscribe to `system_stats` events to receive stats messages
+- **Python Bindings: System Stats Config**: `PyStreamingConfig` now exposes `enable_system_stats` and `system_stats_interval_secs` as constructor params and getter/setter properties
+- **Python Bindings: System Stats Decode**: `decode_server_message()` now returns full system stats data (cpu, memory, disks, networks, load_average, host info) as nested Python dicts/lists
 - **Kitty Graphics: Chunked Transmission**: Large images split across multiple DCS sequences are now properly accumulated and processed. Parser state persists on `Terminal` between chunks (`m=1` continues, `m=0` finalizes)
 - **Kitty Graphics: Complete Delete Targets**: Implemented remaining `KittyDeleteTarget` variants — `AtCursor`, `InCell`, `OnScreen`, `ByColumn`, and `ByRow` now correctly remove graphics placements by position
 - **Kitty Graphics: Placeholder Diacritics**: Unicode placeholder cells now include combining diacritics encoding row/column/MSB offsets in `Cell.combining`, enabling frontends to reconstruct full placeholder sequences

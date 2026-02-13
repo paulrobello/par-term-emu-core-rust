@@ -522,6 +522,14 @@ struct Args {
     /// Input rate limit in bytes per second (0 = unlimited)
     #[arg(long, default_value = "0", env = "PAR_TERM_INPUT_RATE_LIMIT")]
     input_rate_limit: usize,
+
+    /// Enable system resource statistics collection (CPU, memory, disk, network)
+    #[arg(long, env = "PAR_TERM_ENABLE_SYSTEM_STATS")]
+    enable_system_stats: bool,
+
+    /// System stats collection interval in seconds
+    #[arg(long, default_value = "5", env = "PAR_TERM_SYSTEM_STATS_INTERVAL")]
+    system_stats_interval: u64,
 }
 
 /// Main event loop state
@@ -837,6 +845,10 @@ struct BinarySessionFactory {
     pty_sessions: Arc<parking_lot::RwLock<HashMap<String, Arc<Mutex<PtySession>>>>>,
     /// Reference to the streaming server (set after creation)
     streaming_server: Arc<parking_lot::RwLock<Option<Arc<StreamingServer>>>>,
+    /// Whether to collect system resource statistics
+    enable_system_stats: bool,
+    /// System stats collection interval in seconds
+    system_stats_interval_secs: u64,
 }
 
 impl BinarySessionFactory {
@@ -845,6 +857,8 @@ impl BinarySessionFactory {
         scrollback: usize,
         theme: Option<Theme>,
         restart_shell: bool,
+        enable_system_stats: bool,
+        system_stats_interval_secs: u64,
     ) -> Self {
         Self {
             default_shell,
@@ -853,6 +867,8 @@ impl BinarySessionFactory {
             restart_shell,
             pty_sessions: Arc::new(parking_lot::RwLock::new(HashMap::new())),
             streaming_server: Arc::new(parking_lot::RwLock::new(None)),
+            enable_system_stats,
+            system_stats_interval_secs,
         }
     }
 
@@ -1229,6 +1245,142 @@ impl SessionFactory for BinarySessionFactory {
                 }
             }
         });
+
+        // Spawn system stats collection task if enabled
+        if self.enable_system_stats {
+            let session_id_clone = session_id.to_string();
+            let server_ref = self.streaming_server.read().clone();
+            let interval_secs = self.system_stats_interval_secs;
+            tokio::spawn(async move {
+                use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind};
+
+                let refresh_kind = RefreshKind::nothing()
+                    .with_cpu(CpuRefreshKind::everything())
+                    .with_memory(MemoryRefreshKind::everything());
+                let mut sys = sysinfo::System::new_with_specifics(refresh_kind);
+                let mut disks = Disks::new_with_refreshed_list();
+                let mut networks = Networks::new_with_refreshed_list();
+
+                // Collect static info once
+                let hostname = sysinfo::System::host_name();
+                let os_name = sysinfo::System::name();
+                let os_version = sysinfo::System::os_version();
+                let kernel_version = sysinfo::System::kernel_version();
+
+                // Initial CPU refresh for baseline (first reading is always 0%)
+                sys.refresh_specifics(refresh_kind);
+
+                let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
+                // Skip first tick (happens immediately, CPU would be 0%)
+                interval.tick().await;
+
+                loop {
+                    interval.tick().await;
+
+                    let server = match server_ref {
+                        Some(ref s) => s,
+                        None => continue,
+                    };
+
+                    // Refresh all metrics
+                    sys.refresh_specifics(refresh_kind);
+                    disks.refresh(true);
+                    networks.refresh(true);
+
+                    // Build CPU stats
+                    let cpu = {
+                        let global = sys.global_cpu_usage();
+                        let cores = sysinfo::System::physical_core_count().unwrap_or(0) as u32;
+                        let per_core: Vec<f64> =
+                            sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect();
+                        let brand = sys.cpus().first().map(|c| c.brand().to_string());
+                        let freq = sys.cpus().first().map(|c| c.frequency());
+                        par_term_emu_core_rust::streaming::protocol::CpuStats {
+                            overall_usage_percent: global as f64,
+                            physical_core_count: cores,
+                            per_core_usage_percent: per_core,
+                            brand,
+                            frequency_mhz: freq,
+                        }
+                    };
+
+                    // Build memory stats
+                    let memory = par_term_emu_core_rust::streaming::protocol::MemoryStats {
+                        total_bytes: sys.total_memory(),
+                        used_bytes: sys.used_memory(),
+                        available_bytes: sys.available_memory(),
+                        swap_total_bytes: sys.total_swap(),
+                        swap_used_bytes: sys.used_swap(),
+                    };
+
+                    // Build disk stats
+                    let disk_stats: Vec<par_term_emu_core_rust::streaming::protocol::DiskStats> =
+                        disks
+                            .iter()
+                            .map(|d| par_term_emu_core_rust::streaming::protocol::DiskStats {
+                                name: d.name().to_string_lossy().to_string(),
+                                mount_point: d.mount_point().to_string_lossy().to_string(),
+                                total_bytes: d.total_space(),
+                                available_bytes: d.available_space(),
+                                kind: format!("{:?}", d.kind()),
+                                file_system: d.file_system().to_string_lossy().to_string(),
+                                is_removable: d.is_removable(),
+                            })
+                            .collect();
+
+                    // Build network stats
+                    let network_stats: Vec<
+                        par_term_emu_core_rust::streaming::protocol::NetworkInterfaceStats,
+                    > = networks
+                        .iter()
+                        .map(|(name, data)| {
+                            par_term_emu_core_rust::streaming::protocol::NetworkInterfaceStats {
+                                name: name.to_string(),
+                                received_bytes: data.received(),
+                                transmitted_bytes: data.transmitted(),
+                                total_received_bytes: data.total_received(),
+                                total_transmitted_bytes: data.total_transmitted(),
+                                packets_received: data.packets_received(),
+                                packets_transmitted: data.packets_transmitted(),
+                                errors_received: data.errors_on_received(),
+                                errors_transmitted: data.errors_on_transmitted(),
+                            }
+                        })
+                        .collect();
+
+                    // Build load average
+                    let load_avg = sysinfo::System::load_average();
+                    let load_average = par_term_emu_core_rust::streaming::protocol::LoadAverage {
+                        one_minute: load_avg.one,
+                        five_minutes: load_avg.five,
+                        fifteen_minutes: load_avg.fifteen,
+                    };
+
+                    let uptime = sysinfo::System::uptime();
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .ok();
+
+                    let msg =
+                        par_term_emu_core_rust::streaming::protocol::ServerMessage::system_stats(
+                            Some(cpu),
+                            Some(memory),
+                            disk_stats,
+                            network_stats,
+                            Some(load_average),
+                            hostname.clone(),
+                            os_name.clone(),
+                            os_version.clone(),
+                            kernel_version.clone(),
+                            Some(uptime),
+                            timestamp,
+                        );
+
+                    server.send_to_session(&session_id_clone, msg);
+                }
+            });
+        }
 
         Ok(())
     }
@@ -1627,11 +1779,19 @@ async fn main() -> Result<()> {
         presets,
         max_clients_per_session: args.max_clients_per_session,
         input_rate_limit_bytes_per_sec: args.input_rate_limit,
+        enable_system_stats: args.enable_system_stats,
+        system_stats_interval_secs: args.system_stats_interval,
     };
 
     // Create streaming server
     let addr = format!("{}:{}", args.host, args.port);
     info!("Creating streaming server on {}", addr);
+    if args.enable_system_stats {
+        info!(
+            "System stats enabled (interval: {}s)",
+            args.system_stats_interval
+        );
+    }
 
     let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
     let is_macro_mode = args.macro_file.is_some();
@@ -1643,6 +1803,8 @@ async fn main() -> Result<()> {
             args.scrollback,
             Some(theme.clone()),
             restart_shell,
+            args.enable_system_stats,
+            args.system_stats_interval,
         )))
     } else {
         None

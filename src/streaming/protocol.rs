@@ -20,6 +20,63 @@ pub struct ThemeInfo {
     pub bright: [(u8, u8, u8); 8],
 }
 
+/// CPU statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuStats {
+    pub overall_usage_percent: f64,
+    pub physical_core_count: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub per_core_usage_percent: Vec<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brand: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_mhz: Option<u64>,
+}
+
+/// Memory statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MemoryStats {
+    pub total_bytes: u64,
+    pub used_bytes: u64,
+    pub available_bytes: u64,
+    pub swap_total_bytes: u64,
+    pub swap_used_bytes: u64,
+}
+
+/// Individual disk statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiskStats {
+    pub name: String,
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub kind: String,
+    pub file_system: String,
+    pub is_removable: bool,
+}
+
+/// Network interface statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkInterfaceStats {
+    pub name: String,
+    pub received_bytes: u64,
+    pub transmitted_bytes: u64,
+    pub total_received_bytes: u64,
+    pub total_transmitted_bytes: u64,
+    pub packets_received: u64,
+    pub packets_transmitted: u64,
+    pub errors_received: u64,
+    pub errors_transmitted: u64,
+}
+
+/// System load averages
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoadAverage {
+    pub one_minute: f64,
+    pub five_minutes: f64,
+    pub fifteen_minutes: f64,
+}
+
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -305,6 +362,44 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         cursor_line: Option<u64>,
     },
+
+    /// System resource statistics (CPU, memory, disk, network)
+    #[serde(rename = "system_stats")]
+    SystemStats {
+        /// CPU statistics
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cpu: Option<CpuStats>,
+        /// Memory statistics
+        #[serde(skip_serializing_if = "Option::is_none")]
+        memory: Option<MemoryStats>,
+        /// Disk statistics
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        disks: Vec<DiskStats>,
+        /// Network interface statistics
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        networks: Vec<NetworkInterfaceStats>,
+        /// System load averages
+        #[serde(skip_serializing_if = "Option::is_none")]
+        load_average: Option<LoadAverage>,
+        /// Hostname
+        #[serde(skip_serializing_if = "Option::is_none")]
+        hostname: Option<String>,
+        /// Operating system name
+        #[serde(skip_serializing_if = "Option::is_none")]
+        os_name: Option<String>,
+        /// Operating system version
+        #[serde(skip_serializing_if = "Option::is_none")]
+        os_version: Option<String>,
+        /// Kernel version
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kernel_version: Option<String>,
+        /// System uptime in seconds
+        #[serde(skip_serializing_if = "Option::is_none")]
+        uptime_secs: Option<u64>,
+        /// Timestamp (Unix epoch milliseconds)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<u64>,
+    },
 }
 
 /// Messages sent from client to server
@@ -435,6 +530,9 @@ pub enum EventType {
     Clipboard,
     /// Shell integration events
     Shell,
+    /// System resource statistics events
+    #[serde(rename = "system_stats")]
+    SystemStats,
 }
 
 impl ServerMessage {
@@ -815,6 +913,36 @@ impl ServerMessage {
             exit_code,
             timestamp,
             cursor_line,
+        }
+    }
+
+    /// Create a system stats message
+    #[allow(clippy::too_many_arguments)]
+    pub fn system_stats(
+        cpu: Option<CpuStats>,
+        memory: Option<MemoryStats>,
+        disks: Vec<DiskStats>,
+        networks: Vec<NetworkInterfaceStats>,
+        load_average: Option<LoadAverage>,
+        hostname: Option<String>,
+        os_name: Option<String>,
+        os_version: Option<String>,
+        kernel_version: Option<String>,
+        uptime_secs: Option<u64>,
+        timestamp: Option<u64>,
+    ) -> Self {
+        Self::SystemStats {
+            cpu,
+            memory,
+            disks,
+            networks,
+            load_average,
+            hostname,
+            os_name,
+            os_version,
+            kernel_version,
+            uptime_secs,
+            timestamp,
         }
     }
 
