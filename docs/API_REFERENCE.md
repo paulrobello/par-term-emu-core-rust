@@ -1515,6 +1515,7 @@ Encode a server message into binary protobuf format.
 | `"trigger_matched"` | `trigger_id`, `row`, `col`, `end_col`, `text`, `captures`, `timestamp` | Trigger pattern matched |
 | `"user_var_changed"` | `name`, `value`, `old_value` | User variable changed (OSC 1337 SetUserVar) |
 | `"progress_bar_changed"` | `action`, `id`, `state`, `percent`, `label` | Progress bar state changed (OSC 9;4 / OSC 934) |
+| `"system_stats"` | *(none — server-generated)* | System resource statistics (CPU, memory, disk, network) |
 
 **Example:**
 ```python
@@ -1533,6 +1534,24 @@ decode_server_message(data: bytes) -> dict
 ```
 
 Decode a binary protobuf server message into a Python dict with a `"type"` key and message-specific fields.
+
+**`system_stats` message fields:**
+
+When `type` is `"system_stats"`, the dict contains:
+
+| Field | Type | Description |
+|---|---|---|
+| `cpu` | `dict \| None` | `overall_usage_percent`, `physical_core_count`, `per_core_usage_percent`, `brand`, `frequency_mhz` |
+| `memory` | `dict \| None` | `total_bytes`, `used_bytes`, `available_bytes`, `swap_total_bytes`, `swap_used_bytes` |
+| `disks` | `list[dict]` | Each: `name`, `mount_point`, `total_bytes`, `available_bytes`, `kind`, `file_system`, `is_removable` |
+| `networks` | `list[dict]` | Each: `name`, `received_bytes`, `transmitted_bytes`, `total_received_bytes`, `total_transmitted_bytes`, `packets_received`, `packets_transmitted`, `errors_received`, `errors_transmitted` |
+| `load_average` | `dict \| None` | `one_minute`, `five_minutes`, `fifteen_minutes` |
+| `hostname` | `str \| None` | System hostname |
+| `os_name` | `str \| None` | Operating system name |
+| `os_version` | `str \| None` | OS version string |
+| `kernel_version` | `str \| None` | Kernel version string |
+| `uptime_secs` | `int \| None` | System uptime in seconds |
+| `timestamp` | `int \| None` | Unix epoch milliseconds |
 
 ## See Also
 

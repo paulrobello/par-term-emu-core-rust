@@ -1447,6 +1447,9 @@ cargo build --bin par-term-streamer --no-default-features --features streaming -
 # With authentication
 ./target/release/par-term-streamer --api-key my-secret --theme monokai
 
+# With system resource stats (CPU, memory, disk, network)
+./target/release/par-term-streamer --enable-system-stats --system-stats-interval 5
+
 # Install globally
 make streamer-install
 par-term-streamer --help
