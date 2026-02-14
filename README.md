@@ -13,6 +13,19 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New (Unreleased)
+
+### General-Purpose File Transfer (OSC 1337)
+
+Full file transfer support via the iTerm2 OSC 1337 `File=` protocol:
+
+- **Downloads** (`inline=0`): Host sends files to the terminal. The library decodes the base64 payload, tracks transfer progress, and emits lifecycle events (`file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`). Frontends retrieve raw bytes via `take_completed_transfer()` and decide where to save.
+- **Uploads** (`RequestUpload=format=tgz`): Host requests files from the terminal. An `upload_requested` event is emitted; frontends show a file picker and respond via `send_upload_data()` or `cancel_upload()`.
+- **FileTransferManager**: Manages active and completed transfers with bounded ring buffer, configurable max transfer size, and progress tracking.
+- **Python Bindings**: 9 new methods on `Terminal` -- `get_active_transfers()`, `get_completed_transfers()`, `get_transfer()`, `take_completed_transfer()`, `cancel_file_transfer()`, `send_upload_data()`, `cancel_upload()`, `set_max_transfer_size()`, `get_max_transfer_size()`.
+- **Streaming Protocol**: 5 new event types for real-time file transfer event delivery to WebSocket clients.
+- **Observer API**: All 5 file transfer event types integrated with the push-based observer system.
+
 ## What's New in 0.37.0
 
 ### API Key Authentication, System Stats & Kitty Graphics
@@ -1061,6 +1074,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Synchronized Updates (DEC 2026)** - Flicker-free rendering
 - **Tmux Control Protocol** - Control mode integration support
 - **Observer API** - Push-based event delivery with sync callbacks and async queues; convenience wrappers for common patterns (bell, title, CWD, command completion, zone changes)
+- **General-purpose File Transfer** - OSC 1337 `File=` with `inline=0` for host-to-terminal downloads, `RequestUpload` for terminal-to-host uploads, with progress tracking and lifecycle events
 
 ### Graphics Support
 

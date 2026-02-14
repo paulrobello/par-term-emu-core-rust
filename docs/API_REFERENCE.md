@@ -40,6 +40,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Semantic Snapshot](#semantic-snapshot)
   - [Clipboard Extended](#clipboard-extended)
   - [Graphics Extended](#graphics-extended)
+  - [File Transfer](#file-transfer)
   - [Rendering and Damage Tracking](#rendering-and-damage-tracking)
   - [Performance and Benchmarking](#performance-and-benchmarking)
   - [Tmux Control Mode](#tmux-control-mode)
@@ -645,6 +646,95 @@ Additional graphics management beyond basic display:
 - `get_sixel_stats() -> dict[str, int]`: Get Sixel statistics
 - `get_dropped_sixel_graphics() -> int`: Get count of dropped Sixel graphics
 
+### File Transfer
+
+General-purpose file transfer support via OSC 1337 `File=` protocol with `inline=0`. Supports both host-to-terminal downloads and terminal-to-host uploads (`RequestUpload`).
+
+#### Query Methods
+
+- `get_active_transfers() -> list[dict]`: Get all currently active (in-progress) file transfers. Each dict contains:
+  - `id` (`int`): Unique transfer identifier
+  - `direction` (`str`): `"download"` or `"upload"`
+  - `filename` (`str | None`): Original filename if provided
+  - `status` (`str`): Current status (`"pending"`, `"in_progress"`, `"completed"`, `"failed"`, `"cancelled"`)
+  - `bytes_transferred` (`int`): Bytes received so far
+  - `total_bytes` (`int | None`): Expected total size if known
+- `get_completed_transfers() -> list[dict]`: Get completed transfers (without data bytes). Same dict keys as `get_active_transfers()`.
+- `get_transfer(transfer_id: int) -> dict | None`: Get a specific transfer by ID. Returns `None` if not found.
+
+#### Retrieve and Consume
+
+- `take_completed_transfer(transfer_id: int) -> dict | None`: Remove a completed transfer from the buffer and return it with the raw file data. Returns `None` if not found. The returned dict includes all keys from `get_active_transfers()` plus:
+  - `data` (`bytes`): The raw decoded file content
+
+#### Control Methods
+
+- `cancel_file_transfer(transfer_id: int) -> bool`: Cancel an active transfer. Returns `True` if the transfer was found and cancelled.
+- `send_upload_data(data: bytes) -> None`: Send file data in response to an `upload_requested` event. Writes `ok\n` followed by base64-encoded data to the PTY.
+- `cancel_upload() -> None`: Cancel a pending upload request. Writes abort sequence to the PTY.
+
+#### Configuration
+
+- `set_max_transfer_size(max_bytes: int) -> None`: Set the maximum allowed file transfer size in bytes. Transfers exceeding this limit will fail with a `file_transfer_failed` event.
+- `get_max_transfer_size() -> int`: Get the current maximum transfer size limit.
+
+#### Observer Events
+
+File transfer events are delivered through the [Observer API](#observer-api). Subscribe using `kinds` filter or receive all events.
+
+| Event Type | Dict Keys | Description |
+|-----------|-----------|-------------|
+| `file_transfer_started` | `id`, `direction`, `filename`, `total_bytes` | A file download or upload has begun |
+| `file_transfer_progress` | `id`, `bytes_transferred`, `total_bytes` | Progress update during multipart transfer |
+| `file_transfer_completed` | `id`, `filename`, `size` | Transfer finished successfully |
+| `file_transfer_failed` | `id`, `reason` | Transfer failed (decode error, size exceeded, cancelled) |
+| `upload_requested` | `format` | Host requested a file upload (e.g., `"tgz"`) |
+
+#### Download Example
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+def on_transfer(event: dict) -> None:
+    if event["type"] == "file_transfer_completed":
+        transfer = term.take_completed_transfer(event["id"])
+        if transfer:
+            with open(transfer["filename"] or "download.bin", "wb") as f:
+                f.write(transfer["data"])
+            print(f"Saved {transfer['filename']} ({len(transfer['data'])} bytes)")
+
+obs_id = term.add_observer(on_transfer, kinds=[
+    "file_transfer_started",
+    "file_transfer_progress",
+    "file_transfer_completed",
+    "file_transfer_failed",
+])
+
+# Process incoming OSC 1337 File= data with inline=0
+# term.process(file_transfer_data)
+
+term.remove_observer(obs_id)
+```
+
+#### Upload Example
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+def on_upload_request(event: dict) -> None:
+    if event["type"] == "upload_requested":
+        # Read file and send data
+        with open("archive.tgz", "rb") as f:
+            term.send_upload_data(f.read())
+        # Or cancel: term.cancel_upload()
+
+obs_id = term.add_observer(on_upload_request, kinds=["upload_requested"])
+```
+
 ### Rendering and Damage Tracking
 
 For optimized rendering in frontends:
@@ -834,7 +924,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 **Supported event types:**
 
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`
 
 #### Examples
 
