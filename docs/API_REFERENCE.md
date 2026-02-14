@@ -494,8 +494,10 @@ Extended shell integration features beyond basic OSC 133:
 - `clear_command_history()`: Clear command history
 - `set_max_command_history(max: int)`: Set command history limit
 - `start_command_execution(command: str)`: Mark start of command execution
-- `end_command_execution(exit_code: int)`: Mark end of command with exit code
+- `end_command_execution(exit_code: int)`: Mark end of command with exit code (also captures the output zone's row range if an Output zone exists)
 - `get_current_command() -> CommandExecution | None`: Get currently executing command
+- `get_command_output(index: int) -> str | None`: Extract output text for a completed command by index (0 = most recent). Returns `None` if index is out of bounds or output has been evicted from scrollback
+- `get_command_outputs() -> list[dict]`: Get all commands with extractable output text. Returns list of dicts with keys `command`, `cwd`, `exit_code`, `output`. Commands whose output has been evicted from scrollback are excluded
 - `get_shell_integration_stats() -> ShellIntegrationStats`: Get shell integration statistics
 - `get_cwd_changes() -> list[CwdChange]`: Get working directory change history (includes hostname/username)
 - `clear_cwd_history()`: Clear CWD history
@@ -1111,6 +1113,10 @@ Command execution record from shell integration.
 - `end_time: int | None`: End timestamp if completed
 - `exit_code: int | None`: Exit code if completed
 - `cwd: str | None`: Working directory where command was executed
+- `duration_ms: int | None`: Command duration in milliseconds
+- `success: bool | None`: Whether command succeeded (exit code 0)
+- `output_start_row: int | None`: Absolute start row of the command's output zone
+- `output_end_row: int | None`: Absolute end row of the command's output zone
 
 ### CwdChange
 
