@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Streaming Server: API Key Authentication**: New `api_key` field on `StreamingConfig` enables API key authentication for API routes (`/ws`, `/sessions`, `/stats`) while leaving static files (web frontend) unprotected. Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query parameter. When both API key and HTTP Basic Auth are configured, either satisfies authentication. Wired from existing `--api-key` CLI flag (env: `PAR_TERM_API_KEY`). WebSocket-only server modes also validate auth during handshake
+- **Streaming Server: Unified Auth Middleware**: New `ApiAuthConfig` struct and `api_auth_middleware` replace the old `basic_auth_middleware`, supporting both API key and HTTP Basic Auth in a single middleware. Auth is applied only to API routes via axum nested router pattern
+- **Web Frontend: API Key Passthrough**: `getDefaultWsUrl()` now reads `api_key` from the page URL query params and appends it to the WebSocket URL, enabling `http://server:8099/?api_key=secret` to auto-authenticate the WS connection
+- **Python Bindings: API Key Config**: `PyStreamingConfig` now exposes `api_key` as a constructor param (`api_key=None`) and getter/setter property. Masked as `api_key=***` in `__repr__`
 - **Streaming Server: System Resource Statistics**: New optional system stats collection pushes CPU, memory, disk, network, and load average data to subscribed WebSocket clients. Enabled via `--enable-system-stats` CLI flag (env: `PAR_TERM_ENABLE_SYSTEM_STATS`) with configurable interval via `--system-stats-interval` (default 5s, env: `PAR_TERM_SYSTEM_STATS_INTERVAL`). Disabled by default
 - **Streaming Server: Dedicated `/stats` Endpoint**: New WebSocket endpoint at `/stats` streams system stats as JSON to connected clients without requiring a terminal session. Requires `--enable-system-stats` flag. Provides CPU, memory, disk, network, load average, and host info at the configured interval
 - **Streaming Protocol: `SystemStats` Message**: New `system_stats` server message type with nested `CpuStats`, `MemoryStats`, `DiskStats`, `NetworkInterfaceStats`, and `LoadAverage` structures. Includes static host info (hostname, OS name/version, kernel version) and dynamic metrics (CPU usage, memory, disk space, network I/O, load averages, uptime)
@@ -21,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Screenshot: Font Load Failure Logging**: Emoji and CJK font load failures in the screenshot renderer now log error-level messages instead of being silently ignored
 
 ### Changed
+- **Streaming Server: Auth middleware restructured** — `basic_auth_middleware` replaced by unified `api_auth_middleware` that handles both API key and HTTP Basic Auth. Auth is now applied only to API routes (`/ws`, `/sessions`, `/stats`) via nested router, leaving static file serving unprotected
 - **Streaming: `PyPtyTerminal` methods gated with `#[cfg(feature = "streaming")]`** instead of `#[allow(dead_code)]` for clearer intent
 
 ### Removed

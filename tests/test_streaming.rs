@@ -14,7 +14,7 @@ mod streaming_tests {
     };
     use par_term_emu_core_rust::streaming::{
         decode_client_message, decode_server_message, encode_client_message, encode_server_message,
-        HttpBasicAuthConfig, PasswordConfig, StreamingConfig, StreamingError,
+        ApiAuthConfig, HttpBasicAuthConfig, PasswordConfig, StreamingConfig, StreamingError,
     };
 
     // =========================================================================
@@ -470,6 +470,7 @@ mod streaming_tests {
             assert_eq!(config.max_sessions, 10);
             assert_eq!(config.session_idle_timeout, 900);
             assert!(config.presets.is_empty());
+            assert!(config.api_key.is_none());
         }
 
         #[test]
@@ -495,6 +496,7 @@ mod streaming_tests {
                 input_rate_limit_bytes_per_sec: 0,
                 enable_system_stats: false,
                 system_stats_interval_secs: 5,
+                api_key: Some("test-key-123".to_string()),
             };
 
             assert_eq!(config.max_clients, 50);
@@ -509,6 +511,7 @@ mod streaming_tests {
             assert_eq!(config.max_sessions, 5);
             assert_eq!(config.session_idle_timeout, 600);
             assert!(config.presets.is_empty());
+            assert_eq!(config.api_key.as_deref(), Some("test-key-123"));
         }
 
         #[test]
@@ -520,6 +523,63 @@ mod streaming_tests {
             let config2 = config1.clone();
             assert_eq!(config1.max_clients, config2.max_clients);
             assert_eq!(config1.send_initial_screen, config2.send_initial_screen);
+        }
+
+        #[test]
+        fn test_config_with_api_key() {
+            let config = StreamingConfig {
+                api_key: Some("secret-key".to_string()),
+                ..Default::default()
+            };
+            assert_eq!(config.api_key.as_deref(), Some("secret-key"));
+        }
+
+        #[test]
+        fn test_config_default_has_no_api_key() {
+            let config = StreamingConfig::default();
+            assert!(config.api_key.is_none());
+        }
+
+        #[test]
+        fn test_api_auth_config_not_configured() {
+            let config = ApiAuthConfig {
+                api_key: None,
+                http_basic_auth: None,
+            };
+            assert!(!config.is_configured());
+        }
+
+        #[test]
+        fn test_api_auth_config_api_key_only() {
+            let config = ApiAuthConfig {
+                api_key: Some("key".to_string()),
+                http_basic_auth: None,
+            };
+            assert!(config.is_configured());
+        }
+
+        #[test]
+        fn test_api_auth_config_basic_auth_only() {
+            let config = ApiAuthConfig {
+                api_key: None,
+                http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                    "user".to_string(),
+                    "pass".to_string(),
+                )),
+            };
+            assert!(config.is_configured());
+        }
+
+        #[test]
+        fn test_api_auth_config_both() {
+            let config = ApiAuthConfig {
+                api_key: Some("key".to_string()),
+                http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                    "user".to_string(),
+                    "pass".to_string(),
+                )),
+            };
+            assert!(config.is_configured());
         }
     }
 

@@ -230,6 +230,12 @@ par-term-streamer --macro-file demo.yaml --macro-loop --macro-speed 1.5
 par-term-streamer --enable-http --http-user admin --http-password secret
 par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$...'
 par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
+
+# With API key authentication (protects API routes: /ws, /sessions, /stats)
+par-term-streamer --enable-http --api-key my-secret-key
+
+# Combined: API key + HTTP Basic Auth (either satisfies auth)
+par-term-streamer --enable-http --http-user admin --http-password secret --api-key my-secret-key
 ```
 
 **Environment Variables:**
@@ -241,6 +247,9 @@ All CLI options support environment variables with `PAR_TERM_` prefix:
 export PAR_TERM_HOST=0.0.0.0
 export PAR_TERM_PORT=8099
 export PAR_TERM_THEME=dracula
+
+# API Key Authentication
+export PAR_TERM_API_KEY=my-secret-key
 
 # HTTP Basic Authentication
 export PAR_TERM_HTTP_USER=admin
@@ -362,8 +371,7 @@ streaming_server.shutdown("Server stopping")
 | `input_rate_limit_bytes_per_sec` | usize | 0 | Input rate limit (0=unlimited) |
 | `enable_system_stats` | bool | false | Enable system resource statistics collection (CPU, memory, disk, network) |
 | `system_stats_interval_secs` | u64 | 5 | System stats collection interval in seconds |
-
-> **Note:** WebSocket API key authentication (`--api-key`) is configured separately at the CLI level and is not part of `StreamingConfig` or Python bindings.
+| `api_key` | Option\<String\> | None | API key for authenticating API routes (`/ws`, `/sessions`, `/stats`). Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. When both API key and Basic Auth are configured, either satisfies auth. Static files remain unprotected so the web frontend loads without auth. |
 
 **Python Example:**
 ```python
@@ -400,6 +408,8 @@ let config = StreamingConfig {
         "admin".to_string(),
         "secret".to_string(),
     )), // Or None for no auth
+    api_key: Some("my-secret-key".to_string()), // Or None for no API key auth
+    ..Default::default()
 };
 
 let server = StreamingServer::with_config(terminal, addr, config);
@@ -1456,8 +1466,9 @@ When TLS is enabled, clients must use secure URLs:
    - Consider VPN or SSH tunneling
 
 2. **Authentication & Encryption:**
-   - **HTTP Basic Auth** for web frontend: `--http-user` with `--http-password`, `--http-password-hash`, or `--http-password-file`
-   - **WebSocket API key** for programmatic/direct WebSocket access: `--api-key` (clients must provide in `Authorization: Bearer <key>` header or `api_key` URL parameter)
+   - **API Key** for API routes (`/ws`, `/sessions`, `/stats`): `--api-key` — clients authenticate via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. Static files (web frontend) remain unprotected so the browser can load the page, then authenticate the WebSocket.
+   - **HTTP Basic Auth** for API routes: `--http-user` with `--http-password`, `--http-password-hash`, or `--http-password-file`
+   - When both API key and Basic Auth are configured, **either one satisfies authentication**
    - **Enable TLS for production** using `--tls-cert`/`--tls-key` or `--tls-pem` (see [TLS Configuration](#tlsssl-configuration))
    - Use `wss://` (secure WebSocket) instead of `ws://` in production
    - Uses rustls for cross-platform TLS support
@@ -1479,7 +1490,10 @@ When TLS is enabled, clients must use secure URLs:
 
 **Example with Authentication:**
 ```bash
-# Server with HTTP Basic Auth (protects web frontend)
+# Server with API key (protects /ws, /sessions, /stats; static files remain public)
+par-term-streamer --enable-http --api-key secret-token-here
+
+# Server with HTTP Basic Auth (protects /ws, /sessions, /stats)
 par-term-streamer --enable-http --http-user admin --http-password secret
 
 # Server with htpasswd hash (bcrypt, apr1, sha1, md5crypt)
@@ -1488,18 +1502,16 @@ par-term-streamer --enable-http --http-user admin --http-password-hash '$apr1$xy
 # Server with password from file (reads first line, auto-detects hash vs clear text)
 par-term-streamer --enable-http --http-user admin --http-password-file /etc/par-term/password
 
-# Server with WebSocket API key (protects WebSocket endpoint)
-par-term-streamer --api-key secret-token-here
-
-# Combined: HTTP Basic Auth + WebSocket API key
+# Combined: API key + HTTP Basic Auth (either satisfies auth)
 par-term-streamer --enable-http --http-user admin --http-password secret --api-key ws-token
 
-# WebSocket clients can authenticate via header:
-# Authorization: Bearer secret-token-here
-
-# Or via URL parameter:
-# ws://localhost:8099?api_key=secret-token-here
-# ws://localhost:8099/ws?api_key=secret-token-here (with HTTP)
+# Clients can authenticate API key via:
+#   Header: Authorization: Bearer secret-token-here
+#   Header: X-API-Key: secret-token-here
+#   Query:  ws://localhost:8099/ws?api_key=secret-token-here
+#
+# Web frontend auto-passes api_key when loaded with:
+#   http://localhost:8099/?api_key=secret-token-here
 ```
 
 ## Performance

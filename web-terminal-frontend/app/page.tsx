@@ -52,20 +52,34 @@ const getStoredNumber = (key: string, defaultValue: number, min: number, max: nu
 export default function Home() {
   // Auto-detect WebSocket URL based on current location
   const getDefaultWsUrl = () => {
+    let baseUrl: string;
     // In development mode, use localhost:8099/ws
     if (process.env.NODE_ENV === 'development') {
-      return 'ws://localhost:8099/ws';
-    }
-    if (typeof window !== 'undefined') {
+      baseUrl = 'ws://localhost:8099/ws';
+    } else if (typeof window !== 'undefined') {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
       // If loaded from HTTP server, use /ws endpoint
       if (host && host !== '') {
-        return `${protocol}//${host}/ws`;
+        baseUrl = `${protocol}//${host}/ws`;
+      } else {
+        baseUrl = 'ws://localhost:8099/ws';
+      }
+    } else {
+      baseUrl = 'ws://localhost:8099/ws';
+    }
+
+    // Pass through api_key from page URL to WebSocket URL
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const apiKey = params.get('api_key');
+      if (apiKey) {
+        const separator = baseUrl.includes('?') ? '&' : '?';
+        return `${baseUrl}${separator}api_key=${encodeURIComponent(apiKey)}`;
       }
     }
-    // Fallback
-    return 'ws://localhost:8099/ws';
+
+    return baseUrl;
   };
 
   const [wsUrl, setWsUrl] = useState(getDefaultWsUrl());

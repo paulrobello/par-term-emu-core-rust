@@ -67,8 +67,9 @@ pub use client::Client;
 
 #[cfg(feature = "streaming")]
 pub use server::{
-    ConnectionParams, HttpBasicAuthConfig, PasswordConfig, SessionFactory, SessionFactoryResult,
-    SessionInfo, SessionRegistry, SessionState, StreamingConfig, StreamingServer, TlsConfig,
+    ApiAuthConfig, ConnectionParams, HttpBasicAuthConfig, PasswordConfig, SessionFactory,
+    SessionFactoryResult, SessionInfo, SessionRegistry, SessionState, StreamingConfig,
+    StreamingServer, TlsConfig,
 };
 
 #[cfg(feature = "streaming")]

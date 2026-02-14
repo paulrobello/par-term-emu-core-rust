@@ -13,6 +13,26 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
+## What's New (Unreleased)
+
+### API Key Authentication, System Stats & Kitty Graphics
+
+**API Key Authentication:**
+- **API Key Auth for API Routes** - New `api_key` config field and `--api-key` CLI flag protects `/ws`, `/sessions`, `/stats` while leaving static files (web frontend) public. Clients authenticate via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param
+- **Unified Auth Middleware** - `ApiAuthConfig` replaces old `basic_auth_middleware`. When both API key and HTTP Basic Auth are configured, either satisfies authentication
+- **Web Frontend API Key Passthrough** - Navigate to `http://server:8099/?api_key=secret` and the frontend auto-appends the key to the WebSocket URL
+- **Python Bindings** - `StreamingConfig(api_key="secret")` with getter/setter, masked in `__repr__`
+
+**System Resource Statistics:**
+- **System Stats Collection** - Optional CPU, memory, disk, network, load average pushed to WebSocket clients via `--enable-system-stats`
+- **Dedicated `/stats` Endpoint** - WebSocket endpoint streams system stats as JSON without requiring a terminal session
+
+**Kitty Graphics Improvements:**
+- Chunked transmission, complete delete targets, placeholder diacritics
+
+**Screenshot Improvements:**
+- Synthetic bold rendering via swash `embolden()`, font load failure logging
+
 ## What's New in 0.36.0
 
 ### Streaming Server Hardening & Shell Integration Improvements

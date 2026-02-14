@@ -146,6 +146,36 @@ def test_streaming_config_repr():
     assert "max_clients=100" in repr_str
 
 
+def test_streaming_config_api_key_default_none():
+    """Test that api_key defaults to None."""
+    config = StreamingConfig()
+    assert config.api_key is None
+
+
+def test_streaming_config_api_key_constructor():
+    """Test setting api_key via constructor."""
+    config = StreamingConfig(api_key="my-secret-key")
+    assert config.api_key == "my-secret-key"
+
+
+def test_streaming_config_api_key_setter():
+    """Test setting api_key via setter."""
+    config = StreamingConfig()
+    assert config.api_key is None
+    config.api_key = "new-key"
+    assert config.api_key == "new-key"
+    config.api_key = None
+    assert config.api_key is None
+
+
+def test_streaming_config_api_key_repr():
+    """Test that api_key is masked in repr."""
+    config = StreamingConfig(api_key="secret")
+    repr_str = repr(config)
+    assert "api_key=***" in repr_str
+    assert "secret" not in repr_str
+
+
 # Server Creation and Management Tests
 
 

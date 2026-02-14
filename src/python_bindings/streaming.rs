@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -48,6 +48,7 @@ impl PyStreamingConfig {
         input_rate_limit_bytes_per_sec: usize,
         enable_system_stats: bool,
         system_stats_interval_secs: u64,
+        api_key: Option<String>,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -68,6 +69,7 @@ impl PyStreamingConfig {
                 input_rate_limit_bytes_per_sec,
                 enable_system_stats,
                 system_stats_interval_secs,
+                api_key,
             },
         }
     }
@@ -240,14 +242,31 @@ impl PyStreamingConfig {
         self.inner.system_stats_interval_secs = system_stats_interval_secs;
     }
 
+    /// Get the API key for authentication (None if not set)
+    #[getter]
+    fn api_key(&self) -> Option<String> {
+        self.inner.api_key.clone()
+    }
+
+    /// Set the API key for authentication (None to disable)
+    #[setter]
+    fn set_api_key(&mut self, api_key: Option<String>) {
+        self.inner.api_key = api_key;
+    }
+
     fn __repr__(&self) -> String {
         let tls_status = if self.inner.tls.is_some() {
             ", tls=enabled"
         } else {
             ""
         };
+        let api_key_status = if self.inner.api_key.is_some() {
+            ", api_key=***"
+        } else {
+            ""
+        };
         format!(
-            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}, enable_system_stats={}, system_stats_interval_secs={})",
+            "StreamingConfig(max_clients={}, send_initial_screen={}, keepalive_interval={}, default_read_only={}, initial_cols={}, initial_rows={}, enable_http={}, web_root='{}'{}{}, enable_system_stats={}, system_stats_interval_secs={})",
             self.inner.max_clients,
             self.inner.send_initial_screen,
             self.inner.keepalive_interval,
@@ -257,6 +276,7 @@ impl PyStreamingConfig {
             self.inner.enable_http,
             self.inner.web_root,
             tls_status,
+            api_key_status,
             self.inner.enable_system_stats,
             self.inner.system_stats_interval_secs,
         )

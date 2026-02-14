@@ -288,6 +288,8 @@ pub struct StreamingConfig {
     pub enable_system_stats: bool,
     /// System stats collection interval in seconds
     pub system_stats_interval_secs: u64,
+    /// API key for authenticating API routes (None = no API key auth)
+    pub api_key: Option<String>,
 }
 
 impl Default for StreamingConfig {
@@ -310,6 +312,7 @@ impl Default for StreamingConfig {
             input_rate_limit_bytes_per_sec: 0,
             enable_system_stats: false,
             system_stats_interval_secs: 5,
+            api_key: None,
         }
     }
 }
@@ -1456,24 +1459,30 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Build router
-        let app = Router::new()
+        // Build API routes (protected by auth)
+        let api_routes = Router::new()
             .route("/ws", get(ws_handler))
             .route("/sessions", get(sessions_handler))
-            .route("/stats", get(stats_ws_handler))
-            .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone());
+            .route("/stats", get(stats_ws_handler));
 
-        // Add basic auth middleware if configured
-        let app = if let Some(ref auth_config) = self.config.http_basic_auth {
-            let auth_config = auth_config.clone();
-            app.layer(axum::middleware::from_fn(move |req, next| {
+        // Apply auth middleware to API routes only if configured
+        let auth_config = ApiAuthConfig {
+            api_key: self.config.api_key.clone(),
+            http_basic_auth: self.config.http_basic_auth.clone(),
+        };
+        let api_routes = if auth_config.is_configured() {
+            api_routes.layer(axum::middleware::from_fn(move |req, next| {
                 let auth_config = auth_config.clone();
-                basic_auth_middleware(req, next, auth_config)
+                api_auth_middleware(req, next, auth_config)
             }))
         } else {
-            app
+            api_routes
         };
+
+        // Merge API routes with unprotected static file serving
+        let app = api_routes
+            .fallback_service(ServeDir::new(&self.config.web_root))
+            .with_state(self.clone());
 
         // Start server
         let listener = tokio::net::TcpListener::bind(&self.addr)
@@ -1509,24 +1518,30 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Build router
-        let app = Router::new()
+        // Build API routes (protected by auth)
+        let api_routes = Router::new()
             .route("/ws", get(ws_handler))
             .route("/sessions", get(sessions_handler))
-            .route("/stats", get(stats_ws_handler))
-            .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone());
+            .route("/stats", get(stats_ws_handler));
 
-        // Add basic auth middleware if configured
-        let app = if let Some(ref auth_config) = self.config.http_basic_auth {
-            let auth_config = auth_config.clone();
-            app.layer(axum::middleware::from_fn(move |req, next| {
+        // Apply auth middleware to API routes only if configured
+        let auth_config = ApiAuthConfig {
+            api_key: self.config.api_key.clone(),
+            http_basic_auth: self.config.http_basic_auth.clone(),
+        };
+        let api_routes = if auth_config.is_configured() {
+            api_routes.layer(axum::middleware::from_fn(move |req, next| {
                 let auth_config = auth_config.clone();
-                basic_auth_middleware(req, next, auth_config)
+                api_auth_middleware(req, next, auth_config)
             }))
         } else {
-            app
+            api_routes
         };
+
+        // Merge API routes with unprotected static file serving
+        let app = api_routes
+            .fallback_service(ServeDir::new(&self.config.web_root))
+            .with_state(self.clone());
 
         // Build TLS config for axum-server
         let rustls_config = RustlsConfig::from_der(
@@ -1583,14 +1598,27 @@ impl StreamingServer {
                     crate::debug_info!("STREAMING", "New connection from {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
-                        // Accept WebSocket with header callback to capture URI query
+                        // Accept WebSocket with header callback to capture URI query and validate auth
                         let uri_query = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
                         let uri_query_clone = std::sync::Arc::clone(&uri_query);
+                        let ws_api_key = server.config.api_key.clone();
+                        let ws_basic_auth = server.config.http_basic_auth.clone();
 
                         let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
                             if let Some(q) = req.uri().query() {
                                 *uri_query_clone.lock().unwrap() = Some(q.to_string());
                             }
+
+                            // Validate auth if configured
+                            if (ws_api_key.is_some() || ws_basic_auth.is_some())
+                                && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref()) {
+                                    let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                                        .status(401)
+                                        .body(Some("Unauthorized".to_string()))
+                                        .unwrap();
+                                    return Err(reject);
+                                }
+
                             Ok(resp)
                         }).await;
 
@@ -1672,10 +1700,12 @@ impl StreamingServer {
                     tokio::spawn(async move {
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
-                                // Accept WebSocket with header callback to capture URI query
+                                // Accept WebSocket with header callback to capture URI query and validate auth
                                 let uri_query =
                                     std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
                                 let uri_query_clone = std::sync::Arc::clone(&uri_query);
+                                let ws_api_key = server.config.api_key.clone();
+                                let ws_basic_auth = server.config.http_basic_auth.clone();
 
                                 let ws_result = accept_hdr_async(
                                     tls_stream,
@@ -1688,6 +1718,17 @@ impl StreamingServer {
                                         if let Some(q) = req.uri().query() {
                                             *uri_query_clone.lock().unwrap() = Some(q.to_string());
                                         }
+
+                                        // Validate auth if configured
+                                        if (ws_api_key.is_some() || ws_basic_auth.is_some())
+                                            && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref()) {
+                                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                                                    .status(401)
+                                                    .body(Some("Unauthorized".to_string()))
+                                                    .unwrap();
+                                                return Err(reject);
+                                            }
+
                                         Ok(resp)
                                     },
                                 )
@@ -2707,12 +2748,34 @@ fn should_send(
     }
 }
 
-/// HTTP Basic Authentication middleware for Axum
+/// Unified authentication configuration for API routes.
+/// Supports API key auth, HTTP Basic Auth, or both.
+/// When both are configured, either one satisfies authentication.
 #[cfg(feature = "streaming")]
-async fn basic_auth_middleware(
+#[derive(Debug, Clone)]
+pub struct ApiAuthConfig {
+    /// API key for Bearer / X-API-Key / query param auth
+    pub api_key: Option<String>,
+    /// HTTP Basic Authentication credentials
+    pub http_basic_auth: Option<HttpBasicAuthConfig>,
+}
+
+#[cfg(feature = "streaming")]
+impl ApiAuthConfig {
+    /// Returns true if any authentication method is configured
+    pub fn is_configured(&self) -> bool {
+        self.api_key.is_some() || self.http_basic_auth.is_some()
+    }
+}
+
+/// Unified API authentication middleware for Axum.
+/// Checks in order: Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
+/// When both API key and Basic Auth are configured, either one satisfies auth.
+#[cfg(feature = "streaming")]
+async fn api_auth_middleware(
     req: axum::http::Request<axum::body::Body>,
     next: axum::middleware::Next,
-    auth_config: HttpBasicAuthConfig,
+    auth_config: ApiAuthConfig,
 ) -> axum::response::Response {
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
@@ -2720,18 +2783,57 @@ async fn basic_auth_middleware(
     let auth_header = req
         .headers()
         .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok());
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
 
-    if let Some(auth_value) = auth_header {
-        if let Some(credentials) = auth_value.strip_prefix("Basic ") {
-            if let Ok(decoded) = base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                credentials.trim(),
-            ) {
-                if let Ok(credentials_str) = String::from_utf8(decoded) {
-                    if let Some((username, password)) = credentials_str.split_once(':') {
-                        if auth_config.verify(username, password) {
-                            return next.run(req).await;
+    let x_api_key_header = req
+        .headers()
+        .get("X-API-Key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    // Check Bearer token against API key
+    if let Some(ref expected_key) = auth_config.api_key {
+        if let Some(ref auth_value) = auth_header {
+            if let Some(bearer_token) = auth_value.strip_prefix("Bearer ") {
+                if bearer_token.trim() == expected_key {
+                    return next.run(req).await;
+                }
+            }
+        }
+
+        // Check X-API-Key header
+        if let Some(ref key) = x_api_key_header {
+            if key == expected_key {
+                return next.run(req).await;
+            }
+        }
+
+        // Check ?api_key= query param
+        if let Some(query) = req.uri().query() {
+            for pair in query.split('&') {
+                if let Some(value) = pair.strip_prefix("api_key=") {
+                    if value == expected_key {
+                        return next.run(req).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check HTTP Basic Auth
+    if let Some(ref basic_config) = auth_config.http_basic_auth {
+        if let Some(ref auth_value) = auth_header {
+            if let Some(credentials) = auth_value.strip_prefix("Basic ") {
+                if let Ok(decoded) = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    credentials.trim(),
+                ) {
+                    if let Ok(credentials_str) = String::from_utf8(decoded) {
+                        if let Some((username, password)) = credentials_str.split_once(':') {
+                            if basic_config.verify(username, password) {
+                                return next.run(req).await;
+                            }
                         }
                     }
                 }
@@ -2739,12 +2841,84 @@ async fn basic_auth_middleware(
         }
     }
 
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Basic realm=\"Terminal Server\"")],
-        "Unauthorized",
-    )
-        .into_response()
+    // Build 401 response
+    let mut headers = Vec::new();
+    if auth_config.http_basic_auth.is_some() {
+        headers.push((header::WWW_AUTHENTICATE, "Basic realm=\"Terminal Server\""));
+    }
+
+    let mut response = (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    for (key, value) in headers {
+        response.headers_mut().insert(key, value.parse().unwrap());
+    }
+    response
+}
+
+/// Validate auth credentials during WebSocket handshake (for non-HTTP server modes).
+/// Checks Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
+/// Returns true if auth passes (or no auth is configured).
+fn validate_ws_handshake_auth(
+    req: &tokio_tungstenite::tungstenite::http::Request<()>,
+    api_key: Option<&str>,
+    basic_auth: Option<&HttpBasicAuthConfig>,
+) -> bool {
+    let auth_header = req
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok());
+
+    let x_api_key_header = req.headers().get("X-API-Key").and_then(|v| v.to_str().ok());
+
+    // Check API key via Bearer header
+    if let Some(expected_key) = api_key {
+        if let Some(auth_value) = auth_header {
+            if let Some(bearer_token) = auth_value.strip_prefix("Bearer ") {
+                if bearer_token.trim() == expected_key {
+                    return true;
+                }
+            }
+        }
+
+        // Check X-API-Key header
+        if let Some(key) = x_api_key_header {
+            if key == expected_key {
+                return true;
+            }
+        }
+
+        // Check ?api_key= query param
+        if let Some(query) = req.uri().query() {
+            for pair in query.split('&') {
+                if let Some(value) = pair.strip_prefix("api_key=") {
+                    if value == expected_key {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+
+    // Check HTTP Basic Auth
+    if let Some(basic_config) = basic_auth {
+        if let Some(auth_value) = auth_header {
+            if let Some(credentials) = auth_value.strip_prefix("Basic ") {
+                if let Ok(decoded) = base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    credentials.trim(),
+                ) {
+                    if let Ok(credentials_str) = String::from_utf8(decoded) {
+                        if let Some((username, password)) = credentials_str.split_once(':') {
+                            if basic_config.verify(username, password) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    false
 }
 
 /// Axum WebSocket handler (extracts query params for multi-session)

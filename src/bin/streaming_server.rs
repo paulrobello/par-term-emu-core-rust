@@ -1781,6 +1781,7 @@ async fn main() -> Result<()> {
         input_rate_limit_bytes_per_sec: args.input_rate_limit,
         enable_system_stats: args.enable_system_stats,
         system_stats_interval_secs: args.system_stats_interval,
+        api_key: args.api_key.clone(),
     };
 
     // Create streaming server
