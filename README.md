@@ -1050,6 +1050,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Shell Integration** - OSC 133 (iTerm2/VSCode compatible), OSC 1337 RemoteHost for remote host detection
 - **Semantic Buffer Zones** - OSC 133 FinalTerm markers partition scrollback into prompt, command, and output zones
 - **Command Output Capture** - Extract text from specific command execution blocks via `get_command_output()` and `get_command_outputs()`
+- **Semantic Snapshot API** - Structured terminal state extraction via `get_semantic_snapshot()` for AI/LLM consumption, with configurable scope (visible, recent, full) and JSON output
 - **Kitty Keyboard Protocol** - Progressive keyboard enhancement with auto-reset on alternate screen exit
 - **Synchronized Updates (DEC 2026)** - Flicker-free rendering
 - **Tmux Control Protocol** - Control mode integration support

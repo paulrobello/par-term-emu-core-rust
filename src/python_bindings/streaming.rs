@@ -1585,6 +1585,10 @@ pub fn decode_server_message<'py>(
             dict.set_item("depth", depth)?;
             dict.set_item("shell_type", shell_type)?;
         }
+        ServerMessage::SemanticSnapshot { snapshot_json } => {
+            dict.set_item("type", "semantic_snapshot")?;
+            dict.set_item("snapshot_json", snapshot_json)?;
+        }
     }
 
     Ok(dict)
@@ -1677,10 +1681,21 @@ pub fn encode_client_message<'py>(
                     "environment" => Some(EventType::Environment),
                     "remote_host" => Some(EventType::RemoteHost),
                     "sub_shell" => Some(EventType::SubShell),
+                    "snapshot" => Some(EventType::Snapshot),
                     _ => None,
                 })
                 .collect();
             ClientMessage::subscribe(events)
+        }
+        "snapshot_request" => {
+            let scope = get_str("scope").unwrap_or_else(|| "visible".to_string());
+            let get_u32 = |key: &str| -> Option<u32> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let max_commands = get_u32("max_commands");
+            ClientMessage::snapshot_request(scope, max_commands)
         }
         "mouse" => {
             let get_u8 = |key: &str| -> Option<u8> {
@@ -1721,7 +1736,7 @@ pub fn encode_client_message<'py>(
         }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: input, resize, ping, refresh, subscribe, mouse, focus_change, paste, selection_request, clipboard_request",
+                "Unknown message type: {}. Valid types: input, resize, ping, refresh, subscribe, snapshot_request, mouse, focus_change, paste, selection_request, clipboard_request",
                 message_type
             )));
         }
@@ -1800,6 +1815,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Environment => "environment",
                     crate::streaming::protocol::EventType::RemoteHost => "remote_host",
                     crate::streaming::protocol::EventType::SubShell => "sub_shell",
+                    crate::streaming::protocol::EventType::Snapshot => "snapshot",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;
@@ -1853,6 +1869,14 @@ pub fn decode_client_message<'py>(
             dict.set_item("operation", operation)?;
             dict.set_item("content", content)?;
             dict.set_item("target", target)?;
+        }
+        ClientMessage::SnapshotRequest {
+            scope,
+            max_commands,
+        } => {
+            dict.set_item("type", "snapshot_request")?;
+            dict.set_item("scope", scope)?;
+            dict.set_item("max_commands", max_commands)?;
         }
     }
 

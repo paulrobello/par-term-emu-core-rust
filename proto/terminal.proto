@@ -46,6 +46,7 @@ enum EventType {
   EVENT_TYPE_ENVIRONMENT = 20;
   EVENT_TYPE_REMOTE_HOST = 21;
   EVENT_TYPE_SUB_SHELL = 22;
+  EVENT_TYPE_SNAPSHOT = 23;
 }
 
 // =============================================================================
@@ -84,6 +85,7 @@ message ServerMessage {
     EnvironmentChanged environment_changed = 28;
     RemoteHostTransition remote_host_transition = 29;
     SubShellDetected sub_shell_detected = 30;
+    SemanticSnapshotData semantic_snapshot = 31;
   }
 }
 
@@ -360,6 +362,17 @@ message SubShellDetected {
   optional string shell_type = 2;
 }
 
+// Semantic snapshot of terminal state (JSON-encoded)
+message SemanticSnapshotData {
+  string snapshot_json = 1;
+}
+
+// Request a semantic snapshot
+message SnapshotRequest {
+  string scope = 1;                      // "visible", "recent", "full"
+  optional uint32 max_commands = 2;      // For "recent" scope
+}
+
 // =============================================================================
 // Client -> Server Messages
 // =============================================================================
@@ -376,6 +389,7 @@ message ClientMessage {
     PasteInput paste = 8;
     SelectionRequest selection = 9;
     ClipboardRequest clipboard = 10;
+    SnapshotRequest snapshot_request = 11;
   }
 }
 

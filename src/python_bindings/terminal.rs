@@ -5837,6 +5837,96 @@ impl PyTerminal {
     fn get_zone_text(&self, abs_row: usize) -> PyResult<Option<String>> {
         Ok(self.inner.get_zone_text(abs_row))
     }
+
+    /// Get a semantic snapshot of the terminal state as a Python dict.
+    ///
+    /// Returns a structured representation of terminal state including
+    /// content, zones, commands, and environment metadata, suitable
+    /// for AI/LLM consumption.
+    ///
+    /// Args:
+    ///     scope: Snapshot scope - "visible", "recent", or "full" (default: "visible")
+    ///     max_commands: For "recent" scope, max number of commands to include (default: 10)
+    ///
+    /// Returns:
+    ///     dict with keys: timestamp, cols, rows, title, cursor_col, cursor_row,
+    ///     alt_screen_active, visible_text, scrollback_text, zones, commands,
+    ///     cwd, hostname, username, cwd_history, scrollback_lines, total_zones,
+    ///     total_commands
+    ///
+    /// Example:
+    ///     >>> term = Terminal(80, 24)
+    ///     >>> term.process(b"Hello")
+    ///     >>> snap = term.get_semantic_snapshot(scope="visible")
+    ///     >>> snap["cols"]
+    ///     80
+    #[pyo3(signature = (scope="visible", max_commands=10))]
+    fn get_semantic_snapshot(
+        &self,
+        scope: &str,
+        max_commands: usize,
+    ) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
+        use crate::terminal::snapshot::SnapshotScope;
+
+        let snapshot_scope = match scope {
+            "recent" => SnapshotScope::Recent(max_commands),
+            "full" => SnapshotScope::Full,
+            "visible" => SnapshotScope::Visible,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "scope must be 'visible', 'recent', or 'full'",
+                ))
+            }
+        };
+
+        let snapshot = self.inner.get_semantic_snapshot(snapshot_scope);
+        let json = serde_json::to_string(&snapshot)
+            .map_err(|e| PyRuntimeError::new_err(format!("Serialization failed: {}", e)))?;
+
+        Python::attach(|py| {
+            let json_module = py.import("json")?;
+            let dict = json_module
+                .call_method1("loads", (json,))?
+                .cast_into::<pyo3::types::PyDict>()
+                .map_err(|e| {
+                    PyRuntimeError::new_err(format!("Expected dict from json.loads: {}", e))
+                })?;
+            Ok(dict.into())
+        })
+    }
+
+    /// Get a semantic snapshot of the terminal state as a JSON string.
+    ///
+    /// This is more efficient than get_semantic_snapshot() when you need
+    /// the data as a string (e.g., for sending to an LLM API).
+    ///
+    /// Args:
+    ///     scope: Snapshot scope - "visible", "recent", or "full" (default: "visible")
+    ///     max_commands: For "recent" scope, max number of commands to include (default: 10)
+    ///
+    /// Returns:
+    ///     JSON string containing the semantic snapshot
+    ///
+    /// Example:
+    ///     >>> term = Terminal(80, 24)
+    ///     >>> json_str = term.get_semantic_snapshot_json(scope="full")
+    #[pyo3(signature = (scope="visible", max_commands=10))]
+    fn get_semantic_snapshot_json(&self, scope: &str, max_commands: usize) -> PyResult<String> {
+        use crate::terminal::snapshot::SnapshotScope;
+
+        let snapshot_scope = match scope {
+            "recent" => SnapshotScope::Recent(max_commands),
+            "full" => SnapshotScope::Full,
+            "visible" => SnapshotScope::Visible,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "scope must be 'visible', 'recent', or 'full'",
+                ))
+            }
+        };
+
+        Ok(self.inner.get_semantic_snapshot_json(snapshot_scope))
+    }
 }
 
 /// Helper function to parse clipboard slot from string

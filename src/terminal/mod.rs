@@ -14,6 +14,7 @@ mod graphics;
 pub mod notification;
 pub mod progress;
 mod sequences;
+pub mod snapshot;
 pub mod trigger;
 mod write;
 
@@ -3615,6 +3616,200 @@ impl Terminal {
     pub fn export_styled(&self) -> String {
         // Use the active grid (primary or alternate screen)
         self.active_grid().export_styled_buffer()
+    }
+
+    // ========== Semantic Snapshot Methods ==========
+
+    /// Assemble a semantic snapshot of the terminal state
+    ///
+    /// Captures structured terminal information based on the requested scope:
+    /// - `Visible`: Only the visible screen content, no scrollback or history
+    /// - `Recent(n)`: Last N commands with their zones and CWD changes, plus full scrollback
+    /// - `Full`: Everything including full scrollback, all zones, commands, and CWD changes
+    ///
+    /// # Arguments
+    /// * `scope` - The `SnapshotScope` controlling how much history to include
+    ///
+    /// # Returns
+    /// A `SemanticSnapshot` containing the requested terminal state
+    pub fn get_semantic_snapshot(
+        &self,
+        scope: snapshot::SnapshotScope,
+    ) -> snapshot::SemanticSnapshot {
+        use crate::terminal::snapshot::*;
+
+        let (cols, rows) = self.size();
+        let cursor = self.cursor();
+        let all_zones = self.get_zones();
+        let all_commands = self.get_command_history();
+        let all_cwd_changes = self.get_cwd_changes();
+
+        let visible_text = self.content();
+        let scrollback_lines = self.grid.scrollback_len();
+
+        // Determine scrollback_text, zones, commands, and cwd_history based on scope
+        let (scrollback_text, zones, commands, cwd_history) = match &scope {
+            SnapshotScope::Visible => {
+                // Only zones overlapping visible screen
+                let visible_start = scrollback_lines;
+                let visible_end = scrollback_lines + rows;
+                let visible_zones: Vec<ZoneInfo> = all_zones
+                    .iter()
+                    .filter(|z| z.abs_row_start < visible_end && z.abs_row_end >= visible_start)
+                    .map(|z| self.zone_to_info(z))
+                    .collect();
+
+                (None, visible_zones, Vec::new(), Vec::new())
+            }
+            SnapshotScope::Recent(n) => {
+                let n = *n;
+                let scrollback = if scrollback_lines > 0 {
+                    Some(self.export_text())
+                } else {
+                    None
+                };
+
+                // Last N commands
+                let cmd_count = all_commands.len();
+                let cmd_start = cmd_count.saturating_sub(n);
+                let recent_commands: Vec<CommandInfo> = all_commands[cmd_start..]
+                    .iter()
+                    .map(|c| self.command_to_info(c))
+                    .collect();
+
+                // Zones from last N commands onward: find the earliest row of the Nth-from-last command
+                let zones = if n > 0 && !all_commands.is_empty() {
+                    let earliest_cmd = &all_commands[cmd_start];
+                    let earliest_row = earliest_cmd.output_start_row.unwrap_or(0);
+                    all_zones
+                        .iter()
+                        .filter(|z| z.abs_row_end >= earliest_row)
+                        .map(|z| self.zone_to_info(z))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                // Last N cwd changes
+                let cwd_count = all_cwd_changes.len();
+                let cwd_start = cwd_count.saturating_sub(n);
+                let cwd_history: Vec<CwdChangeInfo> = all_cwd_changes[cwd_start..]
+                    .iter()
+                    .map(|c| CwdChangeInfo {
+                        old_cwd: c.old_cwd.clone(),
+                        new_cwd: c.new_cwd.clone(),
+                        hostname: c.hostname.clone(),
+                        username: c.username.clone(),
+                        timestamp: c.timestamp,
+                    })
+                    .collect();
+
+                (scrollback, zones, recent_commands, cwd_history)
+            }
+            SnapshotScope::Full => {
+                let scrollback = if scrollback_lines > 0 {
+                    Some(self.export_text())
+                } else {
+                    None
+                };
+
+                let zones: Vec<ZoneInfo> = all_zones.iter().map(|z| self.zone_to_info(z)).collect();
+
+                let commands: Vec<CommandInfo> = all_commands
+                    .iter()
+                    .map(|c| self.command_to_info(c))
+                    .collect();
+
+                let cwd_history: Vec<CwdChangeInfo> = all_cwd_changes
+                    .iter()
+                    .map(|c| CwdChangeInfo {
+                        old_cwd: c.old_cwd.clone(),
+                        new_cwd: c.new_cwd.clone(),
+                        hostname: c.hostname.clone(),
+                        username: c.username.clone(),
+                        timestamp: c.timestamp,
+                    })
+                    .collect();
+
+                (scrollback, zones, commands, cwd_history)
+            }
+        };
+
+        let si = self.shell_integration();
+
+        SemanticSnapshot {
+            timestamp: unix_millis(),
+            cols,
+            rows,
+            title: self.title().to_string(),
+            cursor_col: cursor.col,
+            cursor_row: cursor.row,
+            alt_screen_active: self.is_alt_screen_active(),
+            visible_text,
+            scrollback_text,
+            zones,
+            commands,
+            cwd: self.current_directory().map(String::from),
+            hostname: si.hostname().map(String::from),
+            username: si.username().map(String::from),
+            cwd_history,
+            scrollback_lines,
+            total_zones: all_zones.len(),
+            total_commands: all_commands.len(),
+        }
+    }
+
+    /// Assemble a semantic snapshot and return it as a JSON string
+    ///
+    /// This is a convenience wrapper around `get_semantic_snapshot()` that
+    /// serializes the result to JSON.
+    ///
+    /// # Arguments
+    /// * `scope` - The `SnapshotScope` controlling how much history to include
+    ///
+    /// # Returns
+    /// A JSON string representation of the `SemanticSnapshot`
+    pub fn get_semantic_snapshot_json(&self, scope: snapshot::SnapshotScope) -> String {
+        let snapshot = self.get_semantic_snapshot(scope);
+        serde_json::to_string(&snapshot)
+            .unwrap_or_else(|e| format!("{{\"error\":\"serialization failed: {}\"}}", e))
+    }
+
+    /// Convert a Zone to a ZoneInfo, extracting zone text from the buffer
+    fn zone_to_info(&self, zone: &crate::zone::Zone) -> snapshot::ZoneInfo {
+        let text = self
+            .extract_text_from_row_range(zone.abs_row_start, zone.abs_row_end)
+            .unwrap_or_default();
+
+        snapshot::ZoneInfo {
+            id: zone.id,
+            zone_type: zone.zone_type.to_string(),
+            abs_row_start: zone.abs_row_start,
+            abs_row_end: zone.abs_row_end,
+            text,
+            command: zone.command.clone(),
+            exit_code: zone.exit_code,
+            timestamp: zone.timestamp,
+        }
+    }
+
+    /// Convert a CommandExecution to a CommandInfo, extracting output text from the buffer
+    fn command_to_info(&self, cmd: &CommandExecution) -> snapshot::CommandInfo {
+        let output = match (cmd.output_start_row, cmd.output_end_row) {
+            (Some(start), Some(end)) => self.extract_text_from_row_range(start, end),
+            _ => None,
+        };
+
+        snapshot::CommandInfo {
+            command: cmd.command.clone(),
+            cwd: cmd.cwd.clone(),
+            start_time: cmd.start_time,
+            end_time: cmd.end_time,
+            exit_code: cmd.exit_code,
+            duration_ms: cmd.duration_ms,
+            success: cmd.success,
+            output,
+        }
     }
 
     /// Export only the visible screen with ANSI styling (excludes scrollback)

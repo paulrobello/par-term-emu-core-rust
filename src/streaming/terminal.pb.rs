@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -97,6 +97,8 @@ pub mod server_message {
         RemoteHostTransition(super::RemoteHostTransition),
         #[prost(message, tag = "30")]
         SubShellDetected(super::SubShellDetected),
+        #[prost(message, tag = "31")]
+        SemanticSnapshot(super::SemanticSnapshotData),
     }
 }
 /// Terminal output data (very high frequency)
@@ -544,11 +546,27 @@ pub struct SubShellDetected {
     #[prost(string, optional, tag = "2")]
     pub shell_type: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// Semantic snapshot of terminal state (JSON-encoded)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SemanticSnapshotData {
+    #[prost(string, tag = "1")]
+    pub snapshot_json: ::prost::alloc::string::String,
+}
+/// Request a semantic snapshot
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SnapshotRequest {
+    /// "visible", "recent", "full"
+    #[prost(string, tag = "1")]
+    pub scope: ::prost::alloc::string::String,
+    /// For "recent" scope
+    #[prost(uint32, optional, tag = "2")]
+    pub max_commands: ::core::option::Option<u32>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(
         oneof = "client_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11"
     )]
     pub message: ::core::option::Option<client_message::Message>,
 }
@@ -576,6 +594,8 @@ pub mod client_message {
         Selection(super::SelectionRequest),
         #[prost(message, tag = "10")]
         Clipboard(super::ClipboardRequest),
+        #[prost(message, tag = "11")]
+        SnapshotRequest(super::SnapshotRequest),
     }
 }
 /// Keyboard input from client
@@ -692,6 +712,7 @@ pub enum EventType {
     Environment = 20,
     RemoteHost = 21,
     SubShell = 22,
+    Snapshot = 23,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -723,6 +744,7 @@ impl EventType {
             Self::Environment => "EVENT_TYPE_ENVIRONMENT",
             Self::RemoteHost => "EVENT_TYPE_REMOTE_HOST",
             Self::SubShell => "EVENT_TYPE_SUB_SHELL",
+            Self::Snapshot => "EVENT_TYPE_SNAPSHOT",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -751,6 +773,7 @@ impl EventType {
             "EVENT_TYPE_ENVIRONMENT" => Some(Self::Environment),
             "EVENT_TYPE_REMOTE_HOST" => Some(Self::RemoteHost),
             "EVENT_TYPE_SUB_SHELL" => Some(Self::SubShell),
+            "EVENT_TYPE_SNAPSHOT" => Some(Self::Snapshot),
             _ => None,
         }
     }
