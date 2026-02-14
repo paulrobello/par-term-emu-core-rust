@@ -1867,6 +1867,197 @@ mod streaming_tests {
             assert!(json.contains(r#""sub_shell"#));
         }
     }
+
+    // =========================================================================
+    // File Transfer Streaming Roundtrip Tests
+    // =========================================================================
+
+    mod file_transfer_roundtrip_tests {
+        use super::*;
+
+        #[test]
+        fn test_file_transfer_started_roundtrip() {
+            let msg = ServerMessage::file_transfer_started(
+                42,
+                "download".to_string(),
+                Some("test.pdf".to_string()),
+                Some(1024),
+            );
+
+            // JSON roundtrip
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"file_transfer_started"#));
+            let json_decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+            match json_decoded {
+                ServerMessage::FileTransferStarted {
+                    id,
+                    direction,
+                    filename,
+                    total_bytes,
+                } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(direction, "download");
+                    assert_eq!(filename, Some("test.pdf".to_string()));
+                    assert_eq!(total_bytes, Some(1024));
+                }
+                _ => panic!("Expected FileTransferStarted"),
+            }
+
+            // Proto (binary) roundtrip
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::FileTransferStarted {
+                    id,
+                    direction,
+                    filename,
+                    total_bytes,
+                } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(direction, "download");
+                    assert_eq!(filename, Some("test.pdf".to_string()));
+                    assert_eq!(total_bytes, Some(1024));
+                }
+                _ => panic!("Expected FileTransferStarted after proto roundtrip"),
+            }
+        }
+
+        #[test]
+        fn test_file_transfer_progress_roundtrip() {
+            let msg = ServerMessage::file_transfer_progress(42, 512, Some(1024));
+
+            // JSON roundtrip
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"file_transfer_progress"#));
+            let json_decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+            match json_decoded {
+                ServerMessage::FileTransferProgress {
+                    id,
+                    bytes_transferred,
+                    total_bytes,
+                } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(bytes_transferred, 512);
+                    assert_eq!(total_bytes, Some(1024));
+                }
+                _ => panic!("Expected FileTransferProgress"),
+            }
+
+            // Proto (binary) roundtrip
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::FileTransferProgress {
+                    id,
+                    bytes_transferred,
+                    total_bytes,
+                } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(bytes_transferred, 512);
+                    assert_eq!(total_bytes, Some(1024));
+                }
+                _ => panic!("Expected FileTransferProgress after proto roundtrip"),
+            }
+        }
+
+        #[test]
+        fn test_file_transfer_completed_roundtrip() {
+            let msg =
+                ServerMessage::file_transfer_completed(42, Some("test.pdf".to_string()), 1024);
+
+            // JSON roundtrip
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"file_transfer_completed"#));
+            let json_decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+            match json_decoded {
+                ServerMessage::FileTransferCompleted { id, filename, size } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(filename, Some("test.pdf".to_string()));
+                    assert_eq!(size, 1024);
+                }
+                _ => panic!("Expected FileTransferCompleted"),
+            }
+
+            // Proto (binary) roundtrip
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::FileTransferCompleted { id, filename, size } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(filename, Some("test.pdf".to_string()));
+                    assert_eq!(size, 1024);
+                }
+                _ => panic!("Expected FileTransferCompleted after proto roundtrip"),
+            }
+        }
+
+        #[test]
+        fn test_file_transfer_failed_roundtrip() {
+            let msg = ServerMessage::file_transfer_failed(42, "size exceeded".to_string());
+
+            // JSON roundtrip
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"file_transfer_failed"#));
+            let json_decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+            match json_decoded {
+                ServerMessage::FileTransferFailed { id, reason } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(reason, "size exceeded");
+                }
+                _ => panic!("Expected FileTransferFailed"),
+            }
+
+            // Proto (binary) roundtrip
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::FileTransferFailed { id, reason } => {
+                    assert_eq!(id, 42);
+                    assert_eq!(reason, "size exceeded");
+                }
+                _ => panic!("Expected FileTransferFailed after proto roundtrip"),
+            }
+        }
+
+        #[test]
+        fn test_upload_requested_roundtrip() {
+            let msg = ServerMessage::upload_requested("tgz".to_string());
+
+            // JSON roundtrip
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"upload_requested"#));
+            let json_decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+            match json_decoded {
+                ServerMessage::UploadRequested { format } => {
+                    assert_eq!(format, "tgz");
+                }
+                _ => panic!("Expected UploadRequested"),
+            }
+
+            // Proto (binary) roundtrip
+            let encoded = encode_server_message(&msg).unwrap();
+            let decoded = decode_server_message(&encoded).unwrap();
+            match decoded {
+                ServerMessage::UploadRequested { format } => {
+                    assert_eq!(format, "tgz");
+                }
+                _ => panic!("Expected UploadRequested after proto roundtrip"),
+            }
+        }
+
+        #[test]
+        fn test_file_transfer_event_types_serialization() {
+            let events = vec![EventType::FileTransfer, EventType::UploadRequest];
+            let json = serde_json::to_string(&events).unwrap();
+            assert!(json.contains(r#""file_transfer"#));
+            assert!(json.contains(r#""upload_request"#));
+
+            let deserialized: Vec<EventType> = serde_json::from_str(&json).unwrap();
+            assert_eq!(deserialized.len(), 2);
+            assert!(deserialized.contains(&EventType::FileTransfer));
+            assert!(deserialized.contains(&EventType::UploadRequest));
+        }
+    }
 }
 
 // Tests that work without streaming feature
