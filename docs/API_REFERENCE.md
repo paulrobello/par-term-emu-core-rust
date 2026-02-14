@@ -119,6 +119,8 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [CursorStyle](#cursorstyle)
   - [UnderlineStyle](#underlinestyle)
   - [ProgressState](#progressstate)
+- [StreamingServer Class](#streamingserver-class)
+- [StreamingConfig Class](#streamingconfig-class)
 - [Streaming Functions](#streaming-functions)
   - [encode_server_message](#encode_server_message)
   - [decode_server_message](#decode_server_message)
@@ -1475,6 +1477,123 @@ The terminal supports multiple concurrent named progress bars via OSC 934 sequen
 **Events:**
 - Event type: `"progress_bar_changed"` (subscribe with `set_event_subscription(["progress_bar_changed"])`)
 - Event dict keys: `action` ("set"/"remove"/"remove_all"), `id`, `state`, `percent`, `label`
+
+## StreamingServer Class
+
+WebSocket streaming server for broadcasting terminal state to connected clients. Available when the `streaming` feature is enabled.
+
+### Constructor
+
+```python
+StreamingServer(pty_terminal: PtyTerminal, addr: str, config: StreamingConfig | None = None)
+```
+
+Create a streaming server bound to `addr` (e.g., `"127.0.0.1:8080"`). Automatically sets up output callback and PTY writer on the terminal.
+
+### Server Lifecycle
+
+- `start()`: Start the server in a background thread (non-blocking)
+- `shutdown(reason: str)`: Shutdown the server and disconnect all clients
+- `client_count() -> int`: Get the number of connected clients
+- `max_clients() -> int`: Get the maximum allowed clients
+
+### Event Polling
+
+- `poll_resize() -> tuple[int, int] | None`: Poll for pending resize requests from clients
+
+### Broadcasting Methods
+
+Methods for sending events to all connected clients:
+
+- `send_output(data: str)`: Send terminal output data
+- `send_resize(cols: int, rows: int)`: Send terminal resize event
+- `send_title(title: str)`: Send title change
+- `send_bell()`: Send bell event
+- `send_mode_changed(mode: str, enabled: bool)`: Send terminal mode change
+- `send_graphics_added(row: int)`: Send graphics added event
+- `send_hyperlink_added(url: str, row: int, col: int, id: str | None = None)`: Send hyperlink added event
+- `send_user_var_changed(name: str, value: str, old_value: str | None = None)`: Send user variable change
+- `send_cursor_position(col: int, row: int, visible: bool)`: Send cursor position update
+- `send_badge_changed(badge: str | None = None)`: Send badge change event
+- `send_action_notify(trigger_id: int, title: str, message: str)`: Send trigger notification action
+- `send_action_mark_line(trigger_id: int, row: int, label: str | None = None, color: tuple[int, int, int] | None = None)`: Send trigger mark line action
+- `send_cwd_changed(new_cwd: str, old_cwd: str | None = None, hostname: str | None = None, username: str | None = None, timestamp: int = 0)`: Send working directory change event
+- `send_trigger_matched(trigger_id: int, row: int, col: int, end_col: int, text: str, captures: list[str] = [], timestamp: int = 0)`: Send trigger match event
+- `send_progress_bar_changed(action: str, id: str, state: ProgressState | None = None, percent: int | None = None, label: str | None = None)`: Send progress bar state change. `action` must be `"set"`, `"remove"`, or `"remove_all"`.
+
+### Theme
+
+- `create_theme_info(name: str, background: tuple, foreground: tuple, normal: list[tuple], bright: list[tuple]) -> dict`: Create a theme info dictionary for the protocol (static method)
+
+### Example
+
+```python
+from par_term_emu_core_rust import PtyTerminal, StreamingServer, StreamingConfig
+
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell()
+    config = StreamingConfig(api_key="secret", enable_system_stats=True)
+    server = StreamingServer(term, "127.0.0.1:8080", config)
+    server.start()
+
+    # Broadcast events
+    server.send_cwd_changed("/home/user", hostname="myhost")
+    server.send_trigger_matched(1, row=5, col=0, end_col=10, text="ERROR")
+    server.send_progress_bar_changed("set", "build", percent=75, label="Building...")
+
+    server.shutdown("Done")
+```
+
+## StreamingConfig Class
+
+Configuration for the streaming server.
+
+### Constructor
+
+```python
+StreamingConfig(
+    max_clients: int = 1000,
+    send_initial_screen: bool = True,
+    keepalive_interval: int = 30,
+    default_read_only: bool = False,
+    enable_http: bool = False,
+    web_root: str = "./web_term",
+    initial_cols: int = 0,
+    initial_rows: int = 0,
+    max_sessions: int = 10,
+    session_idle_timeout: int = 900,
+    max_clients_per_session: int = 0,
+    input_rate_limit_bytes_per_sec: int = 0,
+    api_key: str | None = None,
+    enable_system_stats: bool = False,
+    system_stats_interval_secs: int = 5,
+)
+```
+
+### Properties (getter/setter)
+
+- `max_clients: int` - Maximum concurrent client connections
+- `send_initial_screen: bool` - Send screen snapshot on connect
+- `keepalive_interval: int` - Ping interval in seconds (0=disabled)
+- `default_read_only: bool` - New clients read-only by default
+- `enable_http: bool` - Enable HTTP static file serving
+- `web_root: str` - Web root directory for static files
+- `initial_cols: int` - Initial terminal columns (0=use terminal's current size)
+- `initial_rows: int` - Initial terminal rows (0=use terminal's current size)
+- `max_sessions: int` - Maximum concurrent terminal sessions
+- `session_idle_timeout: int` - Idle session timeout in seconds (0=never timeout)
+- `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
+- `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
+- `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
+- `enable_system_stats: bool` - Enable system resource statistics collection
+- `system_stats_interval_secs: int` - System stats collection interval in seconds
+- `tls_enabled: bool` - Check if TLS is configured (read-only)
+
+### TLS Methods
+
+- `set_tls_from_files(cert_path: str, key_path: str)`: Configure TLS from separate cert and key files
+- `set_tls_from_pem(pem_path: str)`: Configure TLS from combined PEM file
+- `disable_tls()`: Disable TLS
 
 ## Streaming Functions
 

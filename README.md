@@ -13,7 +13,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## What's New (Unreleased)
+## What's New in 0.37.0
 
 ### API Key Authentication, System Stats & Kitty Graphics
 
@@ -32,6 +32,14 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 **Screenshot Improvements:**
 - Synthetic bold rendering via swash `embolden()`, font load failure logging
+
+**Python Bindings:**
+- **`StreamingServer.send_cwd_changed()`** - Broadcast working directory change events to all connected clients
+- **`StreamingServer.send_trigger_matched()`** - Broadcast trigger match events to all connected clients
+- **`StreamingServer.send_progress_bar_changed()`** - Broadcast progress bar state changes to all connected clients
+
+**Breaking Changes:**
+- `basic_auth_middleware` replaced by unified `api_auth_middleware` that handles both API key and HTTP Basic Auth
 
 ## What's New in 0.36.0
 

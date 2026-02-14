@@ -669,6 +669,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `selection_changed` | `start_col?: uint32`, `start_row?: uint32`, `end_col?: uint32`, `end_row?: uint32`, `text?: string`, `mode: string`, `cleared: bool` | Selection state changed |
 | `clipboard_sync` | `operation: string`, `content: string`, `target?: string` | Clipboard content sync (OSC 52) |
 | `shell_integration_event` | `event_type: string`, `command?: string`, `exit_code?: int32`, `timestamp?: uint64` | Shell integration marker (FinalTerm OSC 133) |
+| `system_stats` | `cpu?, memory?, disks[], networks[], load_average?, hostname?, os_name?, os_version?, kernel_version?, uptime_secs?, timestamp?` | System resource statistics (requires `--enable-system-stats`) |
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
@@ -775,6 +776,7 @@ Clients can subscribe to specific event types to filter server messages and redu
 | `SELECTION` | 15 | Selection changes |
 | `CLIPBOARD` | 16 | Clipboard events |
 | `SHELL` | 17 | Shell integration events |
+| `SYSTEM_STATS` | 18 | System resource statistics |
 
 **Example (TypeScript):**
 ```typescript
@@ -961,7 +963,12 @@ def main():
 
     # Create streaming server (automatically sets up output callback and PTY writer)
     addr = "127.0.0.1:8080"
-    server = terminal_core.StreamingServer(pty_terminal, addr)
+    config = terminal_core.StreamingConfig(
+        api_key="my-secret-key",           # Protect /ws, /sessions, /stats
+        enable_system_stats=True,          # Enable CPU/memory/disk/network stats
+        system_stats_interval_secs=5,      # Stats every 5 seconds
+    )
+    server = terminal_core.StreamingServer(pty_terminal, addr, config)
 
     # Start server in background thread (non-blocking)
     server.start()
@@ -977,6 +984,26 @@ def main():
                 print(f"Resizing to {cols}x{rows}")
                 pty_terminal.resize(cols, rows)
                 server.send_resize(cols, rows)
+
+            # Broadcast terminal events to clients
+            for event in pty_terminal.poll_events():
+                if event.get("type") == "cwd_changed":
+                    server.send_cwd_changed(
+                        event["new_cwd"],
+                        old_cwd=event.get("old_cwd"),
+                        hostname=event.get("hostname"),
+                    )
+                elif event.get("type") == "trigger_matched":
+                    server.send_trigger_matched(
+                        event["trigger_id"], event["row"],
+                        event["col"], event["end_col"], event["text"],
+                    )
+                elif event.get("type") == "progress_bar_changed":
+                    server.send_progress_bar_changed(
+                        event["action"], event["id"],
+                        percent=event.get("percent"),
+                        label=event.get("label"),
+                    )
 
             # Check for user commands (Unix only)
             if sys.platform != 'win32':

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-02-13
+
 ### Added
 - **Streaming Server: API Key Authentication**: New `api_key` field on `StreamingConfig` enables API key authentication for API routes (`/ws`, `/sessions`, `/stats`) while leaving static files (web frontend) unprotected. Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query parameter. When both API key and HTTP Basic Auth are configured, either satisfies authentication. Wired from existing `--api-key` CLI flag (env: `PAR_TERM_API_KEY`). WebSocket-only server modes also validate auth during handshake
 - **Streaming Server: Unified Auth Middleware**: New `ApiAuthConfig` struct and `api_auth_middleware` replace the old `basic_auth_middleware`, supporting both API key and HTTP Basic Auth in a single middleware. Auth is applied only to API routes via axum nested router pattern
@@ -18,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Streaming Protocol: `system_stats` Event Type**: New `EVENT_TYPE_SYSTEM_STATS = 18` for subscription filtering. Clients must subscribe to `system_stats` events to receive stats messages
 - **Python Bindings: System Stats Config**: `PyStreamingConfig` now exposes `enable_system_stats` and `system_stats_interval_secs` as constructor params and getter/setter properties
 - **Python Bindings: System Stats Decode**: `decode_server_message()` now returns full system stats data (cpu, memory, disks, networks, load_average, host info) as nested Python dicts/lists
+- **Python Bindings: Missing Streaming Server Methods**: Added `send_cwd_changed()`, `send_trigger_matched()`, and `send_progress_bar_changed()` to `PyStreamingServer` for complete parity with Rust streaming server API
 - **Kitty Graphics: Chunked Transmission**: Large images split across multiple DCS sequences are now properly accumulated and processed. Parser state persists on `Terminal` between chunks (`m=1` continues, `m=0` finalizes)
 - **Kitty Graphics: Complete Delete Targets**: Implemented remaining `KittyDeleteTarget` variants — `AtCursor`, `InCell`, `OnScreen`, `ByColumn`, and `ByRow` now correctly remove graphics placements by position
 - **Kitty Graphics: Placeholder Diacritics**: Unicode placeholder cells now include combining diacritics encoding row/column/MSB offsets in `Cell.combining`, enabling frontends to reconstruct full placeholder sequences
@@ -1123,6 +1126,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Unicode Support**: Full Unicode including emoji and wide characters
 - **Python Integration**: PyO3 bindings for Python 3.12+
 
+[0.37.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.33.0...v0.34.0
 [0.33.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.32.0...v0.33.0
 [0.32.0]: https://github.com/paulrobello/par-term-emu-core-rust/compare/v0.31.1...v0.32.0

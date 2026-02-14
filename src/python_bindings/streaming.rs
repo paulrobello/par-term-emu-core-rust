@@ -705,6 +705,98 @@ impl PyStreamingServer {
         }
     }
 
+    /// Send a CWD changed event to all clients
+    ///
+    /// Args:
+    ///     new_cwd: The new working directory path
+    ///     old_cwd: The previous working directory path (optional)
+    ///     hostname: Hostname associated with the CWD (optional)
+    ///     username: Username associated with the CWD (optional)
+    ///     timestamp: Unix timestamp of the change
+    #[pyo3(signature = (new_cwd, old_cwd=None, hostname=None, username=None, timestamp=0))]
+    fn send_cwd_changed(
+        &self,
+        new_cwd: String,
+        old_cwd: Option<String>,
+        hostname: Option<String>,
+        username: Option<String>,
+        timestamp: u64,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_cwd_changed(old_cwd, new_cwd, hostname, username, timestamp);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a trigger matched event to all clients
+    ///
+    /// Args:
+    ///     trigger_id: ID of the trigger that matched
+    ///     row: Row where the match occurred
+    ///     col: Starting column of the match
+    ///     end_col: Ending column of the match
+    ///     text: The matched text
+    ///     captures: List of capture group strings
+    ///     timestamp: Unix timestamp of the match
+    #[pyo3(signature = (trigger_id, row, col, end_col, text, captures=vec![], timestamp=0))]
+    #[allow(clippy::too_many_arguments)]
+    fn send_trigger_matched(
+        &self,
+        trigger_id: u64,
+        row: u16,
+        col: u16,
+        end_col: u16,
+        text: String,
+        captures: Vec<String>,
+        timestamp: u64,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            server.send_trigger_matched(trigger_id, row, col, end_col, text, captures, timestamp);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
+    /// Send a progress bar changed event to all clients
+    ///
+    /// Args:
+    ///     action: Action string ("set", "remove", or "remove_all")
+    ///     id: Progress bar identifier
+    ///     state: Optional ProgressState enum value
+    ///     percent: Optional progress percentage (0-100)
+    ///     label: Optional label text
+    #[pyo3(signature = (action, id, state=None, percent=None, label=None))]
+    fn send_progress_bar_changed(
+        &self,
+        action: String,
+        id: String,
+        state: Option<super::enums::PyProgressState>,
+        percent: Option<u8>,
+        label: Option<String>,
+    ) -> PyResult<()> {
+        if let Some(server) = &self.server {
+            let action = match action.as_str() {
+                "set" => crate::terminal::ProgressBarAction::Set,
+                "remove" => crate::terminal::ProgressBarAction::Remove,
+                "remove_all" => crate::terminal::ProgressBarAction::RemoveAll,
+                _ => {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "Invalid action '{}': must be 'set', 'remove', or 'remove_all'",
+                        action
+                    )));
+                }
+            };
+            let state = state.map(|s| s.into());
+            server.send_progress_bar_changed(action, id, state, percent, label);
+            Ok(())
+        } else {
+            Err(PyRuntimeError::new_err("Server has been stopped"))
+        }
+    }
+
     /// Shutdown the server and disconnect all clients
     ///
     /// Args:
