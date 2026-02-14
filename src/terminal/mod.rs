@@ -221,6 +221,47 @@ pub enum TerminalEvent {
         /// Shell type if known (e.g., "bash", "zsh")
         shell_type: Option<String>,
     },
+    /// A file transfer has started (download or upload)
+    FileTransferStarted {
+        /// Unique transfer identifier
+        id: u64,
+        /// Transfer direction (download or upload)
+        direction: crate::terminal::file_transfer::TransferDirection,
+        /// Name of the file being transferred (if known)
+        filename: Option<String>,
+        /// Total expected size in bytes (if known)
+        total_bytes: Option<usize>,
+    },
+    /// Progress update for an active file transfer
+    FileTransferProgress {
+        /// Unique transfer identifier
+        id: u64,
+        /// Number of bytes transferred so far
+        bytes_transferred: usize,
+        /// Total expected size in bytes (if known)
+        total_bytes: Option<usize>,
+    },
+    /// A file transfer completed successfully
+    FileTransferCompleted {
+        /// Unique transfer identifier
+        id: u64,
+        /// Name of the file that was transferred (if known)
+        filename: Option<String>,
+        /// Total size of the transferred data in bytes
+        size: usize,
+    },
+    /// A file transfer failed
+    FileTransferFailed {
+        /// Unique transfer identifier
+        id: u64,
+        /// Reason for the failure
+        reason: String,
+    },
+    /// An upload was requested by the remote application
+    UploadRequested {
+        /// Upload format (e.g., "base64")
+        format: String,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -245,6 +286,11 @@ pub enum TerminalEventKind {
     EnvironmentChanged,
     RemoteHostTransition,
     SubShellDetected,
+    FileTransferStarted,
+    FileTransferProgress,
+    FileTransferCompleted,
+    FileTransferFailed,
+    UploadRequested,
 }
 
 /// Hyperlink information with all its locations
@@ -3171,6 +3217,11 @@ impl Terminal {
             TerminalEvent::EnvironmentChanged { .. } => TerminalEventKind::EnvironmentChanged,
             TerminalEvent::RemoteHostTransition { .. } => TerminalEventKind::RemoteHostTransition,
             TerminalEvent::SubShellDetected { .. } => TerminalEventKind::SubShellDetected,
+            TerminalEvent::FileTransferStarted { .. } => TerminalEventKind::FileTransferStarted,
+            TerminalEvent::FileTransferProgress { .. } => TerminalEventKind::FileTransferProgress,
+            TerminalEvent::FileTransferCompleted { .. } => TerminalEventKind::FileTransferCompleted,
+            TerminalEvent::FileTransferFailed { .. } => TerminalEventKind::FileTransferFailed,
+            TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
         }
     }
 

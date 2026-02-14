@@ -831,6 +831,12 @@ impl ServerState {
                             ),
                         );
                     }
+                    // File transfer events are handled locally, not streamed yet
+                    TerminalEvent::FileTransferStarted { .. }
+                    | TerminalEvent::FileTransferProgress { .. }
+                    | TerminalEvent::FileTransferCompleted { .. }
+                    | TerminalEvent::FileTransferFailed { .. }
+                    | TerminalEvent::UploadRequested { .. } => {}
                 }
             }
         }
@@ -1385,6 +1391,12 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
+                        // File transfer events are handled locally, not streamed yet
+                        TerminalEvent::FileTransferStarted { .. }
+                        | TerminalEvent::FileTransferProgress { .. }
+                        | TerminalEvent::FileTransferCompleted { .. }
+                        | TerminalEvent::FileTransferFailed { .. }
+                        | TerminalEvent::UploadRequested { .. } => {}
                     }
                 }
             }

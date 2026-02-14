@@ -5592,6 +5592,11 @@ impl PyTerminal {
             "environment_changed" => Some(TerminalEventKind::EnvironmentChanged),
             "remote_host_transition" => Some(TerminalEventKind::RemoteHostTransition),
             "sub_shell_detected" => Some(TerminalEventKind::SubShellDetected),
+            "file_transfer_started" => Some(TerminalEventKind::FileTransferStarted),
+            "file_transfer_progress" => Some(TerminalEventKind::FileTransferProgress),
+            "file_transfer_completed" => Some(TerminalEventKind::FileTransferCompleted),
+            "file_transfer_failed" => Some(TerminalEventKind::FileTransferFailed),
+            "upload_requested" => Some(TerminalEventKind::UploadRequested),
             _ => None,
         }
     }
