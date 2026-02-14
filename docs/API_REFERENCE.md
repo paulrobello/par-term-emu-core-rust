@@ -36,6 +36,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Bookmarks](#bookmarks)
   - [Triggers & Automation](#triggers--automation)
   - [Shell Integration Extended](#shell-integration-extended)
+  - [Semantic Zones](#semantic-zones)
   - [Clipboard Extended](#clipboard-extended)
   - [Graphics Extended](#graphics-extended)
   - [Rendering and Damage Tracking](#rendering-and-damage-tracking)
@@ -504,6 +505,60 @@ Extended shell integration features beyond basic OSC 133:
 - `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
 - `poll_events()` and `poll_subscribed_events()`: Shell integration events now include `cursor_line` field
+
+### Semantic Zones
+
+Semantic buffer zoning powered by OSC 133 FinalTerm shell integration markers. Zones partition the scrollback buffer into typed regions (prompt, command, output) that can be queried individually.
+
+#### Zone Query Methods
+
+- `get_zones() -> list[dict]`: Returns all semantic zones as a list of dictionaries. Each dict contains:
+  - `zone_type` (str): `"prompt"`, `"command"`, or `"output"`
+  - `abs_row_start` (int): Absolute row where zone starts
+  - `abs_row_end` (int): Absolute row where zone ends (inclusive)
+  - `command` (str | None): Command text (present for command and output zones)
+  - `exit_code` (int | None): Exit code (present for output zones after command finishes)
+  - `timestamp` (int | None): Unix milliseconds when zone was created
+
+- `get_zone_at(abs_row: int) -> dict | None`: Returns the zone containing the given absolute row, or `None` if no zone covers that row. The returned dict has the same fields as `get_zones()`.
+
+- `get_zone_text(abs_row: int) -> str | None`: Extracts text content from the zone containing the given absolute row. Returns `None` if no zone covers that row. Text is extracted from the grid rows spanned by the zone.
+
+**Notes:**
+- Zones are only created on the primary screen buffer; alternate screen (e.g., vim, less) does not generate zones.
+- Zones are automatically evicted when their rows scroll out of the scrollback buffer.
+- Zones are cleared on terminal reset.
+
+**Example:**
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# Simulate a shell integration cycle:
+# OSC 133;A (prompt start), OSC 133;B (command start),
+# OSC 133;C (command executed), OSC 133;D;0 (command finished, exit code 0)
+term.process_str("\x1b]133;A\x07")
+term.process_str("$ ")
+term.process_str("\x1b]133;B\x07")
+term.process_str("ls -la")
+term.process_str("\x1b]133;C\x07")
+term.process_str("file1.txt\nfile2.txt\n")
+term.process_str("\x1b]133;D;0\x07")
+
+zones = term.get_zones()
+# [
+#   {"zone_type": "prompt", "abs_row_start": 0, "abs_row_end": 0, ...},
+#   {"zone_type": "command", "abs_row_start": 0, "abs_row_end": 0, ...},
+#   {"zone_type": "output", "abs_row_start": 0, "abs_row_end": 1, ...},
+# ]
+
+# Query a specific row
+zone = term.get_zone_at(0)  # Returns the zone covering row 0
+
+# Extract text from a zone
+text = term.get_zone_text(1)  # Text from the output zone
+```
 
 ### Clipboard Extended
 

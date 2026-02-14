@@ -1,4 +1,5 @@
 use crate::cell::Cell;
+use crate::zone::Zone;
 
 /// A 2D grid of terminal cells
 #[derive(Debug, Clone)]
@@ -23,6 +24,11 @@ pub struct Grid {
     wrapped: Vec<bool>,
     /// Track wrapped state for scrollback lines (circular buffer)
     scrollback_wrapped: Vec<bool>,
+    /// Semantic zones tracking logical blocks (Prompt, Command, Output)
+    zones: Vec<Zone>,
+    /// Total number of lines that have ever been scrolled into scrollback.
+    /// Used to compute the scrollback floor for zone eviction.
+    total_lines_scrolled: usize,
 }
 
 impl Grid {
@@ -39,6 +45,8 @@ impl Grid {
             max_scrollback,
             wrapped: vec![false; rows],
             scrollback_wrapped: Vec::new(),
+            zones: Vec::new(),
+            total_lines_scrolled: 0,
         }
     }
 
@@ -119,6 +127,7 @@ impl Grid {
     /// Clear the entire grid
     pub fn clear(&mut self) {
         self.cells.fill(Cell::default());
+        self.zones.clear();
     }
 
     /// Clear a specific row
@@ -169,6 +178,16 @@ impl Grid {
     /// Scroll up by n lines (moves content up, adds blank lines at bottom)
     pub fn scroll_up(&mut self, n: usize) {
         let n = n.min(self.rows);
+
+        // Track total lines scrolled for zone eviction
+        if self.max_scrollback > 0 {
+            self.total_lines_scrolled += n;
+            // Evict zones whose rows have been overwritten
+            if self.scrollback_lines >= self.max_scrollback {
+                let floor = self.total_lines_scrolled - self.max_scrollback;
+                self.evict_zones(floor);
+            }
+        }
 
         // Save scrolled lines to scrollback (only if scrollback is enabled)
         if self.max_scrollback > 0 {
@@ -702,6 +721,8 @@ impl Grid {
         self.scrollback_wrapped.clear();
         self.scrollback_lines = 0;
         self.scrollback_start = 0;
+        self.zones.clear();
+        self.total_lines_scrolled = 0;
     }
 
     /// Get the maximum scrollback capacity
@@ -1848,6 +1869,59 @@ impl Grid {
 
         output
     }
+
+    // ========== Semantic Zone Methods ==========
+
+    /// Get all semantic zones
+    pub fn zones(&self) -> &[Zone] {
+        &self.zones
+    }
+
+    /// Get mutable access to zones (for setting exit_code after closing)
+    pub fn zones_mut(&mut self) -> &mut Vec<Zone> {
+        &mut self.zones
+    }
+
+    /// Push a new zone. Zones must be appended in order of abs_row_start.
+    pub fn push_zone(&mut self, zone: Zone) {
+        self.zones.push(zone);
+    }
+
+    /// Close the current (last) open zone at the given absolute row.
+    /// No-op if there are no zones.
+    pub fn close_current_zone(&mut self, abs_row: usize) {
+        if let Some(zone) = self.zones.last_mut() {
+            zone.close(abs_row);
+        }
+    }
+
+    /// Find the zone containing the given absolute row.
+    /// Uses linear search from the end (recent zones more likely queried).
+    pub fn zone_at(&self, abs_row: usize) -> Option<&Zone> {
+        self.zones.iter().rev().find(|z| z.contains_row(abs_row))
+    }
+
+    /// Evict zones that have been fully scrolled past the given floor row.
+    /// Zones fully below `floor` are removed. Zones spanning the boundary
+    /// have their `abs_row_start` clamped to `floor`.
+    pub fn evict_zones(&mut self, floor: usize) {
+        self.zones.retain(|z| z.abs_row_end >= floor);
+        for zone in &mut self.zones {
+            if zone.abs_row_start < floor {
+                zone.abs_row_start = floor;
+            }
+        }
+    }
+
+    /// Clear all zones (used on terminal reset)
+    pub fn clear_zones(&mut self) {
+        self.zones.clear();
+    }
+
+    /// Get total lines ever scrolled (for computing scrollback floor)
+    pub fn total_lines_scrolled(&self) -> usize {
+        self.total_lines_scrolled
+    }
 }
 
 #[cfg(test)]
@@ -2909,5 +2983,91 @@ mod tests {
         let line = grid.scrollback_line(0).unwrap();
         assert_eq!(line[0].c, 'A');
         assert_eq!(line[14].c, 'O');
+    }
+}
+
+#[cfg(test)]
+mod zone_tests {
+    use super::*;
+    use crate::zone::{Zone, ZoneType};
+
+    #[test]
+    fn test_grid_zones_empty() {
+        let grid = Grid::new(80, 24, 100);
+        assert!(grid.zones().is_empty());
+    }
+
+    #[test]
+    fn test_grid_push_zone() {
+        let mut grid = Grid::new(80, 24, 100);
+        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        assert_eq!(grid.zones().len(), 1);
+        assert_eq!(grid.zones()[0].zone_type, ZoneType::Prompt);
+    }
+
+    #[test]
+    fn test_grid_close_current_zone() {
+        let mut grid = Grid::new(80, 24, 100);
+        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        grid.close_current_zone(5);
+        assert_eq!(grid.zones()[0].abs_row_end, 5);
+    }
+
+    #[test]
+    fn test_grid_zone_at() {
+        let mut grid = Grid::new(80, 24, 100);
+        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        z1.close(4);
+        grid.push_zone(z1);
+
+        let mut z2 = Zone::new(ZoneType::Command, 5, None);
+        z2.close(6);
+        grid.push_zone(z2);
+
+        let mut z3 = Zone::new(ZoneType::Output, 7, None);
+        z3.close(20);
+        grid.push_zone(z3);
+
+        assert_eq!(grid.zone_at(0).unwrap().zone_type, ZoneType::Prompt);
+        assert_eq!(grid.zone_at(4).unwrap().zone_type, ZoneType::Prompt);
+        assert_eq!(grid.zone_at(5).unwrap().zone_type, ZoneType::Command);
+        assert_eq!(grid.zone_at(10).unwrap().zone_type, ZoneType::Output);
+        assert!(grid.zone_at(21).is_none());
+    }
+
+    #[test]
+    fn test_grid_evict_zones() {
+        let mut grid = Grid::new(80, 24, 100);
+        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        z1.close(4);
+        grid.push_zone(z1);
+
+        let mut z2 = Zone::new(ZoneType::Output, 5, None);
+        z2.close(20);
+        grid.push_zone(z2);
+
+        grid.evict_zones(5);
+        assert_eq!(grid.zones().len(), 1);
+        assert_eq!(grid.zones()[0].zone_type, ZoneType::Output);
+    }
+
+    #[test]
+    fn test_grid_evict_zones_partial() {
+        let mut grid = Grid::new(80, 24, 100);
+        let mut z1 = Zone::new(ZoneType::Output, 0, None);
+        z1.close(20);
+        grid.push_zone(z1);
+
+        grid.evict_zones(10);
+        assert_eq!(grid.zones().len(), 1);
+        assert_eq!(grid.zones()[0].abs_row_start, 10);
+    }
+
+    #[test]
+    fn test_grid_clear_zones() {
+        let mut grid = Grid::new(80, 24, 100);
+        grid.push_zone(Zone::new(ZoneType::Prompt, 0, None));
+        grid.clear_zones();
+        assert!(grid.zones().is_empty());
     }
 }
