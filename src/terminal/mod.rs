@@ -14,6 +14,7 @@ mod graphics;
 pub mod notification;
 pub mod progress;
 mod sequences;
+pub mod snapshot;
 pub mod trigger;
 mod write;
 
