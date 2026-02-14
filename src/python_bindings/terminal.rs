@@ -2729,6 +2729,10 @@ impl PyTerminal {
                             map.insert("timestamp".to_string(), ts.to_string());
                         }
                     }
+                    // TODO(Task 5): handle new contextual awareness event variants
+                    _ => {
+                        map.insert("type".to_string(), "unknown".to_string());
+                    }
                 }
                 map
             })
@@ -2926,6 +2930,10 @@ impl PyTerminal {
                         if let Some(ts) = timestamp {
                             map.insert("timestamp".to_string(), ts.to_string());
                         }
+                    }
+                    // TODO(Task 5): handle new contextual awareness event variants
+                    _ => {
+                        map.insert("type".to_string(), "unknown".to_string());
                     }
                 }
                 map

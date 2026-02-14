@@ -159,6 +159,62 @@ pub enum TerminalEvent {
         /// This captures the exact position before subsequent output moves the cursor.
         cursor_line: Option<usize>,
     },
+    /// A zone was opened (prompt, command, or output block started)
+    ZoneOpened {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone
+        zone_type: crate::zone::ZoneType,
+        /// Absolute row where zone starts
+        abs_row_start: usize,
+    },
+    /// A zone was closed (prompt, command, or output block ended)
+    ZoneClosed {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone
+        zone_type: crate::zone::ZoneType,
+        /// Absolute row where zone starts
+        abs_row_start: usize,
+        /// Absolute row where zone ends
+        abs_row_end: usize,
+        /// Exit code (for output zones only)
+        exit_code: Option<i32>,
+    },
+    /// A zone was evicted from scrollback
+    ZoneScrolledOut {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone that was evicted
+        zone_type: crate::zone::ZoneType,
+    },
+    /// An environment variable changed (CWD, hostname, username)
+    EnvironmentChanged {
+        /// The key that changed ("cwd", "hostname", "username")
+        key: String,
+        /// The new value
+        value: String,
+        /// The previous value (if any)
+        old_value: Option<String>,
+    },
+    /// Remote host transition detected (hostname changed)
+    RemoteHostTransition {
+        /// New hostname
+        hostname: String,
+        /// New username (if known)
+        username: Option<String>,
+        /// Previous hostname (if any)
+        old_hostname: Option<String>,
+        /// Previous username (if any)
+        old_username: Option<String>,
+    },
+    /// Sub-shell detected (shell nesting depth changed)
+    SubShellDetected {
+        /// Current shell nesting depth
+        depth: usize,
+        /// Shell type if known (e.g., "bash", "zsh")
+        shell_type: Option<String>,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -177,6 +233,12 @@ pub enum TerminalEventKind {
     ProgressBarChanged,
     BadgeChanged,
     ShellIntegrationEvent,
+    ZoneOpened,
+    ZoneClosed,
+    ZoneScrolledOut,
+    EnvironmentChanged,
+    RemoteHostTransition,
+    SubShellDetected,
 }
 
 /// Hyperlink information with all its locations
@@ -3008,6 +3070,12 @@ impl Terminal {
             TerminalEvent::ProgressBarChanged { .. } => TerminalEventKind::ProgressBarChanged,
             TerminalEvent::BadgeChanged(_) => TerminalEventKind::BadgeChanged,
             TerminalEvent::ShellIntegrationEvent { .. } => TerminalEventKind::ShellIntegrationEvent,
+            TerminalEvent::ZoneOpened { .. } => TerminalEventKind::ZoneOpened,
+            TerminalEvent::ZoneClosed { .. } => TerminalEventKind::ZoneClosed,
+            TerminalEvent::ZoneScrolledOut { .. } => TerminalEventKind::ZoneScrolledOut,
+            TerminalEvent::EnvironmentChanged { .. } => TerminalEventKind::EnvironmentChanged,
+            TerminalEvent::RemoteHostTransition { .. } => TerminalEventKind::RemoteHostTransition,
+            TerminalEvent::SubShellDetected { .. } => TerminalEventKind::SubShellDetected,
         }
     }
 

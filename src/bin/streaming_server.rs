@@ -762,6 +762,8 @@ impl ServerState {
                     TerminalEvent::DirtyRegion(_, _) => {
                         // Dirty region is a rendering optimization hint, not needed for streaming
                     }
+                    // TODO(Task 6): handle new contextual awareness event variants
+                    _ => {}
                 }
             }
         }
@@ -1241,6 +1243,8 @@ impl SessionFactory for BinarySessionFactory {
                         TerminalEvent::DirtyRegion(_, _) => {
                             // Dirty region is a rendering optimization hint, not needed for streaming
                         }
+                        // TODO(Task 6): handle new contextual awareness event variants
+                        _ => {}
                     }
                 }
             }
