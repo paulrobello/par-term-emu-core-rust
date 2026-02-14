@@ -10,6 +10,7 @@
 
 // Submodules
 mod colors;
+pub mod file_transfer;
 mod graphics;
 pub mod notification;
 pub mod progress;
@@ -28,6 +29,10 @@ pub use progress::{
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry,
+};
+// Re-export file transfer types as they're part of the public API
+pub use file_transfer::{
+    FileTransfer, FileTransferManager, TransferDirection, TransferId, TransferStatus,
 };
 
 // Imports
