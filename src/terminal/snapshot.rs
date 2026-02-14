@@ -48,10 +48,10 @@ pub struct SemanticSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scrollback_text: Option<String>,
     /// Shell integration zones included in the snapshot
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub zones: Vec<ZoneInfo>,
     /// Command history entries included in the snapshot
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<CommandInfo>,
     /// Current working directory
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -63,7 +63,7 @@ pub struct SemanticSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     /// Working directory change history
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cwd_history: Vec<CwdChangeInfo>,
     /// Number of lines in the scrollback buffer
     pub scrollback_lines: usize,
@@ -450,5 +450,55 @@ mod tests {
         assert!(!json.contains("username"));
         assert!(json.contains("\"new_cwd\":\"/tmp\""));
         assert!(json.contains("\"timestamp\":1700000000000"));
+    }
+
+    #[test]
+    fn test_terminal_visible_snapshot() {
+        use crate::terminal::Terminal;
+        let mut term = Terminal::new(80, 24);
+        term.process(b"Hello, World!\r\n");
+        term.process(b"Second line");
+        let snap = term.get_semantic_snapshot(SnapshotScope::Visible);
+        assert_eq!(snap.cols, 80);
+        assert_eq!(snap.rows, 24);
+        assert!(!snap.alt_screen_active);
+        assert!(snap.visible_text.contains("Hello, World!"));
+        assert!(snap.visible_text.contains("Second line"));
+        assert!(snap.scrollback_text.is_none());
+        assert!(snap.commands.is_empty());
+        assert_eq!(snap.total_commands, 0);
+    }
+
+    #[test]
+    fn test_terminal_snapshot_json() {
+        use crate::terminal::Terminal;
+        let mut term = Terminal::new(80, 24);
+        term.process(b"Test content");
+        let json = term.get_semantic_snapshot_json(SnapshotScope::Visible);
+        assert!(json.contains("\"cols\":80"));
+        assert!(json.contains("Test content"));
+        // Verify it's valid JSON
+        let _parsed: SemanticSnapshot = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn test_terminal_full_snapshot() {
+        use crate::terminal::Terminal;
+        let mut term = Terminal::new(80, 24);
+        term.process(b"Some content\r\n");
+        let snap = term.get_semantic_snapshot(SnapshotScope::Full);
+        assert_eq!(snap.cols, 80);
+        assert!(snap.visible_text.contains("Some content"));
+        // Full scope should have scrollback_text (or None if nothing in scrollback)
+        assert_eq!(snap.total_commands, 0);
+    }
+
+    #[test]
+    fn test_terminal_recent_snapshot() {
+        use crate::terminal::Terminal;
+        let term = Terminal::new(80, 24);
+        // Recent(0) should have no commands
+        let snap = term.get_semantic_snapshot(SnapshotScope::Recent(0));
+        assert!(snap.commands.is_empty());
     }
 }
