@@ -432,6 +432,60 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                 uptime_secs: *uptime_secs,
                 timestamp: *timestamp,
             })),
+            AppServerMessage::ZoneOpened {
+                zone_id,
+                zone_type,
+                abs_row_start,
+            } => Some(Message::ZoneOpened(pb::ZoneOpened {
+                zone_id: *zone_id,
+                zone_type: zone_type.clone(),
+                abs_row_start: *abs_row_start,
+            })),
+            AppServerMessage::ZoneClosed {
+                zone_id,
+                zone_type,
+                abs_row_start,
+                abs_row_end,
+                exit_code,
+            } => Some(Message::ZoneClosed(pb::ZoneClosed {
+                zone_id: *zone_id,
+                zone_type: zone_type.clone(),
+                abs_row_start: *abs_row_start,
+                abs_row_end: *abs_row_end,
+                exit_code: *exit_code,
+            })),
+            AppServerMessage::ZoneScrolledOut { zone_id, zone_type } => {
+                Some(Message::ZoneScrolledOut(pb::ZoneScrolledOut {
+                    zone_id: *zone_id,
+                    zone_type: zone_type.clone(),
+                }))
+            }
+            AppServerMessage::EnvironmentChanged {
+                key,
+                value,
+                old_value,
+            } => Some(Message::EnvironmentChanged(pb::EnvironmentChanged {
+                key: key.clone(),
+                value: value.clone(),
+                old_value: old_value.clone(),
+            })),
+            AppServerMessage::RemoteHostTransition {
+                hostname,
+                username,
+                old_hostname,
+                old_username,
+            } => Some(Message::RemoteHostTransition(pb::RemoteHostTransition {
+                hostname: hostname.clone(),
+                username: username.clone(),
+                old_hostname: old_hostname.clone(),
+                old_username: old_username.clone(),
+            })),
+            AppServerMessage::SubShellDetected { depth, shell_type } => {
+                Some(Message::SubShellDetected(pb::SubShellDetected {
+                    depth: *depth,
+                    shell_type: shell_type.clone(),
+                }))
+            }
         };
 
         pb::ServerMessage { message }
@@ -527,6 +581,10 @@ impl From<AppEventType> for i32 {
             AppEventType::Clipboard => pb::EventType::Clipboard as i32,
             AppEventType::Shell => pb::EventType::Shell as i32,
             AppEventType::SystemStats => pb::EventType::SystemStats as i32,
+            AppEventType::Zone => pb::EventType::Zone as i32,
+            AppEventType::Environment => pb::EventType::Environment as i32,
+            AppEventType::RemoteHost => pb::EventType::RemoteHost as i32,
+            AppEventType::SubShell => pb::EventType::SubShell as i32,
         }
     }
 }
@@ -763,6 +821,39 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 uptime_secs: ss.uptime_secs,
                 timestamp: ss.timestamp,
             }),
+            Some(Message::ZoneOpened(zo)) => Ok(AppServerMessage::ZoneOpened {
+                zone_id: zo.zone_id,
+                zone_type: zo.zone_type,
+                abs_row_start: zo.abs_row_start,
+            }),
+            Some(Message::ZoneClosed(zc)) => Ok(AppServerMessage::ZoneClosed {
+                zone_id: zc.zone_id,
+                zone_type: zc.zone_type,
+                abs_row_start: zc.abs_row_start,
+                abs_row_end: zc.abs_row_end,
+                exit_code: zc.exit_code,
+            }),
+            Some(Message::ZoneScrolledOut(zso)) => Ok(AppServerMessage::ZoneScrolledOut {
+                zone_id: zso.zone_id,
+                zone_type: zso.zone_type,
+            }),
+            Some(Message::EnvironmentChanged(ec)) => Ok(AppServerMessage::EnvironmentChanged {
+                key: ec.key,
+                value: ec.value,
+                old_value: ec.old_value,
+            }),
+            Some(Message::RemoteHostTransition(rht)) => {
+                Ok(AppServerMessage::RemoteHostTransition {
+                    hostname: rht.hostname,
+                    username: rht.username,
+                    old_hostname: rht.old_hostname,
+                    old_username: rht.old_username,
+                })
+            }
+            Some(Message::SubShellDetected(ssd)) => Ok(AppServerMessage::SubShellDetected {
+                depth: ssd.depth,
+                shell_type: ssd.shell_type,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -850,6 +941,10 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Clipboard => AppEventType::Clipboard,
             pb::EventType::Shell => AppEventType::Shell,
             pb::EventType::SystemStats => AppEventType::SystemStats,
+            pb::EventType::Zone => AppEventType::Zone,
+            pb::EventType::Environment => AppEventType::Environment,
+            pb::EventType::RemoteHost => AppEventType::RemoteHost,
+            pb::EventType::SubShell => AppEventType::SubShell,
         }
     }
 }

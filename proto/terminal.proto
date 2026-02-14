@@ -42,6 +42,10 @@ enum EventType {
   EVENT_TYPE_CLIPBOARD = 16;
   EVENT_TYPE_SHELL = 17;
   EVENT_TYPE_SYSTEM_STATS = 18;
+  EVENT_TYPE_ZONE = 19;
+  EVENT_TYPE_ENVIRONMENT = 20;
+  EVENT_TYPE_REMOTE_HOST = 21;
+  EVENT_TYPE_SUB_SHELL = 22;
 }
 
 // =============================================================================
@@ -74,6 +78,12 @@ message ServerMessage {
     ClipboardSync clipboard_sync = 22;
     ShellIntegrationEvent shell_integration_event = 23;
     SystemStats system_stats = 24;
+    ZoneOpened zone_opened = 25;
+    ZoneClosed zone_closed = 26;
+    ZoneScrolledOut zone_scrolled_out = 27;
+    EnvironmentChanged environment_changed = 28;
+    RemoteHostTransition remote_host_transition = 29;
+    SubShellDetected sub_shell_detected = 30;
   }
 }
 
@@ -305,6 +315,49 @@ message SystemStats {
   optional string kernel_version = 9;
   optional uint64 uptime_secs = 10;
   optional uint64 timestamp = 11;
+}
+
+// Zone opened (prompt, command, or output block started)
+message ZoneOpened {
+  uint64 zone_id = 1;
+  string zone_type = 2;    // "prompt", "command", "output"
+  uint64 abs_row_start = 3;
+}
+
+// Zone closed (prompt, command, or output block ended)
+message ZoneClosed {
+  uint64 zone_id = 1;
+  string zone_type = 2;
+  uint64 abs_row_start = 3;
+  uint64 abs_row_end = 4;
+  optional int32 exit_code = 5;
+}
+
+// Zone evicted from scrollback
+message ZoneScrolledOut {
+  uint64 zone_id = 1;
+  string zone_type = 2;
+}
+
+// Environment variable changed
+message EnvironmentChanged {
+  string key = 1;
+  string value = 2;
+  optional string old_value = 3;
+}
+
+// Remote host transition detected
+message RemoteHostTransition {
+  string hostname = 1;
+  optional string username = 2;
+  optional string old_hostname = 3;
+  optional string old_username = 4;
+}
+
+// Sub-shell detected
+message SubShellDetected {
+  uint64 depth = 1;
+  optional string shell_type = 2;
 }
 
 // =============================================================================

@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -85,6 +85,18 @@ pub mod server_message {
         ShellIntegrationEvent(super::ShellIntegrationEvent),
         #[prost(message, tag = "24")]
         SystemStats(super::SystemStats),
+        #[prost(message, tag = "25")]
+        ZoneOpened(super::ZoneOpened),
+        #[prost(message, tag = "26")]
+        ZoneClosed(super::ZoneClosed),
+        #[prost(message, tag = "27")]
+        ZoneScrolledOut(super::ZoneScrolledOut),
+        #[prost(message, tag = "28")]
+        EnvironmentChanged(super::EnvironmentChanged),
+        #[prost(message, tag = "29")]
+        RemoteHostTransition(super::RemoteHostTransition),
+        #[prost(message, tag = "30")]
+        SubShellDetected(super::SubShellDetected),
     }
 }
 /// Terminal output data (very high frequency)
@@ -469,6 +481,69 @@ pub struct SystemStats {
     #[prost(uint64, optional, tag = "11")]
     pub timestamp: ::core::option::Option<u64>,
 }
+/// Zone opened (prompt, command, or output block started)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ZoneOpened {
+    #[prost(uint64, tag = "1")]
+    pub zone_id: u64,
+    /// "prompt", "command", "output"
+    #[prost(string, tag = "2")]
+    pub zone_type: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub abs_row_start: u64,
+}
+/// Zone closed (prompt, command, or output block ended)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ZoneClosed {
+    #[prost(uint64, tag = "1")]
+    pub zone_id: u64,
+    #[prost(string, tag = "2")]
+    pub zone_type: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "3")]
+    pub abs_row_start: u64,
+    #[prost(uint64, tag = "4")]
+    pub abs_row_end: u64,
+    #[prost(int32, optional, tag = "5")]
+    pub exit_code: ::core::option::Option<i32>,
+}
+/// Zone evicted from scrollback
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ZoneScrolledOut {
+    #[prost(uint64, tag = "1")]
+    pub zone_id: u64,
+    #[prost(string, tag = "2")]
+    pub zone_type: ::prost::alloc::string::String,
+}
+/// Environment variable changed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct EnvironmentChanged {
+    #[prost(string, tag = "1")]
+    pub key: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub value: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub old_value: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Remote host transition detected
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RemoteHostTransition {
+    #[prost(string, tag = "1")]
+    pub hostname: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "2")]
+    pub username: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "3")]
+    pub old_hostname: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "4")]
+    pub old_username: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Sub-shell detected
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SubShellDetected {
+    #[prost(uint64, tag = "1")]
+    pub depth: u64,
+    #[prost(string, optional, tag = "2")]
+    pub shell_type: ::core::option::Option<::prost::alloc::string::String>,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientMessage {
     #[prost(
@@ -613,6 +688,10 @@ pub enum EventType {
     Clipboard = 16,
     Shell = 17,
     SystemStats = 18,
+    Zone = 19,
+    Environment = 20,
+    RemoteHost = 21,
+    SubShell = 22,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -640,6 +719,10 @@ impl EventType {
             Self::Clipboard => "EVENT_TYPE_CLIPBOARD",
             Self::Shell => "EVENT_TYPE_SHELL",
             Self::SystemStats => "EVENT_TYPE_SYSTEM_STATS",
+            Self::Zone => "EVENT_TYPE_ZONE",
+            Self::Environment => "EVENT_TYPE_ENVIRONMENT",
+            Self::RemoteHost => "EVENT_TYPE_REMOTE_HOST",
+            Self::SubShell => "EVENT_TYPE_SUB_SHELL",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -664,6 +747,10 @@ impl EventType {
             "EVENT_TYPE_CLIPBOARD" => Some(Self::Clipboard),
             "EVENT_TYPE_SHELL" => Some(Self::Shell),
             "EVENT_TYPE_SYSTEM_STATS" => Some(Self::SystemStats),
+            "EVENT_TYPE_ZONE" => Some(Self::Zone),
+            "EVENT_TYPE_ENVIRONMENT" => Some(Self::Environment),
+            "EVENT_TYPE_REMOTE_HOST" => Some(Self::RemoteHost),
+            "EVENT_TYPE_SUB_SHELL" => Some(Self::SubShell),
             _ => None,
         }
     }

@@ -762,8 +762,75 @@ impl ServerState {
                     TerminalEvent::DirtyRegion(_, _) => {
                         // Dirty region is a rendering optimization hint, not needed for streaming
                     }
-                    // TODO(Task 6): handle new contextual awareness event variants
-                    _ => {}
+                    TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_opened(
+                                zone_id as u64,
+                                zone_type.to_string(),
+                                abs_row_start as u64,
+                            ),
+                        );
+                    }
+                    TerminalEvent::ZoneClosed {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                        abs_row_end,
+                        exit_code,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_closed(
+                                zone_id as u64,
+                                zone_type.to_string(),
+                                abs_row_start as u64,
+                                abs_row_end as u64,
+                                exit_code,
+                            ),
+                        );
+                    }
+                    TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_scrolled_out(
+                                zone_id as u64,
+                                zone_type.to_string(),
+                            ),
+                        );
+                    }
+                    TerminalEvent::EnvironmentChanged {
+                        key,
+                        value,
+                        old_value,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::environment_changed(
+                                key, value, old_value,
+                            ),
+                        );
+                    }
+                    TerminalEvent::RemoteHostTransition {
+                        hostname,
+                        username,
+                        old_hostname,
+                        old_username,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::remote_host_transition(
+                                hostname, username, old_hostname, old_username,
+                            ),
+                        );
+                    }
+                    TerminalEvent::SubShellDetected { depth, shell_type } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::sub_shell_detected(
+                                depth as u64,
+                                shell_type,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -1243,8 +1310,81 @@ impl SessionFactory for BinarySessionFactory {
                         TerminalEvent::DirtyRegion(_, _) => {
                             // Dirty region is a rendering optimization hint, not needed for streaming
                         }
-                        // TODO(Task 6): handle new contextual awareness event variants
-                        _ => {}
+                        TerminalEvent::ZoneOpened {
+                            zone_id,
+                            zone_type,
+                            abs_row_start,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_opened(
+                                    zone_id as u64,
+                                    zone_type.to_string(),
+                                    abs_row_start as u64,
+                                ),
+                            );
+                        }
+                        TerminalEvent::ZoneClosed {
+                            zone_id,
+                            zone_type,
+                            abs_row_start,
+                            abs_row_end,
+                            exit_code,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_closed(
+                                    zone_id as u64,
+                                    zone_type.to_string(),
+                                    abs_row_start as u64,
+                                    abs_row_end as u64,
+                                    exit_code,
+                                ),
+                            );
+                        }
+                        TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::zone_scrolled_out(
+                                    zone_id as u64,
+                                    zone_type.to_string(),
+                                ),
+                            );
+                        }
+                        TerminalEvent::EnvironmentChanged {
+                            key,
+                            value,
+                            old_value,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::environment_changed(
+                                    key, value, old_value,
+                                ),
+                            );
+                        }
+                        TerminalEvent::RemoteHostTransition {
+                            hostname,
+                            username,
+                            old_hostname,
+                            old_username,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::remote_host_transition(
+                                    hostname, username, old_hostname, old_username,
+                                ),
+                            );
+                        }
+                        TerminalEvent::SubShellDetected { depth, shell_type } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::sub_shell_detected(
+                                    depth as u64,
+                                    shell_type,
+                                ),
+                            );
+                        }
                     }
                 }
             }

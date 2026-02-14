@@ -2739,6 +2739,12 @@ fn should_send(
         ServerMessage::ClipboardSync { .. } => subs.contains(&EventType::Clipboard),
         ServerMessage::ShellIntegrationEvent { .. } => subs.contains(&EventType::Shell),
         ServerMessage::SystemStats { .. } => subs.contains(&EventType::SystemStats),
+        ServerMessage::ZoneOpened { .. }
+        | ServerMessage::ZoneClosed { .. }
+        | ServerMessage::ZoneScrolledOut { .. } => subs.contains(&EventType::Zone),
+        ServerMessage::EnvironmentChanged { .. } => subs.contains(&EventType::Environment),
+        ServerMessage::RemoteHostTransition { .. } => subs.contains(&EventType::RemoteHost),
+        ServerMessage::SubShellDetected { .. } => subs.contains(&EventType::SubShell),
         // Always send system messages
         ServerMessage::Connected { .. }
         | ServerMessage::Refresh { .. }
