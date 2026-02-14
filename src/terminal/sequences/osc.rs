@@ -2379,4 +2379,171 @@ mod tests {
         assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
         assert_eq!(term.shell_integration.hostname(), Some("remote"));
     }
+
+    // ========== Semantic Zone Tests ==========
+
+    #[test]
+    fn test_zones_created_by_osc_133() {
+        let mut term = Terminal::new(80, 24);
+
+        // Prompt start
+        term.process(b"\x1b]133;A\x07");
+        assert_eq!(term.get_zones().len(), 1);
+        assert_eq!(term.get_zones()[0].zone_type, crate::zone::ZoneType::Prompt);
+
+        // Type a command - first set it via shell integration
+        term.process(b"ls -la");
+
+        // Command start
+        term.shell_integration_mut()
+            .set_command("ls -la".to_string());
+        term.process(b"\x1b]133;B\x07");
+        assert_eq!(term.get_zones().len(), 2);
+        assert_eq!(
+            term.get_zones()[1].zone_type,
+            crate::zone::ZoneType::Command
+        );
+        assert_eq!(term.get_zones()[1].command.as_deref(), Some("ls -la"));
+
+        // Command executed (output begins)
+        term.process(b"\x1b]133;C\x07");
+        assert_eq!(term.get_zones().len(), 3);
+        assert_eq!(term.get_zones()[2].zone_type, crate::zone::ZoneType::Output);
+        assert_eq!(term.get_zones()[2].command.as_deref(), Some("ls -la"));
+
+        // Some output
+        term.process(b"file1.txt\r\nfile2.txt\r\n");
+
+        // Command finished with exit code 0
+        term.process(b"\x1b]133;D;0\x07");
+        // Output zone should be closed with exit code
+        assert_eq!(term.get_zones()[2].exit_code, Some(0));
+    }
+
+    #[test]
+    fn test_zones_multiple_commands() {
+        let mut term = Terminal::new(80, 24);
+
+        // First command cycle: A -> B -> C -> D
+        term.process(b"\x1b]133;A\x07$ ");
+        term.process(b"\x1b]133;B\x07");
+        term.process(b"\x1b]133;C\x07output1\r\n");
+        term.process(b"\x1b]133;D;0\x07");
+
+        // Second command cycle
+        term.process(b"\x1b]133;A\x07$ ");
+        term.process(b"\x1b]133;B\x07");
+        term.process(b"\x1b]133;C\x07output2\r\n");
+        term.process(b"\x1b]133;D;1\x07");
+
+        // Should have 6 zones (Prompt, Command, Output) x 2
+        let zones = term.get_zones();
+        assert_eq!(zones.len(), 6);
+        assert_eq!(zones[0].zone_type, crate::zone::ZoneType::Prompt);
+        assert_eq!(zones[1].zone_type, crate::zone::ZoneType::Command);
+        assert_eq!(zones[2].zone_type, crate::zone::ZoneType::Output);
+        assert_eq!(zones[3].zone_type, crate::zone::ZoneType::Prompt);
+        assert_eq!(zones[4].zone_type, crate::zone::ZoneType::Command);
+        assert_eq!(zones[5].zone_type, crate::zone::ZoneType::Output);
+        assert_eq!(zones[2].exit_code, Some(0));
+        assert_eq!(zones[5].exit_code, Some(1));
+    }
+
+    #[test]
+    fn test_zones_not_created_on_alt_screen() {
+        let mut term = Terminal::new(80, 24);
+
+        // Switch to alt screen
+        term.process(b"\x1b[?1049h");
+
+        // OSC 133 on alt screen should not create zones
+        term.process(b"\x1b]133;A\x07");
+        assert!(term.get_zones().is_empty());
+
+        // Switch back to primary
+        term.process(b"\x1b[?1049l");
+
+        // Now it should create zones
+        term.process(b"\x1b]133;A\x07");
+        assert_eq!(term.get_zones().len(), 1);
+    }
+
+    #[test]
+    fn test_zones_cleared_on_reset() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]133;A\x07");
+        assert_eq!(term.get_zones().len(), 1);
+
+        term.reset();
+        assert!(term.get_zones().is_empty());
+    }
+
+    #[test]
+    fn test_zones_evicted_on_scrollback_wrap() {
+        // Small scrollback to trigger eviction quickly
+        let mut term = Terminal::with_scrollback(80, 5, 10);
+
+        // Create a prompt zone
+        term.process(b"\x1b]133;A\x07");
+        term.process(b"\x1b]133;B\x07");
+        term.process(b"\x1b]133;C\x07");
+
+        // Generate enough output to fill scrollback and wrap
+        for i in 0..20 {
+            term.process(format!("line {}\r\n", i).as_bytes());
+        }
+
+        // Command finished
+        term.process(b"\x1b]133;D;0\x07");
+
+        // Zones with rows below the scrollback floor should be evicted
+        let zones = term.get_zones();
+        let floor = term
+            .active_grid()
+            .total_lines_scrolled()
+            .saturating_sub(term.active_grid().max_scrollback());
+        for zone in zones {
+            assert!(
+                zone.abs_row_end >= floor,
+                "Zone {:?} at rows {}-{} should be >= floor {}",
+                zone.zone_type,
+                zone.abs_row_start,
+                zone.abs_row_end,
+                floor
+            );
+        }
+    }
+
+    #[test]
+    fn test_zone_get_zone_at() {
+        let mut term = Terminal::new(80, 24);
+
+        // Create zones with newlines between markers so each zone spans distinct rows
+        // Prompt at row 0
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        // Command at row 1
+        term.process(b"\x1b]133;B\x07ls\r\n");
+        // Output at row 2
+        term.process(b"\x1b]133;C\x07output line 1\r\noutput line 2\r\n");
+        // Finish at row 4
+        term.process(b"\x1b]133;D;0\x07");
+
+        // Row 0 should be in the Prompt zone (abs_row_start=0, closed at row 0)
+        let zone = term.get_zone_at(0);
+        assert!(zone.is_some());
+        assert_eq!(zone.unwrap().zone_type, crate::zone::ZoneType::Prompt);
+
+        // Row 1 should be in the Command zone
+        let zone = term.get_zone_at(1);
+        assert!(zone.is_some());
+        assert_eq!(zone.unwrap().zone_type, crate::zone::ZoneType::Command);
+
+        // Row 2 should be in the Output zone
+        let zone = term.get_zone_at(2);
+        assert!(zone.is_some());
+        assert_eq!(zone.unwrap().zone_type, crate::zone::ZoneType::Output);
+
+        // Row way beyond zones should return None
+        assert!(term.get_zone_at(1000).is_none());
+    }
 }
