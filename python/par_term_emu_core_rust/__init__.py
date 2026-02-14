@@ -91,6 +91,14 @@ except ImportError:
     encode_client_message = None
     decode_client_message = None
 
+from .observers import (
+    on_bell,
+    on_command_complete,
+    on_cwd_change,
+    on_title_change,
+    on_zone_change,
+)
+
 __version__ = "0.37.0"
 __all__ = [
     "AmbiguousWidth",
@@ -143,6 +151,12 @@ __all__ = [
     "str_width",
     "str_width_cjk",
     "is_east_asian_ambiguous",
+    # Observer convenience wrappers
+    "on_bell",
+    "on_command_complete",
+    "on_cwd_change",
+    "on_title_change",
+    "on_zone_change",
 ]
 
 # Add streaming classes and functions if available

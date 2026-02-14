@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Terminal Observer API**: New `TerminalObserver` trait enables push-based event delivery with deferred dispatch (events dispatched after `process()` returns). Supports category-specific callbacks (`on_zone_event`, `on_command_event`, `on_environment_event`, `on_screen_event`) plus catch-all `on_event`. Observer panic isolation via `catch_unwind` prevents one bad observer from crashing the terminal
+- **Terminal Observer API: Subscription Filtering**: Observers can implement `subscriptions()` to receive only specific event kinds, avoiding unnecessary dispatch overhead
+- **C-Compatible FFI**: New `SharedState` and `SharedCell` `#[repr(C)]` types provide a frozen snapshot of terminal state (dimensions, cursor, title, CWD, screen content with per-cell text/color/attributes) for C/C++ consumers. C API: `terminal_get_state()`, `terminal_free_state()`, `terminal_add_observer()`, `terminal_remove_observer()`
+- **C FFI Observer Vtable**: `TerminalObserverVtable` struct with function pointers enables C consumers to register observers with `user_data` context pointer
+- **Python Bindings: Sync Observer**: `Terminal.add_observer(callback, kinds=None)` registers a Python callable that receives event dicts after each `process()` call. Optional `kinds` parameter filters by event type
+- **Python Bindings: Async Observer**: `Terminal.add_async_observer(kinds=None)` returns `(observer_id, asyncio.Queue)` tuple for async event consumption via `await queue.get()`
+- **Python Bindings: Observer Management**: `Terminal.remove_observer(id)` and `Terminal.observer_count()` for observer lifecycle management
+- **Python Convenience Wrappers**: `on_command_complete()`, `on_zone_change()`, `on_cwd_change()`, `on_title_change()`, `on_bell()` in `par_term_emu_core_rust.observers` module for common observer patterns
+
 ## [0.37.0] - 2026-02-13
 
 ### Added

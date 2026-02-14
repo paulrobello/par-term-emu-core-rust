@@ -44,12 +44,14 @@ pub mod coprocess;
 pub mod cursor;
 #[macro_use]
 pub mod debug;
+pub mod ffi;
 pub mod grapheme;
 pub mod graphics;
 pub mod grid;
 pub mod html_export;
 pub mod macros;
 pub mod mouse;
+pub mod observer;
 pub mod pty_error;
 pub mod pty_session;
 #[cfg(feature = "python")]

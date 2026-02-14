@@ -11,6 +11,7 @@
 pub mod color_utils;
 pub mod conversions;
 pub mod enums;
+pub mod observer;
 pub mod pty;
 pub mod streaming;
 pub mod terminal;

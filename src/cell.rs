@@ -182,6 +182,15 @@ impl CellFlags {
     pub fn set_wide_char_spacer(&mut self, value: bool) {
         self.bits.set(CellBitflags::WIDE_CHAR_SPACER, value);
     }
+
+    /// Get the underlying bitflags value as a u16
+    ///
+    /// Returns the raw bits representation of the cell's boolean attributes,
+    /// suitable for FFI or serialization.
+    #[inline]
+    pub fn to_bitflags(&self) -> u16 {
+        self.bits.bits()
+    }
 }
 
 /// A single cell in the terminal grid
