@@ -37,6 +37,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Triggers & Automation](#triggers--automation)
   - [Shell Integration Extended](#shell-integration-extended)
   - [Semantic Zones](#semantic-zones)
+  - [Semantic Snapshot](#semantic-snapshot)
   - [Clipboard Extended](#clipboard-extended)
   - [Graphics Extended](#graphics-extended)
   - [Rendering and Damage Tracking](#rendering-and-damage-tracking)
@@ -560,6 +561,58 @@ zone = term.get_zone_at(0)  # Returns the zone covering row 0
 
 # Extract text from a zone
 text = term.get_zone_text(1)  # Text from the output zone
+```
+
+### Semantic Snapshot
+
+Structured terminal state extraction for AI/LLM consumption and external tooling. Returns a point-in-time view of terminal content, zones, commands, and metadata.
+
+#### `get_semantic_snapshot(scope="visible", max_commands=10) -> dict`
+
+Returns a structured snapshot as a Python dict.
+
+**Args:**
+- `scope` (`str`): Controls how much history is included:
+  - `"visible"`: Only the visible screen (no scrollback, no command history)
+  - `"recent"`: Last N commands with output + visible screen
+  - `"full"`: Entire scrollback + all command/zone history
+- `max_commands` (`int`): For `"recent"` scope, max commands to include (default: 10)
+
+**Returns:** dict with keys:
+- `timestamp` (`int`): Unix epoch milliseconds when snapshot was taken
+- `cols`, `rows` (`int`): Terminal dimensions
+- `title` (`str`): Terminal title (from OSC 0/2)
+- `cursor_col`, `cursor_row` (`int`): Cursor position (0-indexed)
+- `alt_screen_active` (`bool`): Whether alternate screen buffer is active
+- `visible_text` (`str`): Plain text of visible screen
+- `scrollback_text` (`str | None`): Scrollback text (Recent/Full scopes only)
+- `zones` (`list[dict]`): Semantic zones with `id`, `zone_type`, `abs_row_start`, `abs_row_end`, `text`, `command`, `exit_code`, `timestamp`
+- `commands` (`list[dict]`): Command history with `command`, `cwd`, `start_time`, `end_time`, `exit_code`, `duration_ms`, `success`, `output`
+- `cwd`, `hostname`, `username` (`str | None`): Current environment context
+- `cwd_history` (`list[dict]`): CWD change records
+- `scrollback_lines`, `total_zones`, `total_commands` (`int`): Summary counts
+
+#### `get_semantic_snapshot_json(scope="visible", max_commands=10) -> str`
+
+Returns the same snapshot data as a JSON string. More efficient when forwarding data as a string (e.g., to an LLM API).
+
+**Example:**
+```python
+term = Terminal(80, 24)
+term.process(b"Hello, World!\r\n")
+
+# Get as Python dict
+snap = term.get_semantic_snapshot(scope="visible")
+print(snap["cols"])  # 80
+print(snap["visible_text"])  # Contains "Hello, World!"
+
+# Get as JSON string (more efficient for API forwarding)
+json_str = term.get_semantic_snapshot_json(scope="recent", max_commands=5)
+
+# Full snapshot with all history
+full = term.get_semantic_snapshot(scope="full")
+for cmd in full.get("commands", []):
+    print(f"{cmd['command']} -> exit {cmd.get('exit_code')}")
 ```
 
 ### Clipboard Extended
