@@ -470,6 +470,7 @@ impl Terminal {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
                                         self.grid.close_current_zone(close_row);
                                         self.grid.push_zone(crate::zone::Zone::new(
+                                            0,
                                             crate::zone::ZoneType::Prompt,
                                             abs_line,
                                             Some(ts),
@@ -496,6 +497,7 @@ impl Terminal {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
                                         self.grid.close_current_zone(close_row);
                                         let mut zone = crate::zone::Zone::new(
+                                            0,
                                             crate::zone::ZoneType::Command,
                                             abs_line,
                                             Some(ts),
@@ -525,6 +527,7 @@ impl Terminal {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
                                         self.grid.close_current_zone(close_row);
                                         let mut zone = crate::zone::Zone::new(
+                                            0,
                                             crate::zone::ZoneType::Output,
                                             abs_line,
                                             Some(ts),

@@ -1391,6 +1391,16 @@ pub struct Terminal {
     bell_events: Vec<BellEvent>,
     /// Terminal events buffer
     terminal_events: Vec<TerminalEvent>,
+    /// Next zone ID to assign (monotonically increasing)
+    next_zone_id: usize,
+    /// Last known hostname (for detecting remote host transitions)
+    last_hostname: Option<String>,
+    /// Last known username (for detecting remote host transitions)
+    last_username: Option<String>,
+    /// Current shell nesting depth (for sub-shell detection)
+    shell_depth: usize,
+    /// Whether we are currently inside command output (between OSC 133 C and D)
+    in_command_output: bool,
     /// Current selection state
     selection: Option<Selection>,
     /// Bookmarks for quick navigation
@@ -1789,6 +1799,11 @@ impl Terminal {
             dirty_rows: HashSet::new(),
             bell_events: Vec::new(),
             terminal_events: Vec::new(),
+            next_zone_id: 0,
+            last_hostname: None,
+            last_username: None,
+            shell_depth: 0,
+            in_command_output: false,
             // Selection and bookmarks
             selection: None,
             bookmarks: Vec::new(),
@@ -3466,6 +3481,13 @@ impl Terminal {
         for i in (0..cols).step_by(8) {
             self.tab_stops[i] = true;
         }
+
+        // Reset contextual awareness tracking
+        self.next_zone_id = 0;
+        self.last_hostname = None;
+        self.last_username = None;
+        self.shell_depth = 0;
+        self.in_command_output = false;
     }
 
     /// Get the terminal content as a string

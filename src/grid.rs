@@ -3008,7 +3008,7 @@ mod zone_tests {
     #[test]
     fn test_grid_push_zone() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, Some(1000)));
         assert_eq!(grid.zones().len(), 1);
         assert_eq!(grid.zones()[0].zone_type, ZoneType::Prompt);
     }
@@ -3016,7 +3016,7 @@ mod zone_tests {
     #[test]
     fn test_grid_close_current_zone() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, Some(1000)));
         grid.close_current_zone(5);
         assert_eq!(grid.zones()[0].abs_row_end, 5);
     }
@@ -3024,15 +3024,15 @@ mod zone_tests {
     #[test]
     fn test_grid_zone_at() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Prompt, 0, None);
         z1.close(4);
         grid.push_zone(z1);
 
-        let mut z2 = Zone::new(ZoneType::Command, 5, None);
+        let mut z2 = Zone::new(1, ZoneType::Command, 5, None);
         z2.close(6);
         grid.push_zone(z2);
 
-        let mut z3 = Zone::new(ZoneType::Output, 7, None);
+        let mut z3 = Zone::new(2, ZoneType::Output, 7, None);
         z3.close(20);
         grid.push_zone(z3);
 
@@ -3046,11 +3046,11 @@ mod zone_tests {
     #[test]
     fn test_grid_evict_zones() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Prompt, 0, None);
         z1.close(4);
         grid.push_zone(z1);
 
-        let mut z2 = Zone::new(ZoneType::Output, 5, None);
+        let mut z2 = Zone::new(1, ZoneType::Output, 5, None);
         z2.close(20);
         grid.push_zone(z2);
 
@@ -3062,7 +3062,7 @@ mod zone_tests {
     #[test]
     fn test_grid_evict_zones_partial() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Output, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Output, 0, None);
         z1.close(20);
         grid.push_zone(z1);
 
@@ -3074,7 +3074,7 @@ mod zone_tests {
     #[test]
     fn test_grid_clear_zones() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, None));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, None));
         grid.clear_zones();
         assert!(grid.zones().is_empty());
     }
