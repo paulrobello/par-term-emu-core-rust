@@ -2100,23 +2100,34 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                    let snapshot_msg = {
-                                        if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                            use crate::terminal::snapshot::SnapshotScope;
-                                            let snapshot_scope = match scope.as_str() {
-                                                "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
-                                                "full" => SnapshotScope::Full,
-                                                _ => SnapshotScope::Visible,
-                                            };
-                                            let json = terminal.get_semantic_snapshot_json(snapshot_scope);
-                                            Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                        } else {
+                                    use crate::terminal::snapshot::SnapshotScope;
+                                    let snapshot_scope = match scope.as_str() {
+                                        "visible" => Some(SnapshotScope::Visible),
+                                        "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
+                                        "full" => Some(SnapshotScope::Full),
+                                        other => {
+                                            let err_msg = ServerMessage::error(format!(
+                                                "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
+                                            ));
+                                            if let Err(e) = client.send(err_msg).await {
+                                                crate::debug_error!("STREAMING", "Failed to send error to client {}: {}", client_id, e);
+                                            }
                                             None
                                         }
                                     };
-                                    if let Some(msg) = snapshot_msg {
-                                        if let Err(e) = client.send(msg).await {
-                                            crate::debug_error!("STREAMING", "Failed to send snapshot to client {}: {}", client_id, e);
+                                    if let Some(ss) = snapshot_scope {
+                                        let snapshot_msg = {
+                                            if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                                let json = terminal.get_semantic_snapshot_json(ss);
+                                                Some(ServerMessage::semantic_snapshot(json))
+                                            } else {
+                                                None
+                                            }
+                                        };
+                                        if let Some(msg) = snapshot_msg {
+                                            if let Err(e) = client.send(msg).await {
+                                                crate::debug_error!("STREAMING", "Failed to send snapshot to client {}: {}", client_id, e);
+                                            }
                                         }
                                     }
                                 }
@@ -2304,23 +2315,34 @@ impl StreamingServer {
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                            let snapshot_msg = {
-                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                    use crate::terminal::snapshot::SnapshotScope;
-                                                    let snapshot_scope = match scope.as_str() {
-                                                        "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
-                                                        "full" => SnapshotScope::Full,
-                                                        _ => SnapshotScope::Visible,
-                                                    };
-                                                    let json = terminal.get_semantic_snapshot_json(snapshot_scope);
-                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                } else {
+                                            use crate::terminal::snapshot::SnapshotScope;
+                                            let snapshot_scope = match scope.as_str() {
+                                                "visible" => Some(SnapshotScope::Visible),
+                                                "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
+                                                "full" => Some(SnapshotScope::Full),
+                                                other => {
+                                                    let err_msg = crate::streaming::protocol::ServerMessage::error(format!(
+                                                        "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
+                                                    ));
+                                                    if let Ok(bytes) = encode_server_message(&err_msg) {
+                                                        let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                                    }
                                                     None
                                                 }
                                             };
-                                            if let Some(msg) = snapshot_msg {
-                                                if let Ok(bytes) = encode_server_message(&msg) {
-                                                    let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                            if let Some(ss) = snapshot_scope {
+                                                let snapshot_msg = {
+                                                    if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                                        let json = terminal.get_semantic_snapshot_json(ss);
+                                                        Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
+                                                    } else {
+                                                        None
+                                                    }
+                                                };
+                                                if let Some(msg) = snapshot_msg {
+                                                    if let Ok(bytes) = encode_server_message(&msg) {
+                                                        let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                                    }
                                                 }
                                             }
                                         }
@@ -2684,23 +2706,34 @@ impl StreamingServer {
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                            let snapshot_msg = {
-                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                    use crate::terminal::snapshot::SnapshotScope;
-                                                    let snapshot_scope = match scope.as_str() {
-                                                        "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
-                                                        "full" => SnapshotScope::Full,
-                                                        _ => SnapshotScope::Visible,
-                                                    };
-                                                    let json = terminal.get_semantic_snapshot_json(snapshot_scope);
-                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                } else {
+                                            use crate::terminal::snapshot::SnapshotScope;
+                                            let snapshot_scope = match scope.as_str() {
+                                                "visible" => Some(SnapshotScope::Visible),
+                                                "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
+                                                "full" => Some(SnapshotScope::Full),
+                                                other => {
+                                                    let err_msg = crate::streaming::protocol::ServerMessage::error(format!(
+                                                        "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
+                                                    ));
+                                                    if let Ok(bytes) = encode_server_message(&err_msg) {
+                                                        let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
+                                                    }
                                                     None
                                                 }
                                             };
-                                            if let Some(msg) = snapshot_msg {
-                                                if let Ok(bytes) = encode_server_message(&msg) {
-                                                    let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
+                                            if let Some(ss) = snapshot_scope {
+                                                let snapshot_msg = {
+                                                    if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                                        let json = terminal.get_semantic_snapshot_json(ss);
+                                                        Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
+                                                    } else {
+                                                        None
+                                                    }
+                                                };
+                                                if let Some(msg) = snapshot_msg {
+                                                    if let Ok(bytes) = encode_server_message(&msg) {
+                                                        let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
+                                                    }
                                                 }
                                             }
                                         }
