@@ -486,6 +486,11 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                     shell_type: shell_type.clone(),
                 }))
             }
+            AppServerMessage::SemanticSnapshot { snapshot_json } => {
+                Some(Message::SemanticSnapshot(pb::SemanticSnapshotData {
+                    snapshot_json: snapshot_json.clone(),
+                }))
+            }
         };
 
         pb::ServerMessage { message }
@@ -554,6 +559,13 @@ impl From<&AppClientMessage> for pb::ClientMessage {
                 content: content.clone(),
                 target: target.clone(),
             })),
+            AppClientMessage::SnapshotRequest {
+                scope,
+                max_commands,
+            } => Some(Message::SnapshotRequest(pb::SnapshotRequest {
+                scope: scope.clone(),
+                max_commands: *max_commands,
+            })),
         };
 
         pb::ClientMessage { message }
@@ -585,6 +597,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Environment => pb::EventType::Environment as i32,
             AppEventType::RemoteHost => pb::EventType::RemoteHost as i32,
             AppEventType::SubShell => pb::EventType::SubShell as i32,
+            AppEventType::Snapshot => pb::EventType::Snapshot as i32,
         }
     }
 }
@@ -854,6 +867,9 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
                 depth: ssd.depth,
                 shell_type: ssd.shell_type,
             }),
+            Some(Message::SemanticSnapshot(snap)) => Ok(AppServerMessage::SemanticSnapshot {
+                snapshot_json: snap.snapshot_json,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -912,6 +928,10 @@ impl TryFrom<pb::ClientMessage> for AppClientMessage {
                 content: clip.content,
                 target: clip.target,
             }),
+            Some(Message::SnapshotRequest(req)) => Ok(AppClientMessage::SnapshotRequest {
+                scope: req.scope,
+                max_commands: req.max_commands,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty client message".into(),
             )),
@@ -945,6 +965,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Environment => AppEventType::Environment,
             pb::EventType::RemoteHost => AppEventType::RemoteHost,
             pb::EventType::SubShell => AppEventType::SubShell,
+            pb::EventType::Snapshot => AppEventType::Snapshot,
         }
     }
 }
@@ -1664,5 +1685,35 @@ mod tests {
     fn test_event_type_user_var_conversion() {
         let user_var_i32: i32 = AppEventType::UserVar.into();
         assert_eq!(user_var_i32, pb::EventType::UserVar as i32);
+    }
+
+    #[test]
+    fn test_snapshot_server_message_round_trip() {
+        let msg = AppServerMessage::semantic_snapshot("{\"cols\":80}".to_string());
+        let encoded = encode_server_message(&msg).unwrap();
+        let decoded = decode_server_message(&encoded).unwrap();
+        match decoded {
+            AppServerMessage::SemanticSnapshot { snapshot_json } => {
+                assert_eq!(snapshot_json, "{\"cols\":80}");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_snapshot_request_round_trip() {
+        let msg = AppClientMessage::snapshot_request("recent".to_string(), Some(10));
+        let encoded = encode_client_message(&msg).unwrap();
+        let decoded = decode_client_message(&encoded).unwrap();
+        match decoded {
+            AppClientMessage::SnapshotRequest {
+                scope,
+                max_commands,
+            } => {
+                assert_eq!(scope, "recent");
+                assert_eq!(max_commands, Some(10));
+            }
+            _ => panic!("Wrong message type"),
+        }
     }
 }

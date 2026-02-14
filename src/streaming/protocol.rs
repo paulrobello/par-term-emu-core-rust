@@ -474,6 +474,13 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         shell_type: Option<String>,
     },
+
+    /// Semantic snapshot of terminal state
+    #[serde(rename = "semantic_snapshot")]
+    SemanticSnapshot {
+        /// JSON-encoded SemanticSnapshot struct
+        snapshot_json: String,
+    },
 }
 
 /// Messages sent from client to server
@@ -562,6 +569,16 @@ pub enum ClientMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         target: Option<String>,
     },
+
+    /// Request a semantic snapshot
+    #[serde(rename = "snapshot_request")]
+    SnapshotRequest {
+        /// Scope: "visible", "recent", "full"
+        scope: String,
+        /// Max commands for "recent" scope
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max_commands: Option<u32>,
+    },
 }
 
 /// Event types that clients can subscribe to
@@ -617,6 +634,9 @@ pub enum EventType {
     /// Sub-shell detection events
     #[serde(rename = "sub_shell")]
     SubShell,
+    /// Semantic snapshot events
+    #[serde(rename = "snapshot")]
+    Snapshot,
 }
 
 impl ServerMessage {
@@ -1090,6 +1110,11 @@ impl ServerMessage {
         Self::SubShellDetected { depth, shell_type }
     }
 
+    /// Create a semantic snapshot message
+    pub fn semantic_snapshot(snapshot_json: String) -> Self {
+        Self::SemanticSnapshot { snapshot_json }
+    }
+
     /// Create a progress bar changed message from terminal event data
     pub fn progress_bar_changed(
         action: crate::terminal::ProgressBarAction,
@@ -1198,6 +1223,14 @@ impl ClientMessage {
             operation,
             content,
             target,
+        }
+    }
+
+    /// Create a snapshot request message
+    pub fn snapshot_request(scope: String, max_commands: Option<u32>) -> Self {
+        Self::SnapshotRequest {
+            scope,
+            max_commands,
         }
     }
 }
@@ -1420,5 +1453,47 @@ mod tests {
         let json = serde_json::to_string(&events).unwrap();
         assert!(json.contains(r#""cwd"#));
         assert!(json.contains(r#""trigger"#));
+    }
+
+    #[test]
+    fn test_semantic_snapshot_serialization() {
+        let msg = ServerMessage::semantic_snapshot("{\"cols\":80}".to_string());
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"semantic_snapshot""#));
+        assert!(json.contains(r#""snapshot_json"#));
+
+        let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ServerMessage::SemanticSnapshot { snapshot_json } => {
+                assert_eq!(snapshot_json, "{\"cols\":80}");
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_snapshot_request_serialization() {
+        let msg = ClientMessage::snapshot_request("recent".to_string(), Some(5));
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains(r#""type":"snapshot_request""#));
+
+        let deserialized: ClientMessage = serde_json::from_str(&json).unwrap();
+        match deserialized {
+            ClientMessage::SnapshotRequest {
+                scope,
+                max_commands,
+            } => {
+                assert_eq!(scope, "recent");
+                assert_eq!(max_commands, Some(5));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_event_type_snapshot_serialization() {
+        let events = vec![EventType::Snapshot];
+        let json = serde_json::to_string(&events).unwrap();
+        assert!(json.contains(r#""snapshot""#));
     }
 }

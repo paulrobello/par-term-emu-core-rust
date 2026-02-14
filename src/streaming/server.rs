@@ -2099,6 +2099,9 @@ impl StreamingServer {
                                         _ => {}
                                     }
                                 }
+                                crate::streaming::protocol::ClientMessage::SnapshotRequest { .. } => {
+                                    // TODO: Handle snapshot request (Task 6)
+                                }
                             }
                         }
                         None => {
@@ -2745,6 +2748,7 @@ fn should_send(
         ServerMessage::EnvironmentChanged { .. } => subs.contains(&EventType::Environment),
         ServerMessage::RemoteHostTransition { .. } => subs.contains(&EventType::RemoteHost),
         ServerMessage::SubShellDetected { .. } => subs.contains(&EventType::SubShell),
+        ServerMessage::SemanticSnapshot { .. } => subs.contains(&EventType::Snapshot),
         // Always send system messages
         ServerMessage::Connected { .. }
         | ServerMessage::Refresh { .. }
