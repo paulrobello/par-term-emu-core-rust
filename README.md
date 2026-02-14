@@ -26,6 +26,16 @@ Full file transfer support via the iTerm2 OSC 1337 `File=` protocol:
 - **Streaming Protocol**: 5 new event types for real-time file transfer event delivery to WebSocket clients.
 - **Observer API**: All 5 file transfer event types integrated with the push-based observer system.
 
+### Instant Replay (Issue #47)
+
+Cell-level terminal snapshots with input-stream delta recording and timeline navigation:
+
+- **TerminalSnapshot / GridSnapshot**: Complete cell-level state capture including grids, cursors, colors, attributes, modes, scroll regions, and tab stops with memory size estimation.
+- **Terminal::capture_snapshot() / restore_from_snapshot()**: Capture and restore complete terminal state at any point in time.
+- **SnapshotManager**: Rolling buffer of snapshots with size-based eviction (default 4 MiB budget, 30-second interval). Records input bytes between snapshots for delta reconstruction.
+- **ReplaySession**: Timeline navigation with `seek_to()`, `step_forward()`, `step_backward()`, `seek_to_start()`, `seek_to_end()`, and timestamp-based seeking. Reconstructs terminal frames at arbitrary positions.
+- **Python Binding**: `capture_replay_snapshot()` returns dict with `timestamp`, `cols`, `rows`, `estimated_size_bytes`.
+
 ## What's New in 0.37.0
 
 ### API Key Authentication, System Stats & Kitty Graphics
@@ -1075,6 +1085,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Tmux Control Protocol** - Control mode integration support
 - **Observer API** - Push-based event delivery with sync callbacks and async queues; convenience wrappers for common patterns (bell, title, CWD, command completion, zone changes)
 - **General-purpose File Transfer** - OSC 1337 `File=` with `inline=0` for host-to-terminal downloads, `RequestUpload` for terminal-to-host uploads, with progress tracking and lifecycle events
+- **Instant Replay** - Cell-level terminal snapshots with input-stream delta recording, size-based eviction, and timeline navigation via `SnapshotManager` and `ReplaySession`
 
 ### Graphics Support
 

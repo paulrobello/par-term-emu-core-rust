@@ -129,6 +129,11 @@ Complete Python API documentation for par-term-emu-core-rust.
 - [Streaming Functions](#streaming-functions)
   - [encode_server_message](#encode_server_message)
   - [decode_server_message](#decode_server_message)
+- [Instant Replay](#instant-replay)
+  - [Snapshot Capture (Rust)](#snapshot-capture-rust)
+  - [SnapshotManager](#snapshotmanager)
+  - [ReplaySession](#replaysession)
+  - [Python Binding](#instant-replay-python-binding)
 
 ## Terminal Class
 
@@ -1968,6 +1973,146 @@ When `type` is `"system_stats"`, the dict contains:
 | `kernel_version` | `str \| None` | Kernel version string |
 | `uptime_secs` | `int \| None` | System uptime in seconds |
 | `timestamp` | `int \| None` | Unix epoch milliseconds |
+
+## Instant Replay
+
+Cell-level terminal snapshots with input-stream delta recording and timeline navigation. Allows reconstructing exact terminal state at any point in history.
+
+### Snapshot Capture (Rust)
+
+#### TerminalSnapshot
+
+Complete capture of terminal state at a point in time. Defined in `src/terminal/terminal_snapshot.rs`.
+
+**Fields:**
+- `timestamp` (`u64`): Unix timestamp in milliseconds when the snapshot was captured
+- `cols` / `rows` (`usize`): Terminal dimensions
+- `grid` / `alt_grid` (`GridSnapshot`): Primary and alternate screen grid snapshots
+- `alt_screen_active` (`bool`): Whether the alternate screen is active
+- `cursor` / `alt_cursor` / `saved_cursor` (`Cursor`): Cursor states
+- `fg` / `bg` / `underline_color`: Current drawing colors
+- `flags` (`CellFlags`): Current cell attribute flags
+- `saved_fg` / `saved_bg` / `saved_underline_color` / `saved_flags`: Saved drawing state
+- `title` (`String`): Terminal title
+- Terminal modes: `auto_wrap`, `origin_mode`, `insert_mode`, `reverse_video`, `line_feed_new_line_mode`, `application_cursor`, `bracketed_paste`, `focus_tracking`, `mouse_mode`, `mouse_encoding`, `use_lr_margins`, `left_margin`, `right_margin`, `keyboard_flags`, `modify_other_keys_mode`, `char_protected`, `bold_brightening`
+- `scroll_region_top` / `scroll_region_bottom` (`usize`): Scroll region bounds
+- `tab_stops` (`Vec<bool>`): Tab stop positions
+- `pending_wrap` (`bool`): Delayed wrap flag
+- `estimated_size_bytes` (`usize`): Approximate memory footprint
+
+**Methods:**
+- `estimate_size() -> usize`: Calculate the memory footprint of this snapshot
+
+#### GridSnapshot
+
+Snapshot of a single grid (primary or alternate screen). Defined in `src/terminal/terminal_snapshot.rs`.
+
+**Fields:**
+- `cells` (`Vec<Cell>`): Visible screen cells (row-major, cols * rows)
+- `scrollback_cells` (`Vec<Cell>`): Scrollback buffer cells (linearized circular buffer)
+- `scrollback_start` / `scrollback_lines` / `max_scrollback` (`usize`): Scrollback state
+- `cols` / `rows` (`usize`): Grid dimensions
+- `wrapped` / `scrollback_wrapped` (`Vec<bool>`): Line-wrap flags
+- `zones` (`Vec<Zone>`): Semantic zones
+- `total_lines_scrolled` (`usize`): Total lines ever scrolled into scrollback
+
+#### Terminal Methods
+
+- `capture_snapshot() -> TerminalSnapshot`: Capture a complete cell-level snapshot of terminal state including grids, cursors, colors, attributes, modes, scroll regions, and tab stops.
+- `restore_from_snapshot(snapshot: &TerminalSnapshot)`: Restore terminal state from a previously captured snapshot. Only restores if dimensions match.
+
+### SnapshotManager
+
+Manages a rolling buffer of terminal snapshots with size-based eviction and input-stream recording. Defined in `src/terminal/snapshot_manager.rs`.
+
+**Constants:**
+- `DEFAULT_MAX_MEMORY_BYTES`: 4 MiB
+- `DEFAULT_SNAPSHOT_INTERVAL_SECS`: 30 seconds
+
+#### Constructor
+
+- `new(max_memory_bytes: usize, snapshot_interval: Duration) -> SnapshotManager`
+- `with_defaults() -> SnapshotManager`: Creates a manager with 4 MiB budget and 30-second interval
+
+#### Snapshot Operations
+
+- `take_snapshot(&mut self, terminal: &Terminal) -> usize`: Capture a snapshot and append it. Returns the new entry index. Evicts oldest entries if over budget.
+- `record_input(&mut self, bytes: &[u8])`: Append input bytes to the most recent entry. No-op if disabled or empty.
+- `reconstruct_at(entry_index: usize, byte_offset: usize) -> Option<Terminal>`: Reconstruct terminal state by restoring a snapshot and replaying `input_bytes[..byte_offset]`.
+- `find_entry_for_timestamp(timestamp: u64) -> Option<usize>`: Binary search for the entry whose timestamp is closest to (but not after) the given Unix-millisecond timestamp.
+
+#### Query Methods
+
+- `entry_count() -> usize`: Number of stored entries
+- `get_entry(index: usize) -> Option<&SnapshotEntry>`: Get entry at index
+- `memory_usage() -> usize`: Current total memory usage
+- `max_memory() -> usize`: Maximum memory budget
+- `snapshot_interval() -> Duration`: Current snapshot interval
+- `time_range() -> Option<(u64, u64)>`: Oldest and newest snapshot timestamps
+- `should_snapshot() -> bool`: Whether enough time has elapsed for a new snapshot
+- `is_enabled() -> bool`: Whether the manager is enabled
+
+#### Configuration
+
+- `set_max_memory(max_bytes: usize)`: Set memory budget (triggers eviction if needed)
+- `set_snapshot_interval(interval: Duration)`: Set snapshot interval
+- `set_enabled(enabled: bool)`: Enable or disable the manager
+- `clear()`: Clear all entries and reset memory tracking
+
+#### SnapshotEntry
+
+A single entry in the snapshot ring buffer.
+
+- `snapshot` (`TerminalSnapshot`): The captured terminal state
+- `input_bytes` (`Vec<u8>`): Bytes fed to `Terminal::process()` after this snapshot
+- `size_bytes() -> usize`: Total memory footprint of this entry
+
+### ReplaySession
+
+Timeline navigation for replay. Creates an independent copy of snapshot data and allows seeking through terminal history. Defined in `src/terminal/replay.rs`.
+
+#### Constructor
+
+- `new(manager: &SnapshotManager) -> Option<ReplaySession>`: Create a session starting at the end of the timeline. Returns `None` if the manager is empty.
+
+#### Navigation
+
+All navigation methods return a `SeekResult` enum (`Ok`, `AtStart`, `AtEnd`, `Empty`).
+
+- `seek_to(entry_index: usize, byte_offset: usize) -> SeekResult`: Seek to a specific position (values are clamped to valid ranges)
+- `seek_to_timestamp(timestamp: u64) -> SeekResult`: Seek to the entry closest to the given timestamp
+- `seek_to_start() -> SeekResult`: Seek to the beginning of the timeline
+- `seek_to_end() -> SeekResult`: Seek to the end of the timeline
+- `step_forward(n_bytes: usize) -> SeekResult`: Step forward by N bytes in the input stream (crosses entry boundaries)
+- `step_backward(n_bytes: usize) -> SeekResult`: Step backward by N bytes in the input stream (crosses entry boundaries)
+- `next_entry() -> SeekResult`: Navigate to the start of the next entry
+- `previous_entry() -> SeekResult`: Navigate to the start of the previous entry
+
+#### Query
+
+- `current_frame() -> &Terminal`: Reconstructed terminal at the current position
+- `current_index() -> usize`: Current entry index
+- `current_byte_offset() -> usize`: Byte offset within the current entry
+- `total_entries() -> usize`: Total number of entries
+- `current_timestamp() -> u64`: Timestamp of the current entry's snapshot
+
+### Instant Replay Python Binding
+
+- `capture_replay_snapshot() -> dict`: Capture a cell-level snapshot of terminal state and return metadata
+
+**Returns:** dict with keys:
+- `timestamp` (`int`): Unix timestamp in milliseconds
+- `cols` (`int`): Terminal width in columns
+- `rows` (`int`): Terminal height in rows
+- `estimated_size_bytes` (`int`): Approximate memory footprint in bytes
+
+```python
+term = Terminal(80, 24)
+term.process(b"Hello, world!")
+info = term.capture_replay_snapshot()
+print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
+# Snapshot at 1707000000000, size: 47232 bytes
+```
 
 ## See Also
 

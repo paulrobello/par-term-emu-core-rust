@@ -1944,6 +1944,50 @@ impl Grid {
     pub fn total_lines_scrolled(&self) -> usize {
         self.total_lines_scrolled
     }
+
+    /// Capture a snapshot of this grid's entire state.
+    ///
+    /// The snapshot includes all visible cells, scrollback, wrap flags,
+    /// zones, and counters. The `evicted_zones` field is intentionally
+    /// omitted because it is transient event data.
+    #[must_use]
+    pub fn capture_snapshot(&self) -> crate::terminal::terminal_snapshot::GridSnapshot {
+        crate::terminal::terminal_snapshot::GridSnapshot {
+            cells: self.cells.clone(),
+            scrollback_cells: self.scrollback_cells.clone(),
+            scrollback_start: self.scrollback_start,
+            scrollback_lines: self.scrollback_lines,
+            max_scrollback: self.max_scrollback,
+            cols: self.cols,
+            rows: self.rows,
+            wrapped: self.wrapped.clone(),
+            scrollback_wrapped: self.scrollback_wrapped.clone(),
+            zones: self.zones.clone(),
+            total_lines_scrolled: self.total_lines_scrolled,
+        }
+    }
+
+    /// Restore this grid's state from a previously captured snapshot.
+    ///
+    /// All fields are replaced wholesale. The `evicted_zones` Vec is
+    /// cleared since it is transient data that should not survive a restore.
+    pub fn restore_from_snapshot(
+        &mut self,
+        snap: &crate::terminal::terminal_snapshot::GridSnapshot,
+    ) {
+        self.cells = snap.cells.clone();
+        self.scrollback_cells = snap.scrollback_cells.clone();
+        self.scrollback_start = snap.scrollback_start;
+        self.scrollback_lines = snap.scrollback_lines;
+        self.max_scrollback = snap.max_scrollback;
+        self.cols = snap.cols;
+        self.rows = snap.rows;
+        self.wrapped = snap.wrapped.clone();
+        self.scrollback_wrapped = snap.scrollback_wrapped.clone();
+        self.zones = snap.zones.clone();
+        self.evicted_zones.clear();
+        self.total_lines_scrolled = snap.total_lines_scrolled;
+    }
 }
 
 #[cfg(test)]
@@ -3091,5 +3135,101 @@ mod zone_tests {
         grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, None));
         grid.clear_zones();
         assert!(grid.zones().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    use crate::color::{Color, NamedColor};
+    use crate::zone::{Zone, ZoneType};
+
+    #[test]
+    fn test_capture_basic_content() {
+        let mut grid = Grid::new(10, 5, 100);
+        // Write some characters into the grid
+        grid.get_mut(0, 0).unwrap().c = 'H';
+        grid.get_mut(1, 0).unwrap().c = 'i';
+        grid.get_mut(0, 1).unwrap().c = '!';
+
+        let snap = grid.capture_snapshot();
+        assert_eq!(snap.cols, 10);
+        assert_eq!(snap.rows, 5);
+        assert_eq!(snap.cells.len(), 10 * 5);
+        assert_eq!(snap.cells[0].c, 'H');
+        assert_eq!(snap.cells[1].c, 'i');
+        assert_eq!(snap.cells[10].c, '!');
+        assert_eq!(snap.scrollback_lines, 0);
+        assert_eq!(snap.total_lines_scrolled, 0);
+    }
+
+    #[test]
+    fn test_roundtrip_restore() {
+        let mut grid = Grid::new(10, 5, 100);
+        // Write content
+        grid.get_mut(0, 0).unwrap().c = 'A';
+        grid.get_mut(1, 0).unwrap().c = 'B';
+        grid.get_mut(2, 0).unwrap().fg = Color::Rgb(255, 0, 0);
+        grid.set_line_wrapped(0, true);
+
+        // Push a zone
+        grid.push_zone(Zone::new(1, ZoneType::Prompt, 0, Some(1_000)));
+
+        let snap = grid.capture_snapshot();
+
+        // Modify the grid after snapshot
+        grid.get_mut(0, 0).unwrap().c = 'X';
+        grid.get_mut(1, 0).unwrap().c = 'Y';
+        grid.get_mut(2, 0).unwrap().fg = Color::Named(NamedColor::White);
+        grid.set_line_wrapped(0, false);
+        grid.clear_zones();
+
+        assert_eq!(grid.get(0, 0).unwrap().c, 'X');
+        assert!(grid.zones().is_empty());
+
+        // Restore from snapshot
+        grid.restore_from_snapshot(&snap);
+
+        assert_eq!(grid.get(0, 0).unwrap().c, 'A');
+        assert_eq!(grid.get(1, 0).unwrap().c, 'B');
+        assert_eq!(grid.get(2, 0).unwrap().fg, Color::Rgb(255, 0, 0));
+        assert!(grid.is_line_wrapped(0));
+        assert_eq!(grid.zones().len(), 1);
+        assert_eq!(grid.zones()[0].id, 1);
+    }
+
+    #[test]
+    fn test_scrollback_roundtrip() {
+        let mut grid = Grid::new(5, 3, 10);
+
+        // Fill the grid with content
+        for row in 0..3 {
+            for col in 0..5 {
+                grid.get_mut(col, row).unwrap().c = char::from(b'A' + (row * 5 + col) as u8);
+            }
+        }
+
+        // Scroll some lines up into scrollback
+        grid.scroll_up(2);
+
+        let sb_lines = grid.scrollback_len();
+        assert!(sb_lines > 0, "scrollback should have lines after scroll_up");
+
+        let snap = grid.capture_snapshot();
+        assert_eq!(snap.scrollback_lines, sb_lines);
+
+        // Modify grid
+        grid.get_mut(0, 0).unwrap().c = 'Z';
+        // Scroll more lines to change scrollback state
+        grid.scroll_up(1);
+
+        let sb_after = grid.scrollback_len();
+        assert_ne!(sb_after, sb_lines, "scrollback should have changed");
+
+        // Restore
+        grid.restore_from_snapshot(&snap);
+
+        // Scrollback should be restored to original state
+        assert_eq!(grid.scrollback_len(), sb_lines);
     }
 }

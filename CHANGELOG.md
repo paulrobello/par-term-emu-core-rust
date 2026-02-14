@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Instant Replay**: Add Instant Replay system with cell-level terminal snapshots, input-stream delta recording, and timeline navigation (Issue #47)
+  - `TerminalSnapshot` and `GridSnapshot` structs capture complete terminal state (grids, cursors, colors, attributes, modes, scroll regions, tab stops) with memory size estimation
+  - `Terminal::capture_snapshot()` and `Terminal::restore_from_snapshot()` for point-in-time state capture and restore
+  - `SnapshotManager` manages a rolling buffer of snapshots with size-based eviction (default 4 MiB budget, 30-second interval), input-stream recording, `reconstruct_at()` for delta replay, and `find_entry_for_timestamp()` for timestamp-based lookup
+  - `ReplaySession` provides timeline navigation with `seek_to()`, `step_forward()`, `step_backward()`, `seek_to_start()`, `seek_to_end()`, `seek_to_timestamp()`, `next_entry()`, and `previous_entry()`
+  - Python binding: `capture_replay_snapshot()` returns dict with `timestamp`, `cols`, `rows`, `estimated_size_bytes`
 - **General-Purpose File Transfer (OSC 1337 File= with inline=0)**: Full file download/upload support via the iTerm2 OSC 1337 `File=` protocol
   - New `FileTransfer` type and `FileTransferManager` with bounded ring buffer for completed transfers (default 32 entries, 50MB max size)
   - Downloads (`inline=0`): Base64 payload decoded, progress tracked, raw bytes stored for frontend retrieval via `take_completed_transfer()`
