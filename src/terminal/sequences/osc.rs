@@ -465,6 +465,20 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Sub-shell detection: if we see a new prompt while
+                                    // inside command output, a sub-shell was spawned
+                                    if self.in_command_output && self.shell_depth > 0 {
+                                        self.shell_depth += 1;
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::SubShellDetected {
+                                                depth: self.shell_depth,
+                                                shell_type: None,
+                                            },
+                                        );
+                                    } else if self.shell_depth == 0 {
+                                        self.shell_depth = 1;
+                                    }
+                                    self.in_command_output = false;
                                     // Zone: close any open zone, start new Prompt zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
@@ -617,6 +631,8 @@ impl Terminal {
                                             },
                                         );
                                     }
+                                    // Mark that we're inside command output
+                                    self.in_command_output = true;
                                 }
                                 Some('D') => {
                                     self.shell_integration
@@ -670,6 +686,17 @@ impl Terminal {
                                                 },
                                             );
                                         }
+                                    }
+                                    // Sub-shell detection: leaving command output
+                                    self.in_command_output = false;
+                                    if self.shell_depth > 1 {
+                                        self.shell_depth -= 1;
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::SubShellDetected {
+                                                depth: self.shell_depth,
+                                                shell_type: None,
+                                            },
+                                        );
                                     }
                                 }
                                 _ => {}

@@ -6413,7 +6413,7 @@ impl Terminal {
                 .as_millis() as u64;
 
             let change = CwdChange {
-                old_cwd,
+                old_cwd: old_cwd.clone(),
                 new_cwd: new_cwd.clone(),
                 hostname: hostname.clone(),
                 username: username.clone(),
@@ -6423,6 +6423,64 @@ impl Terminal {
             // Emit event for subscribers
             self.terminal_events
                 .push(TerminalEvent::CwdChanged(change.clone()));
+
+            // Emit granular environment events
+            if old_cwd.as_deref() != Some(&new_cwd) {
+                self.terminal_events
+                    .push(TerminalEvent::EnvironmentChanged {
+                        key: "cwd".to_string(),
+                        value: new_cwd.clone(),
+                        old_value: old_cwd.clone(),
+                    });
+            }
+
+            if old_hostname.as_deref() != hostname.as_deref() {
+                if let Some(h) = &hostname {
+                    self.terminal_events
+                        .push(TerminalEvent::EnvironmentChanged {
+                            key: "hostname".to_string(),
+                            value: h.clone(),
+                            old_value: old_hostname.clone(),
+                        });
+                }
+            }
+
+            if old_username.as_deref() != username.as_deref() {
+                if let Some(u) = &username {
+                    self.terminal_events
+                        .push(TerminalEvent::EnvironmentChanged {
+                            key: "username".to_string(),
+                            value: u.clone(),
+                            old_value: old_username.clone(),
+                        });
+                }
+            }
+
+            // Emit RemoteHostTransition if hostname changed
+            if old_hostname.as_deref() != hostname.as_deref() {
+                if let Some(h) = &hostname {
+                    self.terminal_events
+                        .push(TerminalEvent::RemoteHostTransition {
+                            hostname: h.clone(),
+                            username: username.clone(),
+                            old_hostname: old_hostname.clone(),
+                            old_username: old_username.clone(),
+                        });
+                } else if old_hostname.is_some() {
+                    // Returned to local
+                    self.terminal_events
+                        .push(TerminalEvent::RemoteHostTransition {
+                            hostname: String::new(),
+                            username: username.clone(),
+                            old_hostname: old_hostname.clone(),
+                            old_username: old_username.clone(),
+                        });
+                }
+            }
+
+            // Update last_hostname/last_username tracking
+            self.last_hostname = hostname.clone();
+            self.last_username = username.clone();
 
             self.cwd_changes.push(change);
 
