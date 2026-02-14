@@ -5552,6 +5552,98 @@ impl PyTerminal {
     fn get_user_vars(&self) -> PyResult<HashMap<String, String>> {
         Ok(self.inner.get_user_vars().clone())
     }
+
+    /// Get all semantic zones in the terminal buffer
+    ///
+    /// Returns a list of zone dictionaries, each containing:
+    /// - zone_type: str - "prompt", "command", or "output"
+    /// - abs_row_start: int - Absolute row where zone starts
+    /// - abs_row_end: int - Absolute row where zone ends (inclusive)
+    /// - command: str | None - Command text (for command/output zones)
+    /// - exit_code: int | None - Exit code (for output zones after command finishes)
+    /// - timestamp: int | None - Unix milliseconds when zone was created
+    ///
+    /// Returns:
+    ///     List of zone dictionaries sorted by row position
+    ///
+    /// Example:
+    ///     ```python
+    ///     zones = term.get_zones()
+    ///     for z in zones:
+    ///         print(f"{z['zone_type']}: rows {z['abs_row_start']}-{z['abs_row_end']}")
+    ///     ```
+    fn get_zones(&self) -> PyResult<Vec<pyo3::Py<pyo3::types::PyDict>>> {
+        use pyo3::types::PyDict;
+
+        let zones = self.inner.get_zones();
+        Python::attach(|py| {
+            let mut result = Vec::with_capacity(zones.len());
+            for zone in zones {
+                let dict = PyDict::new(py);
+                dict.set_item("zone_type", zone.zone_type.to_string())?;
+                dict.set_item("abs_row_start", zone.abs_row_start)?;
+                dict.set_item("abs_row_end", zone.abs_row_end)?;
+                dict.set_item("command", zone.command.as_deref())?;
+                dict.set_item("exit_code", zone.exit_code)?;
+                dict.set_item("timestamp", zone.timestamp)?;
+                result.push(dict.into());
+            }
+            Ok(result)
+        })
+    }
+
+    /// Get the semantic zone containing the given absolute row
+    ///
+    /// Args:
+    ///     abs_row: Absolute row number (scrollback_len + visible_row)
+    ///
+    /// Returns:
+    ///     Zone dictionary or None if no zone contains this row
+    ///
+    /// Example:
+    ///     ```python
+    ///     zone = term.get_zone_at(term.scrollback_len() + 0)
+    ///     if zone:
+    ///         print(f"Row 0 is in a {zone['zone_type']} zone")
+    ///     ```
+    fn get_zone_at(&self, abs_row: usize) -> PyResult<Option<pyo3::Py<pyo3::types::PyDict>>> {
+        use pyo3::types::PyDict;
+
+        match self.inner.get_zone_at(abs_row) {
+            Some(zone) => Python::attach(|py| {
+                let dict = PyDict::new(py);
+                dict.set_item("zone_type", zone.zone_type.to_string())?;
+                dict.set_item("abs_row_start", zone.abs_row_start)?;
+                dict.set_item("abs_row_end", zone.abs_row_end)?;
+                dict.set_item("command", zone.command.as_deref())?;
+                dict.set_item("exit_code", zone.exit_code)?;
+                dict.set_item("timestamp", zone.timestamp)?;
+                Ok(Some(dict.into()))
+            }),
+            None => Ok(None),
+        }
+    }
+
+    /// Get the text content of the zone containing the given absolute row
+    ///
+    /// Extracts all text from the zone's rows, handling line wrapping and
+    /// trimming trailing whitespace. Returns None if no zone contains this row.
+    ///
+    /// Args:
+    ///     abs_row: Absolute row number (scrollback_len + visible_row)
+    ///
+    /// Returns:
+    ///     Zone text content as a string, or None
+    ///
+    /// Example:
+    ///     ```python
+    ///     text = term.get_zone_text(some_row)
+    ///     if text:
+    ///         print(f"Zone content: {text}")
+    ///     ```
+    fn get_zone_text(&self, abs_row: usize) -> PyResult<Option<String>> {
+        Ok(self.inner.get_zone_text(abs_row))
+    }
 }
 
 /// Helper function to parse clipboard slot from string
