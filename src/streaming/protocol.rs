@@ -481,6 +481,61 @@ pub enum ServerMessage {
         /// JSON-encoded SemanticSnapshot struct
         snapshot_json: String,
     },
+
+    /// File transfer started (download or upload)
+    #[serde(rename = "file_transfer_started")]
+    FileTransferStarted {
+        /// Transfer ID
+        id: u64,
+        /// Direction: "download" or "upload"
+        direction: String,
+        /// Filename if known
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        /// Total bytes if known
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total_bytes: Option<u64>,
+    },
+
+    /// File transfer progress update
+    #[serde(rename = "file_transfer_progress")]
+    FileTransferProgress {
+        /// Transfer ID
+        id: u64,
+        /// Bytes transferred so far
+        bytes_transferred: u64,
+        /// Total bytes if known
+        #[serde(skip_serializing_if = "Option::is_none")]
+        total_bytes: Option<u64>,
+    },
+
+    /// File transfer completed successfully
+    #[serde(rename = "file_transfer_completed")]
+    FileTransferCompleted {
+        /// Transfer ID
+        id: u64,
+        /// Filename if known
+        #[serde(skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        /// Total bytes transferred
+        size: u64,
+    },
+
+    /// File transfer failed
+    #[serde(rename = "file_transfer_failed")]
+    FileTransferFailed {
+        /// Transfer ID
+        id: u64,
+        /// Failure reason
+        reason: String,
+    },
+
+    /// Upload requested by terminal application
+    #[serde(rename = "upload_requested")]
+    UploadRequested {
+        /// Upload format
+        format: String,
+    },
 }
 
 /// Messages sent from client to server
@@ -637,6 +692,12 @@ pub enum EventType {
     /// Semantic snapshot events
     #[serde(rename = "snapshot")]
     Snapshot,
+    /// File transfer events (started, progress, completed, failed)
+    #[serde(rename = "file_transfer")]
+    FileTransfer,
+    /// Upload request events
+    #[serde(rename = "upload_request")]
+    UploadRequest,
 }
 
 impl ServerMessage {
@@ -1113,6 +1174,49 @@ impl ServerMessage {
     /// Create a semantic snapshot message
     pub fn semantic_snapshot(snapshot_json: String) -> Self {
         Self::SemanticSnapshot { snapshot_json }
+    }
+
+    /// Create a file transfer started message
+    pub fn file_transfer_started(
+        id: u64,
+        direction: String,
+        filename: Option<String>,
+        total_bytes: Option<u64>,
+    ) -> Self {
+        Self::FileTransferStarted {
+            id,
+            direction,
+            filename,
+            total_bytes,
+        }
+    }
+
+    /// Create a file transfer progress message
+    pub fn file_transfer_progress(
+        id: u64,
+        bytes_transferred: u64,
+        total_bytes: Option<u64>,
+    ) -> Self {
+        Self::FileTransferProgress {
+            id,
+            bytes_transferred,
+            total_bytes,
+        }
+    }
+
+    /// Create a file transfer completed message
+    pub fn file_transfer_completed(id: u64, filename: Option<String>, size: u64) -> Self {
+        Self::FileTransferCompleted { id, filename, size }
+    }
+
+    /// Create a file transfer failed message
+    pub fn file_transfer_failed(id: u64, reason: String) -> Self {
+        Self::FileTransferFailed { id, reason }
+    }
+
+    /// Create an upload requested message
+    pub fn upload_requested(format: String) -> Self {
+        Self::UploadRequested { format }
     }
 
     /// Create a progress bar changed message from terminal event data

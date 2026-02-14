@@ -225,6 +225,58 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
                 map.insert("shell_type".to_string(), st.clone());
             }
         }
+        TerminalEvent::FileTransferStarted {
+            id,
+            direction,
+            filename,
+            total_bytes,
+        } => {
+            map.insert("type".to_string(), "file_transfer_started".to_string());
+            map.insert("id".to_string(), id.to_string());
+            let dir_str = match direction {
+                crate::terminal::TransferDirection::Download => "download",
+                crate::terminal::TransferDirection::Upload => "upload",
+            };
+            map.insert("direction".to_string(), dir_str.to_string());
+            if let Some(name) = filename {
+                map.insert("filename".to_string(), name.clone());
+            }
+            if let Some(total) = total_bytes {
+                map.insert("total_bytes".to_string(), total.to_string());
+            }
+        }
+        TerminalEvent::FileTransferProgress {
+            id,
+            bytes_transferred,
+            total_bytes,
+        } => {
+            map.insert("type".to_string(), "file_transfer_progress".to_string());
+            map.insert("id".to_string(), id.to_string());
+            map.insert(
+                "bytes_transferred".to_string(),
+                bytes_transferred.to_string(),
+            );
+            if let Some(total) = total_bytes {
+                map.insert("total_bytes".to_string(), total.to_string());
+            }
+        }
+        TerminalEvent::FileTransferCompleted { id, filename, size } => {
+            map.insert("type".to_string(), "file_transfer_completed".to_string());
+            map.insert("id".to_string(), id.to_string());
+            if let Some(name) = filename {
+                map.insert("filename".to_string(), name.clone());
+            }
+            map.insert("size".to_string(), size.to_string());
+        }
+        TerminalEvent::FileTransferFailed { id, reason } => {
+            map.insert("type".to_string(), "file_transfer_failed".to_string());
+            map.insert("id".to_string(), id.to_string());
+            map.insert("reason".to_string(), reason.clone());
+        }
+        TerminalEvent::UploadRequested { format } => {
+            map.insert("type".to_string(), "upload_requested".to_string());
+            map.insert("format".to_string(), format.clone());
+        }
     }
     map
 }

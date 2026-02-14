@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -99,6 +99,16 @@ pub mod server_message {
         SubShellDetected(super::SubShellDetected),
         #[prost(message, tag = "31")]
         SemanticSnapshot(super::SemanticSnapshotData),
+        #[prost(message, tag = "32")]
+        FileTransferStarted(super::FileTransferStarted),
+        #[prost(message, tag = "33")]
+        FileTransferProgress(super::FileTransferProgress),
+        #[prost(message, tag = "34")]
+        FileTransferCompleted(super::FileTransferCompleted),
+        #[prost(message, tag = "35")]
+        FileTransferFailed(super::FileTransferFailed),
+        #[prost(message, tag = "36")]
+        UploadRequested(super::UploadRequested),
     }
 }
 /// Terminal output data (very high frequency)
@@ -685,6 +695,52 @@ pub struct ClipboardRequest {
     #[prost(string, optional, tag = "3")]
     pub target: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// File transfer started (download or upload)
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileTransferStarted {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub direction: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "3")]
+    pub filename: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, optional, tag = "4")]
+    pub total_bytes: ::core::option::Option<u64>,
+}
+/// File transfer progress update
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileTransferProgress {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(uint64, tag = "2")]
+    pub bytes_transferred: u64,
+    #[prost(uint64, optional, tag = "3")]
+    pub total_bytes: ::core::option::Option<u64>,
+}
+/// File transfer completed successfully
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileTransferCompleted {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, optional, tag = "2")]
+    pub filename: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint64, tag = "3")]
+    pub size: u64,
+}
+/// File transfer failed
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct FileTransferFailed {
+    #[prost(uint64, tag = "1")]
+    pub id: u64,
+    #[prost(string, tag = "2")]
+    pub reason: ::prost::alloc::string::String,
+}
+/// Upload requested by terminal application
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct UploadRequested {
+    #[prost(string, tag = "1")]
+    pub format: ::prost::alloc::string::String,
+}
 /// Event types for subscription
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -713,6 +769,8 @@ pub enum EventType {
     RemoteHost = 21,
     SubShell = 22,
     Snapshot = 23,
+    FileTransfer = 24,
+    UploadRequest = 25,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -745,6 +803,8 @@ impl EventType {
             Self::RemoteHost => "EVENT_TYPE_REMOTE_HOST",
             Self::SubShell => "EVENT_TYPE_SUB_SHELL",
             Self::Snapshot => "EVENT_TYPE_SNAPSHOT",
+            Self::FileTransfer => "EVENT_TYPE_FILE_TRANSFER",
+            Self::UploadRequest => "EVENT_TYPE_UPLOAD_REQUEST",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -774,6 +834,8 @@ impl EventType {
             "EVENT_TYPE_REMOTE_HOST" => Some(Self::RemoteHost),
             "EVENT_TYPE_SUB_SHELL" => Some(Self::SubShell),
             "EVENT_TYPE_SNAPSHOT" => Some(Self::Snapshot),
+            "EVENT_TYPE_FILE_TRANSFER" => Some(Self::FileTransfer),
+            "EVENT_TYPE_UPLOAD_REQUEST" => Some(Self::UploadRequest),
             _ => None,
         }
     }

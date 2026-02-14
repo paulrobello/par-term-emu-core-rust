@@ -2842,6 +2842,11 @@ fn should_send(
         ServerMessage::RemoteHostTransition { .. } => subs.contains(&EventType::RemoteHost),
         ServerMessage::SubShellDetected { .. } => subs.contains(&EventType::SubShell),
         ServerMessage::SemanticSnapshot { .. } => subs.contains(&EventType::Snapshot),
+        ServerMessage::FileTransferStarted { .. }
+        | ServerMessage::FileTransferProgress { .. }
+        | ServerMessage::FileTransferCompleted { .. }
+        | ServerMessage::FileTransferFailed { .. } => subs.contains(&EventType::FileTransfer),
+        ServerMessage::UploadRequested { .. } => subs.contains(&EventType::UploadRequest),
         // Always send system messages
         ServerMessage::Connected { .. }
         | ServerMessage::Refresh { .. }

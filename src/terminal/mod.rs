@@ -10,6 +10,7 @@
 
 // Submodules
 mod colors;
+pub mod file_transfer;
 mod graphics;
 pub mod notification;
 pub mod progress;
@@ -28,6 +29,10 @@ pub use progress::{
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry,
+};
+// Re-export file transfer types as they're part of the public API
+pub use file_transfer::{
+    FileTransfer, FileTransferManager, TransferDirection, TransferId, TransferStatus,
 };
 
 // Imports
@@ -216,6 +221,47 @@ pub enum TerminalEvent {
         /// Shell type if known (e.g., "bash", "zsh")
         shell_type: Option<String>,
     },
+    /// A file transfer has started (download or upload)
+    FileTransferStarted {
+        /// Unique transfer identifier
+        id: u64,
+        /// Transfer direction (download or upload)
+        direction: crate::terminal::file_transfer::TransferDirection,
+        /// Name of the file being transferred (if known)
+        filename: Option<String>,
+        /// Total expected size in bytes (if known)
+        total_bytes: Option<usize>,
+    },
+    /// Progress update for an active file transfer
+    FileTransferProgress {
+        /// Unique transfer identifier
+        id: u64,
+        /// Number of bytes transferred so far
+        bytes_transferred: usize,
+        /// Total expected size in bytes (if known)
+        total_bytes: Option<usize>,
+    },
+    /// A file transfer completed successfully
+    FileTransferCompleted {
+        /// Unique transfer identifier
+        id: u64,
+        /// Name of the file that was transferred (if known)
+        filename: Option<String>,
+        /// Total size of the transferred data in bytes
+        size: usize,
+    },
+    /// A file transfer failed
+    FileTransferFailed {
+        /// Unique transfer identifier
+        id: u64,
+        /// Reason for the failure
+        reason: String,
+    },
+    /// An upload was requested by the remote application
+    UploadRequested {
+        /// Upload format (e.g., "base64")
+        format: String,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -240,6 +286,11 @@ pub enum TerminalEventKind {
     EnvironmentChanged,
     RemoteHostTransition,
     SubShellDetected,
+    FileTransferStarted,
+    FileTransferProgress,
+    FileTransferCompleted,
+    FileTransferFailed,
+    UploadRequested,
 }
 
 /// Hyperlink information with all its locations
@@ -867,6 +918,10 @@ struct ITermMultipartState {
     total_size: Option<usize>,
     /// Current accumulated size (sum of decoded chunks)
     accumulated_size: usize,
+    /// Whether this multipart transfer is a file transfer (not inline image)
+    is_file_transfer: bool,
+    /// Transfer ID if this is a file transfer (from FileTransferManager)
+    transfer_id: Option<u64>,
 }
 
 /// Image placement action
@@ -1363,6 +1418,8 @@ pub struct Terminal {
     dcs_action: Option<char>,
     /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
     iterm_multipart_buffer: Option<ITermMultipartState>,
+    /// File transfer manager for tracking file downloads and uploads
+    file_transfer_manager: FileTransferManager,
     /// Clipboard content (OSC 52)
     clipboard_content: Option<String>,
     /// Allow clipboard read operations (security flag for OSC 52 queries)
@@ -1812,6 +1869,7 @@ impl Terminal {
             dcs_active: false,
             dcs_action: None,
             iterm_multipart_buffer: None,
+            file_transfer_manager: FileTransferManager::default(),
             clipboard_content: None,
             allow_clipboard_read: false,
             default_fg: Color::Named(NamedColor::White),
@@ -3166,6 +3224,11 @@ impl Terminal {
             TerminalEvent::EnvironmentChanged { .. } => TerminalEventKind::EnvironmentChanged,
             TerminalEvent::RemoteHostTransition { .. } => TerminalEventKind::RemoteHostTransition,
             TerminalEvent::SubShellDetected { .. } => TerminalEventKind::SubShellDetected,
+            TerminalEvent::FileTransferStarted { .. } => TerminalEventKind::FileTransferStarted,
+            TerminalEvent::FileTransferProgress { .. } => TerminalEventKind::FileTransferProgress,
+            TerminalEvent::FileTransferCompleted { .. } => TerminalEventKind::FileTransferCompleted,
+            TerminalEvent::FileTransferFailed { .. } => TerminalEventKind::FileTransferFailed,
+            TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
         }
     }
 
@@ -3210,6 +3273,80 @@ impl Terminal {
                 self.pending_trigger_rows.insert(row);
             }
         }
+    }
+
+    // ========== File Transfer API ==========
+
+    /// Get a list of all active (in-progress) file transfers
+    pub fn get_active_transfers(&self) -> Vec<&FileTransfer> {
+        self.file_transfer_manager.active_transfers()
+    }
+
+    /// Get a reference to the completed transfers ring buffer
+    pub fn get_completed_transfers(&self) -> &[FileTransfer] {
+        self.file_transfer_manager.completed_transfers()
+    }
+
+    /// Get a reference to a file transfer by ID (active transfers only)
+    pub fn get_transfer(&self, id: TransferId) -> Option<&FileTransfer> {
+        self.file_transfer_manager.get_transfer(id)
+    }
+
+    /// Take a completed transfer by ID, removing it from the completed buffer
+    ///
+    /// Returns `None` if no completed transfer with the given ID exists.
+    pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
+        self.file_transfer_manager.take_completed_transfer(id)
+    }
+
+    /// Cancel an active file transfer
+    ///
+    /// Returns `true` if the transfer was found and cancelled, `false` otherwise.
+    /// On success, emits a `FileTransferFailed` event with reason "cancelled".
+    pub fn cancel_file_transfer(&mut self, id: TransferId) -> bool {
+        match self.file_transfer_manager.cancel_transfer(id) {
+            Ok(()) => {
+                self.terminal_events
+                    .push(TerminalEvent::FileTransferFailed {
+                        id,
+                        reason: "cancelled".to_string(),
+                    });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Set the maximum allowed file transfer size in bytes
+    pub fn set_max_transfer_size(&mut self, bytes: usize) {
+        self.file_transfer_manager.set_max_transfer_size(bytes);
+    }
+
+    /// Get the current maximum allowed file transfer size in bytes
+    pub fn get_max_transfer_size(&self) -> usize {
+        self.file_transfer_manager.max_transfer_size()
+    }
+
+    /// Send upload data in response to a `RequestUpload` event
+    ///
+    /// Writes the iTerm2 upload response protocol to the response buffer:
+    /// `"ok\n" + base64(data) + "\n\n"`
+    ///
+    /// The frontend should call this after the user selects a file in response
+    /// to an `UploadRequested` event.
+    pub fn send_upload_data(&mut self, data: &[u8]) {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        let response = format!("ok\n{}\n\n", encoded);
+        self.response_buffer.extend_from_slice(response.as_bytes());
+    }
+
+    /// Cancel an upload request
+    ///
+    /// Writes a Ctrl-C (0x03) to the response buffer to signal cancellation
+    /// of the upload request to the remote application.
+    pub fn cancel_upload(&mut self) {
+        self.response_buffer.push(0x03);
     }
 
     // ========== Mode Introspection ==========

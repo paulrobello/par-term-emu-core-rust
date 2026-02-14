@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **General-Purpose File Transfer (OSC 1337 File= with inline=0)**: Full file download/upload support via the iTerm2 OSC 1337 `File=` protocol
+  - New `FileTransfer` type and `FileTransferManager` with bounded ring buffer for completed transfers (default 32 entries, 50MB max size)
+  - Downloads (`inline=0`): Base64 payload decoded, progress tracked, raw bytes stored for frontend retrieval via `take_completed_transfer()`
+  - Multipart downloads (`MultipartFile`/`FilePart`): Chunked transfers routed through `FileTransferManager` with per-chunk progress events
+  - Single-file downloads: Complete file received and stored in one step
+  - Inline images (`inline=1`): Existing graphics path unchanged (no regression)
+- **RequestUpload Protocol (OSC 1337 RequestUpload)**: Terminal-to-host file upload support
+  - Host sends `RequestUpload=format=tgz`, terminal emits `upload_requested` event
+  - Frontend responds via `send_upload_data(data)` (writes `ok\n` + base64 to PTY) or `cancel_upload()` (writes abort)
+- **File Transfer Terminal Events**: Five new `TerminalEvent` variants: `FileTransferStarted`, `FileTransferProgress`, `FileTransferCompleted`, `FileTransferFailed`, `UploadRequested`
+  - All events routed to `on_screen_event()` in the observer system
+  - New `EventKind` variants for subscription filtering: `FileTransferStarted`, `FileTransferProgress`, `FileTransferCompleted`, `FileTransferFailed`, `UploadRequested`
+- **Python Bindings: File Transfer API**: 9 new methods on `Terminal` and `PtyTerminal`
+  - Query: `get_active_transfers()`, `get_completed_transfers()`, `get_transfer(id)`
+  - Retrieve: `take_completed_transfer(id)` (includes raw `data` bytes)
+  - Control: `cancel_file_transfer(id)`, `send_upload_data(data)`, `cancel_upload()`
+  - Config: `set_max_transfer_size(bytes)`, `get_max_transfer_size()`
+- **Python Bindings: File Transfer Observer Events**: Observer callbacks receive `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, and `upload_requested` event dicts
+- **Streaming Protocol: File Transfer Events**: Five new protobuf messages (`FileTransferStarted`, `FileTransferProgress`, `FileTransferCompleted`, `FileTransferFailed`, `UploadRequested`) and event types (`EVENT_TYPE_FILE_TRANSFER_STARTED=20` through `EVENT_TYPE_UPLOAD_REQUESTED=24`) for real-time WebSocket delivery
+- **Python Bindings: Streaming File Transfer**: `encode_server_message()` and `decode_server_message()` support all 5 file transfer message types
 - **Terminal Observer API**: New `TerminalObserver` trait enables push-based event delivery with deferred dispatch (events dispatched after `process()` returns). Supports category-specific callbacks (`on_zone_event`, `on_command_event`, `on_environment_event`, `on_screen_event`) plus catch-all `on_event`. Observer panic isolation via `catch_unwind` prevents one bad observer from crashing the terminal
 - **Terminal Observer API: Subscription Filtering**: Observers can implement `subscriptions()` to receive only specific event kinds, avoiding unnecessary dispatch overhead
 - **C-Compatible FFI**: New `SharedState` and `SharedCell` `#[repr(C)]` types provide a frozen snapshot of terminal state (dimensions, cursor, title, CWD, screen content with per-cell text/color/attributes) for C/C++ consumers. C API: `terminal_get_state()`, `terminal_free_state()`, `terminal_add_observer()`, `terminal_remove_observer()`

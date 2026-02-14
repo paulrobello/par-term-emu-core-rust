@@ -491,6 +491,44 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                     snapshot_json: snapshot_json.clone(),
                 }))
             }
+            AppServerMessage::FileTransferStarted {
+                id,
+                direction,
+                filename,
+                total_bytes,
+            } => Some(Message::FileTransferStarted(pb::FileTransferStarted {
+                id: *id,
+                direction: direction.clone(),
+                filename: filename.clone(),
+                total_bytes: *total_bytes,
+            })),
+            AppServerMessage::FileTransferProgress {
+                id,
+                bytes_transferred,
+                total_bytes,
+            } => Some(Message::FileTransferProgress(pb::FileTransferProgress {
+                id: *id,
+                bytes_transferred: *bytes_transferred,
+                total_bytes: *total_bytes,
+            })),
+            AppServerMessage::FileTransferCompleted { id, filename, size } => {
+                Some(Message::FileTransferCompleted(pb::FileTransferCompleted {
+                    id: *id,
+                    filename: filename.clone(),
+                    size: *size,
+                }))
+            }
+            AppServerMessage::FileTransferFailed { id, reason } => {
+                Some(Message::FileTransferFailed(pb::FileTransferFailed {
+                    id: *id,
+                    reason: reason.clone(),
+                }))
+            }
+            AppServerMessage::UploadRequested { format } => {
+                Some(Message::UploadRequested(pb::UploadRequested {
+                    format: format.clone(),
+                }))
+            }
         };
 
         pb::ServerMessage { message }
@@ -598,6 +636,8 @@ impl From<AppEventType> for i32 {
             AppEventType::RemoteHost => pb::EventType::RemoteHost as i32,
             AppEventType::SubShell => pb::EventType::SubShell as i32,
             AppEventType::Snapshot => pb::EventType::Snapshot as i32,
+            AppEventType::FileTransfer => pb::EventType::FileTransfer as i32,
+            AppEventType::UploadRequest => pb::EventType::UploadRequest as i32,
         }
     }
 }
@@ -870,6 +910,33 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::SemanticSnapshot(snap)) => Ok(AppServerMessage::SemanticSnapshot {
                 snapshot_json: snap.snapshot_json,
             }),
+            Some(Message::FileTransferStarted(fts)) => Ok(AppServerMessage::FileTransferStarted {
+                id: fts.id,
+                direction: fts.direction,
+                filename: fts.filename,
+                total_bytes: fts.total_bytes,
+            }),
+            Some(Message::FileTransferProgress(ftp)) => {
+                Ok(AppServerMessage::FileTransferProgress {
+                    id: ftp.id,
+                    bytes_transferred: ftp.bytes_transferred,
+                    total_bytes: ftp.total_bytes,
+                })
+            }
+            Some(Message::FileTransferCompleted(ftc)) => {
+                Ok(AppServerMessage::FileTransferCompleted {
+                    id: ftc.id,
+                    filename: ftc.filename,
+                    size: ftc.size,
+                })
+            }
+            Some(Message::FileTransferFailed(ftf)) => Ok(AppServerMessage::FileTransferFailed {
+                id: ftf.id,
+                reason: ftf.reason,
+            }),
+            Some(Message::UploadRequested(ur)) => {
+                Ok(AppServerMessage::UploadRequested { format: ur.format })
+            }
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -966,6 +1033,8 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::RemoteHost => AppEventType::RemoteHost,
             pb::EventType::SubShell => AppEventType::SubShell,
             pb::EventType::Snapshot => AppEventType::Snapshot,
+            pb::EventType::FileTransfer => AppEventType::FileTransfer,
+            pb::EventType::UploadRequest => AppEventType::UploadRequest,
         }
     }
 }

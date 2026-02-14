@@ -726,6 +726,8 @@ impl Terminal {
                             self.handle_set_user_var(payload);
                         } else if let Some(payload) = data.strip_prefix("RemoteHost=") {
                             self.handle_remote_host(payload);
+                        } else if let Some(payload) = data.strip_prefix("RequestUpload=") {
+                            self.handle_request_upload(payload);
                         } else {
                             // Default to inline image handling
                             self.handle_iterm_image(&data);
@@ -1116,6 +1118,33 @@ impl Terminal {
         let current_cwd = self.shell_integration.cwd().unwrap_or("").to_string();
 
         self.record_cwd_change(current_cwd, resolved_hostname, resolved_username);
+    }
+
+    /// Handle OSC 1337 RequestUpload= sequence
+    ///
+    /// Format: `OSC 1337 ; RequestUpload=format ST`
+    ///
+    /// The remote application requests the terminal to upload a file.
+    /// The `format` parameter specifies the encoding (typically "base64").
+    /// This emits an `UploadRequested` event so the frontend can prompt the
+    /// user to select a file and call `send_upload_data()` or `cancel_upload()`.
+    fn handle_request_upload(&mut self, payload: &str) {
+        // Parse format from "format=<value>" pattern
+        let format = if let Some(value) = payload.strip_prefix("format=") {
+            value.to_string()
+        } else {
+            // If no format= prefix, use the entire payload as the format
+            payload.to_string()
+        };
+
+        debug::log(
+            debug::DebugLevel::Debug,
+            "OSC1337",
+            &format!("RequestUpload: format={}", format),
+        );
+
+        self.terminal_events
+            .push(crate::terminal::TerminalEvent::UploadRequested { format });
     }
 }
 

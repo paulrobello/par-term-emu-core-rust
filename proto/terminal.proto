@@ -47,6 +47,8 @@ enum EventType {
   EVENT_TYPE_REMOTE_HOST = 21;
   EVENT_TYPE_SUB_SHELL = 22;
   EVENT_TYPE_SNAPSHOT = 23;
+  EVENT_TYPE_FILE_TRANSFER = 24;
+  EVENT_TYPE_UPLOAD_REQUEST = 25;
 }
 
 // =============================================================================
@@ -86,6 +88,11 @@ message ServerMessage {
     RemoteHostTransition remote_host_transition = 29;
     SubShellDetected sub_shell_detected = 30;
     SemanticSnapshotData semantic_snapshot = 31;
+    FileTransferStarted file_transfer_started = 32;
+    FileTransferProgress file_transfer_progress = 33;
+    FileTransferCompleted file_transfer_completed = 34;
+    FileTransferFailed file_transfer_failed = 35;
+    UploadRequested upload_requested = 36;
   }
 }
 
@@ -450,4 +457,37 @@ message ClipboardRequest {
   string operation = 1;                // "set", "get"
   optional string content = 2;         // Content for "set" operations
   optional string target = 3;          // "clipboard", "primary", "select"
+}
+
+// File transfer started (download or upload)
+message FileTransferStarted {
+  uint64 id = 1;
+  string direction = 2;
+  optional string filename = 3;
+  optional uint64 total_bytes = 4;
+}
+
+// File transfer progress update
+message FileTransferProgress {
+  uint64 id = 1;
+  uint64 bytes_transferred = 2;
+  optional uint64 total_bytes = 3;
+}
+
+// File transfer completed successfully
+message FileTransferCompleted {
+  uint64 id = 1;
+  optional string filename = 2;
+  uint64 size = 3;
+}
+
+// File transfer failed
+message FileTransferFailed {
+  uint64 id = 1;
+  string reason = 2;
+}
+
+// Upload requested by terminal application
+message UploadRequested {
+  string format = 1;
 }

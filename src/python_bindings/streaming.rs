@@ -1186,9 +1186,57 @@ pub fn encode_server_message<'py>(
                 None,
             )
         }
+        "file_transfer_started" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let id = get_u64("id").unwrap_or(0);
+            let direction = get_str("direction").unwrap_or_else(|| "download".to_string());
+            let filename = get_str("filename");
+            let total_bytes = get_u64("total_bytes");
+            ServerMessage::file_transfer_started(id, direction, filename, total_bytes)
+        }
+        "file_transfer_progress" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let id = get_u64("id").unwrap_or(0);
+            let bytes_transferred = get_u64("bytes_transferred").unwrap_or(0);
+            let total_bytes = get_u64("total_bytes");
+            ServerMessage::file_transfer_progress(id, bytes_transferred, total_bytes)
+        }
+        "file_transfer_completed" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let id = get_u64("id").unwrap_or(0);
+            let filename = get_str("filename");
+            let size = get_u64("size").unwrap_or(0);
+            ServerMessage::file_transfer_completed(id, filename, size)
+        }
+        "file_transfer_failed" => {
+            let get_u64 = |key: &str| -> Option<u64> {
+                kwargs
+                    .and_then(|k| k.get_item(key).ok().flatten())
+                    .and_then(|v| v.extract().ok())
+            };
+            let id = get_u64("id").unwrap_or(0);
+            let reason = get_str("reason").unwrap_or_else(|| "unknown".to_string());
+            ServerMessage::file_transfer_failed(id, reason)
+        }
+        "upload_requested" => {
+            let format = get_str("format").unwrap_or_else(|| "base64".to_string());
+            ServerMessage::upload_requested(format)
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed, system_stats",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed, system_stats, file_transfer_started, file_transfer_progress, file_transfer_completed, file_transfer_failed, upload_requested",
                 message_type
             )));
         }
@@ -1589,6 +1637,43 @@ pub fn decode_server_message<'py>(
             dict.set_item("type", "semantic_snapshot")?;
             dict.set_item("snapshot_json", snapshot_json)?;
         }
+        ServerMessage::FileTransferStarted {
+            id,
+            direction,
+            filename,
+            total_bytes,
+        } => {
+            dict.set_item("type", "file_transfer_started")?;
+            dict.set_item("id", id)?;
+            dict.set_item("direction", direction)?;
+            dict.set_item("filename", filename)?;
+            dict.set_item("total_bytes", total_bytes)?;
+        }
+        ServerMessage::FileTransferProgress {
+            id,
+            bytes_transferred,
+            total_bytes,
+        } => {
+            dict.set_item("type", "file_transfer_progress")?;
+            dict.set_item("id", id)?;
+            dict.set_item("bytes_transferred", bytes_transferred)?;
+            dict.set_item("total_bytes", total_bytes)?;
+        }
+        ServerMessage::FileTransferCompleted { id, filename, size } => {
+            dict.set_item("type", "file_transfer_completed")?;
+            dict.set_item("id", id)?;
+            dict.set_item("filename", filename)?;
+            dict.set_item("size", size)?;
+        }
+        ServerMessage::FileTransferFailed { id, reason } => {
+            dict.set_item("type", "file_transfer_failed")?;
+            dict.set_item("id", id)?;
+            dict.set_item("reason", reason)?;
+        }
+        ServerMessage::UploadRequested { format } => {
+            dict.set_item("type", "upload_requested")?;
+            dict.set_item("format", format)?;
+        }
     }
 
     Ok(dict)
@@ -1682,6 +1767,8 @@ pub fn encode_client_message<'py>(
                     "remote_host" => Some(EventType::RemoteHost),
                     "sub_shell" => Some(EventType::SubShell),
                     "snapshot" => Some(EventType::Snapshot),
+                    "file_transfer" => Some(EventType::FileTransfer),
+                    "upload_request" => Some(EventType::UploadRequest),
                     _ => None,
                 })
                 .collect();
@@ -1816,6 +1903,8 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::RemoteHost => "remote_host",
                     crate::streaming::protocol::EventType::SubShell => "sub_shell",
                     crate::streaming::protocol::EventType::Snapshot => "snapshot",
+                    crate::streaming::protocol::EventType::FileTransfer => "file_transfer",
+                    crate::streaming::protocol::EventType::UploadRequest => "upload_request",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;
