@@ -1454,6 +1454,10 @@ pub struct Terminal {
     bell_events: Vec<BellEvent>,
     /// Terminal events buffer
     terminal_events: Vec<TerminalEvent>,
+    /// Registered observers for push-based event delivery
+    observers: Vec<crate::observer::ObserverEntry>,
+    /// Next observer ID to assign (monotonically increasing)
+    next_observer_id: crate::observer::ObserverId,
     /// Next zone ID to assign (monotonically increasing)
     next_zone_id: usize,
     /// Last known hostname (for detecting remote host transitions)
@@ -1862,6 +1866,8 @@ impl Terminal {
             dirty_rows: HashSet::new(),
             bell_events: Vec::new(),
             terminal_events: Vec::new(),
+            observers: Vec::new(),
+            next_observer_id: 1,
             next_zone_id: 0,
             last_hostname: None,
             last_username: None,
@@ -2965,6 +2971,76 @@ impl Terminal {
         std::mem::take(&mut self.bell_events)
     }
 
+    // ========== Observer API ==========
+
+    /// Register an observer for push-based event delivery
+    ///
+    /// Returns a unique observer ID that can be used to remove the observer later.
+    /// Observers receive events after each `process()` call via their trait methods.
+    pub fn add_observer(
+        &mut self,
+        observer: std::sync::Arc<dyn crate::observer::TerminalObserver>,
+    ) -> crate::observer::ObserverId {
+        let id = self.next_observer_id;
+        self.next_observer_id += 1;
+        self.observers
+            .push(crate::observer::ObserverEntry { id, observer });
+        id
+    }
+
+    /// Remove a previously registered observer
+    ///
+    /// Returns true if the observer was found and removed, false if the ID was not found.
+    pub fn remove_observer(&mut self, id: crate::observer::ObserverId) -> bool {
+        let len_before = self.observers.len();
+        self.observers.retain(|entry| entry.id != id);
+        self.observers.len() < len_before
+    }
+
+    /// Returns the number of currently registered observers
+    pub fn observer_count(&self) -> usize {
+        self.observers.len()
+    }
+
+    /// Dispatch pending events to all registered observers
+    ///
+    /// Called internally after `process()` returns. Events remain in the buffer
+    /// for `poll_events()` backward compatibility.
+    fn dispatch_to_observers(&self) {
+        if self.observers.is_empty() {
+            return;
+        }
+
+        for event in &self.terminal_events {
+            let kind = Self::event_kind(event);
+            let category = crate::observer::event_category(event);
+
+            for entry in &self.observers {
+                // Check subscription filter
+                if let Some(subs) = entry.observer.subscriptions() {
+                    if !subs.contains(&kind) {
+                        continue;
+                    }
+                }
+
+                // Call category-specific method
+                match category {
+                    crate::observer::EventCategory::Zone => entry.observer.on_zone_event(event),
+                    crate::observer::EventCategory::Command => {
+                        entry.observer.on_command_event(event)
+                    }
+                    crate::observer::EventCategory::Environment => {
+                        entry.observer.on_environment_event(event)
+                    }
+                    crate::observer::EventCategory::Screen => entry.observer.on_screen_event(event),
+                }
+
+                // Always call catch-all
+                entry.observer.on_event(event);
+            }
+        }
+    }
+
     /// Drain all pending terminal events
     ///
     /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
@@ -3460,10 +3536,12 @@ impl Terminal {
                     }
                 }
             }
+            self.dispatch_to_observers();
             return;
         }
 
         self.process_vte_data(data);
+        self.dispatch_to_observers();
     }
 
     /// Process data through the VTE parser
