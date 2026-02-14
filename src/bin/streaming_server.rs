@@ -831,12 +831,62 @@ impl ServerState {
                             ),
                         );
                     }
-                    // File transfer events are handled locally, not streamed yet
-                    TerminalEvent::FileTransferStarted { .. }
-                    | TerminalEvent::FileTransferProgress { .. }
-                    | TerminalEvent::FileTransferCompleted { .. }
-                    | TerminalEvent::FileTransferFailed { .. }
-                    | TerminalEvent::UploadRequested { .. } => {}
+                    TerminalEvent::FileTransferStarted {
+                        id,
+                        direction,
+                        filename,
+                        total_bytes,
+                    } => {
+                        let dir_str = match direction {
+                            par_term_emu_core_rust::terminal::file_transfer::TransferDirection::Download => "download",
+                            par_term_emu_core_rust::terminal::file_transfer::TransferDirection::Upload => "upload",
+                        };
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_started(
+                                id,
+                                dir_str.to_string(),
+                                filename,
+                                total_bytes.map(|b| b as u64),
+                            ),
+                        );
+                    }
+                    TerminalEvent::FileTransferProgress {
+                        id,
+                        bytes_transferred,
+                        total_bytes,
+                    } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_progress(
+                                id,
+                                bytes_transferred as u64,
+                                total_bytes.map(|b| b as u64),
+                            ),
+                        );
+                    }
+                    TerminalEvent::FileTransferCompleted { id, filename, size } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_completed(
+                                id,
+                                filename,
+                                size as u64,
+                            ),
+                        );
+                    }
+                    TerminalEvent::FileTransferFailed { id, reason } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_failed(
+                                id,
+                                reason,
+                            ),
+                        );
+                    }
+                    TerminalEvent::UploadRequested { format } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::upload_requested(
+                                format,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -1391,12 +1441,67 @@ impl SessionFactory for BinarySessionFactory {
                                 ),
                             );
                         }
-                        // File transfer events are handled locally, not streamed yet
-                        TerminalEvent::FileTransferStarted { .. }
-                        | TerminalEvent::FileTransferProgress { .. }
-                        | TerminalEvent::FileTransferCompleted { .. }
-                        | TerminalEvent::FileTransferFailed { .. }
-                        | TerminalEvent::UploadRequested { .. } => {}
+                        TerminalEvent::FileTransferStarted {
+                            id,
+                            direction,
+                            filename,
+                            total_bytes,
+                        } => {
+                            let dir_str = match direction {
+                                par_term_emu_core_rust::terminal::file_transfer::TransferDirection::Download => "download",
+                                par_term_emu_core_rust::terminal::file_transfer::TransferDirection::Upload => "upload",
+                            };
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_started(
+                                    id,
+                                    dir_str.to_string(),
+                                    filename,
+                                    total_bytes.map(|b| b as u64),
+                                ),
+                            );
+                        }
+                        TerminalEvent::FileTransferProgress {
+                            id,
+                            bytes_transferred,
+                            total_bytes,
+                        } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_progress(
+                                    id,
+                                    bytes_transferred as u64,
+                                    total_bytes.map(|b| b as u64),
+                                ),
+                            );
+                        }
+                        TerminalEvent::FileTransferCompleted { id, filename, size } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_completed(
+                                    id,
+                                    filename,
+                                    size as u64,
+                                ),
+                            );
+                        }
+                        TerminalEvent::FileTransferFailed { id, reason } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::file_transfer_failed(
+                                    id,
+                                    reason,
+                                ),
+                            );
+                        }
+                        TerminalEvent::UploadRequested { format } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::upload_requested(
+                                    format,
+                                ),
+                            );
+                        }
                     }
                 }
             }
