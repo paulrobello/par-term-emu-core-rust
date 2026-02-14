@@ -83,9 +83,9 @@ class TestSyncObserver:
     def test_observer_count_with_multiple(self) -> None:
         term = Terminal(80, 24, scrollback=100)
         assert term.observer_count() == 0
-        id1 = term.add_observer(lambda e: None)
+        id1 = term.add_observer(lambda _e: None)
         assert term.observer_count() == 1
-        id2 = term.add_observer(lambda e: None)
+        id2 = term.add_observer(lambda _e: None)
         assert term.observer_count() == 2
         term.remove_observer(id1)
         assert term.observer_count() == 1
