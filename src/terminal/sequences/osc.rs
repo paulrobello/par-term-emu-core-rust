@@ -465,6 +465,16 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Zone: close any open zone, start new Prompt zone
+                                    if !self.alt_screen_active {
+                                        let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                                        self.grid.close_current_zone(close_row);
+                                        self.grid.push_zone(crate::zone::Zone::new(
+                                            crate::zone::ZoneType::Prompt,
+                                            abs_line,
+                                            Some(ts),
+                                        ));
+                                    }
                                 }
                                 Some('B') => {
                                     self.shell_integration
@@ -481,6 +491,19 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Zone: close Prompt zone, start Command zone
+                                    if !self.alt_screen_active {
+                                        let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                                        self.grid.close_current_zone(close_row);
+                                        let mut zone = crate::zone::Zone::new(
+                                            crate::zone::ZoneType::Command,
+                                            abs_line,
+                                            Some(ts),
+                                        );
+                                        zone.command =
+                                            self.shell_integration.command().map(|s| s.to_string());
+                                        self.grid.push_zone(zone);
+                                    }
                                 }
                                 Some('C') => {
                                     self.shell_integration
@@ -497,6 +520,19 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Zone: close Command zone, start Output zone
+                                    if !self.alt_screen_active {
+                                        let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
+                                        self.grid.close_current_zone(close_row);
+                                        let mut zone = crate::zone::Zone::new(
+                                            crate::zone::ZoneType::Output,
+                                            abs_line,
+                                            Some(ts),
+                                        );
+                                        zone.command =
+                                            self.shell_integration.command().map(|s| s.to_string());
+                                        self.grid.push_zone(zone);
+                                    }
                                 }
                                 Some('D') => {
                                     self.shell_integration
@@ -523,6 +559,16 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Zone: close Output zone, record exit code
+                                    if !self.alt_screen_active {
+                                        self.grid.close_current_zone(abs_line);
+                                        // Set exit code on the just-closed Output zone
+                                        if let Some(zone) = self.grid.zones_mut().last_mut() {
+                                            if zone.zone_type == crate::zone::ZoneType::Output {
+                                                zone.exit_code = parsed_code;
+                                            }
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
