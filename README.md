@@ -33,6 +33,12 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 **Screenshot Improvements:**
 - Synthetic bold rendering via swash `embolden()`, font load failure logging
 
+**Observer API (Scripting & Automation):**
+- **Push-Based Event Delivery** - Register sync callbacks or async queues to receive terminal events as they occur during `process()` calls, eliminating polling
+- **Event Filtering** - Subscribe to specific event types (e.g., `bell`, `title_changed`, `cwd_changed`) to receive only relevant events
+- **Async Support** - `add_async_observer()` returns an `asyncio.Queue` for integration with async/await code
+- **Convenience Wrappers** - `on_bell()`, `on_title_change()`, `on_cwd_change()`, `on_command_complete()`, `on_zone_change()` for common patterns
+
 **Python Bindings:**
 - **`StreamingServer.send_cwd_changed()`** - Broadcast working directory change events to all connected clients
 - **`StreamingServer.send_trigger_matched()`** - Broadcast trigger match events to all connected clients
@@ -1054,6 +1060,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Kitty Keyboard Protocol** - Progressive keyboard enhancement with auto-reset on alternate screen exit
 - **Synchronized Updates (DEC 2026)** - Flicker-free rendering
 - **Tmux Control Protocol** - Control mode integration support
+- **Observer API** - Push-based event delivery with sync callbacks and async queues; convenience wrappers for common patterns (bell, title, CWD, command completion, zone changes)
 
 ### Graphics Support
 

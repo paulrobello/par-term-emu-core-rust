@@ -53,6 +53,8 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Content Search](#content-search)
   - [Buffer Statistics](#buffer-statistics)
   - [Static Utility Methods](#static-utility-methods)
+  - [Observer API](#observer-api)
+- [Observer Convenience Functions](#observer-convenience-functions)
 - [PtyTerminal Class](#ptyterminal-class)
   - [Process Management](#process-management)
   - [I/O Operations](#io-operations)
@@ -810,6 +812,97 @@ Call these on the class itself (e.g., `Terminal.strip_ansi(text)`):
 - `Terminal.rgb_to_hsv_color(rgb: tuple[int, int, int]) -> ColorHSV`: Convert RGB to HSV color representation
 - `Terminal.hsl_to_rgb_color(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
 - `Terminal.hsv_to_rgb_color(h: int, s: int, v: int) -> tuple[int, int, int]`: Convert HSV to RGB
+
+### Observer API
+
+Push-based event delivery for terminal state changes. Observers receive event dicts as they occur during `process()` calls, eliminating the need to poll for events.
+
+#### Registration Methods
+
+- `add_observer(callback, kinds=None) -> int`: Register a synchronous observer callback. The callback receives a `dict` for each matching event. Returns a unique observer ID.
+  - `callback` (`Callable[[dict], None]`): Python callable accepting a single dict argument.
+  - `kinds` (`list[str] | None`): Optional list of event type strings to filter on. When `None`, all events are delivered.
+- `add_async_observer(kinds=None) -> tuple[int, asyncio.Queue]`: Register an async observer backed by an `asyncio.Queue`. Events are pushed via `put_nowait()`. Returns `(observer_id, queue)`.
+  - `kinds` (`list[str] | None`): Optional list of event type strings to filter on.
+- `remove_observer(observer_id) -> bool`: Remove a previously registered observer. Returns `True` if the observer was found and removed.
+  - `observer_id` (`int`): The ID returned by `add_observer()` or `add_async_observer()`.
+- `observer_count() -> int`: Get the number of currently registered observers.
+
+#### Event Dict Format
+
+All observer events are delivered as Python dicts with a `"type"` key identifying the event kind. The remaining keys depend on the event type.
+
+**Supported event types:**
+
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`
+
+#### Examples
+
+**Synchronous observer:**
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+def on_event(event: dict) -> None:
+    print(f"Event: {event['type']}")
+
+# Observe all events
+obs_id = term.add_observer(on_event)
+
+# Observe specific event types only
+obs_id = term.add_observer(on_event, kinds=["bell", "title_changed"])
+
+# Process data — observer callback fires inline
+term.process(b"\x07")  # BEL triggers bell event
+
+# Remove when done
+term.remove_observer(obs_id)
+```
+
+**Async observer with asyncio.Queue:**
+```python
+import asyncio
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+obs_id, queue = term.add_async_observer(kinds=["title_changed"])
+
+term.process(b"\x1b]0;Hello\x07")  # Set title
+
+event = queue.get_nowait()
+print(event["type"])  # "title_changed"
+
+term.remove_observer(obs_id)
+```
+
+## Observer Convenience Functions
+
+The `par_term_emu_core_rust.observers` module provides convenience wrappers that register observers for common event patterns. All functions return an observer ID for later removal via `terminal.remove_observer()`.
+
+These functions are also available as top-level imports from the package.
+
+- `on_command_complete(terminal, callback) -> int`: Register callback for command completion events. Fires when a shell integration `command_finished` event is received (OSC 133;D). Internally subscribes to `shell_integration` events and filters for `command_finished`.
+- `on_zone_change(terminal, callback) -> int`: Register callback for zone lifecycle events. Fires on `zone_opened`, `zone_closed`, and `zone_scrolled_out` events.
+- `on_cwd_change(terminal, callback) -> int`: Register callback for working directory changes. Fires when OSC 7 updates the current working directory (`cwd_changed` events).
+- `on_title_change(terminal, callback) -> int`: Register callback for terminal title changes. Fires when OSC 0/2 updates the terminal title (`title_changed` events).
+- `on_bell(terminal, callback) -> int`: Register callback for bell events. Fires when BEL (0x07) or other bell sequences are processed (`bell` events).
+
+**Example:**
+```python
+from par_term_emu_core_rust import Terminal, on_bell, on_title_change
+
+term = Terminal(80, 24)
+
+bell_id = on_bell(term, lambda event: print("Bell!"))
+title_id = on_title_change(term, lambda event: print(f"Title: {event.get('title')}"))
+
+term.process(b"\x07")               # Prints: Bell!
+term.process(b"\x1b]0;My Title\x07")  # Prints: Title: My Title
+
+term.remove_observer(bell_id)
+term.remove_observer(title_id)
+```
 
 ## PtyTerminal Class
 
