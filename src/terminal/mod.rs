@@ -918,6 +918,12 @@ struct ITermMultipartState {
     total_size: Option<usize>,
     /// Current accumulated size (sum of decoded chunks)
     accumulated_size: usize,
+    /// Whether this multipart transfer is a file transfer (not inline image)
+    #[allow(dead_code)] // Used in Task 4 (graphics handler rewrite)
+    is_file_transfer: bool,
+    /// Transfer ID if this is a file transfer (from FileTransferManager)
+    #[allow(dead_code)] // Used in Task 4 (graphics handler rewrite)
+    transfer_id: Option<u64>,
 }
 
 /// Image placement action
@@ -1414,6 +1420,8 @@ pub struct Terminal {
     dcs_action: Option<char>,
     /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
     iterm_multipart_buffer: Option<ITermMultipartState>,
+    /// File transfer manager for tracking file downloads and uploads
+    file_transfer_manager: FileTransferManager,
     /// Clipboard content (OSC 52)
     clipboard_content: Option<String>,
     /// Allow clipboard read operations (security flag for OSC 52 queries)
@@ -1863,6 +1871,7 @@ impl Terminal {
             dcs_active: false,
             dcs_action: None,
             iterm_multipart_buffer: None,
+            file_transfer_manager: FileTransferManager::default(),
             clipboard_content: None,
             allow_clipboard_read: false,
             default_fg: Color::Named(NamedColor::White),
@@ -3266,6 +3275,58 @@ impl Terminal {
                 self.pending_trigger_rows.insert(row);
             }
         }
+    }
+
+    // ========== File Transfer API ==========
+
+    /// Get a list of all active (in-progress) file transfers
+    pub fn get_active_transfers(&self) -> Vec<&FileTransfer> {
+        self.file_transfer_manager.active_transfers()
+    }
+
+    /// Get a reference to the completed transfers ring buffer
+    pub fn get_completed_transfers(&self) -> &[FileTransfer] {
+        self.file_transfer_manager.completed_transfers()
+    }
+
+    /// Get a reference to a file transfer by ID (active transfers only)
+    pub fn get_transfer(&self, id: TransferId) -> Option<&FileTransfer> {
+        self.file_transfer_manager.get_transfer(id)
+    }
+
+    /// Take a completed transfer by ID, removing it from the completed buffer
+    ///
+    /// Returns `None` if no completed transfer with the given ID exists.
+    pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
+        self.file_transfer_manager.take_completed_transfer(id)
+    }
+
+    /// Cancel an active file transfer
+    ///
+    /// Returns `true` if the transfer was found and cancelled, `false` otherwise.
+    /// On success, emits a `FileTransferFailed` event with reason "cancelled".
+    pub fn cancel_file_transfer(&mut self, id: TransferId) -> bool {
+        match self.file_transfer_manager.cancel_transfer(id) {
+            Ok(()) => {
+                self.terminal_events
+                    .push(TerminalEvent::FileTransferFailed {
+                        id,
+                        reason: "cancelled".to_string(),
+                    });
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Set the maximum allowed file transfer size in bytes
+    pub fn set_max_transfer_size(&mut self, bytes: usize) {
+        self.file_transfer_manager.set_max_transfer_size(bytes);
+    }
+
+    /// Get the current maximum allowed file transfer size in bytes
+    pub fn get_max_transfer_size(&self) -> usize {
+        self.file_transfer_manager.max_transfer_size()
     }
 
     // ========== Mode Introspection ==========

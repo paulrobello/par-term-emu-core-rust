@@ -300,6 +300,8 @@ impl Terminal {
             chunks: Vec::new(),
             total_size,
             accumulated_size: 0,
+            is_file_transfer: false,
+            transfer_id: None,
         });
     }
 
