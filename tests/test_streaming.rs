@@ -1719,6 +1719,154 @@ mod streaming_tests {
             assert_eq!(deserialized, EventType::SystemStats);
         }
     }
+
+    // =========================================================================
+    // Contextual Awareness Event Serialization Tests
+    // =========================================================================
+
+    mod contextual_awareness_tests {
+        use super::*;
+
+        #[test]
+        fn test_zone_opened_serialization() {
+            let msg = ServerMessage::zone_opened(42, "prompt".to_string(), 100);
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"zone_opened"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::ZoneOpened {
+                    zone_id,
+                    zone_type,
+                    abs_row_start,
+                } => {
+                    assert_eq!(zone_id, 42);
+                    assert_eq!(zone_type, "prompt");
+                    assert_eq!(abs_row_start, 100);
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_zone_closed_serialization() {
+            let msg = ServerMessage::zone_closed(1, "output".to_string(), 10, 50, Some(0));
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"zone_closed"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::ZoneClosed {
+                    zone_id,
+                    zone_type,
+                    abs_row_start,
+                    abs_row_end,
+                    exit_code,
+                } => {
+                    assert_eq!(zone_id, 1);
+                    assert_eq!(zone_type, "output");
+                    assert_eq!(abs_row_start, 10);
+                    assert_eq!(abs_row_end, 50);
+                    assert_eq!(exit_code, Some(0));
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_zone_scrolled_out_serialization() {
+            let msg = ServerMessage::zone_scrolled_out(5, "command".to_string());
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"zone_scrolled_out"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::ZoneScrolledOut { zone_id, zone_type } => {
+                    assert_eq!(zone_id, 5);
+                    assert_eq!(zone_type, "command");
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_environment_changed_serialization() {
+            let msg = ServerMessage::environment_changed(
+                "cwd".to_string(),
+                "/new/path".to_string(),
+                Some("/old/path".to_string()),
+            );
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"environment_changed"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::EnvironmentChanged {
+                    key,
+                    value,
+                    old_value,
+                } => {
+                    assert_eq!(key, "cwd");
+                    assert_eq!(value, "/new/path");
+                    assert_eq!(old_value, Some("/old/path".to_string()));
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_remote_host_transition_serialization() {
+            let msg = ServerMessage::remote_host_transition(
+                "server.com".to_string(),
+                Some("deploy".to_string()),
+                Some("localhost".to_string()),
+                Some("user".to_string()),
+            );
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"remote_host_transition"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::RemoteHostTransition {
+                    hostname,
+                    username,
+                    old_hostname,
+                    old_username,
+                } => {
+                    assert_eq!(hostname, "server.com");
+                    assert_eq!(username, Some("deploy".to_string()));
+                    assert_eq!(old_hostname, Some("localhost".to_string()));
+                    assert_eq!(old_username, Some("user".to_string()));
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_sub_shell_detected_serialization() {
+            let msg = ServerMessage::sub_shell_detected(2, Some("bash".to_string()));
+            let json = serde_json::to_string(&msg).unwrap();
+            assert!(json.contains(r#""type":"sub_shell_detected"#));
+            let deserialized: ServerMessage = serde_json::from_str(&json).unwrap();
+            match deserialized {
+                ServerMessage::SubShellDetected { depth, shell_type } => {
+                    assert_eq!(depth, 2);
+                    assert_eq!(shell_type, Some("bash".to_string()));
+                }
+                _ => panic!("Wrong message type"),
+            }
+        }
+
+        #[test]
+        fn test_new_event_types_serialization() {
+            let events = vec![
+                EventType::Zone,
+                EventType::Environment,
+                EventType::RemoteHost,
+                EventType::SubShell,
+            ];
+            let json = serde_json::to_string(&events).unwrap();
+            assert!(json.contains(r#""zone"#));
+            assert!(json.contains(r#""environment"#));
+            assert!(json.contains(r#""remote_host"#));
+            assert!(json.contains(r#""sub_shell"#));
+        }
+    }
 }
 
 // Tests that work without streaming feature
