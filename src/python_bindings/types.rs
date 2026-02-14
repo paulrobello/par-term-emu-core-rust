@@ -2488,6 +2488,10 @@ pub struct PyCommandExecution {
     pub duration_ms: Option<u64>,
     #[pyo3(get)]
     pub success: Option<bool>,
+    #[pyo3(get)]
+    pub output_start_row: Option<usize>,
+    #[pyo3(get)]
+    pub output_end_row: Option<usize>,
 }
 
 #[pymethods]
@@ -2510,6 +2514,8 @@ impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
             exit_code: cmd.exit_code,
             duration_ms: cmd.duration_ms,
             success: cmd.success,
+            output_start_row: cmd.output_start_row,
+            output_end_row: cmd.output_end_row,
         }
     }
 }
