@@ -3327,6 +3327,28 @@ impl Terminal {
         self.file_transfer_manager.max_transfer_size()
     }
 
+    /// Send upload data in response to a `RequestUpload` event
+    ///
+    /// Writes the iTerm2 upload response protocol to the response buffer:
+    /// `"ok\n" + base64(data) + "\n\n"`
+    ///
+    /// The frontend should call this after the user selects a file in response
+    /// to an `UploadRequested` event.
+    pub fn send_upload_data(&mut self, data: &[u8]) {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        let response = format!("ok\n{}\n\n", encoded);
+        self.response_buffer.extend_from_slice(response.as_bytes());
+    }
+
+    /// Cancel an upload request
+    ///
+    /// Writes a Ctrl-C (0x03) to the response buffer to signal cancellation
+    /// of the upload request to the remote application.
+    pub fn cancel_upload(&mut self) {
+        self.response_buffer.push(0x03);
+    }
+
     // ========== Mode Introspection ==========
 
     /// Get auto-wrap mode (DECAWM)
