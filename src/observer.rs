@@ -44,7 +44,7 @@ pub trait TerminalObserver: Send + Sync {
     fn on_event(&self, _event: &TerminalEvent) {}
 
     /// Which event kinds this observer is interested in (None = all)
-    fn subscriptions(&self) -> Option<HashSet<TerminalEventKind>> {
+    fn subscriptions(&self) -> Option<&HashSet<TerminalEventKind>> {
         None
     }
 }

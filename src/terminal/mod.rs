@@ -3023,20 +3023,26 @@ impl Terminal {
                     }
                 }
 
-                // Call category-specific method
-                match category {
-                    crate::observer::EventCategory::Zone => entry.observer.on_zone_event(event),
-                    crate::observer::EventCategory::Command => {
-                        entry.observer.on_command_event(event)
+                // Wrap observer calls in catch_unwind to prevent one bad observer
+                // from crashing the terminal or blocking other observers
+                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Call category-specific method
+                    match category {
+                        crate::observer::EventCategory::Zone => entry.observer.on_zone_event(event),
+                        crate::observer::EventCategory::Command => {
+                            entry.observer.on_command_event(event)
+                        }
+                        crate::observer::EventCategory::Environment => {
+                            entry.observer.on_environment_event(event)
+                        }
+                        crate::observer::EventCategory::Screen => {
+                            entry.observer.on_screen_event(event)
+                        }
                     }
-                    crate::observer::EventCategory::Environment => {
-                        entry.observer.on_environment_event(event)
-                    }
-                    crate::observer::EventCategory::Screen => entry.observer.on_screen_event(event),
-                }
 
-                // Always call catch-all
-                entry.observer.on_event(event);
+                    // Always call catch-all
+                    entry.observer.on_event(event);
+                }));
             }
         }
     }
