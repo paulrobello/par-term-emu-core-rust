@@ -31,6 +31,8 @@ impl std::fmt::Display for ZoneType {
 /// Vec on the Grid, sorted by `abs_row_start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Zone {
+    /// Unique zone identifier (monotonically increasing per terminal)
+    pub id: usize,
     /// Type of this zone
     pub zone_type: ZoneType,
     /// Absolute row where this zone starts (scrollback_len + cursor.row at creation)
@@ -48,8 +50,9 @@ pub struct Zone {
 
 impl Zone {
     /// Create a new zone starting at the given absolute row
-    pub fn new(zone_type: ZoneType, abs_row: usize, timestamp: Option<u64>) -> Self {
+    pub fn new(id: usize, zone_type: ZoneType, abs_row: usize, timestamp: Option<u64>) -> Self {
         Self {
+            id,
             zone_type,
             abs_row_start: abs_row,
             abs_row_end: abs_row,
@@ -76,7 +79,8 @@ mod tests {
 
     #[test]
     fn test_zone_new() {
-        let zone = Zone::new(ZoneType::Prompt, 10, Some(1000));
+        let zone = Zone::new(0, ZoneType::Prompt, 10, Some(1000));
+        assert_eq!(zone.id, 0);
         assert_eq!(zone.zone_type, ZoneType::Prompt);
         assert_eq!(zone.abs_row_start, 10);
         assert_eq!(zone.abs_row_end, 10);
@@ -87,28 +91,28 @@ mod tests {
 
     #[test]
     fn test_zone_close() {
-        let mut zone = Zone::new(ZoneType::Output, 5, None);
+        let mut zone = Zone::new(1, ZoneType::Output, 5, None);
         zone.close(15);
         assert_eq!(zone.abs_row_end, 15);
     }
 
     #[test]
     fn test_zone_close_same_row() {
-        let mut zone = Zone::new(ZoneType::Prompt, 5, None);
+        let mut zone = Zone::new(2, ZoneType::Prompt, 5, None);
         zone.close(5);
         assert_eq!(zone.abs_row_end, 5);
     }
 
     #[test]
     fn test_zone_close_clamps_to_start() {
-        let mut zone = Zone::new(ZoneType::Command, 10, None);
+        let mut zone = Zone::new(3, ZoneType::Command, 10, None);
         zone.close(3);
         assert_eq!(zone.abs_row_end, 10);
     }
 
     #[test]
     fn test_zone_contains_row() {
-        let mut zone = Zone::new(ZoneType::Output, 5, None);
+        let mut zone = Zone::new(4, ZoneType::Output, 5, None);
         zone.close(15);
         assert!(!zone.contains_row(4));
         assert!(zone.contains_row(5));

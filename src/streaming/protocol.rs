@@ -400,6 +400,80 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         timestamp: Option<u64>,
     },
+
+    /// Zone opened (prompt, command, or output block started)
+    #[serde(rename = "zone_opened")]
+    ZoneOpened {
+        /// Unique zone identifier
+        zone_id: u64,
+        /// Zone type: "prompt", "command", "output"
+        zone_type: String,
+        /// Absolute row where zone starts
+        abs_row_start: u64,
+    },
+
+    /// Zone closed (prompt, command, or output block ended)
+    #[serde(rename = "zone_closed")]
+    ZoneClosed {
+        /// Unique zone identifier
+        zone_id: u64,
+        /// Zone type
+        zone_type: String,
+        /// Absolute row where zone starts
+        abs_row_start: u64,
+        /// Absolute row where zone ends
+        abs_row_end: u64,
+        /// Exit code (for output zones only)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit_code: Option<i32>,
+    },
+
+    /// Zone evicted from scrollback
+    #[serde(rename = "zone_scrolled_out")]
+    ZoneScrolledOut {
+        /// Unique zone identifier
+        zone_id: u64,
+        /// Zone type
+        zone_type: String,
+    },
+
+    /// Environment variable changed
+    #[serde(rename = "environment_changed")]
+    EnvironmentChanged {
+        /// Key that changed ("cwd", "hostname", "username")
+        key: String,
+        /// New value
+        value: String,
+        /// Previous value
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_value: Option<String>,
+    },
+
+    /// Remote host transition detected
+    #[serde(rename = "remote_host_transition")]
+    RemoteHostTransition {
+        /// New hostname
+        hostname: String,
+        /// New username
+        #[serde(skip_serializing_if = "Option::is_none")]
+        username: Option<String>,
+        /// Previous hostname
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_hostname: Option<String>,
+        /// Previous username
+        #[serde(skip_serializing_if = "Option::is_none")]
+        old_username: Option<String>,
+    },
+
+    /// Sub-shell detected
+    #[serde(rename = "sub_shell_detected")]
+    SubShellDetected {
+        /// Current shell nesting depth
+        depth: u64,
+        /// Shell type if known
+        #[serde(skip_serializing_if = "Option::is_none")]
+        shell_type: Option<String>,
+    },
 }
 
 /// Messages sent from client to server
@@ -533,6 +607,16 @@ pub enum EventType {
     /// System resource statistics events
     #[serde(rename = "system_stats")]
     SystemStats,
+    /// Zone events (opened, closed, scrolled out)
+    Zone,
+    /// Environment change events
+    Environment,
+    /// Remote host transition events
+    #[serde(rename = "remote_host")]
+    RemoteHost,
+    /// Sub-shell detection events
+    #[serde(rename = "sub_shell")]
+    SubShell,
 }
 
 impl ServerMessage {
@@ -944,6 +1028,66 @@ impl ServerMessage {
             uptime_secs,
             timestamp,
         }
+    }
+
+    /// Create a zone opened message
+    pub fn zone_opened(zone_id: u64, zone_type: String, abs_row_start: u64) -> Self {
+        Self::ZoneOpened {
+            zone_id,
+            zone_type,
+            abs_row_start,
+        }
+    }
+
+    /// Create a zone closed message
+    pub fn zone_closed(
+        zone_id: u64,
+        zone_type: String,
+        abs_row_start: u64,
+        abs_row_end: u64,
+        exit_code: Option<i32>,
+    ) -> Self {
+        Self::ZoneClosed {
+            zone_id,
+            zone_type,
+            abs_row_start,
+            abs_row_end,
+            exit_code,
+        }
+    }
+
+    /// Create a zone scrolled out message
+    pub fn zone_scrolled_out(zone_id: u64, zone_type: String) -> Self {
+        Self::ZoneScrolledOut { zone_id, zone_type }
+    }
+
+    /// Create an environment changed message
+    pub fn environment_changed(key: String, value: String, old_value: Option<String>) -> Self {
+        Self::EnvironmentChanged {
+            key,
+            value,
+            old_value,
+        }
+    }
+
+    /// Create a remote host transition message
+    pub fn remote_host_transition(
+        hostname: String,
+        username: Option<String>,
+        old_hostname: Option<String>,
+        old_username: Option<String>,
+    ) -> Self {
+        Self::RemoteHostTransition {
+            hostname,
+            username,
+            old_hostname,
+            old_username,
+        }
+    }
+
+    /// Create a sub-shell detected message
+    pub fn sub_shell_detected(depth: u64, shell_type: Option<String>) -> Self {
+        Self::SubShellDetected { depth, shell_type }
     }
 
     /// Create a progress bar changed message from terminal event data

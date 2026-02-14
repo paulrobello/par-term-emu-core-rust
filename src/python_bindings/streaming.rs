@@ -1529,6 +1529,62 @@ pub fn decode_server_message<'py>(
             dict.set_item("uptime_secs", uptime_secs)?;
             dict.set_item("timestamp", timestamp)?;
         }
+        ServerMessage::ZoneOpened {
+            zone_id,
+            zone_type,
+            abs_row_start,
+        } => {
+            dict.set_item("type", "zone_opened")?;
+            dict.set_item("zone_id", zone_id)?;
+            dict.set_item("zone_type", zone_type)?;
+            dict.set_item("abs_row_start", abs_row_start)?;
+        }
+        ServerMessage::ZoneClosed {
+            zone_id,
+            zone_type,
+            abs_row_start,
+            abs_row_end,
+            exit_code,
+        } => {
+            dict.set_item("type", "zone_closed")?;
+            dict.set_item("zone_id", zone_id)?;
+            dict.set_item("zone_type", zone_type)?;
+            dict.set_item("abs_row_start", abs_row_start)?;
+            dict.set_item("abs_row_end", abs_row_end)?;
+            dict.set_item("exit_code", exit_code)?;
+        }
+        ServerMessage::ZoneScrolledOut { zone_id, zone_type } => {
+            dict.set_item("type", "zone_scrolled_out")?;
+            dict.set_item("zone_id", zone_id)?;
+            dict.set_item("zone_type", zone_type)?;
+        }
+        ServerMessage::EnvironmentChanged {
+            key,
+            value,
+            old_value,
+        } => {
+            dict.set_item("type", "environment_changed")?;
+            dict.set_item("key", key)?;
+            dict.set_item("value", value)?;
+            dict.set_item("old_value", old_value)?;
+        }
+        ServerMessage::RemoteHostTransition {
+            hostname,
+            username,
+            old_hostname,
+            old_username,
+        } => {
+            dict.set_item("type", "remote_host_transition")?;
+            dict.set_item("hostname", hostname)?;
+            dict.set_item("username", username)?;
+            dict.set_item("old_hostname", old_hostname)?;
+            dict.set_item("old_username", old_username)?;
+        }
+        ServerMessage::SubShellDetected { depth, shell_type } => {
+            dict.set_item("type", "sub_shell_detected")?;
+            dict.set_item("depth", depth)?;
+            dict.set_item("shell_type", shell_type)?;
+        }
     }
 
     Ok(dict)
@@ -1617,6 +1673,10 @@ pub fn encode_client_message<'py>(
                     "clipboard" => Some(EventType::Clipboard),
                     "shell" => Some(EventType::Shell),
                     "system_stats" => Some(EventType::SystemStats),
+                    "zone" => Some(EventType::Zone),
+                    "environment" => Some(EventType::Environment),
+                    "remote_host" => Some(EventType::RemoteHost),
+                    "sub_shell" => Some(EventType::SubShell),
                     _ => None,
                 })
                 .collect();
@@ -1736,6 +1796,10 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Clipboard => "clipboard",
                     crate::streaming::protocol::EventType::Shell => "shell",
                     crate::streaming::protocol::EventType::SystemStats => "system_stats",
+                    crate::streaming::protocol::EventType::Zone => "zone",
+                    crate::streaming::protocol::EventType::Environment => "environment",
+                    crate::streaming::protocol::EventType::RemoteHost => "remote_host",
+                    crate::streaming::protocol::EventType::SubShell => "sub_shell",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

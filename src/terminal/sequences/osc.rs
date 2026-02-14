@@ -465,15 +465,57 @@ impl Terminal {
                                             cursor_line: Some(abs_line),
                                         },
                                     );
+                                    // Sub-shell detection: if we see a new prompt while
+                                    // inside command output, a sub-shell was spawned
+                                    if self.in_command_output && self.shell_depth > 0 {
+                                        self.shell_depth += 1;
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::SubShellDetected {
+                                                depth: self.shell_depth,
+                                                shell_type: None,
+                                            },
+                                        );
+                                    } else if self.shell_depth == 0 {
+                                        self.shell_depth = 1;
+                                    }
+                                    self.in_command_output = false;
                                     // Zone: close any open zone, start new Prompt zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         self.grid.push_zone(crate::zone::Zone::new(
+                                            zone_id,
                                             crate::zone::ZoneType::Prompt,
                                             abs_line,
                                             Some(ts),
                                         ));
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Prompt,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
                                 }
                                 Some('B') => {
@@ -494,8 +536,29 @@ impl Terminal {
                                     // Zone: close Prompt zone, start Command zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         let mut zone = crate::zone::Zone::new(
+                                            zone_id,
                                             crate::zone::ZoneType::Command,
                                             abs_line,
                                             Some(ts),
@@ -503,6 +566,13 @@ impl Terminal {
                                         zone.command =
                                             self.shell_integration.command().map(|s| s.to_string());
                                         self.grid.push_zone(zone);
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Command,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
                                 }
                                 Some('C') => {
@@ -523,8 +593,29 @@ impl Terminal {
                                     // Zone: close Command zone, start Output zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         let mut zone = crate::zone::Zone::new(
+                                            zone_id,
                                             crate::zone::ZoneType::Output,
                                             abs_line,
                                             Some(ts),
@@ -532,7 +623,16 @@ impl Terminal {
                                         zone.command =
                                             self.shell_integration.command().map(|s| s.to_string());
                                         self.grid.push_zone(zone);
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Output,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
+                                    // Mark that we're inside command output
+                                    self.in_command_output = true;
                                 }
                                 Some('D') => {
                                     self.shell_integration
@@ -561,6 +661,12 @@ impl Terminal {
                                     );
                                     // Zone: close Output zone, record exit code
                                     if !self.alt_screen_active {
+                                        // Capture zone info before closing
+                                        let closed_info = self
+                                            .grid
+                                            .zones()
+                                            .last()
+                                            .map(|z| (z.id, z.zone_type, z.abs_row_start));
                                         self.grid.close_current_zone(abs_line);
                                         // Set exit code on the just-closed Output zone
                                         if let Some(zone) = self.grid.zones_mut().last_mut() {
@@ -568,6 +674,29 @@ impl Terminal {
                                                 zone.exit_code = parsed_code;
                                             }
                                         }
+                                        // Emit ZoneClosed
+                                        if let Some((id, zt, start)) = closed_info {
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: id,
+                                                    zone_type: zt,
+                                                    abs_row_start: start,
+                                                    abs_row_end: abs_line,
+                                                    exit_code: parsed_code,
+                                                },
+                                            );
+                                        }
+                                    }
+                                    // Sub-shell detection: leaving command output
+                                    self.in_command_output = false;
+                                    if self.shell_depth > 1 {
+                                        self.shell_depth -= 1;
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::SubShellDetected {
+                                                depth: self.shell_depth,
+                                                shell_type: None,
+                                            },
+                                        );
                                     }
                                 }
                                 _ => {}
@@ -2665,5 +2794,188 @@ mod tests {
         term.end_command_execution(0);
         // output_start_row/output_end_row should be None since last zone is Prompt, not Output
         assert!(term.get_command_output(0).is_none());
+    }
+
+    // ========== Contextual Awareness Event Tests ==========
+
+    #[test]
+    fn test_zone_opened_events_emitted() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]133;A\x1b\\");
+        let events = term.poll_events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            crate::terminal::TerminalEvent::ZoneOpened {
+                zone_type,
+                ..
+            } if *zone_type == crate::zone::ZoneType::Prompt
+        )));
+    }
+
+    #[test]
+    fn test_zone_closed_on_transition() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]133;A\x1b\\");
+        term.poll_events(); // drain
+        term.process(b"\x1b]133;B\x1b\\");
+        let events = term.poll_events();
+        // Should have ZoneClosed for prompt and ZoneOpened for command
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::ZoneClosed {
+                    zone_type,
+                    ..
+                } if *zone_type == crate::zone::ZoneType::Prompt
+            )),
+            "Expected ZoneClosed for Prompt"
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::ZoneOpened {
+                    zone_type,
+                    ..
+                } if *zone_type == crate::zone::ZoneType::Command
+            )),
+            "Expected ZoneOpened for Command"
+        );
+    }
+
+    #[test]
+    fn test_zone_closed_with_exit_code() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]133;A\x1b\\");
+        term.process(b"\x1b]133;B\x1b\\");
+        term.process(b"\x1b]133;C\x1b\\");
+        term.poll_events(); // drain
+        term.process(b"\x1b]133;D;0\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::ZoneClosed {
+                    zone_type,
+                    exit_code: Some(0),
+                    ..
+                } if *zone_type == crate::zone::ZoneType::Output
+            )),
+            "Expected ZoneClosed for Output with exit_code=0"
+        );
+    }
+
+    #[test]
+    fn test_zone_ids_monotonically_increase() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]133;A\x1b\\"); // zone 0 (Prompt)
+        term.process(b"\x1b]133;B\x1b\\"); // zone 1 (Command)
+        term.process(b"\x1b]133;C\x1b\\"); // zone 2 (Output)
+        let events = term.poll_events();
+        let zone_ids: Vec<usize> = events
+            .iter()
+            .filter_map(|e| match e {
+                crate::terminal::TerminalEvent::ZoneOpened { zone_id, .. } => Some(*zone_id),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(zone_ids, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_full_zone_lifecycle() {
+        let mut term = Terminal::new(80, 24);
+        // Full cycle: A -> B -> C -> D
+        term.process(b"\x1b]133;A\x1b\\");
+        term.process(b"\x1b]133;B\x1b\\");
+        term.process(b"\x1b]133;C\x1b\\");
+        term.process(b"\x1b]133;D;0\x1b\\");
+        let events = term.poll_events();
+
+        // Count opens and closes
+        let opens: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ZoneOpened { .. }))
+            .collect();
+        let closes: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, crate::terminal::TerminalEvent::ZoneClosed { .. }))
+            .collect();
+
+        // 3 opens (Prompt, Command, Output), 3 closes (Prompt, Command, Output)
+        assert_eq!(opens.len(), 3, "Expected 3 ZoneOpened events");
+        assert_eq!(closes.len(), 3, "Expected 3 ZoneClosed events");
+    }
+
+    // ========== Environment Change Event Tests ==========
+
+    #[test]
+    fn test_environment_changed_on_cwd() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]7;file:///home/user/project\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::EnvironmentChanged {
+                    key,
+                    value,
+                    ..
+                } if key == "cwd" && value == "/home/user/project"
+            )),
+            "Expected EnvironmentChanged event for cwd"
+        );
+    }
+
+    #[test]
+    fn test_remote_host_transition_from_osc7() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]7;file://remotehost/home/user\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::RemoteHostTransition {
+                    hostname,
+                    old_hostname: None,
+                    ..
+                } if hostname == "remotehost"
+            )),
+            "Expected RemoteHostTransition event from OSC 7"
+        );
+    }
+
+    #[test]
+    fn test_remote_host_transition_from_osc1337() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]1337;RemoteHost=alice@server1\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::RemoteHostTransition {
+                    hostname,
+                    ..
+                } if hostname == "server1"
+            )),
+            "Expected RemoteHostTransition event from OSC 1337"
+        );
+    }
+
+    #[test]
+    fn test_environment_changed_hostname() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b]7;file://myhost/home/user\x1b\\");
+        let events = term.poll_events();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                crate::terminal::TerminalEvent::EnvironmentChanged {
+                    key,
+                    value,
+                    ..
+                } if key == "hostname" && value == "myhost"
+            )),
+            "Expected EnvironmentChanged event for hostname"
+        );
     }
 }

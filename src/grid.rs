@@ -26,6 +26,8 @@ pub struct Grid {
     scrollback_wrapped: Vec<bool>,
     /// Semantic zones tracking logical blocks (Prompt, Command, Output)
     zones: Vec<Zone>,
+    /// Zones that were evicted from scrollback (for event emission)
+    evicted_zones: Vec<Zone>,
     /// Total number of lines that have ever been scrolled into scrollback.
     /// Used to compute the scrollback floor for zone eviction.
     total_lines_scrolled: usize,
@@ -46,6 +48,7 @@ impl Grid {
             wrapped: vec![false; rows],
             scrollback_wrapped: Vec::new(),
             zones: Vec::new(),
+            evicted_zones: Vec::new(),
             total_lines_scrolled: 0,
         }
     }
@@ -1913,12 +1916,23 @@ impl Grid {
     /// Zones fully below `floor` are removed. Zones spanning the boundary
     /// have their `abs_row_start` clamped to `floor`.
     pub fn evict_zones(&mut self, floor: usize) {
+        // Collect fully evicted zones for event emission
+        for zone in &self.zones {
+            if zone.abs_row_end < floor {
+                self.evicted_zones.push(zone.clone());
+            }
+        }
         self.zones.retain(|z| z.abs_row_end >= floor);
         for zone in &mut self.zones {
             if zone.abs_row_start < floor {
                 zone.abs_row_start = floor;
             }
         }
+    }
+
+    /// Drain evicted zones for event emission
+    pub fn drain_evicted_zones(&mut self) -> Vec<Zone> {
+        std::mem::take(&mut self.evicted_zones)
     }
 
     /// Clear all zones (used on terminal reset)
@@ -3008,7 +3022,7 @@ mod zone_tests {
     #[test]
     fn test_grid_push_zone() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, Some(1000)));
         assert_eq!(grid.zones().len(), 1);
         assert_eq!(grid.zones()[0].zone_type, ZoneType::Prompt);
     }
@@ -3016,7 +3030,7 @@ mod zone_tests {
     #[test]
     fn test_grid_close_current_zone() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, Some(1000)));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, Some(1000)));
         grid.close_current_zone(5);
         assert_eq!(grid.zones()[0].abs_row_end, 5);
     }
@@ -3024,15 +3038,15 @@ mod zone_tests {
     #[test]
     fn test_grid_zone_at() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Prompt, 0, None);
         z1.close(4);
         grid.push_zone(z1);
 
-        let mut z2 = Zone::new(ZoneType::Command, 5, None);
+        let mut z2 = Zone::new(1, ZoneType::Command, 5, None);
         z2.close(6);
         grid.push_zone(z2);
 
-        let mut z3 = Zone::new(ZoneType::Output, 7, None);
+        let mut z3 = Zone::new(2, ZoneType::Output, 7, None);
         z3.close(20);
         grid.push_zone(z3);
 
@@ -3046,11 +3060,11 @@ mod zone_tests {
     #[test]
     fn test_grid_evict_zones() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Prompt, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Prompt, 0, None);
         z1.close(4);
         grid.push_zone(z1);
 
-        let mut z2 = Zone::new(ZoneType::Output, 5, None);
+        let mut z2 = Zone::new(1, ZoneType::Output, 5, None);
         z2.close(20);
         grid.push_zone(z2);
 
@@ -3062,7 +3076,7 @@ mod zone_tests {
     #[test]
     fn test_grid_evict_zones_partial() {
         let mut grid = Grid::new(80, 24, 100);
-        let mut z1 = Zone::new(ZoneType::Output, 0, None);
+        let mut z1 = Zone::new(0, ZoneType::Output, 0, None);
         z1.close(20);
         grid.push_zone(z1);
 
@@ -3074,7 +3088,7 @@ mod zone_tests {
     #[test]
     fn test_grid_clear_zones() {
         let mut grid = Grid::new(80, 24, 100);
-        grid.push_zone(Zone::new(ZoneType::Prompt, 0, None));
+        grid.push_zone(Zone::new(0, ZoneType::Prompt, 0, None));
         grid.clear_zones();
         assert!(grid.zones().is_empty());
     }

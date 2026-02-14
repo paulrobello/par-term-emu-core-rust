@@ -159,6 +159,62 @@ pub enum TerminalEvent {
         /// This captures the exact position before subsequent output moves the cursor.
         cursor_line: Option<usize>,
     },
+    /// A zone was opened (prompt, command, or output block started)
+    ZoneOpened {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone
+        zone_type: crate::zone::ZoneType,
+        /// Absolute row where zone starts
+        abs_row_start: usize,
+    },
+    /// A zone was closed (prompt, command, or output block ended)
+    ZoneClosed {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone
+        zone_type: crate::zone::ZoneType,
+        /// Absolute row where zone starts
+        abs_row_start: usize,
+        /// Absolute row where zone ends
+        abs_row_end: usize,
+        /// Exit code (for output zones only)
+        exit_code: Option<i32>,
+    },
+    /// A zone was evicted from scrollback
+    ZoneScrolledOut {
+        /// Unique zone identifier
+        zone_id: usize,
+        /// Type of zone that was evicted
+        zone_type: crate::zone::ZoneType,
+    },
+    /// An environment variable changed (CWD, hostname, username)
+    EnvironmentChanged {
+        /// The key that changed ("cwd", "hostname", "username")
+        key: String,
+        /// The new value
+        value: String,
+        /// The previous value (if any)
+        old_value: Option<String>,
+    },
+    /// Remote host transition detected (hostname changed)
+    RemoteHostTransition {
+        /// New hostname
+        hostname: String,
+        /// New username (if known)
+        username: Option<String>,
+        /// Previous hostname (if any)
+        old_hostname: Option<String>,
+        /// Previous username (if any)
+        old_username: Option<String>,
+    },
+    /// Sub-shell detected (shell nesting depth changed)
+    SubShellDetected {
+        /// Current shell nesting depth
+        depth: usize,
+        /// Shell type if known (e.g., "bash", "zsh")
+        shell_type: Option<String>,
+    },
 }
 
 /// Kind of terminal event for subscription filters
@@ -177,6 +233,12 @@ pub enum TerminalEventKind {
     ProgressBarChanged,
     BadgeChanged,
     ShellIntegrationEvent,
+    ZoneOpened,
+    ZoneClosed,
+    ZoneScrolledOut,
+    EnvironmentChanged,
+    RemoteHostTransition,
+    SubShellDetected,
 }
 
 /// Hyperlink information with all its locations
@@ -1391,6 +1453,16 @@ pub struct Terminal {
     bell_events: Vec<BellEvent>,
     /// Terminal events buffer
     terminal_events: Vec<TerminalEvent>,
+    /// Next zone ID to assign (monotonically increasing)
+    next_zone_id: usize,
+    /// Last known hostname (for detecting remote host transitions)
+    last_hostname: Option<String>,
+    /// Last known username (for detecting remote host transitions)
+    last_username: Option<String>,
+    /// Current shell nesting depth (for sub-shell detection)
+    shell_depth: usize,
+    /// Whether we are currently inside command output (between OSC 133 C and D)
+    in_command_output: bool,
     /// Current selection state
     selection: Option<Selection>,
     /// Bookmarks for quick navigation
@@ -1789,6 +1861,11 @@ impl Terminal {
             dirty_rows: HashSet::new(),
             bell_events: Vec::new(),
             terminal_events: Vec::new(),
+            next_zone_id: 0,
+            last_hostname: None,
+            last_username: None,
+            shell_depth: 0,
+            in_command_output: false,
             // Selection and bookmarks
             selection: None,
             bookmarks: Vec::new(),
@@ -2891,6 +2968,13 @@ impl Terminal {
     ///
     /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
     pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
+        // Drain any evicted zones from grid into events
+        for zone in self.grid.drain_evicted_zones() {
+            self.terminal_events.push(TerminalEvent::ZoneScrolledOut {
+                zone_id: zone.id,
+                zone_type: zone.zone_type,
+            });
+        }
         std::mem::take(&mut self.terminal_events)
     }
 
@@ -2993,6 +3077,12 @@ impl Terminal {
             TerminalEvent::ProgressBarChanged { .. } => TerminalEventKind::ProgressBarChanged,
             TerminalEvent::BadgeChanged(_) => TerminalEventKind::BadgeChanged,
             TerminalEvent::ShellIntegrationEvent { .. } => TerminalEventKind::ShellIntegrationEvent,
+            TerminalEvent::ZoneOpened { .. } => TerminalEventKind::ZoneOpened,
+            TerminalEvent::ZoneClosed { .. } => TerminalEventKind::ZoneClosed,
+            TerminalEvent::ZoneScrolledOut { .. } => TerminalEventKind::ZoneScrolledOut,
+            TerminalEvent::EnvironmentChanged { .. } => TerminalEventKind::EnvironmentChanged,
+            TerminalEvent::RemoteHostTransition { .. } => TerminalEventKind::RemoteHostTransition,
+            TerminalEvent::SubShellDetected { .. } => TerminalEventKind::SubShellDetected,
         }
     }
 
@@ -3466,6 +3556,13 @@ impl Terminal {
         for i in (0..cols).step_by(8) {
             self.tab_stops[i] = true;
         }
+
+        // Reset contextual awareness tracking
+        self.next_zone_id = 0;
+        self.last_hostname = None;
+        self.last_username = None;
+        self.shell_depth = 0;
+        self.in_command_output = false;
     }
 
     /// Get the terminal content as a string
@@ -6316,7 +6413,7 @@ impl Terminal {
                 .as_millis() as u64;
 
             let change = CwdChange {
-                old_cwd,
+                old_cwd: old_cwd.clone(),
                 new_cwd: new_cwd.clone(),
                 hostname: hostname.clone(),
                 username: username.clone(),
@@ -6326,6 +6423,64 @@ impl Terminal {
             // Emit event for subscribers
             self.terminal_events
                 .push(TerminalEvent::CwdChanged(change.clone()));
+
+            // Emit granular environment events
+            if old_cwd.as_deref() != Some(&new_cwd) {
+                self.terminal_events
+                    .push(TerminalEvent::EnvironmentChanged {
+                        key: "cwd".to_string(),
+                        value: new_cwd.clone(),
+                        old_value: old_cwd.clone(),
+                    });
+            }
+
+            if old_hostname.as_deref() != hostname.as_deref() {
+                if let Some(h) = &hostname {
+                    self.terminal_events
+                        .push(TerminalEvent::EnvironmentChanged {
+                            key: "hostname".to_string(),
+                            value: h.clone(),
+                            old_value: old_hostname.clone(),
+                        });
+                }
+            }
+
+            if old_username.as_deref() != username.as_deref() {
+                if let Some(u) = &username {
+                    self.terminal_events
+                        .push(TerminalEvent::EnvironmentChanged {
+                            key: "username".to_string(),
+                            value: u.clone(),
+                            old_value: old_username.clone(),
+                        });
+                }
+            }
+
+            // Emit RemoteHostTransition if hostname changed
+            if old_hostname.as_deref() != hostname.as_deref() {
+                if let Some(h) = &hostname {
+                    self.terminal_events
+                        .push(TerminalEvent::RemoteHostTransition {
+                            hostname: h.clone(),
+                            username: username.clone(),
+                            old_hostname: old_hostname.clone(),
+                            old_username: old_username.clone(),
+                        });
+                } else if old_hostname.is_some() {
+                    // Returned to local
+                    self.terminal_events
+                        .push(TerminalEvent::RemoteHostTransition {
+                            hostname: String::new(),
+                            username: username.clone(),
+                            old_hostname: old_hostname.clone(),
+                            old_username: old_username.clone(),
+                        });
+                }
+            }
+
+            // Update last_hostname/last_username tracking
+            self.last_hostname = hostname.clone();
+            self.last_username = username.clone();
 
             self.cwd_changes.push(change);
 

@@ -2729,6 +2729,74 @@ impl PyTerminal {
                             map.insert("timestamp".to_string(), ts.to_string());
                         }
                     }
+                    TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                    } => {
+                        map.insert("type".to_string(), "zone_opened".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                        map.insert("abs_row_start".to_string(), abs_row_start.to_string());
+                    }
+                    TerminalEvent::ZoneClosed {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                        abs_row_end,
+                        exit_code,
+                    } => {
+                        map.insert("type".to_string(), "zone_closed".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                        map.insert("abs_row_start".to_string(), abs_row_start.to_string());
+                        map.insert("abs_row_end".to_string(), abs_row_end.to_string());
+                        if let Some(code) = exit_code {
+                            map.insert("exit_code".to_string(), code.to_string());
+                        }
+                    }
+                    TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
+                        map.insert("type".to_string(), "zone_scrolled_out".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                    }
+                    TerminalEvent::EnvironmentChanged {
+                        key,
+                        value,
+                        old_value,
+                    } => {
+                        map.insert("type".to_string(), "environment_changed".to_string());
+                        map.insert("key".to_string(), key.clone());
+                        map.insert("value".to_string(), value.clone());
+                        if let Some(old) = old_value {
+                            map.insert("old_value".to_string(), old.clone());
+                        }
+                    }
+                    TerminalEvent::RemoteHostTransition {
+                        hostname,
+                        username,
+                        old_hostname,
+                        old_username,
+                    } => {
+                        map.insert("type".to_string(), "remote_host_transition".to_string());
+                        map.insert("hostname".to_string(), hostname.clone());
+                        if let Some(u) = username {
+                            map.insert("username".to_string(), u.clone());
+                        }
+                        if let Some(oh) = old_hostname {
+                            map.insert("old_hostname".to_string(), oh.clone());
+                        }
+                        if let Some(ou) = old_username {
+                            map.insert("old_username".to_string(), ou.clone());
+                        }
+                    }
+                    TerminalEvent::SubShellDetected { depth, shell_type } => {
+                        map.insert("type".to_string(), "sub_shell_detected".to_string());
+                        map.insert("depth".to_string(), depth.to_string());
+                        if let Some(st) = shell_type {
+                            map.insert("shell_type".to_string(), st.clone());
+                        }
+                    }
                 }
                 map
             })
@@ -2741,7 +2809,10 @@ impl PyTerminal {
     ///     kinds: Optional list of event kinds to receive (strings).
     ///            Valid kinds: bell, title_changed, size_changed, mode_changed,
     ///            graphics_added, hyperlink_added, dirty_region, cwd_changed,
-    ///            trigger_matched, user_var_changed, progress_bar_changed.
+    ///            trigger_matched, user_var_changed, progress_bar_changed,
+    ///            badge_changed, shell_integration, zone_opened, zone_closed,
+    ///            zone_scrolled_out, environment_changed, remote_host_transition,
+    ///            sub_shell_detected.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         use crate::terminal::TerminalEventKind;
@@ -2762,6 +2833,12 @@ impl PyTerminal {
                     "progress_bar_changed" => Some(TerminalEventKind::ProgressBarChanged),
                     "badge_changed" => Some(TerminalEventKind::BadgeChanged),
                     "shell_integration" => Some(TerminalEventKind::ShellIntegrationEvent),
+                    "zone_opened" => Some(TerminalEventKind::ZoneOpened),
+                    "zone_closed" => Some(TerminalEventKind::ZoneClosed),
+                    "zone_scrolled_out" => Some(TerminalEventKind::ZoneScrolledOut),
+                    "environment_changed" => Some(TerminalEventKind::EnvironmentChanged),
+                    "remote_host_transition" => Some(TerminalEventKind::RemoteHostTransition),
+                    "sub_shell_detected" => Some(TerminalEventKind::SubShellDetected),
                     _ => None,
                 })
                 .collect()
@@ -2925,6 +3002,74 @@ impl PyTerminal {
                         }
                         if let Some(ts) = timestamp {
                             map.insert("timestamp".to_string(), ts.to_string());
+                        }
+                    }
+                    TerminalEvent::ZoneOpened {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                    } => {
+                        map.insert("type".to_string(), "zone_opened".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                        map.insert("abs_row_start".to_string(), abs_row_start.to_string());
+                    }
+                    TerminalEvent::ZoneClosed {
+                        zone_id,
+                        zone_type,
+                        abs_row_start,
+                        abs_row_end,
+                        exit_code,
+                    } => {
+                        map.insert("type".to_string(), "zone_closed".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                        map.insert("abs_row_start".to_string(), abs_row_start.to_string());
+                        map.insert("abs_row_end".to_string(), abs_row_end.to_string());
+                        if let Some(code) = exit_code {
+                            map.insert("exit_code".to_string(), code.to_string());
+                        }
+                    }
+                    TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
+                        map.insert("type".to_string(), "zone_scrolled_out".to_string());
+                        map.insert("zone_id".to_string(), zone_id.to_string());
+                        map.insert("zone_type".to_string(), zone_type.to_string());
+                    }
+                    TerminalEvent::EnvironmentChanged {
+                        key,
+                        value,
+                        old_value,
+                    } => {
+                        map.insert("type".to_string(), "environment_changed".to_string());
+                        map.insert("key".to_string(), key.clone());
+                        map.insert("value".to_string(), value.clone());
+                        if let Some(old) = old_value {
+                            map.insert("old_value".to_string(), old.clone());
+                        }
+                    }
+                    TerminalEvent::RemoteHostTransition {
+                        hostname,
+                        username,
+                        old_hostname,
+                        old_username,
+                    } => {
+                        map.insert("type".to_string(), "remote_host_transition".to_string());
+                        map.insert("hostname".to_string(), hostname.clone());
+                        if let Some(u) = username {
+                            map.insert("username".to_string(), u.clone());
+                        }
+                        if let Some(oh) = old_hostname {
+                            map.insert("old_hostname".to_string(), oh.clone());
+                        }
+                        if let Some(ou) = old_username {
+                            map.insert("old_username".to_string(), ou.clone());
+                        }
+                    }
+                    TerminalEvent::SubShellDetected { depth, shell_type } => {
+                        map.insert("type".to_string(), "sub_shell_detected".to_string());
+                        map.insert("depth".to_string(), depth.to_string());
+                        if let Some(st) = shell_type {
+                            map.insert("shell_type".to_string(), st.clone());
                         }
                     }
                 }
