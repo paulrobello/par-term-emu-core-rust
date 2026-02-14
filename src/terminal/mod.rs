@@ -14,6 +14,7 @@ pub mod file_transfer;
 mod graphics;
 pub mod notification;
 pub mod progress;
+pub mod replay;
 mod sequences;
 pub mod snapshot;
 pub mod snapshot_manager;
