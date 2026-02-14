@@ -63,6 +63,7 @@ pub mod text_utils;
 pub mod tmux_control;
 pub mod unicode_normalization_config;
 pub mod unicode_width_config;
+pub mod zone;
 
 // Re-export commonly used types from unicode_normalization_config
 pub use unicode_normalization_config::NormalizationForm;

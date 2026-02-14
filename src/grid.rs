@@ -1,4 +1,5 @@
 use crate::cell::Cell;
+use crate::zone::Zone;
 
 /// A 2D grid of terminal cells
 #[derive(Debug, Clone)]
@@ -23,6 +24,13 @@ pub struct Grid {
     wrapped: Vec<bool>,
     /// Track wrapped state for scrollback lines (circular buffer)
     scrollback_wrapped: Vec<bool>,
+    /// Semantic zones tracking logical blocks (Prompt, Command, Output)
+    #[allow(dead_code)]
+    zones: Vec<Zone>,
+    /// Total number of lines that have ever been scrolled into scrollback.
+    /// Used to compute the scrollback floor for zone eviction.
+    #[allow(dead_code)]
+    total_lines_scrolled: usize,
 }
 
 impl Grid {
@@ -39,6 +47,8 @@ impl Grid {
             max_scrollback,
             wrapped: vec![false; rows],
             scrollback_wrapped: Vec::new(),
+            zones: Vec::new(),
+            total_lines_scrolled: 0,
         }
     }
 
