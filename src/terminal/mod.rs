@@ -7779,4 +7779,5 @@ mod tests {
     include!("../tests/terminal_tests.rs");
     include!("../tests/grid_integration_tests.rs");
     include!("../tests/observer_tests.rs");
+    include!("../tests/ffi_tests.rs");
 }

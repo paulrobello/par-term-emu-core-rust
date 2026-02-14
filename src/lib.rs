@@ -44,6 +44,7 @@ pub mod coprocess;
 pub mod cursor;
 #[macro_use]
 pub mod debug;
+pub mod ffi;
 pub mod grapheme;
 pub mod graphics;
 pub mod grid;
