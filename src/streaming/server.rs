@@ -2099,8 +2099,26 @@ impl StreamingServer {
                                         _ => {}
                                     }
                                 }
-                                crate::streaming::protocol::ClientMessage::SnapshotRequest { .. } => {
-                                    // TODO: Handle snapshot request (Task 6)
+                                crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
+                                    let snapshot_msg = {
+                                        if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                            use crate::terminal::snapshot::SnapshotScope;
+                                            let snapshot_scope = match scope.as_str() {
+                                                "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
+                                                "full" => SnapshotScope::Full,
+                                                _ => SnapshotScope::Visible,
+                                            };
+                                            let json = terminal.get_semantic_snapshot_json(snapshot_scope);
+                                            Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    if let Some(msg) = snapshot_msg {
+                                        if let Err(e) = client.send(msg).await {
+                                            crate::debug_error!("STREAMING", "Failed to send snapshot to client {}: {}", client_id, e);
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -2280,6 +2298,27 @@ impl StreamingServer {
                                                 }
                                             };
                                             if let Some(msg) = refresh_msg {
+                                                if let Ok(bytes) = encode_server_message(&msg) {
+                                                    let _ = ws_tx.send(Message::Binary(bytes.into())).await;
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
+                                            let snapshot_msg = {
+                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                                    use crate::terminal::snapshot::SnapshotScope;
+                                                    let snapshot_scope = match scope.as_str() {
+                                                        "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
+                                                        "full" => SnapshotScope::Full,
+                                                        _ => SnapshotScope::Visible,
+                                                    };
+                                                    let json = terminal.get_semantic_snapshot_json(snapshot_scope);
+                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some(msg) = snapshot_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
                                                     let _ = ws_tx.send(Message::Binary(bytes.into())).await;
                                                 }
@@ -2639,6 +2678,27 @@ impl StreamingServer {
                                                 }
                                             };
                                             if let Some(msg) = refresh_msg {
+                                                if let Ok(bytes) = encode_server_message(&msg) {
+                                                    let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
+                                                }
+                                            }
+                                        }
+                                        crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
+                                            let snapshot_msg = {
+                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
+                                                    use crate::terminal::snapshot::SnapshotScope;
+                                                    let snapshot_scope = match scope.as_str() {
+                                                        "recent" => SnapshotScope::Recent(max_commands.unwrap_or(10) as usize),
+                                                        "full" => SnapshotScope::Full,
+                                                        _ => SnapshotScope::Visible,
+                                                    };
+                                                    let json = terminal.get_semantic_snapshot_json(snapshot_scope);
+                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
+                                                } else {
+                                                    None
+                                                }
+                                            };
+                                            if let Some(msg) = snapshot_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
                                                     let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
                                                 }
