@@ -16,6 +16,7 @@ pub mod notification;
 pub mod progress;
 mod sequences;
 pub mod snapshot;
+pub mod snapshot_manager;
 pub mod terminal_snapshot;
 pub mod trigger;
 mod write;
