@@ -1429,6 +1429,14 @@ impl Grid {
         if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
             // When n >= region_size, save the entire screen to scrollback
             let lines_to_save = n.min(region_size);
+
+            // Track total lines scrolled for zone eviction
+            self.total_lines_scrolled += lines_to_save;
+            if self.scrollback_lines >= self.max_scrollback {
+                let floor = self.total_lines_scrolled - self.max_scrollback;
+                self.evict_zones(floor);
+            }
+
             for i in 0..lines_to_save {
                 // Calculate source indices directly to avoid temporary allocation
                 let src_start = i * self.cols;

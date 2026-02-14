@@ -4774,6 +4774,54 @@ impl PyTerminal {
             .map(super::types::PyCommandExecution::from))
     }
 
+    /// Get command output text by index (0 = most recent completed command).
+    ///
+    /// Args:
+    ///     index: Command index (0 = most recent)
+    ///
+    /// Returns:
+    ///     Output text if available, None if index out of bounds or output evicted
+    ///
+    /// Example:
+    ///     ```python
+    ///     output = term.get_command_output(0)
+    ///     if output:
+    ///         print(f"Last command output: {output}")
+    ///     ```
+    fn get_command_output(&self, index: usize) -> PyResult<Option<String>> {
+        Ok(self.inner.get_command_output(index))
+    }
+
+    /// Get all commands with extractable output text.
+    /// Commands whose output has been evicted from scrollback are excluded.
+    ///
+    /// Returns:
+    ///     List of dicts with keys: command, cwd, exit_code, output
+    ///
+    /// Example:
+    ///     ```python
+    ///     outputs = term.get_command_outputs()
+    ///     for out in outputs:
+    ///         print(f"{out['command']}: {out['output']}")
+    ///     ```
+    fn get_command_outputs(&self) -> PyResult<Vec<pyo3::Py<pyo3::types::PyDict>>> {
+        use pyo3::types::PyDict;
+
+        let outputs = self.inner.get_command_outputs();
+        Python::attach(|py| {
+            let mut result = Vec::with_capacity(outputs.len());
+            for out in &outputs {
+                let dict = PyDict::new(py);
+                dict.set_item("command", &out.command)?;
+                dict.set_item("cwd", out.cwd.as_deref())?;
+                dict.set_item("exit_code", out.exit_code)?;
+                dict.set_item("output", &out.output)?;
+                result.push(dict.into());
+            }
+            Ok(result)
+        })
+    }
+
     /// Record a CWD change
     ///
     /// Args:

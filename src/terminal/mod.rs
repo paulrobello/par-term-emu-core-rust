@@ -998,6 +998,23 @@ pub struct CommandExecution {
     pub duration_ms: Option<u64>,
     /// Whether command succeeded (exit code 0)
     pub success: Option<bool>,
+    /// Absolute start row of the output zone
+    pub output_start_row: Option<usize>,
+    /// Absolute end row of the output zone
+    pub output_end_row: Option<usize>,
+}
+
+/// Command output record combining execution metadata with extracted output text
+#[derive(Debug, Clone)]
+pub struct CommandOutput {
+    /// Command that was executed
+    pub command: String,
+    /// Current working directory when command was run
+    pub cwd: Option<String>,
+    /// Exit code
+    pub exit_code: Option<i32>,
+    /// Extracted output text
+    pub output: String,
 }
 
 /// Shell integration statistics
@@ -2244,13 +2261,33 @@ impl Terminal {
     /// Returns None if no zone contains this row.
     pub fn get_zone_text(&self, abs_row: usize) -> Option<String> {
         let zone = self.grid.zone_at(abs_row)?;
-        let scrollback_len = self.grid.scrollback_len();
-        let mut text = String::new();
+        self.extract_text_from_row_range(zone.abs_row_start, zone.abs_row_end)
+    }
 
-        for row in zone.abs_row_start..=zone.abs_row_end {
+    /// Extract text from an absolute row range (inclusive).
+    /// Returns None if no rows could be found (e.g., evicted from scrollback).
+    /// Handles wrapped lines by omitting newlines between them.
+    fn extract_text_from_row_range(&self, abs_start: usize, abs_end: usize) -> Option<String> {
+        let scrollback_len = self.grid.scrollback_len();
+
+        // Check if the range is entirely evicted from the scrollback buffer
+        let total_scrolled = self.grid.total_lines_scrolled();
+        let max_sb = self.grid.max_scrollback();
+        if total_scrolled > max_sb {
+            let floor = total_scrolled - max_sb;
+            if abs_end < floor {
+                return None;
+            }
+        }
+
+        let mut text = String::new();
+        let mut found_any = false;
+
+        for row in abs_start..=abs_end {
             if row < scrollback_len {
                 // Row is in scrollback
                 if let Some(line) = self.grid.scrollback_line(row) {
+                    found_any = true;
                     let line_text: String = line
                         .iter()
                         .filter(|c| !c.flags.wide_char_spacer())
@@ -2266,7 +2303,7 @@ impl Terminal {
                     let trimmed = line_text.trim_end();
                     if !text.is_empty() {
                         // Check if previous line was wrapped
-                        if row > zone.abs_row_start && self.grid.is_scrollback_wrapped(row - 1) {
+                        if row > abs_start && self.grid.is_scrollback_wrapped(row - 1) {
                             // Wrapped line - no newline
                         } else {
                             text.push('\n');
@@ -2278,6 +2315,7 @@ impl Terminal {
                 // Row is in main grid
                 let grid_row = row - scrollback_len;
                 if let Some(line) = self.grid.row(grid_row) {
+                    found_any = true;
                     let line_text: String = line
                         .iter()
                         .filter(|c| !c.flags.wide_char_spacer())
@@ -2291,7 +2329,7 @@ impl Terminal {
                         })
                         .collect();
                     let trimmed = line_text.trim_end();
-                    if !text.is_empty() && row > zone.abs_row_start {
+                    if !text.is_empty() && row > abs_start {
                         let prev_row = row - 1;
                         if prev_row < scrollback_len {
                             if !self.grid.is_scrollback_wrapped(prev_row) {
@@ -2309,7 +2347,11 @@ impl Terminal {
             }
         }
 
-        Some(text)
+        if found_any {
+            Some(text)
+        } else {
+            None
+        }
     }
 
     /// Report mouse event
@@ -6175,6 +6217,8 @@ impl Terminal {
             exit_code: None,
             duration_ms: None,
             success: None,
+            output_start_row: None,
+            output_end_row: None,
         });
     }
 
@@ -6190,6 +6234,14 @@ impl Terminal {
             cmd.exit_code = Some(exit_code);
             cmd.duration_ms = Some(timestamp.saturating_sub(cmd.start_time));
             cmd.success = Some(exit_code == 0);
+
+            // Capture output zone range from the most recent Output zone
+            if let Some(zone) = self.grid.zones().last() {
+                if zone.zone_type == crate::zone::ZoneType::Output {
+                    cmd.output_start_row = Some(zone.abs_row_start);
+                    cmd.output_end_row = Some(zone.abs_row_end);
+                }
+            }
 
             self.command_history.push(cmd);
 
@@ -6209,6 +6261,38 @@ impl Terminal {
     /// Get current executing command
     pub fn get_current_command(&self) -> Option<&CommandExecution> {
         self.current_command.as_ref()
+    }
+
+    /// Get command output text by index (0 = most recent completed command).
+    /// Returns None if index is out of bounds or output has been evicted from scrollback.
+    pub fn get_command_output(&self, index: usize) -> Option<String> {
+        let history = &self.command_history;
+        if history.is_empty() || index >= history.len() {
+            return None;
+        }
+        let cmd = &history[history.len() - 1 - index];
+        let start = cmd.output_start_row?;
+        let end = cmd.output_end_row?;
+        self.extract_text_from_row_range(start, end)
+    }
+
+    /// Get all commands with extractable output text.
+    /// Commands whose output has been evicted from scrollback are excluded.
+    pub fn get_command_outputs(&self) -> Vec<CommandOutput> {
+        self.command_history
+            .iter()
+            .filter_map(|cmd| {
+                let start = cmd.output_start_row?;
+                let end = cmd.output_end_row?;
+                let output = self.extract_text_from_row_range(start, end)?;
+                Some(CommandOutput {
+                    command: cmd.command.clone(),
+                    cwd: cmd.cwd.clone(),
+                    exit_code: cmd.exit_code,
+                    output,
+                })
+            })
+            .collect()
     }
 
     /// Record a CWD change

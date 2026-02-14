@@ -2546,4 +2546,124 @@ mod tests {
         // Row way beyond zones should return None
         assert!(term.get_zone_at(1000).is_none());
     }
+
+    // ========== Command Output Capture Tests ==========
+
+    #[test]
+    fn test_get_command_output_basic() {
+        let mut term = Terminal::new(80, 24);
+        term.shell_integration_mut().set_command("ls".to_string());
+        term.start_command_execution("ls".to_string());
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        term.process(b"\x1b]133;B\x07ls\r\n");
+        term.process(b"\x1b]133;C\x07");
+        term.process(b"file1.txt\r\nfile2.txt\r\n");
+        term.process(b"\x1b]133;D;0\x07");
+        term.end_command_execution(0);
+
+        let output = term.get_command_output(0);
+        assert!(output.is_some());
+        let text = output.unwrap();
+        assert!(text.contains("file1.txt"));
+        assert!(text.contains("file2.txt"));
+    }
+
+    #[test]
+    fn test_get_command_output_out_of_bounds() {
+        let term = Terminal::new(80, 24);
+        assert!(term.get_command_output(0).is_none());
+        assert!(term.get_command_output(100).is_none());
+    }
+
+    #[test]
+    fn test_get_command_output_no_zone() {
+        let mut term = Terminal::new(80, 24);
+        term.start_command_execution("echo hi".to_string());
+        term.end_command_execution(0);
+        assert!(term.get_command_output(0).is_none());
+    }
+
+    #[test]
+    fn test_get_command_output_multiple_commands() {
+        let mut term = Terminal::new(80, 24);
+
+        term.shell_integration_mut().set_command("cmd1".to_string());
+        term.start_command_execution("cmd1".to_string());
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        term.process(b"\x1b]133;B\x07cmd1\r\n");
+        term.process(b"\x1b]133;C\x07");
+        term.process(b"output1\r\n");
+        term.process(b"\x1b]133;D;0\x07");
+        term.end_command_execution(0);
+
+        term.shell_integration_mut().set_command("cmd2".to_string());
+        term.start_command_execution("cmd2".to_string());
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        term.process(b"\x1b]133;B\x07cmd2\r\n");
+        term.process(b"\x1b]133;C\x07");
+        term.process(b"output2\r\n");
+        term.process(b"\x1b]133;D;0\x07");
+        term.end_command_execution(0);
+
+        let out0 = term.get_command_output(0).unwrap();
+        assert!(out0.contains("output2"));
+        let out1 = term.get_command_output(1).unwrap();
+        assert!(out1.contains("output1"));
+    }
+
+    #[test]
+    fn test_get_command_outputs_filters_evicted() {
+        // Use a larger terminal so the "new" command's output doesn't scroll past its zone
+        let mut term = Terminal::with_scrollback(80, 24, 50);
+
+        // First command - will be evicted
+        term.shell_integration_mut().set_command("old".to_string());
+        term.start_command_execution("old".to_string());
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        term.process(b"\x1b]133;B\x07old\r\n");
+        term.process(b"\x1b]133;C\x07");
+        term.process(b"old output\r\n");
+        term.process(b"\x1b]133;D;0\x07");
+        term.end_command_execution(0);
+
+        // Generate enough output to push old command past scrollback
+        for i in 0..80 {
+            term.process(format!("filler line {}\r\n", i).as_bytes());
+        }
+
+        // Second command - recent, output stays in visible grid (no scrolling between C and D)
+        term.shell_integration_mut().set_command("new".to_string());
+        term.start_command_execution("new".to_string());
+        term.process(b"\x1b]133;A\x07$ \r\n");
+        term.process(b"\x1b]133;B\x07new\r\n");
+        term.process(b"\x1b]133;C\x07");
+        term.process(b"new output"); // No \r\n — stays on same line as C marker
+        term.process(b"\x1b]133;D;0\x07");
+        term.end_command_execution(0);
+
+        let outputs = term.get_command_outputs();
+        // Old command's output should be evicted, only new should remain
+        assert!(!outputs.is_empty());
+        assert!(outputs.iter().any(|o| o.output.contains("new output")));
+        // Old command should not be in extractable outputs
+        assert!(!outputs.iter().any(|o| o.command == "old"));
+
+        // Direct index access: old command (index 1) should return None
+        assert!(term.get_command_output(1).is_none());
+        // New command (index 0) should still work
+        assert!(term.get_command_output(0).is_some());
+    }
+
+    #[test]
+    fn test_get_command_output_no_output_rows_returns_none() {
+        // A command where end_command_execution is called but no Output zone was created
+        // (e.g., the last zone isn't an Output zone).
+        let mut term = Terminal::new(80, 24);
+        term.start_command_execution("echo hi".to_string());
+        // Only create a Prompt zone, no Output zone
+        term.process(b"\x1b]133;A\x07$ ");
+        term.end_command_execution(0);
+        // output_start_row/output_end_row should be None since last zone is Prompt, not Output
+        assert!(term.get_command_output(0).is_none());
+    }
 }
