@@ -468,13 +468,40 @@ impl Terminal {
                                     // Zone: close any open zone, start new Prompt zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         self.grid.push_zone(crate::zone::Zone::new(
-                                            0,
+                                            zone_id,
                                             crate::zone::ZoneType::Prompt,
                                             abs_line,
                                             Some(ts),
                                         ));
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Prompt,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
                                 }
                                 Some('B') => {
@@ -495,9 +522,29 @@ impl Terminal {
                                     // Zone: close Prompt zone, start Command zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         let mut zone = crate::zone::Zone::new(
-                                            0,
+                                            zone_id,
                                             crate::zone::ZoneType::Command,
                                             abs_line,
                                             Some(ts),
@@ -505,6 +552,13 @@ impl Terminal {
                                         zone.command =
                                             self.shell_integration.command().map(|s| s.to_string());
                                         self.grid.push_zone(zone);
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Command,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
                                 }
                                 Some('C') => {
@@ -525,9 +579,29 @@ impl Terminal {
                                     // Zone: close Command zone, start Output zone
                                     if !self.alt_screen_active {
                                         let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
-                                        self.grid.close_current_zone(close_row);
+                                        // Emit ZoneClosed for previous zone if exists
+                                        if let Some(zone) = self.grid.zones().last() {
+                                            let closed_id = zone.id;
+                                            let closed_type = zone.zone_type;
+                                            let closed_start = zone.abs_row_start;
+                                            self.grid.close_current_zone(close_row);
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: closed_id,
+                                                    zone_type: closed_type,
+                                                    abs_row_start: closed_start,
+                                                    abs_row_end: close_row,
+                                                    exit_code: None,
+                                                },
+                                            );
+                                        } else {
+                                            self.grid.close_current_zone(close_row);
+                                        }
+                                        // Create and push new zone with ID
+                                        let zone_id = self.next_zone_id;
+                                        self.next_zone_id += 1;
                                         let mut zone = crate::zone::Zone::new(
-                                            0,
+                                            zone_id,
                                             crate::zone::ZoneType::Output,
                                             abs_line,
                                             Some(ts),
@@ -535,6 +609,13 @@ impl Terminal {
                                         zone.command =
                                             self.shell_integration.command().map(|s| s.to_string());
                                         self.grid.push_zone(zone);
+                                        self.terminal_events.push(
+                                            crate::terminal::TerminalEvent::ZoneOpened {
+                                                zone_id,
+                                                zone_type: crate::zone::ZoneType::Output,
+                                                abs_row_start: abs_line,
+                                            },
+                                        );
                                     }
                                 }
                                 Some('D') => {
@@ -564,12 +645,30 @@ impl Terminal {
                                     );
                                     // Zone: close Output zone, record exit code
                                     if !self.alt_screen_active {
+                                        // Capture zone info before closing
+                                        let closed_info = self
+                                            .grid
+                                            .zones()
+                                            .last()
+                                            .map(|z| (z.id, z.zone_type, z.abs_row_start));
                                         self.grid.close_current_zone(abs_line);
                                         // Set exit code on the just-closed Output zone
                                         if let Some(zone) = self.grid.zones_mut().last_mut() {
                                             if zone.zone_type == crate::zone::ZoneType::Output {
                                                 zone.exit_code = parsed_code;
                                             }
+                                        }
+                                        // Emit ZoneClosed
+                                        if let Some((id, zt, start)) = closed_info {
+                                            self.terminal_events.push(
+                                                crate::terminal::TerminalEvent::ZoneClosed {
+                                                    zone_id: id,
+                                                    zone_type: zt,
+                                                    abs_row_start: start,
+                                                    abs_row_end: abs_line,
+                                                    exit_code: parsed_code,
+                                                },
+                                            );
                                         }
                                     }
                                 }

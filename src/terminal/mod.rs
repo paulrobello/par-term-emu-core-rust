@@ -2968,6 +2968,13 @@ impl Terminal {
     ///
     /// Returns and clears the buffer of terminal events (bells, title changes, mode changes, etc.)
     pub fn poll_events(&mut self) -> Vec<TerminalEvent> {
+        // Drain any evicted zones from grid into events
+        for zone in self.grid.drain_evicted_zones() {
+            self.terminal_events.push(TerminalEvent::ZoneScrolledOut {
+                zone_id: zone.id,
+                zone_type: zone.zone_type,
+            });
+        }
         std::mem::take(&mut self.terminal_events)
     }
 
