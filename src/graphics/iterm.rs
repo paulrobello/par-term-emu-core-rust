@@ -30,6 +30,10 @@ impl ITermParser {
     /// Parse parameters from OSC 1337 File= sequence
     ///
     /// Format: `name=<base64>;size=<bytes>;width=<n>;height=<n>;inline=1`
+    ///
+    /// This parses all key=value pairs from the params string. The `inline`
+    /// parameter determines whether the data is displayed inline (inline=1)
+    /// or treated as a file download (inline=0 or absent).
     pub fn parse_params(&mut self, params_str: &str) -> Result<(), GraphicsError> {
         self.params.clear();
 
@@ -39,13 +43,22 @@ impl ITermParser {
             }
         }
 
-        // inline=1 is required for display
-        match self.params.get("inline") {
-            Some(v) if v == "1" => Ok(()),
-            _ => Err(GraphicsError::ITermError(
-                "inline=1 required for display".to_string(),
-            )),
-        }
+        Ok(())
+    }
+
+    /// Check if this is an inline image (inline=1)
+    ///
+    /// Returns `true` if the `inline` parameter is set to "1", indicating
+    /// the data should be displayed inline in the terminal.
+    /// Returns `false` if `inline` is absent, "0", or any other value,
+    /// indicating the data is a file download.
+    pub fn is_inline(&self) -> bool {
+        self.params.get("inline").map(|v| v == "1").unwrap_or(false)
+    }
+
+    /// Get a reference to all parsed parameters
+    pub fn params(&self) -> &HashMap<String, String> {
+        &self.params
     }
 
     /// Set the base64-encoded image data
@@ -173,7 +186,23 @@ mod tests {
     fn test_parse_params_missing_inline() {
         let mut parser = ITermParser::new();
         let result = parser.parse_params("name=test");
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(!parser.is_inline());
+    }
+
+    #[test]
+    fn test_is_inline() {
+        let mut parser = ITermParser::new();
+        parser.parse_params("inline=1").unwrap();
+        assert!(parser.is_inline());
+
+        let mut parser2 = ITermParser::new();
+        parser2.parse_params("inline=0").unwrap();
+        assert!(!parser2.is_inline());
+
+        let mut parser3 = ITermParser::new();
+        parser3.parse_params("name=test").unwrap();
+        assert!(!parser3.is_inline());
     }
 
     #[test]

@@ -919,10 +919,8 @@ struct ITermMultipartState {
     /// Current accumulated size (sum of decoded chunks)
     accumulated_size: usize,
     /// Whether this multipart transfer is a file transfer (not inline image)
-    #[allow(dead_code)] // Used in Task 4 (graphics handler rewrite)
     is_file_transfer: bool,
     /// Transfer ID if this is a file transfer (from FileTransferManager)
-    #[allow(dead_code)] // Used in Task 4 (graphics handler rewrite)
     transfer_id: Option<u64>,
 }
 

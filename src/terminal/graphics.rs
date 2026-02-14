@@ -236,6 +236,7 @@ impl Terminal {
     /// Supports:
     /// - Single-sequence: `File=name=<b64>;size=<bytes>;inline=1:<base64 data>`
     /// - Multi-part: `MultipartFile=...` followed by `FilePart=<chunk>` sequences
+    /// - File downloads (inline=0 or absent): tracked via FileTransferManager
     pub(crate) fn handle_iterm_image(&mut self, data: &str) {
         // Handle MultipartFile (start of chunked transfer)
         if let Some(params) = data.strip_prefix("MultipartFile=") {
@@ -253,6 +254,21 @@ impl Terminal {
         self.handle_single_file_transfer(data);
     }
 
+    /// Decode a base64-encoded filename from iTerm2 `name=` parameter
+    fn decode_iterm_filename(params: &std::collections::HashMap<String, String>) -> String {
+        params
+            .get("name")
+            .and_then(|encoded| {
+                base64::Engine::decode(
+                    &base64::engine::general_purpose::STANDARD,
+                    encoded.as_bytes(),
+                )
+                .ok()
+            })
+            .and_then(|bytes| String::from_utf8(bytes).ok())
+            .unwrap_or_default()
+    }
+
     /// Handle MultipartFile command (start of chunked transfer)
     fn handle_multipart_file_start(&mut self, params_str: &str) {
         use std::collections::HashMap;
@@ -265,44 +281,85 @@ impl Terminal {
             }
         }
 
-        // Validate inline=1 is present
-        if params.get("inline") != Some(&"1".to_string()) {
-            debug::log(
-                debug::DebugLevel::Debug,
-                "ITERM",
-                "MultipartFile requires inline=1",
-            );
-            return;
-        }
-
-        // Get expected size if provided
+        let is_inline = params.get("inline").map(|v| v == "1").unwrap_or(false);
         let total_size = params.get("size").and_then(|s| s.parse::<usize>().ok());
 
-        // Check size limit (use same limit as graphics store)
-        if let Some(size) = total_size {
-            let limits = self.graphics_store.limits();
-            if size > limits.max_total_memory {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "ITERM",
-                    &format!(
-                        "MultipartFile rejected: size {} exceeds limit {}",
-                        size, limits.max_total_memory
-                    ),
-                );
-                return;
+        if is_inline {
+            // Inline image path: check graphics limits
+            if let Some(size) = total_size {
+                let limits = self.graphics_store.limits();
+                if size > limits.max_total_memory {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!(
+                            "MultipartFile rejected: size {} exceeds graphics limit {}",
+                            size, limits.max_total_memory
+                        ),
+                    );
+                    return;
+                }
             }
-        }
 
-        // Initialize multipart state
-        self.iterm_multipart_buffer = Some(crate::terminal::ITermMultipartState {
-            params,
-            chunks: Vec::new(),
-            total_size,
-            accumulated_size: 0,
-            is_file_transfer: false,
-            transfer_id: None,
-        });
+            // Initialize multipart state for inline image
+            self.iterm_multipart_buffer = Some(crate::terminal::ITermMultipartState {
+                params,
+                chunks: Vec::new(),
+                total_size,
+                accumulated_size: 0,
+                is_file_transfer: false,
+                transfer_id: None,
+            });
+        } else {
+            // File transfer path: check file transfer size limits
+            if let Some(size) = total_size {
+                let max_size = self.file_transfer_manager.max_transfer_size();
+                if size > max_size {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!(
+                            "MultipartFile file transfer rejected: size {} exceeds limit {}",
+                            size, max_size
+                        ),
+                    );
+                    return;
+                }
+            }
+
+            // Decode filename from base64 name= param
+            let filename = Self::decode_iterm_filename(&params);
+
+            // Start a download in the file transfer manager
+            let transfer_id = self.file_transfer_manager.start_download(
+                filename.clone(),
+                total_size,
+                params.clone(),
+            );
+
+            // Emit FileTransferStarted event
+            self.terminal_events
+                .push(crate::terminal::TerminalEvent::FileTransferStarted {
+                    id: transfer_id,
+                    direction: crate::terminal::TransferDirection::Download,
+                    filename: if filename.is_empty() {
+                        None
+                    } else {
+                        Some(filename)
+                    },
+                    total_bytes: total_size,
+                });
+
+            // Initialize multipart state for file transfer
+            self.iterm_multipart_buffer = Some(crate::terminal::ITermMultipartState {
+                params,
+                chunks: Vec::new(),
+                total_size,
+                accumulated_size: 0,
+                is_file_transfer: true,
+                transfer_id: Some(transfer_id),
+            });
+        }
     }
 
     /// Handle FilePart command (chunk of data in multipart transfer)
@@ -320,42 +377,93 @@ impl Terminal {
             }
         };
 
-        // Decode the chunk to check its size
-        let decoded_size = match base64::Engine::decode(
+        // Decode the chunk
+        let decoded = match base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
             base64_chunk.as_bytes(),
         ) {
-            Ok(decoded) => decoded.len(),
+            Ok(d) => d,
             Err(e) => {
                 debug::log(
                     debug::DebugLevel::Debug,
                     "ITERM",
                     &format!("FilePart base64 decode failed: {}", e),
                 );
+                // If this is a file transfer, emit failure event
+                if state.is_file_transfer {
+                    if let Some(transfer_id) = state.transfer_id {
+                        let _ = self
+                            .file_transfer_manager
+                            .fail_transfer(transfer_id, format!("base64 decode error: {}", e));
+                        self.terminal_events.push(
+                            crate::terminal::TerminalEvent::FileTransferFailed {
+                                id: transfer_id,
+                                reason: format!("base64 decode error: {}", e),
+                            },
+                        );
+                    }
+                }
                 self.iterm_multipart_buffer = None;
                 return;
             }
         };
+        let decoded_size = decoded.len();
 
-        // Check if adding this chunk would exceed size limit
-        let new_accumulated = state.accumulated_size + decoded_size;
-        if let Some(expected_size) = state.total_size {
-            if new_accumulated > expected_size {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "ITERM",
-                    &format!(
-                        "FilePart rejected: accumulated {} + chunk {} > expected {}",
-                        state.accumulated_size, decoded_size, expected_size
-                    ),
-                );
-                self.iterm_multipart_buffer = None;
-                return;
+        if state.is_file_transfer {
+            // File transfer path: append decoded data to transfer manager
+            if let Some(transfer_id) = state.transfer_id {
+                if let Err(e) = self
+                    .file_transfer_manager
+                    .append_data(transfer_id, &decoded)
+                {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!("File transfer append failed: {}", e),
+                    );
+                    self.terminal_events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
+                            id: transfer_id,
+                            reason: e,
+                        });
+                    self.iterm_multipart_buffer = None;
+                    return;
+                }
+
+                // Emit progress event
+                let new_accumulated = state.accumulated_size + decoded_size;
+                self.terminal_events
+                    .push(crate::terminal::TerminalEvent::FileTransferProgress {
+                        id: transfer_id,
+                        bytes_transferred: new_accumulated,
+                        total_bytes: state.total_size,
+                    });
             }
         }
 
-        // Add chunk and update size
-        state.chunks.push(base64_chunk.to_string());
+        // Check if adding this chunk would exceed size limit (inline images only)
+        let new_accumulated = state.accumulated_size + decoded_size;
+        if !state.is_file_transfer {
+            if let Some(expected_size) = state.total_size {
+                if new_accumulated > expected_size {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!(
+                            "FilePart rejected: accumulated {} + chunk {} > expected {}",
+                            state.accumulated_size, decoded_size, expected_size
+                        ),
+                    );
+                    self.iterm_multipart_buffer = None;
+                    return;
+                }
+            }
+        }
+
+        // For inline images: accumulate base64 chunks
+        if !state.is_file_transfer {
+            state.chunks.push(base64_chunk.to_string());
+        }
         state.accumulated_size = new_accumulated;
 
         // Check if transfer is complete
@@ -363,12 +471,24 @@ impl Terminal {
             state.accumulated_size >= expected_size
         } else {
             // Without size parameter, we can't determine completion automatically
-            // iTerm2 spec says size should be provided, so this is an error state
             debug::log(
                 debug::DebugLevel::Debug,
                 "ITERM",
                 "MultipartFile missing size parameter - cannot determine completion",
             );
+            // If file transfer, fail it
+            if state.is_file_transfer {
+                if let Some(transfer_id) = state.transfer_id {
+                    let _ = self
+                        .file_transfer_manager
+                        .fail_transfer(transfer_id, "missing size parameter".to_string());
+                    self.terminal_events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
+                            id: transfer_id,
+                            reason: "missing size parameter".to_string(),
+                        });
+                }
+            }
             self.iterm_multipart_buffer = None;
             return;
         };
@@ -378,7 +498,7 @@ impl Terminal {
         }
     }
 
-    /// Finalize multipart transfer and process the complete image
+    /// Finalize multipart transfer and process the complete data
     fn finalize_multipart_transfer(&mut self) {
         // Take the buffer state
         let state = match self.iterm_multipart_buffer.take() {
@@ -386,22 +506,67 @@ impl Terminal {
             None => return,
         };
 
-        // Join all chunks into single base64 string
-        let complete_data = state.chunks.join("");
+        if state.is_file_transfer {
+            // File transfer path: complete the transfer
+            if let Some(transfer_id) = state.transfer_id {
+                // Get the filename and size before completing
+                let filename = Self::decode_iterm_filename(&state.params);
+                let size = self
+                    .file_transfer_manager
+                    .get_transfer(transfer_id)
+                    .map(|t| t.data.len())
+                    .unwrap_or(0);
 
-        // Reconstruct File= format string with params
-        let mut params_parts = Vec::new();
-        for (key, value) in &state.params {
-            params_parts.push(format!("{}={}", key, value));
+                match self.file_transfer_manager.complete_transfer(transfer_id) {
+                    Ok(()) => {
+                        self.terminal_events.push(
+                            crate::terminal::TerminalEvent::FileTransferCompleted {
+                                id: transfer_id,
+                                filename: if filename.is_empty() {
+                                    None
+                                } else {
+                                    Some(filename)
+                                },
+                                size,
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        debug::log(
+                            debug::DebugLevel::Debug,
+                            "ITERM",
+                            &format!("File transfer complete failed: {}", e),
+                        );
+                        self.terminal_events.push(
+                            crate::terminal::TerminalEvent::FileTransferFailed {
+                                id: transfer_id,
+                                reason: e,
+                            },
+                        );
+                    }
+                }
+            }
+        } else {
+            // Inline image path: join chunks and delegate to handle_single_file_transfer
+            let complete_data = state.chunks.join("");
+
+            // Reconstruct File= format string with params
+            let mut params_parts = Vec::new();
+            for (key, value) in &state.params {
+                params_parts.push(format!("{}={}", key, value));
+            }
+            let params_str = params_parts.join(";");
+            let file_data = format!("File={}:{}", params_str, complete_data);
+
+            // Process as single-file transfer (inline image)
+            self.handle_single_file_transfer(&file_data);
         }
-        let params_str = params_parts.join(";");
-        let file_data = format!("File={}:{}", params_str, complete_data);
-
-        // Process as single-file transfer
-        self.handle_single_file_transfer(&file_data);
     }
 
     /// Handle single-sequence File= transfer
+    ///
+    /// Routes to either inline image display (inline=1) or file download
+    /// tracking (inline=0 or absent) based on the parsed parameters.
     fn handle_single_file_transfer(&mut self, data: &str) {
         use crate::graphics::iterm::ITermParser;
 
@@ -442,82 +607,172 @@ impl Terminal {
             return;
         }
 
-        // Set the base64 image data
-        parser.set_data(image_data.as_bytes());
+        if parser.is_inline() {
+            // ===== Inline image path (UNCHANGED from original) =====
+            // Set the base64 image data
+            parser.set_data(image_data.as_bytes());
 
-        // Get cursor position for graphic placement
-        let position = (self.cursor.col, self.cursor.row);
+            // Get cursor position for graphic placement
+            let position = (self.cursor.col, self.cursor.row);
 
-        // Decode and create graphic
-        match parser.decode_image(position) {
-            Ok(mut graphic) => {
-                // Set cell dimensions
-                let (cell_w, cell_h) = self.cell_dimensions;
-                graphic.set_cell_dimensions(cell_w, cell_h);
+            // Decode and create graphic
+            match parser.decode_image(position) {
+                Ok(mut graphic) => {
+                    // Set cell dimensions
+                    let (cell_w, cell_h) = self.cell_dimensions;
+                    graphic.set_cell_dimensions(cell_w, cell_h);
 
-                // Calculate graphic height in terminal rows (ceiling division)
-                let graphic_height_in_rows = graphic.height.div_ceil(cell_h as usize);
+                    // Calculate graphic height in terminal rows (ceiling division)
+                    let graphic_height_in_rows = graphic.height.div_ceil(cell_h as usize);
 
-                // Move cursor to line below graphic (similar to Sixel behavior)
-                let new_cursor_col = 0;
-                let new_cursor_row = self.cursor.row.saturating_add(graphic_height_in_rows);
+                    // Move cursor to line below graphic (similar to Sixel behavior)
+                    let new_cursor_col = 0;
+                    let new_cursor_row = self.cursor.row.saturating_add(graphic_height_in_rows);
 
-                // Check if we need to scroll
-                let (_, rows) = self.size();
-                if new_cursor_row >= rows {
-                    // Graphic pushed cursor past bottom, need to scroll
-                    let scroll_amount = new_cursor_row - rows + 1;
-                    let scroll_top = self.scroll_region_top;
-                    let scroll_bottom = self.scroll_region_bottom;
+                    // Check if we need to scroll
+                    let (_, rows) = self.size();
+                    if new_cursor_row >= rows {
+                        // Graphic pushed cursor past bottom, need to scroll
+                        let scroll_amount = new_cursor_row - rows + 1;
+                        let scroll_top = self.scroll_region_top;
+                        let scroll_bottom = self.scroll_region_bottom;
 
-                    // Scroll the grid and existing graphics
-                    self.active_grid_mut().scroll_region_up(
-                        scroll_amount,
-                        scroll_top,
-                        scroll_bottom,
-                    );
-                    self.adjust_graphics_for_scroll_up(scroll_amount, scroll_top, scroll_bottom);
+                        // Scroll the grid and existing graphics
+                        self.active_grid_mut().scroll_region_up(
+                            scroll_amount,
+                            scroll_top,
+                            scroll_bottom,
+                        );
+                        self.adjust_graphics_for_scroll_up(
+                            scroll_amount,
+                            scroll_top,
+                            scroll_bottom,
+                        );
 
-                    // Adjust new graphic's position for the scroll
-                    let original_row = graphic.position.1;
-                    let new_row = original_row.saturating_sub(scroll_amount);
-                    graphic.position.1 = new_row;
+                        // Adjust new graphic's position for the scroll
+                        let original_row = graphic.position.1;
+                        let new_row = original_row.saturating_sub(scroll_amount);
+                        graphic.position.1 = new_row;
 
-                    // Track rows that scrolled off top
-                    if scroll_amount > original_row {
-                        graphic.scroll_offset_rows = scroll_amount - original_row;
+                        // Track rows that scrolled off top
+                        if scroll_amount > original_row {
+                            graphic.scroll_offset_rows = scroll_amount - original_row;
+                        }
+
+                        self.cursor.row = rows - 1;
+                        self.cursor.col = new_cursor_col;
+                    } else {
+                        self.cursor.row = new_cursor_row;
+                        self.cursor.col = new_cursor_col;
                     }
 
-                    self.cursor.row = rows - 1;
-                    self.cursor.col = new_cursor_col;
-                } else {
-                    self.cursor.row = new_cursor_row;
-                    self.cursor.col = new_cursor_col;
+                    // Add to graphics store (limit enforced internally)
+                    self.graphics_store.add_graphic(graphic.clone());
+
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!(
+                            "Added iTerm image at ({}, {}), size {}x{}, cursor moved to ({}, {})",
+                            position.0,
+                            position.1,
+                            graphic.width,
+                            graphic.height,
+                            self.cursor.col,
+                            self.cursor.row
+                        ),
+                    );
                 }
-
-                // Add to graphics store (limit enforced internally)
-                self.graphics_store.add_graphic(graphic.clone());
-
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "ITERM",
-                    &format!(
-                        "Added iTerm image at ({}, {}), size {}x{}, cursor moved to ({}, {})",
-                        position.0,
-                        position.1,
-                        graphic.width,
-                        graphic.height,
-                        self.cursor.col,
-                        self.cursor.row
-                    ),
-                );
+                Err(e) => {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!("Failed to decode iTerm image: {}", e),
+                    );
+                }
             }
-            Err(e) => {
+        } else {
+            // ===== File download path =====
+            // Decode the base64 data
+            let decoded = match base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                image_data.as_bytes(),
+            ) {
+                Ok(d) => d,
+                Err(e) => {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "ITERM",
+                        &format!("File transfer base64 decode failed: {}", e),
+                    );
+                    return;
+                }
+            };
+
+            let filename = Self::decode_iterm_filename(parser.params());
+            let total_bytes = Some(decoded.len());
+
+            // Start, append data, and complete in one go
+            let transfer_id = self.file_transfer_manager.start_download(
+                filename.clone(),
+                total_bytes,
+                parser.params().clone(),
+            );
+
+            // Emit started event
+            self.terminal_events
+                .push(crate::terminal::TerminalEvent::FileTransferStarted {
+                    id: transfer_id,
+                    direction: crate::terminal::TransferDirection::Download,
+                    filename: if filename.is_empty() {
+                        None
+                    } else {
+                        Some(filename.clone())
+                    },
+                    total_bytes,
+                });
+
+            // Append the full data
+            if let Err(e) = self
+                .file_transfer_manager
+                .append_data(transfer_id, &decoded)
+            {
                 debug::log(
                     debug::DebugLevel::Debug,
                     "ITERM",
-                    &format!("Failed to decode iTerm image: {}", e),
+                    &format!("File transfer append failed: {}", e),
                 );
+                self.terminal_events
+                    .push(crate::terminal::TerminalEvent::FileTransferFailed {
+                        id: transfer_id,
+                        reason: e,
+                    });
+                return;
+            }
+
+            // Complete the transfer
+            let size = decoded.len();
+            match self.file_transfer_manager.complete_transfer(transfer_id) {
+                Ok(()) => {
+                    self.terminal_events.push(
+                        crate::terminal::TerminalEvent::FileTransferCompleted {
+                            id: transfer_id,
+                            filename: if filename.is_empty() {
+                                None
+                            } else {
+                                Some(filename)
+                            },
+                            size,
+                        },
+                    );
+                }
+                Err(e) => {
+                    self.terminal_events
+                        .push(crate::terminal::TerminalEvent::FileTransferFailed {
+                            id: transfer_id,
+                            reason: e,
+                        });
+                }
             }
         }
     }
