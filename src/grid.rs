@@ -1950,6 +1950,7 @@ impl Grid {
     /// The snapshot includes all visible cells, scrollback, wrap flags,
     /// zones, and counters. The `evicted_zones` field is intentionally
     /// omitted because it is transient event data.
+    #[must_use]
     pub fn capture_snapshot(&self) -> crate::terminal::terminal_snapshot::GridSnapshot {
         crate::terminal::terminal_snapshot::GridSnapshot {
             cells: self.cells.clone(),

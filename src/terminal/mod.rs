@@ -4009,6 +4009,7 @@ impl Terminal {
     /// # Returns
     /// A `TerminalSnapshot` that can later be passed to
     /// `restore_from_snapshot` to rewind the terminal to this state.
+    #[must_use]
     pub fn capture_snapshot(&self) -> terminal_snapshot::TerminalSnapshot {
         let mut snap = terminal_snapshot::TerminalSnapshot {
             timestamp: unix_millis(),
@@ -4042,6 +4043,15 @@ impl Terminal {
             application_cursor: self.application_cursor,
             bracketed_paste: self.bracketed_paste,
             focus_tracking: self.focus_tracking,
+            mouse_mode: self.mouse_mode,
+            mouse_encoding: self.mouse_encoding,
+            use_lr_margins: self.use_lr_margins,
+            left_margin: self.left_margin,
+            right_margin: self.right_margin,
+            keyboard_flags: self.keyboard_flags,
+            modify_other_keys_mode: self.modify_other_keys_mode,
+            char_protected: self.char_protected,
+            bold_brightening: self.bold_brightening,
 
             scroll_region_top: self.scroll_region_top,
             scroll_region_bottom: self.scroll_region_bottom,
@@ -4097,6 +4107,15 @@ impl Terminal {
         self.application_cursor = snap.application_cursor;
         self.bracketed_paste = snap.bracketed_paste;
         self.focus_tracking = snap.focus_tracking;
+        self.mouse_mode = snap.mouse_mode;
+        self.mouse_encoding = snap.mouse_encoding;
+        self.use_lr_margins = snap.use_lr_margins;
+        self.left_margin = snap.left_margin;
+        self.right_margin = snap.right_margin;
+        self.keyboard_flags = snap.keyboard_flags;
+        self.modify_other_keys_mode = snap.modify_other_keys_mode;
+        self.char_protected = snap.char_protected;
+        self.bold_brightening = snap.bold_brightening;
 
         // Scroll region
         self.scroll_region_top = snap.scroll_region_top;

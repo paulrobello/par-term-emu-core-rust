@@ -6,6 +6,7 @@
 use crate::cell::{Cell, CellFlags};
 use crate::color::Color;
 use crate::cursor::Cursor;
+use crate::mouse::{MouseEncoding, MouseMode};
 use crate::zone::Zone;
 
 /// Snapshot of a single Grid's state (primary or alternate screen).
@@ -100,6 +101,24 @@ pub struct TerminalSnapshot {
     pub bracketed_paste: bool,
     /// Focus tracking mode
     pub focus_tracking: bool,
+    /// Mouse tracking mode
+    pub mouse_mode: MouseMode,
+    /// Mouse encoding format
+    pub mouse_encoding: MouseEncoding,
+    /// Whether left/right margins are enabled (DECLRMM)
+    pub use_lr_margins: bool,
+    /// Left margin column (0-indexed)
+    pub left_margin: usize,
+    /// Right margin column (0-indexed)
+    pub right_margin: usize,
+    /// Keyboard flags (kitty keyboard protocol)
+    pub keyboard_flags: u16,
+    /// modifyOtherKeys mode level
+    pub modify_other_keys_mode: u8,
+    /// Character protection attribute (DECSCA)
+    pub char_protected: bool,
+    /// Whether bold text uses bright colors
+    pub bold_brightening: bool,
 
     // --- Scroll region ---
     /// Scroll region top row (0-indexed)
@@ -202,6 +221,15 @@ mod tests {
             application_cursor: false,
             bracketed_paste: false,
             focus_tracking: false,
+            mouse_mode: MouseMode::Off,
+            mouse_encoding: MouseEncoding::Default,
+            use_lr_margins: false,
+            left_margin: 0,
+            right_margin: cols.saturating_sub(1),
+            keyboard_flags: 0,
+            modify_other_keys_mode: 0,
+            char_protected: false,
+            bold_brightening: true,
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
             tab_stops: vec![false; cols],
