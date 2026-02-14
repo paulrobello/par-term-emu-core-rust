@@ -5565,6 +5565,36 @@ impl PyTerminal {
         Ok(self.inner.get_semantic_snapshot_json(snapshot_scope))
     }
 
+    /// Capture a cell-level snapshot of the terminal state for Instant Replay.
+    ///
+    /// Unlike `get_semantic_snapshot()` which captures text only, this captures
+    /// raw Cell data including colors and attributes for pixel-perfect reconstruction.
+    ///
+    /// Returns:
+    ///     dict: Snapshot metadata with keys:
+    ///         - timestamp (int): Unix timestamp in milliseconds
+    ///         - cols (int): Terminal width in columns
+    ///         - rows (int): Terminal height in rows
+    ///         - estimated_size_bytes (int): Approximate memory footprint in bytes
+    ///
+    /// Example:
+    ///     >>> term = Terminal(80, 24)
+    ///     >>> info = term.capture_replay_snapshot()
+    ///     >>> print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
+    fn capture_replay_snapshot(&mut self) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
+        use pyo3::types::PyDict;
+
+        let snap = self.inner.capture_snapshot();
+        Python::attach(|py| {
+            let dict = PyDict::new(py);
+            dict.set_item("timestamp", snap.timestamp)?;
+            dict.set_item("cols", snap.cols)?;
+            dict.set_item("rows", snap.rows)?;
+            dict.set_item("estimated_size_bytes", snap.estimated_size_bytes)?;
+            Ok(dict.into())
+        })
+    }
+
     // ========== File Transfer API ==========
 
     /// Get all active (in-progress) file transfers
