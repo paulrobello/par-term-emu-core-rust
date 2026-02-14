@@ -2613,12 +2613,10 @@ mod tests {
 
     #[test]
     fn test_get_command_outputs_filters_evicted() {
-        // Use a large enough scrollback that old command output is retained
-        // but verify both commands' outputs are accessible.
-        // Use a larger terminal to avoid scrollback circular buffer edge cases.
-        let mut term = Terminal::with_scrollback(80, 24, 100);
+        // Use a larger terminal so the "new" command's output doesn't scroll past its zone
+        let mut term = Terminal::with_scrollback(80, 24, 50);
 
-        // First command
+        // First command - will be evicted
         term.shell_integration_mut().set_command("old".to_string());
         term.start_command_execution("old".to_string());
         term.process(b"\x1b]133;A\x07$ \r\n");
@@ -2628,23 +2626,32 @@ mod tests {
         term.process(b"\x1b]133;D;0\x07");
         term.end_command_execution(0);
 
-        // Second command
+        // Generate enough output to push old command past scrollback
+        for i in 0..80 {
+            term.process(format!("filler line {}\r\n", i).as_bytes());
+        }
+
+        // Second command - recent, output stays in visible grid (no scrolling between C and D)
         term.shell_integration_mut().set_command("new".to_string());
         term.start_command_execution("new".to_string());
         term.process(b"\x1b]133;A\x07$ \r\n");
         term.process(b"\x1b]133;B\x07new\r\n");
         term.process(b"\x1b]133;C\x07");
-        term.process(b"new output\r\n");
+        term.process(b"new output"); // No \r\n — stays on same line as C marker
         term.process(b"\x1b]133;D;0\x07");
         term.end_command_execution(0);
 
         let outputs = term.get_command_outputs();
-        // Both commands should have extractable output
-        assert_eq!(outputs.len(), 2);
-        assert!(outputs[0].output.contains("old output"));
-        assert!(outputs[1].output.contains("new output"));
-        assert_eq!(outputs[0].command, "old");
-        assert_eq!(outputs[1].command, "new");
+        // Old command's output should be evicted, only new should remain
+        assert!(!outputs.is_empty());
+        assert!(outputs.iter().any(|o| o.output.contains("new output")));
+        // Old command should not be in extractable outputs
+        assert!(!outputs.iter().any(|o| o.command == "old"));
+
+        // Direct index access: old command (index 1) should return None
+        assert!(term.get_command_output(1).is_none());
+        // New command (index 0) should still work
+        assert!(term.get_command_output(0).is_some());
     }
 
     #[test]

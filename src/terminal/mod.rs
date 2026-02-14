@@ -2269,6 +2269,17 @@ impl Terminal {
     /// Handles wrapped lines by omitting newlines between them.
     fn extract_text_from_row_range(&self, abs_start: usize, abs_end: usize) -> Option<String> {
         let scrollback_len = self.grid.scrollback_len();
+
+        // Check if the range is entirely evicted from the scrollback buffer
+        let total_scrolled = self.grid.total_lines_scrolled();
+        let max_sb = self.grid.max_scrollback();
+        if total_scrolled > max_sb {
+            let floor = total_scrolled - max_sb;
+            if abs_end < floor {
+                return None;
+            }
+        }
+
         let mut text = String::new();
         let mut found_any = false;
 
