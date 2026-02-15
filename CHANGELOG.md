@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.39.0] - 2026-02-15
 
 ### Security
 - **Constant-time auth comparisons (S-1, S-2)**: All API key and password comparisons now use `subtle::ct_eq()` to prevent timing attacks
@@ -38,8 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Event system tests (T-4)**: 29 new tests for `TerminalEvent::kind()` exhaustive variant coverage, event queuing through `process()`/`poll_events()`, and event struct validation
 - **HTML export tests (T-6)**: 20 new tests (up from 2) for text rendering, HTML escaping, text attributes (bold/italic/underline/strikethrough/dim/blink/hidden/reverse), color rendering, and wide characters
 - **Search tests (T-8)**: 24 new tests (up from 2) for regex patterns, search options, match navigation, scrollback search, Unicode support, and API coverage
+- **Python binding: `poll_upload_requests()`**: Add missing Python binding for `Terminal.poll_upload_requests()` to drain pending upload request events
 
 ### Changed
+- **Dependencies**: Update all Rust, Python, and Node dependencies to latest versions. Notable: sysinfo 0.34→0.38, pyo3 0.28.1, ruff 0.15, maturin 1.12
+- **MSRV**: Bump minimum supported Rust version from 1.75 to 1.88 (required by sysinfo 0.38)
+- **Clippy auto-fix**: Replace `map_or(true, ...)` with `is_none_or(...)` in image deletion (Rust 1.82+)
 - **CLAUDE.md**: Improve developer guidance with build commands, single-test examples, architecture overview, streaming protocol layers, and feature flags documentation
 
 ### Documentation

@@ -2786,6 +2786,14 @@ impl PyTerminal {
             .collect())
     }
 
+    /// Drain only upload request events, keeping other events queued
+    ///
+    /// Returns:
+    ///     List of format strings from pending UploadRequested events
+    fn poll_upload_requests(&mut self) -> PyResult<Vec<String>> {
+        Ok(self.inner.poll_upload_requests())
+    }
+
     /// Get auto-wrap mode (DECAWM)
     fn auto_wrap_mode(&self) -> PyResult<bool> {
         Ok(self.inner.auto_wrap_mode())

@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.38.0 adds general-purpose file transfer (OSC 1337), instant replay with timeline navigation, C-compatible FFI, and a comprehensive terminal observer API. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.0 adds security hardening (constant-time auth, input validation, graphics size limits), 133 new tests, and dependency updates (sysinfo 0.38, pyo3 0.28.1, ruff 0.15). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
