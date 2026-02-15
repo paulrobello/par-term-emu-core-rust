@@ -5860,7 +5860,7 @@ fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::ClipboardSlot> 
 ///
 /// Creates a `PyDict` with the transfer's metadata fields. When `include_data`
 /// is true, also includes the raw file data as `PyBytes` under the `"data"` key.
-fn transfer_to_py_dict(
+pub(super) fn transfer_to_py_dict(
     py: Python<'_>,
     transfer: &crate::terminal::file_transfer::FileTransfer,
     include_data: bool,

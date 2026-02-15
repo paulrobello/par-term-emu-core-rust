@@ -2114,6 +2114,76 @@ print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} by
 # Snapshot at 1707000000000, size: 47232 bytes
 ```
 
+## C-Compatible FFI
+
+The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability.
+
+### SharedCell
+
+A frozen cell value with text, colors, and attributes.
+
+| Field | Type | Description |
+|---|---|---|
+| `text` | `[u8; 4]` | UTF-8 encoded character bytes (up to 4 bytes) |
+| `text_len` | `u8` | Number of valid bytes in `text` |
+| `fg_r`, `fg_g`, `fg_b` | `u8` | Foreground color (resolved to RGB) |
+| `bg_r`, `bg_g`, `bg_b` | `u8` | Background color (resolved to RGB) |
+| `bold` | `bool` | Bold attribute |
+| `italic` | `bool` | Italic attribute |
+| `underline` | `bool` | Underline attribute |
+| `strikethrough` | `bool` | Strikethrough attribute |
+
+### SharedState
+
+A frozen snapshot of the full terminal state, allocated on the heap.
+
+| Field | Type | Description |
+|---|---|---|
+| `cols` | `u32` | Number of columns |
+| `rows` | `u32` | Number of rows |
+| `cursor_col` | `u32` | Cursor column (0-indexed) |
+| `cursor_row` | `u32` | Cursor row (0-indexed) |
+| `title` | `*mut c_char` | Null-terminated title string (owned) |
+| `cwd` | `*mut c_char` | Null-terminated CWD string (owned) |
+| `cells` | `*mut SharedCell` | Row-major cell array of `cols * rows` entries (owned) |
+| `cell_count` | `u32` | Number of cells in the array |
+
+### C API Functions
+
+```c
+// Get a frozen snapshot of the terminal state.
+// Returns a heap-allocated SharedState that must be freed with terminal_free_state().
+SharedState* terminal_get_state(const Terminal* term);
+
+// Free a SharedState previously returned by terminal_get_state().
+void terminal_free_state(SharedState* state);
+
+// Register a C observer via vtable. Returns an observer ID (0 on error).
+uint64_t terminal_add_observer(Terminal* term, TerminalObserverVtable vtable);
+
+// Remove a previously registered observer by ID. Returns true if found.
+bool terminal_remove_observer(Terminal* term, uint64_t id);
+```
+
+### TerminalObserverVtable
+
+A C function-pointer table for receiving terminal events. Each callback receives a `user_data` pointer and a JSON-encoded event string (valid only for the duration of the callback).
+
+```c
+typedef struct {
+    // Called for zone lifecycle events (prompt start/end, command start/end, output start/end)
+    void (*on_zone_event)(void* user_data, const char* event_json);     // optional
+    // Called for command completion events
+    void (*on_command_event)(void* user_data, const char* event_json);  // optional
+    // Called for environment change events (CWD, title, etc.)
+    void (*on_environment_event)(void* user_data, const char* event_json); // optional
+    // Called for screen-related events (bell, resize, graphics, file transfers, etc.)
+    void (*on_screen_event)(void* user_data, const char* event_json);   // optional
+    // Opaque user data passed to every callback
+    void* user_data;
+} TerminalObserverVtable;
+```
+
 ## See Also
 
 - [VT Sequences Reference](VT_SEQUENCES.md) - Complete list of supported ANSI/VT sequences

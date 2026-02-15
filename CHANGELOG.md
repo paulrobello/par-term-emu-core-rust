@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-02-14
+
 ### Added
 - **Instant Replay**: Add Instant Replay system with cell-level terminal snapshots, input-stream delta recording, and timeline navigation (Issue #47)
   - `TerminalSnapshot` and `GridSnapshot` structs capture complete terminal state (grids, cursors, colors, attributes, modes, scroll regions, tab stops) with memory size estimation
@@ -26,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **File Transfer Terminal Events**: Five new `TerminalEvent` variants: `FileTransferStarted`, `FileTransferProgress`, `FileTransferCompleted`, `FileTransferFailed`, `UploadRequested`
   - All events routed to `on_screen_event()` in the observer system
   - New `EventKind` variants for subscription filtering: `FileTransferStarted`, `FileTransferProgress`, `FileTransferCompleted`, `FileTransferFailed`, `UploadRequested`
-- **Python Bindings: File Transfer API**: 9 new methods on `Terminal` and `PtyTerminal`
+- **Python Bindings: File Transfer API**: 9 new methods on both `Terminal` and `PtyTerminal`
   - Query: `get_active_transfers()`, `get_completed_transfers()`, `get_transfer(id)`
   - Retrieve: `take_completed_transfer(id)` (includes raw `data` bytes)
   - Control: `cancel_file_transfer(id)`, `send_upload_data(data)`, `cancel_upload()`

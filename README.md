@@ -13,7 +13,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 [!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://buymeacoffee.com/probello3)
 
-## What's New (Unreleased)
+## What's New in 0.38.0
 
 ### General-Purpose File Transfer (OSC 1337)
 
@@ -22,7 +22,7 @@ Full file transfer support via the iTerm2 OSC 1337 `File=` protocol:
 - **Downloads** (`inline=0`): Host sends files to the terminal. The library decodes the base64 payload, tracks transfer progress, and emits lifecycle events (`file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`). Frontends retrieve raw bytes via `take_completed_transfer()` and decide where to save.
 - **Uploads** (`RequestUpload=format=tgz`): Host requests files from the terminal. An `upload_requested` event is emitted; frontends show a file picker and respond via `send_upload_data()` or `cancel_upload()`.
 - **FileTransferManager**: Manages active and completed transfers with bounded ring buffer, configurable max transfer size, and progress tracking.
-- **Python Bindings**: 9 new methods on `Terminal` -- `get_active_transfers()`, `get_completed_transfers()`, `get_transfer()`, `take_completed_transfer()`, `cancel_file_transfer()`, `send_upload_data()`, `cancel_upload()`, `set_max_transfer_size()`, `get_max_transfer_size()`.
+- **Python Bindings**: 9 new methods on both `Terminal` and `PtyTerminal` -- `get_active_transfers()`, `get_completed_transfers()`, `get_transfer()`, `take_completed_transfer()`, `cancel_file_transfer()`, `send_upload_data()`, `cancel_upload()`, `set_max_transfer_size()`, `get_max_transfer_size()`.
 - **Streaming Protocol**: 5 new event types for real-time file transfer event delivery to WebSocket clients.
 - **Observer API**: All 5 file transfer event types integrated with the push-based observer system.
 
@@ -35,6 +35,14 @@ Cell-level terminal snapshots with input-stream delta recording and timeline nav
 - **SnapshotManager**: Rolling buffer of snapshots with size-based eviction (default 4 MiB budget, 30-second interval). Records input bytes between snapshots for delta reconstruction.
 - **ReplaySession**: Timeline navigation with `seek_to()`, `step_forward()`, `step_backward()`, `seek_to_start()`, `seek_to_end()`, and timestamp-based seeking. Reconstructs terminal frames at arbitrary positions.
 - **Python Binding**: `capture_replay_snapshot()` returns dict with `timestamp`, `cols`, `rows`, `estimated_size_bytes`.
+
+### C-Compatible FFI
+
+New `#[repr(C)]` types and C API for embedding in C/C++ applications:
+
+- **SharedState / SharedCell**: Frozen snapshot of terminal state (dimensions, cursor, title, CWD, screen content with per-cell text/color/attributes) accessible from C without Rust FFI complexity.
+- **C API**: `terminal_get_state()`, `terminal_free_state()` for state snapshots; `terminal_add_observer()`, `terminal_remove_observer()` for event delivery.
+- **Observer Vtable**: `TerminalObserverVtable` with function pointers and `user_data` context pointer for C callback registration.
 
 ## What's New in 0.37.0
 
@@ -1086,6 +1094,7 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Observer API** - Push-based event delivery with sync callbacks and async queues; convenience wrappers for common patterns (bell, title, CWD, command completion, zone changes)
 - **General-purpose File Transfer** - OSC 1337 `File=` with `inline=0` for host-to-terminal downloads, `RequestUpload` for terminal-to-host uploads, with progress tracking and lifecycle events
 - **Instant Replay** - Cell-level terminal snapshots with input-stream delta recording, size-based eviction, and timeline navigation via `SnapshotManager` and `ReplaySession`
+- **C-Compatible FFI** - `#[repr(C)]` types (`SharedState`, `SharedCell`) and C API (`terminal_get_state`, `terminal_add_observer`) for embedding in C/C++ applications
 
 ### Graphics Support
 

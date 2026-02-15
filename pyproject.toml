@@ -6,7 +6,7 @@ build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.37.0"
+version = "0.38.0"
 description = "A comprehensive terminal emulator library in Rust with Python bindings - supports true color, alt screen, mouse reporting, bracketed paste, and full Unicode"
 readme = "README.md"
 requires-python = ">=3.12"
