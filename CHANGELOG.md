@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Makefile: npm → bun**: Replace all `npm` commands with `bun` in web frontend targets (`web-install`, `web-dev`, `web-build`, `web-build-static`, `web-start`, `proto-typescript`) to match the project's actual package manager
+- **Makefile: Add `test-rust-streaming` target**: Streaming Rust tests (69 additional tests) were never run; new target added to `test`, `checkall`, and help text
+- **Missing `websockets` dev dependency**: Add `websockets` to `pyproject.toml` dev dependencies so streaming Python tests actually run instead of silently skipping
+- **Streaming test skip guard**: Fix `test_streaming.py` skip logic to catch `RuntimeError`/`TypeError` (not just `ImportError`) when the streaming feature isn't compiled, so tests skip gracefully with `make dev`
+
+### Changed
+- **CLAUDE.md**: Improve developer guidance with build commands, single-test examples, architecture overview, streaming protocol layers, and feature flags documentation
+
 ## [0.38.0] - 2026-02-14
 
 ### Added

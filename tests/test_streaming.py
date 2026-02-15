@@ -19,8 +19,11 @@ try:
     from par_term_emu_core_rust import PtyTerminal, StreamingConfig, StreamingServer
     import websockets  # type: ignore[import-not-found]
 
+    # Verify streaming feature is actually compiled (classes exist but raise
+    # RuntimeError at construction if the feature wasn't enabled at build time)
+    StreamingConfig()
     HAS_STREAMING = True
-except ImportError:
+except (ImportError, RuntimeError, TypeError):
     HAS_STREAMING = False
     pytestmark = pytest.mark.skip(reason="Streaming feature not built")
     # Type checking stubs to avoid unbound errors
@@ -245,7 +248,7 @@ async def test_websocket_connection(streaming_server):
 
     async with websockets.connect(uri) as websocket:
         # Should be connected
-        assert websocket.open
+        assert websocket.state.name == "OPEN"
 
         # Should receive initial screen (if configured)
         try:
@@ -293,7 +296,7 @@ async def test_websocket_multiple_clients(streaming_server):
         # All should be connected
         assert len(clients) == 3
         for client in clients:
-            assert client.open
+            assert client.state.name == "OPEN"
 
         # Check client count
         # Note: This may not work immediately due to async nature
@@ -314,15 +317,15 @@ async def test_websocket_client_disconnect(streaming_server):
 
     # Connect
     websocket = await websockets.connect(uri)
-    assert websocket.open
+    assert websocket.state.name == "OPEN"
 
     # Disconnect
     await websocket.close()
-    assert not websocket.open
+    assert websocket.state.name == "CLOSED"
 
     # Reconnect
     websocket = await websockets.connect(uri)
-    assert websocket.open
+    assert websocket.state.name == "OPEN"
     await websocket.close()
 
 
@@ -552,7 +555,7 @@ async def test_many_clients_sequential(pty_terminal, streaming_port):
     # Connect and disconnect many clients
     for i in range(20):
         client = await websockets.connect(uri)
-        assert client.open
+        assert client.state.name == "OPEN"
 
         # Receive any initial data
         try:

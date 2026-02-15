@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-python clean install install-force dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
@@ -29,8 +29,9 @@ help:
 	@echo "  watch            - Auto-rebuild on file changes (requires cargo-watch)"
 	@echo ""
 	@echo "Testing:"
-	@echo "  test            - Run all tests (Rust + Python)"
+	@echo "  test            - Run all tests (Rust + Rust streaming + Python)"
 	@echo "  test-rust       - Run Rust tests only"
+	@echo "  test-rust-streaming - Run Rust streaming tests only"
 	@echo "  test-python     - Run Python tests only"
 	@echo ""
 	@echo "Code Quality:"
@@ -187,11 +188,15 @@ watch:
 # Testing
 # ============================================================================
 
-test: test-rust test-python
+test: test-rust test-rust-streaming test-python
 
 test-rust:
 	@echo "Running Rust tests..."
 	cargo test --lib --no-default-features --features pyo3/auto-initialize
+
+test-rust-streaming:
+	@echo "Running Rust streaming tests..."
+	cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming
 
 test-python: dev
 	@echo "Running Python tests..."
@@ -224,7 +229,7 @@ check:
 	@echo "Checking Rust code..."
 	cargo check
 
-checkall: test-rust lint lint-python test-python
+checkall: test-rust test-rust-streaming lint lint-python test-python
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -232,6 +237,7 @@ checkall: test-rust lint lint-python test-python
 	@echo ""
 	@echo "Summary:"
 	@echo "  ✓ Rust tests"
+	@echo "  ✓ Rust streaming tests"
 	@echo "  ✓ Rust format (auto-fixed)"
 	@echo "  ✓ Rust lint (clippy auto-fixed)"
 	@echo "  ✓ Python format (auto-fixed)"
@@ -510,7 +516,7 @@ proto-rust:
 proto-typescript: web-install
 	@echo "Generating TypeScript protobuf code..."
 	@mkdir -p web-terminal-frontend/lib/proto
-	cd web-terminal-frontend && npm run proto:generate
+	cd web-terminal-frontend && bun run proto:generate
 	@echo "TypeScript protobuf code generated in web-terminal-frontend/lib/proto/"
 
 proto-clean:
@@ -531,7 +537,7 @@ web-install:
 		echo "Error: web-terminal-frontend directory not found!"; \
 		exit 1; \
 	fi
-	cd web-terminal-frontend && npm install
+	cd web-terminal-frontend && bun install
 	@echo ""
 	@echo "Dependencies installed successfully!"
 	@echo ""
@@ -550,14 +556,14 @@ web-dev: web-install
 	@(sleep 3 && (command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
 	              command -v open > /dev/null && open http://localhost:3000 || \
 	              echo "Please open http://localhost:3000 in your browser")) &
-	cd web-terminal-frontend && npm run dev
+	cd web-terminal-frontend && bun run dev
 
 web-build: web-install
 	@echo "======================================================================"
 	@echo "  Building Web Frontend for Production"
 	@echo "======================================================================"
 	@echo ""
-	cd web-terminal-frontend && npm run build
+	cd web-terminal-frontend && bun run build
 	@echo ""
 	@echo "======================================================================"
 	@echo "  Production build complete!"
@@ -573,7 +579,7 @@ web-build-static: web-install
 	@echo "======================================================================"
 	@echo ""
 	@echo "Building static export..."
-	cd web-terminal-frontend && npm run build
+	cd web-terminal-frontend && bun run build
 	@echo ""
 	@echo "Copying to web_term/..."
 	rm -rf web_term
@@ -614,7 +620,7 @@ web-start:
 	@(sleep 3 && (command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
 	              command -v open > /dev/null && open http://localhost:3000 || \
 	              echo "Please open http://localhost:3000 in your browser")) &
-	cd web-terminal-frontend && npm run start
+	cd web-terminal-frontend && bun run start
 
 web-open:
 	@echo "Opening web frontend in browser..."
