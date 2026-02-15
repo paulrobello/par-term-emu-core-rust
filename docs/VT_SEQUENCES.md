@@ -354,15 +354,20 @@ Parameters for `set`:
 - `label=TEXT` — descriptive label
 - `state=STATE` — one of: `normal`, `indeterminate`, `warning`, `error`, `hidden`
 
-### iTerm2 Inline Images
+### iTerm2 Inline Images and File Transfer
 
-- `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - iTerm2 inline images
+- `OSC 1337;File=name=<b64>;size=<bytes>;inline=1:<base64 data> ST` - Inline image display
+- `OSC 1337;File=name=<b64>;size=<bytes>;inline=0:<base64 data> ST` - File download (host to terminal)
+- `OSC 1337;RequestUpload=format=<fmt> ST` - Request file upload (terminal to host)
 
-### iTerm2 User Variables (OSC 1337)
+### iTerm2 Shell Integration
 
-- `OSC 1337;SetUserVar=<name>=<base64_value> ST` - Set a user variable (value is base64-encoded)
+- `OSC 1337;SetUserVar=<name>=<base64_value> ST` - Set user variable
+- `OSC 1337;RemoteHost=<user>@<host> ST` - Report remote host identity
+- `OSC 1337;SetBadgeFormat=<base64_fmt> ST` - Set badge format string
+- `OSC 1337;CurrentDir=<path> ST` - Report current directory (alternative to OSC 7)
 
-Shell integration scripts use this to report session information (hostname, username, etc.). Variables are decoded and stored on the terminal, accessible via `get_user_var()` / `get_user_vars()`. A `UserVarChanged` event is emitted when a variable changes.
+Shell integration scripts use these to report session information. Variables are decoded and stored on the terminal.
 
 **Security:** Notifications, color changes, hyperlinks, and Sixel graphics can be disabled via `disable_insecure_sequences`.
 

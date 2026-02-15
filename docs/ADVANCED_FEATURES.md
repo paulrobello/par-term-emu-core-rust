@@ -508,6 +508,64 @@ term.process_str("\x1b]52;c;?\x07")
 
 > **🔒 Security:** Always validate clipboard content before processing sensitive data
 
+## General-Purpose File Transfer (OSC 1337)
+
+Full support for iTerm2-compatible file transfers via `OSC 1337 File=` sequences. This enables both host-to-terminal downloads and terminal-to-host uploads.
+
+### Downloads (Host → Terminal)
+
+When a remote host sends a file (e.g., via `imgcat` or shell integration), the terminal handles the base64-decoded payload and triggers events.
+
+**Sequence:** `\x1b]1337;File=name=...;inline=0:...\x07`
+
+```python
+# 1. Register observer to handle transfer events
+def on_transfer(event):
+    if event["type"] == "file_transfer_completed":
+        # Retrieve the completed transfer
+        transfer = term.take_completed_transfer(event["id"])
+        if transfer:
+            filename = transfer.get("filename", "download.dat")
+            data = transfer["data"]  # Raw bytes
+            with open(filename, "wb") as f:
+                f.write(data)
+            print(f"Downloaded {filename} ({len(data)} bytes)")
+
+term.add_observer(on_transfer, kinds=["file_transfer_completed"])
+
+# 2. Host sends file sequence (simulated here)
+term.process_str("\x1b]1337;File=name=aGVsbG8udHh0;inline=0:SGVsbG8gV29ybGQ=\x07")
+```
+
+### Uploads (Terminal → Host)
+
+The host can request a file upload via `RequestUpload`.
+
+**Sequence:** `\x1b]1337;RequestUpload=format=tgz\x07`
+
+```python
+def on_upload_request(event):
+    if event["type"] == "upload_requested":
+        # Prompt user or automatically send file
+        # In a real app, you might show a file picker here
+        try:
+            with open("archive.tgz", "rb") as f:
+                data = f.read()
+            term.send_upload_data(data)
+        except FileNotFoundError:
+            term.cancel_upload()
+
+term.add_observer(on_upload_request, kinds=["upload_requested"])
+```
+
+### Configuration
+
+You can limit the maximum allowed transfer size to prevent memory exhaustion:
+
+```python
+term.set_max_transfer_size(100 * 1024 * 1024)  # 100 MB limit
+```
+
 ## OSC 8 Hyperlinks
 
 OSC 8 provides clickable hyperlinks in terminal output with full support including TUI rendering.
@@ -834,6 +892,149 @@ A `cwd_changed` event is emitted when the remote host changes, allowing frontend
 - VS Code integrated terminal
 - WezTerm
 - Other modern terminals with OSC 133 support
+
+## Triggers & Automation
+
+Register regex patterns to automatically match terminal output and execute actions — highlight matches, send notifications, set bookmarks, update session variables, or emit events for frontend handling.
+
+### Overview
+
+Triggers allow you to create automated behaviors based on terminal content. Key features include:
+- **High-performance matching**: Uses `RegexSet` for scanning multiple patterns simultaneously
+- **Capture support**: Use `$1`, `$2` capture groups in action parameters
+- **Visual feedback**: Highlight matches with custom colors and optional expiry
+- **Integration**: Trigger notifications, bookmarks, and shell integration variables
+
+### Usage
+
+```python
+from par_term_emu_core_rust import Terminal, TriggerAction
+
+term = Terminal(80, 24)
+
+# Action 1: Highlight "ERROR:" in red
+highlight = TriggerAction("highlight", {
+    "bg_r": "255", "bg_g": "0", "bg_b": "0",
+    "fg_r": "255", "fg_g": "255", "fg_b": "255",
+    "duration_ms": "5000"  # Optional expiry
+})
+
+# Action 2: Send notification
+notify = TriggerAction("notify", {
+    "title": "Build Error",
+    "message": "Error detected: $1"  # $1 is replaced by capture group 1
+})
+
+# Register trigger
+term.add_trigger("error_detection", r"ERROR:\s+(.+)", [highlight, notify])
+
+# Process output (triggers are scanned automatically in PTY mode)
+term.process_str("Compiling...\nERROR: Syntax error in main.rs\n")
+term.process_trigger_scans()  # Manual scan for non-PTY usage
+
+# Poll results (for frontend integration)
+results = term.poll_action_results()
+# results = [{"action": "notify", "title": "Build Error", "message": "Error detected: Syntax error in main.rs", ...}]
+```
+
+### Trigger Actions
+
+| Action Type | Parameters | Description |
+|-------------|------------|-------------|
+| `highlight` | `bg_r/g/b`, `fg_r/g/b`, `duration_ms` | Visually highlight the matched text |
+| `notify` | `title`, `message` | Emit a notification event |
+| `mark_line` | `label`, `color` | Add a bookmark at the matched line |
+| `set_variable` | `name`, `value` | Set a session variable (e.g., for badges) |
+| `run_command` | `command`, `args` | Emit a command execution event |
+| `play_sound` | `sound_id`, `volume` | Emit a sound playback event |
+| `send_text` | `text`, `delay_ms` | Emit a text input event |
+| `stop` | (none) | Stop processing subsequent triggers for this match |
+
+### Highlighting
+
+Highlights are overlay regions that persist even if the text moves (scrolling). You can query active highlights for rendering:
+
+```python
+highlights = term.get_trigger_highlights()
+for row, start_col, end_col, fg, bg in highlights:
+    # Render highlight at (row, start_col) to (row, end_col)
+    pass
+```
+
+## Coprocess Management
+
+Run external processes alongside the terminal session with automatic output piping. This is useful for status bars, watch scripts, or sidecar processes that need to interact with the terminal.
+
+### Usage
+
+```python
+from par_term_emu_core_rust import PtyTerminal, CoprocessConfig
+import time
+
+with PtyTerminal(80, 24) as term:
+    term.spawn_shell()
+
+    # Configure a coprocess (e.g., a script that monitors a log file)
+    config = CoprocessConfig(
+        command="tail",
+        args=["-f", "/var/log/system.log"],
+        copy_terminal_output=False,  # Don't pipe terminal output to this process
+        restart_policy="on_failure", # Restart if it crashes
+        restart_delay_ms=1000        # Wait 1s before restart
+    )
+
+    # Start the coprocess
+    cid = term.start_coprocess(config)
+
+    # Read output from the coprocess
+    while term.is_running():
+        output = term.read_from_coprocess(cid)
+        for line in output:
+            print(f"[Log Monitor] {line}")
+
+        # Check errors
+        errors = term.read_coprocess_errors(cid)
+        if errors:
+            print(f"[Log Error] {errors}")
+
+        time.sleep(0.1)
+
+    term.stop_coprocess(cid)
+```
+
+### Features
+
+- **Output Feed**: Optionally pipe all terminal output to the coprocess stdin (`copy_terminal_output=True`)
+- **Restart Policies**: `never` (default), `always`, `on_failure`
+- **Stderr Capture**: Separate reading of stdout and stderr
+- **Lifecycle Management**: Start, stop, and query status of sidecar processes
+
+## Badge Format Support
+
+iTerm2-style badge support allows displaying a text overlay on the terminal with dynamic variable interpolation.
+
+### Usage
+
+```python
+# Set badge format with variables
+term.set_badge_format(r"\(session.username)@\(session.hostname)")
+
+# Set session variables (often done via OSC 1337 or shell integration)
+term.set_badge_session_variable("username", "alice")
+term.set_badge_session_variable("hostname", "prod-db-1")
+
+# Evaluate to get display text
+badge_text = term.evaluate_badge()  # "alice@prod-db-1"
+```
+
+### Built-in Variables
+
+- `session.hostname`, `session.username`, `session.path` (CWD)
+- `session.profile_name`, `session.tty`, `session.term_id`
+- `session.columns`, `session.rows`
+- `session.last_command`
+
+Variables are automatically updated by Shell Integration (OSC 133, OSC 7, OSC 1337).
 
 ## Sixel Graphics
 
@@ -2185,6 +2386,39 @@ term.record_marker("Important moment")  # Named marker
 - Large sessions (>10K events) export efficiently
 - Export operations are fast (millions of events/second)
 - Use markers sparingly for best performance
+
+## Instant Replay
+
+While Session Recording captures an input/output stream for later playback (like `asciinema`), **Instant Replay** captures the full cell-level state of the terminal at frequent intervals. This allows you to "rewind" the terminal to see exactly what was on screen at a specific point in time, including all attributes, modes, and alternate screens.
+
+### Overview
+
+- **Snapshot-based**: Captures full grid state (cells, colors, attributes, modes)
+- **Delta compression**: Stores input stream deltas between snapshots for precise reconstruction
+- **Rolling buffer**: Automatically manages memory usage with size-based eviction (default 4 MiB)
+- **Timeline navigation**: Seek to specific timestamps or step forward/backward
+
+### Usage
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# 1. Capture a snapshot (typically done periodically or on interesting events)
+snapshot = term.capture_replay_snapshot()
+print(f"Captured state at {snapshot['timestamp']}")
+
+# 2. In Rust (feature available via FFI/Rust API):
+# The Rust API provides a `SnapshotManager` and `ReplaySession` for
+# navigating history and reconstructing the terminal state.
+#
+# let mut replay = term.begin_replay_session();
+# replay.seek_to_timestamp(target_time);
+# let restored_term = replay.current_state();
+```
+
+Instant Replay is primarily designed for integration into the Rust-based streaming server or native applications, allowing users to scroll back in time through the visual history of their session.
 
 ## Macro Recording and Playback
 

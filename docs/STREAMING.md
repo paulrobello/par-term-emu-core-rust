@@ -1273,6 +1273,32 @@ ws.onmessage = (event) => {
 
 ## Advanced Features
 
+### Multi-Session Management
+
+The streaming server supports hosting multiple independent terminal sessions simultaneously.
+
+**Connecting to Sessions:**
+- **Default Session:** Connect to `ws://host:port/ws` (creates a default session if none exists)
+- **Named Session:** Connect to `ws://host:port/ws?session=my-dev-session` (joins or creates session "my-dev-session")
+- **Shell Presets:** Connect to `ws://host:port/ws?preset=python` (creates a new session running the "python" preset command)
+
+**Configuration:**
+```python
+config = StreamingConfig(
+    max_sessions=10,              # Max concurrent sessions
+    session_idle_timeout=900,     # Reap empty sessions after 15m
+    presets={                     # Define shell presets
+        "python": "python3",
+        "top": "htop"
+    }
+)
+```
+
+**Client Isolation:**
+- Each session has its own PTY, screen state, and history
+- Clients in the same session see the same screen (shared state)
+- Clients in different sessions are completely isolated
+
 ### Multiple Viewers
 
 The server supports multiple concurrent viewers of the same terminal session:
@@ -1336,45 +1362,23 @@ par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
 - Automated testing
 - Presentation mode
 
-### HTTP Static File Serving
+### File Transfer Events
 
-The server can serve static files alongside WebSocket:
+The streaming protocol supports bidirectional file transfer events compatible with iTerm2's OSC 1337 protocol.
 
-**Enable HTTP:**
-```bash
-# Using the built static frontend
-par-term-streamer --enable-http --web-root ./web_term
+**Server → Client Events:**
+- `file_transfer_started`: Download/upload started (id, filename, total_bytes)
+- `file_transfer_progress`: Progress update (bytes_transferred)
+- `file_transfer_completed`: Transfer finished successully
+- `file_transfer_failed`: Transfer failed or cancelled
+- `upload_requested`: Host requested a file upload
 
-# Or specify a different path
-par-term-streamer --enable-http --web-root ./web-terminal-frontend/out
-```
+**Handling in Frontend:**
+Frontends should subscribe to these events and implement UI for:
+1. **Downloads:** Show progress bar, and on completion, offer the file for saving (blob download)
+2. **Uploads:** When `upload_requested` is received, open file picker, read file, and send data back via `input` message (encoded as base64 within the terminal stream)
 
-**Routes:**
-- `http://localhost:8099/` - Serves `index.html` from web root (static frontend)
-- `ws://localhost:8099/ws` - WebSocket endpoint for terminal streaming
-
-**Configuration:**
-```rust
-let config = StreamingConfig {
-    enable_http: true,
-    web_root: "./web_term".to_string(),
-    // ... other options
-};
-```
-
-**Deploy Frontend:**
-```bash
-# Using Makefile (recommended - builds and copies to web_term/)
-make web-build-static
-
-# Or manually:
-cd web-terminal-frontend
-npm run build  # Creates 'out' directory (Next.js configured with output: 'export')
-cd ..
-cp -r web-terminal-frontend/out/* web_term/
-```
-
-## TLS/SSL Configuration
+### TLS/SSL Configuration
 
 The streaming server supports TLS/SSL for secure HTTPS and WSS (WebSocket Secure) connections.
 
