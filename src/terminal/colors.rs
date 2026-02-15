@@ -202,6 +202,172 @@ impl Terminal {
         self.ansi_palette[index] = color;
         Ok(())
     }
+
+    /// Set the faint/dim text alpha multiplier
+    pub fn set_faint_text_alpha(&mut self, alpha: f32) {
+        self.faint_text_alpha = alpha.clamp(0.0, 1.0);
+    }
+
+    /// Get the faint/dim text alpha multiplier
+    pub fn faint_text_alpha(&self) -> f32 {
+        self.faint_text_alpha
+    }
+
+    /// Get current ANSI palette (0-15)
+    pub fn get_ansi_palette(&self) -> &[Color; 16] {
+        &self.ansi_palette
+    }
+
+    /// Get current cursor color
+    pub fn get_cursor_color(&self) -> Color {
+        self.cursor_color
+    }
+
+    /// Get current link/hyperlink color
+    pub fn get_link_color(&self) -> Color {
+        self.link_color
+    }
+
+    /// Get current selection background color
+    pub fn get_selection_bg_color(&self) -> Color {
+        self.selection_bg_color
+    }
+
+    /// Get current selection foreground/text color
+    pub fn get_selection_fg_color(&self) -> Color {
+        self.selection_fg_color
+    }
+
+    /// Convert RGB to HSV
+    pub fn rgb_to_hsv_color(&self, r: u8, g: u8, b: u8) -> crate::terminal::screen::ColorHSV {
+        crate::terminal::screen::rgb_to_hsv(r, g, b)
+    }
+
+    /// Convert HSV to RGB
+    pub fn hsv_to_rgb_color(&self, hsv: crate::terminal::screen::ColorHSV) -> (u8, u8, u8) {
+        crate::terminal::screen::hsv_to_rgb(hsv)
+    }
+
+    /// Convert RGB to HSL
+    pub fn rgb_to_hsl_color(&self, r: u8, g: u8, b: u8) -> crate::terminal::screen::ColorHSL {
+        crate::terminal::screen::rgb_to_hsl(r, g, b)
+    }
+
+    /// Convert HSL to RGB
+    pub fn hsl_to_rgb_color(&self, hsl: crate::terminal::screen::ColorHSL) -> (u8, u8, u8) {
+        crate::terminal::screen::hsl_to_rgb(hsl)
+    }
+
+    /// Generate color palette
+    pub fn generate_color_palette(
+        &self,
+        r: u8,
+        g: u8,
+        b: u8,
+        mode: crate::terminal::screen::ThemeMode,
+    ) -> crate::terminal::screen::ColorPalette {
+        self.generate_theme(Color::Rgb(r, g, b), mode)
+    }
+
+    /// Calculate color distance
+    pub fn color_distance(&self, r1: u8, g1: u8, b1: u8, r2: u8, g2: u8, b2: u8) -> f32 {
+        let dr = r1 as f32 - r2 as f32;
+        let dg = g1 as f32 - g2 as f32;
+        let db = b1 as f32 - b2 as f32;
+        (dr * dr + dg * dg + db * db).sqrt()
+    }
+
+    // === Feature 8: Advanced Color Operations ===
+
+    /// Generate a color theme from a base color
+    pub fn generate_theme(
+        &self,
+        base: Color,
+        mode: crate::terminal::screen::ThemeMode,
+    ) -> crate::terminal::screen::ColorPalette {
+        let (r, g, b) = base.to_rgb();
+        let hsv = crate::terminal::rgb_to_hsv(r, g, b);
+        let mut colors = Vec::new();
+
+        match mode {
+            crate::terminal::screen::ThemeMode::Complementary => {
+                let comp_h = (hsv.h + 180.0) % 360.0;
+                colors.push(crate::terminal::hsv_to_rgb(
+                    crate::terminal::screen::ColorHSV {
+                        h: comp_h,
+                        s: hsv.s,
+                        v: hsv.v,
+                    },
+                ));
+            }
+            crate::terminal::screen::ThemeMode::Analogous => {
+                for angle in &[-30.0, 30.0] {
+                    let h = (hsv.h + angle + 360.0) % 360.0;
+                    colors.push(crate::terminal::hsv_to_rgb(
+                        crate::terminal::screen::ColorHSV {
+                            h,
+                            s: hsv.s,
+                            v: hsv.v,
+                        },
+                    ));
+                }
+            }
+            crate::terminal::screen::ThemeMode::Triadic => {
+                for angle in &[120.0, 240.0] {
+                    let h = (hsv.h + angle) % 360.0;
+                    colors.push(crate::terminal::hsv_to_rgb(
+                        crate::terminal::screen::ColorHSV {
+                            h,
+                            s: hsv.s,
+                            v: hsv.v,
+                        },
+                    ));
+                }
+            }
+            crate::terminal::screen::ThemeMode::Tetradic => {
+                for angle in &[90.0, 180.0, 270.0] {
+                    let h = (hsv.h + angle) % 360.0;
+                    colors.push(crate::terminal::hsv_to_rgb(
+                        crate::terminal::screen::ColorHSV {
+                            h,
+                            s: hsv.s,
+                            v: hsv.v,
+                        },
+                    ));
+                }
+            }
+            crate::terminal::screen::ThemeMode::SplitComplementary => {
+                for angle in &[150.0, 210.0] {
+                    let h = (hsv.h + angle) % 360.0;
+                    colors.push(crate::terminal::hsv_to_rgb(
+                        crate::terminal::screen::ColorHSV {
+                            h,
+                            s: hsv.s,
+                            v: hsv.v,
+                        },
+                    ));
+                }
+            }
+            crate::terminal::screen::ThemeMode::Monochromatic => {
+                for v_offset in &[-0.2, 0.2, -0.4, 0.4] {
+                    let v = (hsv.v + v_offset).clamp(0.0, 1.0);
+                    colors.push(crate::terminal::hsv_to_rgb(
+                        crate::terminal::screen::ColorHSV {
+                            h: hsv.h,
+                            s: hsv.s,
+                            v,
+                        },
+                    ));
+                }
+            }
+        }
+
+        crate::terminal::screen::ColorPalette {
+            base: (r, g, b),
+            colors,
+            mode,
+        }
+    }
 }
 
 #[cfg(test)]

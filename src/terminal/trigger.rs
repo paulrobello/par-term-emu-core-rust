@@ -97,6 +97,237 @@ pub struct TriggerHighlight {
     pub expiry: u64,
 }
 
+use crate::terminal::Terminal;
+
+impl Terminal {
+    // === Feature 18: Triggers & Automation ===
+
+    /// Add a new trigger with the given name, regex pattern, and actions
+    ///
+    /// Returns the trigger ID on success, or an error if the regex is invalid.
+    pub fn add_trigger(
+        &mut self,
+        name: String,
+        pattern: String,
+        actions: Vec<TriggerAction>,
+    ) -> Result<TriggerId, String> {
+        self.trigger_registry.add(name, pattern, actions)
+    }
+
+    /// Remove a trigger by ID
+    pub fn remove_trigger(&mut self, id: TriggerId) -> bool {
+        self.trigger_registry.remove(id)
+    }
+
+    /// Enable or disable a trigger
+    pub fn set_trigger_enabled(&mut self, id: TriggerId, enabled: bool) -> bool {
+        self.trigger_registry.set_enabled(id, enabled)
+    }
+
+    /// List all registered triggers
+    pub fn list_triggers(&self) -> Vec<&Trigger> {
+        self.trigger_registry.list()
+    }
+
+    /// Get a trigger by ID
+    pub fn get_trigger(&self, id: TriggerId) -> Option<&Trigger> {
+        self.trigger_registry.get(id)
+    }
+
+    /// Drain all pending trigger match events
+    pub fn poll_trigger_matches(&mut self) -> Vec<TriggerMatch> {
+        self.trigger_registry.poll_matches()
+    }
+
+    /// Process trigger scans on pending dirty rows
+    ///
+    /// Called automatically in the PTY reader thread after `process()`.
+    /// Can also be called manually for non-PTY terminals.
+    pub fn process_trigger_scans(&mut self) {
+        if !self.trigger_registry.has_active_triggers() {
+            self.pending_trigger_rows.clear();
+            return;
+        }
+
+        let rows_to_scan: Vec<usize> = self.pending_trigger_rows.drain().collect();
+        let grid = self.active_grid();
+        let cols = grid.cols();
+
+        // Collect row texts and their char-to-grid-col mappings
+        let mut row_data: Vec<(usize, String, Vec<usize>)> = Vec::new();
+        for row in &rows_to_scan {
+            let text = grid.row_text(*row);
+            if !text.trim().is_empty() {
+                let r = *row;
+                let mapping = build_char_to_grid_col_map(
+                    cols,
+                    |col| {
+                        grid.get(col, r)
+                            .is_some_and(|cell| cell.flags.wide_char_spacer())
+                    },
+                    |col| {
+                        grid.get(col, r)
+                            .map(|cell| 1 + cell.combining.len())
+                            .unwrap_or(1)
+                    },
+                );
+                row_data.push((*row, text, mapping));
+            }
+        }
+
+        // Scan each row
+        for (row, text, mapping) in &row_data {
+            let matches = self
+                .trigger_registry
+                .scan_line(*row, text, Some(mapping.as_slice()));
+
+            for trigger_match in &matches {
+                // Execute actions for this match
+                self.execute_trigger_actions(trigger_match);
+
+                // Emit event
+                self.terminal_events
+                    .push(crate::terminal::TerminalEvent::TriggerMatched(
+                        trigger_match.clone(),
+                    ));
+            }
+        }
+    }
+
+    /// Execute trigger actions for a match
+    fn execute_trigger_actions(&mut self, trigger_match: &TriggerMatch) {
+        let trigger_id = trigger_match.trigger_id;
+        let actions = match self.trigger_registry.get(trigger_id) {
+            Some(t) => t.actions.clone(),
+            None => return,
+        };
+
+        let now = crate::terminal::unix_millis();
+
+        for action in &actions {
+            match action {
+                TriggerAction::Highlight {
+                    fg,
+                    bg,
+                    duration_ms,
+                } => {
+                    let expiry = if *duration_ms == 0 {
+                        u64::MAX
+                    } else {
+                        now.saturating_add(*duration_ms)
+                    };
+                    self.trigger_highlights.push(TriggerHighlight {
+                        row: trigger_match.row,
+                        col_start: trigger_match.col,
+                        col_end: trigger_match.end_col,
+                        fg: *fg,
+                        bg: *bg,
+                        expiry,
+                    });
+                }
+                TriggerAction::Notify { title, message } => {
+                    let title = substitute_captures(title, &trigger_match.captures);
+                    let message = substitute_captures(message, &trigger_match.captures);
+                    self.trigger_action_results.push(ActionResult::Notify {
+                        trigger_id: trigger_match.trigger_id,
+                        title,
+                        message,
+                    });
+                }
+                TriggerAction::MarkLine { label, color } => {
+                    let label = label
+                        .as_ref()
+                        .map(|l| substitute_captures(l, &trigger_match.captures));
+                    self.trigger_action_results.push(ActionResult::MarkLine {
+                        trigger_id: trigger_match.trigger_id,
+                        row: trigger_match.row,
+                        label,
+                        color: *color,
+                    });
+                }
+                TriggerAction::SetVariable { name, value } => {
+                    let name = substitute_captures(name, &trigger_match.captures);
+                    let value = substitute_captures(value, &trigger_match.captures);
+                    self.session_variables.custom.insert(name, value);
+                }
+                TriggerAction::RunCommand { command, args } => {
+                    let command = substitute_captures(command, &trigger_match.captures);
+                    let args: Vec<String> = args
+                        .iter()
+                        .map(|a| substitute_captures(a, &trigger_match.captures))
+                        .collect();
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results.push(ActionResult::RunCommand {
+                            trigger_id,
+                            command,
+                            args,
+                        });
+                    }
+                }
+                TriggerAction::PlaySound { sound_id, volume } => {
+                    let sound_id = substitute_captures(sound_id, &trigger_match.captures);
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results.push(ActionResult::PlaySound {
+                            trigger_id,
+                            sound_id,
+                            volume: *volume,
+                        });
+                    }
+                }
+                TriggerAction::SendText { text, delay_ms } => {
+                    let text = substitute_captures(text, &trigger_match.captures);
+                    if self.trigger_action_results.len() < self.max_action_results {
+                        self.trigger_action_results.push(ActionResult::SendText {
+                            trigger_id,
+                            text,
+                            delay_ms: *delay_ms,
+                        });
+                    }
+                }
+                TriggerAction::StopPropagation => {
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Get active trigger highlights (filters expired ones)
+    pub fn get_trigger_highlights(&self) -> Vec<TriggerHighlight> {
+        let now = crate::terminal::unix_millis();
+        self.trigger_highlights
+            .iter()
+            .filter(|h| h.expiry > now)
+            .cloned()
+            .collect()
+    }
+
+    /// Clear all trigger highlights
+    pub fn clear_trigger_highlights(&mut self) {
+        self.trigger_highlights.clear();
+    }
+
+    /// Remove expired trigger highlights
+    pub fn clear_expired_highlights(&mut self) {
+        let now = crate::terminal::unix_millis();
+        self.trigger_highlights.retain(|h| h.expiry > now);
+    }
+
+    /// Drain pending action results for frontend consumption
+    pub fn poll_action_results(&mut self) -> Vec<ActionResult> {
+        std::mem::take(&mut self.trigger_action_results)
+    }
+
+    /// Get access to the trigger registry
+    pub fn trigger_registry(&self) -> &TriggerRegistry {
+        &self.trigger_registry
+    }
+
+    /// Get mutable access to the trigger registry
+    pub fn trigger_registry_mut(&mut self) -> &mut TriggerRegistry {
+        &mut self.trigger_registry
+    }
+}
+
 /// Result of executing trigger actions (for frontend-handled actions)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ActionResult {
@@ -367,6 +598,14 @@ impl TriggerRegistry {
             let excess = self.matches.len() - max;
             self.matches.drain(0..excess);
         }
+    }
+
+    /// Clear all triggers and pending matches
+    pub fn clear(&mut self) {
+        self.triggers.clear();
+        self.regex_set = None;
+        self.pattern_to_id.clear();
+        self.matches.clear();
     }
 
     /// Rebuild the RegexSet from all enabled triggers

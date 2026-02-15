@@ -167,6 +167,102 @@ impl TerminalSnapshot {
     }
 }
 
+use crate::terminal::Terminal;
+
+impl Terminal {
+    /// Capture a complete snapshot of the current terminal state.
+    pub fn capture_snapshot(&self) -> TerminalSnapshot {
+        let (cols, rows) = self.size();
+        let grid = self.grid.capture_snapshot();
+        let alt_grid = self.alt_grid.capture_snapshot();
+
+        let mut snap = TerminalSnapshot {
+            timestamp: crate::terminal::unix_millis(),
+            cols,
+            rows,
+            grid,
+            alt_grid,
+            alt_screen_active: self.alt_screen_active,
+            cursor: self.cursor,
+            alt_cursor: self.alt_cursor,
+            saved_cursor: self.saved_cursor,
+            fg: self.fg,
+            bg: self.bg,
+            underline_color: self.underline_color,
+            flags: self.flags,
+            saved_fg: self.saved_fg,
+            saved_bg: self.saved_bg,
+            saved_underline_color: self.saved_underline_color,
+            saved_flags: self.saved_flags,
+            title: self.title.clone(),
+            auto_wrap: self.auto_wrap,
+            origin_mode: self.origin_mode,
+            insert_mode: self.insert_mode,
+            reverse_video: self.reverse_video,
+            line_feed_new_line_mode: self.line_feed_new_line_mode,
+            application_cursor: self.application_cursor,
+            bracketed_paste: self.bracketed_paste,
+            focus_tracking: self.focus_tracking,
+            mouse_mode: self.mouse_mode,
+            mouse_encoding: self.mouse_encoding,
+            use_lr_margins: self.use_lr_margins,
+            left_margin: self.left_margin,
+            right_margin: self.right_margin,
+            keyboard_flags: self.keyboard_flags,
+            modify_other_keys_mode: self.modify_other_keys_mode,
+            char_protected: self.char_protected,
+            bold_brightening: self.bold_brightening,
+            scroll_region_top: self.scroll_region_top,
+            scroll_region_bottom: self.scroll_region_bottom,
+            tab_stops: self.tab_stops.clone(),
+            pending_wrap: self.pending_wrap,
+            estimated_size_bytes: 0,
+        };
+        snap.estimated_size_bytes = snap.estimate_size();
+        snap
+    }
+
+    /// Restore the terminal state from a previously captured snapshot.
+    pub fn restore_from_snapshot(&mut self, snap: TerminalSnapshot) {
+        self.grid.restore_from_snapshot(&snap.grid);
+        self.alt_grid.restore_from_snapshot(&snap.alt_grid);
+        self.alt_screen_active = snap.alt_screen_active;
+        self.cursor = snap.cursor;
+        self.alt_cursor = snap.alt_cursor;
+        self.saved_cursor = snap.saved_cursor;
+        self.fg = snap.fg;
+        self.bg = snap.bg;
+        self.underline_color = snap.underline_color;
+        self.flags = snap.flags;
+        self.saved_fg = snap.saved_fg;
+        self.saved_bg = snap.saved_bg;
+        self.saved_underline_color = snap.saved_underline_color;
+        self.saved_flags = snap.saved_flags;
+        self.title = snap.title;
+        self.auto_wrap = snap.auto_wrap;
+        self.origin_mode = snap.origin_mode;
+        self.insert_mode = snap.insert_mode;
+        self.reverse_video = snap.reverse_video;
+        self.line_feed_new_line_mode = snap.line_feed_new_line_mode;
+        self.application_cursor = snap.application_cursor;
+        self.bracketed_paste = snap.bracketed_paste;
+        self.focus_tracking = snap.focus_tracking;
+        self.mouse_mode = snap.mouse_mode;
+        self.mouse_encoding = snap.mouse_encoding;
+        self.use_lr_margins = snap.use_lr_margins;
+        self.left_margin = snap.left_margin;
+        self.right_margin = snap.right_margin;
+        self.keyboard_flags = snap.keyboard_flags;
+        self.modify_other_keys_mode = snap.modify_other_keys_mode;
+        self.char_protected = snap.char_protected;
+        self.bold_brightening = snap.bold_brightening;
+        self.scroll_region_top = snap.scroll_region_top;
+        self.scroll_region_bottom = snap.scroll_region_bottom;
+        self.tab_stops = snap.tab_stops;
+        self.pending_wrap = snap.pending_wrap;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -84,15 +84,15 @@ impl Grid {
         }
     }
 
-    /// Scroll up within a region
-    pub fn scroll_region_up(&mut self, n: usize, top: usize, bottom: usize) {
+    /// Scroll up within a region. Returns `false` if parameters are invalid.
+    pub fn scroll_region_up(&mut self, n: usize, top: usize, bottom: usize) -> bool {
         if top >= self.rows || bottom >= self.rows || top > bottom {
             #[cfg(debug_assertions)]
             eprintln!(
                 "Invalid scroll region up: top={} bottom={} rows={}",
                 top, bottom, self.rows
             );
-            return;
+            return false;
         }
 
         let n = n.min(bottom - top + 1);
@@ -101,14 +101,14 @@ impl Grid {
 
         if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
             self.scroll_up(n);
-            return;
+            return true;
         }
 
         if n >= region_size {
             for i in top..=effective_bottom {
                 self.clear_row(i);
             }
-            return;
+            return true;
         }
 
         for i in top..=(effective_bottom - n) {
@@ -124,17 +124,18 @@ impl Grid {
                 self.clear_row(i);
             }
         }
+        true
     }
 
-    /// Scroll down within a region
-    pub fn scroll_region_down(&mut self, n: usize, top: usize, bottom: usize) {
+    /// Scroll down within a region. Returns `false` if parameters are invalid.
+    pub fn scroll_region_down(&mut self, n: usize, top: usize, bottom: usize) -> bool {
         if top >= self.rows || bottom >= self.rows || top > bottom {
             #[cfg(debug_assertions)]
             eprintln!(
                 "Invalid scroll region down: top={} bottom={} rows={}",
                 top, bottom, self.rows
             );
-            return;
+            return false;
         }
 
         let n = n.min(bottom - top + 1);
@@ -144,7 +145,7 @@ impl Grid {
             for i in top..=effective_bottom {
                 self.clear_row(i);
             }
-            return;
+            return true;
         }
 
         for i in ((top + n)..=effective_bottom).rev() {
@@ -158,6 +159,7 @@ impl Grid {
         for i in top..(top + n).min(self.rows) {
             self.clear_row(i);
         }
+        true
     }
 
     /// Resize the grid

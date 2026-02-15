@@ -26,6 +26,32 @@ pub enum MouseEncoding {
     Urxvt,
 }
 
+/// Mouse event type
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEventType {
+    /// Mouse button press
+    Press,
+    /// Mouse button release
+    Release,
+    /// Mouse movement (with or without button held)
+    Move,
+    /// Mouse drag (move with button held)
+    Drag,
+    /// Mouse scroll up
+    ScrollUp,
+    /// Mouse scroll down
+    ScrollDown,
+}
+
+/// Mouse button
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseButton {
+    Left,
+    Middle,
+    Right,
+    None,
+}
+
 /// Mouse event
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MouseEvent {
@@ -34,6 +60,109 @@ pub struct MouseEvent {
     pub row: usize,
     pub pressed: bool,
     pub modifiers: u8,
+}
+
+/// Mouse event record with position and metadata
+#[derive(Debug, Clone)]
+pub struct MouseEventRecord {
+    /// Event type
+    pub event_type: MouseEventType,
+    /// Mouse button involved
+    pub button: MouseButton,
+    /// Column position (0-indexed)
+    pub col: usize,
+    /// Row position (0-indexed)
+    pub row: usize,
+    /// Pixel position (for SGR 1016)
+    pub pixel_x: Option<u16>,
+    pub pixel_y: Option<u16>,
+    /// Modifier keys (shift, alt, ctrl)
+    pub modifiers: u8,
+    /// Timestamp in microseconds
+    pub timestamp: u64,
+}
+
+/// Mouse position history entry
+#[derive(Debug, Clone)]
+pub struct MousePosition {
+    pub col: usize,
+    pub row: usize,
+    pub timestamp: u64,
+}
+
+use crate::terminal::Terminal;
+
+impl Terminal {
+    // === Feature 17: Advanced Mouse Support ===
+
+    /// Record a mouse event in history
+    pub fn record_mouse_event(
+        &mut self,
+        event_type: MouseEventType,
+        button: MouseButton,
+        col: usize,
+        row: usize,
+        modifiers: u8,
+    ) {
+        let record = MouseEventRecord {
+            event_type,
+            button,
+            col,
+            row,
+            pixel_x: None, // Could be populated if cell size known
+            pixel_y: None,
+            modifiers,
+            timestamp: crate::terminal::get_timestamp_us(),
+        };
+
+        self.mouse_events.push(record);
+        if self.mouse_events.len() > self.max_mouse_history {
+            self.mouse_events.remove(0);
+        }
+
+        // Also record position history
+        self.mouse_positions.push(MousePosition {
+            col,
+            row,
+            timestamp: crate::terminal::get_timestamp_us(),
+        });
+        if self.mouse_positions.len() > self.max_mouse_history {
+            self.mouse_positions.remove(0);
+        }
+    }
+
+    /// Get mouse event history
+    pub fn get_mouse_history(&self) -> &[MouseEventRecord] {
+        &self.mouse_events
+    }
+
+    /// Get recent mouse positions
+    pub fn get_mouse_positions(&self) -> &[MousePosition] {
+        &self.mouse_positions
+    }
+
+    /// Clear mouse history
+    pub fn clear_mouse_history(&mut self) {
+        self.mouse_events.clear();
+        self.mouse_positions.clear();
+    }
+
+    /// Set the maximum number of mouse events to retain
+    pub fn set_max_mouse_history(&mut self, max: usize) {
+        self.max_mouse_history = max;
+        if self.mouse_events.len() > max {
+            self.mouse_events.drain(0..self.mouse_events.len() - max);
+        }
+        if self.mouse_positions.len() > max {
+            self.mouse_positions
+                .drain(0..self.mouse_positions.len() - max);
+        }
+    }
+
+    /// Get the maximum number of mouse events to retain
+    pub fn get_max_mouse_history(&self) -> usize {
+        self.max_mouse_history
+    }
 }
 
 impl MouseEvent {

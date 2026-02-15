@@ -203,7 +203,7 @@ impl PtySession {
 
     /// Get the default shell for the current platform
     pub fn get_default_shell() -> String {
-        if cfg!(windows) {
+        let shell = if cfg!(windows) {
             // Use %COMSPEC% (typically cmd.exe), fall back to cmd.exe
             if let Ok(comspec) = std::env::var("COMSPEC") {
                 comspec
@@ -213,7 +213,22 @@ impl PtySession {
         } else {
             // Unix-like: check $SHELL, fall back to /bin/bash
             std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        };
+
+        // Validate that the shell exists and is a file (not a directory)
+        #[cfg(unix)]
+        {
+            if let Ok(metadata) = std::fs::metadata(&shell) {
+                if metadata.is_file() {
+                    return shell;
+                }
+            }
+            // Fallback to /bin/sh if shell doesn't exist
+            "/bin/sh".to_string()
         }
+
+        #[cfg(not(unix))]
+        shell
     }
 
     /// Clean up resources from a previous session before spawning a new one

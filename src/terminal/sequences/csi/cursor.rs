@@ -71,8 +71,12 @@ impl Terminal {
                 let row = row.saturating_sub(1);
 
                 if self.origin_mode {
-                    let region_height = self.scroll_region_bottom - self.scroll_region_top + 1;
-                    let actual_row = self.scroll_region_top + row.min(region_height - 1);
+                    let region_height = self
+                        .scroll_region_bottom
+                        .saturating_sub(self.scroll_region_top)
+                        + 1;
+                    let actual_row =
+                        self.scroll_region_top + row.min(region_height.saturating_sub(1));
                     let actual_col = col.min(cols.saturating_sub(1));
                     self.cursor.goto(actual_col, actual_row);
                 } else {

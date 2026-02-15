@@ -7,10 +7,17 @@
 
 use std::collections::HashMap;
 
+use crate::debug;
 use crate::graphics::{
     next_graphic_id, GraphicProtocol, GraphicsError, ImageDimension, ImageDisplayMode,
     ImagePlacement, TerminalGraphic,
 };
+
+/// Maximum allowed image dimension (width or height) in pixels
+const MAX_IMAGE_DIMENSION: usize = 16384;
+
+/// Maximum allowed base64-encoded image data size in bytes (100 MB)
+const MAX_IMAGE_DATA_SIZE: usize = 100 * 1024 * 1024;
 
 /// iTerm2 inline image parser
 #[derive(Debug, Default)]
@@ -62,12 +69,43 @@ impl ITermParser {
     }
 
     /// Set the base64-encoded image data
+    ///
+    /// Rejects data exceeding `MAX_IMAGE_DATA_SIZE` (100 MB) to prevent
+    /// excessive memory allocation from malicious or malformed sequences.
     pub fn set_data(&mut self, data: &[u8]) {
+        if data.len() > MAX_IMAGE_DATA_SIZE {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                &format!(
+                    "iTerm2 image data too large: {} bytes (max {} bytes), rejecting",
+                    data.len(),
+                    MAX_IMAGE_DATA_SIZE
+                ),
+            );
+            self.data.clear();
+            return;
+        }
         self.data = data.to_vec();
     }
 
     /// Decode the image and create a TerminalGraphic
     pub fn decode_image(&self, position: (usize, usize)) -> Result<TerminalGraphic, GraphicsError> {
+        // Reject empty data (e.g., cleared due to size limit)
+        if self.data.is_empty() {
+            return Err(GraphicsError::ITermError(
+                "No image data available".to_string(),
+            ));
+        }
+
+        // Check base64 data size before decoding
+        if self.data.len() > MAX_IMAGE_DATA_SIZE {
+            return Err(GraphicsError::ImageTooLarge(
+                self.data.len(),
+                MAX_IMAGE_DATA_SIZE,
+            ));
+        }
+
         // Decode base64
         let decoded =
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.data)
@@ -80,6 +118,23 @@ impl ITermParser {
         let rgba = img.to_rgba8();
         let width = rgba.width() as usize;
         let height = rgba.height() as usize;
+
+        // Validate decoded image dimensions
+        if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                &format!(
+                    "iTerm2 image dimensions too large: {}x{} (max {}), rejecting",
+                    width, height, MAX_IMAGE_DIMENSION
+                ),
+            );
+            return Err(GraphicsError::ImageTooLarge(
+                width.max(height),
+                MAX_IMAGE_DIMENSION,
+            ));
+        }
+
         let pixels = rgba.into_raw();
 
         let mut graphic = TerminalGraphic::new(

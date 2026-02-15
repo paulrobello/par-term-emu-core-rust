@@ -405,7 +405,7 @@ impl FontCache {
 
         // Check if already cached
         if self.cache.contains_key(&key) {
-            return self.cache.get(&key).unwrap();
+            return self.cache.get(&key).expect("just inserted");
         }
 
         // Render new glyph - try main font first
@@ -468,7 +468,7 @@ impl FontCache {
                                             format: cjk_format,
                                         },
                                     );
-                                    return self.cache.get(&key).unwrap();
+                                    return self.cache.get(&key).expect("just inserted");
                                 }
                             }
                         }
@@ -500,7 +500,7 @@ impl FontCache {
                                     format: cjk_format,
                                 },
                             );
-                            return self.cache.get(&key).unwrap();
+                            return self.cache.get(&key).expect("just inserted");
                         }
                     }
                 }
@@ -565,7 +565,7 @@ impl FontCache {
                                     format: emoji_format,
                                 },
                             );
-                            return self.cache.get(&key).unwrap();
+                            return self.cache.get(&key).expect("just inserted");
                         }
                     }
                 }
@@ -586,9 +586,14 @@ impl FontCache {
             }
         };
 
+        // Evict oldest entries if cache is too large
+        if self.cache.len() > 10000 {
+            self.cache.clear();
+        }
+
         // Insert and return reference
         self.cache.insert(key, cached_glyph);
-        self.cache.get(&key).unwrap()
+        self.cache.get(&key).expect("just inserted")
     }
 
     /// Rasterize a glyph by glyph ID (from shaped text)

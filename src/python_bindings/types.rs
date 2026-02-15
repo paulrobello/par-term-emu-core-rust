@@ -49,6 +49,25 @@ pub struct PyAttributes {
     pub hyperlink_id: Option<u32>,
 }
 
+impl From<&crate::cell::Cell> for PyAttributes {
+    fn from(cell: &crate::cell::Cell) -> Self {
+        PyAttributes {
+            bold: cell.flags.bold(),
+            dim: cell.flags.dim(),
+            italic: cell.flags.italic(),
+            underline: cell.flags.underline(),
+            blink: cell.flags.blink(),
+            reverse: cell.flags.reverse(),
+            hidden: cell.flags.hidden(),
+            strikethrough: cell.flags.strikethrough(),
+            underline_style: cell.flags.underline_style.into(),
+            wide_char: cell.flags.wide_char(),
+            wide_char_spacer: cell.flags.wide_char_spacer(),
+            hyperlink_id: cell.flags.hyperlink_id,
+        }
+    }
+}
+
 impl Default for PyAttributes {
     fn default() -> Self {
         Self {
@@ -79,6 +98,40 @@ impl PyAttributes {
 }
 
 /// Atomic snapshot of terminal screen state for race-free rendering
+impl From<crate::terminal::terminal_snapshot::TerminalSnapshot> for PyScreenSnapshot {
+    fn from(snap: crate::terminal::terminal_snapshot::TerminalSnapshot) -> Self {
+        let active_grid = if snap.alt_screen_active {
+            &snap.alt_grid
+        } else {
+            &snap.grid
+        };
+
+        let mut lines = Vec::with_capacity(snap.rows);
+        for row in 0..snap.rows {
+            let mut line = Vec::with_capacity(snap.cols);
+            for col in 0..snap.cols {
+                if let Some(cell) = active_grid.cells.get(row * snap.cols + col) {
+                    let fg = cell.fg.to_rgb();
+                    let bg = cell.bg.to_rgb();
+                    line.push((cell.get_grapheme(), fg, bg, cell.into()));
+                }
+            }
+            lines.push(line);
+        }
+
+        PyScreenSnapshot {
+            lines,
+            wrapped_lines: active_grid.wrapped.clone(),
+            cursor_pos: (snap.cursor.col, snap.cursor.row),
+            cursor_visible: snap.cursor.visible,
+            cursor_style: snap.cursor.style().into(),
+            is_alt_screen: snap.alt_screen_active,
+            generation: 0, // generation not tracked in snapshots
+            size: (snap.cols, snap.rows),
+        }
+    }
+}
+
 ///
 /// Captures all lines, cursor state, and screen identity at a single point in time.
 /// This immutable snapshot prevents race conditions where alternate screen switches
@@ -185,6 +238,33 @@ pub struct PyShellIntegration {
     pub hostname: Option<String>,
     #[pyo3(get)]
     pub username: Option<String>,
+}
+
+impl From<&crate::shell_integration::ShellIntegration> for PyShellIntegration {
+    fn from(si: &crate::shell_integration::ShellIntegration) -> Self {
+        use crate::shell_integration::ShellIntegrationMarker;
+
+        let marker = si.marker();
+
+        PyShellIntegration {
+            in_prompt: marker == Some(ShellIntegrationMarker::PromptStart),
+
+            in_command_input: marker == Some(ShellIntegrationMarker::CommandStart),
+
+            in_command_output: marker == Some(ShellIntegrationMarker::CommandExecuted)
+                || marker == Some(ShellIntegrationMarker::CommandFinished),
+
+            current_command: si.command().map(|s: &str| s.to_string()),
+
+            last_exit_code: si.exit_code(),
+
+            cwd: si.cwd().map(|s: &str| s.to_string()),
+
+            hostname: si.hostname().map(|s: &str| s.to_string()),
+
+            username: si.username().map(|s: &str| s.to_string()),
+        }
+    }
 }
 
 #[pymethods]
@@ -1166,6 +1246,23 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
     }
 }
 
+impl From<crate::tmux_control::TmuxNotification> for PyTmuxNotification {
+    fn from(notif: crate::tmux_control::TmuxNotification) -> Self {
+        (&notif).into()
+    }
+}
+
+impl From<crate::terminal::search::RegexMatch> for PySearchMatch {
+    fn from(m: crate::terminal::search::RegexMatch) -> Self {
+        PySearchMatch {
+            row: m.row as isize,
+            col: m.col,
+            length: m.length,
+            text: m.text,
+        }
+    }
+}
+
 /// Search match result
 #[pyclass(name = "SearchMatch", from_py_object)]
 #[derive(Clone)]
@@ -1540,9 +1637,9 @@ impl PyMouseEvent {
     }
 }
 
-impl From<&crate::terminal::MouseEventRecord> for PyMouseEvent {
-    fn from(event: &crate::terminal::MouseEventRecord) -> Self {
-        use crate::terminal::{MouseButton, MouseEventType};
+impl From<&crate::mouse::MouseEventRecord> for PyMouseEvent {
+    fn from(event: &crate::mouse::MouseEventRecord) -> Self {
+        use crate::mouse::{MouseButton, MouseEventType};
 
         let event_type = match event.event_type {
             MouseEventType::Press => "press",
@@ -1597,8 +1694,8 @@ impl PyMousePosition {
     }
 }
 
-impl From<&crate::terminal::MousePosition> for PyMousePosition {
-    fn from(pos: &crate::terminal::MousePosition) -> Self {
+impl From<&crate::mouse::MousePosition> for PyMousePosition {
+    fn from(pos: &crate::mouse::MousePosition) -> Self {
         PyMousePosition {
             col: pos.col,
             row: pos.row,
@@ -2377,6 +2474,8 @@ pub struct PyClipboardSyncEvent {
     #[pyo3(get)]
     pub content: Option<String>,
     #[pyo3(get)]
+    pub is_write: bool,
+    #[pyo3(get)]
     pub timestamp: u64,
     #[pyo3(get)]
     pub is_remote: bool,
@@ -2414,9 +2513,10 @@ impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
         PyClipboardSyncEvent {
             target,
             operation,
-            content: event.content.clone(),
-            timestamp: event.timestamp,
+            content: Some(event.content.clone()),
+            is_write: event.is_write,
             is_remote: event.is_remote,
+            timestamp: event.timestamp,
         }
     }
 }
@@ -3084,6 +3184,7 @@ impl From<&crate::terminal::RecordingEvent> for PyRecordingEvent {
             crate::terminal::RecordingEventType::Input => "Input".to_string(),
             crate::terminal::RecordingEventType::Output => "Output".to_string(),
             crate::terminal::RecordingEventType::Resize => "Resize".to_string(),
+            crate::terminal::RecordingEventType::Metadata => "Metadata".to_string(),
             crate::terminal::RecordingEventType::Marker => "Marker".to_string(),
         };
 
@@ -3125,8 +3226,8 @@ impl PyRecordingSession {
     }
 
     #[getter]
-    fn start_time(&self) -> u64 {
-        self.inner.start_time
+    fn created_at(&self) -> u64 {
+        self.inner.created_at
     }
 
     #[getter]
@@ -3141,7 +3242,7 @@ impl PyRecordingSession {
 
     #[getter]
     fn title(&self) -> Option<String> {
-        self.inner.title.clone()
+        Some(self.inner.title.clone())
     }
 
     #[getter]

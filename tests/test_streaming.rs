@@ -415,12 +415,12 @@ mod streaming_tests {
             let clear = PasswordConfig::ClearText("password".to_string());
             let hash = PasswordConfig::Hash("$2y$...".to_string());
 
-            match clear {
+            match &clear {
                 PasswordConfig::ClearText(p) => assert_eq!(p, "password"),
                 _ => panic!("Expected ClearText variant"),
             }
 
-            match hash {
+            match &hash {
                 PasswordConfig::Hash(h) => assert!(h.starts_with("$2y$")),
                 _ => panic!("Expected Hash variant"),
             }
@@ -432,7 +432,7 @@ mod streaming_tests {
             let auth =
                 HttpBasicAuthConfig::with_hash("testuser".to_string(), "placeholder".to_string());
             assert_eq!(auth.username, "testuser");
-            match auth.password {
+            match &auth.password {
                 PasswordConfig::Hash(h) => assert_eq!(h, "placeholder"),
                 _ => panic!("Expected Hash variant"),
             }
@@ -497,6 +497,7 @@ mod streaming_tests {
                 enable_system_stats: false,
                 system_stats_interval_secs: 5,
                 api_key: Some("test-key-123".to_string()),
+                allow_api_key_in_query: false,
             };
 
             assert_eq!(config.max_clients, 50);
@@ -545,6 +546,7 @@ mod streaming_tests {
             let config = ApiAuthConfig {
                 api_key: None,
                 http_basic_auth: None,
+                allow_api_key_in_query: false,
             };
             assert!(!config.is_configured());
         }
@@ -554,6 +556,7 @@ mod streaming_tests {
             let config = ApiAuthConfig {
                 api_key: Some("key".to_string()),
                 http_basic_auth: None,
+                allow_api_key_in_query: false,
             };
             assert!(config.is_configured());
         }
@@ -566,6 +569,7 @@ mod streaming_tests {
                     "user".to_string(),
                     "pass".to_string(),
                 )),
+                allow_api_key_in_query: false,
             };
             assert!(config.is_configured());
         }
@@ -578,6 +582,7 @@ mod streaming_tests {
                     "user".to_string(),
                     "pass".to_string(),
                 )),
+                allow_api_key_in_query: false,
             };
             assert!(config.is_configured());
         }

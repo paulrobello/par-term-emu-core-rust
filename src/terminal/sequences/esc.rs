@@ -22,21 +22,11 @@ impl Terminal {
         match (byte, intermediates) {
             (b'7', _) => {
                 // Save cursor (DECSC)
-                self.saved_cursor = Some(self.cursor);
-                self.saved_fg = self.fg;
-                self.saved_bg = self.bg;
-                self.saved_underline_color = self.underline_color;
-                self.saved_flags = self.flags;
+                self.save_cursor();
             }
             (b'8', _) => {
                 // Restore cursor (DECRC)
-                if let Some(saved) = self.saved_cursor {
-                    self.cursor = saved;
-                    self.fg = self.saved_fg;
-                    self.bg = self.saved_bg;
-                    self.underline_color = self.saved_underline_color;
-                    self.flags = self.saved_flags;
-                }
+                self.restore_cursor();
             }
             (b'H', _) => {
                 // Set tab stop at current column (HTS)

@@ -49,135 +49,23 @@ impl Terminal {
         &self.graphics_store
     }
 
+    /// Export all graphics state as JSON
+    pub fn export_json_graphics(&self) -> String {
+        self.graphics_store.export_json().unwrap_or_default()
+    }
+
+    /// Import graphics state from JSON
+    pub fn import_json_graphics(&mut self, json: &str) -> Result<usize, String> {
+        self.graphics_store
+            .import_json(json)
+            .map_err(|e| e.to_string())
+    }
+
     /// Get mutable access to graphics store
     pub fn graphics_store_mut(&mut self) -> &mut crate::graphics::GraphicsStore {
         &mut self.graphics_store
     }
 
-    /// Insert Unicode placeholder characters for a virtual placement
-    ///
-    /// This inserts U+10EEEE placeholder characters into the terminal grid
-    /// with appropriate foreground/underline colors and diacritics to mark
-    /// where a Kitty virtual placement should be rendered.
-    ///
-    /// # Arguments
-    /// * `image_id` - Kitty image ID
-    /// * `placement_id` - Kitty placement ID (0 if not specified)
-    /// * `position` - (col, row) position of the top-left corner
-    /// * `cols` - Width in terminal columns
-    /// * `rows` - Height in terminal rows
-    pub(crate) fn insert_placeholder_chars(
-        &mut self,
-        image_id: u32,
-        placement_id: u32,
-        position: (usize, usize),
-        cols: usize,
-        rows: usize,
-    ) {
-        use crate::cell::Cell;
-        use crate::color::Color;
-        use crate::graphics::{create_placeholder_with_diacritics, PLACEHOLDER_CHAR};
-
-        let (start_col, start_row) = position;
-        let (grid_cols, grid_rows) = self.size();
-
-        debug::log(
-            debug::DebugLevel::Debug,
-            "KITTY_PLACEHOLDER",
-            &format!(
-                "Inserting placeholders: image_id={}, placement_id={}, pos=({},{}), size={}x{}",
-                image_id, placement_id, start_col, start_row, cols, rows
-            ),
-        );
-
-        // Extract MSB from image_id if > 24 bits
-        let msb = if image_id > 0x00FFFFFF {
-            Some(((image_id >> 24) & 0xFF) as u8)
-        } else {
-            None
-        };
-
-        // Encode image_id in foreground color (lower 24 bits)
-        let image_id_color = Color::Rgb(
-            ((image_id >> 16) & 0xFF) as u8,
-            ((image_id >> 8) & 0xFF) as u8,
-            (image_id & 0xFF) as u8,
-        );
-
-        // Encode placement_id in underline color
-        let placement_id_color = Color::Rgb(
-            ((placement_id >> 16) & 0xFF) as u8,
-            ((placement_id >> 8) & 0xFF) as u8,
-            (placement_id & 0xFF) as u8,
-        );
-
-        // Insert placeholders for each cell in the virtual placement area
-        for row_offset in 0..rows {
-            let row = start_row + row_offset;
-            if row >= grid_rows {
-                break; // Don't write past grid bounds
-            }
-
-            for col_offset in 0..cols {
-                let col = start_col + col_offset;
-                if col >= grid_cols {
-                    break; // Don't write past grid bounds
-                }
-
-                // Create placeholder character with diacritics for position
-                let placeholder_str = create_placeholder_with_diacritics(
-                    row_offset.min(63) as u8,
-                    col_offset.min(63) as u8,
-                    msb,
-                );
-
-                // Extract combining diacritics from the placeholder string
-                let combining: Vec<char> = placeholder_str.chars().skip(1).collect();
-
-                let cell = Cell {
-                    c: PLACEHOLDER_CHAR,
-                    combining,
-                    fg: image_id_color,
-                    bg: self.bg, // Use current background
-                    underline_color: Some(placement_id_color),
-                    flags: self.flags,
-                    width: 1, // Placeholders are narrow
-                };
-
-                self.active_grid_mut().set(col, row, cell);
-
-                debug::log(
-                    debug::DebugLevel::Trace,
-                    "KITTY_PLACEHOLDER",
-                    &format!(
-                        "Inserted placeholder at ({},{}) with placeholder_str.len()={}",
-                        col,
-                        row,
-                        placeholder_str.len()
-                    ),
-                );
-            }
-        }
-
-        debug::log(
-            debug::DebugLevel::Debug,
-            "KITTY_PLACEHOLDER",
-            &format!(
-                "Inserted {} placeholder cells",
-                rows.min(grid_rows - start_row) * cols.min(grid_cols - start_col)
-            ),
-        );
-    }
-
-    /// Adjust graphics positions when scrolling up within a region
-    ///
-    /// When text scrolls up, graphics should scroll up with it.
-    /// Graphics that scroll completely off the top are moved to scrollback.
-    ///
-    /// # Arguments
-    /// * `n` - Number of lines scrolled
-    /// * `top` - Top of scroll region (0-indexed)
-    /// * `bottom` - Bottom of scroll region (0-indexed)
     pub(super) fn adjust_graphics_for_scroll_up(&mut self, n: usize, top: usize, bottom: usize) {
         // Get the current scrollback length from the grid (AFTER it has already scrolled)
         // We need to pass the OLD scrollback length (before scroll) to graphics store

@@ -59,6 +59,7 @@ serde_json = "1.0.149"
 serde_yaml = "0.9.34"
 percent-encoding = "2.3.2"
 url = "2.5.8"
+uuid = { version = "1.20", features = ["v4", "serde"] }
 
 # Streaming server dependencies
 tokio = { version = "1.49", features = ["full"], optional = true }
@@ -66,7 +67,6 @@ tokio-tungstenite = { version = "0.28", optional = true }
 axum = { version = "0.8.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6.8", features = ["fs", "trace"], optional = true }
 futures-util = { version = "0.3.31", optional = true }
-uuid = { version = "1.20", features = ["v4", "serde"], optional = true }
 
 # CLI dependencies (for streaming server binary)
 clap = { version = "4.5.57", features = ["derive", "env"], optional = true }
@@ -103,6 +103,8 @@ sysinfo = { version = "0.34", optional = true }
 image = "0.25.9"
 swash = "0.2.6"
 parking_lot = "0.12.5"
+subtle = "2.6"
+zeroize = "1.8"
 
 # Unicode text handling
 unicode-segmentation = "1.12"
@@ -128,7 +130,7 @@ tempfile = "3.25"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers", "sysinfo"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "rustls-pemfile", "axum-server", "htpasswd-verify", "headers", "sysinfo"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms

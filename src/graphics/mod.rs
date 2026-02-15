@@ -126,7 +126,7 @@ impl ImageDimension {
 
     /// Check if this is an auto dimension
     pub fn is_auto(&self) -> bool {
-        self.unit == ImageSizeUnit::Auto || self.value == 0.0
+        self.unit == ImageSizeUnit::Auto || !self.value.is_finite() || self.value == 0.0
     }
 }
 

@@ -502,3 +502,344 @@ mod tests {
         assert!(snap.commands.is_empty());
     }
 }
+
+/// Export format for scrollback
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ExportFormat {
+    /// Plain text (stripped of all formatting)
+    Plain,
+    /// HTML with colors and styles
+    Html,
+    /// Raw ANSI escape sequences preserved
+    Ansi,
+}
+
+/// Scrollback statistics
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScrollbackStats {
+    /// Total lines in scrollback
+    pub total_lines: usize,
+    /// Estimated memory usage in bytes
+    pub memory_bytes: usize,
+    /// Whether scrollback has wrapped around
+    pub has_wrapped: bool,
+}
+
+/// Bookmark in scrollback
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Bookmark {
+    /// Unique bookmark ID
+    pub id: usize,
+    /// Row position (negative = scrollback)
+    pub row: isize,
+    /// User-defined label
+    pub label: String,
+}
+
+/// Type of change in a diff
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffChangeType {
+    /// Line added
+    Added,
+    /// Line removed
+    Removed,
+    /// Line modified
+    Modified,
+    /// Line unchanged
+    Unchanged,
+}
+
+/// A single line diff
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LineDiff {
+    /// Type of change
+    pub change_type: DiffChangeType,
+    /// Row number in old snapshot
+    pub old_row: Option<usize>,
+    /// Row number in new snapshot
+    pub new_row: Option<usize>,
+    /// Old line content
+    pub old_content: Option<String>,
+    /// New line content
+    pub new_content: Option<String>,
+}
+
+/// Complete diff between two snapshots
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotDiff {
+    /// List of line diffs
+    pub diffs: Vec<LineDiff>,
+    /// Number of lines added
+    pub added: usize,
+    /// Number of lines removed
+    pub removed: usize,
+    /// Number of lines modified
+    pub modified: usize,
+    /// Number of lines unchanged
+    pub unchanged: usize,
+}
+
+/// Compare two sets of screen lines and return the differences
+pub fn diff_screen_lines(old_lines: &[String], new_lines: &[String]) -> SnapshotDiff {
+    let mut diffs = Vec::new();
+    let mut added = 0;
+    let mut removed = 0;
+    let mut modified = 0;
+    let mut unchanged = 0;
+
+    let max_rows = old_lines.len().max(new_lines.len());
+
+    for row in 0..max_rows {
+        let old_line = old_lines.get(row);
+        let new_line = new_lines.get(row);
+
+        match (old_line, new_line) {
+            (Some(old_content), Some(new_content)) => {
+                if old_content == new_content {
+                    unchanged += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Unchanged,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                } else {
+                    modified += 1;
+                    diffs.push(LineDiff {
+                        change_type: DiffChangeType::Modified,
+                        old_row: Some(row),
+                        new_row: Some(row),
+                        old_content: Some(old_content.clone()),
+                        new_content: Some(new_content.clone()),
+                    });
+                }
+            }
+            (None, Some(new_content)) => {
+                added += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Added,
+                    old_row: None,
+                    new_row: Some(row),
+                    old_content: None,
+                    new_content: Some(new_content.clone()),
+                });
+            }
+            (Some(old_content), None) => {
+                removed += 1;
+                diffs.push(LineDiff {
+                    change_type: DiffChangeType::Removed,
+                    old_row: Some(row),
+                    new_row: None,
+                    old_content: Some(old_content.clone()),
+                    new_content: None,
+                });
+            }
+            (None, None) => {
+                // This shouldn't happen
+            }
+        }
+    }
+
+    SnapshotDiff {
+        diffs,
+        added,
+        removed,
+        modified,
+        unchanged,
+    }
+}
+
+use crate::cell::Cell;
+use crate::terminal::Terminal;
+
+impl Terminal {
+    // === Scrollback Operations ===
+
+    /// Export scrollback to various formats
+    ///
+    /// # Arguments
+    /// * `format` - Export format (Plain, Html, Ansi)
+    /// * `max_lines` - Maximum number of scrollback lines to export (None = all)
+    ///
+    /// Returns the exported content as a string.
+    pub fn export_scrollback(&self, format: ExportFormat, max_lines: Option<usize>) -> String {
+        let scrollback_len = self.grid.scrollback_len();
+        let lines_to_export = max_lines.unwrap_or(scrollback_len).min(scrollback_len);
+
+        match format {
+            ExportFormat::Plain => {
+                let mut output = String::new();
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        output.push_str(&crate::terminal::cells_to_text(line));
+                        output.push('\n');
+                    }
+                }
+                output
+            }
+            ExportFormat::Html => {
+                let mut output = String::from("<pre>\n");
+                for i in (0..lines_to_export).rev() {
+                    if let Some(line) = self.grid.scrollback_line(i) {
+                        let text = crate::terminal::cells_to_text(line);
+                        output.push_str(&crate::terminal::html_escape(&text));
+                        output.push('\n');
+                    }
+                }
+                output.push_str("</pre>");
+                output
+            }
+            ExportFormat::Ansi => {
+                // For ANSI export, we'd need to preserve colors/attributes
+                // For now, just export as plain text
+                self.export_scrollback(ExportFormat::Plain, max_lines)
+            }
+        }
+    }
+
+    /// Get scrollback statistics
+    pub fn scrollback_stats(&self) -> ScrollbackStats {
+        let total_lines = self.grid.scrollback_len();
+        let memory_bytes = total_lines * self.grid.cols() * std::mem::size_of::<Cell>();
+        // Scrollback has wrapped if we've filled the buffer
+        let has_wrapped = total_lines >= self.grid.max_scrollback();
+
+        ScrollbackStats {
+            total_lines,
+            memory_bytes,
+            has_wrapped,
+        }
+    }
+
+    /// Get current scrollback usage (lines used)
+    pub fn get_scrollback_usage(&self) -> usize {
+        self.grid.scrollback_len()
+    }
+
+    /// Capture a semantic snapshot of the terminal state
+    pub fn get_semantic_snapshot(&self, scope: SnapshotScope) -> SemanticSnapshot {
+        let (cols, rows) = self.size();
+        let scrollback_len = self.grid.scrollback_len();
+
+        let mut snapshot = SemanticSnapshot {
+            timestamp: crate::terminal::unix_millis(),
+            cols,
+            rows,
+            title: self.title().to_string(),
+            cursor_col: self.cursor.col,
+            cursor_row: self.cursor.row,
+            alt_screen_active: self.alt_screen_active,
+            visible_text: self.content(),
+            scrollback_text: None,
+            zones: Vec::new(),
+            commands: Vec::new(),
+            cwd: self.shell_integration.cwd().map(|s| s.to_string()),
+            hostname: None, // Could be extracted from shell_integration
+            username: None, // Could be extracted from shell_integration
+            cwd_history: Vec::new(),
+            scrollback_lines: scrollback_len,
+            total_zones: self.grid.zones().len(),
+            total_commands: self.command_history.len(),
+        };
+
+        if scope == SnapshotScope::Full {
+            snapshot.scrollback_text = Some(self.export_scrollback(ExportFormat::Plain, None));
+        }
+
+        snapshot
+    }
+
+    /// Capture a semantic snapshot and return it as a JSON string
+    pub fn get_semantic_snapshot_json(&self, scope: SnapshotScope) -> String {
+        serde_json::to_string(&self.get_semantic_snapshot(scope)).unwrap_or_default()
+    }
+
+    // === Bookmark Methods ===
+
+    /// Add a bookmark at the given scrollback row
+    ///
+    /// # Arguments
+    /// * `row` - Row index (negative for scrollback, 0+ for visible screen)
+    /// * `label` - Optional label for the bookmark
+    ///
+    /// Returns the bookmark ID.
+    pub fn add_bookmark(&mut self, row: isize, label: Option<String>) -> usize {
+        let id = self.next_bookmark_id;
+        self.next_bookmark_id += 1;
+
+        let bookmark = Bookmark {
+            id,
+            row,
+            label: label.unwrap_or_else(|| format!("Bookmark {}", id)),
+        };
+
+        self.bookmarks.push(bookmark);
+        id
+    }
+
+    /// Get all bookmarks
+    pub fn get_bookmarks(&self) -> Vec<Bookmark> {
+        self.bookmarks.clone()
+    }
+
+    /// Remove a bookmark by ID
+    pub fn remove_bookmark(&mut self, id: usize) -> bool {
+        if let Some(pos) = self.bookmarks.iter().position(|b| b.id == id) {
+            self.bookmarks.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Clear all bookmarks
+    pub fn clear_bookmarks(&mut self) {
+        self.bookmarks.clear();
+    }
+
+    /// Get the terminal content as a string (visible area)
+    pub fn content(&self) -> String {
+        self.get_logical_lines().join("\n")
+    }
+
+    /// Export the visible screen content with ANSI styling
+    pub fn export_visible_screen_styled(&self) -> String {
+        self.active_grid().export_visible_screen_styled()
+    }
+
+    /// Export entire buffer (scrollback + current screen) as plain text
+    pub fn export_text(&self) -> String {
+        let mut output = self.export_scrollback(ExportFormat::Plain, None);
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        output.push_str(&self.content());
+        output
+    }
+
+    /// Export entire buffer (scrollback + current screen) with ANSI styling
+    pub fn export_styled(&self) -> String {
+        // For now, just return plain text as a placeholder
+        // In a full implementation, this would include ANSI sequences
+        self.export_text()
+    }
+
+    /// Export the current screen as HTML
+    pub fn export_html(&self, _include_styles: bool) -> String {
+        let (_cols, rows) = self.size();
+        let mut output = String::from("<pre style=\"font-family: monospace\">\n");
+
+        for row in 0..rows {
+            if let Some(line) = self.active_grid().row(row) {
+                let text = crate::terminal::cells_to_text(line);
+                let escaped = crate::terminal::html_escape(&text);
+                output.push_str(&escaped);
+                output.push('\n');
+            }
+        }
+
+        output.push_str("</pre>");
+        output
+    }
+}

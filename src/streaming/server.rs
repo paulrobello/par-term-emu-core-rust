@@ -101,6 +101,24 @@ impl TlsConfig {
                 e
             ))
         })?;
+
+        // Validate private key file permissions on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = std::fs::metadata(key_path) {
+                let mode = metadata.permissions().mode();
+                if mode & 0o077 != 0 {
+                    return Err(StreamingError::ServerError(format!(
+                        "Private key file '{}' has overly permissive permissions (mode {:o}). \
+                         Set to 600 or 400 for security.",
+                        key_path.display(),
+                        mode & 0o777
+                    )));
+                }
+            }
+        }
+
         let mut key_reader = BufReader::new(key_file);
         let key = rustls_pemfile::private_key(&mut key_reader)
             .map_err(|e| {
@@ -206,13 +224,33 @@ pub struct HttpBasicAuthConfig {
     pub password: PasswordConfig,
 }
 
-/// Password storage configuration
-#[derive(Debug, Clone)]
+/// Password storage configuration.
+/// Sensitive data is zeroized on drop to prevent leaking credentials in memory.
+#[derive(Debug)]
 pub enum PasswordConfig {
-    /// Clear text password (compared directly)
+    /// Clear text password (compared directly, zeroized on drop)
     ClearText(String),
-    /// htpasswd format hash (bcrypt, apr1, sha1, md5crypt)
+    /// htpasswd format hash (bcrypt, apr1, sha1, md5crypt, zeroized on drop)
     Hash(String),
+}
+
+impl Clone for PasswordConfig {
+    fn clone(&self) -> Self {
+        match self {
+            PasswordConfig::ClearText(s) => PasswordConfig::ClearText(s.clone()),
+            PasswordConfig::Hash(s) => PasswordConfig::Hash(s.clone()),
+        }
+    }
+}
+
+impl Drop for PasswordConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        match self {
+            PasswordConfig::ClearText(ref mut s) => s.zeroize(),
+            PasswordConfig::Hash(ref mut s) => s.zeroize(),
+        }
+    }
 }
 
 impl HttpBasicAuthConfig {
@@ -234,12 +272,15 @@ impl HttpBasicAuthConfig {
 
     /// Verify a password against this config
     pub fn verify(&self, username: &str, password: &str) -> bool {
-        if username != self.username {
+        use subtle::ConstantTimeEq;
+        if !bool::from(username.as_bytes().ct_eq(self.username.as_bytes())) {
             return false;
         }
 
         match &self.password {
-            PasswordConfig::ClearText(expected) => password == expected,
+            PasswordConfig::ClearText(expected) => {
+                bool::from(password.as_bytes().ct_eq(expected.as_bytes()))
+            }
             PasswordConfig::Hash(hash) => {
                 // Use htpasswd-verify crate to check the password
                 // Format: "username:hash" for htpasswd library
@@ -290,6 +331,10 @@ pub struct StreamingConfig {
     pub system_stats_interval_secs: u64,
     /// API key for authenticating API routes (None = no API key auth)
     pub api_key: Option<String>,
+    /// Allow API key authentication via query parameter (?api_key=...).
+    /// Disabled by default because query params are logged by proxies/firewalls,
+    /// saved in browser history, and leaked via Referer headers.
+    pub allow_api_key_in_query: bool,
 }
 
 impl Default for StreamingConfig {
@@ -313,6 +358,7 @@ impl Default for StreamingConfig {
             enable_system_stats: false,
             system_stats_interval_secs: 5,
             api_key: None,
+            allow_api_key_in_query: false,
         }
     }
 }
@@ -1469,6 +1515,7 @@ impl StreamingServer {
         let auth_config = ApiAuthConfig {
             api_key: self.config.api_key.clone(),
             http_basic_auth: self.config.http_basic_auth.clone(),
+            allow_api_key_in_query: self.config.allow_api_key_in_query,
         };
         let api_routes = if auth_config.is_configured() {
             api_routes.layer(axum::middleware::from_fn(move |req, next| {
@@ -1528,6 +1575,7 @@ impl StreamingServer {
         let auth_config = ApiAuthConfig {
             api_key: self.config.api_key.clone(),
             http_basic_auth: self.config.http_basic_auth.clone(),
+            allow_api_key_in_query: self.config.allow_api_key_in_query,
         };
         let api_routes = if auth_config.is_configured() {
             api_routes.layer(axum::middleware::from_fn(move |req, next| {
@@ -1603,15 +1651,18 @@ impl StreamingServer {
                         let uri_query_clone = std::sync::Arc::clone(&uri_query);
                         let ws_api_key = server.config.api_key.clone();
                         let ws_basic_auth = server.config.http_basic_auth.clone();
+                        let ws_allow_query = server.config.allow_api_key_in_query;
 
                         let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
                             if let Some(q) = req.uri().query() {
-                                *uri_query_clone.lock().unwrap() = Some(q.to_string());
+                                if let Ok(mut guard) = uri_query_clone.lock() {
+                                    *guard = Some(q.to_string());
+                                }
                             }
 
                             // Validate auth if configured
                             if (ws_api_key.is_some() || ws_basic_auth.is_some())
-                                && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref()) {
+                                && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref(), ws_allow_query) {
                                     let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                                         .status(401)
                                         .body(Some("Unauthorized".to_string()))
@@ -1624,7 +1675,7 @@ impl StreamingServer {
 
                         match ws_result {
                             Ok(ws_stream) => {
-                                let query_str = uri_query.lock().unwrap().take();
+                                let query_str = uri_query.lock().ok().and_then(|mut g| g.take());
                                 let params = ConnectionParams::from_uri_query(query_str.as_deref());
                                 if let Err(e) =
                                     server.handle_connection_ws(ws_stream, &params).await
@@ -1706,6 +1757,7 @@ impl StreamingServer {
                                 let uri_query_clone = std::sync::Arc::clone(&uri_query);
                                 let ws_api_key = server.config.api_key.clone();
                                 let ws_basic_auth = server.config.http_basic_auth.clone();
+                                let ws_allow_query = server.config.allow_api_key_in_query;
 
                                 let ws_result = accept_hdr_async(
                                     tls_stream,
@@ -1716,12 +1768,14 @@ impl StreamingServer {
                                         (),
                                     >| {
                                         if let Some(q) = req.uri().query() {
-                                            *uri_query_clone.lock().unwrap() = Some(q.to_string());
+                                            if let Ok(mut guard) = uri_query_clone.lock() {
+                                                *guard = Some(q.to_string());
+                                            }
                                         }
 
                                         // Validate auth if configured
                                         if (ws_api_key.is_some() || ws_basic_auth.is_some())
-                                            && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref()) {
+                                            && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref(), ws_allow_query) {
                                                 let reject = tokio_tungstenite::tungstenite::http::Response::builder()
                                                     .status(401)
                                                     .body(Some("Unauthorized".to_string()))
@@ -1736,7 +1790,8 @@ impl StreamingServer {
 
                                 match ws_result {
                                     Ok(ws_stream) => {
-                                        let query_str = uri_query.lock().unwrap().take();
+                                        let query_str =
+                                            uri_query.lock().ok().and_then(|mut g| g.take());
                                         let params =
                                             ConnectionParams::from_uri_query(query_str.as_deref());
                                         if let Err(e) = server
@@ -2866,6 +2921,8 @@ pub struct ApiAuthConfig {
     pub api_key: Option<String>,
     /// HTTP Basic Authentication credentials
     pub http_basic_auth: Option<HttpBasicAuthConfig>,
+    /// Whether to allow API key in query parameters
+    pub allow_api_key_in_query: bool,
 }
 
 #[cfg(feature = "streaming")]
@@ -2887,6 +2944,7 @@ async fn api_auth_middleware(
 ) -> axum::response::Response {
     use axum::http::{header, StatusCode};
     use axum::response::IntoResponse;
+    use subtle::ConstantTimeEq;
 
     let auth_header = req
         .headers()
@@ -2904,7 +2962,12 @@ async fn api_auth_middleware(
     if let Some(ref expected_key) = auth_config.api_key {
         if let Some(ref auth_value) = auth_header {
             if let Some(bearer_token) = auth_value.strip_prefix("Bearer ") {
-                if bearer_token.trim() == expected_key {
+                if bool::from(
+                    bearer_token
+                        .trim()
+                        .as_bytes()
+                        .ct_eq(expected_key.as_bytes()),
+                ) {
                     return next.run(req).await;
                 }
             }
@@ -2912,17 +2975,19 @@ async fn api_auth_middleware(
 
         // Check X-API-Key header
         if let Some(ref key) = x_api_key_header {
-            if key == expected_key {
+            if bool::from(key.as_bytes().ct_eq(expected_key.as_bytes())) {
                 return next.run(req).await;
             }
         }
 
-        // Check ?api_key= query param
-        if let Some(query) = req.uri().query() {
-            for pair in query.split('&') {
-                if let Some(value) = pair.strip_prefix("api_key=") {
-                    if value == expected_key {
-                        return next.run(req).await;
+        // Check ?api_key= query param (only if explicitly allowed)
+        if auth_config.allow_api_key_in_query {
+            if let Some(query) = req.uri().query() {
+                for pair in query.split('&') {
+                    if let Some(value) = pair.strip_prefix("api_key=") {
+                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                            return next.run(req).await;
+                        }
                     }
                 }
             }
@@ -2963,13 +3028,16 @@ async fn api_auth_middleware(
 }
 
 /// Validate auth credentials during WebSocket handshake (for non-HTTP server modes).
-/// Checks Bearer header → X-API-Key header → ?api_key= query → Basic Auth header.
+/// Checks Bearer header → X-API-Key header → ?api_key= query (if allowed) → Basic Auth header.
 /// Returns true if auth passes (or no auth is configured).
 fn validate_ws_handshake_auth(
     req: &tokio_tungstenite::tungstenite::http::Request<()>,
     api_key: Option<&str>,
     basic_auth: Option<&HttpBasicAuthConfig>,
+    allow_api_key_in_query: bool,
 ) -> bool {
+    use subtle::ConstantTimeEq;
+
     let auth_header = req
         .headers()
         .get("Authorization")
@@ -2981,7 +3049,12 @@ fn validate_ws_handshake_auth(
     if let Some(expected_key) = api_key {
         if let Some(auth_value) = auth_header {
             if let Some(bearer_token) = auth_value.strip_prefix("Bearer ") {
-                if bearer_token.trim() == expected_key {
+                if bool::from(
+                    bearer_token
+                        .trim()
+                        .as_bytes()
+                        .ct_eq(expected_key.as_bytes()),
+                ) {
                     return true;
                 }
             }
@@ -2989,17 +3062,19 @@ fn validate_ws_handshake_auth(
 
         // Check X-API-Key header
         if let Some(key) = x_api_key_header {
-            if key == expected_key {
+            if bool::from(key.as_bytes().ct_eq(expected_key.as_bytes())) {
                 return true;
             }
         }
 
-        // Check ?api_key= query param
-        if let Some(query) = req.uri().query() {
-            for pair in query.split('&') {
-                if let Some(value) = pair.strip_prefix("api_key=") {
-                    if value == expected_key {
-                        return true;
+        // Check ?api_key= query param (only if explicitly allowed)
+        if allow_api_key_in_query {
+            if let Some(query) = req.uri().query() {
+                for pair in query.split('&') {
+                    if let Some(value) = pair.strip_prefix("api_key=") {
+                        if bool::from(value.as_bytes().ct_eq(expected_key.as_bytes())) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -3415,5 +3490,431 @@ mod tests {
             result.unwrap_err(),
             StreamingError::SessionNotFound(_)
         ));
+    }
+
+    // =========================================================================
+    // Terminal Size Validation Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_valid_min() {
+        let result = validate_terminal_size(MIN_COLS, MIN_ROWS);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (MIN_COLS, MIN_ROWS));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_valid_max() {
+        let result = validate_terminal_size(MAX_COLS, MAX_ROWS);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (MAX_COLS, MAX_ROWS));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_valid_typical() {
+        let result = validate_terminal_size(80, 24);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), (80, 24));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_cols_below_min() {
+        let result = validate_terminal_size(1, 24);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_cols_zero() {
+        let result = validate_terminal_size(0, 24);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_cols_above_max() {
+        let result = validate_terminal_size(1001, 24);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_rows_below_min() {
+        let result = validate_terminal_size(80, 0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_rows_above_max() {
+        let result = validate_terminal_size(80, 501);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_both_invalid() {
+        let result = validate_terminal_size(0, 0);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_validate_terminal_size_max_u16() {
+        let result = validate_terminal_size(u16::MAX, u16::MAX);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::InvalidInput(_)
+        ));
+    }
+
+    // =========================================================================
+    // HttpBasicAuthConfig Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_http_basic_auth_correct_password() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(auth.verify("admin", "secret123"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_wrong_password() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(!auth.verify("admin", "wrongpass"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_wrong_username() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(!auth.verify("root", "secret123"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_empty_username() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(!auth.verify("", "secret123"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_empty_password() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(!auth.verify("admin", ""));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_both_empty() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "secret123".to_string());
+        assert!(!auth.verify("", ""));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_unicode_username() {
+        let auth = HttpBasicAuthConfig::with_password("用户".to_string(), "password".to_string());
+        assert!(auth.verify("用户", "password"));
+        assert!(!auth.verify("用戶", "password")); // Different Unicode chars
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_unicode_password() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "密码123".to_string());
+        assert!(auth.verify("admin", "密码123"));
+        assert!(!auth.verify("admin", "密碼123")); // Different Unicode chars
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_case_sensitive() {
+        let auth = HttpBasicAuthConfig::with_password("Admin".to_string(), "Secret".to_string());
+        assert!(auth.verify("Admin", "Secret"));
+        assert!(!auth.verify("admin", "Secret"));
+        assert!(!auth.verify("Admin", "secret"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_whitespace() {
+        let auth = HttpBasicAuthConfig::with_password("admin".to_string(), "pass word".to_string());
+        assert!(auth.verify("admin", "pass word"));
+        assert!(!auth.verify("admin", "password"));
+    }
+
+    #[tokio::test]
+    async fn test_http_basic_auth_special_chars() {
+        let auth = HttpBasicAuthConfig::with_password(
+            "user@example.com".to_string(),
+            "p@ss!w0rd#$%".to_string(),
+        );
+        assert!(auth.verify("user@example.com", "p@ss!w0rd#$%"));
+        assert!(!auth.verify("user@example.com", "p@ss!w0rd"));
+    }
+
+    // =========================================================================
+    // SessionRegistry Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_session_registry_get_nonexistent() {
+        let registry = SessionRegistry::new(10);
+        assert!(registry.get("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_remove_existing() {
+        let registry = SessionRegistry::new(10);
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = Arc::new(SessionState::new("test".to_string(), terminal, None, true));
+
+        registry
+            .insert("test".to_string(), Arc::clone(&session))
+            .unwrap();
+        assert_eq!(registry.session_count(), 1);
+
+        let removed = registry.remove("test");
+        assert!(removed.is_some());
+        assert_eq!(removed.unwrap().id, "test");
+        assert_eq!(registry.session_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_remove_nonexistent() {
+        let registry = SessionRegistry::new(10);
+        assert!(registry.remove("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_replace_existing() {
+        let registry = SessionRegistry::new(2);
+        let terminal1 = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session1 = Arc::new(SessionState::new("test".to_string(), terminal1, None, true));
+
+        registry
+            .insert("test".to_string(), Arc::clone(&session1))
+            .unwrap();
+        assert_eq!(registry.session_count(), 1);
+
+        // Replace with new session (same ID, should not count toward limit)
+        let terminal2 = Arc::new(Mutex::new(Terminal::new(100, 30)));
+        let session2 = Arc::new(SessionState::new("test".to_string(), terminal2, None, true));
+        let result = registry.insert("test".to_string(), session2);
+        assert!(result.is_ok());
+        assert_eq!(registry.session_count(), 1);
+
+        let retrieved = registry.get("test").unwrap();
+        assert_eq!(retrieved.terminal.lock().grid.cols(), 100);
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_multiple_sessions() {
+        let registry = SessionRegistry::new(10);
+
+        for i in 0..5 {
+            let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+            let session = Arc::new(SessionState::new(format!("s{}", i), terminal, None, true));
+            registry.insert(format!("s{}", i), session).unwrap();
+        }
+        assert_eq!(registry.session_count(), 5);
+
+        // Verify all sessions can be retrieved
+        for i in 0..5 {
+            assert!(registry.get(&format!("s{}", i)).is_some());
+        }
+
+        // Remove some sessions
+        registry.remove("s1");
+        registry.remove("s3");
+        assert_eq!(registry.session_count(), 3);
+
+        assert!(registry.get("s0").is_some());
+        assert!(registry.get("s1").is_none());
+        assert!(registry.get("s2").is_some());
+        assert!(registry.get("s3").is_none());
+        assert!(registry.get("s4").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_session_registry_zero_capacity() {
+        let registry = SessionRegistry::new(0);
+        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let session = Arc::new(SessionState::new("test".to_string(), terminal, None, true));
+
+        let result = registry.insert("test".to_string(), session);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            StreamingError::MaxSessionsReached
+        ));
+    }
+
+    // =========================================================================
+    // StreamingConfig Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_streaming_config_default_allow_api_key_in_query() {
+        let config = StreamingConfig::default();
+        assert!(!config.allow_api_key_in_query);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_max_clients() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.max_clients, 1000);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_send_initial_screen() {
+        let config = StreamingConfig::default();
+        assert!(config.send_initial_screen);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_keepalive_interval() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.keepalive_interval, 30);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_read_only() {
+        let config = StreamingConfig::default();
+        assert!(!config.default_read_only);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_max_sessions() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.max_sessions, 10);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_session_idle_timeout() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.session_idle_timeout, 900);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_presets() {
+        let config = StreamingConfig::default();
+        assert!(config.presets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_max_clients_per_session() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.max_clients_per_session, 0);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_input_rate_limit() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_enable_http() {
+        let config = StreamingConfig::default();
+        assert!(!config.enable_http);
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_web_root() {
+        let config = StreamingConfig::default();
+        assert_eq!(config.web_root, "./web_term");
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_tls() {
+        let config = StreamingConfig::default();
+        assert!(config.tls.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_http_basic_auth() {
+        let config = StreamingConfig::default();
+        assert!(config.http_basic_auth.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_streaming_config_default_api_key() {
+        let config = StreamingConfig::default();
+        assert!(config.api_key.is_none());
+    }
+
+    // =========================================================================
+    // ApiAuthConfig Tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_api_auth_config_is_configured_none() {
+        let config = ApiAuthConfig {
+            api_key: None,
+            http_basic_auth: None,
+            allow_api_key_in_query: false,
+        };
+        assert!(!config.is_configured());
+    }
+
+    #[tokio::test]
+    async fn test_api_auth_config_is_configured_api_key_only() {
+        let config = ApiAuthConfig {
+            api_key: Some("test-key".to_string()),
+            http_basic_auth: None,
+            allow_api_key_in_query: false,
+        };
+        assert!(config.is_configured());
+    }
+
+    #[tokio::test]
+    async fn test_api_auth_config_is_configured_basic_auth_only() {
+        let config = ApiAuthConfig {
+            api_key: None,
+            http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                "admin".to_string(),
+                "secret".to_string(),
+            )),
+            allow_api_key_in_query: false,
+        };
+        assert!(config.is_configured());
+    }
+
+    #[tokio::test]
+    async fn test_api_auth_config_is_configured_both() {
+        let config = ApiAuthConfig {
+            api_key: Some("test-key".to_string()),
+            http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                "admin".to_string(),
+                "secret".to_string(),
+            )),
+            allow_api_key_in_query: true,
+        };
+        assert!(config.is_configured());
+    }
+
+    #[tokio::test]
+    async fn test_api_auth_config_allow_api_key_in_query_no_auth() {
+        let config = ApiAuthConfig {
+            api_key: None,
+            http_basic_auth: None,
+            allow_api_key_in_query: true,
+        };
+        // Even if allow_api_key_in_query is true, no auth is configured
+        assert!(!config.is_configured());
     }
 }

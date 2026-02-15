@@ -91,6 +91,21 @@ impl SharedState {
     /// Build a `SharedState` snapshot from the current terminal state.
     ///
     /// The returned value owns all heap memory and will free it on drop.
+    /// Raw pointers (`title`, `cwd`, `cells`) are valid only for the lifetime
+    /// of this `SharedState` — accessing them after `Drop` is undefined behavior.
+    ///
+    /// # Safety Contract
+    ///
+    /// Callers must ensure:
+    /// - The `Terminal` reference is not accessed concurrently from other threads
+    ///   while this snapshot is being built
+    /// - The returned `SharedState` must not outlive any external references to its
+    ///   raw pointer fields (`title`, `cwd`, `cells`)
+    /// - The `cells` pointer is valid for `cell_count` elements only
+    /// - The `title` pointer (if non-null) is a NUL-terminated C string of `title_len` bytes
+    /// - The `cwd` pointer (if non-null) is a NUL-terminated C string of `cwd_len` bytes
+    /// - Only one `SharedState` should be built from a `Terminal` at a time to prevent
+    ///   data races on the underlying grid state
     pub fn from_terminal(term: &Terminal) -> Self {
         let grid = term.active_grid();
         let cols = grid.cols();
@@ -109,7 +124,7 @@ impl SharedState {
         // Title
         let title_str = term.title();
         let title_len = title_str.len() as u32;
-        let title_cstring = CString::new(title_str).unwrap_or_else(|_| CString::new("").unwrap());
+        let title_cstring = CString::new(title_str).unwrap_or_default();
         let title = title_cstring.into_raw();
 
         // CWD
@@ -117,7 +132,7 @@ impl SharedState {
         let (cwd, cwd_len) = match cwd_opt {
             Some(s) => {
                 let len = s.len() as u32;
-                let cs = CString::new(s).unwrap_or_else(|_| CString::new("").unwrap());
+                let cs = CString::new(s).unwrap_or_default();
                 (cs.into_raw(), len)
             }
             None => (std::ptr::null_mut(), 0u32),

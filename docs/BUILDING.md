@@ -1,6 +1,6 @@
 # Building par-term-emu-core-rust
 
-This guide explains how to build and install the par-term-emu-core-rust library (version 0.18.0).
+This guide explains how to build and install the par-term-emu-core-rust library.
 
 ## Table of Contents
 

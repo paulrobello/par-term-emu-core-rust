@@ -316,6 +316,8 @@ par-term-streamer --enable-http --web-root ./web_term
 
 ### Python Integration
 
+**Basic Usage:**
+
 ```python
 import par_term_emu_core_rust as terminal_core
 import time
@@ -346,6 +348,89 @@ while pty_terminal.is_running():
 
 # Cleanup
 streaming_server.shutdown("Server stopping")
+```
+
+**Creating a Custom StreamingConfig:**
+
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Create a custom configuration
+config = terminal_core.StreamingConfig(
+    max_clients=50,
+    send_initial_screen=True,
+    keepalive_interval=30,
+    default_read_only=False,
+    initial_cols=120,
+    initial_rows=40,
+    enable_http=True,
+    web_root="./my_web_frontend",
+    enable_system_stats=True,
+    system_stats_interval_secs=5,
+    api_key="my-secret-key"  # Protect /ws, /sessions, /stats
+)
+
+# Create server with custom config
+pty_terminal = terminal_core.PtyTerminal(80, 24)
+pty_terminal.spawn_shell()
+server = terminal_core.StreamingServer(pty_terminal, "127.0.0.1:8099", config)
+```
+
+**Configuring TLS:**
+
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Create config
+config = terminal_core.StreamingConfig()
+
+# From separate certificate and key files
+config.set_tls_from_files("cert.pem", "key.pem")
+
+# Or from combined PEM file
+config.set_tls_from_pem("combined.pem")
+
+# Check TLS status
+print(f"TLS enabled: {config.tls_enabled}")  # True
+
+# Disable TLS if needed
+config.disable_tls()
+
+# Use config with server
+pty_terminal = terminal_core.PtyTerminal(80, 24)
+pty_terminal.spawn_shell()
+server = terminal_core.StreamingServer(pty_terminal, "0.0.0.0:8099", config)
+server.start()
+
+# Clients must now use wss://host:8099/ws
+```
+
+**Setting an API Key:**
+
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Via constructor
+config = terminal_core.StreamingConfig(api_key="my-secret-key")
+
+# Or via setter
+config = terminal_core.StreamingConfig()
+config.set_api_key("my-secret-key")
+
+# Check if API key is set
+if config.api_key:
+    print("API key configured")
+
+# Create server with API key protection
+pty_terminal = terminal_core.PtyTerminal(80, 24)
+pty_terminal.spawn_shell()
+server = terminal_core.StreamingServer(pty_terminal, "127.0.0.1:8099", config)
+server.start()
+
+# Clients must authenticate via:
+#   - Header: Authorization: Bearer my-secret-key
+#   - Header: X-API-Key: my-secret-key
+#   - Query:  ws://localhost:8099/ws?api_key=my-secret-key
 ```
 
 ### Configuration

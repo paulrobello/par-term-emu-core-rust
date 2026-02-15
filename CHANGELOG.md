@@ -7,14 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Constant-time auth comparisons (S-1, S-2)**: All API key and password comparisons now use `subtle::ct_eq()` to prevent timing attacks
+- **API key query parameter disabled by default (S-3)**: Add `allow_api_key_in_query` config flag (default `false`) to `StreamingConfig` and CLI `--allow-api-key-in-query`. Query param API keys are logged by proxies and leaked via Referer headers; now opt-in only
+- **Coprocess command injection prevention (S-4)**: Validate coprocess commands for shell metacharacters (`|;&$` etc.), path traversal (`..`), working directory traversal, and environment variable name format
+- **Shell path validation (S-5)**: Validate `$SHELL` environment variable points to an existing file before use; fallback to `/bin/sh`
+- **Image/graphics size limits (S-6 through S-9)**: Add `MAX_IMAGE_DIMENSION`, `MAX_IMAGE_DATA_SIZE`, `MAX_SIXEL_DIMENSION`, `MAX_SIXEL_COLORS`, and `GraphicsLimits` struct with configurable bounds for all graphics protocols
+- **OSC string length limit (S-10)**: Add `MAX_OSC_DATA_LENGTH` (1MB) to reject oversized escape sequences
+- **Clipboard size limit (S-11)**: Add `MAX_CLIPBOARD_CONTENT_SIZE` (10MB) to bound clipboard memory usage
+- **TLS key permission validation (S-12)**: Warn on Unix when TLS private key file has group/world-readable permissions
+- **Password file permission validation (S-13)**: Warn on Unix when htpasswd file has insecure permissions
+- **Password memory zeroization (S-14)**: Add `zeroize` crate; `PasswordConfig` now zeroizes sensitive data on drop to prevent credential leakage in memory dumps
+- **FFI safety documentation (S-15)**: Strengthen `SharedState::from_terminal()` safety contract documentation with pointer lifetime and exclusivity requirements
+- **NaN handling in image size (Q-10)**: Image size `is_auto()` now handles NaN/Infinity correctly
+
 ### Fixed
+- **Observer dispatch race (D-1)**: Fix duplicate event dispatch when `process()` is called multiple times before `poll_events()`. Events are now tracked with a dispatch index to prevent re-delivery to observers
+- **Tab stop resize validation (Q-8)**: Guard tab stop array operations against zero-width terminal resize
+- **Origin mode underflow (Q-9)**: Use `saturating_sub` in cursor positioning to prevent underflow when scroll region bounds are invalid
+- **Scroll region return values (Q-7)**: `scroll_region_up()`/`scroll_region_down()` now return `bool` indicating success/failure
+- **Clippy needless_return**: Fix clippy warning in `get_default_shell()`
 - **Makefile: npm → bun**: Replace all `npm` commands with `bun` in web frontend targets (`web-install`, `web-dev`, `web-build`, `web-build-static`, `web-start`, `proto-typescript`) to match the project's actual package manager
 - **Makefile: Add `test-rust-streaming` target**: Streaming Rust tests (69 additional tests) were never run; new target added to `test`, `checkall`, and help text
 - **Missing `websockets` dev dependency**: Add `websockets` to `pyproject.toml` dev dependencies so streaming Python tests actually run instead of silently skipping
 - **Streaming test skip guard**: Fix `test_streaming.py` skip logic to catch `RuntimeError`/`TypeError` (not just `ImportError`) when the streaming feature isn't compiled, so tests skip gracefully with `make dev`
 
+### Added
+- **Streaming server unit tests (T-1)**: 47 new tests for `validate_terminal_size()`, `HttpBasicAuthConfig::verify()`, `SessionRegistry` lifecycle, `StreamingConfig` defaults, and `ApiAuthConfig::is_configured()`
+- **Recording system tests (T-5)**: 13 new tests for recording lifecycle, timestamp accuracy, event type recording, asciicast/JSON export format validation, and session ID uniqueness
+- **Event system tests (T-4)**: 29 new tests for `TerminalEvent::kind()` exhaustive variant coverage, event queuing through `process()`/`poll_events()`, and event struct validation
+- **HTML export tests (T-6)**: 20 new tests (up from 2) for text rendering, HTML escaping, text attributes (bold/italic/underline/strikethrough/dim/blink/hidden/reverse), color rendering, and wide characters
+- **Search tests (T-8)**: 24 new tests (up from 2) for regex patterns, search options, match navigation, scrollback search, Unicode support, and API coverage
+
 ### Changed
 - **CLAUDE.md**: Improve developer guidance with build commands, single-test examples, architecture overview, streaming protocol layers, and feature flags documentation
+
+### Documentation
+- **Instant Replay guide (DOC-1)**: New `docs/INSTANT_REPLAY.md` with SnapshotManager configuration, ReplaySession navigation, Python API reference, and memory tuning
+- **C/C++ FFI guide (DOC-2)**: New `docs/FFI_GUIDE.md` with SharedCell/SharedState types, memory ownership rules, build instructions, and C code examples
+- **Observer patterns guide (DOC-7)**: New `docs/OBSERVERS.md` with Rust/Python observer implementation, event categories, subscription filtering, and thread safety
+- **Streaming Python examples (DOC-4)**: Add Python integration section to `docs/STREAMING.md` with StreamingConfig, TLS, and API key examples
+- **README deduplication (DOC-5)**: Consolidate verbose "What's New" sections into brief summary pointing to CHANGELOG.md
+- **BUILDING.md version fix (DOC-6)**: Remove stale version reference from title
 
 ## [0.38.0] - 2026-02-14
 

@@ -209,7 +209,7 @@ impl SnapshotManager {
 
         let mut terminal =
             Terminal::with_scrollback(snap.cols, snap.rows, snap.grid.max_scrollback);
-        terminal.restore_from_snapshot(snap);
+        terminal.restore_from_snapshot(snap.clone());
 
         let clamped = byte_offset.min(entry.input_bytes.len());
         if clamped > 0 {

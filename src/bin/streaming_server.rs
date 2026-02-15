@@ -93,7 +93,7 @@ use tar::Archive;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::time;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 /// Get the current terminal size from the TTY
 #[cfg(unix)]
@@ -404,9 +404,14 @@ struct Args {
     theme: String,
 
     /// API key for WebSocket authentication (optional)
-    /// Clients must provide this via Authorization header or api_key URL param
+    /// Clients must provide this via Authorization header or X-API-Key header
     #[arg(long, env = "PAR_TERM_API_KEY")]
     api_key: Option<String>,
+
+    /// Allow API key authentication via query parameter (?api_key=...).
+    /// Disabled by default because query params are logged by proxies and saved in browser history.
+    #[arg(long, env = "PAR_TERM_ALLOW_API_KEY_IN_QUERY")]
+    allow_api_key_in_query: bool,
 
     /// Maximum number of concurrent clients
     #[arg(long, default_value = "100", env = "PAR_TERM_MAX_CLIENTS")]
@@ -1873,6 +1878,23 @@ fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig>> {
 
     // Priority: file > hash > clear text
     if let Some(ref file_path) = args.http_password_file {
+        // Validate file permissions (should not be world/group readable)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if let Ok(metadata) = fs::metadata(file_path) {
+                let mode = metadata.mode();
+                if mode & 0o077 != 0 {
+                    warn!(
+                        "Password file {} has insecure permissions {:o}. \
+                         Consider restricting to owner-only (chmod 600).",
+                        file_path,
+                        mode & 0o777
+                    );
+                }
+            }
+        }
+
         // Read password from file (first line)
         let file = fs::File::open(file_path)
             .context(format!("Failed to open password file: {}", file_path))?;
@@ -2043,6 +2065,7 @@ async fn main() -> Result<()> {
         enable_system_stats: args.enable_system_stats,
         system_stats_interval_secs: args.system_stats_interval,
         api_key: args.api_key.clone(),
+        allow_api_key_in_query: args.allow_api_key_in_query,
     };
 
     // Create streaming server
@@ -2219,10 +2242,13 @@ async fn main() -> Result<()> {
         println!("  API Key: {}", "*".repeat(api_key.len().min(8)));
         println!("\n  Connect with:");
         println!("    - Header: Authorization: Bearer <api-key>");
-        if args.enable_http {
-            println!("    - URL: {}://{}/ws?api_key=<api-key>", ws_scheme, addr);
-        } else {
-            println!("    - URL: {}://{}?api_key=<api-key>", ws_scheme, addr);
+        println!("    - Header: X-API-Key: <api-key>");
+        if args.allow_api_key_in_query {
+            if args.enable_http {
+                println!("    - URL: {}://{}/ws?api_key=<api-key>", ws_scheme, addr);
+            } else {
+                println!("    - URL: {}://{}?api_key=<api-key>", ws_scheme, addr);
+            }
         }
     } else {
         println!("\n  WebSocket Auth: DISABLED");

@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -49,6 +49,7 @@ impl PyStreamingConfig {
         enable_system_stats: bool,
         system_stats_interval_secs: u64,
         api_key: Option<String>,
+        allow_api_key_in_query: bool,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -70,6 +71,7 @@ impl PyStreamingConfig {
                 enable_system_stats,
                 system_stats_interval_secs,
                 api_key,
+                allow_api_key_in_query,
             },
         }
     }
@@ -254,6 +256,19 @@ impl PyStreamingConfig {
         self.inner.api_key = api_key;
     }
 
+    /// Get whether API key authentication via query parameter is allowed
+    #[getter]
+    fn allow_api_key_in_query(&self) -> bool {
+        self.inner.allow_api_key_in_query
+    }
+
+    /// Set whether to allow API key authentication via query parameter.
+    /// Disabled by default because query params are logged by proxies and saved in browser history.
+    #[setter]
+    fn set_allow_api_key_in_query(&mut self, allow: bool) {
+        self.inner.allow_api_key_in_query = allow;
+    }
+
     fn __repr__(&self) -> String {
         let tls_status = if self.inner.tls.is_some() {
             ", tls=enabled"
@@ -397,7 +412,9 @@ impl PyStreamingServer {
                         // All bytes are valid UTF-8
                         let output = valid_str.to_string();
                         buffer.clear();
-                        let _ = output_sender.try_send(output);
+                        if output_sender.try_send(output).is_err() {
+                            crate::debug_info!("STREAMING", "Output channel full, message dropped");
+                        }
                     }
                     Err(error) => {
                         // Find how much is valid
@@ -405,9 +422,15 @@ impl PyStreamingServer {
 
                         if valid_up_to > 0 {
                             // Send the valid portion
-                            let valid_str = std::str::from_utf8(&buffer[..valid_up_to]).unwrap();
+                            let valid_str = std::str::from_utf8(&buffer[..valid_up_to])
+                                .expect("valid_up_to guarantees valid UTF-8");
                             let output = valid_str.to_string();
-                            let _ = output_sender.try_send(output);
+                            if output_sender.try_send(output).is_err() {
+                                crate::debug_info!(
+                                    "STREAMING",
+                                    "Output channel full, message dropped"
+                                );
+                            }
 
                             // Keep only the incomplete sequence for next time
                             buffer.drain(..valid_up_to);
@@ -418,7 +441,12 @@ impl PyStreamingServer {
                         if buffer.len() > 100 {
                             let output = String::from_utf8_lossy(&buffer).to_string();
                             buffer.clear();
-                            let _ = output_sender.try_send(output);
+                            if output_sender.try_send(output).is_err() {
+                                crate::debug_info!(
+                                    "STREAMING",
+                                    "Output channel full, message dropped"
+                                );
+                            }
                         }
                     }
                 }

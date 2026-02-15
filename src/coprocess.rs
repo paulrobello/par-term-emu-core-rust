@@ -223,6 +223,44 @@ impl CoprocessManager {
             return Err("Command must not be empty".to_string());
         }
 
+        // Validate command doesn't contain path traversal
+        if config.command.contains("..") {
+            return Err("Command path must not contain '..'".to_string());
+        }
+
+        // Validate command doesn't contain shell metacharacters that could enable injection
+        const SHELL_META: &[char] = &[
+            '|', ';', '&', '$', '`', '(', ')', '{', '}', '<', '>', '\n', '\r',
+        ];
+        if config.command.chars().any(|c| SHELL_META.contains(&c)) {
+            return Err("Command must not contain shell metacharacters".to_string());
+        }
+
+        // Validate working directory if specified
+        if let Some(ref cwd) = config.cwd {
+            if cwd.is_empty() {
+                return Err("Working directory must not be empty".to_string());
+            }
+            if cwd.contains("..") {
+                return Err("Working directory must not contain '..'".to_string());
+            }
+            // Canonicalize and verify the directory exists
+            let cwd_path = std::path::Path::new(cwd);
+            if cwd_path.exists() && !cwd_path.is_dir() {
+                return Err("Working directory path is not a directory".to_string());
+            }
+        }
+
+        // Validate environment variable names (must be valid identifier-like)
+        for key in config.env.keys() {
+            if key.is_empty() {
+                return Err("Environment variable name must not be empty".to_string());
+            }
+            if !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                return Err(format!("Invalid environment variable name: {}", key));
+            }
+        }
+
         let spawn = Self::spawn_child(&config, self.max_buffer_lines)?;
 
         let id = self.next_id;
@@ -469,6 +507,58 @@ mod tests {
     fn test_coprocess_empty_command() {
         let mut mgr = CoprocessManager::new();
         let result = mgr.start(CoprocessConfig::default());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_coprocess_path_traversal_rejected() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "../malicious".to_string(),
+            ..Default::default()
+        };
+        let result = mgr.start(config);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains(".."));
+    }
+
+    #[test]
+    fn test_coprocess_shell_metacharacters_rejected() {
+        let mut mgr = CoprocessManager::new();
+        for meta in &["|", ";", "&", "$", "`", "(", ")"] {
+            let config = CoprocessConfig {
+                command: format!("cmd{}", meta),
+                ..Default::default()
+            };
+            let result = mgr.start(config);
+            assert!(result.is_err(), "Should reject command with '{}'", meta);
+        }
+    }
+
+    #[test]
+    fn test_coprocess_cwd_traversal_rejected() {
+        let mut mgr = CoprocessManager::new();
+        let config = CoprocessConfig {
+            command: "cat".to_string(),
+            cwd: Some("../../../etc".to_string()),
+            ..Default::default()
+        };
+        let result = mgr.start(config);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_coprocess_invalid_env_var_name() {
+        let mut mgr = CoprocessManager::new();
+        let mut env = HashMap::new();
+        env.insert("VALID_NAME".to_string(), "ok".to_string());
+        env.insert("invalid name!".to_string(), "bad".to_string());
+        let config = CoprocessConfig {
+            command: "cat".to_string(),
+            env,
+            ..Default::default()
+        };
+        let result = mgr.start(config);
         assert!(result.is_err());
     }
 

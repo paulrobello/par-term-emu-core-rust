@@ -285,6 +285,78 @@ impl FileTransferManager {
     }
 }
 
+use crate::terminal::Terminal;
+
+impl Terminal {
+    // === File Transfer Methods ===
+
+    /// Get a list of all active file transfers
+    pub fn get_active_transfers(&self) -> Vec<FileTransfer> {
+        self.file_transfer_manager
+            .active_transfers()
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Get a list of all completed file transfers
+    pub fn get_completed_transfers(&self) -> Vec<FileTransfer> {
+        self.file_transfer_manager.completed_transfers().to_vec()
+    }
+
+    /// Get a specific transfer by ID (active or completed)
+    pub fn get_transfer(&self, id: TransferId) -> Option<FileTransfer> {
+        self.file_transfer_manager
+            .get_transfer(id)
+            .cloned()
+            .or_else(|| {
+                self.file_transfer_manager
+                    .completed_transfers()
+                    .iter()
+                    .find(|t| t.id == id)
+                    .cloned()
+            })
+    }
+
+    /// Take a completed transfer by ID, removing it from the manager
+    pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
+        self.file_transfer_manager.take_completed_transfer(id)
+    }
+
+    /// Cancel an active file transfer
+    pub fn cancel_file_transfer(&mut self, id: TransferId) -> bool {
+        self.file_transfer_manager.cancel_transfer(id).is_ok()
+    }
+
+    /// Send data for an active upload
+    ///
+    /// Writes the iTerm2-compatible upload response to the response buffer:
+    /// `ok\n` + base64(data) + `\n\n`
+    pub fn send_upload_data(&mut self, data: &[u8]) {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+        let response = format!("ok\n{}\n\n", encoded);
+        self.response_buffer.extend_from_slice(response.as_bytes());
+    }
+
+    /// Cancel the current upload
+    ///
+    /// Writes Ctrl-C (0x03) to the response buffer to signal upload cancellation
+    pub fn cancel_upload(&mut self) {
+        self.response_buffer.push(0x03);
+    }
+
+    /// Set the maximum allowed transfer size in bytes
+    pub fn set_max_transfer_size(&mut self, size: usize) {
+        self.file_transfer_manager.set_max_transfer_size(size);
+    }
+
+    /// Get the maximum allowed transfer size in bytes
+    pub fn get_max_transfer_size(&self) -> usize {
+        self.file_transfer_manager.max_transfer_size()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

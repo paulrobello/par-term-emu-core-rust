@@ -2407,7 +2407,7 @@ impl PyPtyTerminal {
         word_chars: Option<&str>,
     ) -> PyResult<Option<((usize, usize), (usize, usize))>> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
+        let mut term = terminal.lock();
         Ok(term.select_word(col, row, word_chars))
     }
 
@@ -2425,7 +2425,11 @@ impl PyPtyTerminal {
     fn find_text(&self, pattern: &str, case_sensitive: bool) -> PyResult<Vec<(usize, usize)>> {
         let terminal = self.inner.terminal();
         let term = terminal.lock();
-        Ok(term.find_text(pattern, case_sensitive))
+        Ok(term
+            .find_text(pattern, case_sensitive)
+            .into_iter()
+            .map(|m| (m.col, m.row as usize))
+            .collect())
     }
 
     /// Find next occurrence of text from given position
@@ -2448,7 +2452,9 @@ impl PyPtyTerminal {
     ) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
         let term = terminal.lock();
-        Ok(term.find_next(pattern, from_col, from_row, case_sensitive))
+        Ok(term
+            .find_next(pattern, from_col, from_row, case_sensitive)
+            .map(|m| (m.col, m.row as usize)))
     }
 
     // ========== Buffer Statistics ==========
@@ -2496,7 +2502,7 @@ impl PyPtyTerminal {
     fn get_scrollback_usage(&self) -> PyResult<(usize, usize)> {
         let terminal = self.inner.terminal();
         let term = terminal.lock();
-        Ok(term.get_scrollback_usage())
+        Ok((term.get_scrollback_usage(), term.grid().max_scrollback()))
     }
 
     // ========== Advanced Text Selection ==========
@@ -2536,8 +2542,8 @@ impl PyPtyTerminal {
         delimiters: &str,
     ) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.select_semantic_region(col, row, delimiters))
+        let mut term = terminal.lock();
+        Ok(term.select_semantic_region(col, row, Some(delimiters)))
     }
 
     /// Export terminal content as HTML
@@ -2935,10 +2941,14 @@ impl PyPtyTerminal {
     /// Args:
     ///     name: Name of the macro to play
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
+    #[pyo3(signature = (name, speed=None))]
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
         if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.play_macro(&name, speed.unwrap_or(1.0))
-                .map_err(PyValueError::new_err)
+            term.play_macro(&name).map_err(PyValueError::new_err)?;
+            if let Some(s) = speed {
+                term.set_macro_speed(s);
+            }
+            Ok(())
         } else {
             Err(PyRuntimeError::new_err("Failed to lock terminal"))
         }
@@ -3266,7 +3276,7 @@ impl PyPtyTerminal {
         Python::attach(|py| {
             let mut result = Vec::with_capacity(transfers.len());
             for transfer in transfers {
-                result.push(super::terminal::transfer_to_py_dict(py, transfer, false)?);
+                result.push(super::terminal::transfer_to_py_dict(py, &transfer, false)?);
             }
             Ok(result)
         })
@@ -3294,7 +3304,7 @@ impl PyPtyTerminal {
         Python::attach(|py| {
             let mut result = Vec::with_capacity(transfers.len());
             for transfer in transfers {
-                result.push(super::terminal::transfer_to_py_dict(py, transfer, false)?);
+                result.push(super::terminal::transfer_to_py_dict(py, &transfer, false)?);
             }
             Ok(result)
         })
@@ -3321,7 +3331,7 @@ impl PyPtyTerminal {
         match term.get_transfer(transfer_id) {
             Some(transfer) => Python::attach(|py| {
                 Ok(Some(super::terminal::transfer_to_py_dict(
-                    py, transfer, false,
+                    py, &transfer, false,
                 )?))
             }),
             None => Ok(None),
