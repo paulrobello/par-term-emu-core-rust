@@ -111,7 +111,7 @@ impl Terminal {
     pub fn delete_image(&mut self, id: &str) -> bool {
         let before_len = self.inline_images.len();
         self.inline_images
-            .retain(|img| img.id.as_ref().map_or(true, |img_id| img_id != id));
+            .retain(|img| img.id.as_ref().is_none_or(|img_id| img_id != id));
         self.inline_images.len() < before_len
     }
 

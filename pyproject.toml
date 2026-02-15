@@ -89,7 +89,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py312"
 extend-exclude = [
     "examples",
 ]
@@ -100,12 +100,12 @@ typeCheckingMode = "basic"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.11.5",
+    "maturin>=1.12.0",
     "pre-commit>=4.5.1",
     "pyright>=1.1.408",
     "pytest>=9.0.2",
     "pytest-timeout>=2.4.0",
     "rich>=14.3.2",
-    "ruff>=0.14.14,<0.15",
+    "ruff>=0.15.1,<0.16",
     "websockets>=15.0",
 ]
