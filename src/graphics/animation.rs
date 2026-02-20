@@ -457,4 +457,189 @@ mod tests {
         anim.play();
         assert_eq!(anim.state, AnimationState::Playing);
     }
+
+    #[test]
+    fn test_animation_update_returns_false_when_stopped() {
+        let mut anim = Animation::new(1, 100);
+        anim.add_frame(AnimationFrame::new(1, vec![0u8; 4], 1, 1));
+        assert!(
+            !anim.update(),
+            "update on stopped animation should return false"
+        );
+    }
+
+    #[test]
+    fn test_animation_add_and_get_frame() {
+        let mut anim = Animation::new(1, 100);
+        anim.add_frame(AnimationFrame::new(3, vec![1u8, 2, 3, 4], 1, 1));
+        let retrieved = anim.get_frame(3);
+        assert!(retrieved.is_some(), "should be able to retrieve frame 3");
+        assert_eq!(retrieved.unwrap().frame_number, 3);
+    }
+
+    #[test]
+    fn test_animation_get_nonexistent_frame_returns_none() {
+        let anim = Animation::new(1, 100);
+        assert!(anim.get_frame(99).is_none());
+    }
+
+    #[test]
+    fn test_animation_current_frame_method_returns_none_when_no_frames() {
+        let anim = Animation::new(1, 100);
+        assert!(
+            anim.current_frame().is_none(),
+            "current_frame() should return None when no frames added"
+        );
+    }
+
+    #[test]
+    fn test_animation_current_frame_method_returns_some_when_frame_exists() {
+        let mut anim = Animation::new(1, 100);
+        anim.add_frame(AnimationFrame::new(1, vec![0u8; 4], 1, 1));
+        assert!(
+            anim.current_frame().is_some(),
+            "current_frame() should return Some when frame 1 exists"
+        );
+    }
+
+    #[test]
+    fn test_animation_stop_resets_loops_completed() {
+        let mut anim = Animation::new(1, 100);
+        anim.add_frame(AnimationFrame::new(1, vec![0u8; 4], 1, 1));
+        anim.play();
+        anim.loops_completed = 5;
+        anim.stop();
+        assert_eq!(
+            anim.loops_completed, 0,
+            "stop should reset loops_completed to 0"
+        );
+        assert!(
+            anim.frame_start_time.is_none(),
+            "stop should clear frame_start_time"
+        );
+    }
+
+    #[test]
+    fn test_animation_stop_resets_current_frame_field() {
+        let mut anim = Animation::new(1, 100);
+        anim.add_frame(AnimationFrame::new(1, vec![0u8; 4], 1, 1));
+        anim.add_frame(AnimationFrame::new(2, vec![0u8; 4], 1, 1));
+        anim.play();
+        anim.current_frame = 2;
+        anim.stop();
+        assert_eq!(
+            anim.current_frame, 1,
+            "stop should reset current_frame field to 1"
+        );
+        assert_eq!(anim.state, AnimationState::Stopped);
+    }
+
+    #[test]
+    fn test_animation_apply_control_stop_sets_stopped_state() {
+        let mut anim = Animation::new(1, 100);
+        anim.play();
+        anim.loops_completed = 3;
+        anim.apply_control(AnimationControl::Stop);
+        assert_eq!(anim.state, AnimationState::Stopped);
+        assert_eq!(
+            anim.loops_completed, 0,
+            "apply_control(Stop) should reset loops_completed"
+        );
+    }
+
+    #[test]
+    fn test_animation_apply_control_loading_mode_pauses() {
+        let mut anim = Animation::new(1, 100);
+        anim.play();
+        anim.apply_control(AnimationControl::LoadingMode);
+        assert_eq!(anim.state, AnimationState::Paused);
+    }
+
+    #[test]
+    fn test_animation_apply_control_enable_looping_starts_playing() {
+        let mut anim = Animation::new(1, 100);
+        anim.apply_control(AnimationControl::EnableLooping);
+        // EnableLooping calls play(), which sets state to Playing
+        assert_eq!(
+            anim.state,
+            AnimationState::Playing,
+            "EnableLooping should start playback"
+        );
+    }
+
+    #[test]
+    fn test_animation_set_loops_zero_is_infinite() {
+        let mut anim = Animation::new(1, 100);
+        anim.set_loops(0);
+        assert_eq!(anim.loop_count, 0, "loop_count 0 means infinite loops");
+    }
+
+    #[test]
+    fn test_animation_frame_builder_with_delay() {
+        let frame = AnimationFrame::new(1, vec![0u8; 4], 2, 2).with_delay(500);
+        assert_eq!(frame.delay_ms, 500);
+    }
+
+    #[test]
+    fn test_animation_frame_builder_with_offset() {
+        let frame = AnimationFrame::new(1, vec![0u8; 4], 2, 2).with_offset(10, 20);
+        assert_eq!(frame.x_offset, 10);
+        assert_eq!(frame.y_offset, 20);
+    }
+
+    #[test]
+    fn test_animation_frame_builder_with_composition_overwrite() {
+        let frame =
+            AnimationFrame::new(1, vec![0u8; 4], 2, 2).with_composition(CompositionMode::Overwrite);
+        assert_eq!(frame.composition, CompositionMode::Overwrite);
+    }
+
+    #[test]
+    fn test_animation_frame_builder_with_composition_alpha_blend() {
+        let frame = AnimationFrame::new(1, vec![0u8; 4], 2, 2)
+            .with_composition(CompositionMode::AlphaBlend);
+        assert_eq!(frame.composition, CompositionMode::AlphaBlend);
+    }
+
+    #[test]
+    fn test_animation_play_sets_frame_start_time() {
+        let mut anim = Animation::new(1, 100);
+        assert!(
+            anim.frame_start_time.is_none(),
+            "frame_start_time should be None before play"
+        );
+        anim.play();
+        assert!(
+            anim.frame_start_time.is_some(),
+            "frame_start_time should be set after play"
+        );
+    }
+
+    #[test]
+    fn test_animation_play_does_not_reset_frame_start_time_if_already_set() {
+        let mut anim = Animation::new(1, 100);
+        anim.play();
+        let first_time = anim.frame_start_time.unwrap();
+        // Pause and re-play: frame_start_time should not be reset since it's already Some
+        anim.pause();
+        anim.play();
+        assert_eq!(
+            anim.frame_start_time.unwrap(),
+            first_time,
+            "play should not reset an already-set frame_start_time"
+        );
+    }
+
+    #[test]
+    fn test_animation_composition_mode_from_char_invalid() {
+        assert_eq!(CompositionMode::from_char('2'), None);
+        assert_eq!(CompositionMode::from_char('a'), None);
+    }
+
+    #[test]
+    fn test_animation_control_from_value_invalid() {
+        assert_eq!(AnimationControl::from_value("0"), None);
+        assert_eq!(AnimationControl::from_value(""), None);
+        assert_eq!(AnimationControl::from_value("99"), None);
+    }
 }
