@@ -3917,4 +3917,102 @@ mod tests {
         // Even if allow_api_key_in_query is true, no auth is configured
         assert!(!config.is_configured());
     }
+
+    // ─── InputRateLimiter tests ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_rate_limiter_initial_burst_capacity() {
+        let mut limiter = InputRateLimiter::new(1000);
+        // 1000 bytes/sec → burst = 2000 bytes; starts full
+        assert!(
+            limiter.try_consume(2000),
+            "should allow consuming burst capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_rejects_over_burst() {
+        let mut limiter = InputRateLimiter::new(1000);
+        // Burst is 2000; requesting 2001 should fail
+        assert!(
+            !limiter.try_consume(2001),
+            "should reject request exceeding burst capacity"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_exhausted_rejects() {
+        let mut limiter = InputRateLimiter::new(1000);
+        assert!(limiter.try_consume(2000));
+        assert!(!limiter.try_consume(1), "should reject after exhaustion");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_zero_bytes_always_allowed() {
+        let mut limiter = InputRateLimiter::new(1000);
+        assert!(limiter.try_consume(0));
+        assert!(limiter.try_consume(2000));
+        assert!(
+            limiter.try_consume(0),
+            "zero bytes should be allowed even when exhausted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_refills_over_time() {
+        tokio::time::pause();
+        let mut limiter = InputRateLimiter::new(1000);
+        assert!(limiter.try_consume(2000));
+        assert!(!limiter.try_consume(1));
+        tokio::time::advance(std::time::Duration::from_secs(1)).await;
+        assert!(
+            limiter.try_consume(1000),
+            "should allow 1000 bytes after 1 second refill"
+        );
+        assert!(
+            !limiter.try_consume(1),
+            "should reject after consuming refilled tokens"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_capped_at_max_tokens() {
+        tokio::time::pause();
+        let mut limiter = InputRateLimiter::new(1000);
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        // Even after 10 seconds, tokens should be capped at 2000 (not 10000)
+        assert!(limiter.try_consume(2000), "should allow burst capacity");
+        assert!(
+            !limiter.try_consume(1),
+            "should not exceed max_tokens even after long wait"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_partial_refill() {
+        tokio::time::pause();
+        let mut limiter = InputRateLimiter::new(1000);
+        // Consume 1500 bytes (leaving 500)
+        assert!(limiter.try_consume(1500));
+        // Advance 0.25 seconds → refill 250 tokens → total ~750
+        tokio::time::advance(std::time::Duration::from_millis(250)).await;
+        assert!(
+            limiter.try_consume(750),
+            "should allow ~750 bytes after partial refill"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_rate_limiter_sequential_small_requests() {
+        let mut limiter = InputRateLimiter::new(1000);
+        // 2000 burst capacity; 10 requests of 200 bytes = 2000 total, all should pass
+        for _ in 0..10 {
+            assert!(
+                limiter.try_consume(200),
+                "each 200-byte chunk should be allowed within burst"
+            );
+        }
+        // 11th request should fail
+        assert!(!limiter.try_consume(200));
+    }
 }

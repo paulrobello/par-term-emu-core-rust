@@ -124,6 +124,7 @@ prost-build = { version = "0.14.3", optional = true }
 
 [dev-dependencies]
 pyo3 = { version = "0.28.1", features = ["auto-initialize"] }
+tokio = { version = "1.49", features = ["full", "test-util"] }
 proptest = "1.10.0"
 tempfile = "3.25"
 
