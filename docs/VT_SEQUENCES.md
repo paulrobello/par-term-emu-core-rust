@@ -37,13 +37,16 @@ VT100 cursor movement sequences.
 - `CSI <n> E` - Cursor next line (CNL)
 - `CSI <n> F` - Cursor previous line (CPL)
 - `CSI <n> G` - Cursor horizontal absolute (CHA)
+- `CSI <n> \`` - Horizontal position absolute (HPA, alias for CHA)
 - `CSI <row> ; <col> H` - Cursor position (CUP)
 - `CSI <row> ; <col> f` - Cursor position (HVP - alternative)
 - `CSI <n> d` - Line position absolute (VPA)
-- `CSI s` - Save cursor position (ANSI.SYS)
-- `CSI u` - Restore cursor position (ANSI.SYS)
+- `CSI s` - Save cursor position (ANSI.SYS/SCOSC)
+- `CSI u` - Restore cursor position (ANSI.SYS/SCORC)
 - `ESC 7` - Save cursor (DECSC)
 - `ESC 8` - Restore cursor (DECRC)
+
+> **Note:** `CSI s` and `CSI u` have dual purposes depending on context. `CSI s` with parameters and DECLRMM mode enabled sets left/right margins (DECSLRM). `CSI u` with a parameter sets margin bell volume (DECSMBV).
 
 ## Display Control
 
@@ -87,7 +90,6 @@ VT420 advanced text editing operations that work on rectangular regions of the s
 - `CSI Pt ; Pl ; Pb ; Pr ; Ps $ r` - DECCARA: Change attributes in rectangle
 - `CSI Pt ; Pl ; Pb ; Pr ; Ps $ t` - DECRARA: Reverse attributes in rectangle
 - `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` - DECRQCRA: Request rectangle checksum
-- `CSI Ps * x` - DECSACE: Set attribute change extent (0/1=stream, 2=rectangle)
 
 > See [VT_TECHNICAL_REFERENCE.md#rectangle-operations](VT_TECHNICAL_REFERENCE.md#rectangle-operations-vt420) for detailed parameter descriptions and behavior.
 
@@ -166,6 +168,11 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 39 m` - Default foreground color
 - `CSI 49 m` - Default background color
 
+### Color Stack Operations (xterm)
+
+- `CSI # P` - Push current colors to stack (XTPUSHCOLORS)
+- `CSI # Q` - Pop colors from stack (XTPOPCOLORS)
+
 ## Tab Stops
 
 VT100 tab stop management.
@@ -238,10 +245,6 @@ Modern terminal features and VT520 extensions.
 - `ESC V` / `ESC W` - Start/End Protected Area (SPA/EPA)
 - `CSI ? Ps " q` - Select Character Protection Attribute (DECSCA, Ps: 0/2=unprotected, 1=protected)
 
-**Color stack:**
-- `CSI # P` - Push current colors (XTPUSHCOLORS)
-- `CSI # Q` - Pop colors from stack (XTPOPCOLORS)
-
 > See [VT_TECHNICAL_REFERENCE.md#modern-extensions](VT_TECHNICAL_REFERENCE.md#modern-extensions) for detailed behavior and VT520 conformance level effects.
 
 ## Kitty Keyboard Protocol
@@ -250,7 +253,7 @@ Progressive enhancement for keyboard handling with flags for disambiguation and 
 
 - `CSI = flags ; mode u` - Set keyboard protocol (mode: 0=disable, 1=set, 2=lock, 3=report)
   - Flags (bitmask): 1=disambiguate, 2=report events, 4=alt keys, 8=all keys, 16=text
-- `CSI ? u` - Query current flags → Response: `CSI ? flags u`
+- `CSI ? u` - Query current flags - Response: `CSI ? flags u`
 - `CSI > flags u` - Push current flags and set new
 - `CSI < count u` - Pop flags from stack
 
@@ -260,14 +263,16 @@ Progressive enhancement for keyboard handling with flags for disambiguation and 
 
 VT100/VT220 device information requests.
 
-- `CSI 5 n` - Device Status Report (DSR) → `CSI 0 n` (ready)
-- `CSI 6 n` - Cursor Position Report (CPR) → `CSI row ; col R` (1-indexed)
-- `CSI c` / `CSI 0 c` - Primary Device Attributes → `CSI ? id ; features c`
-- `CSI > c` - Secondary Device Attributes → `CSI > 82 ; 10000 ; 0 c`
-- `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) → `CSI ? mode ; state $ y`
-- `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM) → `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x`
-- `CSI 14 t` - Report pixel size → `CSI 4 ; height ; width t`
-- `CSI 18 t` - Report text size → `CSI 8 ; rows ; cols t`
+- `CSI 5 n` - Device Status Report (DSR) - Response: `CSI 0 n` (ready)
+- `CSI 6 n` - Cursor Position Report (CPR) - Response: `CSI row ; col R` (1-indexed)
+- `CSI c` / `CSI 0 c` - Primary Device Attributes - Response: `CSI ? id ; features c`
+- `CSI > c` - Secondary Device Attributes - Response: `CSI > 82 ; 10000 ; 0 c`
+- `CSI > q` - XTVERSION - Response: DCS with version info
+- `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) - Response: `CSI ? mode ; state $ y`
+- `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM) - Response: `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x`
+- `CSI 14 t` - Report pixel size - Response: `CSI 4 ; height ; width t`
+- `CSI 16 t` - Report cell size in pixels - Response: `CSI 6 ; height ; width t`
+- `CSI 18 t` - Report text size - Response: `CSI 8 ; rows ; cols t`
 - `CSI 22 t` - Save window title to stack
 - `CSI 23 t` - Restore window title from stack
 
@@ -282,7 +287,7 @@ VT100/VT220 device information requests.
 
 ### Left/Right Margins (DECSLRM)
 
-- `CSI Pl ; Pr s` - Set left/right margins (requires DECLRMM mode ?69)
+- `CSI Pl ; Pr s` - Set left/right margins (requires DECLRMM mode ?69 enabled)
 
 > See [VT_TECHNICAL_REFERENCE.md#device-queries](VT_TECHNICAL_REFERENCE.md#device-queries) for detailed response formats and parameter meanings.
 
@@ -350,9 +355,9 @@ Multiple concurrent progress bars with IDs and labels:
 - `OSC 934;remove_all ST` - Remove all progress bars
 
 Parameters for `set`:
-- `percent=N` — progress percentage (0-100, clamped)
-- `label=TEXT` — descriptive label
-- `state=STATE` — one of: `normal`, `indeterminate`, `warning`, `error`, `hidden`
+- `percent=N` - progress percentage (0-100, clamped)
+- `label=TEXT` - descriptive label
+- `state=STATE` - one of: `normal`, `indeterminate`, `warning`, `error`, `hidden`
 
 ### iTerm2 Inline Images and File Transfer
 
@@ -389,9 +394,9 @@ Full VT340 Sixel graphics support for inline images with configurable limits.
 - Carriage return: `$`
 - New line: `-`
 - Sixel data characters: `?` through `~` (ASCII 63-126)
-- Up to 256 colors, configurable size limits
+- Up to 4096 colors, configurable size limits
 
-**Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 1024×1024 pixels, 256 graphics.
+**Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 16384x16384 pixels.
 
 > See [VT_TECHNICAL_REFERENCE.md#sixel-graphics](VT_TECHNICAL_REFERENCE.md#sixel-graphics) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
 
@@ -405,11 +410,31 @@ Application Program Command sequences (format: `APC params data ST`).
 
 Kitty graphics protocol support for modern terminal graphics with animation, composition modes, and advanced features.
 
-- Transmission actions: transmit (t), transmit+display (T), query (q), put (p), delete (d), frame (f), animation control (a)
-- Formats: RGB (24), RGBA (32), PNG (100)
-- Transmission media: direct (d), file (f), temp file (t), shared memory (s)
+**Transmission actions:**
+- `a=t` - Transmit only (store image data)
+- `a=T` - Transmit and display
+- `a=q` - Query terminal support
+- `a=p` - Put/display previously transmitted image
+- `a=d` - Delete images
+- `a=f` - Animation frame
+- `a=a` - Animation control
+
+**Formats:**
+- `f=24` - RGB (24-bit)
+- `f=32` - RGBA (32-bit)
+- `f=100` - PNG compressed
+
+**Transmission media:**
+- `t=d` - Direct in-band data
+- `t=f` - Read from file
+- `t=t` - Read from temp file and delete
+- `t=s` - Shared memory (not supported)
+
+**Additional features:**
 - Animation support with frame control and composition modes
 - Virtual placements and relative positioning
+- Zlib compression (`o=z`)
+- Z-index layering
 
 **Note:** Kitty graphics can also be sent via DCS sequences using `DCS G key=value;data ST` format.
 
@@ -430,6 +455,7 @@ ASCII control characters.
 ## Reset Sequences
 
 - `ESC c` - Reset to initial state (RIS)
+- `CSI ! p` - Soft terminal reset (DECSTR)
 
 ## See Also
 

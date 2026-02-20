@@ -134,11 +134,12 @@ The screenshot module in `src/screenshot/` uses pure Rust implementations for ma
 
 **Windows:**
 ```rust
-"C:\\Windows\\Fonts\\seguiemj.ttf",  // Segoe UI Emoji
+"C:\\Windows\\Fonts\\seguiemj.ttf",  // Segoe UI Emoji (color emoji)
 "C:\\Windows\\Fonts\\seguisym.ttf",  // Segoe UI Symbol
 "C:\\Windows\\Fonts\\arial.ttf",     // Arial (basic coverage)
 "C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (Japanese)
 "C:\\Windows\\Fonts\\msyh.ttc",      // Microsoft YaHei (Chinese)
+"C:\\Windows\\Fonts\\malgun.ttf",    // Malgun Gothic (Korean)
 ```
 
 **Image Encoding:**
@@ -259,7 +260,7 @@ par-term-emu-core-rust is built entirely in Rust with no C dependencies required
 - Consistent behavior everywhere
 
 **Required Tools:**
-- **Rust**: Version 1.75 or later (minimum specified in `Cargo.toml: rust-version = "1.75"`)
+- **Rust**: Version 1.88 or later (minimum specified in `Cargo.toml: rust-version = "1.88"`)
 - **Cargo**: Comes with Rust
 - **Python**: 3.12+ for Python bindings (if building with `python` feature)
 - **uv**: Python package manager for dependency management (recommended)

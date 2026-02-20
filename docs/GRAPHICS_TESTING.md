@@ -16,6 +16,7 @@ Quick reference for testing graphics support in par-term-emu-core-rust.
 - [Test Images](#test-images)
 - [Example Scripts](#example-scripts)
 - [Tools](#tools)
+- [Session Persistence](#session-persistence)
 - [Next Steps](#next-steps)
 - [Contributing](#contributing)
 
@@ -84,10 +85,10 @@ graph TB
 
 | Protocol | Status | Format | Test Script |
 |----------|--------|--------|-------------|
-| Sixel | ✅ Complete | DCS | `examples/test_sixel_simple.py`, `examples/display_image_sixel.py` |
-| iTerm2 Inline | ✅ Complete | OSC 1337 | Multipart and single-sequence transfers |
-| Kitty Graphics | ✅ Complete | APC G | Virtual placements with Unicode placeholders |
-| Kitty Animation | ✅ Complete | APC G | `scripts/test_kitty_animation.py` |
+| Sixel | Complete | DCS | `examples/test_sixel_simple.py`, `examples/display_image_sixel.py` |
+| iTerm2 Inline | Complete | OSC 1337 | Multipart and single-sequence transfers |
+| Kitty Graphics | Complete | APC G | Virtual placements with Unicode placeholders |
+| Kitty Animation | Complete | APC G | `scripts/test_kitty_animation.py` |
 
 **Protocol Implementation Details:**
 - **Sixel**: DEC VT340 compatible bitmap graphics with color palette support
@@ -178,6 +179,7 @@ tail -f /tmp/par_term_emu_core_rust_debug_rust.log | grep -i "GRAPHICS\|KITTY"
 - `GRAPHICS` - General graphics operations and scrolling
 - `KITTY` - Kitty graphics protocol parsing and animation control
 - `KITTY_PLACEHOLDER` - Unicode placeholder insertion for virtual placements
+- `ANIMATION` - Animation frame management and timing
 
 ## Python TUI Testing
 
@@ -241,10 +243,10 @@ term = Terminal(80, 24)
 count = term.graphics_count()  # Returns: int
 
 # Get graphics at specific row
-graphics_list = term.graphics_at_row(row)  # Returns: list[PyGraphic]
+graphics_list = term.graphics_at_row(row)  # Returns: list[Graphic]
 
 # Get all graphics
-all_graphics = term.graphics()  # Returns: list[PyGraphic]
+all_graphics = term.graphics()  # Returns: list[Graphic]
 
 # Clear all graphics
 term.clear_graphics()
@@ -254,23 +256,67 @@ term.clear_graphics()
 
 ```python
 # Update animations and get changed image IDs
-changed_ids = term.update_animations()  # Returns: list[u32]
+changed_ids = term.update_animations()  # Returns: list[int]
 # Call this regularly (e.g., 60Hz) to advance animation frames
 ```
 
-### PyGraphic Object
+### Graphic Object
 
 Graphics returned from query methods have the following properties:
-- `position` - Tuple `(col, row)` of top-left corner in grid coordinates
-- `width` - Width in pixels
-- `height` - Height in pixels
-- `protocol` - Protocol identifier (string: "sixel", "iterm", "kitty")
-- `id` - Unique placement ID (u64)
-- `scroll_offset_rows` - Number of rows scrolled from original position
-- `cell_dimensions` - Optional tuple `(cell_width, cell_height)` in pixels
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `int` | Unique placement ID (u64) |
+| `protocol` | `str` | Protocol identifier ("sixel", "iterm", "kitty") |
+| `position` | `tuple[int, int]` | `(col, row)` of top-left corner in grid coordinates |
+| `width` | `int` | Current width in pixels (may change during animation) |
+| `height` | `int` | Current height in pixels (may change during animation) |
+| `original_width` | `int` | Original width as decoded from source |
+| `original_height` | `int` | Original height as decoded from source |
+| `scroll_offset_rows` | `int` | Number of rows scrolled from original position |
+| `cell_dimensions` | `tuple[int, int] \| None` | `(cell_width, cell_height)` in pixels |
+| `was_compressed` | `bool` | Whether the original data was compressed (for diagnostics) |
+| `placement` | `ImagePlacement` | Unified placement metadata |
 
 **Methods:**
-- `get_pixel(x, y)` - Get RGBA color at coordinates, returns `(r, g, b, a)` tuple or `None` if out of bounds
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `get_pixel(x, y)` | `tuple[int, int, int, int] \| None` | RGBA color at coordinates, `None` if out of bounds |
+| `pixels()` | `bytes` | Raw RGBA pixel data in row-major order |
+| `cell_size(cell_width, cell_height)` | `tuple[int, int]` | `(cols, rows)` dimensions in terminal cells |
+| `sample_half_block(col, row, cell_w, cell_h)` | `tuple \| None` | Half-block colors: `((top_rgba), (bottom_rgba))` |
+
+### ImagePlacement Object
+
+Unified placement metadata for rendering:
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `display_mode` | `str` | "inline" | Display mode ("inline" or "download") |
+| `requested_width` | `ImageDimension` | auto | Requested width for sizing |
+| `requested_height` | `ImageDimension` | auto | Requested height for sizing |
+| `preserve_aspect_ratio` | `bool` | True | Whether to preserve aspect ratio |
+| `columns` | `int \| None` | None | Number of columns (Kitty c=) |
+| `rows` | `int \| None` | None | Number of rows (Kitty r=) |
+| `z_index` | `int` | 0 | Z-index for layering |
+| `x_offset` | `int` | 0 | X offset within cell in pixels |
+| `y_offset` | `int` | 0 | Y offset within cell in pixels |
+
+### ImageDimension Object
+
+Dimension with unit for image sizing:
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `value` | `float` | Numeric value (0 means auto) |
+| `unit` | `str` | Unit: "auto", "cells", "pixels", or "percent" |
+
+**Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `is_auto()` | `bool` | True if dimension is auto |
 
 ## Performance Testing
 
@@ -316,6 +362,7 @@ For implementation details, see:
 - `src/graphics/kitty.rs` - Kitty graphics protocol parser
 - `src/graphics/animation.rs` - Animation frame management and composition
 - `src/graphics/placeholder.rs` - Unicode placeholder generation for Kitty virtual placements
+- `src/graphics/serialization.rs` - JSON serialization for session persistence
 
 **Sixel Support:**
 - `src/sixel.rs` - Sixel parser implementation
@@ -380,13 +427,43 @@ kitty +kitten icat image.png
 
 **Note**: These tools send graphics using their respective protocols. The library implements the protocol handlers, so images sent by these tools will be parsed and stored correctly.
 
+## Session Persistence
+
+Graphics state can be serialized and restored for session persistence:
+
+```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+
+# ... load some graphics ...
+
+# Export graphics state to JSON
+json_str = term.export_graphics_json()
+with open("session_graphics.json", "w") as f:
+    f.write(json_str)
+
+# Later, restore graphics state
+with open("session_graphics.json") as f:
+    json_str = f.read()
+count = term.import_graphics_json(json_str)
+print(f"Restored {count} graphics")
+```
+
+**Serialization includes:**
+- Active placements with positions and pixel data
+- Scrollback graphics
+- Animation frames and state
+- Kitty image ID mappings
+
 ## Next Steps
 
-1. ✅ **Sixel, iTerm2, Kitty** - All protocols working
-2. ✅ **Scrollback persistence** - Graphics saved in scrollback
-3. ✅ **Animation playback** - Fully integrated in backend and frontend
-4. ✅ **Unicode placeholders** - Virtual placements insert placeholder characters into grid
-5. ⏳ **Performance optimization** - Consider texture caching, frame pooling for large animations
+1. **Sixel, iTerm2, Kitty** - All protocols working
+2. **Scrollback persistence** - Graphics saved in scrollback
+3. **Animation playback** - Fully integrated in backend and frontend
+4. **Unicode placeholders** - Virtual placements insert placeholder characters into grid
+5. **Session persistence** - JSON export/import for graphics state
+6. **Performance optimization** - Consider texture caching, frame pooling for large animations
 
 ## Contributing
 
@@ -404,3 +481,4 @@ When adding graphics tests:
 - Test scrollback persistence (scroll graphics off screen)
 - Verify memory limits are enforced
 - Test with various image sizes and formats
+- Test session persistence (export/import JSON)

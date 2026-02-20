@@ -68,7 +68,7 @@ term = Terminal(cols=120, rows=40, scrollback=5000)
 term = Terminal(cols=80, rows=24, scrollback=0)
 ```
 
-**Location:** `Terminal` struct in `src/terminal/mod.rs` and Python bindings in `src/python_bindings/terminal.rs`
+**Location:** `Terminal` struct in `src/terminal/mod.rs` and Python bindings in `src/python_bindings/terminal/mod.rs`
 
 ---
 
@@ -203,8 +203,8 @@ term.set_margin_bell_volume(3)   # Low volume
 - `MouseMode::Off` - No mouse tracking
 - `MouseMode::X10` - Press only
 - `MouseMode::Normal` - Press + release
-- `MouseMode::Button` - Press + release + drag
-- `MouseMode::Any` - All motion
+- `MouseMode::ButtonEvent` - Press + release + drag
+- `MouseMode::AnyEvent` - All motion
 
 **Implementation:** See `MouseMode` enum in `src/mouse.rs` and usage in `Terminal` struct
 
@@ -216,6 +216,12 @@ term.set_margin_bell_volume(3)   # Low volume
 | UTF-8 | `CSI ? 1005 h/l` | No | UTF-8 extended coordinates |
 | SGR | `CSI ? 1006 h/l` | No | Recommended: `CSI < ... M/m` format |
 | URXVT | `CSI ? 1015 h/l` | No | URXVT extended encoding |
+
+**Mouse Encoding Values:**
+- `MouseEncoding::Default` - Classic X11 encoding
+- `MouseEncoding::Utf8` - UTF-8 extended coordinates
+- `MouseEncoding::Sgr` - SGR format (recommended)
+- `MouseEncoding::Urxvt` - URXVT extended encoding
 
 **Implementation:** See `MouseEncoding` enum in `src/mouse.rs` and usage in `Terminal` struct
 
@@ -236,7 +242,17 @@ These settings control potentially sensitive or insecure terminal features at th
 | `allow_clipboard_read` | `bool` | `false` | Allow OSC 52 clipboard queries (security risk) |
 | `accept_osc7` | `bool` | `true` | Accept OSC 7 directory tracking |
 | `disable_insecure_sequences` | `bool` | `false` | Block OSC 8, 52, 9, 777, and Sixel graphics |
-| `answerback_string` | `string | null` | `null` | Optional ENQ answerback payload returned via response buffer |
+| `answerback_string` | `Option<String>` | `None` | Optional ENQ answerback payload returned via response buffer |
+
+**Python API for answerback_string:**
+```python
+# Get the answerback string
+answerback = term.answerback_string()  # Returns None or string
+
+# Set the answerback string
+term.set_answerback_string("par-term")  # Enable with custom string
+term.set_answerback_string(None)         # Disable (default, recommended for security)
+```
 
 ### Security Recommendations
 
@@ -433,9 +449,9 @@ The terminal core provides programmatic screenshot capabilities via Python and R
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `include_scrollback` | `bool` | `false` | Include scrollback buffer in screenshot |
-| `scrollback_lines` | `Option<usize>` | `None` | Number of scrollback lines to include (None = all) |
+| `scrollback_offset` | `usize` | `0` | Number of lines to scroll back from current position (method parameter) |
 
-**Note:** The `scrollback_offset` parameter is passed separately to the `screenshot()` method, not via `ScreenshotConfig`.
+**Note:** The `scrollback_offset` parameter is passed directly to the `screenshot()` method, not as part of the config options.
 
 #### Canvas Settings
 
@@ -515,7 +531,7 @@ svg_bytes = term.screenshot(
 )
 
 # Screenshot with theme settings
-# Note: bold_brightening and use_bold_color are booleans (not Optional)
+# Note: bold_brightening and use_bold_color are Optional[bool], defaulting to False when not specified
 png_bytes = term.screenshot(
     bold_brightening=True,
     use_bold_color=True,
@@ -526,15 +542,12 @@ png_bytes = term.screenshot(
     faint_text_alpha=0.6
 )
 
-# Capture scrollback content
+# Capture scrollback content with offset
+# Note: include_scrollback enables scrollback capture, scrollback_offset scrolls viewport
 png_bytes = term.screenshot(
     include_scrollback=True,
-    scrollback_lines=100  # Last 100 lines from scrollback
+    scrollback_offset=50  # Scroll back 50 lines before capture
 )
-
-# Capture historical view (scroll back 10 lines from current position)
-# Note: scrollback_offset is a method parameter, not a config option
-png_bytes = term.screenshot(scrollback_offset=10)
 
 # Save directly to file (format is auto-detected from extension, or specify explicitly)
 term.screenshot_to_file(
@@ -548,11 +561,13 @@ term.screenshot_to_file(
 png_bytes = term.screenshot(sixel_mode="pixels")  # Show actual image data
 ```
 
+**Note on scrollback capture:** To capture scrollback content, use `include_scrollback=True`. The `scrollback_offset` parameter scrolls the viewport position before taking the screenshot.
+
 ### Implementation Details
 
 **Location:**
 - Configuration: `src/screenshot/config.rs` - `ScreenshotConfig` struct
-- Python bindings: `src/python_bindings/terminal.rs` - `screenshot()` and `screenshot_to_file()` methods
+- Python bindings: `src/python_bindings/terminal/mod.rs` - `screenshot()` and `screenshot_to_file()` methods
 - Renderer: `src/screenshot/renderer.rs` - Core rendering logic
 
 **Font Support:**

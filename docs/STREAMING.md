@@ -36,6 +36,10 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Read-Only Mode](#read-only-mode)
   - [Macro Playback](#macro-playback)
   - [HTTP Static File Serving](#http-static-file-serving)
+  - [Zone Events](#zone-events)
+  - [Semantic Snapshots](#semantic-snapshots)
+  - [Environment and Remote Host Tracking](#environment-and-remote-host-tracking)
+  - [File Transfer Events](#file-transfer-events)
 - [TLS/SSL Configuration](#tlsssl-configuration)
 - [Security Considerations](#security-considerations)
 - [Performance](#performance)
@@ -287,6 +291,9 @@ par-term-streamer --enable-http
 | `PAR_TERM_SESSION_IDLE_TIMEOUT` | `--session-idle-timeout` | Idle session timeout (seconds) |
 | `PAR_TERM_ENABLE_SYSTEM_STATS` | `--enable-system-stats` | Enable system stats collection |
 | `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
+| `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
+| `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
+| `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Input rate limit (bytes/sec, 0=unlimited) |
 
 **Download Web Frontend:**
 
@@ -417,6 +424,9 @@ config = terminal_core.StreamingConfig(api_key="my-secret-key")
 config = terminal_core.StreamingConfig()
 config.set_api_key("my-secret-key")
 
+# Allow API key in query parameter (disabled by default for security)
+config.allow_api_key_in_query = True
+
 # Check if API key is set
 if config.api_key:
     print("API key configured")
@@ -457,6 +467,7 @@ server.start()
 | `enable_system_stats` | bool | false | Enable system resource statistics collection (CPU, memory, disk, network) |
 | `system_stats_interval_secs` | u64 | 5 | System stats collection interval in seconds |
 | `api_key` | Option\<String\> | None | API key for authenticating API routes (`/ws`, `/sessions`, `/stats`). Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. When both API key and Basic Auth are configured, either satisfies auth. Static files remain unprotected so the web frontend loads without auth. |
+| `allow_api_key_in_query` | bool | false | Allow API key authentication via query parameter (?api_key=...). Disabled by default because query params are logged by proxies/firewalls, saved in browser history, and leaked via Referer headers. |
 
 **Python Example:**
 ```python
@@ -494,6 +505,7 @@ let config = StreamingConfig {
         "secret".to_string(),
     )), // Or None for no auth
     api_key: Some("my-secret-key".to_string()), // Or None for no API key auth
+    allow_api_key_in_query: false, // Set to true to allow ?api_key= in URL (not recommended)
     ..Default::default()
 };
 
@@ -596,7 +608,7 @@ npm run proto:generate
 
 - `app/page.tsx`: Main application UI with connection controls and status indicator
 - `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
-- `lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, etc.)
+- `lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
 - `lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
 - `next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
@@ -753,8 +765,20 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `badge_changed` | `badge?: string` | Badge text changed (OSC 1337 SetBadgeFormat) |
 | `selection_changed` | `start_col?: uint32`, `start_row?: uint32`, `end_col?: uint32`, `end_row?: uint32`, `text?: string`, `mode: string`, `cleared: bool` | Selection state changed |
 | `clipboard_sync` | `operation: string`, `content: string`, `target?: string` | Clipboard content sync (OSC 52) |
-| `shell_integration_event` | `event_type: string`, `command?: string`, `exit_code?: int32`, `timestamp?: uint64` | Shell integration marker (FinalTerm OSC 133) |
+| `shell_integration_event` | `event_type: string`, `command?: string`, `exit_code?: int32`, `timestamp?: uint64`, `cursor_line?: uint64` | Shell integration marker (FinalTerm OSC 133) |
 | `system_stats` | `cpu?, memory?, disks[], networks[], load_average?, hostname?, os_name?, os_version?, kernel_version?, uptime_secs?, timestamp?` | System resource statistics (requires `--enable-system-stats`) |
+| `zone_opened` | `zone_id: uint64`, `zone_type: string`, `abs_row_start: uint64` | Zone opened (prompt, command, or output block started) |
+| `zone_closed` | `zone_id: uint64`, `zone_type: string`, `abs_row_start: uint64`, `abs_row_end: uint64`, `exit_code?: int32` | Zone closed (prompt, command, or output block ended) |
+| `zone_scrolled_out` | `zone_id: uint64`, `zone_type: string` | Zone evicted from scrollback |
+| `environment_changed` | `key: string`, `value: string`, `old_value?: string` | Environment variable changed |
+| `remote_host_transition` | `hostname: string`, `username?: string`, `old_hostname?: string`, `old_username?: string` | Remote host transition detected |
+| `sub_shell_detected` | `depth: uint64`, `shell_type?: string` | Sub-shell detected |
+| `semantic_snapshot` | `snapshot_json: string` | Semantic snapshot of terminal state (JSON-encoded) |
+| `file_transfer_started` | `id: uint64`, `direction: string`, `filename?: string`, `total_bytes?: uint64` | File transfer started (download or upload) |
+| `file_transfer_progress` | `id: uint64`, `bytes_transferred: uint64`, `total_bytes?: uint64` | File transfer progress update |
+| `file_transfer_completed` | `id: uint64`, `filename?: string`, `size: uint64` | File transfer completed successfully |
+| `file_transfer_failed` | `id: uint64`, `reason: string` | File transfer failed |
+| `upload_requested` | `format: string` | Upload requested by terminal application |
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
@@ -773,6 +797,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `paste` | `content: string` | Paste content (auto-wrapped in bracketed paste when active) |
 | `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
 | `clipboard` | `operation: string`, `content?: string`, `target?: string` | Clipboard get/set request |
+| `snapshot_request` | `scope: string`, `max_commands?: uint32` | Request a semantic snapshot (scope: "visible", "recent", "full") |
 
 ### ThemeInfo Structure
 
@@ -862,6 +887,13 @@ Clients can subscribe to specific event types to filter server messages and redu
 | `CLIPBOARD` | 16 | Clipboard events |
 | `SHELL` | 17 | Shell integration events |
 | `SYSTEM_STATS` | 18 | System resource statistics |
+| `ZONE` | 19 | Zone events (opened, closed, scrolled out) |
+| `ENVIRONMENT` | 20 | Environment change events |
+| `REMOTE_HOST` | 21 | Remote host transition events |
+| `SUB_SHELL` | 22 | Sub-shell detection events |
+| `SNAPSHOT` | 23 | Semantic snapshot events |
+| `FILE_TRANSFER` | 24 | File transfer events (started, progress, completed, failed) |
+| `UPLOAD_REQUEST` | 25 | Upload request events |
 
 **Example (TypeScript):**
 ```typescript
@@ -1462,6 +1494,58 @@ The streaming protocol supports bidirectional file transfer events compatible wi
 Frontends should subscribe to these events and implement UI for:
 1. **Downloads:** Show progress bar, and on completion, offer the file for saving (blob download)
 2. **Uploads:** When `upload_requested` is received, open file picker, read file, and send data back via `input` message (encoded as base64 within the terminal stream)
+
+### Zone Events
+
+The streaming protocol reports semantic zone boundaries (prompt, command, output blocks) based on shell integration (OSC 133) sequences.
+
+**Zone Types:**
+- `prompt`: Shell prompt zone
+- `command`: Command input zone
+- `output`: Command output zone
+
+**Server → Client Events:**
+- `zone_opened`: Zone started (zone_id, zone_type, abs_row_start)
+- `zone_closed`: Zone ended (zone_id, zone_type, abs_row_start, abs_row_end, exit_code for output zones)
+- `zone_scrolled_out`: Zone evicted from scrollback (zone_id, zone_type)
+
+**Use Cases:**
+- Command history navigation
+- Output block collapsing/expanding
+- Semantic search within terminal output
+- Exit code indicators on command blocks
+
+### Semantic Snapshots
+
+Clients can request a semantic snapshot of the terminal state for advanced UI features.
+
+**Client Request:**
+```typescript
+const msg = createSnapshotMessage("recent", 10);  // Last 10 commands
+ws.send(encodeClientMessage(msg));
+```
+
+**Scope Options:**
+- `visible`: Current visible screen only
+- `recent`: Last N commands (specify max_commands)
+- `full`: Full scrollback history
+
+**Server Response:**
+- `semantic_snapshot`: JSON-encoded snapshot with command history, zones, exit codes
+
+### Environment and Remote Host Tracking
+
+The streaming protocol tracks environment changes and remote host transitions.
+
+**Server → Client Events:**
+- `environment_changed`: Environment variable changed (key, value, old_value) - typically for "cwd", "hostname", "username"
+- `remote_host_transition`: SSH/su transition detected (hostname, username, old_hostname, old_username)
+- `sub_shell_detected`: Nested shell detected (depth, shell_type)
+
+**Use Cases:**
+- Dynamic prompt rendering
+- Remote host indicators in UI
+- Shell nesting level display
 
 ### TLS/SSL Configuration
 

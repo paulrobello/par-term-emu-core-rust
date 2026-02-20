@@ -17,6 +17,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [VT Conformance Level](#vt-conformance-level)
   - [Bell Volume Control](#bell-volume-control-vt520)
   - [Scrolling and Margins](#scrolling-and-margins)
+  - [Tab Stops](#tab-stops)
   - [Colors and Appearance](#colors-and-appearance)
   - [Theme Colors](#theme-colors)
   - [Text Rendering Options](#text-rendering-options)
@@ -75,6 +76,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [NotificationConfig](#notificationconfig)
   - [NotificationEvent](#notificationevent)
   - [RecordingSession](#recordingsession)
+  - [RecordingEvent](#recordingevent)
   - [Selection](#selection)
   - [ClipboardEntry](#clipboardentry)
   - [ScrollbackStats](#scrollbackstats)
@@ -164,6 +166,7 @@ Create a new terminal with specified dimensions.
 - `resize(cols: int, rows: int)`: Resize the terminal. When width changes, scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved.
 - `reset()`: Reset terminal to default state
 - `title() -> str`: Get terminal title
+- `set_title(title: str)`: Set terminal title programmatically
 
 #### Badge Format (OSC 1337 SetBadgeFormat)
 - `badge_format() -> str | None`: Get current badge format template
@@ -290,6 +293,12 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 - `scroll_region() -> tuple[int, int]`: Get vertical scroll region (top, bottom)
 - `left_right_margins() -> tuple[int, int] | None`: Get horizontal margins if set
 
+#### Tab Stops
+- `get_tab_stops() -> list[int]`: Get column positions of all tab stops
+- `set_tab_stop(col: int)`: Set a tab stop at the specified column
+- `clear_tab_stop(col: int)`: Clear a tab stop at the specified column
+- `clear_all_tab_stops()`: Clear all tab stops
+
 #### Colors and Appearance
 - `default_fg() -> tuple[int, int, int] | None`: Get default foreground color
 - `default_bg() -> tuple[int, int, int] | None`: Get default background color
@@ -410,11 +419,11 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `export_text() -> str`: Export entire buffer as plain text without styling
 - `export_styled() -> str`: Export entire buffer with ANSI styling
 - `export_html(include_styles: bool = True) -> str`: Export as HTML (full document or content only)
-- `export_scrollback() -> str`: Export scrollback buffer as plain text
+- `export_scrollback(format: str = "text", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "text" or "json". If max_lines is None, exports all scrollback.
 
 #### Screenshots
-- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, minimum_contrast) -> bytes`: Take screenshot and return image bytes
-- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, minimum_contrast)`: Take screenshot and save to file
+- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast) -> bytes`: Take screenshot and return image bytes
+- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast)`: Take screenshot and save to file
 
 **Supported Formats:** PNG, JPEG, BMP, SVG (vector), HTML
 
@@ -775,6 +784,9 @@ Performance measurement and optimization tools:
 - `get_fps() -> float`: Get current FPS
 - `get_average_frame_time() -> float`: Get average frame time in milliseconds
 - `record_frame_timing(render_time_ms: float)`: Record frame timing
+- `record_escape_sequence(category: str, time_us: int)`: Record escape sequence processing time for profiling
+- `record_allocation(bytes: int)`: Record memory allocation for profiling
+- `update_peak_memory(current_bytes: int)`: Update peak memory tracking
 
 ### Tmux Control Mode
 
@@ -810,8 +822,8 @@ Save and restore terminal state:
 Extended text manipulation beyond basic extraction:
 
 - `get_paragraph_at(col: int, row: int) -> str | None`: Extract paragraph at position
-- `get_logical_lines(start_row: int, end_row: int) -> list[JoinedLines]`: Get logical lines (respecting wrapping)
-- `join_wrapped_lines(start_row: int) -> JoinedLines`: Join wrapped lines from start position
+- `get_logical_lines() -> list[str]`: Get all logical lines (respecting wrapping, each string is a joined logical line)
+- `join_wrapped_lines(start_row: int) -> JoinedLines | None`: Join wrapped lines from start position (returns None if row is out of bounds)
 - `is_line_start(row: int) -> bool`: Check if row is start of logical line
 - `get_line_context(row: int, before: int, after: int) -> list[str]`: Get lines with context
 
@@ -839,6 +851,7 @@ VT compliance testing:
 - `use_alt_screen()`: Switch to alternate screen buffer (programmatic, not via escape codes)
 - `use_primary_screen()`: Switch to primary screen buffer (programmatic)
 - `poll_events() -> list[str]`: Poll for pending terminal events
+- `drain_bell_events() -> list[str]`: Drain pending bell events
 - `set_event_subscription(kinds: list[str] | None)`: Filter which terminal events are returned by `poll_subscribed_events()` (None clears filter)
 - `clear_event_subscription()`: Clear event filter (all events are returned)
 - `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter
@@ -884,6 +897,11 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `clear_selection()`: Clear current selection
 - `select_word_at(col: int, row: int)`: Select word at position
 - `select_line(row: int)`: Select entire line
+
+#### Rectangle Operations (DECCRA/DECERA)
+- `get_rectangle(top: int, left: int, bottom: int, right: int) -> str | None`: Get text content of rectangular region
+- `fill_rectangle(top: int, left: int, bottom: int, right: int, char: str)`: Fill rectangular region with character (DECERA)
+- `erase_rectangle(top: int, left: int, bottom: int, right: int)`: Erase rectangular region (DECERA with space)
 
 ### Content Search
 
@@ -1249,6 +1267,22 @@ Session recording metadata.
 **Methods:**
 - `get_size() -> tuple[int, int]`: Get recording size (cols, rows)
 - `get_duration_seconds() -> float`: Get recording duration in seconds
+- `created_at() -> int`: Get recording creation timestamp (milliseconds)
+- `events() -> list[RecordingEvent]`: Get all recorded events
+- `env() -> dict[str, str]`: Get environment variables captured during recording
+
+### RecordingEvent
+
+Event in a recording session.
+
+**Properties:**
+- `timestamp: int`: Event timestamp in milliseconds
+- `event_type: str`: Event type ("Input", "Output", "Resize", "Metadata", or "Marker")
+- `data: bytes`: Raw event data
+- `metadata: tuple[int, int] | None`: Optional metadata (e.g., resize dimensions)
+
+**Methods:**
+- `get_data_str() -> str`: Get event data as UTF-8 string (lossy conversion)
 
 ### Selection
 
@@ -1283,15 +1317,21 @@ Macro recording for keyboard automation.
 
 **Properties:**
 - `name: str`: Macro name
+- `description: str | None`: Optional macro description
 - `duration: int`: Total duration in milliseconds
+- `terminal_size: tuple[int, int] | None`: Terminal dimensions the macro was recorded with
+- `event_count: int`: Number of events in the macro
 - `events: list[MacroEvent]`: List of macro events
 
 **Methods:**
 - `add_key(key: str)`: Add a key press event
-- `add_delay(duration: int)`: Add a delay event
+- `add_delay(duration_ms: int)`: Add a delay event
 - `add_screenshot(label: str | None = None)`: Add a screenshot trigger event
+- `set_description(description: str)`: Set macro description
 - `to_yaml() -> str`: Export macro to YAML format
 - `from_yaml(yaml_str: str) -> Macro`: Load macro from YAML format (static method)
+- `save_yaml(path: str)`: Save macro to YAML file
+- `load_yaml(path: str) -> Macro`: Load macro from YAML file (static method)
 
 ### MacroEvent
 
@@ -1864,13 +1904,12 @@ StreamingConfig(
     web_root: str = "./web_term",
     initial_cols: int = 0,
     initial_rows: int = 0,
-    max_sessions: int = 10,
-    session_idle_timeout: int = 900,
     max_clients_per_session: int = 0,
     input_rate_limit_bytes_per_sec: int = 0,
-    api_key: str | None = None,
     enable_system_stats: bool = False,
     system_stats_interval_secs: int = 5,
+    api_key: str | None = None,
+    allow_api_key_in_query: bool = False,
 )
 ```
 
@@ -1884,11 +1923,12 @@ StreamingConfig(
 - `web_root: str` - Web root directory for static files
 - `initial_cols: int` - Initial terminal columns (0=use terminal's current size)
 - `initial_rows: int` - Initial terminal rows (0=use terminal's current size)
-- `max_sessions: int` - Maximum concurrent terminal sessions
-- `session_idle_timeout: int` - Idle session timeout in seconds (0=never timeout)
+- `max_sessions: int` - Maximum concurrent terminal sessions (read-only, fixed at 10)
+- `session_idle_timeout: int` - Idle session timeout in seconds (read-only, fixed at 900)
 - `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
 - `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
+- `allow_api_key_in_query: bool` - Allow API key authentication via query parameter (disabled by default for security)
 - `enable_system_stats: bool` - Enable system resource statistics collection
 - `system_stats_interval_secs: int` - System stats collection interval in seconds
 - `tls_enabled: bool` - Check if TLS is configured (read-only)

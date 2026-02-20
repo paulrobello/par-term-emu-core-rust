@@ -2599,29 +2599,69 @@ npm run dev  # Development server on http://localhost:3000
 ### Protocol
 
 **Wire Format:**
-The protocol uses binary Protocol Buffers with a 1-byte compression header:
+The protocol uses binary Protocol Buffers over WebSocket:
 
 ```
-[1 byte: compression flag][N bytes: protobuf payload]
+[N bytes: protobuf ServerMessage/ClientMessage]
 ```
 
-- `0x00` = Uncompressed Protocol Buffers message
-- `0x01` = zlib-compressed Protocol Buffers message (used for payloads > 1KB)
+For bandwidth optimization, payloads larger than 1KB are automatically zlib-compressed with a compression header:
+
+```
+[1 byte: 0x01 compression flag][N bytes: zlib-compressed protobuf]
+```
+
+Uncompressed messages have no compression header for minimal latency.
 
 **Message Types:**
 
 **Server → Client:**
-- `Connected`: Initial connection with terminal size, session ID, and theme
+- `Connected`: Initial connection with terminal size, session ID, theme, badge, faint_text_alpha, cwd, modify_other_keys, client_id, readonly
 - `Output`: Terminal output data (text/ANSI sequences)
 - `Resize`: Terminal dimension change
 - `Title`: Terminal title update
-- `Ping`: Keepalive message
+- `Bell`: Bell/alert event
+- `CwdChanged`: Working directory change (OSC 7)
+- `TriggerMatched`: Trigger pattern matched
+- `ActionNotify`: Trigger action notification
+- `ActionMarkLine`: Trigger bookmark action
+- `ModeChanged`: Terminal mode changed (cursor visibility, mouse tracking, bracketed paste, etc.)
+- `GraphicsAdded`: Graphics/image added (Sixel, iTerm2, Kitty)
+- `HyperlinkAdded`: Hyperlink added (OSC 8)
+- `UserVarChanged`: User variable changed (OSC 1337 SetUserVar)
+- `ProgressBarChanged`: Named progress bar changed (OSC 934)
+- `BadgeChanged`: Badge text changed (OSC 1337 SetBadgeFormat)
+- `SelectionChanged`: Selection changed
+- `ClipboardSync`: Clipboard sync event (OSC 52)
+- `ShellIntegrationEvent`: Shell integration event (FinalTerm sequences)
+- `SystemStats`: System resource statistics (CPU, memory, disk, network)
+- `ZoneOpened`: Semantic zone opened (prompt, command, output)
+- `ZoneClosed`: Semantic zone closed
+- `EnvironmentChanged`: Environment variable changed
+- `RemoteHostTransition`: Remote host transition detected
+- `SubShellDetected`: Sub-shell detected
+- `SemanticSnapshot`: Semantic snapshot of terminal state
+- `FileTransferStarted`: File transfer started
+- `FileTransferProgress`: File transfer progress
+- `FileTransferCompleted`: File transfer completed
+- `FileTransferFailed`: File transfer failed
+- `UploadRequested`: Upload requested by terminal application
+- `Error`: Error notification
+- `Shutdown`: Server shutdown notification
+- `Pong`: Keepalive response
 
 **Client → Server:**
-- `Input`: User keyboard/mouse input
+- `Input`: User keyboard input
 - `Resize`: Request terminal resize
+- `Ping`: Keepalive request
 - `Refresh`: Request full screen refresh
-- `Pong`: Keepalive response
+- `Subscribe`: Subscribe to specific event types
+- `Mouse`: Mouse input (press, release, move, scroll)
+- `Focus`: Focus change notification
+- `Paste`: Paste input
+- `Selection`: Selection request
+- `Clipboard`: Clipboard request (set/get)
+- `SnapshotRequest`: Request semantic snapshot
 
 > **📝 Note:** The protocol definition is in `proto/terminal.proto`. See [STREAMING.md](STREAMING.md) for complete protocol specification and examples.
 
@@ -2744,14 +2784,14 @@ par-term-streamer \
 **Frontend:**
 - Next.js 16 with React 19
 - TypeScript 5.9
-- xterm.js 5.5 with WebGL renderer
+- xterm.js 6.0 with WebGL renderer (@xterm/xterm)
 - Tailwind CSS 4.1
-- Protocol Buffers: @bufbuild/protobuf
+- Protocol Buffers: @bufbuild/protobuf 2.11
 - Compression: pako (zlib)
 
 **Protocol:**
 - Definition: `proto/terminal.proto` (Protocol Buffers schema)
-- Wire format: 1-byte compression header + binary protobuf
+- Wire format: Binary protobuf (uncompressed for low latency) or with zlib compression header for large payloads (>1KB)
 - Compression: Optional zlib for large payloads (>1KB)
 - Generation: `prost-build` (Rust), `@bufbuild/buf` (TypeScript)
 

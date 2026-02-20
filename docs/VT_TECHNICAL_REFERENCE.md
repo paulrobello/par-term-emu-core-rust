@@ -23,6 +23,9 @@ For a quick sequence lookup, see [VT_SEQUENCES.md](VT_SEQUENCES.md).
   - [Grapheme Cluster Support](#grapheme-cluster-support)
 - [Compatibility Matrix](#compatibility-matrix)
 - [Known Limitations](#known-limitations)
+- [Testing and Validation](#testing-and-validation)
+- [References](#references)
+- [See Also](#see-also)
 
 ---
 
@@ -47,7 +50,7 @@ The terminal implementation uses a modular structure:
 **Primary directory:** `src/terminal/`
 
 **Sequence handlers** (in `src/terminal/sequences/`):
-- `csi.rs` - CSI sequence handler (`csi_dispatch_impl()`)
+- `csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
 - `osc.rs` - OSC sequence handler (`osc_dispatch_impl()`)
 - `dcs.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`)
@@ -785,17 +788,17 @@ OSC 8 ; id=unique123 ; https://example.com ST same link OSC 8 ; ; ST
 |-------|------|-------------------|-------------|
 | Hidden | 0 | No | Hide progress bar |
 | Normal | 1 | Yes (0-100) | Normal progress display |
-| Indeterminate | 2 | No | Busy/unknown progress indicator |
-| Warning | 3 | Yes (0-100) | Operation with potential issues |
-| Error | 4 | Yes (0-100) | Failed operation |
+| Error | 2 | Yes (0-100) | Failed operation |
+| Indeterminate | 3 | No | Busy/unknown progress indicator |
+| Warning | 4 | Yes (0-100) | Operation with potential issues |
 
 **Examples:**
 ```
 OSC 9 ; 4 ; 1 ; 50 ST    # Set progress to 50%
 OSC 9 ; 4 ; 0 ST         # Hide progress bar
-OSC 9 ; 4 ; 2 ST         # Show indeterminate progress
-OSC 9 ; 4 ; 3 ; 75 ST    # Show warning state at 75%
-OSC 9 ; 4 ; 4 ; 100 ST   # Show error state at 100%
+OSC 9 ; 4 ; 2 ; 100 ST   # Show error state at 100%
+OSC 9 ; 4 ; 3 ST         # Show indeterminate progress
+OSC 9 ; 4 ; 4 ; 75 ST    # Show warning state at 75%
 ```
 
 **Features:**
@@ -803,6 +806,43 @@ OSC 9 ; 4 ; 4 ; 100 ST   # Show error state at 100%
 - Can be used for file transfers, compilation, deployments
 - Terminal UI can display in tab bar, title bar, or dedicated UI
 - Indeterminate state for operations with unknown duration
+
+#### Named Progress Bars (OSC 934)
+
+`OSC 934 ; action ; id [; key=value ...] ST` - Named progress bar protocol for concurrent progress tracking
+
+**Implementation:**
+- OSC handler in `src/terminal/sequences/osc.rs`
+- Named progress types in `src/terminal/progress.rs` (`NamedProgressBar`, `ProgressBarCommand`)
+
+**Actions:**
+| Action | Description |
+|--------|-------------|
+| `set` | Create or update a named progress bar |
+| `remove` | Remove a specific progress bar by ID |
+| `remove_all` | Remove all progress bars |
+
+**Parameters (for `set` action):**
+| Parameter | Values | Description |
+|-----------|--------|-------------|
+| `percent=N` | 0-100 | Progress percentage (clamped) |
+| `label=text` | String | Descriptive label for the progress bar |
+| `state=S` | `normal`, `indeterminate`, `warning`, `error`, `hidden` | Progress state |
+
+**Examples:**
+```
+OSC 934 ; set ; dl-1 ; percent=50 ; label=Downloading ST
+OSC 934 ; set ; build ; state=indeterminate ; label=Compiling ST
+OSC 934 ; set ; job ; state=error ; label=Build failed ST
+OSC 934 ; remove ; dl-1 ST
+OSC 934 ; remove_all ST
+```
+
+**Features:**
+- Multiple concurrent progress bars with unique IDs
+- Optional labels for user-friendly descriptions
+- All states from OSC 9;4 supported
+- Progress percentage clamped to 0-100
 
 **Python API:**
 ```python
@@ -1366,6 +1406,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | OSC 133 Shell Integration | ✅ Full | `src/terminal/sequences/osc.rs` | Prompt/command/output markers |
 | OSC 7 Directory Tracking | ✅ Full | `src/terminal/sequences/osc.rs` | Percent-decoded paths, username, hostname, session variable sync, CWD history |
 | OSC 9;4 Progress Bar | ✅ Full | `src/terminal/sequences/osc.rs`, `src/terminal/progress.rs` | ConEmu/Windows Terminal style progress |
+| OSC 934 Named Progress | ✅ Full | `src/terminal/sequences/osc.rs`, `src/terminal/progress.rs` | Multiple concurrent progress bars with unique IDs |
 | OSC 1337 SetUserVar | ✅ Full | `src/terminal/sequences/osc.rs` | Shell integration user variables, base64 decoding, change events |
 | Underline styles | ✅ Full | `src/terminal/sequences/csi.rs` | 6 different styles |
 
@@ -1536,11 +1577,13 @@ To validate VT compatibility, test with:
   - Screen buffer: `src/grid.rs`
   - Graphics:
     - Unified store: `src/graphics/mod.rs`
+    - Terminal integration: `src/terminal/graphics.rs`
     - Sixel parser: `src/sixel.rs`
     - Kitty protocol: `src/graphics/kitty.rs`
     - iTerm2 protocol: `src/graphics/iterm.rs`
     - Animation support: `src/graphics/animation.rs`
     - Unicode placeholders: `src/graphics/placeholder.rs`
+    - Session serialization: `src/graphics/serialization.rs`
   - Unicode support:
     - Grapheme utilities: `src/grapheme.rs`
   - Conformance levels: `src/conformance_level.rs`

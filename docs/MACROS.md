@@ -21,6 +21,7 @@ Keyboard macro recording, YAML serialization, and timed playback for terminal se
   - [Speed Control](#speed-control)
   - [Pause and Resume](#pause-and-resume)
   - [Looping](#looping)
+- [Terminal Macro Library](#terminal-macro-library)
 - [Use Cases](#use-cases)
   - [Interactive Demos](#interactive-demos)
   - [Tutorial Recording](#tutorial-recording)
@@ -50,7 +51,7 @@ The macro system provides comprehensive recording and playback capabilities for 
 - Screenshot markers for documentation
 - Environment variable capture
 - Terminal size preservation
-- Loop mode for continuous playback
+- Macro library for storing and playing macros by name
 
 **Common Applications:**
 - Creating interactive terminal demos
@@ -74,6 +75,7 @@ graph TB
     subgraph "Storage"
         YAML[YAML File]
         Memory[In-Memory Macro]
+        Library[Macro Library]
     end
 
     subgraph "Playback"
@@ -86,6 +88,8 @@ graph TB
     Recorder -->|Store| Events
     Events -->|Serialize| YAML
     YAML -->|Deserialize| Memory
+    Memory -->|Load| Library
+    Library -->|Play| Player
     Memory -->|Initialize| Player
     Player -->|Schedule| Timer
     Timer -->|Execute| Output
@@ -94,6 +98,7 @@ graph TB
     style Events fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
     style YAML fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
     style Memory fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Library fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
     style Player fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
     style Timer fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
     style Output fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
@@ -178,9 +183,10 @@ term.process_str("echo 'Hello World'\n")
 session = term.stop_recording()
 
 if session:
-    # Recording session properties
+    # RecordingSession properties
     print(f"Recorded {session.event_count} events in {session.duration}ms")
     print(f"Terminal size: {session.initial_size}")
+    print(f"Title: {session.title}")
 
     # Note: RecordingSession captures raw terminal events.
     # To create a playable macro, use the Macro class directly
@@ -213,9 +219,9 @@ if session:
 # session properties
 session.event_count      # Number of events recorded
 session.duration         # Total duration in milliseconds
-session.start_time       # Unix timestamp (ms)
+session.created_at       # Unix timestamp (ms) when recording was created
 session.initial_size     # Terminal size (cols, rows) when recording started
-session.title            # Optional recording title/name
+session.title            # Recording title/name (always returns a string)
 session.events           # List of RecordingEvent objects
 session.env              # Dict of environment variables captured at recording start
 
@@ -228,7 +234,7 @@ session.get_duration_seconds()  # Returns duration in seconds as float
 ```python
 # event properties
 event.timestamp   # Milliseconds since recording start
-event.event_type  # "Input", "Output", "Resize", or "Marker"
+event.event_type  # "Input", "Output", "Resize", "Metadata", or "Marker"
 event.data        # Raw bytes of the event data
 event.metadata    # Optional (cols, rows) for resize events
 
@@ -317,7 +323,7 @@ macro.add_key("!")
 macro.add_key("'")
 macro.add_key("enter")
 macro.add_delay(1000)
-macro.add_screenshot(Some("welcome_msg"))
+macro.add_screenshot("welcome_msg")
 
 # Set description
 macro.set_description("Welcome message demo")
@@ -635,6 +641,95 @@ Macro playback can be integrated with the StreamingServer for web-based demonstr
 **Note on Python Playback:**
 The `MacroPlayback` class is currently only available in Rust. Python users should manually iterate over macro events for playback (see Python examples above).
 
+## Terminal Macro Library
+
+The `Terminal` struct maintains a macro library for storing and playing macros by name.
+
+**Python API:**
+```python
+import par_term_emu_core_rust as terminal_core
+
+# Create terminal
+term = terminal_core.Terminal(80, 24)
+
+# Load a macro into the library
+macro = terminal_core.Macro.load_yaml("demo.yaml")
+term.load_macro("demo", macro)
+
+# List available macros
+macros = term.list_macros()
+print(f"Available macros: {macros}")
+
+# Play a macro by name
+term.play_macro("demo")
+
+# Check playback state
+if term.is_macro_playing():
+    progress = term.get_macro_progress()
+    name = term.get_current_macro_name()
+    print(f"Playing {name}: {progress[0]}/{progress[1]} events")
+
+    # Pause/resume control
+    term.pause_macro()
+    if term.is_macro_paused():
+        print("Macro is paused")
+    term.resume_macro()
+
+    # Change speed during playback
+    term.set_macro_speed(2.0)
+
+# Stop playback
+term.stop_macro()
+
+# Remove a macro from the library
+term.remove_macro("demo")
+
+# Get a macro from the library
+stored_macro = term.get_macro("demo")
+```
+
+**Rust API:**
+```rust
+// Load a macro into the library
+terminal.load_macro("demo".to_string(), macro_data);
+
+// List available macros
+let macros = terminal.list_macros();
+
+// Play a macro by name
+terminal.play_macro("demo")?;
+
+// Check playback state
+if terminal.is_macro_playing() {
+    let progress = terminal.get_macro_progress();
+    let name = terminal.get_current_macro_name();
+
+    // Pause/resume control
+    terminal.pause_macro();
+    if terminal.is_macro_paused() {
+        println!("Macro is paused");
+    }
+    terminal.resume_macro();
+
+    // Change speed
+    terminal.set_macro_speed(2.0);
+}
+
+// Stop playback
+terminal.stop_macro();
+
+// Tick macro playback and get events
+if let Some(bytes) = terminal.tick_macro() {
+    // bytes contains the key press data to send
+}
+
+// Get screenshot triggers that fired
+let triggers = terminal.get_macro_screenshot_triggers();
+for label in triggers {
+    println!("Screenshot trigger: {}", label);
+}
+```
+
 ## Use Cases
 
 ### Interactive Demos
@@ -656,12 +751,7 @@ pty_term.start_recording("Product Demo v1.0")
 time.sleep(60)  # Record 1 minute demo
 
 session = pty_term.stop_recording()
-pty_term.save_macro_yaml(
-    session,
-    "product_demo.yaml",
-    "Product Demo",
-    "Full feature demonstration for sales presentations"
-)
+# Convert session to macro if needed
 ```
 
 **Conference Talks:**
@@ -1013,7 +1103,7 @@ assert_eq!(bytes, vec![0x61]);
 2. **Realistic Timing:** Keep delays natural for viewer comprehension
 3. **Error Handling:** Include recovery steps if demonstrating error scenarios
 4. **Documentation:** Add meaningful screenshot labels and descriptions
-5. **Terminal Size:** Use standard sizes (80×24, 100×30, 120×40) for compatibility
+5. **Terminal Size:** Use standard sizes (80x24, 100x30, 120x40) for compatibility
 
 **Playback Best Practices:**
 
@@ -1091,7 +1181,7 @@ assert_eq!(bytes, vec![0x61]);
 **Problem:** Playback too fast/slow
 
 **Solutions:**
-- Adjust speed with `set_speed()`
+- Adjust speed with `set_speed()` or `set_macro_speed()`
 - Check delay events are present
 - Verify timestamps are sequential
 - Consider network latency for streaming

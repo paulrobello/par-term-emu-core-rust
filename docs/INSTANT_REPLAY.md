@@ -2,6 +2,37 @@
 
 Instant Replay provides snapshot-based terminal state capture with delta replay, enabling navigation through terminal history with byte-level precision.
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Architecture](#architecture)
+- [SnapshotManager](#snapshotmanager)
+  - [Configuration](#configuration)
+  - [Automatic Snapshots](#automatic-snapshots)
+  - [Input Recording](#input-recording)
+  - [Eviction Policy](#eviction-policy)
+- [ReplaySession](#replaysession)
+  - [Creating a Session](#creating-a-session)
+  - [Current State](#current-state)
+  - [Timeline Navigation](#timeline-navigation)
+    - [Seek to Specific Position](#seek-to-specific-position)
+    - [Seek to Timestamp](#seek-to-timestamp)
+    - [Seek to Start/End](#seek-to-startend)
+    - [Step Forward/Backward](#step-forwardbackward)
+    - [Entry Navigation](#entry-navigation)
+- [Python API Reference](#python-api-reference)
+- [Configuration Tuning](#configuration-tuning)
+  - [Memory Budget Tuning](#memory-budget-tuning)
+  - [Snapshot Interval Tuning](#snapshot-interval-tuning)
+- [Implementation Notes](#implementation-notes)
+  - [Snapshot Contents](#snapshot-contents)
+  - [Reconstruction Performance](#reconstruction-performance)
+  - [Thread Safety](#thread-safety)
+  - [Limitations](#limitations)
+- [Future Enhancements](#future-enhancements)
+- [Related Documentation](#related-documentation)
+
 ## Overview
 
 The Instant Replay system captures periodic snapshots of complete terminal state (grid cells, cursor, colors, modes, etc.) and records the input bytes processed between snapshots. This allows reconstructing any historical terminal state by restoring a snapshot and replaying the subsequent input bytes up to a specific position.
@@ -16,7 +47,7 @@ The system uses a delta-based approach: snapshots serve as checkpoints, and inpu
 
 ## Quick Start
 
-Basic snapshot capture and replay:
+Basic snapshot capture and metadata retrieval:
 
 ```python
 from par_term_emu_core_rust import Terminal
@@ -31,29 +62,54 @@ print(f"Snapshot timestamp: {info['timestamp']}")
 print(f"Size: {info['estimated_size_bytes']} bytes")
 ```
 
-Full replay session with timeline navigation:
+> **Note:** Full `ReplaySession` timeline navigation is only available via the Rust API. Python bindings for `ReplaySession` are planned for a future release. The Python API currently provides `capture_replay_snapshot()` for capturing individual snapshot metadata.
 
-```python
-from par_term_emu_core_rust import Terminal
-import time
+## Architecture
 
-term = Terminal(80, 24)
+```mermaid
+graph TB
+    subgraph "Input Flow"
+        Input[Input Bytes]
+        Process[Terminal.process]
+        Record[Record Input]
+    end
 
-# Enable automatic snapshot capture (30-second intervals, 4 MiB budget)
-term.enable_instant_replay(
-    max_memory_bytes=4 * 1024 * 1024,
-    interval_secs=30
-)
+    subgraph "SnapshotManager"
+        Entries[Entry Ring Buffer]
+        Snap1[Snapshot 1]
+        Snap2[Snapshot 2]
+        Snap3[Snapshot N]
+        Bytes1[Input Bytes 1]
+        Bytes2[Input Bytes 2]
+        Bytes3[Input Bytes N]
+    end
 
-# Process terminal output over time
-term.process(b"ls -la\n")
-time.sleep(1)
-term.process(b"git status\n")
-time.sleep(1)
-term.process(b"cat file.txt\n")
+    subgraph "ReplaySession"
+        Reconstruct[Reconstruct Frame]
+        Frame[Terminal Frame]
+    end
 
-# Access replay session through manager (Rust API only)
-# Python bindings for ReplaySession are planned for a future release
+    Input --> Process
+    Process --> Record
+    Record --> Entries
+    Snap1 --> Entries
+    Snap2 --> Entries
+    Snap3 --> Entries
+    Bytes1 --> Snap1
+    Bytes2 --> Snap2
+    Bytes3 --> Snap3
+    Entries --> Reconstruct
+    Reconstruct --> Frame
+
+    style Input fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Process fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style Record fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Entries fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style Snap1 fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style Snap2 fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style Snap3 fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style Reconstruct fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style Frame fill:#1a237e,stroke:#3f51b5,stroke-width:2px,color:#ffffff
 ```
 
 ## SnapshotManager
@@ -79,14 +135,14 @@ Snapshots are captured automatically when:
 2. The snapshot interval has elapsed since the last snapshot
 3. `should_snapshot()` returns `true`
 
-Manual snapshot capture:
+Manual snapshot capture (Rust API):
 ```rust
 let index = manager.take_snapshot(&terminal);
 ```
 
 ### Input Recording
 
-Input bytes are recorded automatically between snapshots:
+Input bytes are recorded automatically between snapshots (Rust API):
 ```rust
 // After terminal.process(bytes) call:
 manager.record_input(bytes);
@@ -101,7 +157,7 @@ When total memory usage exceeds `max_memory_bytes`:
 - Always keeps at least one entry (the newest)
 - Eviction happens automatically after `take_snapshot()` and `record_input()`
 
-Adjust memory budget dynamically:
+Adjust memory budget dynamically (Rust API):
 ```rust
 manager.set_max_memory(8 * 1024 * 1024); // 8 MiB
 ```
@@ -109,6 +165,8 @@ manager.set_max_memory(8 * 1024 * 1024); // 8 MiB
 ## ReplaySession
 
 A `ReplaySession` provides timeline navigation through captured history. The session clones the `SnapshotManager` state at creation time, so it operates on a frozen timeline even if the original manager continues capturing new snapshots.
+
+> **Note:** `ReplaySession` is only available via the Rust API. Python bindings are planned for a future release.
 
 ### Creating a Session
 
@@ -209,31 +267,38 @@ session.next_entry();
 
 Capture a cell-level snapshot of the terminal state.
 
+Unlike `get_semantic_snapshot()` which captures text only, this captures raw Cell data including colors and attributes for pixel-perfect reconstruction.
+
 **Returns**: Dictionary with keys:
 - `timestamp` (int): Unix timestamp in milliseconds
-- `cols` (int): Terminal width
-- `rows` (int): Terminal height
-- `estimated_size_bytes` (int): Approximate memory footprint
+- `cols` (int): Terminal width in columns
+- `rows` (int): Terminal height in rows
+- `estimated_size_bytes` (int): Approximate memory footprint in bytes
 
 **Example**:
 ```python
+from par_term_emu_core_rust import Terminal
+
+term = Terminal(80, 24)
+term.process(b"Hello, World!")
+
 info = term.capture_replay_snapshot()
 print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} bytes")
 ```
 
-**Note**: This method captures the snapshot metadata only. Full `ReplaySession` Python bindings are planned for a future release.
+> **Note:** This method captures snapshot metadata only. Full `ReplaySession` Python bindings for timeline navigation are planned for a future release.
 
-## Configuration
+## Configuration Tuning
 
 ### Memory Budget Tuning
 
 Memory usage depends on:
-- Terminal size (cols × rows)
+- Terminal size (cols x rows)
 - Scrollback depth
 - Number of entries in the buffer
 - Input bytes recorded between snapshots
 
-Example memory estimates (80×24 terminal, 1000-line scrollback):
+Example memory estimates (80x24 terminal, 1000-line scrollback):
 - Single snapshot: ~400 KiB
 - 10 snapshots + input bytes: ~4-8 MiB (depending on input volume)
 - 20 snapshots + input bytes: ~8-16 MiB
@@ -261,6 +326,54 @@ The interval is wall-clock time, not processing time. Snapshots are only capture
 ### Snapshot Contents
 
 A `TerminalSnapshot` captures:
+
+```mermaid
+graph TB
+    subgraph "TerminalSnapshot"
+        TS[Terminal Snapshot]
+        Meta[Metadata: timestamp, cols, rows]
+        Grids[Grids]
+        Cursors[Cursors]
+        Colors[Colors]
+        Modes[Modes]
+        Misc[Misc: title, tab_stops, scroll_region]
+    end
+
+    subgraph "Grids"
+        Primary[Primary Grid]
+        Alt[Alternate Grid]
+    end
+
+    subgraph "Grid Contents"
+        Cells[Visible Cells]
+        Scrollback[Scrollback Buffer]
+        Wrapped[Wrap Flags]
+        Zones[Semantic Zones]
+    end
+
+    TS --> Meta
+    TS --> Grids
+    TS --> Cursors
+    TS --> Colors
+    TS --> Modes
+    TS --> Misc
+    Grids --> Primary
+    Grids --> Alt
+    Primary --> Cells
+    Primary --> Scrollback
+    Primary --> Wrapped
+    Primary --> Zones
+
+    style TS fill:#e65100,stroke:#ff9800,stroke-width:3px,color:#ffffff
+    style Meta fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style Grids fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style Cursors fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Colors fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style Modes fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style Misc fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+```
+
+Detailed contents:
 - **Grids**: Primary and alternate screen cells (visible + scrollback)
 - **Cursors**: Primary, alternate, and saved cursor state
 - **Colors**: Current and saved foreground, background, underline colors
@@ -313,3 +426,9 @@ Planned features:
 - Input stream compression (reduce memory usage for large sessions)
 - Incremental snapshots (delta encoding between snapshots)
 - Metadata-only snapshots (capture timestamps without full state for scrubbing)
+
+## Related Documentation
+
+- [API Reference](API_REFERENCE.md) - Complete API documentation for the terminal emulator
+- [Architecture](ARCHITECTURE.md) - Detailed internal architecture with diagrams
+- [Semantic Snapshots](#) - Text-focused snapshot API for command/output extraction

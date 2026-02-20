@@ -1,6 +1,6 @@
 # Regional Indicator Flag Emoji - Frontend Rendering Limitation
 
-Regional indicator flag emojis (🇺🇸, 🇨🇳, 🇯🇵, etc.) are now correctly stored as single cells in the backend (v0.22.0+), but may not render correctly in the web terminal client. This is a known limitation of xterm.js that requires grapheme cluster support, which is not yet available.
+Regional indicator flag emojis (🇺🇸, 🇨🇳, 🇯🇵, etc.) are correctly stored as single cells in the backend, but may not render correctly in the web terminal client. This is a known limitation of xterm.js that requires grapheme cluster support, which is not yet published to npm.
 
 ## Table of Contents
 - [Technical Background](#technical-background)
@@ -70,9 +70,9 @@ graph TD
 
 ### What Happens Now
 
-**Backend (Rust) - v0.22.0+:**
+**Backend (Rust):**
 
-The backend now correctly handles regional indicator flag emoji as grapheme clusters:
+The backend correctly handles regional indicator flag emoji as grapheme clusters:
 - Receives the flag emoji (e.g., "🇺🇸")
 - Detects regional indicator pairs (two consecutive regional indicators)
 - Stores both regional indicators in a **single cell** (first as base char, second in combining vector)
@@ -96,12 +96,12 @@ The xterm.js team developed a solution: `@xterm/addon-unicode-graphemes`
 
 **Current Status:**
 - Code exists in the xterm.js repository (PR #4519)
-- Included in xterm.js 5.5.0 release notes
-- Never published to npm (Issue #5147)
+- Included in xterm.js release notes
+- **Still not published to npm** (Issue #5147 remains open)
 - Not available on CDN (jsDelivr, unpkg)
-- Scheduled for xterm.js 6.0.0 milestone (no due date set)
+- No published version available as of 2026-02
 
-> **⚠️ Warning:** A malicious typosquatting package exists (`xterm-addon-unicode-graphemes` without the `@` prefix). Do not install this package.
+> **Warning:** A malicious typosquatting package exists (`xterm-addon-unicode-graphemes` without the `@xterm/` prefix). Do not install this package. See [Snyk Security Advisory](https://security.snyk.io/vuln/SNYK-JS-XTERMADDONUNICODEGRAPHEMES-6044724).
 
 ### Tracking Issues
 
@@ -202,11 +202,11 @@ The Rust backend includes a dedicated `grapheme` module (`src/grapheme.rs`) with
 
 **Unicode Width Calculation:**
 
-The backend uses the `unicode-width` crate (v0.2.2) to calculate individual character widths:
+The backend uses the `unicode-width` crate (v0.2.2) to calculate individual character widths via the `unicode_width_config` module:
 
 ```rust
-// From src/cell.rs
-let width = unicode_width::UnicodeWidthChar::width(c).unwrap_or(1) as u8;
+// From src/unicode_width_config.rs
+use unicode_width::UnicodeWidthChar;
 ```
 
 **Combining Character Handling:**
@@ -226,9 +226,9 @@ if grapheme::is_variation_selector(c)
 }
 ```
 
-**Regional Indicator Pair Handling (v0.22.0+):**
+**Regional Indicator Pair Handling:**
 
-The terminal writer now correctly handles regional indicator pairs:
+The terminal writer correctly handles regional indicator pairs:
 
 ```rust
 // Regional indicators are detected and combined into single cells
@@ -264,9 +264,10 @@ Located in `examples/streaming_client.html`:
 **Next.js Web Terminal:**
 
 Located in `web-terminal-frontend/components/Terminal.tsx`:
-- xterm.js version: 5.5.0
+- xterm.js version: 6.0.0
 - Same addon configuration as HTML client
 - React-based implementation with TypeScript
+- Note: xterm.js 6.0.0 is used but the grapheme addon is still not published
 
 ## Related Documentation
 
@@ -274,10 +275,11 @@ Located in `web-terminal-frontend/components/Terminal.tsx`:
 - [VT_SEQUENCES.md](VT_SEQUENCES.md) - Supported VT sequences
 - [xterm.js Issue #5147](https://github.com/xtermjs/xterm.js/issues/5147) - Missing npm package tracking issue
 - [xterm.js Issue #3304](https://github.com/xtermjs/xterm.js/issues/3304) - Grapheme cluster support request
+- [Snyk Security Advisory](https://security.snyk.io/vuln/SNYK-JS-XTERMADDONUNICODEGRAPHEMES-6044724) - Malicious typosquatting package warning
 
 ---
 
-**Last Updated**: 2025-11-24
-**xterm.js Version**: 5.5.0
+**Last Updated**: 2026-02-20
+**xterm.js Version**: 6.0.0 (Next.js), 5.5.0 (HTML client)
 **unicode-width Crate**: 0.2.2
-**Status**: Blocked on upstream xterm.js addon publishing (scheduled for v6.0.0)
+**Status**: Blocked on upstream xterm.js addon publishing (Issue #5147 still open)

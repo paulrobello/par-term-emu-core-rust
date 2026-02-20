@@ -35,7 +35,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ### Rust
 
-You need Rust 1.75 or later (as specified in `Cargo.toml` with `rust-version = "1.75"`). The project is currently tested with Rust 1.92.0. Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.88 or later (as specified in `Cargo.toml` with `rust-version = "1.88"`). Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -93,13 +93,14 @@ make dev
 ```
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
-- **maturin** (≥1.9, <2.0 for build; ≥1.10.2 for dev) - Build tool for PyO3 projects
-- **pytest** (≥9.0.1) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
-- **ruff** (≥0.14.7) - Fast Python linter and formatter
-- **pyright** (≥1.1.407) - Static type checker
-- **pre-commit** (≥4.5.0) - Git hook framework
-- **rich** (≥14.2.0) - Rich text formatting for examples
-- **pillow** (≥12.0.0) - Image processing for graphics features (required dependency)
+- **maturin** (≥1.12.0) - Build tool for PyO3 projects
+- **pytest** (≥9.0.2) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
+- **ruff** (≥0.15.1, <0.16) - Fast Python linter and formatter
+- **pyright** (≥1.1.408) - Static type checker
+- **pre-commit** (≥4.5.1) - Git hook framework
+- **rich** (≥14.3.2) - Rich text formatting for examples
+- **websockets** (≥15.0) - WebSocket client for streaming examples
+- **pillow** (≥12.1.0) - Image processing for graphics features (required dependency)
 
 ### Development Build
 

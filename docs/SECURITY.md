@@ -605,7 +605,7 @@ The file loading security implementation is located in the `load_file_data()` me
 
 **Implementation Details:**
 ```rust
-// From src/graphics/kitty.rs (lines 653-707)
+// From src/graphics/kitty.rs - load_file_data() method
 fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
     // 1. Decode path (NOT base64 for file transmission)
     let path_str = String::from_utf8(path_data.to_vec())

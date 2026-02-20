@@ -14,17 +14,19 @@ This guide explains how to test Kitty graphics protocol animation support in `pa
 - [Frontend Integration](#frontend-integration)
 - [Manual Testing](#manual-testing)
 - [Debugging](#debugging)
+- [Animation Serialization](#animation-serialization)
 - [Related Documentation](#related-documentation)
 
 ## Current Status
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Backend Animation Storage | ✅ Complete | `src/graphics/animation.rs` |
-| Backend Frame Management | ✅ Complete | Frames stored in `GraphicsStore.animations` |
-| Backend Playback Control | ✅ Complete | Stop/LoadingMode/EnableLooping |
-| Backend Loop Count | ✅ Complete | Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops) |
-| Frontend Rendering | 🔄 Pending | Needs integration in par-term |
+| Backend Animation Storage | Complete | `src/graphics/animation.rs` |
+| Backend Frame Management | Complete | Frames stored in `GraphicsStore.animations` |
+| Backend Playback Control | Complete | Stop/LoadingMode/EnableLooping |
+| Backend Loop Count | Complete | Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops) |
+| Animation Serialization | Complete | JSON export/import for session persistence |
+| Frontend Rendering | Pending | Needs integration in par-term |
 
 ## Prerequisites
 
@@ -50,18 +52,18 @@ python scripts/test_kitty_animation.py
 uv run scripts/test_kitty_animation.py
 ```
 
-> **⚠️ Note:** To see animations actually render, you need a terminal emulator with full Kitty graphics protocol animation support, or test with the par-term frontend once animation rendering is integrated.
+> **Note:** To see animations actually render, you need a terminal emulator with full Kitty graphics protocol animation support, or test with the par-term frontend once animation rendering is integrated.
 
 ## What the Test Does
 
 The test script creates two animations:
 
-1. **Simple 2-frame animation**: Red ↔ Blue squares
+1. **Simple 2-frame animation**: Red and Blue squares
    - Frame 1: Red (500ms delay)
    - Frame 2: Blue (500ms delay)
    - Demonstrates: Play, Pause, Resume, Stop
 
-2. **Multi-frame color cycle**: Red → Yellow → Green → Blue
+2. **Multi-frame color cycle**: Red to Yellow to Green to Blue
    - 4 frames, 400ms each
    - Demonstrates: Loop count (2 loops)
 
@@ -171,7 +173,7 @@ tail -f /tmp/par_term_emu_core_rust_debug_rust.log
 
 The frontend ([par-term](https://github.com/probello/par-term)) needs the following integration to enable animation playback:
 
-> **📝 Note:** This section describes the integration requirements for the par-term Rust frontend. The integration is not yet complete.
+> **Note:** This section describes the integration requirements for the par-term Rust frontend. The integration is not yet complete.
 
 ### Required Implementation Steps
 
@@ -361,6 +363,44 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 - Internally: `loop_count` is set to `N-1`, and the animation stops after `N-1` complete loops (giving N total plays including the initial playthrough)
 - Check logs for: `"Setting loop count for image_id=..."` messages
 
+## Animation Serialization
+
+Animations are included in the graphics serialization system for session persistence. When you export terminal graphics state, animations are preserved and can be restored.
+
+### Export Animation State
+
+```python
+# Export graphics state including animations to JSON
+json_str = terminal.export_graphics_json()
+
+# Save to file
+with open("session_graphics.json", "w") as f:
+    f.write(json_str)
+```
+
+### Import Animation State
+
+```python
+# Load graphics state from JSON
+with open("session_graphics.json") as f:
+    json_str = f.read()
+
+# Restore graphics including animations
+count = terminal.import_graphics_json(json_str)
+print(f"Restored {count} graphics")
+```
+
+### Serialized Animation Data
+
+The serialization captures:
+- All animation frames with pixel data (base64-encoded RGBA)
+- Frame metadata (delay, composition mode, offsets)
+- Current playback state (Playing, Paused, Stopped)
+- Current frame number
+- Loop count and loops completed
+
+**Implementation file:** `src/graphics/serialization.rs`
+
 ## Related Documentation
 
 - [Kitty Graphics Protocol - Animation](https://sw.kovidgoyal.net/kitty/graphics-protocol/#animation) - Official Kitty animation specification
@@ -372,8 +412,9 @@ ANIMATION: image_id=42 advanced frame 1 -> 2 (delay=500ms, elapsed=501ms)
 - [`src/graphics/animation.rs`](../src/graphics/animation.rs) - Animation frame storage and playback logic
 - [`src/graphics/mod.rs`](../src/graphics/mod.rs) - Graphics store with `update_animations()` method
 - [`src/graphics/kitty.rs`](../src/graphics/kitty.rs) - Kitty protocol parser with animation support
+- [`src/graphics/serialization.rs`](../src/graphics/serialization.rs) - Animation serialization for session persistence
 - [`scripts/test_kitty_animation.py`](../scripts/test_kitty_animation.py) - Automated animation test script
-- [`src/python_bindings/terminal.rs`](../src/python_bindings/terminal.rs) - Python bindings for terminal animation updates
+- [`src/python_bindings/terminal/mod.rs`](../src/python_bindings/terminal/mod.rs) - Python bindings for terminal animation updates
 - [`src/python_bindings/pty.rs`](../src/python_bindings/pty.rs) - Python bindings for PTY animation updates
 
 ## Implementation Status
@@ -385,38 +426,42 @@ graph LR
     Control[Playback Control]
     Loops[Loop Count]
     Timing[Frame Timing]
+    Serialization[Session Persistence]
     Frontend[Frontend Integration]
 
     Storage --> Frames
     Frames --> Control
     Control --> Loops
     Loops --> Timing
-    Timing --> Frontend
+    Timing --> Serialization
+    Serialization --> Frontend
 
     style Storage fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Frames fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Control fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Loops fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Timing fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
+    style Serialization fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style Frontend fill:#ff6f00,stroke:#ffa726,stroke-width:2px,color:#ffffff
 ```
 
 ### Completed Features
-- ✅ **Animation Storage** - Frames stored in `GraphicsStore.animations` with Arc-shared pixels
-- ✅ **Frame Management** - Add, retrieve, and iterate frames with composition modes
-- ✅ **Playback Control** - Stop (s=1), LoadingMode (s=2), EnableLooping (s=3)
-- ✅ **Loop Count** - Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops)
-- ✅ **Frame Timing** - Automatic frame advancement based on delay_ms
-- ✅ **Auto Placement Update** - `update_animations()` updates pixel data in all placements
+- **Animation Storage** - Frames stored in `GraphicsStore.animations` with Arc-shared pixels
+- **Frame Management** - Add, retrieve, and iterate frames with composition modes
+- **Playback Control** - Stop (s=1), LoadingMode (s=2), EnableLooping (s=3)
+- **Loop Count** - Supports v= parameter (0=ignored, 1=infinite, N=N-1 loops)
+- **Frame Timing** - Automatic frame advancement based on delay_ms
+- **Auto Placement Update** - `update_animations()` updates pixel data in all placements
+- **Session Persistence** - JSON export/import preserves animation state
 
 ### Pending Features
-- 🔄 **Frontend Integration** - par-term needs to call `update_animations()` in render loop
-- ⏳ **Frame Composition Testing** - Alpha blend (default) vs overwrite modes are parsed but need thorough validation
+- **Frontend Integration** - par-term needs to call `update_animations()` in render loop
+- **Frame Composition Testing** - Alpha blend (default) vs overwrite modes are parsed but need thorough validation
   - Composition modes are set via the `c=` parameter in frame transmission (when action is `a=f`)
   - `c=0` or unspecified: AlphaBlend (default) - blend frame with previous frame using alpha channel
   - `c=1`: Overwrite - completely replace previous frame pixels
-- ⏳ **Performance Optimization** - Large animations (100+ frames) may benefit from additional caching
-- ⏳ **Garbage Collection** - Strategy for cleaning up old animation data when images are deleted
+- **Performance Optimization** - Large animations (100+ frames) may benefit from additional caching
+- **Garbage Collection** - Strategy for cleaning up old animation data when images are deleted
 
 ### Known Limitations
 

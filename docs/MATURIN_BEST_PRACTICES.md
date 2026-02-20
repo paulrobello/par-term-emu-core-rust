@@ -16,7 +16,7 @@ This document analyzes our project's compliance with [Maturin](https://github.co
 
 ## Current Configuration Summary
 
-### ✅ Following Best Practices
+### Following Best Practices
 
 #### 1. **Project Structure**
 ```
@@ -40,7 +40,7 @@ par-term-emu-core-rust/
     └── (other modules)
 ```
 
-**Status**: ✅ **Compliant**
+**Status**: **Compliant**
 - Uses recommended `python-source = "python"` structure
 - Avoids [common ImportError pitfall](https://github.com/PyO3/maturin/issues/490)
 - Module name properly configured as `par_term_emu_core_rust._native`
@@ -107,12 +107,12 @@ graph TB
 #### 2. **pyproject.toml Configuration**
 ```toml
 [build-system]
-requires = ["maturin>=1.9,<2.0"]
+requires = ["maturin>=1.10.2,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.16.0"
+version = "0.39.1"
 requires-python = ">=3.12"
 
 [tool.maturin]
@@ -121,12 +121,12 @@ python-source = "python"
 module-name = "par_term_emu_core_rust._native"
 
 [dependency-groups]
-dev = ["maturin>=1.10.2", ...]
+dev = ["maturin>=1.12.0", ...]
 ```
 
-**Status**: ✅ **Compliant**
+**Status**: **Compliant**
 - Proper PEP 517/518 build system configuration
-- Maturin version: `>=1.9,<2.0` (build), `>=1.10.2` (dev)
+- Maturin version: `>=1.10.2,<2.0` (build), `>=1.12.0` (dev)
 - Maturin as build backend
 - Python 3.12+ requirement (aligned with modern Python)
 - Correct feature flags for PyO3
@@ -135,8 +135,9 @@ dev = ["maturin>=1.10.2", ...]
 #### 3. **Cargo.toml Configuration**
 ```toml
 [package]
-rust-version = "1.75"
-version = "0.16.0"
+rust-version = "1.88"
+version = "0.39.1"
+edition = "2021"
 
 [lib]
 name = "par_term_emu_core_rust"
@@ -148,12 +149,16 @@ path = "src/bin/streaming_server.rs"
 required-features = ["streaming"]
 
 [dependencies]
-pyo3 = { version = "0.27.2", optional = true }
+pyo3 = { version = "0.28.1", optional = true }
 
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", ...]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http",
+             "futures-util", "clap", "anyhow", "tracing",
+             "tracing-subscriber", "reqwest", "tar", "prost",
+             "rustls", "tokio-rustls", "rustls-pemfile", "axum-server",
+             "htpasswd-verify", "headers", "sysinfo"]
 
 [profile.release]
 opt-level = 3
@@ -162,32 +167,33 @@ codegen-units = 1
 strip = true
 ```
 
-**Status**: ✅ **Compliant**
+**Status**: **Compliant**
 - Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
-- PyO3 version: 0.27.2 (latest stable, made optional for flexibility)
-- Minimum Rust version: 1.75
+- PyO3 version: 0.28.1 (latest stable, made optional for flexibility)
+- Minimum Rust version: 1.88
+- Rust edition: 2021
 - Proper PyO3 extension-module feature in `python` feature
-- Feature-based architecture (python, streaming, rust-only, full)
+- Feature-based architecture (python, streaming, rust-only, full, jemalloc)
 - Aggressive release optimizations (LTO, strip, single codegen-unit)
 - Supports both Python bindings and standalone Rust binaries
 
 #### 4. **Cross-Platform Builds**
 
-**macOS**: ✅ **Excellent**
+**macOS**: **Excellent**
 - Builds for `x86_64` (Intel Macs)
 - Builds for `universal2-apple-darwin` (Intel + Apple Silicon)
 - Covers all macOS hardware architectures
 - Python versions: 3.12, 3.13, 3.14
 
-**Linux**: ✅ **Excellent**
+**Linux**: **Excellent**
 - Builds for `x86_64` and `aarch64` (ARM64)
 - Uses `manylinux: auto` for maximum compatibility
 - Auto-selects appropriate manylinux version (manylinux2014+)
-- Rust 1.75+ requires glibc 2.17+ (manylinux2014 minimum)
+- Rust 1.88+ requires glibc 2.17+ (manylinux2014 minimum)
 - QEMU-based cross-compilation for ARM64
 - Python versions: 3.12, 3.13, 3.14
 
-**Windows**: ✅ **Enabled**
+**Windows**: **Enabled**
 - Builds for x86_64 architecture
 - Tests run with PTY tests excluded (Unix-only feature)
 - Uses pytest ignore pattern for PTY test files
@@ -203,20 +209,20 @@ strip = true
     manylinux: auto
 ```
 
-**Status**: ✅ **Compliant**
+**Status**: **Compliant**
 - Uses official `PyO3/maturin-action@v1` (latest stable)
 - Enables sccache for faster builds
 - Proper target specification
 - Correct interpreter selection
 - All workflows use consistent maturin-action version
 
-## ✅ Implemented Improvements
+## Implemented Improvements
 
-All previously recommended improvements have been **fully implemented** as of version 0.8.0 and remain current in version 0.16.0!
+All previously recommended improvements have been **fully implemented** and remain current!
 
-### 1. **Linux ARM64 (aarch64) Support** - ✅ IMPLEMENTED
+### 1. **Linux ARM64 (aarch64) Support** - IMPLEMENTED
 
-**Status**: ✅ **COMPLETE**
+**Status**: **COMPLETE**
 
 **Implementation**:
 ```yaml
@@ -237,14 +243,14 @@ All previously recommended improvements have been **fully implemented** as of ve
 ```
 
 **Benefits Delivered**:
-- ✅ AWS Graviton instance support
-- ✅ Raspberry Pi 4/5 support
-- ✅ All ARM64 Linux server support
-- ✅ Python 3.12, 3.13, 3.14 coverage
+- AWS Graviton instance support
+- Raspberry Pi 4/5 support
+- All ARM64 Linux server support
+- Python 3.12, 3.13, 3.14 coverage
 
-### 2. **Manylinux Version** - ✅ OPTIMAL
+### 2. **Manylinux Version** - OPTIMAL
 
-**Status**: ✅ **Using `auto` (Best Practice)**
+**Status**: **Using `auto` (Best Practice)**
 
 **Current Configuration**:
 ```yaml
@@ -257,9 +263,9 @@ manylinux: auto  # Automatically selects best compatibility
 - Maximum distribution compatibility
 - Currently selects manylinux2014 (glibc 2.17+)
 
-### 3. **Windows Support** - ✅ IMPLEMENTED
+### 3. **Windows Support** - IMPLEMENTED
 
-**Status**: ✅ **ENABLED**
+**Status**: **ENABLED**
 
 **Implementation**:
 ```yaml
@@ -294,23 +300,23 @@ windows:
     - name: Run tests (skip PTY tests on Windows)
       run: |
         .venv\Scripts\activate
-        pytest tests/ -v --timeout=5 --timeout-method=thread -k "not pty"
+        pytest tests/ -v --timeout=30 --timeout-method=thread -k "not pty"
 ```
 
 **Solution Applied**:
-- ✅ PTY tests skipped using `-k "not pty"` filter
-- ✅ All other tests run successfully
-- ✅ No hanging issues with thread-based timeout
-- ✅ Fast, reliable builds with sccache
+- PTY tests skipped using `-k "not pty"` filter
+- All other tests run successfully
+- No hanging issues with thread-based timeout
+- Fast, reliable builds with sccache
 
-### 4. **Multi-Architecture Testing** - ✅ DOCUMENTED
+### 4. **Multi-Architecture Testing** - DOCUMENTED
 
-**Status**: ✅ **OPTIMALLY CONFIGURED**
+**Status**: **OPTIMALLY CONFIGURED**
 
 **Testing Strategy**:
-- **x86_64 (Linux/macOS/Windows)**: ✅ Fully tested on CI
-- **ARM64 (Linux)**: ⚠️ Built with QEMU cross-compilation, tested on actual hardware
-- **universal2 (macOS)**: ⚠️ x86_64 portion tested on CI, Apple Silicon tested post-release
+- **x86_64 (Linux/macOS/Windows)**: Fully tested on CI
+- **ARM64 (Linux)**: Built with QEMU cross-compilation, tested on actual hardware
+- **universal2 (macOS)**: x86_64 portion tested on CI, Apple Silicon tested post-release
 
 **Rationale for Current Approach**:
 - Cannot directly test ARM64 wheels on x86_64 runners
@@ -322,13 +328,13 @@ windows:
 
 | Platform | Architecture | Status | Test Coverage | Python Versions |
 |----------|--------------|--------|---------------|-----------------|
-| Linux | x86_64 | ✅ Built & Tested | Full | 3.12, 3.13, 3.14 |
-| Linux | aarch64 (ARM64) | ✅ Built | Build-only* | 3.12, 3.13, 3.14 |
-| macOS | x86_64 | ✅ Built & Tested | Full | 3.12, 3.13, 3.14 |
-| macOS | universal2 | ✅ Built & Tested | x86_64 on CI† | 3.12, 3.13, 3.14 |
-| Windows | x86_64 | ✅ Built & Tested | PTY excluded‡ | 3.12, 3.13, 3.14 |
+| Linux | x86_64 | Built & Tested | Full | 3.12, 3.13, 3.14 |
+| Linux | aarch64 (ARM64) | Built | Build-only* | 3.12, 3.13, 3.14 |
+| macOS | x86_64 | Built & Tested | Full | 3.12, 3.13, 3.14 |
+| macOS | universal2 | Built & Tested | x86_64 on CI | 3.12, 3.13, 3.14 |
+| Windows | x86_64 | Built & Tested | PTY excluded | 3.12, 3.13, 3.14 |
 
-**Total**: **15 wheels per deployment** (3 Python versions × 5 platform configurations)
+**Total**: **15 wheels per deployment** (3 Python versions x 5 platform configurations)
 
 *ARM64 Linux wheels built via QEMU cross-compilation, not directly testable on x86_64 CI runners
 †macOS universal2 wheels tested for x86_64 portion on CI, Apple Silicon portion tested post-release
@@ -419,15 +425,15 @@ graph TB
 
 ### Current Approach
 - Using `manylinux: auto` which automatically selects the best compatibility level
-- With Rust 1.75+, minimum glibc is 2.17 (manylinux2014)
+- With Rust 1.88+, minimum glibc is 2.17 (manylinux2014)
 
 ### Compatibility Table
 
 | Manylinux | glibc | Python | Rust Support | Our Status |
 |-----------|-------|--------|--------------|------------|
-| 2010 | 2.12 | 3.5+ | ❌ Requires glibc 2.17+ | Not supported |
-| 2014 | 2.17 | 3.5+ | ✅ Minimum for Rust 1.75+ | **Auto-selected** |
-| 2_28 | 2.28 | 3.7+ | ✅ Fully supported | Could upgrade |
+| 2010 | 2.12 | 3.5+ | Not supported (requires glibc 2.17+) | Not supported |
+| 2014 | 2.17 | 3.5+ | Minimum for Rust 1.88+ | **Auto-selected** |
+| 2_28 | 2.28 | 3.7+ | Fully supported | Could upgrade |
 
 ### Recommendation
 Keep `manylinux: auto` - it provides:
@@ -438,20 +444,20 @@ Keep `manylinux: auto` - it provides:
 ## Distribution Workflow Best Practices
 
 ### Current Workflow
-1. ✅ Build wheels for multiple Python versions (3.12, 3.13, 3.14)
-2. ✅ Build platform-specific wheels (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64)
-3. ✅ Build source distribution (sdist)
-4. ✅ QEMU-based ARM64 cross-compilation
-5. ✅ Platform-specific test strategies (PTY tests excluded on Windows)
-6. ✅ TestPyPI pre-release testing workflow
-7. ✅ PyPI trusted publishing (OIDC)
-8. ✅ Sigstore signing (in deployment.yml)
+1. Build wheels for multiple Python versions (3.12, 3.13, 3.14)
+2. Build platform-specific wheels (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64)
+3. Build source distribution (sdist)
+4. QEMU-based ARM64 cross-compilation
+5. Platform-specific test strategies (PTY tests excluded on Windows)
+6. TestPyPI pre-release testing workflow
+7. PyPI trusted publishing (OIDC)
+8. Sigstore signing (in deployment.yml)
 
 ### Following Official Recommendations
-- ✅ Using `maturin build` + `uv publish` pattern
-- ✅ Testing on TestPyPI before production
-- ✅ Using official GitHub Actions
-- ✅ sccache enabled for faster builds
+- Using `maturin build` + PyPI publish pattern
+- Testing on TestPyPI before production
+- Using official GitHub Actions
+- sccache enabled for faster builds
 
 ## Cargo Profile Optimization
 
@@ -471,54 +477,54 @@ strip = true       # Strip symbols (smaller wheel)
 - Single codegen-unit: ~5-10% size reduction
 
 **Trade-offs**:
-- ✅ Smaller wheels (faster PyPI downloads)
-- ✅ Better runtime performance
-- ❌ Slower compile times (acceptable for CI)
-- ❌ Harder to debug (but we ship release builds)
+- Smaller wheels (faster PyPI downloads)
+- Better runtime performance
+- Slower compile times (acceptable for CI)
+- Harder to debug (but we ship release builds)
 
 ## Recommendations Summary
 
-### ✅ All High Priority Items - COMPLETED
-1. ✅ **Package name fixed** (par-term-emu → par-term-emu-core-rust)
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
-2. ✅ **ARM64 Linux support added**
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
+### All High Priority Items - COMPLETED
+1. **Package name fixed** (par-term-emu -> par-term-emu-core-rust)
+   - **Status**: Implemented and current
+2. **ARM64 Linux support added**
+   - **Status**: Implemented and current
    - Implementation: QEMU-based cross-compilation
    - Coverage: Python 3.12, 3.13, 3.14
 
-### ✅ All Medium Priority Items - COMPLETED
-3. ✅ **Windows builds re-enabled**
-   - **Status**: ✅ Implemented in v0.8.0, current in v0.16.0
+### All Medium Priority Items - COMPLETED
+3. **Windows builds re-enabled**
+   - **Status**: Implemented and current
    - Solution: PTY tests excluded with `-k "not pty"` filter
    - Coverage: Python 3.12, 3.13, 3.14
 
-### ✅ Low Priority Items - OPTIMAL
-4. ✅ **Manylinux auto** - optimal configuration
-5. ✅ **Cargo profile** - optimal for distribution
+### Low Priority Items - OPTIMAL
+4. **Manylinux auto** - optimal configuration
+5. **Cargo profile** - optimal for distribution
 
 ### Future Enhancements (Optional)
-6. ⚙️ **Self-hosted ARM64 runners** (for native ARM64 testing)
+6. **Self-hosted ARM64 runners** (for native ARM64 testing)
    - Impact: Direct ARM64 testing instead of cross-compilation
    - Complexity: High (infrastructure required)
-7. ⚙️ **PyPy support** (if requested by users)
+7. **PyPy support** (if requested by users)
    - Impact: Additional interpreter support
    - Complexity: Medium (requires testing)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2025-12-03 (Version 0.16.0)
+**Last Updated**: 2026-02-20 (Version 0.39.1)
 
 | Category | Score | Notes |
 |----------|-------|-------|
-| Project Structure | ✅ 10/10 | Perfect structure with `python-source` pattern + Protocol Buffers |
-| Build Configuration | ✅ 10/10 | Maturin 1.9+, PyO3 0.27.2, optimal settings |
-| Cross-Platform (macOS) | ✅ 10/10 | x86_64 + universal2 (Intel + Apple Silicon) |
-| Cross-Platform (Linux) | ✅ 10/10 | x86_64 + ARM64/aarch64 with QEMU |
-| Cross-Platform (Windows) | ✅ 10/10 | x86_64 with smart PTY test exclusion |
-| CI/CD Integration | ✅ 10/10 | Full matrix testing across all platforms |
-| Testing | ✅ 9/10 | Platform-specific strategies, comprehensive coverage |
-| Distribution | ✅ 10/10 | TestPyPI + PyPI + Sigstore signing |
-| **Overall** | **✅ 10/10** | **🏆 PERFECT MATURIN COMPLIANCE** |
+| Project Structure | 10/10 | Perfect structure with `python-source` pattern + Protocol Buffers |
+| Build Configuration | 10/10 | Maturin 1.10.2+, PyO3 0.28.1, optimal settings |
+| Cross-Platform (macOS) | 10/10 | x86_64 + universal2 (Intel + Apple Silicon) |
+| Cross-Platform (Linux) | 10/10 | x86_64 + ARM64/aarch64 with QEMU |
+| Cross-Platform (Windows) | 10/10 | x86_64 with smart PTY test exclusion |
+| CI/CD Integration | 10/10 | Full matrix testing across all platforms |
+| Testing | 9/10 | Platform-specific strategies, comprehensive coverage |
+| Distribution | 10/10 | TestPyPI + PyPI + Sigstore signing |
+| **Overall** | **10/10** | **PERFECT MATURIN COMPLIANCE** |
 
 ### Key Achievements
 - **15 wheel configurations** across 5 platforms and 3 Python versions (3.12, 3.13, 3.14)
@@ -529,53 +535,53 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Conclusion
 
-### 🎯 Perfect Maturin Compliance Achieved
+### Perfect Maturin Compliance Achieved
 
 This project **perfectly follows all Maturin best practices** with:
 
-#### ✅ Core Excellence
-- ✅ Proper project structure avoiding common pitfalls
-- ✅ Optimal build configuration for distribution
-- ✅ Aggressive release optimizations for smaller wheels (LTO, strip, single codegen-unit)
+#### Core Excellence
+- Proper project structure avoiding common pitfalls
+- Optimal build configuration for distribution
+- Aggressive release optimizations for smaller wheels (LTO, strip, single codegen-unit)
 
-#### ✅ Comprehensive Platform Support
-- ✅ **Linux x86_64**: Native builds with full testing
-- ✅ **Linux ARM64**: QEMU cross-compilation for Raspberry Pi, AWS Graviton
-- ✅ **macOS x86_64**: Native builds for Intel Macs
-- ✅ **macOS universal2**: Combined Intel + Apple Silicon binaries
-- ✅ **Windows x86_64**: Native builds with smart test exclusion
+#### Comprehensive Platform Support
+- **Linux x86_64**: Native builds with full testing
+- **Linux ARM64**: QEMU cross-compilation for Raspberry Pi, AWS Graviton
+- **macOS x86_64**: Native builds for Intel Macs
+- **macOS universal2**: Combined Intel + Apple Silicon binaries
+- **Windows x86_64**: Native builds with smart test exclusion
 
-#### ✅ Professional Distribution
-- ✅ PyPI trusted publishing (OIDC) - no API tokens needed
-- ✅ Sigstore artifact signing for enhanced security
-- ✅ TestPyPI pre-release testing workflow
-- ✅ Discord notifications for release tracking
-- ✅ Automated multi-version builds (Python 3.12, 3.13, 3.14)
+#### Professional Distribution
+- PyPI trusted publishing (OIDC) - no API tokens needed
+- Sigstore artifact signing for enhanced security
+- TestPyPI pre-release testing workflow
+- Discord notifications for release tracking
+- Automated multi-version builds (Python 3.12, 3.13, 3.14)
 
-#### ✅ Best Practices Implementation
-- ✅ `manylinux: auto` for maximum compatibility
-- ✅ sccache for faster CI builds
-- ✅ Platform-specific test strategies
-- ✅ QEMU setup for ARM64 cross-compilation
-- ✅ All recommended GitHub Actions patterns
+#### Best Practices Implementation
+- `manylinux: auto` for maximum compatibility
+- sccache for faster CI builds
+- Platform-specific test strategies
+- QEMU setup for ARM64 cross-compilation
+- All recommended GitHub Actions patterns
 
-### 📊 Metrics
+### Metrics
 
-**Platform Coverage**: 5/5 major platforms ✅
-**Python Versions**: 3/3 supported versions ✅
-**Wheels per Release**: 15 (production-ready) ✅
-**Compliance Score**: 10/10 (perfect) 🏆
+**Platform Coverage**: 5/5 major platforms
+**Python Versions**: 3/3 supported versions
+**Wheels per Release**: 15 (production-ready)
+**Compliance Score**: 10/10 (perfect)
 
-### 🚀 Production Ready
+### Production Ready
 
 The current configuration provides **world-class** packaging for a Rust/Python hybrid project, meeting or exceeding all Maturin recommendations and industry standards.
 
 ## References
 
 ### Official Documentation
-- [Maturin User Guide](https://maturin.rs/) - Official documentation (verified 2025-12-03)
-- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository (verified 2025-12-03)
-- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration (verified 2025-12-03)
+- [Maturin User Guide](https://maturin.rs/) - Official documentation
+- [Maturin GitHub Repository](https://github.com/PyO3/maturin) - Main repository
+- [Maturin GitHub Action](https://github.com/PyO3/maturin-action) - CI/CD integration
 - [PyO3 Documentation](https://pyo3.rs/) - Rust-Python bindings
 - [PyO3 GitHub](https://github.com/PyO3/pyo3) - PyO3 repository
 

@@ -1,6 +1,6 @@
 # Architecture Documentation
 
-This document describes the internal architecture of par-term-emu-core-rust.
+Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
 ## Table of Contents
 
@@ -28,7 +28,7 @@ This document describes the internal architecture of par-term-emu-core-rust.
 - [Debugging](#debugging)
 - [Contributing](#contributing)
 - [References](#references)
-- [See Also](#see-also)
+- [Related Documentation](#related-documentation)
 
 ## Overview
 
@@ -108,15 +108,25 @@ pub struct Cursor {
 
 ### 4. Grid
 
-**Location:** `src/grid.rs`
+**Location:** `src/grid/mod.rs`
 
-Manages the 2D terminal buffer:
+Manages the 2D terminal buffer with modular organization:
 
+**Submodules:**
+- `edit.rs` - Line editing operations (insert, delete)
+- `erase.rs` - Erase operations (line, display, scrollback)
+- `export.rs` - Text and content export
+- `rect.rs` - Rectangle operations (copy, fill)
+- `scroll.rs` - Scrolling operations
+- `zone.rs` - Semantic zone tracking
+
+**Features:**
 - Main screen buffer (cols × rows)
-- Scrollback buffer (configurable size)
+- Scrollback buffer (configurable size, flat circular buffer)
 - Scrolling operations
 - Cell access and manipulation
 - Resize handling with scrollback reflow
+- Semantic zone tracking (Prompt, Command, Output)
 
 **Resize Behavior:**
 When terminal width changes, the scrollback buffer is automatically reflowed:
@@ -140,6 +150,9 @@ pub struct Grid {
     max_scrollback: usize,
     wrapped: Vec<bool>,            // Line wrap tracking
     scrollback_wrapped: Vec<bool>, // Scrollback wrap tracking
+    zones: Vec<Zone>,              // Semantic zones
+    evicted_zones: Vec<Zone>,      // Zones evicted from scrollback
+    total_lines_scrolled: usize,   // Lifetime scroll count
 }
 ```
 
@@ -148,15 +161,34 @@ pub struct Grid {
 **Location:** `src/terminal/mod.rs` (modular implementation)
 
 The main terminal emulator that ties everything together, organized into submodules:
+
+**Core Submodules:**
+- `clipboard.rs` - Clipboard management (OSC 52)
+- `colors.rs` - Color configuration and palette
+- `compliance.rs` - VT conformance testing
+- `event.rs` - Terminal events (Bell, Cwd, Shell)
+- `file_transfer.rs` - File transfer tracking
+- `graphics.rs` - Unified graphics (Sixel, iTerm2, Kitty)
+- `image.rs` - Inline image handling
+- `macros.rs` - Macro recording and playback
+- `metrics.rs` - Performance metrics and benchmarking
+- `multiplexing.rs` - Pane and session management
 - `notification.rs` - Notification types from OSC sequences
+- `perform.rs` - VTE Perform trait implementation
+- `progress.rs` - OSC 9;4 progress bar support
+- `recording.rs` - Session recording
+- `replay.rs` - Recording playback
+- `screen.rs` - Screen buffer management
+- `search.rs` - Text search functionality
 - `sequences/` - VTE sequence handlers (CSI, OSC, ESC, DCS)
-- `graphics.rs` - Sixel graphics management
-- `colors.rs` - Color configuration
+- `shell_integration.rs` - OSC 133 markers
+- `snapshot.rs` - State snapshots
+- `snapshot_manager.rs` - Snapshot lifecycle
+- `terminal_snapshot.rs` - Full terminal state capture
+- `trigger.rs` - Regex pattern matching
 - `write.rs` - Character writing logic
-- `progress.rs` - OSC 9;4 progress bar support (ConEmu/Windows Terminal style)
 
-Features:
-
+**Features:**
 - Owns the grid and cursor
 - Implements the VTE `Perform` trait for ANSI parsing
 - Manages terminal state (colors, attributes)
@@ -216,7 +248,7 @@ Features:
   - `mod.rs` - Core streaming types
   - `server.rs` - Axum-based WebSocket server with TLS support, per-client subscription filtering
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions (app-level): 23 server message types, 10 client message types, 18 event types
+  - `protocol.rs` - Streaming protocol definitions (app-level): 33 server message types, 10 client message types, 24 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
   - `error.rs` - Streaming-specific errors
@@ -557,7 +589,7 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
   - Hex color conversion
   - ANSI 256-color conversion
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 57 classes and 22 functions (18 color utility functions + 4 binary protocol functions for streaming).
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 67 classes and 27 functions (22 color/unicode utility functions + 5 binary protocol functions for streaming).
 
 ```rust
 #[pyclass(name = "Terminal")]
@@ -627,11 +659,11 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Test Coverage
 
 **Current test counts (as of latest commit):**
-- **Rust tests:** 898 unit and integration tests
-- **Python tests:** 363 test functions across 13 test modules
+- **Rust tests:** 1,652 unit and integration tests
+- **Python tests:** 552 test functions across 13+ test modules
   - PTY tests excluded in CI (hang in automated environments)
   - All tests run locally for comprehensive validation
-- **Total:** 1,261 tests ensuring comprehensive coverage and reliability
+- **Total:** 2,204 tests ensuring comprehensive coverage and reliability
 
 ### Rust Tests
 
@@ -1145,7 +1177,7 @@ When contributing, please:
 - [ANSI Escape Sequences](https://en.wikipedia.org/wiki/ANSI_escape_code) - Wikipedia overview
 - [VT100 Reference](https://vt100.net/) - Historical VT100 documentation
 
-## See Also
+## Related Documentation
 
 - [VT_TECHNICAL_REFERENCE.md](VT_TECHNICAL_REFERENCE.md) - Complete VT feature support matrix and implementation details
 - [ADVANCED_FEATURES.md](ADVANCED_FEATURES.md) - Advanced features guide
