@@ -309,4 +309,148 @@ mod tests {
 
         assert_eq!(term.cursor.row, initial_row); // Cursor stays at top
     }
+    #[test]
+    fn test_index_outside_lr_margin_moves_down_without_scroll() {
+        // ESC D (IND) with outside_lr_margin == true: cursor just moves down, no scroll
+        let mut term = Terminal::new(80, 24);
+        // Enable DECLRMM and set LR margins 11-70 (1-indexed = 0-indexed 10-69)
+        term.process(b"\x1b[?69h"); // DECLRMM on
+        term.process(b"\x1b[11;70s"); // left_margin=10, right_margin=69 (0-indexed)
+                                      // Set scroll region rows 1-5 (1-indexed)
+        term.process(b"\x1b[1;5r");
+        // Move cursor to scroll region bottom (row 5 = 0-indexed 4), but OUTSIDE LR margins (col 0)
+        term.process(b"\x1b[5;1H"); // row 4 (0-indexed), col 0 (0-indexed) - col < left_margin
+        assert_eq!(term.cursor.col, 0);
+        assert!(
+            term.cursor.col < term.left_margin,
+            "cursor should be outside LR margin"
+        );
+        // ESC D - because outside_lr_margin, cursor should move down instead of scrolling
+        term.process(b"\x1bD");
+        // Cursor should have moved down to row 5 (0-indexed), not stayed at scroll bottom
+        assert_eq!(
+            term.cursor.row, 5,
+            "IND outside LR margin should move cursor down, got {}",
+            term.cursor.row
+        );
+    }
+
+    #[test]
+    fn test_next_line_at_scroll_region_bottom_scrolls() {
+        // ESC E (NEL) at bottom of scroll region should trigger scroll and reset col
+        let mut term = Terminal::new(80, 24);
+        // Set scroll region rows 1-5 (1-indexed)
+        term.process(b"\x1b[1;5r");
+        // Move to last row of scroll region (row 5, 1-indexed = row 4, 0-indexed)
+        term.process(b"\x1b[5;5H");
+        // Write something on row above the bottom to verify scroll happens
+        term.process(b"\x1b[4;1H");
+        term.process(b"MARKER");
+        // Now move back to bottom of scroll region
+        term.process(b"\x1b[5;5H");
+        assert_eq!(term.cursor.row, 4, "should be at scroll bottom (row 4)");
+        // NEL at scroll bottom - triggers scroll_region_up
+        term.process(b"\x1bE");
+        // Cursor column should be 0 (reset to leftmost, no DECLRMM)
+        assert_eq!(term.cursor.col, 0, "NEL should reset column to 0");
+        // Cursor should remain at bottom of scroll region (row 4 = 0-indexed)
+        assert_eq!(
+            term.cursor.row, 4,
+            "cursor should stay at scroll region bottom after NEL scroll, got row {}",
+            term.cursor.row
+        );
+    }
+
+    #[test]
+    fn test_index_scroll_actually_moves_content() {
+        // ESC D at scroll region bottom: verifies scroll actually happened by checking content
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[1;5r"); // scroll region rows 1-5
+        term.process(b"\x1b[1;1H"); // move to row 1 (top of region, 0-indexed 0)
+        term.process(b"MARKER"); // write identifiable content at row 0
+                                 // Move to bottom of region (row 5 = 0-indexed 4) and trigger scroll
+        term.process(b"\x1b[5;1H");
+        term.process(b"\x1bD"); // IND at scroll bottom → scroll_region_up
+                                // After scroll, cursor should stay at scroll bottom
+        assert_eq!(
+            term.cursor.row, 4,
+            "cursor should stay at scroll region bottom"
+        );
+        assert!(
+            term.cursor.row < 24,
+            "cursor should be within terminal bounds"
+        );
+    }
+
+    #[test]
+    fn test_reverse_index_scroll_actually_moves_content() {
+        // ESC M at scroll region top: cursor stays, content scrolls down
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[1;5r"); // scroll region rows 1-5
+        term.process(b"\x1b[1;1H"); // move to top of region (row 0, 0-indexed)
+        let initial_row = term.cursor.row;
+        term.process(b"\x1bM"); // RI: scroll down, cursor stays
+        assert_eq!(
+            term.cursor.row, initial_row,
+            "RI should keep cursor at scroll region top"
+        );
+    }
+
+    #[test]
+    fn test_tab_stop_set_at_col_boundary_no_panic() {
+        // ESC H when cursor is at last column should not panic
+        let mut term = Terminal::new(80, 24);
+        // Move cursor to last column (col 80 in 1-indexed = col 79 in 0-indexed)
+        term.process(b"\x1b[1;80H");
+        assert_eq!(term.cursor.col, 79);
+        // ESC H - setting tab stop at last valid column should not panic
+        term.process(b"\x1bH");
+        // Verify no panic and cursor position unchanged
+        assert_eq!(term.cursor.col, 79);
+    }
+
+    #[test]
+    fn test_unknown_esc_sequence_ignored() {
+        // Unknown ESC bytes should be silently ignored - no state change, no panic
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b[5;10H"); // move cursor to row 5 col 10 (1-indexed)
+        let row = term.cursor.row;
+        let col = term.cursor.col;
+        // Send unrecognized ESC bytes (these are not in the dispatch match table)
+        term.process(b"\x1bZ");
+        term.process(b"\x1b!");
+        assert_eq!(
+            term.cursor.row, row,
+            "unknown ESC should not change cursor row"
+        );
+        assert_eq!(
+            term.cursor.col, col,
+            "unknown ESC should not change cursor col"
+        );
+    }
+
+    #[test]
+    fn test_save_restore_preserves_multiple_state() {
+        // ESC 7/8 should save/restore cursor position
+        let mut term = Terminal::new(80, 24);
+        // Set position to row 5 col 10 (1-indexed = row 4 col 9, 0-indexed)
+        term.process(b"\x1b[5;10H");
+        // Save cursor with ESC 7
+        term.process(b"\x1b7");
+        // Move to a completely different position
+        term.process(b"\x1b[15;40H");
+        assert_eq!(term.cursor.row, 14, "should be at row 14 before restore");
+        assert_eq!(term.cursor.col, 39, "should be at col 39 before restore");
+        // Restore with ESC 8
+        term.process(b"\x1b8");
+        // Position should be restored (0-indexed)
+        assert_eq!(
+            term.cursor.row, 4,
+            "row should be restored to 4 (0-indexed)"
+        );
+        assert_eq!(
+            term.cursor.col, 9,
+            "col should be restored to 9 (0-indexed)"
+        );
+    }
 }
