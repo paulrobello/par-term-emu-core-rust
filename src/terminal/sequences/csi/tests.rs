@@ -776,3 +776,186 @@ fn test_mode_changed_no_event_when_mouse_already_off() {
         .collect();
     assert!(all_events.is_empty());
 }
+
+// ─── DECRQM (Request Mode) ─────────────────────────────────────────────────
+
+#[test]
+fn test_decrqm_application_cursor_off_by_default() {
+    let mut term = Terminal::new(80, 24);
+    // Query DEC private mode 1 (application cursor) — should be reset (status=2)
+    term.process(b"\x1b[?1$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("$y"),
+        "DECRQM response should contain $y, got: {:?}",
+        response_str
+    );
+    assert!(
+        response_str.contains(";2"),
+        "application cursor should be reset by default, got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_application_cursor_after_setting() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?1h"); // enable application cursor
+    term.process(b"\x1b[?1$p"); // query
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains(";1"),
+        "application cursor should be set (status=1), got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_auto_wrap_on_by_default() {
+    let mut term = Terminal::new(80, 24);
+    // Auto-wrap (mode 7) is on by default
+    term.process(b"\x1b[?7$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains(";1"),
+        "auto-wrap should be set by default (status=1), got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_unrecognized_mode_returns_zero() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?9999$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains(";0"),
+        "unrecognized mode should return status 0, got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_ansi_insert_mode_off_by_default() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[4$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("$y"),
+        "DECRQM ANSI response should contain $y, got: {:?}",
+        response_str
+    );
+    assert!(
+        response_str.contains(";2"),
+        "insert mode should be reset by default, got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_alt_screen_after_enable() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?1049h"); // enable alt screen
+    term.process(b"\x1b[?1049$p"); // query
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains(";1"),
+        "alt screen should be set after enable, got: {:?}",
+        response_str
+    );
+}
+
+// ─── DECSLRM (Set Left-Right Margins) ─────────────────────────────────────
+
+#[test]
+fn test_decslrm_sets_margins_when_declrmm_enabled() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?69h"); // enable DECLRMM
+    term.process(b"\x1b[10;70s"); // set left=10, right=70 (1-indexed)
+    assert_eq!(term.left_margin, 9, "left margin should be 9 (0-indexed)");
+    assert_eq!(
+        term.right_margin, 69,
+        "right margin should be 69 (0-indexed)"
+    );
+}
+
+#[test]
+fn test_decslrm_ignored_when_declrmm_disabled() {
+    let mut term = Terminal::new(80, 24);
+    // DECLRMM is off by default; CSI s without params or without DECLRMM = cursor save
+    term.process(b"\x1b[5;10H");
+    term.process(b"\x1b[s"); // save cursor (not DECSLRM since DECLRMM is off and no params)
+    assert_eq!(
+        term.left_margin, 0,
+        "left margin should remain 0 without DECLRMM"
+    );
+    assert_eq!(
+        term.right_margin, 79,
+        "right margin should remain 79 without DECLRMM"
+    );
+}
+
+// ─── DECCRA (Copy Rectangular Area) ────────────────────────────────────────
+
+#[test]
+fn test_deccra_copies_content() {
+    use crate::terminal::cells_to_text;
+    let mut term = Terminal::new(80, 24);
+    // Write "ABCDE" on row 1 col 1
+    term.process(b"\x1b[1;1H");
+    term.process(b"ABCDE");
+    // DECCRA: copy rows 1-1, cols 1-5, page 1 → dest row 5, col 1, page 1
+    // Format: CSI Pt;Pl;Pb;Pr;Pp;Dt;Dl;Dp $v
+    term.process(b"\x1b[1;1;1;5;1;5;1;1$v");
+    let rows = term.get_row_range(4, 5); // 0-indexed row 4 = 1-indexed row 5
+    let row4_text = cells_to_text(&rows[0]);
+    assert!(
+        row4_text.starts_with("ABCDE"),
+        "DECCRA should copy 'ABCDE' to row 5, got: {:?}",
+        &row4_text[..row4_text.len().min(10)]
+    );
+}
+
+// ─── DECSERA (Selective Erase Rectangular Area) ────────────────────────────
+
+#[test]
+fn test_decsera_erases_unprotected_cells() {
+    use crate::terminal::cells_to_text;
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[1;1H");
+    term.process(b"hello");
+    // DECSERA: erase rows 1-1, cols 1-5
+    // Format: CSI Pt;Pl;Pb;Pr ${
+    term.process(b"\x1b[1;1;1;5${");
+    let rows = term.get_row_range(0, 1);
+    let row0_text = cells_to_text(&rows[0]);
+    let region: String = row0_text.chars().take(5).collect();
+    assert!(
+        region.chars().all(|c| c == ' '),
+        "DECSERA should erase unprotected cells to spaces, got: {:?}",
+        region
+    );
+}
+
+// ─── Synchronized Updates ──────────────────────────────────────────────────
+
+#[test]
+fn test_synchronized_updates_mode_toggle() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?2026h"); // enable
+    assert!(
+        term.synchronized_updates,
+        "synchronized_updates should be true after enable"
+    );
+    term.process(b"\x1b[?2026l"); // disable
+    assert!(
+        !term.synchronized_updates,
+        "synchronized_updates should be false after disable"
+    );
+}
