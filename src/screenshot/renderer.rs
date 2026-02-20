@@ -1653,4 +1653,133 @@ mod tests {
 
         assert_eq!(vertical_padding, 2);
     }
+
+    fn make_test_renderer() -> Renderer {
+        Renderer::new(24, 80, ScreenshotConfig::default())
+            .expect("should be able to create renderer with embedded fonts")
+    }
+
+    fn count_colored_pixels(image: &RgbaImage, r: u8, g: u8, b: u8) -> u32 {
+        image
+            .pixels()
+            .filter(|p| p[0] == r && p[1] == g && p[2] == b && p[3] > 0)
+            .count() as u32
+    }
+
+    #[test]
+    fn test_render_strikethrough_draws_pixels() {
+        let renderer = make_test_renderer();
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        renderer.render_strikethrough(
+            &mut image,
+            renderer.config.padding_px,
+            renderer.config.padding_px,
+            (255, 0, 0),
+        );
+        assert!(
+            count_colored_pixels(&image, 255, 0, 0) > 0,
+            "render_strikethrough should draw red pixels"
+        );
+    }
+
+    #[test]
+    fn test_render_strikethrough_at_vertical_midpoint() {
+        let renderer = make_test_renderer();
+        let cell_h = renderer.cell_height;
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        let start_y = renderer.config.padding_px + cell_h; // second cell row
+        renderer.render_strikethrough(&mut image, renderer.config.padding_px, start_y, (255, 0, 0));
+        let expected_y = start_y + cell_h / 2;
+        let found = (0..renderer.cell_width).any(|dx| {
+            let x = renderer.config.padding_px + dx;
+            image.get_pixel(x, expected_y)[0] == 255
+        });
+        assert!(found, "strikethrough should be drawn at y={}", expected_y);
+    }
+
+    #[test]
+    fn test_render_overline_draws_at_top() {
+        let renderer = make_test_renderer();
+        let cell_h = renderer.cell_height;
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        let start_y = renderer.config.padding_px + cell_h; // second cell row
+        renderer.render_overline(&mut image, renderer.config.padding_px, start_y, (0, 255, 0));
+        // overline is drawn at y + 1
+        let expected_y = start_y + 1;
+        let found = (0..renderer.cell_width).any(|dx| {
+            let x = renderer.config.padding_px + dx;
+            image.get_pixel(x, expected_y)[1] == 255
+        });
+        assert!(found, "overline should be drawn at y+1={}", expected_y);
+    }
+
+    #[test]
+    fn test_render_double_underline_draws_two_lines() {
+        let renderer = make_test_renderer();
+        let cell_h = renderer.cell_height;
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        let start_y = renderer.config.padding_px + cell_h; // second cell row
+        renderer.render_double_underline(
+            &mut image,
+            renderer.config.padding_px,
+            start_y,
+            (0, 0, 255),
+        );
+        let line1_y = start_y + cell_h - 3;
+        let line2_y = start_y + cell_h - 1;
+        let found_line1 = (0..renderer.cell_width).any(|dx| {
+            let x = renderer.config.padding_px + dx;
+            image.get_pixel(x, line1_y)[2] == 255
+        });
+        let found_line2 = (0..renderer.cell_width).any(|dx| {
+            let x = renderer.config.padding_px + dx;
+            image.get_pixel(x, line2_y)[2] == 255
+        });
+        assert!(
+            found_line1,
+            "double underline: first line should be at y+cell_h-3={}",
+            line1_y
+        );
+        assert!(
+            found_line2,
+            "double underline: second line should be at y+cell_h-1={}",
+            line2_y
+        );
+    }
+
+    #[test]
+    fn test_render_cursor_block_modifies_pixels() {
+        let renderer = make_test_renderer();
+        let cell_w = renderer.cell_width;
+        let cell_h = renderer.cell_height;
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        let cursor = Cursor {
+            col: 2,
+            row: 2,
+            visible: true,
+            style: CursorStyle::SteadyBlock,
+        };
+        renderer.render_cursor(&mut image, &cursor);
+        // Block cursor at (col=2, row=2) blends at 50% alpha with white cursor_color
+        // Background is black (0,0,0) + white (255,255,255) / 2 = (127,127,127)
+        let cx = renderer.config.padding_px + cell_w * 2 + cell_w / 2;
+        let cy = renderer.config.padding_px + cell_h * 2 + cell_h / 2;
+        let center = image.get_pixel(cx, cy);
+        let is_modified = center[0] != 0 || center[1] != 0 || center[2] != 0;
+        assert!(
+            is_modified,
+            "block cursor should modify pixels in cell area (center pixel: {:?})",
+            center
+        );
+    }
 }
