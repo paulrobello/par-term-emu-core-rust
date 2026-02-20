@@ -1071,4 +1071,115 @@ mod tests {
         assert_eq!(graphic.placement.display_mode, ImageDisplayMode::Inline);
         assert!(graphic.placement.preserve_aspect_ratio);
     }
+
+    fn make_graphics_test_graphic(
+        width: usize,
+        height: usize,
+        col: usize,
+        row: usize,
+    ) -> TerminalGraphic {
+        let pixels = vec![128u8; width * height * 4];
+        TerminalGraphic::new(1, GraphicProtocol::Sixel, (col, row), width, height, pixels)
+    }
+
+    #[test]
+    fn test_cell_span_exact_fit() {
+        let graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        let (cols, rows) = graphic.cell_span(10, 10);
+        assert_eq!(cols, 10);
+        assert_eq!(rows, 5);
+    }
+
+    #[test]
+    fn test_cell_span_ceiling_division() {
+        let graphic = make_graphics_test_graphic(101, 51, 0, 0);
+        let (cols, rows) = graphic.cell_span(10, 10);
+        assert_eq!(cols, 11, "should ceil column count");
+        assert_eq!(rows, 6, "should ceil row count");
+    }
+
+    #[test]
+    fn test_cell_span_uses_stored_dimensions_when_set() {
+        let mut graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        graphic.set_cell_dimensions(20, 25);
+        let (cols, rows) = graphic.cell_span(10, 10);
+        assert_eq!(cols, 5);
+        assert_eq!(rows, 2);
+    }
+
+    #[test]
+    fn test_height_in_rows_exact() {
+        let graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        assert_eq!(graphic.height_in_rows(10), 5);
+    }
+
+    #[test]
+    fn test_height_in_rows_ceiling() {
+        let graphic = make_graphics_test_graphic(100, 51, 0, 0);
+        assert_eq!(graphic.height_in_rows(10), 6);
+    }
+
+    #[test]
+    fn test_height_in_rows_uses_stored_cell_height() {
+        let mut graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        graphic.set_cell_dimensions(10, 25);
+        assert_eq!(graphic.height_in_rows(10), 2);
+    }
+
+    #[test]
+    fn test_set_cell_dimensions_affects_cell_span() {
+        let mut graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        graphic.set_cell_dimensions(8, 16);
+        let (cols, rows) = graphic.cell_span(10, 10);
+        assert_eq!(cols, 13); // ceil(100/8) = 13
+        assert_eq!(rows, 4); // ceil(50/16) = 4
+    }
+
+    #[test]
+    fn test_graphics_at_row_includes_graphic() {
+        let mut store = GraphicsStore::new();
+        let graphic = make_graphics_test_graphic(80, 20, 0, 2);
+        store.add_graphic(graphic);
+        let at_row2 = store.graphics_at_row(2);
+        assert_eq!(at_row2.len(), 1, "should find graphic at row 2");
+    }
+
+    #[test]
+    fn test_graphics_at_row_empty_store() {
+        let store = GraphicsStore::new();
+        assert!(store.graphics_at_row(0).is_empty());
+    }
+
+    #[test]
+    fn test_graphics_at_row_out_of_range() {
+        let mut store = GraphicsStore::new();
+        let graphic = make_graphics_test_graphic(80, 10, 0, 5);
+        store.add_graphic(graphic);
+        assert!(
+            store.graphics_at_row(0).is_empty(),
+            "row 0 should not find graphic at row 5"
+        );
+        assert!(
+            !store.graphics_at_row(5).is_empty(),
+            "row 5 should find the graphic"
+        );
+    }
+
+    #[test]
+    fn test_sample_half_block_returns_colors() {
+        let graphic = make_graphics_test_graphic(20, 20, 0, 0);
+        let result = graphic.sample_half_block(0, 0, 10, 10);
+        assert!(
+            result.is_some(),
+            "sample_half_block should return Some for in-bounds cell"
+        );
+        let (_top, _bottom) = result.unwrap();
+    }
+
+    #[test]
+    fn test_sample_half_block_out_of_bounds_returns_none() {
+        let graphic = make_graphics_test_graphic(10, 10, 0, 0);
+        let result = graphic.sample_half_block(100, 100, 10, 10);
+        assert!(result.is_none(), "out-of-bounds cell should return None");
+    }
 }

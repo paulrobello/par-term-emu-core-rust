@@ -315,3 +315,180 @@ impl Terminal {
         self.remote_session_id.as_deref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::Terminal;
+
+    #[test]
+    fn test_add_and_get_clipboard_history() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "first entry".to_string(), None);
+        let history = term.get_clipboard_history(ClipboardSlot::Clipboard);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "first entry");
+    }
+
+    #[test]
+    fn test_get_latest_clipboard_returns_last() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "first".to_string(), None);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "second".to_string(), None);
+        let latest = term.get_latest_clipboard(ClipboardSlot::Clipboard);
+        assert!(latest.is_some());
+        assert_eq!(latest.unwrap().content, "second");
+    }
+
+    #[test]
+    fn test_clear_clipboard_history() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "data".to_string(), None);
+        assert!(!term
+            .get_clipboard_history(ClipboardSlot::Clipboard)
+            .is_empty());
+        term.clear_clipboard_history(ClipboardSlot::Clipboard);
+        assert!(term
+            .get_clipboard_history(ClipboardSlot::Clipboard)
+            .is_empty());
+    }
+
+    #[test]
+    fn test_clear_all_clipboard_history() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "c".to_string(), None);
+        term.add_to_clipboard_history(ClipboardSlot::Primary, "p".to_string(), None);
+        term.clear_all_clipboard_history();
+        assert!(term
+            .get_clipboard_history(ClipboardSlot::Clipboard)
+            .is_empty());
+        assert!(term
+            .get_clipboard_history(ClipboardSlot::Primary)
+            .is_empty());
+    }
+
+    #[test]
+    fn test_set_and_get_clipboard_with_slot() {
+        let mut term = Terminal::new(80, 24);
+        term.set_clipboard_with_slot("hello clipboard".to_string(), ClipboardSlot::Primary);
+        let result = term.get_clipboard_from_slot(ClipboardSlot::Primary);
+        assert_eq!(result, Some("hello clipboard".to_string()));
+    }
+
+    #[test]
+    fn test_get_clipboard_from_slot_initially_none() {
+        let term = Terminal::new(80, 24);
+        assert!(term
+            .get_clipboard_from_slot(ClipboardSlot::Clipboard)
+            .is_none());
+    }
+
+    #[test]
+    fn test_search_clipboard_history_finds_match() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "hello world".to_string(), None);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "foo bar".to_string(), None);
+        let results = term.search_clipboard_history("hello", Some(ClipboardSlot::Clipboard));
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.contains("hello"));
+    }
+
+    #[test]
+    fn test_search_clipboard_history_no_match() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "hello world".to_string(), None);
+        let results = term.search_clipboard_history("zzz", Some(ClipboardSlot::Clipboard));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_search_clipboard_history_across_all_slots() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, "clipboard data".to_string(), None);
+        term.add_to_clipboard_history(ClipboardSlot::Primary, "primary data".to_string(), None);
+        let results = term.search_clipboard_history("data", None);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_clipboard_history_truncates_large_content() {
+        let mut term = Terminal::new(80, 24);
+        let large = "x".repeat(11 * 1024 * 1024); // 11 MB (> MAX_CLIPBOARD_CONTENT_SIZE)
+        term.add_to_clipboard_history(ClipboardSlot::Clipboard, large, None);
+        let history = term.get_clipboard_history(ClipboardSlot::Clipboard);
+        assert_eq!(history.len(), 1);
+        assert!(
+            history[0].content.len() <= 10 * 1024 * 1024 + 100,
+            "content should be truncated to ~10MB, got {} bytes",
+            history[0].content.len()
+        );
+    }
+
+    #[test]
+    fn test_set_and_get_clipboard_osc52() {
+        let mut term = Terminal::new(80, 24);
+        term.set_clipboard(Some("osc52 content".to_string()));
+        assert_eq!(term.get_clipboard(), Some("osc52 content".to_string()));
+    }
+
+    #[test]
+    fn test_get_clipboard_initial_none() {
+        let term = Terminal::new(80, 24);
+        assert!(term.get_clipboard().is_none());
+    }
+
+    #[test]
+    fn test_set_clipboard_none_clears() {
+        let mut term = Terminal::new(80, 24);
+        term.set_clipboard(Some("data".to_string()));
+        term.set_clipboard(None);
+        assert!(term.get_clipboard().is_none());
+    }
+
+    #[test]
+    fn test_record_clipboard_sync_and_get_events() {
+        let mut term = Terminal::new(80, 24);
+        term.record_clipboard_sync(
+            ClipboardTarget::Clipboard,
+            ClipboardOperation::Set,
+            Some("synced data".to_string()),
+            false,
+        );
+        let events = term.get_clipboard_sync_events();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].content, "synced data");
+    }
+
+    #[test]
+    fn test_clear_clipboard_sync_events() {
+        let mut term = Terminal::new(80, 24);
+        term.record_clipboard_sync(
+            ClipboardTarget::Clipboard,
+            ClipboardOperation::Set,
+            Some("data".to_string()),
+            false,
+        );
+        assert!(!term.get_clipboard_sync_events().is_empty());
+        term.clear_clipboard_sync_events();
+        assert!(term.get_clipboard_sync_events().is_empty());
+    }
+
+    #[test]
+    fn test_clipboard_history_with_label() {
+        let mut term = Terminal::new(80, 24);
+        term.add_to_clipboard_history(
+            ClipboardSlot::Clipboard,
+            "labeled content".to_string(),
+            Some("my label".to_string()),
+        );
+        let history = term.get_clipboard_history(ClipboardSlot::Clipboard);
+        assert_eq!(history[0].label, Some("my label".to_string()));
+    }
+
+    #[test]
+    fn test_max_clipboard_sync_events_setter() {
+        let mut term = Terminal::new(80, 24);
+        term.set_max_clipboard_sync_events(100);
+        assert_eq!(term.max_clipboard_sync_events(), 100);
+    }
+}
