@@ -1562,4 +1562,107 @@ mod tests {
 
         assert!(result.is_ok());
     }
+    #[test]
+    fn test_resize_with_pixels_before_spawn() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.resize_with_pixels(100, 30, 800, 600);
+        assert!(
+            result.is_ok(),
+            "resize_with_pixels before spawn should not error: {:?}",
+            result
+        );
+        assert_eq!(session.size(), (100, 30));
+    }
+
+    #[test]
+    fn test_write_str_before_spawn_returns_error() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.write_str("hello");
+        assert!(
+            result.is_err(),
+            "write_str before spawn should return error"
+        );
+    }
+
+    #[test]
+    fn test_bell_count_initial() {
+        let session = PtySession::new(80, 24, 1000);
+        assert_eq!(session.bell_count(), 0);
+    }
+
+    #[test]
+    fn test_scrollback_initial_empty() {
+        let session = PtySession::new(80, 24, 1000);
+        let sb = session.scrollback();
+        assert!(
+            sb.is_empty(),
+            "scrollback should be empty before any output"
+        );
+    }
+
+    #[test]
+    fn test_scrollback_len_initial() {
+        let session = PtySession::new(80, 24, 1000);
+        assert_eq!(session.scrollback_len(), 0);
+    }
+
+    #[test]
+    fn test_has_updates_since_same_generation() {
+        let session = PtySession::new(80, 24, 1000);
+        let gen = session.update_generation();
+        assert!(!session.has_updates_since(gen));
+    }
+
+    #[test]
+    fn test_has_updates_since_older_generation() {
+        let session = PtySession::new(80, 24, 1000);
+        let gen = session.update_generation();
+        // Only test if gen > 0 to avoid u64 underflow
+        if gen > 0 {
+            assert!(
+                session.has_updates_since(gen - 1),
+                "should have updates since an older generation"
+            );
+        }
+        // If gen == 0, the session just started with no updates; skip the check.
+    }
+
+    #[test]
+    fn test_get_writer_before_spawn_is_none() {
+        let session = PtySession::new(80, 24, 1000);
+        assert!(
+            session.get_writer().is_none(),
+            "writer should be None before spawn"
+        );
+    }
+
+    #[test]
+    fn test_try_wait_before_spawn_returns_error() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.try_wait();
+        assert!(result.is_err(), "try_wait before spawn should return error");
+    }
+
+    #[test]
+    fn test_kill_before_spawn_returns_error() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.kill();
+        assert!(result.is_err(), "kill before spawn should return error");
+    }
+
+    #[test]
+    fn test_set_and_clear_output_callback() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+        let mut session = PtySession::new(80, 24, 1000);
+        let called = Arc::new(AtomicBool::new(false));
+        let called_clone = called.clone();
+        session.set_output_callback(Arc::new(move |_data: &[u8]| {
+            called_clone.store(true, Ordering::Relaxed);
+        }));
+        session.clear_output_callback();
+        // After clear, no callback is set (smoke test, no panic)
+    }
 }
