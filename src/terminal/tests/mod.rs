@@ -46,4 +46,6 @@ mod tui;
 mod vt520;
 
 #[cfg(test)]
+mod metrics;
+#[cfg(test)]
 mod screen;
