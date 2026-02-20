@@ -44,3 +44,6 @@ mod tmux;
 mod tui;
 #[cfg(test)]
 mod vt520;
+
+#[cfg(test)]
+mod screen;
