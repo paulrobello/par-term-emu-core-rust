@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.1] - 2026-02-19
+
+### Fixed
+- **Increase OSC data size limit**: Raise `MAX_OSC_DATA_LENGTH` from 1 MB to 128 MB to support inline images via iTerm2/Kitty protocols. The previous limit silently dropped any image whose base64-encoded OSC sequence exceeded 1 MB (~750 KB raw).
+
 ## [0.39.0] - 2026-02-15
 
 ### Security

@@ -10,8 +10,10 @@ mod title;
 use crate::debug;
 use crate::terminal::Terminal;
 
-/// Maximum total OSC data length in bytes (1 MB)
-const MAX_OSC_DATA_LENGTH: usize = 1_048_576;
+/// Maximum total OSC data length in bytes (128 MB)
+/// Must be large enough for inline images (iTerm2/Kitty protocols send
+/// base64-encoded image data inside a single OSC sequence).
+const MAX_OSC_DATA_LENGTH: usize = 128 * 1024 * 1024;
 
 impl Terminal {
     /// Check if an OSC command should be filtered due to security settings
