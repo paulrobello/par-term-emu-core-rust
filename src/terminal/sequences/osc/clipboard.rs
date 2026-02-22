@@ -30,7 +30,10 @@ impl Terminal {
                                 }
                             }
                         } else {
-                            self.clipboard_content = None;
+                            // Treat empty OSC 52 payloads as a no-op instead of clearing.
+                            // Some apps/tmux mouse interactions can emit empty clipboard
+                            // writes on plain clicks, which would otherwise destroy existing
+                            // clipboard contents (including image clipboards in the host app).
                         }
                     }
                 }

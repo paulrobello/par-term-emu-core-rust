@@ -1280,18 +1280,19 @@ fn test_osc52_clipboard_query_denied() {
 }
 
 #[test]
-fn test_osc52_clipboard_clear() {
+fn test_osc52_clipboard_empty_write_is_noop() {
     let mut term = Terminal::new(80, 24);
 
     // Set clipboard content
     term.set_clipboard(Some("Some text".to_string()));
     assert_eq!(term.clipboard(), Some("Some text"));
 
-    // Clear clipboard with empty data
+    // Empty clipboard payloads are treated as a no-op to avoid destructive
+    // clears from zero-length OSC 52 writes (for example some mouse-click paths).
     term.process(b"\x1b]52;c;\x1b\\");
 
-    // Clipboard should be empty
-    assert_eq!(term.clipboard(), None);
+    // Clipboard should be preserved
+    assert_eq!(term.clipboard(), Some("Some text"));
 }
 
 #[test]
@@ -1321,9 +1322,9 @@ fn test_osc52_clipboard_multiple_operations() {
     term.process(b"\x1b]52;c;c2Vjb25k\x1b\\"); // "second"
     assert_eq!(term.clipboard(), Some("second"));
 
-    // Clear
+    // Empty payload is a no-op (preserve existing content)
     term.process(b"\x1b]52;c;\x1b\\");
-    assert_eq!(term.clipboard(), None);
+    assert_eq!(term.clipboard(), Some("second"));
 }
 
 #[test]

@@ -388,9 +388,9 @@ fn test_clipboard_operations() {
     term.process(sequence.as_bytes());
     assert_eq!(term.clipboard_content, Some("Hello".to_string()));
 
-    // Clear clipboard
+    // Empty payload is treated as a no-op (preserve existing clipboard content)
     term.process(b"\x1b]52;c;\x1b\\");
-    assert_eq!(term.clipboard_content, None);
+    assert_eq!(term.clipboard_content, Some("Hello".to_string()));
 }
 
 #[test]
