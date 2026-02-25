@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.1 raises the OSC data size limit from 1 MB to 128 MB, fixing silent drops of inline images (iTerm2/Kitty protocols) whose base64-encoded OSC sequence exceeded ~750 KB raw. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.3 fixes graphics scrollback clearing when using ED 2/3 sequences. Version 0.39.2 adds GitNexus MCP integration and fixes OSC52 empty clipboard writes. Version 0.39.1 raises the OSC data size limit from 1 MB to 128 MB, fixing silent drops of inline images. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
