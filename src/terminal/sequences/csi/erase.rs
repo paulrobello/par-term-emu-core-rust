@@ -32,6 +32,7 @@ impl Terminal {
                     2 => {
                         self.active_grid_mut().clear();
                         self.graphics_store.clear();
+                        self.graphics_store.clear_scrollback_graphics();
                         debug::log(
                             debug::DebugLevel::Debug,
                             "CLEAR",
@@ -42,6 +43,7 @@ impl Terminal {
                         self.active_grid_mut().clear();
                         self.active_grid_mut().clear_scrollback();
                         self.graphics_store.clear();
+                        self.graphics_store.clear_scrollback_graphics();
                         debug::log(
                             debug::DebugLevel::Debug,
                             "CLEAR",
