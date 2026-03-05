@@ -858,6 +858,7 @@ VT compliance testing:
 - `poll_cwd_events() -> list[dict]`: Drain only CWD change events (fields: new_cwd, old_cwd?, hostname?, username?, timestamp)
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (fields: event_type, command?, exit_code?, timestamp?, cursor_line?)
 - `poll_upload_requests() -> list[str]`: Drain only upload request events, returning format strings from pending `UploadRequested` events
+- `poll_screen_cleared_events() -> list[bool]`: Drain pending `ScreenCleared` events. Each `bool` is `True` if the scrollback was also cleared (ED 3J), `False` for screen-only clears (ED 2J). Use this to invalidate scrollback zone/mark metadata on the frontend.
 
 **Event types returned by `poll_events()` / `poll_subscribed_events()`:**
 `bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`

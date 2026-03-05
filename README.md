@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.3 fixes graphics scrollback clearing when using ED 2/3 sequences. Version 0.39.2 adds GitNexus MCP integration and fixes OSC52 empty clipboard writes. Version 0.39.1 raises the OSC data size limit from 1 MB to 128 MB, fixing silent drops of inline images. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.4 adds the `ScreenCleared` terminal event (emitted on ED 2J/3J) so frontends can invalidate scrollback metadata, OSC 133;C command extraction for shell integration, and login shell detection via `-l`/`--login` flags. Version 0.39.3 fixes graphics scrollback clearing when using ED 2/3 sequences. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
