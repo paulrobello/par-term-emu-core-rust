@@ -45,6 +45,8 @@ pub struct PtySession {
     output_callback: Arc<Mutex<Option<OutputCallback>>>,
     /// Coprocess manager for piping terminal output to external processes
     coprocess_manager: Arc<Mutex<CoprocessManager>>,
+    /// PID of the spawned child process (shell or command), set after spawn
+    child_pid: Option<u32>,
 }
 
 impl PtySession {
@@ -80,6 +82,7 @@ impl PtySession {
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             output_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
+            child_pid: None,
         }
     }
 
@@ -526,6 +529,7 @@ impl PtySession {
         self.child = Some(child);
         self.writer = Some(Arc::clone(&writer));
         self.running.store(true, Ordering::SeqCst);
+        self.child_pid = child_pid;
 
         // Spawn the reader thread (shares writer for device query responses)
         self.start_reader_thread(reader, writer, child_pid);
@@ -990,6 +994,14 @@ impl PtySession {
     /// Check if the process is still running
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
+    }
+
+    /// Return the PID of the spawned child process (shell or command).
+    ///
+    /// Returns `None` if no process has been spawned yet or if the platform
+    /// does not expose the PID (unusual).
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child_pid
     }
 
     /// Try to get the exit status without blocking

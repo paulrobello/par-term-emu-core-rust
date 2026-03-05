@@ -1037,6 +1037,7 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 #### Process Management
 - `spawn(cmd: str, args: list[str] = [], env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
 - `spawn_shell(shell: str | None = None)`: Spawn a shell (defaults to /bin/bash)
+- `child_pid() -> int | None`: Return the PID of the spawned child process, or `None` if not yet spawned
 - `is_running() -> bool`: Check if the child process is still running
 - `wait() -> int | None`: Wait for child process to exit and return exit code
 - `try_wait() -> int | None`: Non-blocking check if child has exited

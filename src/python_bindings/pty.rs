@@ -176,6 +176,20 @@ impl PyPtyTerminal {
         Ok(())
     }
 
+    /// Return the PID of the spawned child process.
+    ///
+    /// Returns:
+    ///     PID as an integer, or None if no process has been spawned yet.
+    ///
+    /// Example:
+    ///     >>> session = PtySession(80, 24)
+    ///     >>> session.spawn_shell()
+    ///     >>> pid = session.child_pid()
+    ///     >>> print(pid)  # e.g. 12345
+    fn child_pid(&self) -> PyResult<Option<u32>> {
+        Ok(self.inner.child_pid())
+    }
+
     /// Check if the process is still running
     ///
     /// Returns:
