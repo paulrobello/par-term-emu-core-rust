@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.4 adds the `ScreenCleared` terminal event (emitted on ED 2J/3J) so frontends can invalidate scrollback metadata, OSC 133;C command extraction for shell integration, and login shell detection via `-l`/`--login` flags. Version 0.39.3 fixes graphics scrollback clearing when using ED 2/3 sequences. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.5 adds `child_pid()` on `PtySession`, exposing the PID of the spawned child process for process management (sending signals, monitoring, etc.). Version 0.39.4 adds the `ScreenCleared` terminal event (emitted on ED 2J/3J) so frontends can invalidate scrollback metadata, OSC 133;C command extraction for shell integration, and login shell detection via `-l`/`--login` flags. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
