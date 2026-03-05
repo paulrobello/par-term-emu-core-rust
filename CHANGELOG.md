@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.4] - 2026-03-04
+
+### Added
+- **ScreenCleared terminal event**: New event emitted when ED 2J (clear screen) or ED 3J (clear screen + scrollback) is received. Frontends can use this to invalidate scrollback zone/mark metadata so the scrollbar stays consistent with terminal state.
+  - New `TerminalEvent::ScreenCleared { include_scrollback: bool }` variant
+  - New `poll_screen_cleared_events()` method on Terminal to drain these events
+  - Streaming protocol support with new `screen_cleared` message type and `ScreenCleared` event subscription
+  - Python binding: `poll_screen_cleared_events()` returns `list[bool]`
+- **OSC 133;C command extraction**: Shell integration now extracts the command text from `OSC 133;C;<command>` sequences sent by shell scripts before command execution markers.
+
+### Changed
+- **Login shell detection**: PTY session now detects `-l`/`--login` flags for shell spawning. (Note: portable-pty's CommandBuilder uses args[0] for both path resolution and arg0, so `$0` shows the shell path rather than `-bash`; the `-l` flag provides full login shell behavior regardless.)
+- Added `nix` dependency (0.29) with process/term/signal features for Unix platforms
+
 ## [0.39.3] - 2026-02-25
 
 ### Fixed

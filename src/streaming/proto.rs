@@ -529,6 +529,11 @@ impl From<&AppServerMessage> for pb::ServerMessage {
                     format: format.clone(),
                 }))
             }
+            AppServerMessage::ScreenCleared { include_scrollback } => {
+                Some(Message::ScreenCleared(pb::ScreenCleared {
+                    include_scrollback: *include_scrollback,
+                }))
+            }
         };
 
         pb::ServerMessage { message }
@@ -638,6 +643,7 @@ impl From<AppEventType> for i32 {
             AppEventType::Snapshot => pb::EventType::Snapshot as i32,
             AppEventType::FileTransfer => pb::EventType::FileTransfer as i32,
             AppEventType::UploadRequest => pb::EventType::UploadRequest as i32,
+            AppEventType::ScreenCleared => pb::EventType::ScreenCleared as i32,
         }
     }
 }
@@ -937,6 +943,9 @@ impl TryFrom<pb::ServerMessage> for AppServerMessage {
             Some(Message::UploadRequested(ur)) => {
                 Ok(AppServerMessage::UploadRequested { format: ur.format })
             }
+            Some(Message::ScreenCleared(sc)) => Ok(AppServerMessage::ScreenCleared {
+                include_scrollback: sc.include_scrollback,
+            }),
             None => Err(StreamingError::InvalidMessage(
                 "Empty server message".into(),
             )),
@@ -1035,6 +1044,7 @@ impl From<pb::EventType> for AppEventType {
             pb::EventType::Snapshot => AppEventType::Snapshot,
             pb::EventType::FileTransfer => AppEventType::FileTransfer,
             pb::EventType::UploadRequest => AppEventType::UploadRequest,
+            pb::EventType::ScreenCleared => AppEventType::ScreenCleared,
         }
     }
 }

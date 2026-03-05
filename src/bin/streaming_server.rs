@@ -892,6 +892,13 @@ impl ServerState {
                             ),
                         );
                     }
+                    TerminalEvent::ScreenCleared { include_scrollback } => {
+                        self.streaming_server.broadcast(
+                            par_term_emu_core_rust::streaming::protocol::ServerMessage::screen_cleared(
+                                include_scrollback,
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -1504,6 +1511,14 @@ impl SessionFactory for BinarySessionFactory {
                                 &session_id_clone,
                                 par_term_emu_core_rust::streaming::protocol::ServerMessage::upload_requested(
                                     format,
+                                ),
+                            );
+                        }
+                        TerminalEvent::ScreenCleared { include_scrollback } => {
+                            server.send_to_session(
+                                &session_id_clone,
+                                par_term_emu_core_rust::streaming::protocol::ServerMessage::screen_cleared(
+                                    include_scrollback,
                                 ),
                             );
                         }

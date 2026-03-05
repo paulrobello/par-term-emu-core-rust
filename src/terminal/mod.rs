@@ -2297,6 +2297,7 @@ impl Terminal {
                         TerminalEventKind::FileTransferFailed
                     }
                     TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
+                    TerminalEvent::ScreenCleared { .. } => TerminalEventKind::ScreenCleared,
                 };
                 filter.contains(&kind)
             });
@@ -2368,6 +2369,28 @@ impl Terminal {
 
         self.terminal_events = remaining;
         shell_events
+    }
+
+    /// Drain any pending `ScreenCleared` events.
+    ///
+    /// Returns a `Vec<bool>` where each element corresponds to one clear event;
+    /// `true` means the scrollback was also cleared (ESC[3J), `false` means
+    /// only the visible screen was cleared (ESC[2J).
+    pub fn poll_screen_cleared_events(&mut self) -> Vec<bool> {
+        let events = std::mem::take(&mut self.terminal_events);
+        let mut cleared_events = Vec::new();
+        let mut remaining = Vec::new();
+
+        for event in events {
+            if let TerminalEvent::ScreenCleared { include_scrollback } = event {
+                cleared_events.push(include_scrollback);
+            } else {
+                remaining.push(event);
+            }
+        }
+
+        self.terminal_events = remaining;
+        cleared_events
     }
 
     /// Calculate a checksum for a rectangular region of cells

@@ -1,6 +1,6 @@
 [package]
 name = "par-term-emu-core-rust"
-version = "0.39.3"
+version = "0.39.4"
 edition = "2021"
 rust-version = "1.88"
 authors = ["Paul Robello <probello@gmail.com>"]
@@ -112,6 +112,7 @@ unicode-normalization = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.182"
+nix = { version = "0.29", features = ["process", "term", "signal"] }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms

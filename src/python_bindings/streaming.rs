@@ -1262,9 +1262,13 @@ pub fn encode_server_message<'py>(
             let format = get_str("format").unwrap_or_else(|| "base64".to_string());
             ServerMessage::upload_requested(format)
         }
+        "screen_cleared" => {
+            let include_scrollback = get_bool("include_scrollback").unwrap_or(false);
+            ServerMessage::screen_cleared(include_scrollback)
+        }
         _ => {
             return Err(PyRuntimeError::new_err(format!(
-                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed, system_stats, file_transfer_started, file_transfer_progress, file_transfer_completed, file_transfer_failed, upload_requested",
+                "Unknown message type: {}. Valid types: output, resize, title, bell, pong, connected, error, shutdown, cursor, refresh, action_notify, action_mark_line, mode_changed, graphics_added, hyperlink_added, badge_changed, selection_changed, clipboard_sync, shell_integration, cwd_changed, trigger_matched, user_var_changed, progress_bar_changed, system_stats, file_transfer_started, file_transfer_progress, file_transfer_completed, file_transfer_failed, upload_requested, screen_cleared",
                 message_type
             )));
         }
@@ -1702,6 +1706,10 @@ pub fn decode_server_message<'py>(
             dict.set_item("type", "upload_requested")?;
             dict.set_item("format", format)?;
         }
+        ServerMessage::ScreenCleared { include_scrollback } => {
+            dict.set_item("type", "screen_cleared")?;
+            dict.set_item("include_scrollback", include_scrollback)?;
+        }
     }
 
     Ok(dict)
@@ -1933,6 +1941,7 @@ pub fn decode_client_message<'py>(
                     crate::streaming::protocol::EventType::Snapshot => "snapshot",
                     crate::streaming::protocol::EventType::FileTransfer => "file_transfer",
                     crate::streaming::protocol::EventType::UploadRequest => "upload_request",
+                    crate::streaming::protocol::EventType::ScreenCleared => "screen_cleared",
                 })
                 .collect();
             dict.set_item("events", event_strs)?;

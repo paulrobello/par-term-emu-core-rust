@@ -118,7 +118,7 @@ wheels = [
 
 [[package]]
 name = "par-term-emu-core-rust"
-version = "0.39.3"
+version = "0.39.4"
 source = { editable = "." }
 dependencies = [
     { name = "pillow" },

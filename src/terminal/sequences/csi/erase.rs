@@ -33,6 +33,10 @@ impl Terminal {
                         self.active_grid_mut().clear();
                         self.graphics_store.clear();
                         self.graphics_store.clear_scrollback_graphics();
+                        self.terminal_events
+                            .push(crate::terminal::TerminalEvent::ScreenCleared {
+                                include_scrollback: false,
+                            });
                         debug::log(
                             debug::DebugLevel::Debug,
                             "CLEAR",
@@ -44,6 +48,10 @@ impl Terminal {
                         self.active_grid_mut().clear_scrollback();
                         self.graphics_store.clear();
                         self.graphics_store.clear_scrollback_graphics();
+                        self.terminal_events
+                            .push(crate::terminal::TerminalEvent::ScreenCleared {
+                                include_scrollback: true,
+                            });
                         debug::log(
                             debug::DebugLevel::Debug,
                             "CLEAR",

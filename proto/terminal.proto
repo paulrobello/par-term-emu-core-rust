@@ -49,6 +49,7 @@ enum EventType {
   EVENT_TYPE_SNAPSHOT = 23;
   EVENT_TYPE_FILE_TRANSFER = 24;
   EVENT_TYPE_UPLOAD_REQUEST = 25;
+  EVENT_TYPE_SCREEN_CLEARED = 26;
 }
 
 // =============================================================================
@@ -93,6 +94,7 @@ message ServerMessage {
     FileTransferCompleted file_transfer_completed = 34;
     FileTransferFailed file_transfer_failed = 35;
     UploadRequested upload_requested = 36;
+    ScreenCleared screen_cleared = 37;
   }
 }
 
@@ -490,4 +492,9 @@ message FileTransferFailed {
 // Upload requested by terminal application
 message UploadRequested {
   string format = 1;
+}
+
+// Screen cleared (ED 2J or ED 3J)
+message ScreenCleared {
+  bool include_scrollback = 1;    // True if scrollback was also cleared (ED 3J)
 }

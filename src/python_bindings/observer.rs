@@ -277,6 +277,13 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             map.insert("type".to_string(), "upload_requested".to_string());
             map.insert("format".to_string(), format.clone());
         }
+        TerminalEvent::ScreenCleared { include_scrollback } => {
+            map.insert("type".to_string(), "screen_cleared".to_string());
+            map.insert(
+                "include_scrollback".to_string(),
+                include_scrollback.to_string(),
+            );
+        }
     }
     map
 }

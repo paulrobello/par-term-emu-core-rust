@@ -29,7 +29,7 @@ pub struct ThemeInfo {
 pub struct ServerMessage {
     #[prost(
         oneof = "server_message::Message",
-        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36"
+        tags = "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37"
     )]
     pub message: ::core::option::Option<server_message::Message>,
 }
@@ -109,6 +109,8 @@ pub mod server_message {
         FileTransferFailed(super::FileTransferFailed),
         #[prost(message, tag = "36")]
         UploadRequested(super::UploadRequested),
+        #[prost(message, tag = "37")]
+        ScreenCleared(super::ScreenCleared),
     }
 }
 /// Terminal output data (very high frequency)
@@ -741,6 +743,13 @@ pub struct UploadRequested {
     #[prost(string, tag = "1")]
     pub format: ::prost::alloc::string::String,
 }
+/// Screen cleared (ED 2J or ED 3J)
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ScreenCleared {
+    /// True if scrollback was also cleared (ED 3J)
+    #[prost(bool, tag = "1")]
+    pub include_scrollback: bool,
+}
 /// Event types for subscription
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -771,6 +780,7 @@ pub enum EventType {
     Snapshot = 23,
     FileTransfer = 24,
     UploadRequest = 25,
+    ScreenCleared = 26,
 }
 impl EventType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -805,6 +815,7 @@ impl EventType {
             Self::Snapshot => "EVENT_TYPE_SNAPSHOT",
             Self::FileTransfer => "EVENT_TYPE_FILE_TRANSFER",
             Self::UploadRequest => "EVENT_TYPE_UPLOAD_REQUEST",
+            Self::ScreenCleared => "EVENT_TYPE_SCREEN_CLEARED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -836,6 +847,7 @@ impl EventType {
             "EVENT_TYPE_SNAPSHOT" => Some(Self::Snapshot),
             "EVENT_TYPE_FILE_TRANSFER" => Some(Self::FileTransfer),
             "EVENT_TYPE_UPLOAD_REQUEST" => Some(Self::UploadRequest),
+            "EVENT_TYPE_SCREEN_CLEARED" => Some(Self::ScreenCleared),
             _ => None,
         }
     }

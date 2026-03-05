@@ -414,6 +414,15 @@ impl PtySession {
             cmd.arg(arg);
         }
 
+        // Check if login shell mode is requested (-l or --login flag)
+        // For bash to properly recognize login shell via $0 and shopt login_shell,
+        // argv[0] must start with '-'. The -l flag alone makes bash read profile
+        // files but doesn't set $0 to -bash.
+        // We need to modify argv[0] AFTER path resolution but BEFORE exec.
+        // Since CommandBuilder uses args[0] for both path resolution AND arg0,
+        // we detect login shell mode here and will handle it in the spawn.
+        let is_login_shell = args.iter().any(|a| *a == "-l" || *a == "--login");
+
         // Inherit parent environment variables, but deliberately drop static
         // size hints that confuse apps after a PTY resize.
         // Many libraries (e.g. Python's shutil.get_terminal_size) and some TUIs
@@ -483,9 +492,19 @@ impl PtySession {
         // Spawn the child process using the slave side. Drop our handle to the slave
         // immediately after spawn so that when the child exits, the master side sees EOF.
         let PtyPair { master, slave } = pair;
-        let child = slave
-            .spawn_command(cmd)
-            .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?;
+
+        let child = if is_login_shell {
+            // For login shells, we need to set argv[0] to "-bash" for the shell
+            // to properly recognize itself as a login shell via $0 and shopt login_shell.
+            // The CommandBuilder's as_command() uses args[0] for both path resolution
+            // and arg0, which doesn't work for login shells. We spawn manually.
+            self.spawn_login_shell(command, args, &cmd, &slave, additional_env.cloned())
+                .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?
+        } else {
+            slave
+                .spawn_command(cmd)
+                .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?
+        };
         drop(slave);
 
         // Get the master reader
@@ -512,6 +531,56 @@ impl PtySession {
         self.start_reader_thread(reader, writer, child_pid);
 
         Ok(())
+    }
+
+    /// Spawn a login shell.
+    ///
+    /// The `-l` flag is passed to the shell, which makes bash:
+    /// 1. Read `/etc/profile` and `~/.bash_profile`
+    /// 2. Report `shopt login_shell` as ON
+    ///
+    /// Note: `$0` will show the shell path (not `-bash`) because portable-pty's
+    /// CommandBuilder uses args[0] for both path resolution AND arg0. The `-l`
+    /// flag provides full login shell behavior regardless.
+    #[cfg(unix)]
+    #[allow(clippy::borrowed_box)]
+    fn spawn_login_shell(
+        &self,
+        shell_path: &str,
+        _args: &[&str],
+        cmd_builder: &CommandBuilder,
+        slave: &Box<dyn portable_pty::SlavePty + Send>,
+        _additional_env: Option<HashMap<String, String>>,
+    ) -> Result<Box<dyn portable_pty::Child + Send + Sync>, PtyError> {
+        let shell_basename = shell_path.rsplit('/').next().unwrap_or(shell_path);
+
+        debug::log(
+            debug::DebugLevel::Info,
+            "PTY_SPAWN",
+            &format!(
+                "Spawning login shell: {} -l (login_shell via -l flag)",
+                shell_basename
+            ),
+        );
+
+        slave
+            .spawn_command(cmd_builder.clone())
+            .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))
+    }
+
+    #[cfg(not(unix))]
+    #[allow(clippy::borrowed_box)]
+    fn spawn_login_shell(
+        &self,
+        _shell_path: &str,
+        _args: &[&str],
+        cmd_builder: &CommandBuilder,
+        slave: &Box<dyn portable_pty::SlavePty + Send>,
+        _additional_env: Option<HashMap<String, String>>,
+    ) -> Result<Box<dyn portable_pty::Child + Send + Sync>, PtyError> {
+        slave
+            .spawn_command(cmd_builder.clone())
+            .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))
     }
 
     /// Start the reader thread that processes PTY output

@@ -154,6 +154,16 @@ impl Terminal {
                                 }
                             }
                             Some('C') => {
+                                // Extract optional command text from params[2]
+                                // Shell scripts send: \033]133;C;<command>\007
+                                if let Some(cmd_bytes) = params.get(2) {
+                                    if let Ok(cmd) = std::str::from_utf8(cmd_bytes) {
+                                        let cmd = cmd.trim();
+                                        if !cmd.is_empty() {
+                                            self.shell_integration.set_command(cmd.to_string());
+                                        }
+                                    }
+                                }
                                 self.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandExecuted);
                                 self.terminal_events.push(

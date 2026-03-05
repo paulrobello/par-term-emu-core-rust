@@ -2599,6 +2599,28 @@ impl PyTerminal {
         Ok(events.iter().map(event_to_dict).collect())
     }
 
+    /// Drain pending screen cleared events
+    ///
+    /// Returns a list of booleans indicating whether each clear event also
+    /// cleared the scrollback buffer (True for ESC[3J, False for ESC[2J).
+    ///
+    /// This is useful for frontends to invalidate scrollback zone/mark metadata
+    /// so the scrollbar is consistent with the visible terminal state.
+    ///
+    /// Returns:
+    ///     list[bool]: List of include_scrollback flags for each ScreenCleared event.
+    ///
+    /// Example:
+    ///     >>> cleared = term.poll_screen_cleared_events()
+    ///     >>> for include_scrollback in cleared:
+    ///     ...     if include_scrollback:
+    ///     ...         print("Screen and scrollback cleared (ESC[3J)")
+    ///     ...     else:
+    ///     ...         print("Screen cleared (ESC[2J)")
+    fn poll_screen_cleared_events(&mut self) -> Vec<bool> {
+        self.inner.poll_screen_cleared_events()
+    }
+
     /// Set event subscription filter
     ///
     /// Args:

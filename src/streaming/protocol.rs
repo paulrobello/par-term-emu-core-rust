@@ -536,6 +536,13 @@ pub enum ServerMessage {
         /// Upload format
         format: String,
     },
+
+    /// Screen cleared (ED 2J or ED 3J)
+    #[serde(rename = "screen_cleared")]
+    ScreenCleared {
+        /// Whether scrollback was also cleared (ED 3J vs ED 2J)
+        include_scrollback: bool,
+    },
 }
 
 /// Messages sent from client to server
@@ -698,6 +705,9 @@ pub enum EventType {
     /// Upload request events
     #[serde(rename = "upload_request")]
     UploadRequest,
+    /// Screen cleared events (ED 2J, ED 3J)
+    #[serde(rename = "screen_cleared")]
+    ScreenCleared,
 }
 
 impl ServerMessage {
@@ -1217,6 +1227,11 @@ impl ServerMessage {
     /// Create an upload requested message
     pub fn upload_requested(format: String) -> Self {
         Self::UploadRequested { format }
+    }
+
+    /// Create a screen cleared message
+    pub fn screen_cleared(include_scrollback: bool) -> Self {
+        Self::ScreenCleared { include_scrollback }
     }
 
     /// Create a progress bar changed message from terminal event data

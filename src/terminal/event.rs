@@ -198,6 +198,16 @@ pub enum TerminalEvent {
         /// Upload format (e.g., "base64")
         format: String,
     },
+    /// The screen was cleared (ESC[2J or ESC[3J).
+    ///
+    /// `include_scrollback` is true when ESC[3J (erase display + scrollback)
+    /// was received.  Consumers such as par-term use this to invalidate
+    /// scrollback zone/mark metadata so the scrollbar is consistent with the
+    /// visible terminal state.
+    ScreenCleared {
+        /// Whether the scrollback buffer was also cleared (ESC[3J vs ESC[2J).
+        include_scrollback: bool,
+    },
 }
 
 impl TerminalEvent {
@@ -228,6 +238,7 @@ impl TerminalEvent {
             TerminalEvent::FileTransferCompleted { .. } => TerminalEventKind::FileTransferCompleted,
             TerminalEvent::FileTransferFailed { .. } => TerminalEventKind::FileTransferFailed,
             TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
+            TerminalEvent::ScreenCleared { .. } => TerminalEventKind::ScreenCleared,
         }
     }
 }
@@ -259,6 +270,7 @@ pub enum TerminalEventKind {
     FileTransferCompleted,
     FileTransferFailed,
     UploadRequested,
+    ScreenCleared,
 }
 
 /// A drained shell integration event: (event_type, command, exit_code, timestamp, cursor_line).
