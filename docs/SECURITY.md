@@ -226,6 +226,7 @@ safe_spawn_with_file(term, "document.txt")  # OK: /safe/directory/document.txt
 - These variables are static and don't update on resize, causing issues with terminal-aware applications
 - Many libraries (e.g., Python's `shutil.get_terminal_size()`) and some TUIs prioritize these env vars over `ioctl(TIOCGWINSZ)`, leaving them stuck at the parent terminal's size
 - Applications should query terminal size via `ioctl(TIOCGWINSZ)` instead
+- Strips tmux (`TMUX`, `TMUX_PANE`) and GNU Screen (`STY`, `WINDOW`) environment variables from child processes to prevent tools like fzf from rendering in the parent multiplexer pane instead of the embedded PTY
 - Set `PAR_TERM_REPLY_XTWINOPS=0` before creating `PtyTerminal` to suppress XTWINOPS query responses (this setting is cached at terminal creation time; changing it after will have no effect)
 
 ### Secure Environment Practices

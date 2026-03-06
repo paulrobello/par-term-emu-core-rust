@@ -1805,6 +1805,7 @@ pub fn encode_client_message<'py>(
                     "snapshot" => Some(EventType::Snapshot),
                     "file_transfer" => Some(EventType::FileTransfer),
                     "upload_request" => Some(EventType::UploadRequest),
+                    "screen_cleared" => Some(EventType::ScreenCleared),
                     _ => None,
                 })
                 .collect();
