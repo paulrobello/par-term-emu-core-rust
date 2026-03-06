@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.6] - 2026-03-05
+
+### Fixed
+- **Streaming `screen_cleared` subscription**: Python clients could not subscribe to `"screen_cleared"` events via the streaming protocol because the string-to-EventType mapping was missing. The reverse conversion (EventType to string) worked, so events were emitted but unsubscribable.
+
+### Docs
+- Updated README, SECURITY.md, and CROSS_PLATFORM.md to document PTY multiplexer env var stripping (TMUX, TMUX_PANE, STY, WINDOW)
+
 ## [0.39.5] - 2026-03-04
 
 ### Added

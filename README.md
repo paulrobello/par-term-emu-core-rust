@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.5 adds `child_pid()` on `PtySession`, exposing the PID of the spawned child process for process management (sending signals, monitoring, etc.), and fixes PTY environment leakage by stripping tmux (`TMUX`, `TMUX_PANE`) and GNU Screen (`STY`, `WINDOW`) environment variables from child processes. Version 0.39.4 adds the `ScreenCleared` terminal event (emitted on ED 2J/3J) so frontends can invalidate scrollback metadata, OSC 133;C command extraction for shell integration, and login shell detection via `-l`/`--login` flags. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.6 fixes a streaming protocol bug where Python clients could not subscribe to `"screen_cleared"` events. Version 0.39.5 adds `child_pid()` on `PtySession` and fixes PTY environment leakage by stripping tmux/GNU Screen env vars from child processes. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
