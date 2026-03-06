@@ -434,16 +434,16 @@ impl PtySession {
         //    The child shell is inside a new PTY, NOT inside tmux. Inheriting these
         //    causes tools like fzf to render in the parent tmux pane instead of here.
         // 3. STY/WINDOW — GNU Screen equivalents of TMUX.
-        let mut dropped: Vec<String> = Vec::new();
-        for (key, value) in std::env::vars() {
-            match key.as_str() {
-                "COLUMNS" | "LINES" | "TMUX" | "TMUX_PANE" | "STY" | "WINDOW" => {
-                    dropped.push(key);
-                    continue;
-                }
-                _ => {}
+        // CommandBuilder::new() pre-loads the full parent environment via
+        // get_base_env(), so we must explicitly remove unwanted vars with
+        // env_remove() — simply skipping them in the loop below is not enough.
+        const DROP_VARS: &[&str] = &["COLUMNS", "LINES", "TMUX", "TMUX_PANE", "STY", "WINDOW"];
+        let mut dropped: Vec<&str> = Vec::new();
+        for &var in DROP_VARS {
+            if std::env::var_os(var).is_some() {
+                cmd.env_remove(var);
+                dropped.push(var);
             }
-            cmd.env(&key, &value);
         }
         if !dropped.is_empty() {
             debug::log(
@@ -451,6 +451,11 @@ impl PtySession {
                 "PTY_SPAWN",
                 &format!("Dropped env vars: {}", dropped.join(", ")),
             );
+        }
+
+        // Re-apply parent env vars (overrides get_base_env values with current ones)
+        for (key, value) in std::env::vars() {
+            cmd.env(&key, &value);
         }
 
         // Set terminal-specific environment variables

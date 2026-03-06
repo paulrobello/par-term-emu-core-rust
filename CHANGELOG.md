@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.7] - 2026-03-05
+
+### Fixed
+- **PTY env var stripping**: Fixed environment variable removal for multiplexer vars (TMUX, TMUX_PANE, STY, WINDOW, COLUMNS, LINES). The previous approach of skipping vars during iteration didn't work because `CommandBuilder::new()` pre-loads the full parent environment via `get_base_env()`. Now uses `env_remove()` to explicitly remove unwanted vars after base env is loaded.
+
 ## [0.39.6] - 2026-03-05
 
 ### Fixed

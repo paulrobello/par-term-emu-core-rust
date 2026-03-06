@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.6 fixes a streaming protocol bug where Python clients could not subscribe to `"screen_cleared"` events. Version 0.39.5 adds `child_pid()` on `PtySession` and fixes PTY environment leakage by stripping tmux/GNU Screen env vars from child processes. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.7 fixes PTY env var stripping — the previous approach didn't work because `CommandBuilder` pre-loads the parent environment; now uses `env_remove()` to properly strip multiplexer vars (TMUX, STY, etc.). Version 0.39.6 fixes streaming `screen_cleared` event subscriptions. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 
