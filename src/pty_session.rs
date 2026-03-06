@@ -426,34 +426,30 @@ impl PtySession {
         // we detect login shell mode here and will handle it in the spawn.
         let is_login_shell = args.iter().any(|a| *a == "-l" || *a == "--login");
 
-        // Inherit parent environment variables, but deliberately drop static
-        // size hints that confuse apps after a PTY resize.
-        // Many libraries (e.g. Python's shutil.get_terminal_size) and some TUIs
-        // prioritize COLUMNS/LINES env over TIOCGWINSZ, which leaves them stuck
-        // at the parent terminal's size. We omit these so children query the PTY.
-        let mut dropped_cols = false;
-        let mut dropped_lines = false;
+        // Inherit parent environment variables, but deliberately drop:
+        // 1. COLUMNS/LINES — static size hints that confuse apps after a PTY resize.
+        //    Many libraries (e.g. Python's shutil.get_terminal_size) and some TUIs
+        //    prioritize these over TIOCGWINSZ, staying stuck at the parent size.
+        // 2. TMUX/TMUX_PANE — multiplexer session vars from the parent terminal.
+        //    The child shell is inside a new PTY, NOT inside tmux. Inheriting these
+        //    causes tools like fzf to render in the parent tmux pane instead of here.
+        // 3. STY/WINDOW — GNU Screen equivalents of TMUX.
+        let mut dropped: Vec<String> = Vec::new();
         for (key, value) in std::env::vars() {
-            if key == "COLUMNS" || key == "LINES" {
-                if key == "COLUMNS" {
-                    dropped_cols = true;
+            match key.as_str() {
+                "COLUMNS" | "LINES" | "TMUX" | "TMUX_PANE" | "STY" | "WINDOW" => {
+                    dropped.push(key);
+                    continue;
                 }
-                if key == "LINES" {
-                    dropped_lines = true;
-                }
-                continue; // skip misleading static size vars
+                _ => {}
             }
             cmd.env(&key, &value);
         }
-        if dropped_cols || dropped_lines {
+        if !dropped.is_empty() {
             debug::log(
                 debug::DebugLevel::Info,
                 "PTY_SPAWN",
-                &format!(
-                    "Dropped env vars: {}{}",
-                    if dropped_cols { "COLUMNS " } else { "" },
-                    if dropped_lines { "LINES" } else { "" }
-                ),
+                &format!("Dropped env vars: {}", dropped.join(", ")),
             );
         }
 

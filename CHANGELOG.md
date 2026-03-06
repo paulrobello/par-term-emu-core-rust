@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **`child_pid()` on `PtySession`**: New method that returns the PID of the spawned child process (shell or command) as `int | None`. Useful for process management (sending signals, monitoring, etc.).
 
+### Fixed
+- **PTY environment leakage**: Child PTY processes now strip tmux (`TMUX`, `TMUX_PANE`) and GNU Screen (`STY`, `WINDOW`) environment variables from the parent. Previously these leaked into spawned shells, causing tools like fzf to render in the parent multiplexer pane instead of the embedded PTY.
+
 ## [0.39.4] - 2026-03-04
 
 ### Added
