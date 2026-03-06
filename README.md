@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.7 fixes PTY env var stripping — the previous approach didn't work because `CommandBuilder` pre-loads the parent environment; now uses `env_remove()` to properly strip multiplexer vars (TMUX, STY, etc.). Version 0.39.6 fixes streaming `screen_cleared` event subscriptions. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.39.8 fixes PTY env var stripping — the re-apply loop now skips `DROP_VARS` so stripped multiplexer env vars are not re-added. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 

@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.39.8] - 2026-03-05
+
+### Fixed
+- **PTY env var stripping**: Fixed the re-apply loop to skip `DROP_VARS` so that stripped multiplexer env vars (TMUX, TMUX_PANE, STY, WINDOW, COLUMNS, LINES) are not re-added by the parent env re-application step.
+
 ## [0.39.7] - 2026-03-05
 
 ### Fixed

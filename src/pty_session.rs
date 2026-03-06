@@ -453,9 +453,12 @@ impl PtySession {
             );
         }
 
-        // Re-apply parent env vars (overrides get_base_env values with current ones)
+        // Re-apply parent env vars (overrides get_base_env values with current ones),
+        // but skip the vars we just removed so we don't re-add them.
         for (key, value) in std::env::vars() {
-            cmd.env(&key, &value);
+            if !DROP_VARS.contains(&key.as_str()) {
+                cmd.env(&key, &value);
+            }
         }
 
         // Set terminal-specific environment variables
