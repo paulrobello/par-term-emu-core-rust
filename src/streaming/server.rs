@@ -1653,6 +1653,9 @@ impl StreamingServer {
                         let ws_basic_auth = server.config.http_basic_auth.clone();
                         let ws_allow_query = server.config.allow_api_key_in_query;
 
+                        // The tungstenite `Callback` trait fixes `ErrorResponse` as
+                        // `HttpResponse<Option<String>>` — we cannot box or shrink it
+                        // without violating the external API contract.
                         #[allow(clippy::result_large_err)]
                         let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
                             if let Some(q) = req.uri().query() {
@@ -1760,6 +1763,8 @@ impl StreamingServer {
                                 let ws_basic_auth = server.config.http_basic_auth.clone();
                                 let ws_allow_query = server.config.allow_api_key_in_query;
 
+                                // Same as above: ErrorResponse type is fixed by the
+                                // tungstenite Callback trait and cannot be reduced.
                                 #[allow(clippy::result_large_err)]
                                 let ws_result = accept_hdr_async(
                                     tls_stream,
