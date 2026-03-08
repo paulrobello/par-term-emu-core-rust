@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "maturin>=1.10.2,<2.0",
+    "maturin>=1.12.6,<2.0",
 ]
 build-backend = "maturin"
 
@@ -52,7 +52,7 @@ keywords = [
     "true-color",
 ]
 dependencies = [
-    "pillow>=12.1.0",
+    "pillow>=12.1.1",
 ]
 
 [project.license]
@@ -68,7 +68,7 @@ Discussions = "https://github.com/paulrobello/par-term-emu-core-rust/discussions
 [project.optional-dependencies]
 # Image processing for sixel examples and screenshot features
 image = [
-    "pillow>=12.1.0",
+    "pillow>=12.1.1",
 ]
 
 [tool.maturin]
@@ -100,12 +100,12 @@ typeCheckingMode = "basic"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.12.0",
+    "maturin>=1.12.6",
     "pre-commit>=4.5.1",
     "pyright>=1.1.408",
     "pytest>=9.0.2",
     "pytest-timeout>=2.4.0",
-    "rich>=14.3.2",
-    "ruff>=0.15.1,<0.16",
-    "websockets>=15.0",
+    "rich>=14.3.3",
+    "ruff>=0.15.5",
+    "websockets>=16.0",
 ]

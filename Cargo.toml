@@ -47,7 +47,7 @@ path = "src/bin/streaming_server.rs"
 required-features = ["streaming"]
 
 [dependencies]
-pyo3 = { version = "0.28.1", optional = true }
+pyo3 = { version = "0.28.2", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
@@ -59,18 +59,18 @@ serde_json = "1.0.149"
 serde_yaml = "0.9.34"
 percent-encoding = "2.3.2"
 url = "2.5.8"
-uuid = { version = "1.21", features = ["v4", "serde"] }
+uuid = { version = "1.22", features = ["v4", "serde"] }
 
 # Streaming server dependencies
-tokio = { version = "1.49", features = ["full"], optional = true }
+tokio = { version = "1.50", features = ["full"], optional = true }
 tokio-tungstenite = { version = "0.28", optional = true }
 axum = { version = "0.8.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6.8", features = ["fs", "trace"], optional = true }
 futures-util = { version = "0.3.32", optional = true }
 
 # CLI dependencies (for streaming server binary)
-clap = { version = "4.5.58", features = ["derive", "env"], optional = true }
-anyhow = { version = "1.0.101", optional = true }
+clap = { version = "4.5.60", features = ["derive", "env"], optional = true }
+anyhow = { version = "1.0.102", optional = true }
 tracing = { version = "0.1.44", optional = true }
 tracing-subscriber = { version = "0.3.22", optional = true }
 
@@ -87,7 +87,7 @@ tar = { version = "0.4.44", optional = true }
 prost = { version = "0.14.3", optional = true }
 
 # TLS support
-rustls = { version = "0.23.36", optional = true }
+rustls = { version = "0.23.37", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 rustls-pemfile = { version = "2.2.0", optional = true }
 axum-server = { version = "0.8.0", features = ["tls-rustls"], optional = true }
@@ -97,7 +97,7 @@ htpasswd-verify = { version = "0.3.0", optional = true }
 headers = { version = "0.4.1", optional = true }
 
 # System resource monitoring
-sysinfo = { version = "0.38", optional = true }
+sysinfo = { version = "0.38.3", optional = true }
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
 image = "0.25.9"
@@ -111,8 +111,8 @@ unicode-segmentation = "1.12"
 unicode-normalization = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.182"
-nix = { version = "0.29", features = ["process", "term", "signal"] }
+libc = "0.2.183"
+nix = { version = "0.31", features = ["process", "term", "signal"] }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
@@ -124,10 +124,10 @@ tikv-jemallocator = { version = "0.6.1", optional = true }
 prost-build = { version = "0.14.3", optional = true }
 
 [dev-dependencies]
-pyo3 = { version = "0.28.1", features = ["auto-initialize"] }
-tokio = { version = "1.49", features = ["full", "test-util"] }
+pyo3 = { version = "0.28.2", features = ["auto-initialize"] }
+tokio = { version = "1.50", features = ["full", "test-util"] }
 proptest = "1.10.0"
-tempfile = "3.25"
+tempfile = "3.26"
 
 [features]
 default = ["python"]
