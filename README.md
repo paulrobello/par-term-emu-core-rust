@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.39.8 fixes PTY env var stripping — the re-apply loop now skips `DROP_VARS` so stripped multiplexer env vars are not re-added. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.40.0 adds full VT100 ACS (Alternate Character Set) line-drawing support. Applications like tmux that fall back from UTF-8 to ACS now render correct box-drawing glyphs (`┌`, `┐`, `└`, `┘`, `─`, `│`, `┼`, etc.) instead of raw ASCII letters. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.34.0
 

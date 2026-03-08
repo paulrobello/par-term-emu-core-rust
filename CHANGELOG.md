@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.40.0] - 2026-03-08
+
+### Added
+- **VT100 ACS (Alternate Character Set) line-drawing support**: Applications like tmux that fall back from UTF-8 to ACS line-drawing now render correct box-drawing glyphs instead of raw ASCII letters.
+  - `ESC ( 0` / `ESC ( B`: designate G0 charset as DEC Line Drawing / ASCII
+  - `ESC ) 0` / `ESC ) B`: designate G1 charset as DEC Line Drawing / ASCII
+  - `SO` (0x0E) / `SI` (0x0F): shift active charset to G1 / G0
+  - Full 22-entry ACS→Unicode mapping applied in `write_char` when active charset is DecLineDrawing
+
+### Fixed
+- **Streaming `result_large_err` suppression**: Added self-documenting comments explaining why `#[allow(clippy::result_large_err)]` is used in WebSocket handshake callbacks — the `ErrorResponse` type is fixed by the tungstenite `Callback` trait and cannot be reduced or boxed.
+
 ## [0.39.8] - 2026-03-05
 
 ### Fixed
