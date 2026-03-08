@@ -17,6 +17,15 @@ use crate::terminal::Terminal;
 impl Terminal {
     /// Write a character to the terminal at the current cursor position
     pub(super) fn write_char(&mut self, c: char) {
+        // Apply ACS (Alternate Character Set) translation when the active charset
+        // is DEC Special / Line Drawing.  Only printable ASCII chars are mapped;
+        // control characters pass through unchanged so CR/LF/etc. still work.
+        let c = if c.is_ascii_graphic() {
+            self.active_charset().translate(c)
+        } else {
+            c
+        };
+
         let (cols, _rows) = self.size();
 
         // Handle regional indicator pairs (flag emoji like 🇺🇸)

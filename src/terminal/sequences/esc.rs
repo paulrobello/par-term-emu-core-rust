@@ -6,9 +6,10 @@
 //! - Cursor movement (IND, RI, NEL)
 //! - Terminal reset (RIS)
 //! - Character protection (SPA/EPA)
+//! - Charset designation (SCS): G0/G1 → ASCII or DEC Line Drawing
 
 use crate::debug;
-use crate::terminal::Terminal;
+use crate::terminal::{Charset, Terminal};
 
 impl Terminal {
     /// VTE ESC dispatch - handle ESC sequences
@@ -113,6 +114,16 @@ impl Terminal {
                 // Disable character protection
                 self.char_protected = false;
             }
+            // SCS — Select Character Set (G0 slot)
+            // ESC ( 0  → G0 = DEC Special / Line Drawing
+            (b'0', [b'(']) => self.g0_charset = Charset::DecLineDrawing,
+            // ESC ( B  → G0 = ASCII (reset)
+            (b'B', [b'(']) => self.g0_charset = Charset::Ascii,
+            // SCS — Select Character Set (G1 slot)
+            // ESC ) 0  → G1 = DEC Special / Line Drawing
+            (b'0', [b')']) => self.g1_charset = Charset::DecLineDrawing,
+            // ESC ) B  → G1 = ASCII (reset)
+            (b'B', [b')']) => self.g1_charset = Charset::Ascii,
             _ => {}
         }
     }
@@ -120,7 +131,7 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-    use crate::terminal::Terminal;
+    use crate::terminal::{Charset, Terminal};
 
     #[test]
     fn test_save_restore_cursor() {
@@ -407,6 +418,186 @@ mod tests {
         term.process(b"\x1bH");
         // Verify no panic and cursor position unchanged
         assert_eq!(term.cursor.col, 79);
+    }
+
+    // ===== ACS (Alternate Character Set) tests =====
+
+    #[test]
+    fn test_acs_g0_designation_dec_line_drawing() {
+        let mut term = Terminal::new(80, 24);
+        // ESC ( 0 — designate G0 = DEC Special / Line Drawing
+        term.process(b"\x1b(0");
+        assert_eq!(term.g0_charset, Charset::DecLineDrawing);
+        assert_eq!(term.g1_charset, Charset::Ascii);
+        assert_eq!(term.active_g, 0); // G0 is still the active slot
+    }
+
+    #[test]
+    fn test_acs_g0_reset_to_ascii() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b(0"); // set G0 to DecLineDrawing
+        term.process(b"\x1b(B"); // reset G0 to ASCII
+        assert_eq!(term.g0_charset, Charset::Ascii);
+    }
+
+    #[test]
+    fn test_acs_g1_designation_dec_line_drawing() {
+        let mut term = Terminal::new(80, 24);
+        // ESC ) 0 — designate G1 = DEC Special / Line Drawing
+        term.process(b"\x1b)0");
+        assert_eq!(term.g1_charset, Charset::DecLineDrawing);
+        assert_eq!(term.g0_charset, Charset::Ascii);
+    }
+
+    #[test]
+    fn test_acs_g1_reset_to_ascii() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b)0");
+        term.process(b"\x1b)B");
+        assert_eq!(term.g1_charset, Charset::Ascii);
+    }
+
+    #[test]
+    fn test_acs_so_shifts_to_g1() {
+        let mut term = Terminal::new(80, 24);
+        assert_eq!(term.active_g, 0);
+        // SO (0x0E) — shift out to G1
+        term.process(b"\x0e");
+        assert_eq!(term.active_g, 1);
+    }
+
+    #[test]
+    fn test_acs_si_shifts_to_g0() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x0e"); // shift to G1
+        assert_eq!(term.active_g, 1);
+        // SI (0x0F) — shift in to G0
+        term.process(b"\x0f");
+        assert_eq!(term.active_g, 0);
+    }
+
+    #[test]
+    fn test_acs_line_drawing_characters_translated() {
+        let mut term = Terminal::new(80, 24);
+        // ESC ( 0 — G0 = DEC Line Drawing, G0 is active by default
+        term.process(b"\x1b(0");
+        // Write raw ACS bytes (would appear as letters without translation)
+        term.process(b"\x1b[1;1H"); // move to top-left
+        term.process(b"jklm"); // ┘ ┐ ┌ └ in ACS
+
+        let (cols, _) = term.size();
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[0].c, '┘', "j → ┘");
+        assert_eq!(row[1].c, '┐', "k → ┐");
+        assert_eq!(row[2].c, '┌', "l → ┌");
+        assert_eq!(row[3].c, '└', "m → └");
+        let _ = cols;
+    }
+
+    #[test]
+    fn test_acs_more_line_drawing_characters() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b(0");
+        term.process(b"\x1b[1;1H");
+        term.process(b"nqtuvwx"); // ┼ ─ ├ ┤ ┴ ┬ │
+
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[0].c, '┼', "n → ┼");
+        assert_eq!(row[1].c, '─', "q → ─");
+        assert_eq!(row[2].c, '├', "t → ├");
+        assert_eq!(row[3].c, '┤', "u → ┤");
+        assert_eq!(row[4].c, '┴', "v → ┴");
+        assert_eq!(row[5].c, '┬', "w → ┬");
+        assert_eq!(row[6].c, '│', "x → │");
+    }
+
+    #[test]
+    fn test_acs_disabled_by_default() {
+        let mut term = Terminal::new(80, 24);
+        // Without activating ACS, raw bytes should appear as-is
+        term.process(b"\x1b[1;1H");
+        term.process(b"jklmx");
+
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[0].c, 'j');
+        assert_eq!(row[1].c, 'k');
+        assert_eq!(row[2].c, 'l');
+        assert_eq!(row[3].c, 'm');
+        assert_eq!(row[4].c, 'x');
+    }
+
+    #[test]
+    fn test_acs_si_restores_ascii() {
+        let mut term = Terminal::new(80, 24);
+        // Set G0 = line drawing, activate, write, then SI and write again
+        term.process(b"\x1b(0"); // G0 = DecLineDrawing
+        term.process(b"\x1b[1;1H");
+        term.process(b"x"); // should be │
+                            // SI — back to G0 (still DecLineDrawing! SI ≠ reset charset)
+                            // To get ASCII back, we need ESC ( B to reset G0
+        term.process(b"\x1b(B"); // G0 = ASCII
+        term.process(b"\x1b[1;2H");
+        term.process(b"x"); // should be x now
+
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[0].c, '│', "x with DecLineDrawing active → │");
+        assert_eq!(row[1].c, 'x', "x after resetting G0 to ASCII → x");
+    }
+
+    #[test]
+    fn test_acs_g1_drawing_via_so() {
+        let mut term = Terminal::new(80, 24);
+        // G1 = DecLineDrawing, then SO to activate G1
+        term.process(b"\x1b)0"); // G1 = DecLineDrawing
+        term.process(b"\x0e"); // SO — shift to G1
+        term.process(b"\x1b[1;1H");
+        term.process(b"x"); // should be │
+
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[0].c, '│', "x via G1 DecLineDrawing → │");
+
+        // SI — back to G0 (ASCII), x should now be x
+        term.process(b"\x0f");
+        term.process(b"\x1b[1;2H");
+        term.process(b"x");
+        let grid = term.active_grid();
+        let row = grid.row(0).unwrap();
+        assert_eq!(row[1].c, 'x', "x after SI → plain x");
+    }
+
+    #[test]
+    fn test_acs_reset_clears_charset_state() {
+        let mut term = Terminal::new(80, 24);
+        term.process(b"\x1b(0"); // G0 = DecLineDrawing
+        term.process(b"\x0e"); // SO — shift to G1
+                               // Hard reset
+        term.process(b"\x1bc");
+        assert_eq!(term.g0_charset, Charset::Ascii);
+        assert_eq!(term.g1_charset, Charset::Ascii);
+        assert_eq!(term.active_g, 0);
+    }
+
+    #[test]
+    fn test_acs_charset_translate_passthrough_non_drawing() {
+        // Characters not in the ACS map should pass through unchanged
+        let charset = Charset::DecLineDrawing;
+        assert_eq!(charset.translate('A'), 'A');
+        assert_eq!(charset.translate('Z'), 'Z');
+        assert_eq!(charset.translate('5'), '5');
+    }
+
+    #[test]
+    fn test_acs_charset_translate_ascii_no_change() {
+        // ASCII charset should never translate anything
+        let charset = Charset::Ascii;
+        for c in 'a'..='z' {
+            assert_eq!(charset.translate(c), c);
+        }
     }
 
     #[test]

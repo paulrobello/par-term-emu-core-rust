@@ -1653,6 +1653,7 @@ impl StreamingServer {
                         let ws_basic_auth = server.config.http_basic_auth.clone();
                         let ws_allow_query = server.config.allow_api_key_in_query;
 
+                        #[allow(clippy::result_large_err)]
                         let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
                             if let Some(q) = req.uri().query() {
                                 if let Ok(mut guard) = uri_query_clone.lock() {
@@ -1759,6 +1760,7 @@ impl StreamingServer {
                                 let ws_basic_auth = server.config.http_basic_auth.clone();
                                 let ws_allow_query = server.config.allow_api_key_in_query;
 
+                                #[allow(clippy::result_large_err)]
                                 let ws_result = accept_hdr_async(
                                     tls_stream,
                                     move |req: &tokio_tungstenite::tungstenite::http::Request<

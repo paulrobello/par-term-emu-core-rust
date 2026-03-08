@@ -55,6 +55,14 @@ impl Perform for Terminal {
                 self.bell_events.push(event.clone());
                 self.terminal_events.push(TerminalEvent::BellRang(event));
             }
+            0x0E => {
+                // SO — Shift Out: switch active charset to G1
+                self.active_g = 1;
+            }
+            0x0F => {
+                // SI — Shift In: switch active charset to G0
+                self.active_g = 0;
+            }
             _ => {}
         }
     }

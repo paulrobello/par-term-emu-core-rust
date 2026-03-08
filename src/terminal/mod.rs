@@ -82,6 +82,57 @@ use crate::shell_integration::ShellIntegration;
 use crate::sixel;
 use std::collections::{HashMap, HashSet};
 
+/// Character set designation for G0/G1 charset slots.
+///
+/// VT100 defines multiple character sets; the most commonly used are ASCII
+/// and the DEC Special / Line Drawing set used by applications like tmux.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Charset {
+    /// Standard ASCII character set (default)
+    #[default]
+    Ascii,
+    /// DEC Special / Line Drawing character set (ESC ( 0 / ESC ) 0)
+    DecLineDrawing,
+}
+
+impl Charset {
+    /// Translate a character according to the DEC Special / Line Drawing table.
+    ///
+    /// Only characters in the printable ASCII range that appear in the ACS map
+    /// are translated; everything else passes through unchanged.
+    pub fn translate(self, c: char) -> char {
+        if self != Charset::DecLineDrawing {
+            return c;
+        }
+        // ACS byte → Unicode mapping (VT100 manual §3.3.4)
+        match c {
+            'j' => '┘', // U+2518
+            'k' => '┐', // U+2510
+            'l' => '┌', // U+250C
+            'm' => '└', // U+2514
+            'n' => '┼', // U+253C
+            'q' => '─', // U+2500
+            't' => '├', // U+251C
+            'u' => '┤', // U+2524
+            'v' => '┴', // U+2534
+            'w' => '┬', // U+252C
+            'x' => '│', // U+2502
+            'a' => '▒', // U+2592
+            '`' => '◆', // U+25C6
+            'f' => '°', // U+00B0
+            'g' => '±', // U+00B1
+            '~' => '•', // U+00B7
+            'o' => '⎺', // U+23BA
+            'p' => '⎻', // U+23BB
+            'r' => '⎼', // U+23BC
+            's' => '⎽', // U+23BD
+            'i' => '␋', // U+240B
+            'h' => '▒', // U+2592
+            _ => c,
+        }
+    }
+}
+
 const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
 const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
 const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
@@ -499,6 +550,14 @@ pub struct Terminal {
     pub(crate) max_action_results: usize,
     /// Rows pending trigger scan (populated from dirty_rows when triggers exist)
     pub(crate) pending_trigger_rows: HashSet<usize>,
+
+    // === ACS (Alternate Character Set) state ===
+    /// G0 charset slot designation (ESC ( 0 / ESC ( B)
+    pub(crate) g0_charset: Charset,
+    /// G1 charset slot designation (ESC ) 0 / ESC ) B)
+    pub(crate) g1_charset: Charset,
+    /// Active charset slot: 0 = G0, 1 = G1 (toggled by SO/SI)
+    pub(crate) active_g: u8,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -715,6 +774,19 @@ impl Terminal {
             trigger_action_results: Vec::new(),
             max_action_results: 100,
             pending_trigger_rows: HashSet::new(),
+            g0_charset: Charset::Ascii,
+            g1_charset: Charset::Ascii,
+            active_g: 0,
+        }
+    }
+
+    /// Return the currently-active character set (G0 or G1 based on SO/SI state).
+    #[inline]
+    pub(crate) fn active_charset(&self) -> Charset {
+        if self.active_g == 1 {
+            self.g1_charset
+        } else {
+            self.g0_charset
         }
     }
 
