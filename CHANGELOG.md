@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-03-11
+
 ### Added
 - **`TriggerAction::SplitPane` and `ActionResult::SplitPane`**: New trigger action that instructs the frontend to open a split pane. Supports `direction` (`horizontal`/`vertical`), `focus_new_pane`, `target` (`active`/`source`), and optional `command` (either `SendText` or `InitialCommand`). Polled via `poll_action_results()` which returns dicts with `type="split_pane"`.
   - New supporting types: `TriggerSplitDirection`, `TriggerSplitTarget`, `TriggerSplitCommand` (all re-exported from `terminal` module)
   - Python `TriggerAction("split_pane", {...})` fully handled: `to_trigger_action()` parses all params; `poll_action_results()` serialises the result dict
+  - Python binding `split_pane()` added to expose the action from Python
 
 ## [0.40.0] - 2026-03-08
 

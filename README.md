@@ -15,7 +15,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.40.0 adds full VT100 ACS (Alternate Character Set) line-drawing support. Applications like tmux that fall back from UTF-8 to ACS now render correct box-drawing glyphs (`┌`, `┐`, `└`, `┘`, `─`, `│`, `┼`, etc.) instead of raw ASCII letters. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.41.0 adds `TriggerAction::SplitPane` — a new trigger action that instructs frontends to open a split pane with configurable direction (`horizontal`/`vertical`), focus behaviour, target pane, and an optional command (`SendText` or `InitialCommand`). Poll results via `poll_action_results()` which returns dicts with `type="split_pane"`. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.40.0
+
+Version 0.40.0 added full VT100 ACS (Alternate Character Set) line-drawing support. Applications like tmux that fall back from UTF-8 to ACS now render correct box-drawing glyphs (`┌`, `┐`, `└`, `┘`, `─`, `│`, `┼`, etc.) instead of raw ASCII letters.
 
 ## What's New in 0.34.0
 
