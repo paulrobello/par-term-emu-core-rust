@@ -67,7 +67,7 @@ pub use snapshot::{
 };
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
-    TriggerRegistry,
+    TriggerRegistry, TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,
 };
 
 // Imports

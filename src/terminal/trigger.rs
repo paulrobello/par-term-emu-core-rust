@@ -9,6 +9,28 @@ use std::collections::HashMap;
 /// Unique trigger identifier
 pub type TriggerId = u64;
 
+/// Split direction for SplitPane trigger actions (mirrors par-term-config::TriggerSplitDirection)
+#[derive(Debug, Clone, PartialEq)]
+pub enum TriggerSplitDirection {
+    Horizontal,
+    Vertical,
+}
+
+/// Which pane to split (mirrors par-term-config::TriggerSplitTarget)
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum TriggerSplitTarget {
+    #[default]
+    Active,
+    Source,
+}
+
+/// Command to run in the new pane (mirrors par-term-config::SplitPaneCommand)
+#[derive(Debug, Clone, PartialEq)]
+pub enum TriggerSplitCommand {
+    SendText { text: String, delay_ms: u64 },
+    InitialCommand { command: String, args: Vec<String> },
+}
+
 /// Action to execute when a trigger matches
 #[derive(Debug, Clone, PartialEq)]
 pub enum TriggerAction {
@@ -34,6 +56,13 @@ pub enum TriggerAction {
     PlaySound { sound_id: String, volume: u8 },
     /// Send text to the terminal (emitted as event for frontend)
     SendText { text: String, delay_ms: u64 },
+    /// Open a new pane (frontend-handled, emitted as ActionResult::SplitPane)
+    SplitPane {
+        direction: TriggerSplitDirection,
+        command: Option<TriggerSplitCommand>,
+        focus_new_pane: bool,
+        target: TriggerSplitTarget,
+    },
     /// Stop processing remaining actions for this trigger
     StopPropagation,
 }
@@ -284,6 +313,21 @@ impl Terminal {
                         });
                     }
                 }
+                TriggerAction::SplitPane {
+                    direction,
+                    command,
+                    focus_new_pane,
+                    target,
+                } => {
+                    self.trigger_action_results.push(ActionResult::SplitPane {
+                        trigger_id,
+                        direction: direction.clone(),
+                        command: command.clone(),
+                        focus_new_pane: *focus_new_pane,
+                        target: target.clone(),
+                        source_pane_id: None, // per-pane polling not yet wired
+                    });
+                }
                 TriggerAction::StopPropagation => {
                     break;
                 }
@@ -361,6 +405,16 @@ pub enum ActionResult {
         row: usize,
         label: Option<String>,
         color: Option<(u8, u8, u8)>,
+    },
+    /// Frontend should open a new split pane and optionally run a command
+    SplitPane {
+        trigger_id: TriggerId,
+        direction: TriggerSplitDirection,
+        command: Option<TriggerSplitCommand>,
+        focus_new_pane: bool,
+        target: TriggerSplitTarget,
+        /// Pane ID that generated the match. None = per-pane polling not yet available.
+        source_pane_id: Option<u64>,
     },
 }
 

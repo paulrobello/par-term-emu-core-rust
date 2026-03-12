@@ -4943,6 +4943,36 @@ impl PyTerminal {
                             map.insert("color".to_string(), format!("{},{},{}", r, g, b));
                         }
                     }
+                    ActionResult::SplitPane {
+                        trigger_id,
+                        direction,
+                        focus_new_pane,
+                        target,
+                        source_pane_id,
+                        ..
+                    } => {
+                        use crate::terminal::trigger::{TriggerSplitDirection, TriggerSplitTarget};
+                        map.insert("type".to_string(), "split_pane".to_string());
+                        map.insert("trigger_id".to_string(), trigger_id.to_string());
+                        map.insert(
+                            "direction".to_string(),
+                            match direction {
+                                TriggerSplitDirection::Horizontal => "horizontal".to_string(),
+                                TriggerSplitDirection::Vertical => "vertical".to_string(),
+                            },
+                        );
+                        map.insert("focus_new_pane".to_string(), focus_new_pane.to_string());
+                        map.insert(
+                            "target".to_string(),
+                            match target {
+                                TriggerSplitTarget::Active => "active".to_string(),
+                                TriggerSplitTarget::Source => "source".to_string(),
+                            },
+                        );
+                        if let Some(pane_id) = source_pane_id {
+                            map.insert("source_pane_id".to_string(), pane_id.to_string());
+                        }
+                    }
                 }
                 map
             })
