@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **`TriggerAction::SplitPane` and `ActionResult::SplitPane`**: New trigger action that instructs the frontend to open a split pane. Supports `direction` (`horizontal`/`vertical`), `focus_new_pane`, `target` (`active`/`source`), and optional `command` (either `SendText` or `InitialCommand`). Polled via `poll_action_results()` which returns dicts with `type="split_pane"`.
+  - New supporting types: `TriggerSplitDirection`, `TriggerSplitTarget`, `TriggerSplitCommand` (all re-exported from `terminal` module)
+  - Python `TriggerAction("split_pane", {...})` fully handled: `to_trigger_action()` parses all params; `poll_action_results()` serialises the result dict
+
 ## [0.40.0] - 2026-03-08
 
 ### Added

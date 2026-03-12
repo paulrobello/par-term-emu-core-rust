@@ -482,7 +482,7 @@ Register regex patterns to automatically match terminal output and execute actio
 
 - `process_trigger_scans()`: Scan dirty rows for trigger matches. Called automatically in PTY mode; call manually for non-PTY terminals.
 - `poll_trigger_matches() -> list[TriggerMatch]`: Get and clear pending trigger matches.
-- `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (Notify, MarkLine, RunCommand, PlaySound, SendText).
+- `poll_action_results() -> list[dict]`: Get and clear pending frontend action results (Notify, MarkLine, RunCommand, PlaySound, SendText, SplitPane). Each dict always contains a `"type"` key; `"split_pane"` dicts include `trigger_id`, `direction` (`"horizontal"`/`"vertical"`), `focus_new_pane`, `target` (`"active"`/`"source"`), and optionally `source_pane_id`.
 
 #### Trigger Highlights
 
@@ -502,6 +502,7 @@ Actions are created using `TriggerAction(action_type, params)`:
 | `"run_command"` | `command`, `args` (comma-separated) | Emit command event for frontend |
 | `"play_sound"` | `sound_id`, `volume` | Emit sound event for frontend |
 | `"send_text"` | `text`, `delay_ms` | Emit text input event for frontend |
+| `"split_pane"` | `direction` (`"horizontal"`/`"vertical"`), `focus_new_pane` (`"true"`/`"false"`), `target` (`"active"`/`"source"`), `command_type` (`"send_text"`/`"initial_command"`, optional), `command_text` (optional), `command_delay_ms` (optional), `command_args` (comma-separated, optional) | Emit split-pane event for frontend |
 | `"stop"` | *(none)* | Stop processing remaining actions |
 
 ### Shell Integration Extended
@@ -1648,7 +1649,7 @@ A registered trigger pattern.
 Trigger action configuration. Constructed from Python with `TriggerAction(action_type, params)`.
 
 **Properties:**
-- `action_type: str`: Action type (e.g., "highlight", "notify", "mark_line", "set_variable", "run_command", "play_sound", "send_text", "stop")
+- `action_type: str`: Action type (e.g., "highlight", "notify", "mark_line", "set_variable", "run_command", "play_sound", "send_text", "split_pane", "stop")
 - `params: dict[str, str]`: Action parameters (keys depend on action type)
 
 ### TriggerMatch

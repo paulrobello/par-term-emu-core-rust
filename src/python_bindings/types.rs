@@ -2922,7 +2922,7 @@ impl From<&crate::terminal::trigger::TriggerMatch> for PyTriggerMatch {
 #[derive(Clone)]
 pub struct PyTriggerAction {
     /// Action type: "highlight", "notify", "mark_line", "set_variable",
-    /// "run_command", "play_sound", "send_text", "stop"
+    /// "run_command", "play_sound", "send_text", "split_pane", "stop"
     #[pyo3(get)]
     pub action_type: String,
     /// Action parameters (key-value pairs, type-specific)
@@ -2936,7 +2936,7 @@ impl PyTriggerAction {
     ///
     /// Args:
     ///     action_type: Action type string (highlight, notify, mark_line,
-    ///         set_variable, run_command, play_sound, send_text, stop)
+    ///         set_variable, run_command, play_sound, send_text, split_pane, stop)
     ///     params: Dictionary of action parameters
     ///
     /// Returns:
@@ -2945,6 +2945,7 @@ impl PyTriggerAction {
     /// Example:
     ///     >>> action = TriggerAction("highlight", {"bg_r": "255", "bg_g": "0", "bg_b": "0"})
     ///     >>> action = TriggerAction("notify", {"title": "Alert", "message": "Error found: $1"})
+    ///     >>> action = TriggerAction("split_pane", {"direction": "horizontal", "focus_new_pane": "true"})
     #[new]
     #[pyo3(signature = (action_type, params=None))]
     fn new(action_type: String, params: Option<std::collections::HashMap<String, String>>) -> Self {
@@ -3028,6 +3029,65 @@ impl PyTriggerAction {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(0),
             }),
+            "split_pane" => {
+                use crate::terminal::trigger::{
+                    TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,
+                };
+                let direction = match self
+                    .params
+                    .get("direction")
+                    .map(|s| s.as_str())
+                    .unwrap_or("horizontal")
+                {
+                    "vertical" => TriggerSplitDirection::Vertical,
+                    _ => TriggerSplitDirection::Horizontal,
+                };
+                let focus_new_pane = self
+                    .params
+                    .get("focus_new_pane")
+                    .map(|v| v == "true" || v == "1")
+                    .unwrap_or(false);
+                let target = match self
+                    .params
+                    .get("target")
+                    .map(|s| s.as_str())
+                    .unwrap_or("active")
+                {
+                    "source" => TriggerSplitTarget::Source,
+                    _ => TriggerSplitTarget::Active,
+                };
+                let command = match self.params.get("command_type").map(|s| s.as_str()) {
+                    Some("send_text") => {
+                        let text = self.params.get("command_text").cloned().unwrap_or_default();
+                        let delay_ms = self
+                            .params
+                            .get("command_delay_ms")
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(0);
+                        Some(TriggerSplitCommand::SendText { text, delay_ms })
+                    }
+                    Some("initial_command") => {
+                        let command_str =
+                            self.params.get("command_text").cloned().unwrap_or_default();
+                        let args: Vec<String> = self
+                            .params
+                            .get("command_args")
+                            .map(|a| a.split(',').map(|s| s.trim().to_string()).collect())
+                            .unwrap_or_default();
+                        Some(TriggerSplitCommand::InitialCommand {
+                            command: command_str,
+                            args,
+                        })
+                    }
+                    _ => None,
+                };
+                Ok(TriggerAction::SplitPane {
+                    direction,
+                    command,
+                    focus_new_pane,
+                    target,
+                })
+            }
             "stop" => Ok(TriggerAction::StopPropagation),
             _ => Err(format!("Unknown action type: {}", self.action_type)),
         }
