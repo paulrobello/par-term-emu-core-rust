@@ -47,7 +47,7 @@ path = "src/bin/streaming_server.rs"
 required-features = ["streaming"]
 
 [dependencies]
-pyo3 = { version = "0.28.2", optional = true }
+pyo3 = { version = "0.28.3", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
@@ -59,20 +59,20 @@ serde_json = "1.0.149"
 serde_yaml = "0.9.34"
 percent-encoding = "2.3.2"
 url = "2.5.8"
-uuid = { version = "1.22", features = ["v4", "serde"] }
+uuid = { version = "1.23", features = ["v4", "serde"] }
 
 # Streaming server dependencies
-tokio = { version = "1.50", features = ["full"], optional = true }
-tokio-tungstenite = { version = "0.28", optional = true }
+tokio = { version = "1.51", features = ["full"], optional = true }
+tokio-tungstenite = { version = "0.29", optional = true }
 axum = { version = "0.8.8", features = ["ws"], optional = true }
 tower-http = { version = "0.6.8", features = ["fs", "trace"], optional = true }
 futures-util = { version = "0.3.32", optional = true }
 
 # CLI dependencies (for streaming server binary)
-clap = { version = "4.5.60", features = ["derive", "env"], optional = true }
+clap = { version = "4.6.0", features = ["derive", "env"], optional = true }
 anyhow = { version = "1.0.102", optional = true }
 tracing = { version = "0.1.44", optional = true }
-tracing-subscriber = { version = "0.3.22", optional = true }
+tracing-subscriber = { version = "0.3.23", optional = true }
 
 # HTTP client for downloading web frontend (using rustls for cross-compilation support)
 reqwest = { version = "0.13.2", default-features = false, features = ["json", "rustls"], optional = true }
@@ -81,7 +81,7 @@ reqwest = { version = "0.13.2", default-features = false, features = ["json", "r
 flate2 = "1.1.9"
 
 # Archive extraction
-tar = { version = "0.4.44", optional = true }
+tar = { version = "0.4.45", optional = true }
 
 # Protocol Buffers
 prost = { version = "0.14.3", optional = true }
@@ -97,22 +97,22 @@ htpasswd-verify = { version = "0.3.0", optional = true }
 headers = { version = "0.4.1", optional = true }
 
 # System resource monitoring
-sysinfo = { version = "0.38.3", optional = true }
+sysinfo = { version = "0.38.4", optional = true }
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
-image = "0.25.9"
-swash = "0.2.6"
+image = "0.25.10"
+swash = "0.2.7"
 parking_lot = "0.12.5"
-subtle = "2.6"
-zeroize = "1.8"
+subtle = "2.6.1"
+zeroize = "1.8.2"
 
 # Unicode text handling
-unicode-segmentation = "1.12"
+unicode-segmentation = "1.13"
 unicode-normalization = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
-libc = "0.2.183"
-nix = { version = "0.31", features = ["process", "term", "signal"] }
+libc = "0.2.184"
+nix = { version = "0.31.2", features = ["process", "term", "signal"] }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
@@ -124,10 +124,10 @@ tikv-jemallocator = { version = "0.6.1", optional = true }
 prost-build = { version = "0.14.3", optional = true }
 
 [dev-dependencies]
-pyo3 = { version = "0.28.2", features = ["auto-initialize"] }
-tokio = { version = "1.50", features = ["full", "test-util"] }
-proptest = "1.10.0"
-tempfile = "3.26"
+pyo3 = { version = "0.28.3", features = ["auto-initialize"] }
+tokio = { version = "1.51", features = ["full", "test-util"] }
+proptest = "1.11.0"
+tempfile = "3.27"
 
 [features]
 default = ["python"]

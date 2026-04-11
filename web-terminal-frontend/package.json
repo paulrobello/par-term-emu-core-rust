@@ -6,7 +6,7 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
-    "lint": "next lint",
+    "lint": "eslint .",
     "proto:generate": "buf generate"
   },
   "dependencies": {
@@ -16,22 +16,24 @@
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/addon-webgl": "^0.19.0",
     "@xterm/xterm": "^6.0.0",
-    "next": "^16.1.6",
+    "next": "^16.2.3",
     "pako": "^2.1.0",
-    "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
-    "@bufbuild/buf": "^1.66.0",
+    "@bufbuild/buf": "^1.67.0",
     "@bufbuild/protoc-gen-es": "^2.11.0",
-    "@tailwindcss/postcss": "^4.2.1",
-    "@types/node": "^25.3.5",
+    "@tailwindcss/postcss": "^4.2.2",
+    "@types/node": "^25.6.0",
     "@types/pako": "^2.0.4",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "autoprefixer": "^10.4.27",
-    "postcss": "^8.5.8",
-    "tailwindcss": "^4.2.1",
-    "typescript": "^5.9.3"
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.3",
+    "postcss": "^8.5.9",
+    "tailwindcss": "^4.2.2",
+    "typescript": "^6.0.2"
   }
 }
