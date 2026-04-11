@@ -15,7 +15,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.41.0 adds `TriggerAction::SplitPane` — a new trigger action that instructs frontends to open a split pane with configurable direction (`horizontal`/`vertical`), focus behaviour, target pane, and an optional command (`SendText` or `InitialCommand`). Poll results via `poll_action_results()` which returns dicts with `type="split_pane"`. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.41.1 is a maintenance release — dependency bumps across Rust (pyo3 0.28.3, tokio 1.51, tokio-tungstenite 0.29, clap 4.6, image 0.25.10, swash 0.2.7, nix 0.31.2, proptest 1.11), Python (pillow 12.2, maturin 1.13.1, rich 14.3.4, ruff 0.15.10), and the web frontend (next 16.2.3, react 19.2.5, typescript 6.0.2, tailwindcss 4.2.2). Also fixes flaky coprocess tests by replacing fixed sleeps with a poll-with-backoff helper, resolves three real React anti-patterns in the web terminal (forward-reference for retry, ref-during-render in debug overlay, inline component definition on the main page), and migrates the frontend lint pipeline from the now-removed `next lint` subcommand to standalone ESLint 9 flat config. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.41.0
+
+Version 0.41.0 added `TriggerAction::SplitPane` — a new trigger action that instructs frontends to open a split pane with configurable direction (`horizontal`/`vertical`), focus behaviour, target pane, and an optional command (`SendText` or `InitialCommand`). Poll results via `poll_action_results()` which returns dicts with `type="split_pane"`.
 
 ## What's New in 0.40.0
 

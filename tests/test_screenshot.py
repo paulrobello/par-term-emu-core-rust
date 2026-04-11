@@ -307,8 +307,14 @@ class TestScreenshotEdgeCases:
         png_bytes = term.screenshot()
         assert len(png_bytes) > 0
 
+    @pytest.mark.timeout(30)
     def test_very_large_terminal(self):
-        """Test screenshot of large terminal"""
+        """Test screenshot of large terminal.
+
+        Rendering 200×100 = 20,000 cells to PNG is legitimately slow — under
+        CPU contention it can exceed the 5s global pytest timeout. Override
+        to 30s for this specific test rather than relaxing the default.
+        """
         term = Terminal(200, 100)
         for i in range(50):
             term.process_str(f"Line {i}\n")

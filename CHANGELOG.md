@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-04-11
+
 ### Changed
 - **Dependency updates across all three sub-projects**:
   - **Rust** (`Cargo.toml`): bumped pyo3 0.28.2→0.28.3, tokio 1.50→1.51, tokio-tungstenite 0.28→0.29, clap 4.5.60→4.6.0, uuid 1.22→1.23, image 0.25.9→0.25.10, swash 0.2.6→0.2.7, nix 0.31→0.31.2, proptest 1.10→1.11, tempfile 3.26→3.27, plus patch bumps (libc, subtle, zeroize, sysinfo, tar, tracing-subscriber, unicode-segmentation). No source changes required — all API-compatible.
@@ -18,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Terminal.tsx reconnect forward-reference**: `scheduleRetry` called `connect()` before `connect` was declared (TDZ / `react-hooks/refs` violation). Introduced a `connectRef` forward-reference synced via `useEffect` so scheduled reconnects always invoke the current closure.
 - **TerminalDebug.tsx ref-during-render**: The debug overlay read `debugLogs.current.length` during render, which React disallows. Replaced with a `logCount` state updated when logs are pushed.
 - **page.tsx inline component definition**: `StatusIndicator` was defined inside the `Home` component body, so it was re-created every render and would reset its own state. Hoisted to module scope alongside a new `STATUS_CONFIG` table and now takes `status` as a prop.
+- **Flaky `test_ioctl_returns_updated_size`**: Replaced fixed `time.sleep(0.3)` / `time.sleep(0.5)` windows with a `wait_for_either` poll loop (50ms interval, 5s deadline) that watches the subprocess log file for SIGWINCH / poll markers. Under CPU contention the fixed sleeps raced the scheduler and the spawned Python interpreter had not yet written its log line.
+- **Slow `test_very_large_terminal`**: Added `@pytest.mark.timeout(30)` override — rendering a 200×100 (20k-cell) terminal to PNG legitimately takes 6-9s under CPU contention, exceeding the 5s global pytest timeout. The default stays tight for fast tests.
 
 ### Build / Tooling
 - **Frontend lint migrated from `next lint` to standalone ESLint**: Next.js 16 removed the `next lint` subcommand. Added `eslint@^9.39.4` + `eslint-config-next@^16.2.3` as dev dependencies, replaced legacy `.eslintrc.json` with flat-config `eslint.config.mjs`, and updated the `lint` npm script to `eslint .`. Downgraded two compiler-focused `react-hooks` v7 rules (`set-state-in-effect`, `preserve-manual-memoization`) from `error` to `warn` — they are calibrated for React-Compiler codebases and fire false-positives on idiomatic Next.js SSR hydration and pre-Compiler useCallback patterns.
