@@ -207,7 +207,9 @@ export function OnscreenKeyboard({
   const keyboardRef = useRef<HTMLDivElement>(null);
   const macroAbortRef = useRef<boolean>(false);
 
-  // Load macros from localStorage on mount
+  // Load macros from localStorage after mount. See app/page.tsx for the
+  // rationale on preferring post-mount hydration over lazy initializers in
+  // a Next.js SSR context.
   useEffect(() => {
     try {
       const stored = localStorage.getItem(MACROS_STORAGE_KEY);

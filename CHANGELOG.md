@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependency updates across all three sub-projects**:
+  - **Rust** (`Cargo.toml`): bumped pyo3 0.28.2→0.28.3, tokio 1.50→1.51, tokio-tungstenite 0.28→0.29, clap 4.5.60→4.6.0, uuid 1.22→1.23, image 0.25.9→0.25.10, swash 0.2.6→0.2.7, nix 0.31→0.31.2, proptest 1.10→1.11, tempfile 3.26→3.27, plus patch bumps (libc, subtle, zeroize, sysinfo, tar, tracing-subscriber, unicode-segmentation). No source changes required — all API-compatible.
+  - **Python** (`pyproject.toml`): bumped pillow 12.1.1→12.2.0, maturin 1.12.6→1.13.1, pytest 9.0.2→9.0.3, rich 14.3.3→14.3.4, ruff 0.15.5→0.15.10.
+  - **Frontend** (`web-terminal-frontend/package.json`): bumped next 16.1.6→16.2.3, react/react-dom 19.2.4→19.2.5, typescript 5.9.3→6.0.2 (major), @bufbuild/buf 1.66→1.67, @tailwindcss/postcss + tailwindcss 4.2.1→4.2.2, @types/node 25.3→25.6, postcss 8.5.8→8.5.9.
+
+### Fixed
+- **Flaky coprocess tests**: Replaced fixed `thread::sleep(200ms)` with a `poll_until(timeout_ms, fn)` helper (10ms poll interval, 2s deadline) throughout the coprocess test suite in both `src/coprocess.rs` and `tests/test_coprocess.rs`. Fixed-duration sleeps raced the OS scheduler under parallel CPU contention, causing intermittent `Some(true) vs Some(false)` status failures on loaded CI boxes. The full suite now passes 3/3 back-to-back runs. Affects: `test_coprocess_write_read`, `test_coprocess_feed_output`, `test_coprocess_dead_process`, `test_coprocess_stderr_capture`, `test_coprocess_auto_cleanup_never_policy`, `test_coprocess_restart_always_policy`, `test_coprocess_restart_on_failure_clean_exit`, `test_coprocess_restart_on_failure_nonzero_exit`, `test_coprocess_no_copy_output`.
+- **Terminal.tsx reconnect forward-reference**: `scheduleRetry` called `connect()` before `connect` was declared (TDZ / `react-hooks/refs` violation). Introduced a `connectRef` forward-reference synced via `useEffect` so scheduled reconnects always invoke the current closure.
+- **TerminalDebug.tsx ref-during-render**: The debug overlay read `debugLogs.current.length` during render, which React disallows. Replaced with a `logCount` state updated when logs are pushed.
+- **page.tsx inline component definition**: `StatusIndicator` was defined inside the `Home` component body, so it was re-created every render and would reset its own state. Hoisted to module scope alongside a new `STATUS_CONFIG` table and now takes `status` as a prop.
+
+### Build / Tooling
+- **Frontend lint migrated from `next lint` to standalone ESLint**: Next.js 16 removed the `next lint` subcommand. Added `eslint@^9.39.4` + `eslint-config-next@^16.2.3` as dev dependencies, replaced legacy `.eslintrc.json` with flat-config `eslint.config.mjs`, and updated the `lint` npm script to `eslint .`. Downgraded two compiler-focused `react-hooks` v7 rules (`set-state-in-effect`, `preserve-manual-memoization`) from `error` to `warn` — they are calibrated for React-Compiler codebases and fire false-positives on idiomatic Next.js SSR hydration and pre-Compiler useCallback patterns.
+
 ## [0.41.0] - 2026-03-11
 
 ### Added

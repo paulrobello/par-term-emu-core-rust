@@ -123,6 +123,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   // Track fontSize prop for use in handlers
   const fontSizeRef = useRef<number | undefined>(fontSize);
 
+  // Forward-reference to `connect` so `scheduleRetry` (declared earlier) can
+  // invoke it without a TDZ/no-use-before-declare violation. The ref is
+  // populated once the real `connect` useCallback runs below.
+  const connectRef = useRef<(() => void) | null>(null);
+
   const updateStatus = (newStatus: ConnectionStatus) => {
     setStatus(newStatus);
     onStatusChange?.(newStatus);
@@ -191,7 +196,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       if (!retryCancelledRef.current) {
         // Increase delay for next retry (max 5 seconds)
         retryDelayRef.current = Math.min(retryDelayRef.current * 2, 5000);
-        connect();
+        connectRef.current?.();
       }
     }, delay);
   }, [onRetryingChange]);
@@ -940,6 +945,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       wsRef.current = null;
     }
   }, [cancelRetry, stopHeartbeat]);
+
+  // Keep `connectRef` (used by the earlier `scheduleRetry` useCallback) in
+  // sync with the latest `connect` identity so scheduled reconnects always
+  // invoke the current closure.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   // Expose control functions to parent
   useEffect(() => {

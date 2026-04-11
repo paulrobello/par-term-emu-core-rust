@@ -49,6 +49,46 @@ const getStoredNumber = (key: string, defaultValue: number, min: number, max: nu
   return Math.max(min, Math.min(max, num));
 };
 
+// Status indicator style table. Module-level so the `StatusIndicator`
+// component below can be declared outside any parent component (required by
+// react-hooks/component-declaration — components defined inside another
+// component are re-created every render and reset their own state).
+const STATUS_CONFIG: Record<ConnectionStatus, { color: string; text: string; pulse: boolean }> = {
+  disconnected: { color: 'bg-gray-500', text: 'Disconnected', pulse: false },
+  connecting: { color: 'bg-yellow-500', text: 'Connecting...', pulse: true },
+  connected: { color: 'bg-green-500', text: 'Connected', pulse: false },
+  error: { color: 'bg-red-500', text: 'Error', pulse: false },
+};
+
+// Small status dot + optional label. Declared at module scope so React sees a
+// stable component identity across renders.
+function StatusIndicator({
+  status,
+  showText = true,
+  className = '',
+}: {
+  status: ConnectionStatus;
+  showText?: boolean;
+  className?: string;
+}) {
+  const currentStatus = STATUS_CONFIG[status];
+  return (
+    <div className={`flex items-center gap-1.5 ${className}`}>
+      <div className="status-indicator">
+        {currentStatus.pulse && (
+          <span className={`status-indicator-ping ${currentStatus.color}`} />
+        )}
+        <span className={`status-indicator-dot ${currentStatus.color}`} />
+      </div>
+      {showText && (
+        <span className="text-xs font-medium text-terminal-text">
+          {currentStatus.text}
+        </span>
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   // Auto-detect WebSocket URL based on current location
   const getDefaultWsUrl = () => {
@@ -100,7 +140,15 @@ export default function Home() {
   const [hyperlinks, setHyperlinks] = useState<Array<{url: string; row: number; col: number; id?: string}>>([]);
   const [userVars, setUserVars] = useState<Map<string, string>>(new Map());
 
-  // Load persisted UI state from localStorage on mount
+  // Load persisted UI state from localStorage after mount.
+  //
+  // We deliberately hydrate in an effect rather than via `useState(() => ...)`
+  // lazy initializers: during SSR `typeof window === 'undefined'`, so lazy
+  // initializers would return defaults on the server but stored values on the
+  // first client render, producing a hydration mismatch. The effect pattern
+  // forces the first client render to match the server, then syncs once on
+  // mount. This is the canonical Next.js approach for localStorage-backed
+  // UI state.
   useEffect(() => {
     // Load showControls from localStorage (default: true)
     const storedShowControls = getStoredBoolean(STORAGE_KEY_SHOW_CONTROLS, true);
@@ -134,48 +182,6 @@ export default function Home() {
     localStorage.setItem(STORAGE_KEY_FONT_SIZE, String(fontSize));
   }, [fontSize]);
 
-  const statusConfig = {
-    disconnected: {
-      color: 'bg-gray-500',
-      text: 'Disconnected',
-      pulse: false,
-    },
-    connecting: {
-      color: 'bg-yellow-500',
-      text: 'Connecting...',
-      pulse: true,
-    },
-    connected: {
-      color: 'bg-green-500',
-      text: 'Connected',
-      pulse: false,
-    },
-    error: {
-      color: 'bg-red-500',
-      text: 'Error',
-      pulse: false,
-    },
-  };
-
-  const currentStatus = statusConfig[status];
-
-  // Status indicator component used in multiple places
-  const StatusIndicator = ({ showText = true, className = '' }: { showText?: boolean; className?: string }) => (
-    <div className={`flex items-center gap-1.5 ${className}`}>
-      <div className="status-indicator">
-        {currentStatus.pulse && (
-          <span className={`status-indicator-ping ${currentStatus.color}`} />
-        )}
-        <span className={`status-indicator-dot ${currentStatus.color}`} />
-      </div>
-      {showText && (
-        <span className="text-xs font-medium text-terminal-text">
-          {currentStatus.text}
-        </span>
-      )}
-    </div>
-  );
-
   return (
     <main className="flex h-[100dvh] flex-col overflow-hidden">
       {/* Header - Hideable */}
@@ -199,7 +205,7 @@ export default function Home() {
                 placeholder="ws://127.0.0.1:8080"
               />
               <div className="absolute right-2 top-1/2 -translate-y-1/2">
-                <StatusIndicator showText={true} />
+                <StatusIndicator status={status} showText={true} />
               </div>
             </div>
 

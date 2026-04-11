@@ -45,6 +45,10 @@ const TerminalDebug = forwardRef<{ getLogs: () => DebugLog[] }, TerminalDebugPro
     const wsRef = useRef<WebSocket | null>(null);
     const debugLogs = useRef<DebugLog[]>([]);
     const [isReady, setIsReady] = useState(false);
+    // Rendered count of debug logs. Updated whenever `debugLogs` mutates so
+    // the overlay can display a live count without touching a ref during
+    // render (which would be a react-hooks/refs rule violation).
+    const [logCount, setLogCount] = useState(0);
 
     // Expose debug logs via ref
     useImperativeHandle(ref, () => ({
@@ -76,6 +80,8 @@ const TerminalDebug = forwardRef<{ getLogs: () => DebugLog[] }, TerminalDebugPro
       if (debugLogs.current.length > 1000) {
         debugLogs.current = debugLogs.current.slice(-1000);
       }
+
+      setLogCount(debugLogs.current.length);
 
       // Log to console for immediate visibility
       console.log(`[DEBUG ${type}]`, log);
@@ -266,7 +272,7 @@ const TerminalDebug = forwardRef<{ getLogs: () => DebugLog[] }, TerminalDebugPro
             fontFamily: 'monospace',
             borderRadius: '4px',
           }}>
-            Debug Mode | Logs: {debugLogs.current.length} |
+            Debug Mode | Logs: {logCount} |
             Open console (F12) for details
           </div>
         )}
