@@ -1,6 +1,22 @@
 // Integration tests for coprocess system (Feature 18)
 use par_term_emu_core_rust::coprocess::{CoprocessConfig, CoprocessManager};
 
+/// Poll `f` until it returns `true` or the timeout elapses. Uses a short
+/// sleep between attempts so tests stay responsive even under heavy CPU
+/// contention (avoids the "fixed N ms sleep races the OS scheduler" class
+/// of flake).
+fn poll_until<F: FnMut() -> bool>(timeout_ms: u64, mut f: F) -> bool {
+    let start = std::time::Instant::now();
+    let deadline = std::time::Duration::from_millis(timeout_ms);
+    while start.elapsed() < deadline {
+        if f() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    f()
+}
+
 #[test]
 fn test_coprocess_spawn_cat() {
     let mut mgr = CoprocessManager::new();
@@ -24,11 +40,16 @@ fn test_coprocess_write_read() {
     let id = mgr.start(config).unwrap();
 
     mgr.write(id, b"hello\nworld\n").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let output = mgr.read(id).unwrap();
-    assert!(output.contains(&"hello".to_string()));
-    assert!(output.contains(&"world".to_string()));
+    // Poll until both lines round-trip through the `cat` subprocess, or give
+    // up after 2s. 2s is 20x the previous fixed 100ms sleep — enough slack
+    // for loaded CI boxes without slowing the happy path.
+    let mut collected: Vec<String> = Vec::new();
+    let ok = poll_until(2000, || {
+        collected.extend(mgr.read(id).unwrap_or_default());
+        collected.iter().any(|l| l == "hello") && collected.iter().any(|l| l == "world")
+    });
+    assert!(ok, "expected both 'hello' and 'world', got {collected:?}");
 
     mgr.stop(id).unwrap();
 }
@@ -81,10 +102,13 @@ fn test_coprocess_feed_output() {
     let id = mgr.start(config).unwrap();
 
     mgr.feed_output(b"fed data\n");
-    std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let output = mgr.read(id).unwrap();
-    assert!(output.contains(&"fed data".to_string()));
+    let mut collected: Vec<String> = Vec::new();
+    let ok = poll_until(2000, || {
+        collected.extend(mgr.read(id).unwrap_or_default());
+        collected.iter().any(|l| l == "fed data")
+    });
+    assert!(ok, "expected 'fed data', got {collected:?}");
 
     mgr.stop(id).unwrap();
 }
@@ -98,9 +122,15 @@ fn test_coprocess_dead_process() {
     };
     let id = mgr.start(config).unwrap();
 
-    std::thread::sleep(std::time::Duration::from_millis(200));
-
-    assert_eq!(mgr.status(id), Some(false));
+    // `true` exits immediately, but the reaper thread needs a moment to
+    // observe the exit. Poll instead of banking on a fixed 200ms window —
+    // on a loaded CI box that window can easily slip.
+    let ok = poll_until(2000, || mgr.status(id) == Some(false));
+    assert!(
+        ok,
+        "coprocess never transitioned to dead: {:?}",
+        mgr.status(id)
+    );
     mgr.stop(id).unwrap();
 }
 
@@ -123,19 +153,26 @@ fn test_coprocess_no_copy_output() {
     };
     let id = mgr.start(config).unwrap();
 
-    // feed_output should NOT send to this coprocess
+    // feed_output should NOT send to this coprocess. A short sleep here is
+    // unavoidable (we're asserting a negative — that nothing appears) but
+    // 200ms is plenty of headroom; any routing bug surfaces immediately.
     mgr.feed_output(b"should not appear\n");
-    std::thread::sleep(std::time::Duration::from_millis(100));
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     let output = mgr.read(id).unwrap();
-    assert!(output.is_empty());
+    assert!(
+        output.is_empty(),
+        "expected no output from feed_output, got {output:?}"
+    );
 
-    // But direct write should work
+    // But direct write should work — poll for it.
     mgr.write(id, b"direct write\n").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    let output = mgr.read(id).unwrap();
-    assert!(output.contains(&"direct write".to_string()));
+    let mut collected: Vec<String> = Vec::new();
+    let ok = poll_until(2000, || {
+        collected.extend(mgr.read(id).unwrap_or_default());
+        collected.iter().any(|l| l == "direct write")
+    });
+    assert!(ok, "expected 'direct write', got {collected:?}");
 
     mgr.stop(id).unwrap();
 }

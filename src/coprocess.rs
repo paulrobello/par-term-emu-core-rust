@@ -488,6 +488,22 @@ impl Drop for CoprocessManager {
 mod tests {
     use super::*;
 
+    /// Poll `f` until it returns `true` or the timeout elapses. Uses a short
+    /// sleep between attempts so tests stay responsive even under heavy CPU
+    /// contention. Fixed `thread::sleep(Duration::from_millis(N))` races the
+    /// OS scheduler on loaded CI boxes — this is the recommended replacement.
+    fn poll_until<F: FnMut() -> bool>(timeout_ms: u64, mut f: F) -> bool {
+        let start = std::time::Instant::now();
+        let deadline = std::time::Duration::from_millis(timeout_ms);
+        while start.elapsed() < deadline {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        f()
+    }
+
     #[test]
     fn test_coprocess_config_default() {
         let config = CoprocessConfig::default();
@@ -587,13 +603,14 @@ mod tests {
         // Write data to coprocess
         mgr.write(id, b"hello\nworld\n").unwrap();
 
-        // Give cat time to process
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        // Read output
-        let output = mgr.read(id).unwrap();
-        assert!(output.contains(&"hello".to_string()));
-        assert!(output.contains(&"world".to_string()));
+        // Poll for both lines to round-trip through `cat`. 2s deadline gives
+        // plenty of headroom under CI load.
+        let mut collected: Vec<String> = Vec::new();
+        let ok = poll_until(2000, || {
+            collected.extend(mgr.read(id).unwrap_or_default());
+            collected.iter().any(|l| l == "hello") && collected.iter().any(|l| l == "world")
+        });
+        assert!(ok, "expected 'hello' and 'world', got {collected:?}");
 
         mgr.stop(id).unwrap();
     }
@@ -615,10 +632,13 @@ mod tests {
         let id = mgr.start(config).unwrap();
 
         mgr.feed_output(b"fed line\n");
-        std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let output = mgr.read(id).unwrap();
-        assert!(output.contains(&"fed line".to_string()));
+        let mut collected: Vec<String> = Vec::new();
+        let ok = poll_until(2000, || {
+            collected.extend(mgr.read(id).unwrap_or_default());
+            collected.iter().any(|l| l == "fed line")
+        });
+        assert!(ok, "expected 'fed line', got {collected:?}");
 
         mgr.stop(id).unwrap();
     }
@@ -632,10 +652,13 @@ mod tests {
         };
         let id = mgr.start(config).unwrap();
 
-        // Wait for process to exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        assert_eq!(mgr.status(id), Some(false));
+        // Wait for the reaper thread to observe the exit.
+        let ok = poll_until(2000, || mgr.status(id) == Some(false));
+        assert!(
+            ok,
+            "process never transitioned to dead: {:?}",
+            mgr.status(id)
+        );
         mgr.stop(id).unwrap();
     }
 
@@ -649,11 +672,15 @@ mod tests {
         };
         let id = mgr.start(config).unwrap();
 
-        // Give process time to write stderr and exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        let errors = mgr.read_errors(id).unwrap();
-        assert!(errors.contains(&"error_msg".to_string()));
+        // Poll for the stderr line to arrive. The subprocess writes and exits
+        // immediately, but we still need to let the stderr reader thread
+        // observe the write.
+        let mut collected: Vec<String> = Vec::new();
+        let ok = poll_until(2000, || {
+            collected.extend(mgr.read_errors(id).unwrap_or_default());
+            collected.iter().any(|l| l == "error_msg")
+        });
+        assert!(ok, "expected 'error_msg' on stderr, got {collected:?}");
         mgr.stop(id).unwrap();
     }
 
@@ -675,8 +702,10 @@ mod tests {
         assert_eq!(mgr.list(), vec![id]);
 
         // Wait for process to exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(mgr.status(id), Some(false));
+        assert!(
+            poll_until(2000, || mgr.status(id) == Some(false)),
+            "process never transitioned to dead"
+        );
 
         // feed_output should clean up the dead process
         mgr.feed_output(b"data\n");
@@ -698,8 +727,10 @@ mod tests {
         let id = mgr.start(config).unwrap();
 
         // Wait for process to exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(mgr.status(id), Some(false));
+        assert!(
+            poll_until(2000, || mgr.status(id) == Some(false)),
+            "process never transitioned to dead"
+        );
 
         // feed_output should restart the process (same ID preserved)
         mgr.feed_output(b"data\n");
@@ -724,8 +755,10 @@ mod tests {
         let id = mgr.start(config).unwrap();
 
         // Wait for process to exit cleanly
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(mgr.status(id), Some(false));
+        assert!(
+            poll_until(2000, || mgr.status(id) == Some(false)),
+            "process never transitioned to dead"
+        );
 
         // feed_output should remove it (clean exit, OnFailure policy)
         mgr.feed_output(b"data\n");
@@ -744,8 +777,10 @@ mod tests {
         let id = mgr.start(config).unwrap();
 
         // Wait for process to exit with failure
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(mgr.status(id), Some(false));
+        assert!(
+            poll_until(2000, || mgr.status(id) == Some(false)),
+            "process never transitioned to dead"
+        );
 
         // feed_output should restart it (non-zero exit, OnFailure policy)
         mgr.feed_output(b"data\n");
