@@ -5,6 +5,12 @@ description: "Use when the user asks how code works, wants to understand archite
 
 # Exploring Codebases with GitNexus
 
+> **IMPORTANT — How to use GitNexus**: GitNexus is a standalone CLI tool. Run it directly
+> via `gitnexus <command>` in the Bash tool. Do **NOT** use `mcpl call gitnexus ...`.
+
+> **Multi-repo note**: Always pass `--repo <name>` to every command to avoid
+> "multiple repositories" errors.
+
 ## When to Use
 
 - "How does authentication work?"
@@ -16,63 +22,65 @@ description: "Use when the user asks how code works, wants to understand archite
 ## Workflow
 
 ```
-1. READ gitnexus://repos                          → Discover indexed repos
-2. READ gitnexus://repo/{name}/context             → Codebase overview, check staleness
-3. gitnexus_query({query: "<what you want to understand>"})  → Find related execution flows
-4. gitnexus_context({name: "<symbol>"})            → Deep dive on specific symbol
-5. READ gitnexus://repo/{name}/process/{name}      → Trace full execution flow
+1. gitnexus list                                              → Discover indexed repos
+2. gitnexus status                                            → Check index freshness
+3. gitnexus query "<what you want to understand>" --repo <name>  → Find related execution flows
+4. gitnexus context "<symbol>" --repo <name>                  → Deep dive on specific symbol
+5. Read source files from the returned file paths for implementation details
 ```
 
-> If step 2 says "Index is stale" → run `npx gitnexus analyze` in terminal.
+> If step 2 says the index is stale → run `gitnexus analyze` in terminal.
 
 ## Checklist
 
 ```
-- [ ] READ gitnexus://repo/{name}/context
-- [ ] gitnexus_query for the concept you want to understand
-- [ ] Review returned processes (execution flows)
-- [ ] gitnexus_context on key symbols for callers/callees
-- [ ] READ process resource for full execution traces
+- [ ] gitnexus status to verify index freshness
+- [ ] gitnexus query for the concept you want to understand
+- [ ] Review returned processes (execution flows) and file paths
+- [ ] gitnexus context on key symbols for callers/callees
 - [ ] Read source files for implementation details
 ```
 
-## Resources
+## Commands
 
-| Resource                                | What you get                                            |
-| --------------------------------------- | ------------------------------------------------------- |
-| `gitnexus://repo/{name}/context`        | Stats, staleness warning (~150 tokens)                  |
-| `gitnexus://repo/{name}/clusters`       | All functional areas with cohesion scores (~300 tokens) |
-| `gitnexus://repo/{name}/cluster/{name}` | Area members with file paths (~500 tokens)              |
-| `gitnexus://repo/{name}/process/{name}` | Step-by-step execution trace (~200 tokens)              |
+**`gitnexus query`** — find execution flows related to a concept:
 
-## Tools
-
-**gitnexus_query** — find execution flows related to a concept:
-
-```
-gitnexus_query({query: "payment processing"})
-→ Processes: CheckoutFlow, RefundFlow, WebhookHandler
-→ Symbols grouped by flow with file locations
+```bash
+gitnexus query "payment processing" --repo my-app
+# → Processes: CheckoutFlow, RefundFlow, WebhookHandler
+# → Symbols grouped by flow with file locations
 ```
 
-**gitnexus_context** — 360-degree view of a symbol:
+**`gitnexus context`** — 360-degree view of a symbol:
 
+```bash
+gitnexus context "validateUser" --repo my-app
+# → Incoming calls: loginHandler, apiMiddleware
+# → Outgoing calls: checkToken, getUserById
+# → Processes: LoginFlow (step 2/5), TokenRefresh (step 1/3)
 ```
-gitnexus_context({name: "validateUser"})
-→ Incoming calls: loginHandler, apiMiddleware
-→ Outgoing calls: checkToken, getUserById
-→ Processes: LoginFlow (step 2/5), TokenRefresh (step 1/3)
+
+**`gitnexus cypher`** — custom graph queries for structural exploration:
+
+```bash
+gitnexus cypher 'MATCH (f:Function)-[:MEMBER_OF]->(c:Class {name: "PaymentService"}) RETURN f.name, f.filePath' --repo my-app
 ```
 
 ## Example: "How does payment processing work?"
 
-```
-1. READ gitnexus://repo/my-app/context       → 918 symbols, 45 processes
-2. gitnexus_query({query: "payment processing"})
-   → CheckoutFlow: processPayment → validateCard → chargeStripe
-   → RefundFlow: initiateRefund → calculateRefund → processRefund
-3. gitnexus_context({name: "processPayment"})
-   → Incoming: checkoutHandler, webhookHandler
-   → Outgoing: validateCard, chargeStripe, saveTransaction
-4. Read src/payments/processor.ts for implementation details
+```bash
+# 1. Check index is fresh
+gitnexus status
+
+# 2. Find execution flows for the concept
+gitnexus query "payment processing" --repo my-app
+# → CheckoutFlow: processPayment → validateCard → chargeStripe
+# → RefundFlow: initiateRefund → calculateRefund → processRefund
+
+# 3. Deep dive on the main entry point
+gitnexus context "processPayment" --repo my-app
+# → Incoming: checkoutHandler, webhookHandler
+# → Outgoing: validateCard, chargeStripe, saveTransaction
+
+# 4. Read src/payments/processor.ts for implementation details
 ```
