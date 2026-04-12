@@ -38,3 +38,9 @@ test_font_fallback.py
 claude_scratch/
 .gitnexus
 *.dSYM/
+
+# Local/user-specific configs
+CLAUDE.local.md
+settings.local.json
+*.local
+*.local.*
