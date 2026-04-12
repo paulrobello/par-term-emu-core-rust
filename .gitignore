@@ -44,3 +44,4 @@ CLAUDE.local.md
 settings.local.json
 *.local
 *.local.*
+.claude/.cc2cc-session-id
