@@ -110,6 +110,7 @@ dev:
 	uv run maturin develop --release
 
 install:
+	rm -rf target/wheels
 	uv run maturin build --release
 	uv pip install target/wheels/*.whl --force-reinstall
 
