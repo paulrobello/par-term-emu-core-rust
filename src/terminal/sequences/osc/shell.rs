@@ -9,9 +9,9 @@ use url::Url;
 impl Terminal {
     pub(crate) fn handle_osc_shell(&mut self, command: &str, params: &[&[u8]]) {
         match command {
-            "7" => {
+            "7"
                 // Set current working directory (OSC 7)
-                if self.accept_osc7 && params.len() >= 2 {
+                if self.accept_osc7 && params.len() >= 2 => {
                     if let Ok(cwd_url) = std::str::from_utf8(params[1]) {
                         if let Some((path, hostname, username)) = Self::parse_osc7_url(cwd_url) {
                             // record_cwd_change handles setting shell_integration state
@@ -31,10 +31,9 @@ impl Terminal {
                         }
                     }
                 }
-            }
-            "133" => {
+            "133"
                 // Shell integration (iTerm2/VSCode)
-                if params.len() >= 2 {
+                if params.len() >= 2 => {
                     if let Ok(marker) = std::str::from_utf8(params[1]) {
                         let ts = crate::terminal::unix_millis();
                         let abs_line = self.active_grid().scrollback_len() + self.cursor.row;
@@ -285,7 +284,6 @@ impl Terminal {
                         }
                     }
                 }
-            }
             _ => {}
         }
     }

@@ -8,31 +8,27 @@ use crate::terminal::Terminal;
 impl Terminal {
     pub(crate) fn handle_osc_notify(&mut self, command: &str, params: &[&[u8]]) {
         match command {
-            "9" => {
-                if params.len() >= 2 {
-                    if let Ok(param1) = std::str::from_utf8(params[1]) {
-                        let param1 = param1.trim();
-                        if param1 == "4" {
-                            self.handle_osc9_progress(&params[2..]);
-                        } else {
-                            let notification = Notification::new(String::new(), param1.to_string());
-                            self.enqueue_notification(notification);
-                        }
+            "9" if params.len() >= 2 => {
+                if let Ok(param1) = std::str::from_utf8(params[1]) {
+                    let param1 = param1.trim();
+                    if param1 == "4" {
+                        self.handle_osc9_progress(&params[2..]);
+                    } else {
+                        let notification = Notification::new(String::new(), param1.to_string());
+                        self.enqueue_notification(notification);
                     }
                 }
             }
-            "777" => {
-                if params.len() >= 4 {
-                    if let Ok(action) = std::str::from_utf8(params[1]) {
-                        if action == "notify" {
-                            if let (Ok(title), Ok(message)) = (
-                                std::str::from_utf8(params[2]),
-                                std::str::from_utf8(params[3]),
-                            ) {
-                                let notification =
-                                    Notification::new(title.to_string(), message.to_string());
-                                self.enqueue_notification(notification);
-                            }
+            "777" if params.len() >= 4 => {
+                if let Ok(action) = std::str::from_utf8(params[1]) {
+                    if action == "notify" {
+                        if let (Ok(title), Ok(message)) = (
+                            std::str::from_utf8(params[2]),
+                            std::str::from_utf8(params[3]),
+                        ) {
+                            let notification =
+                                Notification::new(title.to_string(), message.to_string());
+                            self.enqueue_notification(notification);
                         }
                     }
                 }

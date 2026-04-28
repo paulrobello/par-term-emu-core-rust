@@ -449,7 +449,7 @@ impl Terminal {
     pub fn get_rendering_hints(&self, sort_by_priority: bool) -> Vec<RenderingHint> {
         let mut hints = self.rendering_hints.clone();
         if sort_by_priority {
-            hints.sort_by(|a, b| b.priority.cmp(&a.priority));
+            hints.sort_by_key(|hint| std::cmp::Reverse(hint.priority));
         }
         hints
     }

@@ -29,12 +29,11 @@ impl Terminal {
                 // Restore cursor (DECRC)
                 self.restore_cursor();
             }
-            (b'H', _) => {
+            (b'H', _)
                 // Set tab stop at current column (HTS)
-                if self.cursor.col < self.tab_stops.len() {
+                if self.cursor.col < self.tab_stops.len() => {
                     self.tab_stops[self.cursor.col] = true;
                 }
-            }
             (b'M', _) => {
                 // Reverse index (RI) - move cursor up one line, scroll if at top
                 self.pending_wrap = false;

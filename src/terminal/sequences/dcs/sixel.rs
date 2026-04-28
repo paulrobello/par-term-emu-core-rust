@@ -63,16 +63,15 @@ impl Terminal {
                     }
                 }
             }
-            '!' => {
+            '!'
                 // Repeat sequence: !Pn character
-                if buffer_str.len() >= 2 {
+                if buffer_str.len() >= 2 => {
                     let count_str = &buffer_str[1..buffer_str.len() - 1];
                     let repeat_char = buffer_str.chars().last().unwrap_or('?');
                     if let Ok(count) = count_str.parse::<usize>() {
                         parser.parse_repeat(count, repeat_char);
                     }
                 }
-            }
             _ => {}
         }
 

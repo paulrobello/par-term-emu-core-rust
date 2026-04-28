@@ -244,9 +244,9 @@ impl Terminal {
                     self.cursor.goto(0, if self.origin_mode { top } else { 0 });
                 }
             }
-            's' => {
+            's'
                 // Set left and right margins (DECSLRM) - only if DECLRMM is set
-                if self.use_lr_margins {
+                if self.use_lr_margins => {
                     let mut iter = params.iter();
                     let left = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                     let right = iter
@@ -263,7 +263,6 @@ impl Terminal {
                         self.right_margin = right;
                     }
                 }
-            }
             _ => {}
         }
     }

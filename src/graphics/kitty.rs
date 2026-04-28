@@ -318,13 +318,12 @@ impl KittyParser {
                         // Relative X offset in pixels
                         self.relative_x_offset = value.parse().ok();
                     }
-                    "V" => {
+                    "V"
                         // Relative Y offset in pixels (note: different from v=height)
                         // Only parse as relative offset if we have parent placement
-                        if self.parent_image_id.is_some() {
+                        if self.parent_image_id.is_some() => {
                             self.relative_y_offset = value.parse().ok();
                         }
-                    }
                     "o" => {
                         // Compression format
                         if let Some(c) = value.chars().next() {

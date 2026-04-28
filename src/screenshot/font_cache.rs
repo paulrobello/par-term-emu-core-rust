@@ -694,15 +694,11 @@ impl FontCache {
 
         // Ensure fonts are loaded
         match font_type {
-            FontType::Emoji => {
-                if self.emoji_font.is_none() {
-                    self.try_load_emoji_font();
-                }
+            FontType::Emoji if self.emoji_font.is_none() => {
+                self.try_load_emoji_font();
             }
-            FontType::Cjk => {
-                if self.cjk_fonts.is_empty() {
-                    self.try_load_cjk_font();
-                }
+            FontType::Cjk if self.cjk_fonts.is_empty() => {
+                self.try_load_cjk_font();
             }
             _ => {}
         }

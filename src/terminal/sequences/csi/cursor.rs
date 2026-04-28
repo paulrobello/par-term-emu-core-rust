@@ -169,9 +169,9 @@ impl Terminal {
                 }
                 self.pending_wrap = false;
             }
-            'q' => {
+            'q'
                 // DECSCUSR - Set Cursor Style OR DECSWBV - Set Warning Bell Volume
-                if _intermediates.contains(&b' ') {
+                if _intermediates.contains(&b' ') => {
                     let mut iter = params.iter();
                     let n = iter.next().and_then(|p| p.first()).copied().unwrap_or(1);
 
@@ -190,7 +190,6 @@ impl Terminal {
                     // Handle DECSWBV (VT520)
                     self.warning_bell_volume = n.min(8) as u8;
                 }
-            }
             's' => {
                 // SCOSC - Save Cursor
                 self.save_cursor();

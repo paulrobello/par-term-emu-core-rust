@@ -188,11 +188,10 @@ impl Terminal {
 
     /// Get average frame time in microseconds
     pub fn get_average_frame_time(&self) -> u64 {
-        if self.perf_metrics.frames_rendered == 0 {
-            0
-        } else {
-            self.perf_metrics.total_processing_us / self.perf_metrics.frames_rendered
-        }
+        self.perf_metrics
+            .total_processing_us
+            .checked_div(self.perf_metrics.frames_rendered)
+            .unwrap_or(0)
     }
 
     /// Get frames per second (based on average frame time)

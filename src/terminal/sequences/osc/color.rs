@@ -42,9 +42,9 @@ impl Terminal {
 
     pub(crate) fn handle_osc_color(&mut self, command: &str, params: &[&[u8]]) {
         match command {
-            "4" => {
+            "4"
                 // Set ANSI color palette entry (OSC 4)
-                if !self.disable_insecure_sequences && params.len() >= 3 {
+                if !self.disable_insecure_sequences && params.len() >= 3 => {
                     if let Ok(data) = std::str::from_utf8(params[1]) {
                         if let Ok(index) = data.trim().parse::<usize>() {
                             if index < 16 {
@@ -57,10 +57,9 @@ impl Terminal {
                         }
                     }
                 }
-            }
-            "104" => {
+            "104"
                 // Reset ANSI color palette (OSC 104)
-                if !self.disable_insecure_sequences {
+                if !self.disable_insecure_sequences => {
                     if params.len() == 1 || (params.len() >= 2 && params[1].is_empty()) {
                         self.ansi_palette = Self::default_ansi_palette();
                     } else if params.len() >= 2 {
@@ -74,10 +73,9 @@ impl Terminal {
                         }
                     }
                 }
-            }
-            "10" | "11" | "12" => {
+            "10" | "11" | "12"
                 // Query or set default colors
-                if params.len() >= 2 {
+                if params.len() >= 2 => {
                     if let Ok(data) = std::str::from_utf8(params[1]) {
                         let data = data.trim();
                         if data == "?" {
@@ -108,22 +106,18 @@ impl Terminal {
                         }
                     }
                 }
-            }
-            "110" => {
-                if !self.disable_insecure_sequences {
+            "110"
+                if !self.disable_insecure_sequences => {
                     self.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
-            }
-            "111" => {
-                if !self.disable_insecure_sequences {
+            "111"
+                if !self.disable_insecure_sequences => {
                     self.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
                 }
-            }
-            "112" => {
-                if !self.disable_insecure_sequences {
+            "112"
+                if !self.disable_insecure_sequences => {
                     self.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
-            }
             _ => {}
         }
     }
