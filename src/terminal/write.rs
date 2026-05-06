@@ -156,6 +156,17 @@ impl Terminal {
             if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
                 target_cell.combining.push(c);
 
+                // Fast path: Kitty TGP placeholder cells (base char U+10EEEE)
+                // encode an image ID via combining marks, not real text. Skip
+                // NFC/NFKC normalization and grapheme width recalc — both
+                // would allocate strings per combining mark and dominate the
+                // cost of rendering an N×M placeholder rectangle (e.g., 40×20
+                // = 800 cells × 3 diacritics = 2400 normalize calls).
+                if target_cell.c == crate::graphics::placeholder::PLACEHOLDER_CHAR {
+                    self.mark_row_dirty(target_row);
+                    return;
+                }
+
                 // Apply Unicode normalization if NFC or NFKC (composition forms)
                 // This composes base + combining into precomposed form when possible
                 if matches!(
