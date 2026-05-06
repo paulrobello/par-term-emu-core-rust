@@ -194,6 +194,11 @@ pub struct KittyParser {
     pub num_plays: Option<u32>,
     /// Z-index for layering (z= for placement commands)
     pub z_index: Option<i32>,
+    /// Quietness level (q= parameter)
+    /// 0 = default (reply with OK and errors)
+    /// 1 = suppress OK reply only
+    /// 2 = suppress all replies
+    pub quietness: u8,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -338,6 +343,12 @@ impl KittyParser {
                             self.frame_delay_ms = value.parse().ok();
                         } else {
                             self.z_index = value.parse().ok();
+                        }
+                    }
+                    "q" => {
+                        // Quietness level (0 = reply, 1 = suppress OK, 2 = suppress all)
+                        if let Ok(level) = value.parse::<u8>() {
+                            self.quietness = level;
                         }
                     }
                     _ => {}

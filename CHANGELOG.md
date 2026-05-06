@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kitty Terminal Graphics Protocol — query response (Phase 3 of 3)**: `KittyParser` now stores the `q=` (quietness) parameter as `pub quietness: u8`. `Terminal::filter_apc_and_advance` branches on `KittyAction::Query`: when `quietness < 2`, builds an APC reply (`ESC _ G [i={id};] OK ESC \`) and appends it to `response_buffer` (the same buffer ENQ/DA1/DSR replies use). `q=2` suppresses the reply. Echoes the inbound `i=<id>` if present; emits `\x1b_G;OK\x1b\\` if not. Four new tests (`query_emits_ok_response_on_response_buffer`, `quiet_mode_query_suppresses_response`, `query_without_image_id_emits_ok_without_id`, `transmit_does_not_emit_response`).
+- **Kitty Terminal Graphics Protocol — APC ingestion (Phase 1 of 3)** _(Phase 2 lives in par-term/par-term-render — see par-term CHANGELOG)_: `Terminal::process` now intercepts Kitty TGP APC sequences (`ESC _ G ... ST`) before they reach `vte::Parser`. The previously orphaned `KittyParser` (in `src/graphics/kitty.rs`) is now wired into the byte stream:
+  - New module `src/terminal/apc_filter.rs` implements a streaming byte-level state-machine pre-filter. Only APCs starting with `_G` (Kitty graphics) are intercepted; all others (`_X…`, etc.) pass through unchanged so that `vte` continues to silently swallow them per `State::SosPmApcString` semantics.
+  - The pre-filter is necessary because `vte` 0.15 does not deliver APC payload bytes to `Perform` — `SosPmApcString` only handles state transitions, never invoking a payload callback.
+  - Handles APC sequences split across multiple `process()` calls (the common case — Kitty TGP messages typically arrive as 4 KB chunks, each in its own APC), both `\x1b\\` (7-bit ST) and `\x9c` (C1 ST) terminators, and `ESC` bytes within payloads.
+  - Completed Kitty APC payloads are forwarded to `KittyParser::parse_chunk`; on the final chunk (no `m=1`), `build_graphic` commits transmitted images and virtual placements (`U=1`) into `GraphicsStore`. Malformed APCs reset the parser and are silently dropped (no panic).
+  - Three new fields on `Terminal`: `apc_filter_state`, `apc_buffer`, `kitty_parser`.
+  - 10 unit tests for the filter state machine + 5 integration tests against `Terminal::process` covering split sequences, surrounding-text passthrough, and non-Kitty APC ignore.
+- Phase 2 (rendering placeholder cells via virtual-placement lookup, in par-term-render) and Phase 3 (responding `OK` to TGP query commands so terminal-detection probes succeed) are still required for end-to-end visible Kitty TGP support.
+
 ## [0.41.1] - 2026-04-11
 
 ### Changed
