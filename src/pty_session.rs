@@ -37,6 +37,12 @@ pub struct PtySession {
     cwd: Option<String>,
     cols: u16,
     rows: u16,
+    /// Cell pixel dimensions used for `TIOCGWINSZ` `pixel_width`/`pixel_height`
+    /// reporting. Updated by `resize_with_pixels`; falls back to a coarse 10×20
+    /// default for callers that have not yet supplied real cell pixels (e.g.
+    /// the initial `PtySession::new` before any layout pass).
+    cell_pixel_width: u16,
+    cell_pixel_height: u16,
     update_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Whether to reply to XTWINOPS queries (cached from env var PAR_TERM_REPLY_XTWINOPS)
     reply_xtwinops: Arc<AtomicBool>,
@@ -78,6 +84,8 @@ impl PtySession {
             cwd: None,
             cols: cols as u16,
             rows: rows as u16,
+            cell_pixel_width: 10,
+            cell_pixel_height: 20,
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             output_callback: Arc::new(Mutex::new(None)),
@@ -379,13 +387,14 @@ impl PtySession {
 
         // Create the PTY system
         let pty_system = native_pty_system();
-        // Calculate pixel dimensions (10x20 per cell - standard terminal font size)
-        // This ensures kitten icat and other tools can query pixel dimensions via TIOCGWINSZ
+        // Use the tracked cell pixel size (defaulted on construction, updated by
+        // `resize_with_pixels`). This drives TIOCGWINSZ so client programs see
+        // pixel dimensions consistent with how cells are actually rendered.
         let pty_size = PtySize {
             rows: self.rows,
             cols: self.cols,
-            pixel_width: self.cols * 10,
-            pixel_height: self.rows * 20,
+            pixel_width: self.cols * self.cell_pixel_width,
+            pixel_height: self.rows * self.cell_pixel_height,
         };
 
         debug::log(
@@ -815,13 +824,14 @@ impl PtySession {
 
         // Resize the PTY (sends SIGWINCH to child)
         if let Some(ref master) = self.pty_master {
-            // Calculate pixel dimensions (10x20 per cell - standard terminal font size)
-            // This ensures kitten icat and other tools can query pixel dimensions via TIOCGWINSZ
+            // Use the tracked cell pixel size (updated by `resize_with_pixels`).
+            // Falls back to the construction default if no pixel-aware resize
+            // has been called yet.
             let pty_size = PtySize {
                 rows,
                 cols,
-                pixel_width: cols * 10,
-                pixel_height: rows * 20,
+                pixel_width: cols * self.cell_pixel_width,
+                pixel_height: rows * self.cell_pixel_height,
             };
             debug::log(
                 debug::DebugLevel::Debug,
@@ -920,6 +930,12 @@ impl PtySession {
     ) -> Result<(), PtyError> {
         self.cols = cols;
         self.rows = rows;
+        // Cache per-cell pixel size so plain `resize()` (without pixels) and
+        // future spawns can reuse it without falling back to the 10×20 default.
+        if cols > 0 && rows > 0 {
+            self.cell_pixel_width = (pixel_width / cols).max(1);
+            self.cell_pixel_height = (pixel_height / rows).max(1);
+        }
 
         // Resize the terminal and record pixel size
         {

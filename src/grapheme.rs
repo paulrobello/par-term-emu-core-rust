@@ -52,18 +52,27 @@ pub fn is_regional_indicator(c: char) -> bool {
 
 /// Check if a character is a combining mark (diacritics, accents, etc.)
 ///
-/// Combining marks modify the preceding base character.
-/// This includes:
-/// - Combining Diacritical Marks (U+0300-U+036F)
-/// - Combining Marks for Symbols (U+20D0-U+20FF)
-/// - And other Unicode combining character categories
+/// Combining marks modify the preceding base character. Detected via Unicode's
+/// canonical combining class — any non-zero CCC indicates a non-spacing mark
+/// that should attach to the previous base character. This is broader than a
+/// hardcoded range list and correctly handles non-Latin combining marks used
+/// by Kitty's Unicode-placeholder graphics protocol (Cyrillic 0x0483-0x0487,
+/// Hebrew 0x0591-0x05C7, Arabic 0x0610-0x06ED, etc.). Without this, Kitty TGP
+/// virtual placement placeholders whose column-encoding diacritic falls
+/// outside the old narrow ranges would orphan that diacritic into a separate
+/// cell, surfacing as a stray glyph next to the rendered image.
 #[inline]
 pub fn is_combining_mark(c: char) -> bool {
+    if unicode_normalization::char::canonical_combining_class(c) != 0 {
+        return true;
+    }
+    // CCC catches Mn (non-spacing) marks and reordered marks. A few extra
+    // ranges still need explicit handling for marks that have CCC=0 but are
+    // semantically combining (Mc/Me categories Unicode treats as zero-width
+    // for collation purposes).
     let code = c as u32;
     matches!(code,
-        0x0300..=0x036F | // Combining Diacritical Marks
         0x1AB0..=0x1AFF | // Combining Diacritical Marks Extended
-        0x1DC0..=0x1DFF | // Combining Diacritical Marks Supplement
         0x20D0..=0x20FF | // Combining Diacritical Marks for Symbols
         0xFE20..=0xFE2F   // Combining Half Marks
     )
