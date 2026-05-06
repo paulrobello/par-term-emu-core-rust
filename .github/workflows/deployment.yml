@@ -112,7 +112,7 @@ jobs:
   build-streaming-binaries:
     name: Build streaming binary - ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: [version-check]
     strategy:
       fail-fast: false
