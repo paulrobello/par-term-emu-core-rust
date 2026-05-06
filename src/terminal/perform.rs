@@ -12,6 +12,15 @@ impl Perform for Terminal {
     fn print(&mut self, c: char) {
         debug::log_print(c, self.cursor.col, self.cursor.row);
 
+        // Fast path for the Kitty TGP placeholder character (U+10EEEE):
+        // these cells encode image IDs, not text, so Unicode normalization
+        // is pure waste. The combining-diacritic fast path lives in
+        // `write_char` where the target cell is in scope.
+        if c == crate::graphics::placeholder::PLACEHOLDER_CHAR {
+            self.write_char(c);
+            return;
+        }
+
         // Apply Unicode normalization if configured
         if !self.normalization_form.is_none() {
             let normalized = self.normalization_form.normalize_char(c);

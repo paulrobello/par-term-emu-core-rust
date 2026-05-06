@@ -147,6 +147,72 @@ fn transmit_does_not_emit_response() {
 }
 
 #[test]
+fn placeholder_cells_skip_unicode_normalization() {
+    // Placeholder cells (U+10EEEE base + combining diacritics) encode an image
+    // ID, not real text. The print/write_char path must accept them without
+    // running NFC normalization or grapheme width recalc — both would allocate
+    // strings per char and dominate frame time for an N×M placement.
+    use crate::graphics::placeholder::{number_to_diacritic, PLACEHOLDER_CHAR};
+
+    let mut term = Terminal::new(80, 24);
+
+    let row_diac = number_to_diacritic(0).unwrap();
+    let col_diac = number_to_diacritic(0).unwrap();
+    let id_diac = number_to_diacritic(0).unwrap();
+
+    let mut placeholder = String::new();
+    placeholder.push(PLACEHOLDER_CHAR);
+    placeholder.push(row_diac);
+    placeholder.push(col_diac);
+    placeholder.push(id_diac);
+
+    term.process(placeholder.as_bytes());
+
+    let grid = term.active_grid();
+    let cell = grid.get(0, 0).unwrap();
+    assert_eq!(cell.c, PLACEHOLDER_CHAR, "base char preserved");
+    assert_eq!(
+        cell.combining,
+        vec![row_diac, col_diac, id_diac],
+        "combining marks preserved verbatim (no normalization rewrite)"
+    );
+    assert_eq!(cell.width, 1, "no width recalc applied");
+}
+
+#[test]
+fn placeholder_cells_render_at_scale_quickly() {
+    // Smoke check: a 40x20 placeholder rectangle (800 cells × 4 chars =
+    // 3200 prints) must complete promptly. Before the fast path, NFC
+    // normalization on each char + per-combining-mark grapheme normalize
+    // pushed this into hundreds of milliseconds; after, it should be
+    // sub-10ms. We assert << 200ms to leave headroom for slow CI.
+    use crate::graphics::placeholder::{number_to_diacritic, PLACEHOLDER_CHAR};
+
+    let mut term = Terminal::new(80, 24);
+    let mut buf = String::with_capacity(40 * 20 * 8);
+    for r in 0..20u8 {
+        for c in 0..40u8 {
+            buf.push(PLACEHOLDER_CHAR);
+            buf.push(number_to_diacritic(r).unwrap());
+            buf.push(number_to_diacritic(c).unwrap());
+            buf.push(number_to_diacritic(0).unwrap());
+        }
+        buf.push('\r');
+        buf.push('\n');
+    }
+
+    let start = std::time::Instant::now();
+    term.process(buf.as_bytes());
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < std::time::Duration::from_millis(200),
+        "40x20 placeholder rect took {:?}, expected < 200ms",
+        elapsed
+    );
+}
+
+#[test]
 fn non_kitty_apc_is_left_alone() {
     let mut term = Terminal::new(80, 24);
 
