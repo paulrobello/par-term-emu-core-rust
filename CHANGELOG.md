@@ -7,8 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **Kitty TGP placeholder rendering: par-term hang on first display.** Writing an N×M Kitty TGP placeholder rectangle (e.g. 40×20 = 800 cells × 4 chars per cell = 3200 prints + 2400 combining-mark insertions) ran the default NFC Unicode normalization on every char and every combining-mark insertion, allocating thousands of intermediate `String`s and recalculating grapheme widths inside `Terminal::process` while the terminal write lock was held. par-term's renderer (which `try_read`s the same lock per pane per frame) saw the lock contested for hundreds of milliseconds and skipped frames; from the user's perspective every tab froze. Added a fast-path bypass: `print` skips normalization for `\u{10EEEE}` (the Kitty placeholder char) and `write_char`'s combining-mark branch skips normalization + width recalc when the target cell's base char is `\u{10EEEE}`. These cells encode an image ID, not real text, so the work was pure waste. New benchmark test `placeholder_cells_render_at_scale_quickly` asserts 40×20 placeholder ingestion completes in < 200 ms (in practice well under 10 ms). Plus `placeholder_cells_skip_unicode_normalization` pins down the cell-shape invariant.
+## [0.42.0] - 2026-05-06
 
 ### Added
 - **Kitty Terminal Graphics Protocol — query response (Phase 3 of 3)**: `KittyParser` now stores the `q=` (quietness) parameter as `pub quietness: u8`. `Terminal::filter_apc_and_advance` branches on `KittyAction::Query`: when `quietness < 2`, builds an APC reply (`ESC _ G [i={id};] OK ESC \`) and appends it to `response_buffer` (the same buffer ENQ/DA1/DSR replies use). `q=2` suppresses the reply. Echoes the inbound `i=<id>` if present; emits `\x1b_G;OK\x1b\\` if not. Four new tests (`query_emits_ok_response_on_response_buffer`, `quiet_mode_query_suppresses_response`, `query_without_image_id_emits_ok_without_id`, `transmit_does_not_emit_response`).
@@ -20,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Three new fields on `Terminal`: `apc_filter_state`, `apc_buffer`, `kitty_parser`.
   - 10 unit tests for the filter state machine + 5 integration tests against `Terminal::process` covering split sequences, surrounding-text passthrough, and non-Kitty APC ignore.
 - Phase 2 (rendering placeholder cells via virtual-placement lookup, in par-term-render) and Phase 3 (responding `OK` to TGP query commands so terminal-detection probes succeed) are still required for end-to-end visible Kitty TGP support.
+
+### Fixed
+- **Kitty TGP placeholder rendering: par-term hang on first display.** Writing an N×M Kitty TGP placeholder rectangle (e.g. 40×20 = 800 cells × 4 chars per cell = 3200 prints + 2400 combining-mark insertions) ran the default NFC Unicode normalization on every char and every combining-mark insertion, allocating thousands of intermediate `String`s and recalculating grapheme widths inside `Terminal::process` while the terminal write lock was held. par-term's renderer (which `try_read`s the same lock per pane per frame) saw the lock contested for hundreds of milliseconds and skipped frames; from the user's perspective every tab froze. Added a fast-path bypass: `print` skips normalization for `\u{10EEEE}` (the Kitty placeholder char) and `write_char`'s combining-mark branch skips normalization + width recalc when the target cell's base char is `\u{10EEEE}`. These cells encode an image ID, not real text, so the work was pure waste. New benchmark test `placeholder_cells_render_at_scale_quickly` asserts 40×20 placeholder ingestion completes in < 200 ms (in practice well under 10 ms). Plus `placeholder_cells_skip_unicode_normalization` pins down the cell-shape invariant.
+
+### Changed
+- **Dependency updates across all three sub-projects**:
+  - **Rust** (`Cargo.toml`): bumped tokio 1.51→1.52, axum 0.8.8→0.8.9, tower-http 0.6.8→0.6.10, rustls 0.23.37→0.23.40, reqwest 0.13.2→0.13.3, bitflags 2.11.0→2.11.1, clap 4.6.0→4.6.1, uuid 1.23→1.23.1, libc 0.2.184→0.2.186.
+  - **Python** (`pyproject.toml`): bumped rich 14→15, ruff 0.15.10→0.15.12, pyright 1.1.408→1.1.409, pre-commit 4.5.1→4.6.0.
+  - **Frontend** (`web-terminal-frontend/package.json`): bumped next 16.2.3→16.2.5, react/react-dom 19.2.5→19.2.6, eslint 9→10, typescript 6.0.2→6.0.3, tailwindcss 4.2.2→4.2.4, @bufbuild/buf 1.67→1.69, @bufbuild/protobuf 2.11→2.12, autoprefixer 10.4→10.5, postcss 8.5.9→8.5.14.
 
 ## [0.41.1] - 2026-04-11
 
