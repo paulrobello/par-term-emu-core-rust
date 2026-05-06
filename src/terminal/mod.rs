@@ -4,6 +4,7 @@
 //! split across multiple submodules for maintainability.
 
 // Submodules
+mod apc_filter;
 pub mod clipboard;
 mod colors;
 pub mod compliance;
@@ -75,11 +76,13 @@ use crate::cell::{Cell, CellFlags};
 use crate::color::{Color, NamedColor};
 use crate::cursor::{Cursor, CursorStyle};
 use crate::debug;
+use crate::graphics::kitty::KittyParser;
 use crate::graphics::{GraphicsLimits, GraphicsStore};
 use crate::grid::Grid;
 use crate::mouse::{MouseEncoding, MouseEvent, MouseEventRecord, MouseMode, MousePosition};
 use crate::shell_integration::ShellIntegration;
 use crate::sixel;
+use crate::terminal::apc_filter::ApcFilterState;
 use std::collections::{HashMap, HashSet};
 
 /// Character set designation for G0/G1 charset slots.
@@ -340,6 +343,14 @@ pub struct Terminal {
     pub(crate) bell_count: u64,
     /// VTE parser instance (maintains state across process() calls)
     pub(crate) parser: vte::Parser,
+    /// Streaming state for the Kitty TGP APC pre-filter (vte 0.15 doesn't
+    /// expose APC payloads to `Perform`, so we strip them out before they
+    /// reach the parser).
+    pub(crate) apc_filter_state: ApcFilterState,
+    /// Accumulator for the in-flight Kitty APC payload bytes.
+    pub(crate) apc_buffer: Vec<u8>,
+    /// Long-lived Kitty TGP parser; reset between unrelated transmissions.
+    pub(crate) kitty_parser: KittyParser,
     /// DECAWM delayed wrap: set after printing in last column
     pub(crate) pending_wrap: bool,
     /// Pixel width of the text area (XTWINOPS 14)
@@ -651,6 +662,9 @@ impl Terminal {
             named_progress_bars: HashMap::new(),
             bell_count: 0,
             parser: vte::Parser::new(),
+            apc_filter_state: ApcFilterState::default(),
+            apc_buffer: Vec::new(),
+            kitty_parser: KittyParser::new(),
             pending_wrap: false,
             // Initialize pixel dimensions with reasonable defaults (10x20 per cell)
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
@@ -2104,6 +2118,87 @@ impl Terminal {
         self.tmux_notifications.clear();
     }
 
+    /// Run the Kitty APC pre-filter on `data` and feed the non-APC remainder
+    /// to the VTE parser.
+    ///
+    /// vte 0.15 does not deliver APC payload bytes to `Perform`, so Kitty
+    /// graphics sequences (`ESC _ G ... ST`) must be intercepted before they
+    /// reach the parser. Each completed Kitty APC payload is forwarded to
+    /// [`KittyParser::parse_chunk`]; once the final chunk arrives (the APC
+    /// did not request more chunks via `m=1`), [`KittyParser::build_graphic`]
+    /// commits the result into [`GraphicsStore`]. Errors during parsing
+    /// reset the Kitty parser and discard the payload — they never panic.
+    fn filter_apc_and_advance(&mut self, data: &[u8]) {
+        // Local working buffers — we route non-APC bytes here, then feed
+        // them to vte after the filter pass completes. We also collect
+        // completed Kitty payloads to avoid borrow-checker conflicts with
+        // `self` inside the `feed` closure.
+        let mut passthrough: Vec<u8> = Vec::with_capacity(data.len());
+        let mut completed_payloads: Vec<Vec<u8>> = Vec::new();
+
+        apc_filter::feed(
+            &mut self.apc_filter_state,
+            &mut self.apc_buffer,
+            data,
+            &mut passthrough,
+            |apc| {
+                completed_payloads.push(apc.payload.to_vec());
+            },
+        );
+
+        // Process completed Kitty APC payloads.
+        for payload_bytes in completed_payloads {
+            // Kitty payloads are ASCII text (key=value pairs + base64). Any
+            // non-UTF-8 byte indicates a malformed APC; reset and skip.
+            let payload = match std::str::from_utf8(&payload_bytes) {
+                Ok(s) => s,
+                Err(_) => {
+                    self.kitty_parser.reset();
+                    continue;
+                }
+            };
+
+            match self.kitty_parser.parse_chunk(payload) {
+                Ok(true) => {
+                    // More chunks expected (m=1) — keep state, await next APC.
+                }
+                Ok(false) => {
+                    // Final chunk: handle query (a=q) inline by emitting an
+                    // APC OK reply on response_buffer; non-query actions go to
+                    // build_graphic. See Kitty TGP spec, "Querying support".
+                    if self.kitty_parser.action == crate::graphics::kitty::KittyAction::Query {
+                        if self.kitty_parser.quietness < 2 {
+                            let response = match self.kitty_parser.image_id {
+                                Some(id) => format!("\x1b_Gi={};OK\x1b\\", id),
+                                None => "\x1b_G;OK\x1b\\".to_string(),
+                            };
+                            self.response_buffer.extend_from_slice(response.as_bytes());
+                        }
+                        self.kitty_parser.reset();
+                    } else {
+                        // Errors here are non-fatal.
+                        let position = (self.cursor.col, self.cursor.row);
+                        let _ = self
+                            .kitty_parser
+                            .build_graphic(position, &mut self.graphics_store);
+                        self.kitty_parser.reset();
+                    }
+                }
+                Err(_) => {
+                    // Malformed chunk — reset and continue.
+                    self.kitty_parser.reset();
+                }
+            }
+        }
+
+        // Feed the non-APC byte stream to vte.
+        if !passthrough.is_empty() {
+            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
+            parser.advance(self, &passthrough);
+            let _ = std::mem::replace(&mut self.parser, parser);
+        }
+    }
+
     /// Process incoming data from the PTY
     pub fn process(&mut self, data: &[u8]) {
         if self.is_recording {
@@ -2131,9 +2226,8 @@ impl Terminal {
                 match notification {
                     crate::tmux_control::TmuxNotification::TerminalOutput { data } => {
                         // Feed non-control data back to standard VTE parser
-                        let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-                        parser.advance(self, &data);
-                        let _ = std::mem::replace(&mut self.parser, parser);
+                        // (with Kitty APC pre-filtering)
+                        self.filter_apc_and_advance(&data);
                     }
                     _ => {
                         // Store tmux notification
@@ -2142,10 +2236,8 @@ impl Terminal {
                 }
             }
         } else {
-            // Process as standard terminal output
-            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-            parser.advance(self, data);
-            let _ = std::mem::replace(&mut self.parser, parser);
+            // Process as standard terminal output (with Kitty APC pre-filtering)
+            self.filter_apc_and_advance(data);
         }
 
         self.dispatch_events();

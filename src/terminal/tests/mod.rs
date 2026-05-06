@@ -21,6 +21,8 @@ mod grid_integration_tests;
 #[cfg(test)]
 mod keyboard;
 #[cfg(test)]
+mod kitty_apc;
+#[cfg(test)]
 mod modes;
 #[cfg(test)]
 mod observer_tests;
