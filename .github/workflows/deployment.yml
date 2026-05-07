@@ -26,7 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 15
     needs: [github-release]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -149,7 +149,7 @@ jobs:
             asset_name: par-term-streamer-windows-x86_64.exe
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -200,7 +200,7 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -259,7 +259,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -307,7 +307,7 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -353,7 +353,7 @@ jobs:
     timeout-minutes: 15
     needs: [version-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -374,7 +374,7 @@ jobs:
     timeout-minutes: 15
     needs: [version-check]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Get version
         id: get_version
@@ -425,7 +425,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -534,7 +534,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v5
