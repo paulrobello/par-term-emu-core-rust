@@ -46,3 +46,4 @@ settings.local.json
 *.local.*
 .claude/.cc2cc-session-id
 .pi/extensions/discord-relay/state.json
+graphify-out/

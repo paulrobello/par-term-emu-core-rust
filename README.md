@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
+Version 0.42.1 fixes Kitty TGP virtual placement truncation past the 64th column/row — the diacritic table now covers all 297 entries from the spec, and `CSI 16t` (report cell pixel size) now returns the actual renderer pitch instead of a hardcoded 10×20. Also bumps GitHub Actions to latest versions and increases the streaming binary build timeout. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.42.0
+
 Version 0.42.0 adds **Kitty Terminal Graphics Protocol** support — APC ingestion (Phase 1) intercepts Kitty TGP sequences before the VTE parser, supporting chunked payloads, virtual placements, and malformed-sequence recovery. Query response (Phase 3) replies `OK` to Kitty image queries so terminal-detection probes succeed. Also fixes a critical hang where Kitty placeholder cells caused frame-skipping in par-term due to unnecessary Unicode NFC normalization on non-text cells. Dependency bumps across Rust (tokio 1.52, axum 0.8.9, tower-http 0.6.10, rustls 0.23.40), Python (rich 15, ruff 0.15.12, pyright 1.1.409), and the web frontend (next 16.2.5, react 19.2.6, eslint 10, typescript 6.0.3). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.41.0
