@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Kitty TGP virtual placement: image truncated past 64th column/row.** `graphics::placeholder::diacritic_to_number` only mapped the first 64 of the 297 diacritics defined in the Kitty graphics protocol spec ([rowcolumn-diacritics.txt](https://github.com/kovidgoyal/kitty/blob/master/kittens/unicode_input/rowcolumn-diacritics.txt)). Once a client emitted a placeholder cell with `col >= 64`, the second-diacritic lookup returned `None`, `decode_placeholder_cell` rejected the cell, and the bounding-box scan in par-term-render's `scan_placeholder_cells` stopped at column 63 — so a Kitty image asked to fit in e.g. 75 cells rendered into only 64. Replaced the 64-arm match with the full 297-entry `DIACRITICS: &[char]` static table plus a `OnceLock<HashMap<char, u16>>` reverse lookup. `row` and `col` widened from `u8` to `u16` (the spec's 0..=296 range overflows `u8`); `msb` stays `u8` because that diacritic position only encodes 0..=255. New tests `test_diacritic_table_size` (asserts 297 entries) and `test_create_placeholder_past_64` (round-trips index 120/200) lock down the regression.
+- **CSI 16t (report cell pixel size) returned a hardcoded 10×20.** `XTWINOPS Ps=16` now derives the response from `self.pixel_width / cols` and `self.pixel_height / rows` (both set by `Terminal::set_pixel_size` from host-supplied resize events), with the 10×20 default kept as a fallback for the pre-resize state. Clients querying `\x1b[16t` to size inline graphics (sixel/iTerm2/Kitty) now receive the renderer's actual cell pitch instead of a value that disagreed with both the renderer and `TIOCGWINSZ`.
+
 ## [0.42.0] - 2026-05-06
 
 ### Added

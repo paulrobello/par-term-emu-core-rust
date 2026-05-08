@@ -202,8 +202,23 @@ impl Terminal {
                         self.push_response(response.as_bytes());
                     }
                     16 => {
-                        // Report character cell size in pixels
-                        let (cpw, cph) = (10, 20); // Default cell size
+                        // Report character cell size in pixels.
+                        // Derive from text-area pixel size / grid size so the
+                        // value matches what the renderer actually uses (set
+                        // via `Terminal::set_pixel_size`, which the host
+                        // updates from `cell_renderer.cell_width/_height` on
+                        // every resize). Falls back to a 10x20 default if the
+                        // pixel/grid dimensions have not been set yet.
+                        let cpw = if cols > 0 && self.pixel_width > 0 {
+                            (self.pixel_width / cols).max(1)
+                        } else {
+                            10
+                        };
+                        let cph = if rows > 0 && self.pixel_height > 0 {
+                            (self.pixel_height / rows).max(1)
+                        } else {
+                            20
+                        };
                         let response = format!("\x1b[6;{};{}t", cph, cpw);
                         self.push_response(response.as_bytes());
                     }

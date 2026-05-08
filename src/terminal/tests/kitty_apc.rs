@@ -190,8 +190,8 @@ fn placeholder_cells_render_at_scale_quickly() {
 
     let mut term = Terminal::new(80, 24);
     let mut buf = String::with_capacity(40 * 20 * 8);
-    for r in 0..20u8 {
-        for c in 0..40u8 {
+    for r in 0..20u16 {
+        for c in 0..40u16 {
             buf.push(PLACEHOLDER_CHAR);
             buf.push(number_to_diacritic(r).unwrap());
             buf.push(number_to_diacritic(c).unwrap());

@@ -5,162 +5,353 @@
 //! and most significant byte of image ID for virtual placement rendering.
 //!
 //! Reference: https://sw.kovidgoyal.net/kitty/graphics-protocol/#unicode-placeholders
+//! Diacritic table: https://github.com/kovidgoyal/kitty/blob/master/kittens/unicode_input/rowcolumn-diacritics.txt
+//!
+//! Per the spec there are 297 diacritics indexed 0..=296.  The earlier
+//! 64-entry table caused images wider/taller than 64 cells to lose
+//! placeholders past the 64th column/row — `decode_placeholder_cell` would
+//! reject the col-diacritic on cell 64+, the bounding-box scan would stop at
+//! 63, and clients (e.g. par-textual-image) saw a Kitty image visibly smaller
+//! than the same image rendered via Sixel/iTerm2.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// The Unicode placeholder character for graphics
 pub const PLACEHOLDER_CHAR: char = '\u{10EEEE}';
 
-/// Number to diacritic mapping for row/column encoding
-///
-/// Maps numeric values (0-63) to Unicode combining characters
-/// as specified in the Kitty graphics protocol.
-pub fn number_to_diacritic(n: u8) -> Option<char> {
-    if n > 63 {
-        return None;
-    }
+/// Maximum index supported by the diacritic table (Kitty spec: 297 entries).
+pub const MAX_DIACRITIC_INDEX: u16 = 296;
 
-    // Mapping from rowcolumn-diacritics.txt in Kitty spec
-    Some(match n {
-        0 => '\u{0305}',  // Combining Overline
-        1 => '\u{030D}',  // Combining Vertical Line Above
-        2 => '\u{030E}',  // Combining Double Vertical Line Above
-        3 => '\u{0310}',  // Combining Candrabindu
-        4 => '\u{0312}',  // Combining Turned Comma Above
-        5 => '\u{033D}',  // Combining X Above
-        6 => '\u{033E}',  // Combining Vertical Tilde
-        7 => '\u{033F}',  // Combining Double Overline
-        8 => '\u{0346}',  // Combining Bridge Above
-        9 => '\u{034A}',  // Combining Not Tilde Above
-        10 => '\u{034B}', // Combining Homothetic Above
-        11 => '\u{034C}', // Combining Almost Equal To Above
-        12 => '\u{0350}', // Combining Right Arrowhead Above
-        13 => '\u{0351}', // Combining Left Half Ring Above
-        14 => '\u{0352}', // Combining Fermata
-        15 => '\u{0357}', // Combining Right Half Ring Above
-        16 => '\u{035B}', // Combining Zigzag Above
-        17 => '\u{0363}', // Combining Latin Small Letter A
-        18 => '\u{0364}', // Combining Latin Small Letter E
-        19 => '\u{0365}', // Combining Latin Small Letter I
-        20 => '\u{0366}', // Combining Latin Small Letter O
-        21 => '\u{0367}', // Combining Latin Small Letter U
-        22 => '\u{0368}', // Combining Latin Small Letter C
-        23 => '\u{0369}', // Combining Latin Small Letter D
-        24 => '\u{036A}', // Combining Latin Small Letter H
-        25 => '\u{036B}', // Combining Latin Small Letter M
-        26 => '\u{036C}', // Combining Latin Small Letter R
-        27 => '\u{036D}', // Combining Latin Small Letter T
-        28 => '\u{036E}', // Combining Latin Small Letter V
-        29 => '\u{036F}', // Combining Latin Small Letter X
-        30 => '\u{0483}', // Combining Cyrillic Titlo
-        31 => '\u{0484}', // Combining Cyrillic Palatalization
-        32 => '\u{0485}', // Combining Cyrillic Dasia Pneumata
-        33 => '\u{0486}', // Combining Cyrillic Psili Pneumata
-        34 => '\u{0487}', // Combining Cyrillic Pokrytie
-        35 => '\u{0592}', // Hebrew Accent Segol
-        36 => '\u{0593}', // Hebrew Accent Shalshelet
-        37 => '\u{0594}', // Hebrew Accent Zaqef Qatan
-        38 => '\u{0595}', // Hebrew Accent Zaqef Gadol
-        39 => '\u{0597}', // Hebrew Accent Revia
-        40 => '\u{0598}', // Hebrew Accent Zarqa
-        41 => '\u{0599}', // Hebrew Accent Pashta
-        42 => '\u{059C}', // Hebrew Accent Geresh
-        43 => '\u{059D}', // Hebrew Accent Geresh Muqdam
-        44 => '\u{059E}', // Hebrew Accent Gershayim
-        45 => '\u{059F}', // Hebrew Accent Qarney Para
-        46 => '\u{05A0}', // Hebrew Accent Telisha Gedola
-        47 => '\u{05A1}', // Hebrew Accent Pazer
-        48 => '\u{05A8}', // Hebrew Accent Qadma
-        49 => '\u{05A9}', // Hebrew Accent Telisha Qetana
-        50 => '\u{05AB}', // Hebrew Accent Ole
-        51 => '\u{05AC}', // Hebrew Accent Iluy
-        52 => '\u{05AF}', // Hebrew Mark Masora Circle
-        53 => '\u{05C4}', // Hebrew Mark Upper Dot
-        54 => '\u{0610}', // Arabic Sign Sallallahou Alayhe Wassallam
-        55 => '\u{0611}', // Arabic Sign Alayhe Assallam
-        56 => '\u{0612}', // Arabic Sign Rahmatullah Alayhe
-        57 => '\u{0613}', // Arabic Sign Radi Allahou Anhu
-        58 => '\u{0614}', // Arabic Sign Takhallus
-        59 => '\u{0615}', // Arabic Small High Tah
-        60 => '\u{0616}', // Arabic Small High Ligature Alef with Lam with Yeh
-        61 => '\u{0617}', // Arabic Small High Zain
-        62 => '\u{0657}', // Arabic Inverted Damma
-        63 => '\u{0658}', // Arabic Mark Noon Ghunna
-        _ => unreachable!(),
+/// Full diacritic table (297 entries) from the Kitty graphics protocol spec.
+/// Index = numeric value, value = combining character used in the placeholder.
+pub const DIACRITICS: &[char] = &[
+    '\u{0305}',
+    '\u{030D}',
+    '\u{030E}',
+    '\u{0310}',
+    '\u{0312}',
+    '\u{033D}',
+    '\u{033E}',
+    '\u{033F}',
+    '\u{0346}',
+    '\u{034A}',
+    '\u{034B}',
+    '\u{034C}',
+    '\u{0350}',
+    '\u{0351}',
+    '\u{0352}',
+    '\u{0357}',
+    '\u{035B}',
+    '\u{0363}',
+    '\u{0364}',
+    '\u{0365}',
+    '\u{0366}',
+    '\u{0367}',
+    '\u{0368}',
+    '\u{0369}',
+    '\u{036A}',
+    '\u{036B}',
+    '\u{036C}',
+    '\u{036D}',
+    '\u{036E}',
+    '\u{036F}',
+    '\u{0483}',
+    '\u{0484}',
+    '\u{0485}',
+    '\u{0486}',
+    '\u{0487}',
+    '\u{0592}',
+    '\u{0593}',
+    '\u{0594}',
+    '\u{0595}',
+    '\u{0597}',
+    '\u{0598}',
+    '\u{0599}',
+    '\u{059C}',
+    '\u{059D}',
+    '\u{059E}',
+    '\u{059F}',
+    '\u{05A0}',
+    '\u{05A1}',
+    '\u{05A8}',
+    '\u{05A9}',
+    '\u{05AB}',
+    '\u{05AC}',
+    '\u{05AF}',
+    '\u{05C4}',
+    '\u{0610}',
+    '\u{0611}',
+    '\u{0612}',
+    '\u{0613}',
+    '\u{0614}',
+    '\u{0615}',
+    '\u{0616}',
+    '\u{0617}',
+    '\u{0657}',
+    '\u{0658}',
+    '\u{0659}',
+    '\u{065A}',
+    '\u{065B}',
+    '\u{065D}',
+    '\u{065E}',
+    '\u{06D6}',
+    '\u{06D7}',
+    '\u{06D8}',
+    '\u{06D9}',
+    '\u{06DA}',
+    '\u{06DB}',
+    '\u{06DC}',
+    '\u{06DF}',
+    '\u{06E0}',
+    '\u{06E1}',
+    '\u{06E2}',
+    '\u{06E4}',
+    '\u{06E7}',
+    '\u{06E8}',
+    '\u{06EB}',
+    '\u{06EC}',
+    '\u{0730}',
+    '\u{0732}',
+    '\u{0733}',
+    '\u{0735}',
+    '\u{0736}',
+    '\u{073A}',
+    '\u{073D}',
+    '\u{073F}',
+    '\u{0740}',
+    '\u{0741}',
+    '\u{0743}',
+    '\u{0745}',
+    '\u{0747}',
+    '\u{0749}',
+    '\u{074A}',
+    '\u{07EB}',
+    '\u{07EC}',
+    '\u{07ED}',
+    '\u{07EE}',
+    '\u{07EF}',
+    '\u{07F0}',
+    '\u{07F1}',
+    '\u{07F3}',
+    '\u{0816}',
+    '\u{0817}',
+    '\u{0818}',
+    '\u{0819}',
+    '\u{081B}',
+    '\u{081C}',
+    '\u{081D}',
+    '\u{081E}',
+    '\u{081F}',
+    '\u{0820}',
+    '\u{0821}',
+    '\u{0822}',
+    '\u{0823}',
+    '\u{0825}',
+    '\u{0826}',
+    '\u{0827}',
+    '\u{0829}',
+    '\u{082A}',
+    '\u{082B}',
+    '\u{082C}',
+    '\u{082D}',
+    '\u{0951}',
+    '\u{0953}',
+    '\u{0954}',
+    '\u{0F82}',
+    '\u{0F83}',
+    '\u{0F86}',
+    '\u{0F87}',
+    '\u{135D}',
+    '\u{135E}',
+    '\u{135F}',
+    '\u{17DD}',
+    '\u{193A}',
+    '\u{1A17}',
+    '\u{1A75}',
+    '\u{1A76}',
+    '\u{1A77}',
+    '\u{1A78}',
+    '\u{1A79}',
+    '\u{1A7A}',
+    '\u{1A7B}',
+    '\u{1A7C}',
+    '\u{1B6B}',
+    '\u{1B6D}',
+    '\u{1B6E}',
+    '\u{1B6F}',
+    '\u{1B70}',
+    '\u{1B71}',
+    '\u{1B72}',
+    '\u{1B73}',
+    '\u{1CD0}',
+    '\u{1CD1}',
+    '\u{1CD2}',
+    '\u{1CDA}',
+    '\u{1CDB}',
+    '\u{1CE0}',
+    '\u{1DC0}',
+    '\u{1DC1}',
+    '\u{1DC3}',
+    '\u{1DC4}',
+    '\u{1DC5}',
+    '\u{1DC6}',
+    '\u{1DC7}',
+    '\u{1DC8}',
+    '\u{1DC9}',
+    '\u{1DCB}',
+    '\u{1DCC}',
+    '\u{1DD1}',
+    '\u{1DD2}',
+    '\u{1DD3}',
+    '\u{1DD4}',
+    '\u{1DD5}',
+    '\u{1DD6}',
+    '\u{1DD7}',
+    '\u{1DD8}',
+    '\u{1DD9}',
+    '\u{1DDA}',
+    '\u{1DDB}',
+    '\u{1DDC}',
+    '\u{1DDD}',
+    '\u{1DDE}',
+    '\u{1DDF}',
+    '\u{1DE0}',
+    '\u{1DE1}',
+    '\u{1DE2}',
+    '\u{1DE3}',
+    '\u{1DE4}',
+    '\u{1DE5}',
+    '\u{1DE6}',
+    '\u{1DFE}',
+    '\u{20D0}',
+    '\u{20D1}',
+    '\u{20D4}',
+    '\u{20D5}',
+    '\u{20D6}',
+    '\u{20D7}',
+    '\u{20DB}',
+    '\u{20DC}',
+    '\u{20E1}',
+    '\u{20E7}',
+    '\u{20E9}',
+    '\u{20F0}',
+    '\u{2CEF}',
+    '\u{2CF0}',
+    '\u{2CF1}',
+    '\u{2DE0}',
+    '\u{2DE1}',
+    '\u{2DE2}',
+    '\u{2DE3}',
+    '\u{2DE4}',
+    '\u{2DE5}',
+    '\u{2DE6}',
+    '\u{2DE7}',
+    '\u{2DE8}',
+    '\u{2DE9}',
+    '\u{2DEA}',
+    '\u{2DEB}',
+    '\u{2DEC}',
+    '\u{2DED}',
+    '\u{2DEE}',
+    '\u{2DEF}',
+    '\u{2DF0}',
+    '\u{2DF1}',
+    '\u{2DF2}',
+    '\u{2DF3}',
+    '\u{2DF4}',
+    '\u{2DF5}',
+    '\u{2DF6}',
+    '\u{2DF7}',
+    '\u{2DF8}',
+    '\u{2DF9}',
+    '\u{2DFA}',
+    '\u{2DFB}',
+    '\u{2DFC}',
+    '\u{2DFD}',
+    '\u{2DFE}',
+    '\u{2DFF}',
+    '\u{A66F}',
+    '\u{A67C}',
+    '\u{A67D}',
+    '\u{A6F0}',
+    '\u{A6F1}',
+    '\u{A8E0}',
+    '\u{A8E1}',
+    '\u{A8E2}',
+    '\u{A8E3}',
+    '\u{A8E4}',
+    '\u{A8E5}',
+    '\u{A8E6}',
+    '\u{A8E7}',
+    '\u{A8E8}',
+    '\u{A8E9}',
+    '\u{A8EA}',
+    '\u{A8EB}',
+    '\u{A8EC}',
+    '\u{A8ED}',
+    '\u{A8EE}',
+    '\u{A8EF}',
+    '\u{A8F0}',
+    '\u{A8F1}',
+    '\u{AAB0}',
+    '\u{AAB2}',
+    '\u{AAB3}',
+    '\u{AAB7}',
+    '\u{AAB8}',
+    '\u{AABE}',
+    '\u{AABF}',
+    '\u{AAC1}',
+    '\u{FE20}',
+    '\u{FE21}',
+    '\u{FE22}',
+    '\u{FE23}',
+    '\u{FE24}',
+    '\u{FE25}',
+    '\u{FE26}',
+    '\u{10A0F}',
+    '\u{10A38}',
+    '\u{1D185}',
+    '\u{1D186}',
+    '\u{1D187}',
+    '\u{1D188}',
+    '\u{1D189}',
+    '\u{1D1AA}',
+    '\u{1D1AB}',
+    '\u{1D1AC}',
+    '\u{1D1AD}',
+    '\u{1D242}',
+    '\u{1D243}',
+    '\u{1D244}',
+];
+
+/// Build the inverse `char -> u16` lookup table on first use.  Cheaper than a
+/// 297-arm match (which the compiler does not always lower to a jump table for
+/// chars in widely-separated planes).
+fn diacritic_lookup() -> &'static HashMap<char, u16> {
+    static LOOKUP: OnceLock<HashMap<char, u16>> = OnceLock::new();
+    LOOKUP.get_or_init(|| {
+        DIACRITICS
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| (c, i as u16))
+            .collect()
     })
 }
 
-/// Diacritic to number mapping for row/column encoding
+/// Number to diacritic mapping for row/column/MSB encoding.
 ///
-/// Maps Unicode combining characters to their numeric values (0-63)
-/// as specified in the Kitty graphics protocol.
-pub fn diacritic_to_number(c: char) -> Option<u8> {
-    // Mapping from rowcolumn-diacritics.txt in Kitty spec
-    match c {
-        '\u{0305}' => Some(0),  // Combining Overline
-        '\u{030D}' => Some(1),  // Combining Vertical Line Above
-        '\u{030E}' => Some(2),  // Combining Double Vertical Line Above
-        '\u{0310}' => Some(3),  // Combining Candrabindu
-        '\u{0312}' => Some(4),  // Combining Turned Comma Above
-        '\u{033D}' => Some(5),  // Combining X Above
-        '\u{033E}' => Some(6),  // Combining Vertical Tilde
-        '\u{033F}' => Some(7),  // Combining Double Overline
-        '\u{0346}' => Some(8),  // Combining Bridge Above
-        '\u{034A}' => Some(9),  // Combining Not Tilde Above
-        '\u{034B}' => Some(10), // Combining Homothetic Above
-        '\u{034C}' => Some(11), // Combining Almost Equal To Above
-        '\u{0350}' => Some(12), // Combining Right Arrowhead Above
-        '\u{0351}' => Some(13), // Combining Left Half Ring Above
-        '\u{0352}' => Some(14), // Combining Fermata
-        '\u{0357}' => Some(15), // Combining Right Half Ring Above
-        '\u{035B}' => Some(16), // Combining Zigzag Above
-        '\u{0363}' => Some(17), // Combining Latin Small Letter A
-        '\u{0364}' => Some(18), // Combining Latin Small Letter E
-        '\u{0365}' => Some(19), // Combining Latin Small Letter I
-        '\u{0366}' => Some(20), // Combining Latin Small Letter O
-        '\u{0367}' => Some(21), // Combining Latin Small Letter U
-        '\u{0368}' => Some(22), // Combining Latin Small Letter C
-        '\u{0369}' => Some(23), // Combining Latin Small Letter D
-        '\u{036A}' => Some(24), // Combining Latin Small Letter H
-        '\u{036B}' => Some(25), // Combining Latin Small Letter M
-        '\u{036C}' => Some(26), // Combining Latin Small Letter R
-        '\u{036D}' => Some(27), // Combining Latin Small Letter T
-        '\u{036E}' => Some(28), // Combining Latin Small Letter V
-        '\u{036F}' => Some(29), // Combining Latin Small Letter X
-        '\u{0483}' => Some(30), // Combining Cyrillic Titlo
-        '\u{0484}' => Some(31), // Combining Cyrillic Palatalization
-        '\u{0485}' => Some(32), // Combining Cyrillic Dasia Pneumata
-        '\u{0486}' => Some(33), // Combining Cyrillic Psili Pneumata
-        '\u{0487}' => Some(34), // Combining Cyrillic Pokrytie
-        '\u{0592}' => Some(35), // Hebrew Accent Segol
-        '\u{0593}' => Some(36), // Hebrew Accent Shalshelet
-        '\u{0594}' => Some(37), // Hebrew Accent Zaqef Qatan
-        '\u{0595}' => Some(38), // Hebrew Accent Zaqef Gadol
-        '\u{0597}' => Some(39), // Hebrew Accent Revia
-        '\u{0598}' => Some(40), // Hebrew Accent Zarqa
-        '\u{0599}' => Some(41), // Hebrew Accent Pashta
-        '\u{059C}' => Some(42), // Hebrew Accent Geresh
-        '\u{059D}' => Some(43), // Hebrew Accent Geresh Muqdam
-        '\u{059E}' => Some(44), // Hebrew Accent Gershayim
-        '\u{059F}' => Some(45), // Hebrew Accent Qarney Para
-        '\u{05A0}' => Some(46), // Hebrew Accent Telisha Gedola
-        '\u{05A1}' => Some(47), // Hebrew Accent Pazer
-        '\u{05A8}' => Some(48), // Hebrew Accent Qadma
-        '\u{05A9}' => Some(49), // Hebrew Accent Telisha Qetana
-        '\u{05AB}' => Some(50), // Hebrew Accent Ole
-        '\u{05AC}' => Some(51), // Hebrew Accent Iluy
-        '\u{05AF}' => Some(52), // Hebrew Mark Masora Circle
-        '\u{05C4}' => Some(53), // Hebrew Mark Upper Dot
-        '\u{0610}' => Some(54), // Arabic Sign Sallallahou Alayhe Wassallam
-        '\u{0611}' => Some(55), // Arabic Sign Alayhe Assallam
-        '\u{0612}' => Some(56), // Arabic Sign Rahmatullah Alayhe
-        '\u{0613}' => Some(57), // Arabic Sign Radi Allahou Anhu
-        '\u{0614}' => Some(58), // Arabic Sign Takhallus
-        '\u{0615}' => Some(59), // Arabic Small High Tah
-        '\u{0616}' => Some(60), // Arabic Small High Ligature Alef with Lam with Yeh
-        '\u{0617}' => Some(61), // Arabic Small High Zain
-        '\u{0657}' => Some(62), // Arabic Inverted Damma
-        '\u{0658}' => Some(63), // Arabic Mark Noon Ghunna
-        _ => None,
-    }
+/// Returns `None` for indices outside the 0..=296 spec range.
+pub fn number_to_diacritic(n: u16) -> Option<char> {
+    DIACRITICS.get(n as usize).copied()
+}
+
+/// Diacritic to number mapping for row/column/MSB decoding.
+///
+/// Returns the spec index in 0..=296 for any of the 297 valid diacritics, or
+/// `None` for any other character.
+pub fn diacritic_to_number(c: char) -> Option<u16> {
+    diacritic_lookup().get(&c).copied()
 }
 
 /// Information extracted from a Unicode placeholder cell
@@ -170,11 +361,12 @@ pub struct PlaceholderInfo {
     pub image_id: u32,
     /// Placement ID (from underline color, 0 if not specified)
     pub placement_id: u32,
-    /// Row position (from first diacritic)
-    pub row: Option<u8>,
-    /// Column position (from second diacritic)
-    pub col: Option<u8>,
-    /// Most significant byte of image ID (from third diacritic)
+    /// Row position (from first diacritic; 0..=296 per spec)
+    pub row: Option<u16>,
+    /// Column position (from second diacritic; 0..=296 per spec)
+    pub col: Option<u16>,
+    /// Most significant byte of image ID (from third diacritic; spec uses
+    /// indices 0..=255 here so this stays a `u8`)
     pub msb: Option<u8>,
 }
 
@@ -197,7 +389,7 @@ impl PlaceholderInfo {
     }
 
     /// Set row/column/MSB from diacritics
-    pub fn with_diacritics(mut self, row: Option<u8>, col: Option<u8>, msb: Option<u8>) -> Self {
+    pub fn with_diacritics(mut self, row: Option<u16>, col: Option<u16>, msb: Option<u8>) -> Self {
         self.row = row;
         self.col = col;
         self.msb = msb;
@@ -216,7 +408,7 @@ impl PlaceholderInfo {
     }
 
     /// Check if this placeholder can inherit from the previous cell
-    pub fn can_inherit_from(&self, prev: &PlaceholderInfo, expected_col: u8) -> bool {
+    pub fn can_inherit_from(&self, prev: &PlaceholderInfo, expected_col: u16) -> bool {
         // Same image ID and placement ID
         if self.image_id != prev.image_id || self.placement_id != prev.placement_id {
             return false;
@@ -250,12 +442,12 @@ impl PlaceholderInfo {
 /// Create a placeholder character with diacritics for row/column/MSB encoding
 ///
 /// Returns a String containing U+10EEEE followed by up to 3 combining diacritics.
-/// - First diacritic: row (0-63)
-/// - Second diacritic: column (0-63)
-/// - Third diacritic: MSB of image ID (0-63, optional)
+/// - First diacritic: row (0..=296)
+/// - Second diacritic: column (0..=296)
+/// - Third diacritic: MSB of image ID (0..=255, optional)
 ///
 /// If MSB is 0 or None, it is omitted.
-pub fn create_placeholder_with_diacritics(row: u8, col: u8, msb: Option<u8>) -> String {
+pub fn create_placeholder_with_diacritics(row: u16, col: u16, msb: Option<u8>) -> String {
     let mut result = String::from(PLACEHOLDER_CHAR);
 
     // Add row diacritic
@@ -271,7 +463,7 @@ pub fn create_placeholder_with_diacritics(row: u8, col: u8, msb: Option<u8>) -> 
     // Add MSB diacritic if present and non-zero
     if let Some(msb_val) = msb {
         if msb_val > 0 {
-            if let Some(msb_diacritic) = number_to_diacritic(msb_val) {
+            if let Some(msb_diacritic) = number_to_diacritic(msb_val as u16) {
                 result.push(msb_diacritic);
             }
         }
@@ -283,7 +475,7 @@ pub fn create_placeholder_with_diacritics(row: u8, col: u8, msb: Option<u8>) -> 
 /// Parse diacritics from a string of combining characters
 ///
 /// Returns (row, col, msb) as parsed from the diacritics
-pub fn parse_diacritics(diacritics: &str) -> (Option<u8>, Option<u8>, Option<u8>) {
+pub fn parse_diacritics(diacritics: &str) -> (Option<u16>, Option<u16>, Option<u8>) {
     let mut chars: Vec<char> = diacritics.chars().collect();
 
     // Remove any non-diacritic characters
@@ -291,7 +483,10 @@ pub fn parse_diacritics(diacritics: &str) -> (Option<u8>, Option<u8>, Option<u8>
 
     let row = chars.first().and_then(|&c| diacritic_to_number(c));
     let col = chars.get(1).and_then(|&c| diacritic_to_number(c));
-    let msb = chars.get(2).and_then(|&c| diacritic_to_number(c));
+    let msb = chars
+        .get(2)
+        .and_then(|&c| diacritic_to_number(c))
+        .map(|n| n as u8);
 
     (row, col, msb)
 }
@@ -306,12 +501,21 @@ mod tests {
     }
 
     #[test]
+    fn test_diacritic_table_size() {
+        assert_eq!(DIACRITICS.len(), 297, "Kitty spec defines 297 diacritics");
+        assert_eq!(MAX_DIACRITIC_INDEX as usize, DIACRITICS.len() - 1);
+    }
+
+    #[test]
     fn test_number_to_diacritic() {
         assert_eq!(number_to_diacritic(0), Some('\u{0305}'));
         assert_eq!(number_to_diacritic(1), Some('\u{030D}'));
         assert_eq!(number_to_diacritic(2), Some('\u{030E}'));
         assert_eq!(number_to_diacritic(63), Some('\u{0658}'));
-        assert_eq!(number_to_diacritic(64), None);
+        // Past the old 64-entry table — must now resolve.
+        assert_eq!(number_to_diacritic(64), Some('\u{0659}'));
+        assert_eq!(number_to_diacritic(296), Some('\u{1D244}'));
+        assert_eq!(number_to_diacritic(297), None);
     }
 
     #[test]
@@ -320,14 +524,17 @@ mod tests {
         assert_eq!(diacritic_to_number('\u{030D}'), Some(1));
         assert_eq!(diacritic_to_number('\u{030E}'), Some(2));
         assert_eq!(diacritic_to_number('\u{0658}'), Some(63));
+        // Past the old table — must now resolve.
+        assert_eq!(diacritic_to_number('\u{0659}'), Some(64));
+        assert_eq!(diacritic_to_number('\u{1D244}'), Some(296));
         assert_eq!(diacritic_to_number('a'), None);
     }
 
     #[test]
     fn test_roundtrip_diacritic_conversion() {
-        // Test that number -> diacritic -> number works
-        for n in 0..=63 {
-            let diacritic = number_to_diacritic(n).unwrap();
+        // Test that number -> diacritic -> number works for the full range.
+        for n in 0..=MAX_DIACRITIC_INDEX {
+            let diacritic = number_to_diacritic(n).expect("index in spec range");
             assert_eq!(diacritic_to_number(diacritic), Some(n));
         }
     }
@@ -351,6 +558,14 @@ mod tests {
         assert_eq!(row, Some(0));
         assert_eq!(col, Some(1));
         assert_eq!(msb, Some(2));
+
+        // Row/col past the old 64-entry boundary — must now parse cleanly.
+        let row_diac = number_to_diacritic(0).unwrap();
+        let col_diac = number_to_diacritic(120).unwrap();
+        let s: String = [row_diac, col_diac].iter().collect();
+        let (row, col, _) = parse_diacritics(&s);
+        assert_eq!(row, Some(0));
+        assert_eq!(col, Some(120));
     }
 
     #[test]
@@ -420,5 +635,16 @@ mod tests {
         assert_eq!(row, Some(1));
         assert_eq!(col, Some(2));
         assert_eq!(msb, Some(3));
+    }
+
+    #[test]
+    fn test_create_placeholder_past_64() {
+        // Index 120 used to be unencodable — now it must round-trip.
+        let placeholder = create_placeholder_with_diacritics(120, 200, None);
+        assert!(placeholder.starts_with(PLACEHOLDER_CHAR));
+        let diacritics: String = placeholder.chars().skip(1).collect();
+        let (row, col, _) = parse_diacritics(&diacritics);
+        assert_eq!(row, Some(120));
+        assert_eq!(col, Some(200));
     }
 }
