@@ -1,0 +1,35 @@
+/*
+ * Par Terminal Web UI Theme - Dark Orange
+ *
+ * A dark theme with orange accents, inspired by modern editor settings UI.
+ * Edit this file to customize the UI appearance.
+ * Changes take effect on page refresh - no rebuild required.
+ *
+ * Note: Terminal colors (ANSI palette) are controlled by the server.
+ * This file only affects the surrounding UI chrome.
+ */
+:root {
+  /* Main background color - deep charcoal */
+  --terminal-bg: #141414;
+
+  /* Surface color for panels, cards, status bar - slightly lighter */
+  --terminal-surface: #1e1e1e;
+
+  /* Border color for containers and dividers */
+  --terminal-border: #2d2d2d;
+
+  /* Accent color for scrollbar thumb, hover states */
+  --terminal-accent: #3d3d3d;
+
+  /* Primary text color - bright white */
+  --terminal-text: #f5f5f5;
+
+  /* Muted text color for secondary information */
+  --terminal-muted: #888888;
+
+  /* Primary/brand color for links, focus rings, interactive elements */
+  --terminal-primary: #ff9500;
+
+  /* Primary hover state */
+  --terminal-primary-hover: #ffaa33;
+}
