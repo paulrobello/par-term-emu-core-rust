@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **PytestUnknownMarkWarning for `@pytest.mark.asyncio`.** Added `pytest-asyncio` to dev dependencies so pytest recognizes the asyncio mark used by streaming tests.
 
+### Build / Tooling
+- **Updated Rust crates:** nix 0.31.2→0.31.3, serde_json 1.0.149→1.0.150, sysinfo 0.38.4→0.39.2, tar 0.4.45→0.4.46, tokio 1.52.2→1.52.3, tower-http 0.6.10→0.6.11
+- **Updated Python dev deps:** maturin 1.13.1→1.13.3, ruff 0.15.12→0.15.14, pytest-asyncio added
+- **Updated web frontend deps:** next 16.2.5→16.2.6, tailwindcss 4.2.4→4.3.0, eslint 10.3.0→10.4.0, postcss 8.5.14→8.5.15, and others
+
 ## [0.42.1] - 2026-05-08
 
 ### Fixed

@@ -55,7 +55,7 @@ base64 = "0.22.1"
 bitflags = "2.11.1"
 regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
+serde_json = "1.0.150"
 serde_yaml = "0.9.34"
 percent-encoding = "2.3.2"
 url = "2.5.8"
@@ -65,7 +65,7 @@ uuid = { version = "1.23.1", features = ["v4", "serde"] }
 tokio = { version = "1.52", features = ["full"], optional = true }
 tokio-tungstenite = { version = "0.29", optional = true }
 axum = { version = "0.8.9", features = ["ws"], optional = true }
-tower-http = { version = "0.6.10", features = ["fs", "trace"], optional = true }
+tower-http = { version = "0.6.11", features = ["fs", "trace"], optional = true }
 futures-util = { version = "0.3.32", optional = true }
 
 # CLI dependencies (for streaming server binary)
@@ -81,7 +81,7 @@ reqwest = { version = "0.13.3", default-features = false, features = ["json", "r
 flate2 = "1.1.9"
 
 # Archive extraction
-tar = { version = "0.4.45", optional = true }
+tar = { version = "0.4.46", optional = true }
 
 # Protocol Buffers
 prost = { version = "0.14.3", optional = true }
@@ -97,7 +97,7 @@ htpasswd-verify = { version = "0.3.0", optional = true }
 headers = { version = "0.4.1", optional = true }
 
 # System resource monitoring
-sysinfo = { version = "0.38.4", optional = true }
+sysinfo = { version = "0.39.2", optional = true }
 
 # Screenshot support - using pure Rust swash for cross-platform compatibility
 image = "0.25.10"
@@ -112,7 +112,7 @@ unicode-normalization = "0.1.25"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
-nix = { version = "0.31.2", features = ["process", "term", "signal"] }
+nix = { version = "0.31.3", features = ["process", "term", "signal"] }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
