@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
+Version 0.42.2 fixes top-anchored scroll region lines being lost instead of entering scrollback — partial regions (e.g. Codex CLI's scroll region) now correctly preserve evicted rows in primary-screen scrollback, matching iTerm2 behavior. Also fixes `pytest-asyncio` mark warnings and bumps dependencies across all sub-projects (tikv-jemallocator 0.7, pygments 2.20, @bufbuild/buf 1.70). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.42.1
+
 Version 0.42.1 fixes Kitty TGP virtual placement truncation past the 64th column/row — the diacritic table now covers all 297 entries from the spec, and `CSI 16t` (report cell pixel size) now returns the actual renderer pitch instead of a hardcoded 10×20. Also bumps GitHub Actions to latest versions and increases the streaming binary build timeout. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.42.0

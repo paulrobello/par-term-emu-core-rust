@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-05-29
+
 ### Fixed
 - **PytestUnknownMarkWarning for `@pytest.mark.asyncio`.** Added `pytest-asyncio` to dev dependencies so pytest recognizes the asyncio mark used by streaming tests.
 - **Top-anchored scroll region lines lost instead of entering scrollback.** `scroll_region_up()` only pushed rows into scrollback when the region covered the full screen. Partial top-anchored regions (e.g. Codex CLI's `CSI 1;{rows-1} r`) now correctly preserve evicted rows in primary-screen scrollback, matching iTerm2 behavior. Refactored scrollback insertion into a shared `push_rows_to_scrollback()` helper used by both full-screen and region scrolling paths. ([#54](https://github.com/paulrobello/par-term-emu-core-rust/pull/54), thanks @ziglerari)
