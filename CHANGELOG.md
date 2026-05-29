@@ -9,11 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **PytestUnknownMarkWarning for `@pytest.mark.asyncio`.** Added `pytest-asyncio` to dev dependencies so pytest recognizes the asyncio mark used by streaming tests.
+- **Top-anchored scroll region lines lost instead of entering scrollback.** `scroll_region_up()` only pushed rows into scrollback when the region covered the full screen. Partial top-anchored regions (e.g. Codex CLI's `CSI 1;{rows-1} r`) now correctly preserve evicted rows in primary-screen scrollback, matching iTerm2 behavior. Refactored scrollback insertion into a shared `push_rows_to_scrollback()` helper used by both full-screen and region scrolling paths. ([#54](https://github.com/paulrobello/par-term-emu-core-rust/pull/54), thanks @ziglerari)
 
 ### Build / Tooling
-- **Updated Rust crates:** nix 0.31.2→0.31.3, serde_json 1.0.149→1.0.150, sysinfo 0.38.4→0.39.2, tar 0.4.45→0.4.46, tokio 1.52.2→1.52.3, tower-http 0.6.10→0.6.11
-- **Updated Python dev deps:** maturin 1.13.1→1.13.3, ruff 0.15.12→0.15.14, pytest-asyncio added
-- **Updated web frontend deps:** next 16.2.5→16.2.6, tailwindcss 4.2.4→4.3.0, eslint 10.3.0→10.4.0, postcss 8.5.14→8.5.15, and others
+- **Updated Rust crates:** tikv-jemallocator 0.6→0.7, sysinfo 0.39.2→0.39.3, hyper 1.9→1.10, reqwest 0.13.3→0.13.4, plus transitive bumps (cc, displaydoc, http, log, memchr, mio, socket2, uuid, zerocopy)
+- **Updated Python dev deps:** pygments 2.19.2→2.20.0, platformdirs 4.9.6→4.10.0, pytest-asyncio 1.3→1.4, ruff 0.15.14→0.15.15, virtualenv 21.3→21.4
+- **Updated web frontend deps:** @bufbuild/buf 1.69→1.70
 
 ## [0.42.1] - 2026-05-08
 
