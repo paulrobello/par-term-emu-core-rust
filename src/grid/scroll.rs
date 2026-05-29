@@ -4,43 +4,51 @@ use crate::cell::Cell;
 use crate::grid::Grid;
 
 impl Grid {
+    fn push_rows_to_scrollback(&mut self, start_row: usize, count: usize) {
+        if self.max_scrollback == 0 || count == 0 || start_row >= self.rows {
+            return;
+        }
+
+        let available = self.rows - start_row;
+        let count = count.min(available);
+
+        self.total_lines_scrolled += count;
+        if self.scrollback_lines >= self.max_scrollback {
+            let floor = self
+                .total_lines_scrolled
+                .saturating_sub(self.max_scrollback);
+            self.evict_zones(floor);
+        }
+
+        for i in 0..count {
+            let row = start_row + i;
+            let src_start = row * self.cols;
+            let src_end = src_start + self.cols;
+            let is_wrapped = self.wrapped.get(row).copied().unwrap_or(false);
+
+            if self.scrollback_lines < self.max_scrollback {
+                self.scrollback_cells
+                    .extend_from_slice(&self.cells[src_start..src_end]);
+                self.scrollback_wrapped.push(is_wrapped);
+                self.scrollback_lines += 1;
+            } else {
+                let write_idx = self.scrollback_start;
+                let dst_start = write_idx * self.cols;
+                let dst_end = dst_start + self.cols;
+
+                self.scrollback_cells[dst_start..dst_end]
+                    .clone_from_slice(&self.cells[src_start..src_end]);
+                self.scrollback_wrapped[write_idx] = is_wrapped;
+                self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
+            }
+        }
+    }
+
     /// Scroll up by n lines
     pub fn scroll_up(&mut self, n: usize) {
         let n = n.min(self.rows);
 
-        if self.max_scrollback > 0 {
-            self.total_lines_scrolled += n;
-            if self.scrollback_lines >= self.max_scrollback {
-                let floor = self
-                    .total_lines_scrolled
-                    .saturating_sub(self.max_scrollback);
-                self.evict_zones(floor);
-            }
-        }
-
-        if self.max_scrollback > 0 {
-            for i in 0..n {
-                let src_start = i * self.cols;
-                let src_end = src_start + self.cols;
-                let is_wrapped = self.wrapped.get(i).copied().unwrap_or(false);
-
-                if self.scrollback_lines < self.max_scrollback {
-                    self.scrollback_cells
-                        .extend_from_slice(&self.cells[src_start..src_end]);
-                    self.scrollback_wrapped.push(is_wrapped);
-                    self.scrollback_lines += 1;
-                } else {
-                    let write_idx = self.scrollback_start;
-                    let dst_start = write_idx * self.cols;
-                    let dst_end = dst_start + self.cols;
-
-                    self.scrollback_cells[dst_start..dst_end]
-                        .clone_from_slice(&self.cells[src_start..src_end]);
-                    self.scrollback_wrapped[write_idx] = is_wrapped;
-                    self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
-                }
-            }
-        }
+        self.push_rows_to_scrollback(0, n);
 
         for i in n..self.rows {
             let src_start = i * self.cols;
@@ -102,6 +110,10 @@ impl Grid {
         if top == 0 && effective_bottom == self.rows - 1 && self.max_scrollback > 0 {
             self.scroll_up(n);
             return true;
+        }
+
+        if top == 0 {
+            self.push_rows_to_scrollback(0, n);
         }
 
         if n >= region_size {

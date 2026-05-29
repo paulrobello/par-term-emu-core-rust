@@ -68,6 +68,26 @@ fn test_scroll_region_up() {
 }
 
 #[test]
+fn test_scroll_region_up_top_anchored_pushes_scrollback() {
+    let mut grid = Grid::new(5, 6, 10);
+    for row in 0..6 {
+        grid.set(0, row, Cell::new((b'A' + row as u8) as char));
+    }
+
+    assert!(grid.scroll_region_up(1, 0, 3));
+
+    assert_eq!(grid.scrollback_len(), 1);
+    let line0 = grid.scrollback_line(0).unwrap();
+    assert_eq!(line0[0].c, 'A');
+    assert_eq!(grid.get(0, 0).unwrap().c, 'B');
+    assert_eq!(grid.get(0, 1).unwrap().c, 'C');
+    assert_eq!(grid.get(0, 2).unwrap().c, 'D');
+    assert_eq!(grid.get(0, 3).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 4).unwrap().c, 'E');
+    assert_eq!(grid.get(0, 5).unwrap().c, 'F');
+}
+
+#[test]
 fn test_scroll_region_down() {
     let mut grid = Grid::new(80, 10, 1000);
     for i in 0..10 {
