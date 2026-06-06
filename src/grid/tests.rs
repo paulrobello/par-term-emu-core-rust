@@ -1,5 +1,6 @@
 use super::*;
 use crate::cell::Cell;
+use crate::color::{Color, NamedColor};
 
 #[test]
 fn test_grid_creation() {
@@ -168,7 +169,7 @@ fn test_erase_chars_boundary() {
         grid.set(i, 0, Cell::new((b'X' + i as u8) as char));
     }
 
-    grid.erase_chars(5, 0, 20); // Erase 20 chars from position 5 (only 5 exist)
+    grid.erase_chars(5, 0, 20, Color::Named(NamedColor::Black)); // Erase 20 chars from position 5 (only 5 exist)
 
     assert_eq!(grid.get(4, 0).unwrap().c, '\\'); // Should be preserved (X + 4)
     for i in 5..10 {
@@ -184,7 +185,7 @@ fn test_clear_line_operations() {
     }
 
     // Clear from position 5 to end
-    grid.clear_line_right(5, 2);
+    grid.clear_line_right(5, 2, Color::Named(NamedColor::Black));
 
     assert_eq!(grid.get(4, 2).unwrap().c, 'X'); // Preserved
     assert_eq!(grid.get(5, 2).unwrap().c, ' '); // Cleared
@@ -199,7 +200,7 @@ fn test_clear_line_left() {
     }
 
     // Clear from start to position 5 (inclusive)
-    grid.clear_line_left(5, 2);
+    grid.clear_line_left(5, 2, Color::Named(NamedColor::Black));
 
     for i in 0..=5 {
         assert_eq!(grid.get(i, 2).unwrap().c, ' '); // Cleared
@@ -217,12 +218,133 @@ fn test_clear_screen_operations() {
     }
 
     // Clear from (5,5) to end of screen
-    grid.clear_screen_below(5, 5);
+    grid.clear_screen_below(5, 5, Color::Named(NamedColor::Black));
 
     assert_eq!(grid.get(4, 5).unwrap().c, 'X'); // Before cursor on same line - preserved
     assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared
     assert_eq!(grid.get(0, 6).unwrap().c, ' '); // Next line - cleared
     assert_eq!(grid.get(0, 4).unwrap().c, 'X'); // Previous line - preserved
+}
+
+// ===== BCE (Background Color Erase) Tests =====
+
+#[test]
+fn test_bce_clear_line_right() {
+    let mut grid = Grid::new(10, 5, 1000);
+    for i in 0..10 {
+        grid.set(i, 2, Cell::new('X'));
+    }
+    let bg = Color::Rgb(0, 128, 0); // green
+    grid.clear_line_right(5, 2, bg);
+
+    assert_eq!(grid.get(4, 2).unwrap().c, 'X'); // Preserved
+    assert_eq!(grid.get(5, 2).unwrap().c, ' '); // Cleared
+    assert_eq!(grid.get(5, 2).unwrap().bg, bg); // BCE: green bg
+    assert_eq!(grid.get(9, 2).unwrap().bg, bg); // BCE: green bg
+}
+
+#[test]
+fn test_bce_clear_line_left() {
+    let mut grid = Grid::new(10, 5, 1000);
+    for i in 0..10 {
+        grid.set(i, 2, Cell::new('X'));
+    }
+    let bg = Color::Rgb(0, 0, 255); // blue
+    grid.clear_line_left(5, 2, bg);
+
+    for i in 0..=5 {
+        assert_eq!(grid.get(i, 2).unwrap().c, ' '); // Cleared
+        assert_eq!(grid.get(i, 2).unwrap().bg, bg); // BCE: blue bg
+    }
+    assert_eq!(grid.get(6, 2).unwrap().c, 'X'); // Preserved
+}
+
+#[test]
+fn test_bce_clear_row() {
+    let mut grid = Grid::new(10, 5, 1000);
+    for i in 0..10 {
+        grid.set(i, 2, Cell::new('X'));
+    }
+    let bg = Color::Rgb(255, 0, 0); // red
+    grid.clear_row_with_bg(2, bg);
+
+    for i in 0..10 {
+        assert_eq!(grid.get(i, 2).unwrap().c, ' ');
+        assert_eq!(grid.get(i, 2).unwrap().bg, bg); // BCE: red bg
+    }
+}
+
+#[test]
+fn test_bce_clear_screen_below() {
+    let mut grid = Grid::new(10, 10, 1000);
+    for row in 0..10 {
+        for col in 0..10 {
+            grid.set(col, row, Cell::new('X'));
+        }
+    }
+    let bg = Color::Rgb(128, 0, 128); // magenta
+    grid.clear_screen_below(5, 5, bg);
+
+    assert_eq!(grid.get(4, 5).unwrap().c, 'X'); // Before cursor - preserved
+    assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared
+    assert_eq!(grid.get(5, 5).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(0, 6).unwrap().c, ' '); // Next line - cleared
+    assert_eq!(grid.get(0, 6).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(0, 4).unwrap().c, 'X'); // Previous line - preserved
+}
+
+#[test]
+fn test_bce_clear_screen_above() {
+    let mut grid = Grid::new(10, 10, 1000);
+    for row in 0..10 {
+        for col in 0..10 {
+            grid.set(col, row, Cell::new('X'));
+        }
+    }
+    let bg = Color::Indexed(42); // indexed color
+    grid.clear_screen_above(5, 5, bg);
+
+    assert_eq!(grid.get(0, 4).unwrap().c, ' '); // Previous line - cleared
+    assert_eq!(grid.get(0, 4).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared
+    assert_eq!(grid.get(5, 5).unwrap().bg, bg); // BCE
+    assert_eq!(grid.get(6, 5).unwrap().c, 'X'); // After cursor - preserved
+}
+
+#[test]
+fn test_bce_erase_characters() {
+    let mut grid = Grid::new(10, 5, 1000);
+    for i in 0..10 {
+        grid.set(i, 0, Cell::new('X'));
+    }
+    let bg = Color::Rgb(0, 128, 0);
+    grid.erase_characters(3, 0, 4, bg);
+
+    assert_eq!(grid.get(2, 0).unwrap().c, 'X'); // Preserved
+    for i in 3..7 {
+        assert_eq!(grid.get(i, 0).unwrap().c, ' '); // Erased
+        assert_eq!(grid.get(i, 0).unwrap().bg, bg); // BCE
+    }
+    assert_eq!(grid.get(7, 0).unwrap().c, 'X'); // Preserved
+}
+
+#[test]
+fn test_bce_clear_with_bg() {
+    let mut grid = Grid::new(10, 3, 1000);
+    for row in 0..3 {
+        for col in 0..10 {
+            grid.set(col, row, Cell::new('X'));
+        }
+    }
+    let bg = Color::Rgb(255, 255, 0); // yellow
+    grid.clear_with_bg(bg);
+
+    for row in 0..3 {
+        for col in 0..10 {
+            assert_eq!(grid.get(col, row).unwrap().c, ' ');
+            assert_eq!(grid.get(col, row).unwrap().bg, bg); // BCE
+        }
+    }
 }
 
 #[test]
@@ -235,7 +357,7 @@ fn test_clear_screen_above() {
     }
 
     // Clear from start of screen to (5,5)
-    grid.clear_screen_above(5, 5);
+    grid.clear_screen_above(5, 5, Color::Named(NamedColor::Black));
 
     assert_eq!(grid.get(0, 4).unwrap().c, ' '); // Previous line - cleared
     assert_eq!(grid.get(5, 5).unwrap().c, ' '); // At cursor - cleared

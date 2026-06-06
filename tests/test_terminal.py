@@ -2270,5 +2270,91 @@ def test_progress_bar_does_not_affect_notifications():
     assert len(term.take_notifications()) == 0
 
 
+# ===== BCE (Background Color Erase) Tests =====
+
+
+def test_bce_el0_clear_to_end_of_line():
+    """EL 0 (\\x1b[K) should fill erased cells with current SGR background"""
+    term = Terminal(40, 2)
+    # Set green background, write text, then erase to end of line
+    term.process_str("\x1b[42mGREEN+EL\x1b[K")
+
+    # Text cells should have green bg
+    bg_text = term.get_bg_color(0, 0)
+    assert bg_text == (0, 128, 0), f"Text cell bg should be green, got {bg_text}"
+
+    # Erased cells (beyond text) should also have green bg (BCE)
+    bg_erased = term.get_bg_color(20, 0)
+    assert bg_erased == (0, 128, 0), f"Erased cell bg should be green, got {bg_erased}"
+
+
+def test_bce_el1_clear_to_start_of_line():
+    """EL 1 (\\x1b[1K) should fill erased cells with current SGR background"""
+    term = Terminal(40, 2)
+    # Write text, move to col 9, set red bg, erase to start
+    term.process_str("ABCDEFGHIJ\x1b[41m\x1b[9G\x1b[1K")
+
+    # Erased cells (0-8) should have red bg
+    bg_erased = term.get_bg_color(0, 0)
+    assert bg_erased == (128, 0, 0), f"Erased cell bg should be red, got {bg_erased}"
+
+
+def test_bce_el2_clear_entire_line():
+    """EL 2 (\\x1b[2K) should fill entire line with current SGR background"""
+    term = Terminal(40, 2)
+    term.process_str("\x1b[44mBLUE\x1b[2K")
+
+    # All cells on the line should have blue bg
+    bg = term.get_bg_color(0, 0)
+    assert bg == (0, 0, 128), f"Line start bg should be blue, got {bg}"
+    bg_end = term.get_bg_color(39, 0)
+    assert bg_end == (0, 0, 128), f"Line end bg should be blue, got {bg_end}"
+
+
+def test_bce_ed0_clear_to_end_of_screen():
+    """ED 0 (\\x1b[J) should fill erased cells with current SGR background"""
+    term = Terminal(20, 5)
+    term.process_str("\x1b[45m\x1b[H\x1b[J")
+
+    # All cells should have magenta bg
+    bg = term.get_bg_color(0, 0)
+    assert bg == (128, 0, 128), f"Cell (0,0) bg should be magenta, got {bg}"
+    bg_last = term.get_bg_color(19, 4)
+    assert bg_last == (128, 0, 128), f"Last cell bg should be magenta, got {bg_last}"
+
+
+def test_bce_ed2_clear_entire_screen():
+    """ED 2 (\\x1b[2J) should fill entire screen with current SGR background"""
+    term = Terminal(20, 5)
+    term.process_str("SOME TEXT")
+    term.process_str("\x1b[46m\x1b[2J")
+
+    # All cells should be cleared with cyan bg
+    bg = term.get_bg_color(0, 0)
+    assert bg == (0, 128, 128), f"Cell (0,0) bg should be cyan, got {bg}"
+    bg_last = term.get_bg_color(19, 4)
+    assert bg_last == (0, 128, 128), f"Last cell bg should be cyan, got {bg_last}"
+
+
+def test_bce_ech_erase_characters():
+    """ECH (\\x1b[X) should fill erased cells with current SGR background"""
+    term = Terminal(40, 2)
+    term.process_str("AAAAAAAAAAAAAAAA")
+    term.process_str("\x1b[42m\x1b[1;1H\x1b[5X")
+
+    # First 5 cells erased with green bg
+    bg = term.get_bg_color(0, 0)
+    assert bg == (0, 128, 0), f"Erased cell bg should be green, got {bg}"
+
+
+def test_bce_default_bg_is_black():
+    """Without SGR bg set, erase should use default black bg"""
+    term = Terminal(40, 2)
+    term.process_str("Hello\x1b[K")
+
+    bg_erased = term.get_bg_color(10, 0)
+    assert bg_erased == (0, 0, 0), f"Default bg should be black, got {bg_erased}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
