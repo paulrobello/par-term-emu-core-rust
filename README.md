@@ -15,7 +15,7 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
-Version 0.42.2 fixes top-anchored scroll region lines being lost instead of entering scrollback — partial regions (e.g. Codex CLI's scroll region) now correctly preserve evicted rows in primary-screen scrollback, matching iTerm2 behavior. Also fixes `pytest-asyncio` mark warnings and bumps dependencies across all sub-projects (tikv-jemallocator 0.7, pygments 2.20, @bufbuild/buf 1.70). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.42.3 implements **BCE (Background Color Erase)** — all VT erase operations (`EL`, `ED`, `ECH`, `DECSERA`) now fill erased cells with the current SGR background color instead of always resetting to black, matching iTerm2/Alacritty/Windows Terminal behavior. Also bumps dependencies across Rust (bitflags 2.13, tokio 1.52.3), Python (pytest-asyncio 1.4, ruff 0.15.16), and web frontend (next 16.2.7, react 19.2.7). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.42.1
 
