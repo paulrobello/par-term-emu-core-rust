@@ -13,7 +13,8 @@ impl Terminal {
     ) {
         match action {
             'J' => {
-                // Erase in display (ED)
+                // Erase in display (ED) — BCE: fill with current SGR background
+                let bg = self.bg;
                 let n = params
                     .iter()
                     .next()
@@ -25,12 +26,12 @@ impl Terminal {
                 match n {
                     0 => self
                         .active_grid_mut()
-                        .clear_screen_below(cursor_col, cursor_row),
+                        .clear_screen_below(cursor_col, cursor_row, bg),
                     1 => self
                         .active_grid_mut()
-                        .clear_screen_above(cursor_col, cursor_row),
+                        .clear_screen_above(cursor_col, cursor_row, bg),
                     2 => {
-                        self.active_grid_mut().clear();
+                        self.active_grid_mut().clear_with_bg(bg);
                         self.graphics_store.clear();
                         self.graphics_store.clear_scrollback_graphics();
                         self.terminal_events
@@ -44,7 +45,7 @@ impl Terminal {
                         );
                     }
                     3 => {
-                        self.active_grid_mut().clear();
+                        self.active_grid_mut().clear_with_bg(bg);
                         self.active_grid_mut().clear_scrollback();
                         self.graphics_store.clear();
                         self.graphics_store.clear_scrollback_graphics();
@@ -62,7 +63,8 @@ impl Terminal {
                 }
             }
             'K' => {
-                // Erase in line (EL)
+                // Erase in line (EL) — BCE: fill with current SGR background
+                let bg = self.bg;
                 let n = params
                     .iter()
                     .next()
@@ -74,16 +76,17 @@ impl Terminal {
                 match n {
                     0 => self
                         .active_grid_mut()
-                        .clear_line_right(cursor_col, cursor_row),
+                        .clear_line_right(cursor_col, cursor_row, bg),
                     1 => self
                         .active_grid_mut()
-                        .clear_line_left(cursor_col, cursor_row),
-                    2 => self.active_grid_mut().clear_row(cursor_row),
+                        .clear_line_left(cursor_col, cursor_row, bg),
+                    2 => self.active_grid_mut().clear_row_with_bg(cursor_row, bg),
                     _ => {}
                 }
             }
             'X' => {
-                // Erase characters (ECH)
+                // Erase characters (ECH) — BCE: fill with current SGR background
+                let bg = self.bg;
                 let n = params
                     .iter()
                     .next()
@@ -94,7 +97,7 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 let cursor_row = self.cursor.row;
                 self.active_grid_mut()
-                    .erase_characters(cursor_col, cursor_row, n);
+                    .erase_characters(cursor_col, cursor_row, n, bg);
             }
             _ => {}
         }
@@ -176,10 +179,12 @@ impl Terminal {
                 }
             }
         }
-        // Second pass: erase the collected cells
+        // Second pass: erase the collected cells with BCE
+        let bg = self.bg;
         for (col, row) in to_erase {
             if let Some(cells) = self.active_grid_mut().row_mut(row) {
-                cells[col] = crate::cell::Cell::default();
+                cells[col].reset();
+                cells[col].bg = bg;
             }
         }
 
