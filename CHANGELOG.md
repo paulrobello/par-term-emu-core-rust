@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.3] - 2026-06-06
+
+### Fixed
+- **BCE (Background Color Erase) not implemented.** All VT erase operations (`EL` `\x1b[K`, `ED` `\x1b[J`, `ECH` `\x1b[X`, `DECSERA`) now fill erased cells with the current SGR background color instead of always resetting to black. This matches the behavior of iTerm2, Alacritty, and Windows Terminal. Grid erase methods now accept a `bg: Color` parameter; the CSI erase handler passes `self.bg` (current SGR background). Scroll/edit operations continue using default black bg (BCE does not apply to scroll). ([#57](https://github.com/paulrobello/par-term-emu-core-rust/issues/57), [#58](https://github.com/paulrobello/par-term-emu-core-rust/pull/58))
+
+### Build / Tooling
+- **Updated Rust crates:** bitflags 2.11.1→2.13.0, uuid 1.23.1→1.23.2, tokio 1.52→1.52.3, reqwest 0.13.3→0.13.4, sysinfo 0.39.2→0.39.3, unicode-segmentation 1.13→1.13.3, plus transitive bumps (hyper, log, zerocopy, yoke, etc.)
+- **Updated Python dev deps:** pyright 1.1.409→1.1.410, pytest-asyncio 0.26→1.4, ruff 0.15.14→0.15.16
+- **Updated web frontend deps:** next 16.2.6→16.2.7, react 19.2.6→19.2.7, react-dom 19.2.6→19.2.7, eslint 10.4.0→10.4.1, eslint-config-next 16.2.6→16.2.7, @types/node 25.9.1→25.9.2, @types/react 19.2.15→19.2.17
+
 ## [0.42.2] - 2026-05-29
 
 ### Fixed
