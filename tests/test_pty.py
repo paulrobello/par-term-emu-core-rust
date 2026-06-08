@@ -283,6 +283,70 @@ def test_pty_terminal_title():
     # 3. It matches the Terminal API contract
 
 
+def test_update_generation_initial():
+    """Test that generation counter starts at 0"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    assert term.update_generation() == 0
+
+
+def test_has_updates_since_no_changes():
+    """Test that has_updates_since returns False when no changes occurred"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    gen = term.update_generation()
+    assert not term.has_updates_since(gen)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_generation_counter_increments_on_output():
+    """Regression test for issue #60: generation counter must increment on PTY output."""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/echo", args=["hello"])
+
+    gen_before = term.update_generation()
+    time.sleep(0.3)
+
+    gen_after = term.update_generation()
+    assert gen_after > gen_before, (
+        f"generation counter should increment after PTY output: was {gen_before}, now {gen_after}"
+    )
+    assert term.has_updates_since(gen_before), (
+        "has_updates_since() should return True after PTY output"
+    )
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_generation_counter_after_ctrl_c():
+    """Regression test for issue #60: generation counter must still work after Ctrl+C."""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn_shell()
+    time.sleep(0.5)
+
+    # Send Ctrl+C
+    term.write(b"\x03")
+    time.sleep(0.3)
+
+    # Send a normal command after Ctrl+C
+    gen_before = term.update_generation()
+    term.write_str("echo GENERATION_TEST\n")
+    time.sleep(0.5)
+
+    gen_after = term.update_generation()
+    assert gen_after > gen_before, (
+        f"generation counter should increment for output after Ctrl+C: was {gen_before}, now {gen_after}"
+    )
+    assert term.has_updates_since(gen_before), (
+        "has_updates_since() must detect changes after Ctrl+C"
+    )
+
+
 def test_pty_terminal_hyperlink():
     """Test getting hyperlink from PtyTerminal"""
     from par_term_emu_core_rust import PtyTerminal, Terminal
