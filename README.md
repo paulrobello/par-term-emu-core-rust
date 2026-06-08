@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
+Version 0.42.4 fixes `has_updates_since()` on Windows — the generation counter now increments immediately on PTY data arrival instead of at the end of terminal processing, preventing it from getting stuck after Ctrl+C on ConPTY. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.42.3
+
 Version 0.42.3 implements **BCE (Background Color Erase)** — all VT erase operations (`EL`, `ED`, `ECH`, `DECSERA`) now fill erased cells with the current SGR background color instead of always resetting to black, matching iTerm2/Alacritty/Windows Terminal behavior. Also bumps dependencies across Rust (bitflags 2.13, tokio 1.52.3), Python (pytest-asyncio 1.4, ruff 0.15.16), and web frontend (next 16.2.7, react 19.2.7). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.42.1
