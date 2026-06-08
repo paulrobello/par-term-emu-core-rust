@@ -627,6 +627,14 @@ impl PtySession {
                     Ok(n) => {
                         debug::log_pty_read(n);
 
+                        // Bump generation counter IMMEDIATELY on successful read,
+                        // before any processing. This guarantees the counter always
+                        // advances when PTY data arrives, even if processing encounters
+                        // a panic or unexpected code path (e.g., Windows ConPTY after
+                        // Ctrl+C where subsequent sequences may cause issues).
+                        let old_gen = update_generation.fetch_add(1, Ordering::SeqCst);
+                        debug::log_generation_change(old_gen, old_gen + 1, "PTY read");
+
                         // Call output callback if set (for streaming, logging, etc.)
                         {
                             let callback_guard = output_callback.lock();
@@ -644,7 +652,6 @@ impl PtySession {
                         // Process the bytes through the terminal
                         {
                             let mut term = terminal.lock();
-                            let old_gen = update_generation.load(Ordering::SeqCst);
                             let was_alt_screen = term.is_alt_screen_active();
                             term.process(&buffer[..n]);
                             // Record output for session recording
@@ -746,10 +753,6 @@ impl PtySession {
                                     }
                                 }
                             }
-
-                            // Increment update generation to signal content changed
-                            let new_gen = update_generation.fetch_add(1, Ordering::SeqCst) + 1;
-                            debug::log_generation_change(old_gen, new_gen, "PTY read");
                         }
                     }
                     Err(e) => {
@@ -1726,6 +1729,101 @@ mod tests {
             );
         }
         // If gen == 0, the session just started with no updates; skip the check.
+    }
+
+    /// Regression test for issue #60: generation counter must increment
+    /// on every successful PTY read, even if terminal processing encounters
+    /// unexpected sequences (e.g., Windows ConPTY after Ctrl+C).
+    ///
+    /// This test spawns a real PTY, writes data, and verifies that
+    /// `has_updates_since()` correctly detects the change.
+    #[test]
+    fn test_generation_counter_increments_on_pty_output() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Spawn a simple command that exits immediately
+        #[cfg(unix)]
+        let result = session.spawn("/bin/echo", &["hello"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo hello"]);
+
+        assert!(result.is_ok());
+
+        let gen_before = session.update_generation();
+
+        // Wait for the command to execute and produce output
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // The generation counter MUST have incremented because the reader
+        // thread read data from the PTY (echo produces "hello\r\n").
+        let gen_after = session.update_generation();
+        assert!(
+            gen_after > gen_before,
+            "generation counter should have incremented after PTY output: was {}, now {}",
+            gen_before,
+            gen_after
+        );
+        assert!(
+            session.has_updates_since(gen_before),
+            "has_updates_since() should return true after PTY output"
+        );
+    }
+
+    /// Test that generation counter increments are not blocked by terminal
+    /// processing issues. Simulates the Ctrl+C scenario from issue #60 by
+    /// spawning a shell, sending Ctrl+C, then sending normal data and
+    /// verifying the generation counter still advances.
+    #[test]
+    fn test_generation_counter_after_ctrl_c() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Spawn a shell
+        #[cfg(unix)]
+        let result = session.spawn_shell();
+        #[cfg(windows)]
+        let result = session.spawn_shell();
+
+        assert!(result.is_ok());
+
+        // Wait for shell to start
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let gen_before_ctrl_c = session.update_generation();
+
+        // Send Ctrl+C
+        session.write(b"\x03").unwrap();
+
+        // Wait for Ctrl+C to be processed
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        // Generation should have incremented due to shell prompt redraw after Ctrl+C
+        let gen_after_ctrl_c = session.update_generation();
+        assert!(
+            gen_after_ctrl_c >= gen_before_ctrl_c,
+            "generation counter should have incremented after Ctrl+C: was {}, now {}",
+            gen_before_ctrl_c,
+            gen_after_ctrl_c
+        );
+
+        // Now send a normal command
+        let gen_before_echo = session.update_generation();
+        session.write(b"echo TEST_GENERATION\r\n").unwrap();
+
+        // Wait for output
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        // Generation MUST increment for the echo output
+        let gen_after_echo = session.update_generation();
+        assert!(
+            gen_after_echo > gen_before_echo,
+            "generation counter should increment for output after Ctrl+C: was {}, now {}",
+            gen_before_echo,
+            gen_after_echo
+        );
+        assert!(
+            session.has_updates_since(gen_before_echo),
+            "has_updates_since() must detect changes after Ctrl+C"
+        );
     }
 
     #[test]
