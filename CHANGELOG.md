@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.42.4] - 2026-06-08
+
+### Fixed
+- **`has_updates_since()` unreliable on Windows after Ctrl+C.** The generation counter (`update_generation` / `has_updates_since`) was incremented at the end of a long terminal processing block in the PTY reader thread. If processing encountered a panic or unexpected code path — notably on Windows ConPTY after the child receives `CTRL_C_EVENT` — the counter would stay stuck even though data had already been written to the grid buffer. The `fetch_add(1)` now runs immediately after a successful `reader.read()`, before any processing, guaranteeing the counter always advances when PTY data arrives. ([#60](https://github.com/paulrobello/par-term-emu-core-rust/issues/60), [#61](https://github.com/paulrobello/par-term-emu-core-rust/pull/61))
+
 ## [0.42.3] - 2026-06-06
 
 ### Fixed
