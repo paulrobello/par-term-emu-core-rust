@@ -6,6 +6,7 @@
 // ARC-002: cohesive method groups are split into sibling `*_api` files, each
 // with its own `#[pymethods] impl PyTerminal` block. Pure relocation — the
 // Python `Terminal` class keeps the same surface.
+mod bookmark_api;
 mod trigger_api;
 
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -3278,54 +3279,6 @@ impl PyTerminal {
             memory_bytes: stats.memory_bytes,
             has_wrapped: stats.has_wrapped,
         })
-    }
-
-    // === Bookmark Methods ===
-
-    /// Add a bookmark at the given scrollback row
-    ///
-    /// Args:
-    ///     row: Row index (negative for scrollback, 0+ for visible screen)
-    ///     label: Optional label for the bookmark
-    ///
-    /// Returns:
-    ///     Bookmark ID
-    #[pyo3(signature = (row, label=None))]
-    fn add_bookmark(&mut self, row: isize, label: Option<String>) -> PyResult<usize> {
-        Ok(self.inner.add_bookmark(row, label))
-    }
-
-    /// Get all bookmarks
-    ///
-    /// Returns:
-    ///     List of Bookmark objects
-    fn get_bookmarks(&self) -> PyResult<Vec<super::types::PyBookmark>> {
-        let bookmarks = self.inner.get_bookmarks();
-        Ok(bookmarks
-            .iter()
-            .map(|b| super::types::PyBookmark {
-                id: b.id,
-                row: b.row,
-                label: b.label.clone(),
-            })
-            .collect())
-    }
-
-    /// Remove a bookmark by ID
-    ///
-    /// Args:
-    ///     id: Bookmark ID
-    ///
-    /// Returns:
-    ///     True if bookmark was removed, False if not found
-    fn remove_bookmark(&mut self, id: usize) -> PyResult<bool> {
-        Ok(self.inner.remove_bookmark(id))
-    }
-
-    /// Clear all bookmarks
-    fn clear_bookmarks(&mut self) -> PyResult<()> {
-        self.inner.clear_bookmarks();
-        Ok(())
     }
 
     // === Feature 7: Performance Metrics ===
