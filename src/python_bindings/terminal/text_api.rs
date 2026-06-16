@@ -14,21 +14,7 @@ impl PyTerminal {
 
     // select_word, find_text, find_next, find_matching_bracket, select_semantic_region:
     //   provided by impl_terminal_search_select! (ARC-003/QA-001)
-
-    /// Export terminal content as HTML
-    ///
-    /// Args:
-    ///     include_styles: Whether to include full HTML document with CSS (default: True)
-    ///
-    /// Returns:
-    ///     HTML string with terminal content and styling
-    ///
-    /// When include_styles is True, returns a complete HTML document.
-    /// When False, returns just the styled content (useful for embedding).
-    #[pyo3(signature = (include_styles = true))]
-    fn export_html(&self, include_styles: bool) -> PyResult<String> {
-        Ok(self.inner.export_html(include_styles))
-    }
+    // export_html: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     // === Text Extraction ===
 

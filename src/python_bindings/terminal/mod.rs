@@ -64,6 +64,7 @@ crate::impl_terminal_content_misc!(PyTerminal);
 crate::impl_terminal_search_select!(PyTerminal);
 crate::impl_terminal_debug_snapshots!(PyTerminal);
 crate::impl_terminal_file_transfer!(PyTerminal);
+crate::impl_terminal_exports!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -103,34 +104,7 @@ impl PyTerminal {
     }
 
     // content, __str__: provided by impl_terminal_content_misc! (ARC-003/QA-001)
-
-    /// Export entire buffer (scrollback + current screen) as plain text
-    ///
-    /// This exports all buffer contents with:
-    /// - No styling, colors, or graphics (Sixel, etc.)
-    /// - Trailing spaces trimmed from each line
-    /// - Wrapped lines properly handled (no newline between wrapped segments)
-    /// - Empty lines preserved
-    ///
-    /// Returns:
-    ///     String containing all buffer text from scrollback through current screen
-    fn export_text(&self) -> PyResult<String> {
-        Ok(self.inner.export_text())
-    }
-
-    /// Export entire buffer (scrollback + current screen) with ANSI styling
-    ///
-    /// This exports all buffer contents with:
-    /// - Full ANSI escape sequences for colors and text attributes
-    /// - Trailing spaces trimmed from each line
-    /// - Wrapped lines properly handled (no newline between wrapped segments)
-    /// - Efficient escape sequence generation (only emits changes)
-    ///
-    /// Returns:
-    ///     String containing all buffer text with ANSI styling
-    fn export_styled(&self) -> PyResult<String> {
-        Ok(self.inner.export_styled())
-    }
+    // export_text, export_styled: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     /// Take a screenshot of the current visible buffer
     ///
@@ -1061,17 +1035,7 @@ impl PyTerminal {
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
-    /// Update all Kitty graphics animations and trigger refresh if frames changed
-    ///
-    /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
-    /// It returns a list of image IDs whose frames changed, allowing frontends to
-    /// selectively refresh only graphics that were updated.
-    ///
-    /// Returns:
-    ///     List of image IDs that changed frames
-    fn update_animations(&mut self) -> PyResult<Vec<u32>> {
-        Ok(self.inner.update_animations())
-    }
+    // update_animations: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     // Device query response methods
 

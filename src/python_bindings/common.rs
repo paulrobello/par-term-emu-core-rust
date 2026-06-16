@@ -1902,3 +1902,60 @@ macro_rules! impl_terminal_file_transfer {
         }
     };
 }
+
+/// Emit text/html export + animation-tick methods for `$ty`.
+/// (ARC-003/QA-001 batch: exports + animations.)
+#[macro_export]
+macro_rules! impl_terminal_exports {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Export entire buffer (scrollback + current screen) as plain text
+            ///
+            /// Returns:
+            ///     String containing all text content
+            fn export_text(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.export_text())
+            }
+
+            /// Export entire buffer (scrollback + current screen) with ANSI styling
+            ///
+            /// Returns:
+            ///     String containing text content with ANSI escape codes
+            fn export_styled(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.export_styled())
+            }
+
+            /// Export terminal content as HTML
+            ///
+            /// Args:
+            ///     include_styles: Whether to include full HTML document with CSS (default: True)
+            ///
+            /// Returns:
+            ///     HTML string with terminal content and styling
+            ///
+            /// When include_styles is True, returns a complete HTML document.
+            /// When False, returns just the styled content (useful for embedding).
+            #[pyo3(signature = (include_styles = true))]
+            fn export_html(&self, include_styles: bool) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.export_html(include_styles))
+            }
+
+            /// Update all Kitty graphics animations and trigger refresh if frames changed
+            ///
+            /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
+            /// It returns a list of image IDs whose frames changed, allowing frontends to
+            /// selectively refresh only graphics that were updated.
+            ///
+            /// Returns:
+            ///     List of image IDs that changed frames
+            fn update_animations(&mut self) -> pyo3::PyResult<Vec<u32>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.update_animations())
+            }
+        }
+    };
+}

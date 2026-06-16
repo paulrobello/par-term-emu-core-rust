@@ -58,6 +58,7 @@ crate::impl_terminal_content_misc!(PyPtyTerminal);
 crate::impl_terminal_search_select!(PyPtyTerminal);
 crate::impl_terminal_debug_snapshots!(PyPtyTerminal);
 crate::impl_terminal_file_transfer!(PyPtyTerminal);
+crate::impl_terminal_exports!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {
@@ -255,34 +256,7 @@ impl PyPtyTerminal {
     // content, __str__: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // title: provided by impl_terminal_query_getters! (ARC-003/QA-001)
-
-    /// Export entire buffer (scrollback + current screen) as plain text
-    ///
-    /// This exports all buffer contents with:
-    /// - No styling, colors, or graphics (Sixel, etc.)
-    /// - Trailing spaces trimmed from each line
-    /// - Wrapped lines properly handled (no newline between wrapped segments)
-    /// - Empty lines preserved
-    ///
-    /// Returns:
-    ///     String containing all buffer text from scrollback through current screen
-    fn export_text(&self) -> PyResult<String> {
-        Ok(self.inner.export_text())
-    }
-
-    /// Export entire buffer (scrollback + current screen) with ANSI styling
-    ///
-    /// This exports all buffer contents with:
-    /// - Full ANSI escape sequences for colors and text attributes
-    /// - Trailing spaces trimmed from each line
-    /// - Wrapped lines properly handled (no newline between wrapped segments)
-    /// - Efficient escape sequence generation (only emits changes)
-    ///
-    /// Returns:
-    ///     String containing all buffer text with ANSI styling
-    fn export_styled(&self) -> PyResult<String> {
-        Ok(self.inner.export_styled())
-    }
+    // export_text, export_styled: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     /// Take a screenshot of the current visible buffer
     ///
@@ -1098,24 +1072,7 @@ impl PyPtyTerminal {
     // Sixel graphics methods
     // graphics_at_row, graphics_count, graphics, clear_graphics:
     //   provided by impl_terminal_sixel_graphics! (ARC-003/QA-001)
-
-    /// Update all Kitty graphics animations and trigger refresh if frames changed
-    ///
-    /// This method should be called regularly (e.g., 60Hz) to advance animation frames.
-    /// It returns a list of image IDs whose frames changed, allowing frontends to
-    /// selectively refresh only graphics that were updated.
-    ///
-    /// Returns:
-    ///     List of image IDs that changed frames
-    fn update_animations(&mut self) -> PyResult<Vec<u32>> {
-        let terminal = self.inner.terminal();
-        let changed = if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
-            term.update_animations()
-        } else {
-            Vec::new()
-        };
-        Ok(changed)
-    }
+    // update_animations: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     fn __repr__(&self) -> PyResult<String> {
         let (cols, rows) = self.inner.size();
@@ -1201,20 +1158,7 @@ impl PyPtyTerminal {
 
     // find_matching_bracket, select_semantic_region:
     //   provided by impl_terminal_search_select! (ARC-003/QA-001)
-
-    /// Export terminal content as HTML
-    ///
-    /// Args:
-    ///     include_styles: Whether to include full HTML document with CSS (default: True)
-    ///
-    /// Returns:
-    ///     HTML string with terminal content and styling
-    #[pyo3(signature = (include_styles = true))]
-    fn export_html(&self, include_styles: bool) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.export_html(include_styles))
-    }
+    // export_html: provided by impl_terminal_exports! (ARC-003/QA-001)
 
     // ========== Static Utility Methods ==========
     // strip_ansi, measure_text_width, parse_color: provided by impl_terminal_static_helpers! (ARC-003/QA-001)
