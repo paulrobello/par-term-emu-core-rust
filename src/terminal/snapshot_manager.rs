@@ -5,7 +5,7 @@
 //! Each entry captures a point-in-time snapshot plus the bytes that were fed
 //! to `Terminal::process()` *after* the snapshot was taken.
 
-use super::terminal_snapshot::TerminalSnapshot;
+use super::replay_snapshot::TerminalSnapshot;
 use super::Terminal;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};

@@ -31,13 +31,13 @@ mod queries;
 #[cfg(test)]
 mod rectangles;
 #[cfg(test)]
+mod replay_snapshot_tests;
+#[cfg(test)]
 mod scrolling;
 #[cfg(test)]
 mod search;
 #[cfg(test)]
 mod shell_integration;
-#[cfg(test)]
-mod terminal_snapshot_tests;
 #[cfg(test)]
 mod terminal_tests;
 #[cfg(test)]

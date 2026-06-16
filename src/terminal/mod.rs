@@ -19,13 +19,13 @@ pub mod notification;
 pub mod progress;
 pub mod recording;
 pub mod replay;
+pub mod replay_snapshot;
 pub mod screen;
 pub mod search;
+pub mod semantic_snapshot;
 mod sequences;
 pub mod shell_integration;
-pub mod snapshot;
 pub mod snapshot_manager;
-pub mod terminal_snapshot;
 pub mod trigger;
 mod write;
 
@@ -61,11 +61,11 @@ pub use screen::{
     ThemeMode, UpdatePriority, ZLayer,
 };
 pub use search::{DetectedItem, HyperlinkInfo, RegexMatch, RegexSearchOptions, SearchMatch};
-pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
-pub use snapshot::{
+pub use semantic_snapshot::{
     diff_screen_lines, Bookmark, CommandInfo, CwdChangeInfo, DiffChangeType, ExportFormat,
     LineDiff, ScrollbackStats, SemanticSnapshot, SnapshotDiff, SnapshotScope, ZoneInfo,
 };
+pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
 pub use trigger::{
     ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry, TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,

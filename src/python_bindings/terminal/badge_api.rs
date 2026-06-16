@@ -173,7 +173,7 @@ impl PyTerminal {
         scope: &str,
         max_commands: usize,
     ) -> PyResult<pyo3::Py<pyo3::types::PyDict>> {
-        use crate::terminal::snapshot::SnapshotScope;
+        use crate::terminal::semantic_snapshot::SnapshotScope;
 
         let snapshot_scope = match scope {
             "recent" => SnapshotScope::Recent(max_commands),
@@ -219,7 +219,7 @@ impl PyTerminal {
     ///     >>> json_str = term.get_semantic_snapshot_json(scope="full")
     #[pyo3(signature = (scope="visible", max_commands=10))]
     fn get_semantic_snapshot_json(&self, scope: &str, max_commands: usize) -> PyResult<String> {
-        use crate::terminal::snapshot::SnapshotScope;
+        use crate::terminal::semantic_snapshot::SnapshotScope;
 
         let snapshot_scope = match scope {
             "recent" => SnapshotScope::Recent(max_commands),

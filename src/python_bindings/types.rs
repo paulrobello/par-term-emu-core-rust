@@ -98,8 +98,8 @@ impl PyAttributes {
 }
 
 /// Atomic snapshot of terminal screen state for race-free rendering
-impl From<crate::terminal::terminal_snapshot::TerminalSnapshot> for PyScreenSnapshot {
-    fn from(snap: crate::terminal::terminal_snapshot::TerminalSnapshot) -> Self {
+impl From<crate::terminal::replay_snapshot::TerminalSnapshot> for PyScreenSnapshot {
+    fn from(snap: crate::terminal::replay_snapshot::TerminalSnapshot) -> Self {
         let active_grid = if snap.alt_screen_active {
             &snap.alt_grid
         } else {

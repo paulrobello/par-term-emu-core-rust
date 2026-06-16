@@ -187,8 +187,8 @@ impl Grid {
 
     /// Capture a snapshot of this grid's entire state.
     #[must_use]
-    pub fn capture_snapshot(&self) -> crate::terminal::terminal_snapshot::GridSnapshot {
-        crate::terminal::terminal_snapshot::GridSnapshot {
+    pub fn capture_snapshot(&self) -> crate::terminal::replay_snapshot::GridSnapshot {
+        crate::terminal::replay_snapshot::GridSnapshot {
             cells: self.cells.clone(),
             scrollback_cells: self.scrollback_cells.clone(),
             scrollback_start: self.scrollback_start,
@@ -204,10 +204,7 @@ impl Grid {
     }
 
     /// Restore this grid's state from a previously captured snapshot.
-    pub fn restore_from_snapshot(
-        &mut self,
-        snap: &crate::terminal::terminal_snapshot::GridSnapshot,
-    ) {
+    pub fn restore_from_snapshot(&mut self, snap: &crate::terminal::replay_snapshot::GridSnapshot) {
         self.cells = snap.cells.clone();
         self.scrollback_cells = snap.scrollback_cells.clone();
         self.scrollback_start = snap.scrollback_start;

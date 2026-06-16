@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_json() {
+    fn test_replay_snapshot_json() {
         use crate::terminal::Terminal;
         let mut term = Terminal::new(80, 24);
         term.process(b"Test content");

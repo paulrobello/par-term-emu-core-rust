@@ -1920,7 +1920,7 @@ impl StreamingServer {
         scope: &str,
         max_commands: Option<u32>,
     ) -> ServerMessage {
-        use crate::terminal::snapshot::SnapshotScope;
+        use crate::terminal::semantic_snapshot::SnapshotScope;
         match scope {
             "visible" => {
                 let terminal = terminal_for_refresh.lock();

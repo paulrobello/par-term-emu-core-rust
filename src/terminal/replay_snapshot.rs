@@ -286,7 +286,7 @@ mod tests {
         }
     }
 
-    fn make_terminal_snapshot(cols: usize, rows: usize) -> TerminalSnapshot {
+    fn make_replay_snapshot(cols: usize, rows: usize) -> TerminalSnapshot {
         let grid = make_grid_snapshot(cols, rows);
         let alt_grid = make_grid_snapshot(cols, rows);
 
@@ -337,8 +337,8 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_creation() {
-        let snap = make_terminal_snapshot(80, 24);
+    fn test_replay_snapshot_creation() {
+        let snap = make_replay_snapshot(80, 24);
         assert_eq!(snap.cols, 80);
         assert_eq!(snap.rows, 24);
         assert_eq!(snap.grid.cells.len(), 80 * 24);
@@ -350,8 +350,8 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_clone() {
-        let snap = make_terminal_snapshot(80, 24);
+    fn test_replay_snapshot_clone() {
+        let snap = make_replay_snapshot(80, 24);
         let cloned = snap.clone();
         assert_eq!(cloned.cols, snap.cols);
         assert_eq!(cloned.rows, snap.rows);
@@ -364,8 +364,8 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_size_estimation() {
-        let snap = make_terminal_snapshot(80, 24);
+    fn test_replay_snapshot_size_estimation() {
+        let snap = make_replay_snapshot(80, 24);
         let size = snap.estimate_size();
         // Should be at least the size of the cell data
         let min_cells = 80 * 24 * 2 * std::mem::size_of::<Cell>();
@@ -377,17 +377,17 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_with_scrollback() {
+    fn test_replay_snapshot_with_scrollback() {
         let mut grid = make_grid_snapshot(80, 24);
         grid.scrollback_cells = vec![Cell::default(); 80 * 100];
         grid.scrollback_lines = 100;
 
-        let mut snap = make_terminal_snapshot(80, 24);
+        let mut snap = make_replay_snapshot(80, 24);
         snap.grid = grid;
         snap.estimated_size_bytes = snap.estimate_size();
 
         // Scrollback should increase the estimated size
-        let no_scrollback_snap = make_terminal_snapshot(80, 24);
+        let no_scrollback_snap = make_replay_snapshot(80, 24);
         assert!(
             snap.estimated_size_bytes > no_scrollback_snap.estimated_size_bytes,
             "snapshot with scrollback should be larger"
@@ -395,8 +395,8 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_snapshot_with_colored_cells() {
-        let mut snap = make_terminal_snapshot(10, 5);
+    fn test_replay_snapshot_with_colored_cells() {
+        let mut snap = make_replay_snapshot(10, 5);
         // Set some cells to have non-default colors
         snap.grid.cells[0] = Cell::with_colors('A', Color::Rgb(255, 0, 0), Color::Rgb(0, 0, 255));
         snap.grid.cells[1] =
