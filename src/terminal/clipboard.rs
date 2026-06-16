@@ -212,7 +212,7 @@ impl Terminal {
         let mut content_str = content.clone().unwrap_or_default();
         crate::terminal::sanitize_clipboard_content(
             &mut content_str,
-            self.max_clipboard_event_bytes,
+            self.clipboard_sync.max_event_bytes,
         );
 
         let event = ClipboardSyncEvent {
@@ -224,9 +224,9 @@ impl Terminal {
             timestamp: crate::terminal::unix_millis(),
         };
 
-        self.clipboard_sync_events.push(event);
-        if self.clipboard_sync_events.len() > self.max_clipboard_sync_events {
-            self.clipboard_sync_events.remove(0);
+        self.clipboard_sync.events.push(event);
+        if self.clipboard_sync.events.len() > self.clipboard_sync.max_events {
+            self.clipboard_sync.events.remove(0);
         }
 
         if is_write {
@@ -235,15 +235,15 @@ impl Terminal {
                     target,
                     content: c,
                     source: if is_remote {
-                        self.remote_session_id.clone()
+                        self.clipboard_sync.remote_session_id.clone()
                     } else {
                         None
                     },
                     timestamp: crate::terminal::unix_millis(),
                 };
-                let history = self.clipboard_sync_history.entry(target).or_default();
+                let history = self.clipboard_sync.history.entry(target).or_default();
                 history.push(history_entry);
-                if history.len() > self.max_clipboard_sync_history {
+                if history.len() > self.clipboard_sync.max_history {
                     history.remove(0);
                 }
             }
@@ -252,7 +252,7 @@ impl Terminal {
 
     /// Get clipboard sync events
     pub fn get_clipboard_sync_events(&self) -> &[ClipboardSyncEvent] {
-        &self.clipboard_sync_events
+        &self.clipboard_sync.events
     }
 
     /// Get clipboard sync history for a target
@@ -260,7 +260,8 @@ impl Terminal {
         &self,
         target: ClipboardTarget,
     ) -> Vec<ClipboardHistoryEntry> {
-        self.clipboard_sync_history
+        self.clipboard_sync
+            .history
             .get(&target)
             .cloned()
             .unwrap_or_default()
@@ -268,32 +269,33 @@ impl Terminal {
 
     /// Clear clipboard sync events
     pub fn clear_clipboard_sync_events(&mut self) {
-        self.clipboard_sync_events.clear();
+        self.clipboard_sync.events.clear();
     }
 
     /// Set maximum clipboard sync events
     pub fn set_max_clipboard_sync_events(&mut self, max: usize) {
-        self.max_clipboard_sync_events = max;
-        if self.clipboard_sync_events.len() > max {
-            self.clipboard_sync_events
-                .drain(0..self.clipboard_sync_events.len() - max);
+        self.clipboard_sync.max_events = max;
+        if self.clipboard_sync.events.len() > max {
+            self.clipboard_sync
+                .events
+                .drain(0..self.clipboard_sync.events.len() - max);
         }
     }
 
     /// Set maximum clipboard event bytes
     pub fn set_max_clipboard_event_bytes(&mut self, max: usize) {
-        self.max_clipboard_event_bytes = max;
+        self.clipboard_sync.max_event_bytes = max;
     }
 
     /// Set remote session ID for clipboard sync
     pub fn set_remote_session_id(&mut self, id: Option<String>) {
-        self.remote_session_id = id;
+        self.clipboard_sync.remote_session_id = id;
     }
 
     /// Set maximum clipboard sync history
     pub fn set_max_clipboard_sync_history(&mut self, max: usize) {
-        self.max_clipboard_sync_history = max;
-        for history in self.clipboard_sync_history.values_mut() {
+        self.clipboard_sync.max_history = max;
+        for history in self.clipboard_sync.history.values_mut() {
             if history.len() > max {
                 history.drain(0..history.len() - max);
             }
@@ -302,17 +304,17 @@ impl Terminal {
 
     /// Get maximum clipboard sync events
     pub fn max_clipboard_sync_events(&self) -> usize {
-        self.max_clipboard_sync_events
+        self.clipboard_sync.max_events
     }
 
     /// Get maximum clipboard event bytes
     pub fn max_clipboard_event_bytes(&self) -> usize {
-        self.max_clipboard_event_bytes
+        self.clipboard_sync.max_event_bytes
     }
 
     /// Get remote session ID
     pub fn remote_session_id(&self) -> Option<&str> {
-        self.remote_session_id.as_deref()
+        self.clipboard_sync.remote_session_id.as_deref()
     }
 }
 

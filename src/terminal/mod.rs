@@ -221,6 +221,51 @@ pub(crate) fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
+// =============================================================================
+// Cohesive state sub-structs (ARC-001: decomposing the `Terminal` god object)
+//
+// `Terminal` historically carried ~120 flat fields spanning many unrelated
+// concerns. Related fields are grouped into cohesive structs held as fields on
+// `Terminal`. Each extraction is behavior-preserving; existing accessor methods
+// on `Terminal` delegate to the sub-struct so callers (including the Python
+// bindings) are unaffected.
+// =============================================================================
+
+/// OSC 52 clipboard-sync state (Feature 30).
+///
+/// Holds the clipboard-sync event log, per-target history, size caps, and the
+/// remote session id. Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct ClipboardSyncState {
+    /// Clipboard sync events log
+    pub(crate) events: Vec<ClipboardSyncEvent>,
+    /// Clipboard sync history across targets
+    pub(crate) history: HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
+    /// Maximum clipboard sync history entries per target
+    pub(crate) max_history: usize,
+    /// Maximum clipboard sync events retained for diagnostics
+    pub(crate) max_events: usize,
+    /// Maximum bytes of clipboard content to persist per event/history entry
+    pub(crate) max_event_bytes: usize,
+    /// Remote session identifier for clipboard sync
+    pub(crate) remote_session_id: Option<String>,
+}
+
+/// Performance metrics and profiling state.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct ProfilingState {
+    /// Performance metrics tracking (frames rendered, cells updated, etc.)
+    pub(crate) metrics: PerformanceMetrics,
+    /// Frame timing history (last N frames)
+    pub(crate) frame_timings: Vec<FrameTiming>,
+    /// Maximum frame timings to keep
+    pub(crate) max_frame_timings: usize,
+    /// Profiling data (when enabled)
+    pub(crate) data: Option<ProfilingData>,
+    /// Profiling enabled flag
+    pub(crate) enabled: bool,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -440,12 +485,8 @@ pub struct Terminal {
     pub(crate) bookmarks: Vec<Bookmark>,
     /// Next available bookmark ID
     pub(crate) next_bookmark_id: usize,
-    /// Performance metrics tracking
-    pub(crate) perf_metrics: PerformanceMetrics,
-    /// Frame timing history (last N frames)
-    pub(crate) frame_timings: Vec<FrameTiming>,
-    /// Maximum frame timings to keep
-    pub(crate) max_frame_timings: usize,
+    /// Performance metrics and profiling state (ARC-001 sub-struct)
+    pub(crate) profiling: ProfilingState,
     /// Clipboard history (multiple slots)
     pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     /// Maximum clipboard history entries per slot
@@ -460,10 +501,6 @@ pub struct Terminal {
     pub(crate) rendering_hints: Vec<RenderingHint>,
     /// Damage regions accumulated
     pub(crate) damage_regions: Vec<DamageRegion>,
-    /// Profiling data (when enabled)
-    pub(crate) profiling_data: Option<ProfilingData>,
-    /// Profiling enabled flag
-    pub(crate) profiling_enabled: bool,
     /// Regex search matches cache
     pub(crate) regex_matches: Vec<RegexMatch>,
     /// Current regex search pattern
@@ -476,18 +513,8 @@ pub struct Terminal {
     pub(crate) max_inline_images: usize,
 
     // === Feature 30: OSC 52 Clipboard Sync ===
-    /// Clipboard sync events log
-    pub(crate) clipboard_sync_events: Vec<ClipboardSyncEvent>,
-    /// Clipboard sync history across targets
-    pub(crate) clipboard_sync_history: HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
-    /// Maximum clipboard sync history entries per target
-    pub(crate) max_clipboard_sync_history: usize,
-    /// Maximum clipboard sync events retained for diagnostics
-    pub(crate) max_clipboard_sync_events: usize,
-    /// Maximum bytes of clipboard content to persist per event/history entry
-    pub(crate) max_clipboard_event_bytes: usize,
-    /// Remote session identifier for clipboard sync
-    pub(crate) remote_session_id: Option<String>,
+    /// OSC 52 clipboard-sync state (ARC-001 sub-struct)
+    pub(crate) clipboard_sync: ClipboardSyncState,
 
     // === Feature 31: Shell Integration++ ===
     /// Command execution history
@@ -720,9 +747,13 @@ impl Terminal {
             bookmarks: Vec::new(),
             next_bookmark_id: 0,
             // Performance metrics
-            perf_metrics: PerformanceMetrics::default(),
-            frame_timings: Vec::new(),
-            max_frame_timings: 100, // Keep last 100 frames
+            profiling: ProfilingState {
+                metrics: PerformanceMetrics::default(),
+                frame_timings: Vec::new(),
+                max_frame_timings: 100, // Keep last 100 frames
+                data: None,
+                enabled: false,
+            },
             // Clipboard integration
             clipboard_history: HashMap::new(),
             max_clipboard_history: 10,
@@ -733,9 +764,6 @@ impl Terminal {
             // Rendering hints
             rendering_hints: Vec::new(),
             damage_regions: Vec::new(),
-            // Performance profiling
-            profiling_data: None,
-            profiling_enabled: false,
             // Regex search
             regex_matches: Vec::new(),
             current_regex_pattern: None,
@@ -745,12 +773,14 @@ impl Terminal {
             inline_images: Vec::new(),
             max_inline_images: 100,
             // OSC 52 Clipboard Sync
-            clipboard_sync_events: Vec::new(),
-            clipboard_sync_history: HashMap::new(),
-            max_clipboard_sync_history: 50,
-            max_clipboard_sync_events: DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS,
-            max_clipboard_event_bytes: DEFAULT_MAX_CLIPBOARD_EVENT_BYTES,
-            remote_session_id: None,
+            clipboard_sync: ClipboardSyncState {
+                events: Vec::new(),
+                history: HashMap::new(),
+                max_history: 50,
+                max_events: DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS,
+                max_event_bytes: DEFAULT_MAX_CLIPBOARD_EVENT_BYTES,
+                remote_session_id: None,
+            },
             // Shell Integration++
             command_history: Vec::new(),
             current_command: None,

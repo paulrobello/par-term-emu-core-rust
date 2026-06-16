@@ -138,13 +138,13 @@ use crate::terminal::Terminal;
 impl Terminal {
     /// Get current performance metrics
     pub fn get_performance_metrics(&self) -> PerformanceMetrics {
-        self.perf_metrics.clone()
+        self.profiling.metrics.clone()
     }
 
     /// Reset performance metrics
     pub fn reset_performance_metrics(&mut self) {
-        self.perf_metrics = PerformanceMetrics::default();
-        self.frame_timings.clear();
+        self.profiling.metrics = PerformanceMetrics::default();
+        self.profiling.frame_timings.clear();
     }
 
     /// Record a frame timing
@@ -154,43 +154,44 @@ impl Terminal {
         cells_updated: usize,
         bytes_processed: usize,
     ) {
-        self.perf_metrics.frames_rendered += 1;
-        self.perf_metrics.cells_updated += cells_updated as u64;
-        self.perf_metrics.bytes_processed += bytes_processed as u64;
-        self.perf_metrics.total_processing_us += processing_us;
+        self.profiling.metrics.frames_rendered += 1;
+        self.profiling.metrics.cells_updated += cells_updated as u64;
+        self.profiling.metrics.bytes_processed += bytes_processed as u64;
+        self.profiling.metrics.total_processing_us += processing_us;
 
-        if processing_us > self.perf_metrics.peak_frame_us {
-            self.perf_metrics.peak_frame_us = processing_us;
+        if processing_us > self.profiling.metrics.peak_frame_us {
+            self.profiling.metrics.peak_frame_us = processing_us;
         }
 
         let frame_timing = FrameTiming {
-            frame_number: self.perf_metrics.frames_rendered,
+            frame_number: self.profiling.metrics.frames_rendered,
             processing_us,
             cells_updated,
             bytes_processed,
         };
 
-        self.frame_timings.push(frame_timing);
+        self.profiling.frame_timings.push(frame_timing);
 
         // Keep only last N frames
-        if self.frame_timings.len() > self.max_frame_timings {
-            self.frame_timings.remove(0);
+        if self.profiling.frame_timings.len() > self.profiling.max_frame_timings {
+            self.profiling.frame_timings.remove(0);
         }
     }
 
     /// Get recent frame timings
     pub fn get_frame_timings(&self, count: Option<usize>) -> Vec<FrameTiming> {
         let count = count
-            .unwrap_or(self.frame_timings.len())
-            .min(self.frame_timings.len());
-        self.frame_timings[self.frame_timings.len() - count..].to_vec()
+            .unwrap_or(self.profiling.frame_timings.len())
+            .min(self.profiling.frame_timings.len());
+        self.profiling.frame_timings[self.profiling.frame_timings.len() - count..].to_vec()
     }
 
     /// Get average frame time in microseconds
     pub fn get_average_frame_time(&self) -> u64 {
-        self.perf_metrics
+        self.profiling
+            .metrics
             .total_processing_us
-            .checked_div(self.perf_metrics.frames_rendered)
+            .checked_div(self.profiling.metrics.frames_rendered)
             .unwrap_or(0)
     }
 
@@ -208,15 +209,15 @@ impl Terminal {
 
     /// Enable or disable performance profiling
     pub fn set_profiling_enabled(&mut self, enabled: bool) {
-        self.profiling_enabled = enabled;
-        if enabled && self.profiling_data.is_none() {
-            self.profiling_data = Some(ProfilingData::default());
+        self.profiling.enabled = enabled;
+        if enabled && self.profiling.data.is_none() {
+            self.profiling.data = Some(ProfilingData::default());
         }
     }
 
     /// Check if profiling is enabled
     pub fn is_profiling_enabled(&self) -> bool {
-        self.profiling_enabled
+        self.profiling.enabled
     }
 
     /// Enable profiling
@@ -231,7 +232,7 @@ impl Terminal {
 
     /// Record a memory allocation
     pub fn record_allocation(&mut self, bytes: u64) {
-        if let Some(ref mut data) = self.profiling_data {
+        if let Some(ref mut data) = self.profiling.data {
             data.allocations += 1;
             data.bytes_allocated += bytes;
         }
@@ -239,7 +240,7 @@ impl Terminal {
 
     /// Update peak memory usage
     pub fn update_peak_memory(&mut self, current_bytes: usize) {
-        if let Some(ref mut data) = self.profiling_data {
+        if let Some(ref mut data) = self.profiling.data {
             if current_bytes > data.peak_memory {
                 data.peak_memory = current_bytes;
             }
@@ -248,11 +249,11 @@ impl Terminal {
 
     /// Record profiling data for a category
     pub fn record_profiling(&mut self, category: ProfileCategory, micros: u64) {
-        if !self.profiling_enabled {
+        if !self.profiling.enabled {
             return;
         }
 
-        if let Some(ref mut data) = self.profiling_data {
+        if let Some(ref mut data) = self.profiling.data {
             let profile = data.categories.entry(category).or_default();
             profile.count += 1;
             profile.total_time_us += micros;
@@ -265,15 +266,15 @@ impl Terminal {
 
     /// Get current profiling data
     pub fn get_profiling_data(&self) -> Option<ProfilingData> {
-        self.profiling_data.clone()
+        self.profiling.data.clone()
     }
 
     /// Reset profiling data
     pub fn reset_profiling_data(&mut self) {
-        if self.profiling_enabled {
-            self.profiling_data = Some(ProfilingData::default());
+        if self.profiling.enabled {
+            self.profiling.data = Some(ProfilingData::default());
         } else {
-            self.profiling_data = None;
+            self.profiling.data = None;
         }
     }
 
