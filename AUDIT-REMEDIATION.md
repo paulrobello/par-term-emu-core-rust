@@ -12,13 +12,14 @@
 | Area | Status | Resolved this cycle |
 |------|--------|---------------------|
 | **Security (all)** | ✅ **All 7 resolved** | SEC-001 (zlib cap); SEC-002 (public-bind warning); SEC-003 (replaced htpasswd-verify → maintained bcrypt/md-5/sha1, openssl-vector-tested); SEC-004 (PyO3 0.28→0.29, zero source changes); SEC-005 (WS Origin + CORS defense); SEC-006 (rustls-pemfile → pki-types PemObject); SEC-007 (AVIF disabled → `paste` no longer compiled). `cargo audit`: **5 vulnerabilities → 0**. |
-| **ARC-001** (Terminal god object) | ✅ **Substantially complete** | Decomposed from ~120–140 flat fields → **65** (29 cohesive sub-struct holders + 36 irreducible core). 29 sub-structs extracted across 23 commits, all behavior-preserving (1833 tests pass). EventBroker + GraphicsState remain (documented below). |
-| **Architecture (other)** | ✅ 3 / ⏭️ rest | ARC-011, ARC-019, ARC-025 resolved. ARC-002/003/004/005/006/007/008/009/010/012–028 remain (see Remaining). |
+| **ARC-001** (Terminal god object) | ✅ **Complete** | Decomposed from ~150 flat fields → **56** (31 cohesive sub-struct holders + 25 irreducible core: buffer, cursor, parser, current cell render state, event dispatch, graphics store). 31 sub-structs across 25 commits, all behavior-preserving (1834 tests pass). See the [ARC-001 Decomposition](#arc-001-decomposition) inventory. |
+| **ARC-007** (observer dispatch) | ✅ **Safe fix done** | Observer callbacks now run inside `catch_unwind` — a panicking observer is isolated instead of unwinding through the `parking_lot` mutex (which doesn't poison → would silently corrupt state + re-fire events). Regression test added. The full out-of-lock dispatch redesign remains future work. |
+| **Architecture (other)** | ✅ 4 / ⏭️ rest | ARC-007 (safe fix), ARC-011, ARC-019, ARC-025 resolved. ARC-002/003/004/005/006/008/009/010/012–028 remain (see Remaining). |
 | **Code Quality** | ✅ 3 / ⏭️ rest | QA-003, QA-007, QA-010 resolved. QA-001/002/004/005/006/008/009/011/012/013 remain. |
 | **Documentation** | ✅ 8 / ⏭️ rest | DOC-005/013/017/019/020/021/022/023/024 resolved. DOC-001–004/006–012/015/016/018 remain. |
-| **Verification** | ✅ | `make checkall` green: cargo check + clippy (0 warnings) + fmt + ruff + pyright + 1833 Rust tests + 492 Python tests. One known-flaky PTY timing test (passes in isolation). |
+| **Verification** | ✅ | `make checkall` green: cargo check + clippy (0 warnings) + fmt + ruff + pyright + 1834 Rust tests + 492 Python tests. One known-flaky PTY timing test (passes in isolation). |
 
-**Totals**: ~50 audit items resolved across all rounds. **All Security closed.** ARC-001 (the largest finding, rated Critical) substantially complete. Remaining work is ARC-002 (PyTerminal) + the long tail of Medium/Low architecture, code-quality, and documentation items.
+**Totals**: ~50 audit items resolved across all rounds. **All Security closed.** ARC-001 (the largest finding, rated Critical) complete. Remaining work is ARC-002 (PyTerminal) + the long tail of Medium/Low architecture, code-quality, and documentation items.
 
 ---
 
@@ -37,7 +38,7 @@
 - **[ARC-011]** `poll_subscribed_events` duplicated the 25-arm match — `src/terminal/mod.rs` — replaced the re-implemented `TerminalEvent → TerminalEventKind` match with a call to the existing `TerminalEvent::kind()` (`event.rs`), preserving the filter partition exactly.
 - **[ARC-019]** Coprocess output buffer `Vec::remove(0)` (O(n)/line) — `src/coprocess.rs` — `output_buffer`/`error_buffer` switched `Vec<String>` → `VecDeque<String>` with O(1) `push_back`/`pop_front`; the two drain consumers (`read()`/`read_errors()`) convert back to `Vec<String>` via `mem::take().into_iter().collect()`, so the public API is unchanged.
 - **[ARC-025]** Duplicated `emit_style` SGR closure (~78 lines × 2) — `src/grid/export.rs` — verified byte-for-byte identical, extracted a private `push_sgr_style(result, fg, bg, flags)` helper; both closures removed, 3 call sites updated. Output identical.
-- **[ARC-001]** `Terminal` god-object decomposition — **substantially complete**. See the dedicated [ARC-001 Decomposition](#arc-001-decomposition) section below for the full sub-struct inventory.
+- **[ARC-001]** `Terminal` god-object decomposition — **complete**. See the dedicated [ARC-001 Decomposition](#arc-001-decomposition) section below for the full sub-struct inventory.
 
 ### Code Quality
 - **[QA-003]** `Ok::<_, ()>(x.lock())` dead-branch anti-pattern (12 sites) — `src/streaming/server.rs` — collapsed `if let Ok(mut w) = Ok::<_, ()>(writer.lock()) { … }` → `let mut w = writer.lock(); …` (Pattern A, 6 sites); the 6 `terminal_for_refresh.lock()` sites (Pattern B, with dead `else { None }`) collapsed to direct evaluation. (Note: ~120 identical sites in `src/python_bindings/pty.rs` were deliberately left — out of scope; should be folded into the deferred ARC-003/QA-001 binding-dedup work.)
@@ -62,11 +63,9 @@ These issues could not be safely auto-remediated. They require dedicated plannin
 
 ### Critical — remaining architecture
 - **[ARC-002] Decompose `PyTerminal` god object (383 methods)** — `src/python_bindings/terminal/mod.rs`
-  - **Why open**: Breaking Python API change requiring a major-version bump or a compatibility shim. ARC-001 (its Rust-side prerequisite) is now substantially complete, so this is unblocked.
+  - **Why open**: Breaking Python API change requiring a major-version bump or a compatibility shim. ARC-001 (its Rust-side prerequisite) is now complete, so this is unblocked.
   - **Recommended approach**: Expose cohesive nested `#[pyclass]` sub-objects (`term.clipboard`, `term.colors`, `term.triggers`, `term.metrics`); provide a deprecation shim proxying flat methods to the new nested objects.
   - **Estimated effort**: Large (multi-sprint).
-- **[ARC-001 tail] EventBroker + GraphicsState sub-structs** — `src/terminal/mod.rs`
-  - **Why open**: ARC-001 is substantially complete (29 sub-structs; see inventory below), but two cohesive groups were deliberately left flat. **EventBroker** (`terminal_events`, `bell_events`, `events_dispatched_up_to`, `observers`, `next_observer_id`, `next_zone_id`, ~90 sites) is tightly co-iterated in the dispatch loop — extract it **together with ARC-007's dispatch-redesign** (moving observer dispatch out of the mutex), not separately. **GraphicsState** (`graphics_store`, `sixel_limits`, `cell_dimensions`, `iterm_multipart_buffer`, `file_transfer_manager`, 123 sites) needs its own dedicated pass due to access volume.
 
 ### High — large refactors (Security fully closed; these remain)
 - **[ARC-003 / QA-001] ~155 duplicated methods PyTerminal/PyPtyTerminal** — `src/python_bindings/terminal/mod.rs`, `src/python_bindings/pty.rs`
@@ -79,7 +78,7 @@ These issues could not be safely auto-remediated. They require dedicated plannin
   - **Why open**: Changes `Cell` memory layout and touches the parser hot path; deserves its own focused, benchmarked PR rather than being folded into a bulk commit.
   - **Estimated effort**: Medium.
 - **[ARC-006/008/009/010] mod.rs hot-path, locking, event-cap, layout** — `src/terminal/mod.rs`, `src/pty_session.rs`, `src/graphics/mod.rs`
-  - **Why open**: Now that ARC-001 has decomposed Terminal, these are unblocked. **ARC-007 (observer dispatch under lock) is the priority** — it's a correctness risk (a panicking observer leaves Terminal inconsistent since `parking_lot` doesn't poison); pair its fix with the EventBroker extraction above.
+  - **Why open**: Now unblocked by ARC-001. (ARC-007's panic-isolation safe fix is already done; the remaining ARC-007 work — moving observer dispatch fully out of the mutex — pairs naturally with these.)
   - **Estimated effort**: Medium each.
 - **[QA-005] `screenshot` 17–19 positional params → options struct** — `src/python_bindings/*`
   - **Why open**: Public API change needing a deprecation shim; pair with QA-009 in one release for a single doc-sync.
@@ -134,10 +133,12 @@ These issues could not be safely auto-remediated. They require dedicated plannin
 | 27 | `UnicodeConfigState` | `unicode_state` | width + normalization config (2) |
 | 28 | `SecurityFlagsState` | `security_state` | accept_osc7 + disable_insecure_sequences (2) |
 | 29 | `BadgeState` | `badge_state` | OSC 1337 badge format + session vars (2) |
+| 30 | `GraphicsState` | `graphics` | unified graphics store + Sixel limits + cell dimensions + iTerm2 multipart + file-transfer manager (5) |
+| 31 | `EventBrokerState` | `events` | terminal/bell event buffers + dispatch index + observer registry + ID counters (6) |
 
-**Remaining flat core** (~36 fields): `grid`, `alt_grid`, `alt_screen_active`, `cursor`, `alt_cursor`, `fg`, `bg`, `underline_color`, `flags` (current SGR cell render state), `parser`, `apc_filter_state`, `apc_buffer`, `kitty_parser`, `pending_wrap`, `pixel_width`, `pixel_height`, `response_buffer`, `conformance_level`, `warning_bell_volume`, `margin_bell_volume`, `dirty_rows`, `selection`, `pane_state`, `event_subscription`, `tab_stops`, plus the EventBroker + GraphicsState groups flagged for follow-up above.
+**Remaining flat core** (~25 fields): the genuinely-irreducible terminal state — `grid`, `alt_grid`, `alt_screen_active`, `cursor`, `alt_cursor`, `fg`, `bg`, `underline_color`, `flags` (current SGR cell render state), `parser`, `apc_filter_state`, `apc_buffer`, `kitty_parser`, `pending_wrap`, `pixel_width`, `pixel_height`, `response_buffer`, `conformance_level`, `warning_bell_volume`, `margin_bell_volume`, `dirty_rows`, `selection`, `pane_state`, `event_subscription`, `tab_stops`.
 
-**Two skipped groups** (documented): `EventBroker` (~90 access sites, co-iterated in the dispatch loop — extract with ARC-007) and `GraphicsState` (123 sites — dedicated pass needed).
+**All cohesive groups extracted.** The two groups previously skipped (EventBroker, GraphicsState) were extracted in the final pass; EventBroker's dispatch logic now reads through `self.events.*` (and, per ARC-007, observer callbacks are `catch_unwind`-isolated).
 
 ---
 
@@ -174,8 +175,8 @@ Highlights by round:
 
 ## Next Steps
 
-1. **ARC-002 (`PyTerminal` decomposition)** is now the highest-leverage open item — and it's unblocked because ARC-001 is substantially complete. Nearly every remaining Code Quality finding (QA-001/005/008/009) is downstream of it.
-2. **ARC-007 + EventBroker extraction together** — move observer dispatch out of the `Terminal` mutex (a latent correctness risk: a panicking observer leaves state inconsistent since `parking_lot` doesn't poison) and fold the EventBroker fields into a sub-struct in the same pass.
+1. **ARC-002 (`PyTerminal` decomposition)** is now the highest-leverage open item — and it's unblocked because ARC-001 is complete. Nearly every remaining Code Quality finding (QA-001/005/008/009) is downstream of it.
+2. **ARC-007 full redesign (optional)** — the panic-isolation safe fix is done (`catch_unwind`); the remaining ARC-007 work is moving observer dispatch *fully out of the `Terminal` mutex* (to remove reader-thread latency amplification from slow observers). Lower priority now that the correctness risk is contained.
 3. **ARC-005 (Cell SmallVec)** remains the best self-contained perf win (own benchmarked PR).
 4. **Make the DOC-001 codegen decision** — a `#[pyo3(get)]` → API_REFERENCE generator fixes the largest doc defect permanently and folds in DOC-002/003/004/006/007/009/010/011.
 5. **Investigate the flaky `test_generation_counter_increments_on_pty_output`** as a separate item — it intermittently fails under full-suite parallel load (passes in isolation). Likely needs a more robust wait/poll. (Not introduced by this work.)
