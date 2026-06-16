@@ -49,10 +49,11 @@ A focused pass closing 13 Architecture items. Each landed as its own verified co
 
 These were assessed but **deliberately not rushed** — each is large and/or high-regression-risk, and the branch is currently fully green. They are the next focused work items, not quick wins:
 
-- **ARC-009** (split coarse Terminal mutex) — concurrency refactor; must not regress the GIL-vs-mutex invariant. High risk.
-- **ARC-012** (make Cell/Grid fields private) — large cascade across every `grid/` submodule + external readers.
-- **ARC-013** (centralized `PyErr` mapping) — **lower leverage than the audit assumed**: most of the ~98 `new_err` sites are *direct constructions* for input-validation/lock-failures (not `Result<_, DomainError>` conversions a `From` impl could replace), and the exception-type-per-variant is a Python-visible design decision. Needs a scoped plan, not a blanket migration.
-- **ARC-014** / **ARC-028** (derive macros for PyXxx data-classes / StreamingConfig getters) — each requires a **new proc-macro crate** in the workspace; substantial infrastructure.
+- **ARC-009** (split coarse Terminal mutex) — concurrency refactor; must not regress the GIL-vs-mutex invariant. High risk. Needs the finer decomposition (grid/metadata/events) the audit ties to ARC-001.
+- **ARC-012** (make Cell/Grid fields private) — large cascade across every `grid/` submodule + external readers; mechanical but high-churn, moderate encapsulation value for an internally-consumed type.
+- **ARC-013** (centralized `PyErr` mapping) — **empirically not actionable as a beneficial change (round 3)**: `grep 'format!("{}", e)'` over `python_bindings/` returns **0** — *every* domain-error→`PyErr` site adds context (e.g. `"Screenshot error: {e}"`) that a `From<DomainError> for PyErr` + `?` would **lose** (degrading Python error messages), and the rest are direct constructions (validation/lock-failures) not conversions. The audit premise doesn't hold. Defining `From` impls that nothing can safely adopt would be dead code.
+- **ARC-028** (StreamingConfig getter/setter boilerplate) — **macro_rules proven blocked (round 3)**: PyO3's `#[pymethods]` rejects macro-generated items (`error: macros cannot be used as items in #[pymethods] impl blocks`; `getter`/`setter` helper attrs aren't in scope for a nested macro). The `#[pyo3(get, set)]` field restructure is invasive (`StreamingConfig` also carries `tls`/`http_basic_auth` fields consumed by `start()`). Needs a dedicated proc-macro crate.
+- **ARC-014** (derive PyXxx data-class boilerplate) — requires a **new proc-macro crate** in the workspace; substantial infrastructure (a derive on the `#[pyclass]` structs would work, unlike ARC-028's inside-`#[pymethods]` case, but it's still a meaningful build).
 - **ARC-021** (`TerminalAction` enum) — large architectural change separating parse from mutate; the audit itself flags it "large; defer."
 - **ARC-002 tail** (nested sub-objects) / **ARC-007 full** (out-of-lock dispatch) — stretch / breaking-major-version, as previously noted.
 
