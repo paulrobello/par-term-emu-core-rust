@@ -84,18 +84,21 @@ impl Terminal {
 
     /// Add an inline image
     pub fn add_inline_image(&mut self, image: InlineImage) {
-        self.inline_images.push(image);
+        self.inline_image_state.inline_images.push(image);
 
         // Limit number of stored images
-        if self.inline_images.len() > self.max_inline_images {
-            self.inline_images
-                .drain(0..self.inline_images.len() - self.max_inline_images);
+        if self.inline_image_state.inline_images.len() > self.inline_image_state.max_inline_images {
+            self.inline_image_state.inline_images.drain(
+                0..self.inline_image_state.inline_images.len()
+                    - self.inline_image_state.max_inline_images,
+            );
         }
     }
 
     /// Get inline images at a specific position
     pub fn get_images_at(&self, col: usize, row: usize) -> Vec<InlineImage> {
-        self.inline_images
+        self.inline_image_state
+            .inline_images
             .iter()
             .filter(|img| img.position == (col, row))
             .cloned()
@@ -104,25 +107,27 @@ impl Terminal {
 
     /// Get all inline images
     pub fn get_all_images(&self) -> Vec<InlineImage> {
-        self.inline_images.clone()
+        self.inline_image_state.inline_images.clone()
     }
 
     /// Delete image by ID
     pub fn delete_image(&mut self, id: &str) -> bool {
-        let before_len = self.inline_images.len();
-        self.inline_images
+        let before_len = self.inline_image_state.inline_images.len();
+        self.inline_image_state
+            .inline_images
             .retain(|img| img.id.as_ref().is_none_or(|img_id| img_id != id));
-        self.inline_images.len() < before_len
+        self.inline_image_state.inline_images.len() < before_len
     }
 
     /// Clear all inline images
     pub fn clear_images(&mut self) {
-        self.inline_images.clear();
+        self.inline_image_state.inline_images.clear();
     }
 
     /// Get image by ID
     pub fn get_image_by_id(&self, id: &str) -> Option<InlineImage> {
-        self.inline_images
+        self.inline_image_state
+            .inline_images
             .iter()
             .find(|img| img.id.as_ref().is_some_and(|img_id| img_id == id))
             .cloned()
@@ -130,9 +135,11 @@ impl Terminal {
 
     /// Set maximum inline images
     pub fn set_max_inline_images(&mut self, max: usize) {
-        self.max_inline_images = max;
-        if self.inline_images.len() > max {
-            self.inline_images.drain(0..self.inline_images.len() - max);
+        self.inline_image_state.max_inline_images = max;
+        if self.inline_image_state.inline_images.len() > max {
+            self.inline_image_state
+                .inline_images
+                .drain(0..self.inline_image_state.inline_images.len() - max);
         }
     }
 }

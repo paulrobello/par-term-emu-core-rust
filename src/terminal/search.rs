@@ -105,7 +105,7 @@ impl Terminal {
         builder.multi_line(options.multiline);
 
         let re = builder.build().map_err(|e| e.to_string())?;
-        self.current_regex_pattern = Some(pattern.to_string());
+        self.search.current_regex_pattern = Some(pattern.to_string());
 
         let mut all_content = Vec::new();
         let grid = self.active_grid();
@@ -162,7 +162,7 @@ impl Terminal {
             matches.reverse();
         }
 
-        self.regex_matches = matches.clone();
+        self.search.regex_matches = matches.clone();
         Ok(matches)
     }
 
@@ -177,7 +177,7 @@ impl Terminal {
 
     /// Get current search matches
     pub fn get_search_matches(&self) -> &[RegexMatch] {
-        &self.regex_matches
+        &self.search.regex_matches
     }
 
     /// Alias for get_search_matches
@@ -187,13 +187,13 @@ impl Terminal {
 
     /// Get the current regex search pattern
     pub fn get_current_regex_pattern(&self) -> Option<String> {
-        self.current_regex_pattern.clone()
+        self.search.current_regex_pattern.clone()
     }
 
     /// Clear current search matches
     pub fn clear_search_matches(&mut self) {
-        self.regex_matches.clear();
-        self.current_regex_pattern = None;
+        self.search.regex_matches.clear();
+        self.search.current_regex_pattern = None;
     }
 
     /// Alias for clear_search_matches
@@ -203,7 +203,8 @@ impl Terminal {
 
     /// Find next regex match from position
     pub fn next_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
-        self.regex_matches
+        self.search
+            .regex_matches
             .iter()
             .find(|m| {
                 if m.row > from_row {
@@ -219,7 +220,8 @@ impl Terminal {
 
     /// Find previous regex match from position
     pub fn prev_regex_match(&self, from_row: usize, from_col: usize) -> Option<RegexMatch> {
-        self.regex_matches
+        self.search
+            .regex_matches
             .iter()
             .rev()
             .find(|m| {

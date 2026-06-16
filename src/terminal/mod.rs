@@ -266,6 +266,38 @@ pub(crate) struct ProfilingState {
     pub(crate) enabled: bool,
 }
 
+/// Mouse event/position history.
+pub(crate) struct MouseHistoryState {
+    pub(crate) mouse_events: Vec<MouseEventRecord>,
+    pub(crate) mouse_positions: Vec<MousePosition>,
+    pub(crate) max_mouse_history: usize,
+}
+
+/// Regex search matches and current pattern.
+pub(crate) struct SearchState {
+    pub(crate) regex_matches: Vec<RegexMatch>,
+    pub(crate) current_regex_pattern: Option<String>,
+}
+
+/// Inline image storage (iTerm2/Kitty protocols).
+pub(crate) struct InlineImageState {
+    pub(crate) inline_images: Vec<InlineImage>,
+    pub(crate) max_inline_images: usize,
+}
+
+/// Rendering hints and accumulated damage regions.
+pub(crate) struct RenderingState {
+    pub(crate) rendering_hints: Vec<RenderingHint>,
+    pub(crate) damage_regions: Vec<DamageRegion>,
+}
+
+/// Macro library and playback state (Feature 38).
+pub(crate) struct MacroState {
+    pub(crate) macro_library: HashMap<String, crate::macros::Macro>,
+    pub(crate) macro_playback: Option<crate::macros::MacroPlayback>,
+    pub(crate) macro_screenshot_triggers: Vec<String>,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -491,26 +523,16 @@ pub struct Terminal {
     pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     /// Maximum clipboard history entries per slot
     pub(crate) max_clipboard_history: usize,
-    /// Mouse event history
-    pub(crate) mouse_events: Vec<MouseEventRecord>,
-    /// Mouse position history
-    pub(crate) mouse_positions: Vec<MousePosition>,
-    /// Maximum mouse history entries
-    pub(crate) max_mouse_history: usize,
-    /// Current rendering hints
-    pub(crate) rendering_hints: Vec<RenderingHint>,
-    /// Damage regions accumulated
-    pub(crate) damage_regions: Vec<DamageRegion>,
-    /// Regex search matches cache
-    pub(crate) regex_matches: Vec<RegexMatch>,
-    /// Current regex search pattern
-    pub(crate) current_regex_pattern: Option<String>,
+    /// Mouse event/position history (ARC-001 sub-struct)
+    pub(crate) mouse_history: MouseHistoryState,
+    /// Rendering hints and damage regions (ARC-001 sub-struct)
+    pub(crate) rendering: RenderingState,
+    /// Regex search state (ARC-001 sub-struct)
+    pub(crate) search: SearchState,
     /// Current pane state (for multiplexing)
     pub(crate) pane_state: Option<PaneState>,
-    /// Inline images (iTerm2, Kitty protocols)
-    pub(crate) inline_images: Vec<InlineImage>,
-    /// Maximum number of inline images to store
-    pub(crate) max_inline_images: usize,
+    /// Inline image storage (ARC-001 sub-struct)
+    pub(crate) inline_image_state: InlineImageState,
 
     // === Feature 30: OSC 52 Clipboard Sync ===
     /// OSC 52 clipboard-sync state (ARC-001 sub-struct)
@@ -551,12 +573,8 @@ pub struct Terminal {
     pub(crate) recording_start_time: u64,
 
     // === Feature 38: Macro Recording and Playback ===
-    /// Macro library (name -> macro)
-    pub(crate) macro_library: HashMap<String, crate::macros::Macro>,
-    /// Current macro playback state
-    pub(crate) macro_playback: Option<crate::macros::MacroPlayback>,
-    /// Screenshot triggers from macro playback
-    pub(crate) macro_screenshot_triggers: Vec<String>,
+    /// Macro library and playback state (ARC-001 sub-struct)
+    pub(crate) macros: MacroState,
 
     // === Answerback String (ENQ response) ===
     /// Answerback string sent in response to ENQ (0x05) control character
@@ -758,20 +776,28 @@ impl Terminal {
             clipboard_history: HashMap::new(),
             max_clipboard_history: 10,
             // Mouse tracking
-            mouse_events: Vec::new(),
-            mouse_positions: Vec::new(),
-            max_mouse_history: 100,
+            mouse_history: MouseHistoryState {
+                mouse_events: Vec::new(),
+                mouse_positions: Vec::new(),
+                max_mouse_history: 100,
+            },
             // Rendering hints
-            rendering_hints: Vec::new(),
-            damage_regions: Vec::new(),
+            rendering: RenderingState {
+                rendering_hints: Vec::new(),
+                damage_regions: Vec::new(),
+            },
             // Regex search
-            regex_matches: Vec::new(),
-            current_regex_pattern: None,
+            search: SearchState {
+                regex_matches: Vec::new(),
+                current_regex_pattern: None,
+            },
             // Multiplexing
             pane_state: None,
             // Inline images
-            inline_images: Vec::new(),
-            max_inline_images: 100,
+            inline_image_state: InlineImageState {
+                inline_images: Vec::new(),
+                max_inline_images: 100,
+            },
             // OSC 52 Clipboard Sync
             clipboard_sync: ClipboardSyncState {
                 events: Vec::new(),
@@ -799,9 +825,11 @@ impl Terminal {
             is_recording: false,
             recording_start_time: 0,
             // Macros
-            macro_library: HashMap::new(),
-            macro_playback: None,
-            macro_screenshot_triggers: Vec::new(),
+            macros: MacroState {
+                macro_library: HashMap::new(),
+                macro_playback: None,
+                macro_screenshot_triggers: Vec::new(),
+            },
             // Answerback
             answerback_string: None,
             // Unicode

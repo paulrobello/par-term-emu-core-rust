@@ -115,53 +115,56 @@ impl Terminal {
             timestamp: crate::terminal::get_timestamp_us(),
         };
 
-        self.mouse_events.push(record);
-        if self.mouse_events.len() > self.max_mouse_history {
-            self.mouse_events.remove(0);
+        self.mouse_history.mouse_events.push(record);
+        if self.mouse_history.mouse_events.len() > self.mouse_history.max_mouse_history {
+            self.mouse_history.mouse_events.remove(0);
         }
 
         // Also record position history
-        self.mouse_positions.push(MousePosition {
+        self.mouse_history.mouse_positions.push(MousePosition {
             col,
             row,
             timestamp: crate::terminal::get_timestamp_us(),
         });
-        if self.mouse_positions.len() > self.max_mouse_history {
-            self.mouse_positions.remove(0);
+        if self.mouse_history.mouse_positions.len() > self.mouse_history.max_mouse_history {
+            self.mouse_history.mouse_positions.remove(0);
         }
     }
 
     /// Get mouse event history
     pub fn get_mouse_history(&self) -> &[MouseEventRecord] {
-        &self.mouse_events
+        &self.mouse_history.mouse_events
     }
 
     /// Get recent mouse positions
     pub fn get_mouse_positions(&self) -> &[MousePosition] {
-        &self.mouse_positions
+        &self.mouse_history.mouse_positions
     }
 
     /// Clear mouse history
     pub fn clear_mouse_history(&mut self) {
-        self.mouse_events.clear();
-        self.mouse_positions.clear();
+        self.mouse_history.mouse_events.clear();
+        self.mouse_history.mouse_positions.clear();
     }
 
     /// Set the maximum number of mouse events to retain
     pub fn set_max_mouse_history(&mut self, max: usize) {
-        self.max_mouse_history = max;
-        if self.mouse_events.len() > max {
-            self.mouse_events.drain(0..self.mouse_events.len() - max);
+        self.mouse_history.max_mouse_history = max;
+        if self.mouse_history.mouse_events.len() > max {
+            self.mouse_history
+                .mouse_events
+                .drain(0..self.mouse_history.mouse_events.len() - max);
         }
-        if self.mouse_positions.len() > max {
-            self.mouse_positions
-                .drain(0..self.mouse_positions.len() - max);
+        if self.mouse_history.mouse_positions.len() > max {
+            self.mouse_history
+                .mouse_positions
+                .drain(0..self.mouse_history.mouse_positions.len() - max);
         }
     }
 
     /// Get the maximum number of mouse events to retain
     pub fn get_max_mouse_history(&self) -> usize {
-        self.max_mouse_history
+        self.mouse_history.max_mouse_history
     }
 }
 

@@ -9,30 +9,30 @@ impl Terminal {
 
     /// Load a macro into the library
     pub fn load_macro(&mut self, name: String, m: crate::macros::Macro) {
-        self.macro_library.insert(name, m);
+        self.macros.macro_library.insert(name, m);
     }
 
     /// Get a macro from the library
     pub fn get_macro(&self, name: &str) -> Option<&crate::macros::Macro> {
-        self.macro_library.get(name)
+        self.macros.macro_library.get(name)
     }
 
     /// Remove a macro from the library
     pub fn remove_macro(&mut self, name: &str) -> Option<crate::macros::Macro> {
-        self.macro_library.remove(name)
+        self.macros.macro_library.remove(name)
     }
 
     /// List all macros in the library
     pub fn list_macros(&self) -> Vec<String> {
-        self.macro_library.keys().cloned().collect()
+        self.macros.macro_library.keys().cloned().collect()
     }
 
     // === Feature 38: Macro Recording and Playback ===
 
     /// Start playing a macro by name
     pub fn play_macro(&mut self, name: &str) -> Result<(), String> {
-        if let Some(m) = self.macro_library.get(name).cloned() {
-            self.macro_playback = Some(crate::macros::MacroPlayback::new(m));
+        if let Some(m) = self.macros.macro_library.get(name).cloned() {
+            self.macros.macro_playback = Some(crate::macros::MacroPlayback::new(m));
             Ok(())
         } else {
             Err(format!("Macro '{}' not found", name))
@@ -41,34 +41,35 @@ impl Terminal {
 
     /// Stop macro playback
     pub fn stop_macro(&mut self) {
-        self.macro_playback = None;
-        self.macro_screenshot_triggers.clear();
+        self.macros.macro_playback = None;
+        self.macros.macro_screenshot_triggers.clear();
     }
 
     /// Pause macro playback
     pub fn pause_macro(&mut self) {
-        if let Some(ref mut playback) = self.macro_playback {
+        if let Some(ref mut playback) = self.macros.macro_playback {
             playback.pause();
         }
     }
 
     /// Resume macro playback
     pub fn resume_macro(&mut self) {
-        if let Some(ref mut playback) = self.macro_playback {
+        if let Some(ref mut playback) = self.macros.macro_playback {
             playback.resume();
         }
     }
 
     /// Set macro playback speed
     pub fn set_macro_speed(&mut self, speed: f64) {
-        if let Some(ref mut playback) = self.macro_playback {
+        if let Some(ref mut playback) = self.macros.macro_playback {
             playback.set_speed(speed);
         }
     }
 
     /// Check if a macro is currently playing
     pub fn is_macro_playing(&self) -> bool {
-        self.macro_playback
+        self.macros
+            .macro_playback
             .as_ref()
             .map(|p| !p.is_finished())
             .unwrap_or(false)
@@ -76,7 +77,8 @@ impl Terminal {
 
     /// Check if macro playback is paused
     pub fn is_macro_paused(&self) -> bool {
-        self.macro_playback
+        self.macros
+            .macro_playback
             .as_ref()
             .map(|p| p.is_paused())
             .unwrap_or(false)
@@ -84,12 +86,15 @@ impl Terminal {
 
     /// Get macro playback progress
     pub fn get_macro_progress(&self) -> Option<(usize, usize)> {
-        self.macro_playback.as_ref().map(|p| p.progress())
+        self.macros.macro_playback.as_ref().map(|p| p.progress())
     }
 
     /// Get the name of the currently playing macro
     pub fn get_current_macro_name(&self) -> Option<String> {
-        self.macro_playback.as_ref().map(|p| p.name().to_string())
+        self.macros
+            .macro_playback
+            .as_ref()
+            .map(|p| p.name().to_string())
     }
 
     /// Tick macro playback and return events that should be processed now
@@ -97,7 +102,7 @@ impl Terminal {
     /// Returns bytes to send to PTY for KeyPress events, None for others
     /// Screenshot events are stored in macro_screenshot_triggers
     pub fn tick_macro(&mut self) -> Option<Vec<u8>> {
-        if let Some(ref mut playback) = self.macro_playback {
+        if let Some(ref mut playback) = self.macros.macro_playback {
             if let Some(event) = playback.next_event() {
                 match event {
                     crate::macros::MacroEvent::KeyPress { key, .. } => {
@@ -105,7 +110,8 @@ impl Terminal {
                         return Some(bytes);
                     }
                     crate::macros::MacroEvent::Screenshot { label, .. } => {
-                        self.macro_screenshot_triggers
+                        self.macros
+                            .macro_screenshot_triggers
                             .push(label.unwrap_or_else(|| "screenshot".to_string()));
                     }
                     crate::macros::MacroEvent::Delay { .. } => {
@@ -116,7 +122,7 @@ impl Terminal {
 
             // Check if playback is finished and clean up
             if playback.is_finished() {
-                self.macro_playback = None;
+                self.macros.macro_playback = None;
             }
         }
         None
@@ -124,7 +130,7 @@ impl Terminal {
 
     /// Get and clear screenshot triggers
     pub fn get_macro_screenshot_triggers(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.macro_screenshot_triggers)
+        std::mem::take(&mut self.macros.macro_screenshot_triggers)
     }
 
     /// Convert a RecordingSession to a Macro

@@ -387,17 +387,17 @@ impl Terminal {
 
     /// Add a rendering hint for the frontend
     pub fn add_rendering_hint(&mut self, hint: RenderingHint) {
-        self.rendering_hints.push(hint);
+        self.rendering.rendering_hints.push(hint);
     }
 
     /// Get all pending rendering hints and clear the list
     pub fn poll_rendering_hints(&mut self) -> Vec<RenderingHint> {
-        std::mem::take(&mut self.rendering_hints)
+        std::mem::take(&mut self.rendering.rendering_hints)
     }
 
     /// Add a damage region
     pub fn add_damage_region(&mut self, left: usize, top: usize, right: usize, bottom: usize) {
-        self.damage_regions.push(DamageRegion {
+        self.rendering.damage_regions.push(DamageRegion {
             left,
             top,
             right,
@@ -407,17 +407,17 @@ impl Terminal {
 
     /// Get all accumulated damage regions and clear the list
     pub fn poll_damage_regions(&mut self) -> Vec<DamageRegion> {
-        std::mem::take(&mut self.damage_regions)
+        std::mem::take(&mut self.rendering.damage_regions)
     }
 
     /// Get all damage regions without clearing
     pub fn get_damage_regions(&self) -> &[DamageRegion] {
-        &self.damage_regions
+        &self.rendering.damage_regions
     }
 
     /// Merge all damage regions into a single bounding box
     pub fn merge_damage_regions(&mut self) {
-        if self.damage_regions.is_empty() {
+        if self.rendering.damage_regions.is_empty() {
             return;
         }
         let mut min_left = usize::MAX;
@@ -425,14 +425,14 @@ impl Terminal {
         let mut max_right = 0;
         let mut max_bottom = 0;
 
-        for region in &self.damage_regions {
+        for region in &self.rendering.damage_regions {
             min_left = min_left.min(region.left);
             min_top = min_top.min(region.top);
             max_right = max_right.max(region.right);
             max_bottom = max_bottom.max(region.bottom);
         }
 
-        self.damage_regions = vec![DamageRegion {
+        self.rendering.damage_regions = vec![DamageRegion {
             left: min_left,
             top: min_top,
             right: max_right,
@@ -442,12 +442,12 @@ impl Terminal {
 
     /// Clear all damage regions
     pub fn clear_damage_regions(&mut self) {
-        self.damage_regions.clear();
+        self.rendering.damage_regions.clear();
     }
 
     /// Get all rendering hints without clearing
     pub fn get_rendering_hints(&self, sort_by_priority: bool) -> Vec<RenderingHint> {
-        let mut hints = self.rendering_hints.clone();
+        let mut hints = self.rendering.rendering_hints.clone();
         if sort_by_priority {
             hints.sort_by_key(|hint| std::cmp::Reverse(hint.priority));
         }
@@ -456,7 +456,7 @@ impl Terminal {
 
     /// Clear all rendering hints
     pub fn clear_rendering_hints(&mut self) {
-        self.rendering_hints.clear();
+        self.rendering.rendering_hints.clear();
     }
 
     // === Selection Management ===
