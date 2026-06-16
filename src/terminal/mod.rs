@@ -714,6 +714,10 @@ pub struct Terminal {
     pub(crate) apc_filter_state: ApcFilterState,
     /// Accumulator for the in-flight Kitty APC payload bytes.
     pub(crate) apc_buffer: Vec<u8>,
+    /// Reusable scratch buffer for non-APC bytes during APC pre-filtering
+    /// (ARC-008). Capacity is reused across `process()` calls instead of
+    /// reallocating a fresh `Vec` on every call.
+    pub(crate) apc_passthrough: Vec<u8>,
     /// Long-lived Kitty TGP parser; reset between unrelated transmissions.
     pub(crate) kitty_parser: KittyParser,
     /// DECAWM delayed wrap: set after printing in last column
@@ -936,6 +940,7 @@ impl Terminal {
             parser: vte::Parser::new(),
             apc_filter_state: ApcFilterState::default(),
             apc_buffer: Vec::new(),
+            apc_passthrough: Vec::new(),
             kitty_parser: KittyParser::new(),
             pending_wrap: false,
             // Initialize pixel dimensions with reasonable defaults (10x20 per cell)
@@ -2445,11 +2450,20 @@ impl Terminal {
     /// commits the result into [`GraphicsStore`]. Errors during parsing
     /// reset the Kitty parser and discard the payload — they never panic.
     fn filter_apc_and_advance(&mut self, data: &[u8]) {
-        // Local working buffers — we route non-APC bytes here, then feed
-        // them to vte after the filter pass completes. We also collect
-        // completed Kitty payloads to avoid borrow-checker conflicts with
-        // `self` inside the `feed` closure.
-        let mut passthrough: Vec<u8> = Vec::with_capacity(data.len());
+        // Fast path (ARC-008): if the APC filter is idle and this chunk has no
+        // ESC byte, no APC sequence can begin here — feed the bytes straight to
+        // vte, skipping the passthrough copy and the filter pass entirely.
+        if self.apc_filter_state == ApcFilterState::Outside && !data.contains(&0x1b) {
+            self.advance_parser(data);
+            return;
+        }
+
+        // Filter path. Reuse the passthrough buffer's capacity across calls
+        // (ARC-008) instead of reallocating `Vec::with_capacity(data.len())`
+        // on every `process()`. Take it out of `self` so feeding it to vte
+        // below doesn't alias a `&mut self` borrow.
+        let mut passthrough = std::mem::take(&mut self.apc_passthrough);
+        passthrough.clear();
         let mut completed_payloads: Vec<Vec<u8>> = Vec::new();
 
         apc_filter::feed(
@@ -2507,12 +2521,24 @@ impl Terminal {
             }
         }
 
-        // Feed the non-APC byte stream to vte.
+        // Feed the non-APC byte stream to vte, then return the (capacity-reused)
+        // buffer to the field for the next call.
         if !passthrough.is_empty() {
-            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-            parser.advance(self, &passthrough);
-            let _ = std::mem::replace(&mut self.parser, parser);
+            self.advance_parser(&passthrough);
         }
+        self.apc_passthrough = passthrough;
+    }
+
+    /// Feed bytes to the vte parser. `vte::Parser::advance` needs `&mut self`
+    /// (as the `Perform` impl) and `&mut parser`, but `parser` is a field of
+    /// `self` — temporarily move it out to satisfy the borrow checker.
+    fn advance_parser(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
+        parser.advance(self, bytes);
+        self.parser = parser;
     }
 
     /// Process incoming data from the PTY
