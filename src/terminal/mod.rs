@@ -429,6 +429,18 @@ pub(crate) struct CharsetState {
     pub(crate) active_g: u8,
 }
 
+/// Hyperlink storage (OSC 8): ID→URL map, current ID being written, next free ID.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct HyperlinkState {
+    /// Hyperlink storage: ID -> URL mapping (for deduplication)
+    pub(crate) hyperlinks: HashMap<u32, String>,
+    /// Current hyperlink ID being written
+    pub(crate) current_hyperlink_id: Option<u32>,
+    /// Next available hyperlink ID
+    pub(crate) next_hyperlink_id: u32,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -492,12 +504,8 @@ pub struct Terminal {
     pub(crate) keyboard_state: KeyboardState,
     /// Response buffer for device queries (DA/DSR/etc)
     pub(crate) response_buffer: Vec<u8>,
-    /// Hyperlink storage: ID -> URL mapping (for deduplication)
-    pub(crate) hyperlinks: HashMap<u32, String>,
-    /// Current hyperlink ID being written
-    pub(crate) current_hyperlink_id: Option<u32>,
-    /// Next available hyperlink ID
-    pub(crate) next_hyperlink_id: u32,
+    /// Hyperlinks map, current ID, next ID (ARC-001 sub-struct)
+    pub(crate) hyperlink_state: HyperlinkState,
     /// Unified graphics storage (Sixel, iTerm2, Kitty)
     pub(crate) graphics_store: GraphicsStore,
     /// Sixel resource limits (per-terminal, for decoding)
@@ -772,9 +780,11 @@ impl Terminal {
                 modify_other_keys_mode: 0,
             },
             response_buffer: Vec::new(),
-            hyperlinks: HashMap::new(),
-            current_hyperlink_id: None,
-            next_hyperlink_id: 0,
+            hyperlink_state: HyperlinkState {
+                hyperlinks: HashMap::new(),
+                current_hyperlink_id: None,
+                next_hyperlink_id: 0,
+            },
             graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
             sixel_limits: sixel::SixelLimits::default(),
             cell_dimensions: (1, 2), // Default for TUI half-block rendering
@@ -2236,7 +2246,7 @@ impl Terminal {
 
     /// Get the URL for a hyperlink ID
     pub fn get_hyperlink_url(&self, id: u32) -> Option<String> {
-        self.hyperlinks.get(&id).cloned()
+        self.hyperlink_state.hyperlinks.get(&id).cloned()
     }
 
     /// Enable or disable tmux control mode

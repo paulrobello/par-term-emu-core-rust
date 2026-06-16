@@ -643,7 +643,7 @@ impl Terminal {
             if let Some(line) = grid.row(row) {
                 for (col, cell) in line.iter().enumerate() {
                     if let Some(id) = cell.flags.hyperlink_id {
-                        if let Some(url) = self.hyperlinks.get(&id) {
+                        if let Some(url) = self.hyperlink_state.hyperlinks.get(&id) {
                             let entry = links.entry(id).or_insert_with(|| HyperlinkInfo {
                                 url: url.clone(),
                                 positions: Vec::new(),

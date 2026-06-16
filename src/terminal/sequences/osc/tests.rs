@@ -116,24 +116,24 @@ fn test_hyperlinks() {
 
     // Start hyperlink
     term.process(b"\x1b]8;;https://example.com\x1b\\");
-    assert!(term.current_hyperlink_id.is_some());
-    let id1 = term.current_hyperlink_id.unwrap();
+    assert!(term.hyperlink_state.current_hyperlink_id.is_some());
+    let id1 = term.hyperlink_state.current_hyperlink_id.unwrap();
 
     // End hyperlink (empty URL)
     term.process(b"\x1b]8;;\x1b\\");
-    assert!(term.current_hyperlink_id.is_none());
+    assert!(term.hyperlink_state.current_hyperlink_id.is_none());
 
     // Start another hyperlink
     term.process(b"\x1b]8;;https://example.org\x1b\\");
-    assert!(term.current_hyperlink_id.is_some());
-    let id2 = term.current_hyperlink_id.unwrap();
+    assert!(term.hyperlink_state.current_hyperlink_id.is_some());
+    let id2 = term.hyperlink_state.current_hyperlink_id.unwrap();
 
     // IDs should be different
     assert_ne!(id1, id2);
 
     // Reuse existing URL (deduplication)
     term.process(b"\x1b]8;;https://example.com\x1b\\");
-    assert_eq!(term.current_hyperlink_id, Some(id1));
+    assert_eq!(term.hyperlink_state.current_hyperlink_id, Some(id1));
 }
 
 #[test]
@@ -351,7 +351,7 @@ fn test_notifications_security() {
 
     // OSC 8 (hyperlinks) should be blocked
     secure_term.process(b"\x1b]8;;https://evil.com\x1b\\");
-    assert!(secure_term.current_hyperlink_id.is_none());
+    assert!(secure_term.hyperlink_state.current_hyperlink_id.is_none());
 }
 
 #[test]

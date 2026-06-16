@@ -459,7 +459,7 @@ impl Terminal {
             cell_flags.set_wide_char(true);
         }
         // Apply current hyperlink ID
-        cell_flags.hyperlink_id = self.current_hyperlink_id;
+        cell_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
         // Apply character protection (DECSCA)
         cell_flags.set_guarded(self.char_protected);
 
@@ -494,7 +494,7 @@ impl Terminal {
             let mut spacer_flags = self.flags;
             spacer_flags.set_wide_char_spacer(true);
             // Apply hyperlink ID to spacer as well
-            spacer_flags.hyperlink_id = self.current_hyperlink_id;
+            spacer_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
 
             let spacer = Cell {
                 c: ' ', // Spacer character
@@ -564,7 +564,7 @@ impl Terminal {
         // Write the regional indicator as width 1 initially
         // (It will become width 2 if followed by another regional indicator)
         let mut cell_flags = self.flags;
-        cell_flags.hyperlink_id = self.current_hyperlink_id;
+        cell_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
         cell_flags.set_guarded(self.char_protected);
 
         let cell = Cell {
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn test_write_char_with_hyperlink() {
         let mut term = create_test_terminal();
-        term.current_hyperlink_id = Some(42);
+        term.hyperlink_state.current_hyperlink_id = Some(42);
 
         term.write_char('A');
 

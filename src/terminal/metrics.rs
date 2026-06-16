@@ -407,7 +407,7 @@ impl Terminal {
             non_whitespace_lines: self.count_non_whitespace_lines(),
             graphics_count: self.graphics_store.graphics_count(),
             estimated_memory_bytes: 0, // Should be calculated
-            hyperlink_count: self.hyperlinks.len(),
+            hyperlink_count: self.hyperlink_state.hyperlinks.len(),
             hyperlink_memory_bytes: 0, // Should be calculated
             color_stack_depth: self.color_stack.len(),
             title_stack_depth: self.title_state.title_stack.len(),

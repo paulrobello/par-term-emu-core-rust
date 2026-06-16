@@ -90,21 +90,22 @@ impl Terminal {
                 let url = url.trim();
 
                 if url.is_empty() {
-                    self.current_hyperlink_id = None;
+                    self.hyperlink_state.current_hyperlink_id = None;
                 } else {
                     let id = self
+                        .hyperlink_state
                         .hyperlinks
                         .iter()
                         .find(|(_, v)| v.as_str() == url)
                         .map(|(k, _)| *k)
                         .unwrap_or_else(|| {
-                            let id = self.next_hyperlink_id;
-                            self.hyperlinks.insert(id, url.to_string());
-                            self.next_hyperlink_id += 1;
+                            let id = self.hyperlink_state.next_hyperlink_id;
+                            self.hyperlink_state.hyperlinks.insert(id, url.to_string());
+                            self.hyperlink_state.next_hyperlink_id += 1;
                             id
                         });
 
-                    self.current_hyperlink_id = Some(id);
+                    self.hyperlink_state.current_hyperlink_id = Some(id);
 
                     self.terminal_events
                         .push(crate::terminal::TerminalEvent::HyperlinkAdded {
@@ -116,7 +117,7 @@ impl Terminal {
                 }
             }
         } else if params.len() == 2 {
-            self.current_hyperlink_id = None;
+            self.hyperlink_state.current_hyperlink_id = None;
         }
     }
 }
