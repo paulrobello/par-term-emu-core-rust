@@ -25,9 +25,9 @@ impl Terminal {
             return;
         }
 
-        self.dcs_active = true;
-        self.dcs_action = Some(action);
-        self.dcs_buffer.clear();
+        self.dcs_state.dcs_active = true;
+        self.dcs_state.dcs_action = Some(action);
+        self.dcs_state.dcs_buffer.clear();
 
         if action == 'q' {
             self.handle_sixel_hook(params);
@@ -36,30 +36,31 @@ impl Terminal {
 
     /// VTE put - data for DCS sequence
     pub(in crate::terminal) fn dcs_put(&mut self, byte: u8) {
-        if !self.dcs_active {
+        if !self.dcs_state.dcs_active {
             return;
         }
 
-        if self.dcs_action == Some('q') {
+        if self.dcs_state.dcs_action == Some('q') {
             let is_sixel_data = (63..=126).contains(&byte);
 
             if is_sixel_data {
                 let mut pending_repeat = None;
-                let has_repeat = !self.dcs_buffer.is_empty() && self.dcs_buffer[0] == b'!';
+                let has_repeat =
+                    !self.dcs_state.dcs_buffer.is_empty() && self.dcs_state.dcs_buffer[0] == b'!';
 
                 if has_repeat {
                     // Parse repeat count
-                    let s = std::str::from_utf8(&self.dcs_buffer[1..]).unwrap_or("1");
+                    let s = std::str::from_utf8(&self.dcs_state.dcs_buffer[1..]).unwrap_or("1");
                     let count = s.parse().unwrap_or(1);
                     pending_repeat = Some(count);
-                    self.dcs_buffer.clear();
-                } else if !self.dcs_buffer.is_empty() {
+                    self.dcs_state.dcs_buffer.clear();
+                } else if !self.dcs_state.dcs_buffer.is_empty() {
                     // Process any other pending commands (colors)
                     self.process_sixel_command();
                 }
 
                 // Feed to parser
-                if let Some(parser) = &mut self.sixel_parser {
+                if let Some(parser) = &mut self.dcs_state.sixel_parser {
                     if let Some(count) = pending_repeat {
                         parser.parse_repeat(count, byte as char);
                     } else {
@@ -67,41 +68,43 @@ impl Terminal {
                     }
                 }
             } else if byte == b'-' {
-                if !self.dcs_buffer.is_empty() {
+                if !self.dcs_state.dcs_buffer.is_empty() {
                     self.process_sixel_command();
                 }
-                if let Some(p) = &mut self.sixel_parser {
+                if let Some(p) = &mut self.dcs_state.sixel_parser {
                     p.new_line();
                 }
             } else if byte == b'$' {
-                if !self.dcs_buffer.is_empty() {
+                if !self.dcs_state.dcs_buffer.is_empty() {
                     self.process_sixel_command();
                 }
-                if let Some(p) = &mut self.sixel_parser {
+                if let Some(p) = &mut self.dcs_state.sixel_parser {
                     p.carriage_return();
                 }
             } else {
                 // Control chars or parameters (#, ", !, digits)
                 // If starting a new command, process previous one
-                if (byte == b'#' || byte == b'"' || byte == b'!') && !self.dcs_buffer.is_empty() {
+                if (byte == b'#' || byte == b'"' || byte == b'!')
+                    && !self.dcs_state.dcs_buffer.is_empty()
+                {
                     self.process_sixel_command();
                 }
-                self.dcs_buffer.push(byte);
+                self.dcs_state.dcs_buffer.push(byte);
             }
         } else {
-            self.dcs_buffer.push(byte);
+            self.dcs_state.dcs_buffer.push(byte);
         }
     }
 
     /// VTE unhook - end of DCS sequence
     pub(in crate::terminal) fn dcs_unhook(&mut self) {
-        if !self.dcs_active {
+        if !self.dcs_state.dcs_active {
             return;
         }
 
-        if self.dcs_action == Some('q') {
+        if self.dcs_state.dcs_action == Some('q') {
             self.process_sixel_command();
-            if let Some(parser) = self.sixel_parser.take() {
+            if let Some(parser) = self.dcs_state.sixel_parser.take() {
                 let position = (self.cursor.col, self.cursor.row);
                 let sixel_graphic = parser.build_graphic(position);
 
@@ -147,9 +150,9 @@ impl Terminal {
             }
         }
 
-        self.dcs_active = false;
-        self.dcs_action = None;
-        self.dcs_buffer.clear();
+        self.dcs_state.dcs_active = false;
+        self.dcs_state.dcs_action = None;
+        self.dcs_state.dcs_buffer.clear();
     }
 }
 

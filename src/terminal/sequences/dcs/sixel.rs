@@ -13,15 +13,15 @@ const MAX_SIXEL_COLORS: usize = 4096;
 impl Terminal {
     /// Process accumulated Sixel command from DCS buffer
     pub(crate) fn process_sixel_command(&mut self) {
-        if self.dcs_buffer.is_empty() {
+        if self.dcs_state.dcs_buffer.is_empty() {
             return;
         }
 
-        let Some(parser) = &mut self.sixel_parser else {
+        let Some(parser) = &mut self.dcs_state.sixel_parser else {
             return;
         };
 
-        let buffer_str = String::from_utf8_lossy(&self.dcs_buffer);
+        let buffer_str = String::from_utf8_lossy(&self.dcs_state.dcs_buffer);
         let command = buffer_str.chars().next().unwrap_or('\0');
 
         match command {
@@ -75,7 +75,7 @@ impl Terminal {
             _ => {}
         }
 
-        self.dcs_buffer.clear();
+        self.dcs_state.dcs_buffer.clear();
     }
 
     pub(crate) fn handle_sixel_hook(&mut self, params: &Params) {
@@ -89,6 +89,6 @@ impl Terminal {
 
         parser.set_params(&params_vec);
 
-        self.sixel_parser = Some(parser);
+        self.dcs_state.sixel_parser = Some(parser);
     }
 }

@@ -457,6 +457,21 @@ pub(crate) struct ClipboardState {
     pub(crate) max_clipboard_history: usize,
 }
 
+/// DCS / Sixel graphics-decode state.
+///
+/// Holds the active Sixel parser, the DCS byte buffer, the active flag, and
+/// the action character. Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct DcsState {
+    /// Current Sixel parser (active during DCS)
+    pub(crate) sixel_parser: Option<sixel::SixelParser>,
+    /// Buffer for DCS data accumulation
+    pub(crate) dcs_buffer: Vec<u8>,
+    /// DCS active flag
+    pub(crate) dcs_active: bool,
+    /// DCS action character ('q' for Sixel)
+    pub(crate) dcs_action: Option<char>,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -530,14 +545,8 @@ pub struct Terminal {
     /// Default (1, 2) is for text-mode TUI with half-block rendering
     /// Pixel renderers should set actual cell dimensions
     pub(crate) cell_dimensions: (u32, u32),
-    /// Current Sixel parser (active during DCS)
-    pub(crate) sixel_parser: Option<sixel::SixelParser>,
-    /// Buffer for DCS data accumulation
-    pub(crate) dcs_buffer: Vec<u8>,
-    /// DCS active flag
-    pub(crate) dcs_active: bool,
-    /// DCS action character ('q' for Sixel)
-    pub(crate) dcs_action: Option<char>,
+    /// Sixel parser, DCS buffer, active flag, action char (ARC-001 sub-struct)
+    pub(crate) dcs_state: DcsState,
     /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
     pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
     /// File transfer manager for tracking file downloads and uploads
@@ -798,10 +807,12 @@ impl Terminal {
             graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
             sixel_limits: sixel::SixelLimits::default(),
             cell_dimensions: (1, 2), // Default for TUI half-block rendering
-            sixel_parser: None,
-            dcs_buffer: Vec::new(),
-            dcs_active: false,
-            dcs_action: None,
+            dcs_state: DcsState {
+                sixel_parser: None,
+                dcs_buffer: Vec::new(),
+                dcs_active: false,
+                dcs_action: None,
+            },
             iterm_multipart_buffer: None,
             file_transfer_manager: FileTransferManager::default(),
             clipboard_state: ClipboardState {

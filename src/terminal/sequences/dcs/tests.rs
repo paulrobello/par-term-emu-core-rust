@@ -16,10 +16,10 @@ fn test_dcs_hook_sixel() {
 
     term.dcs_hook(&params, &[], false, 'q');
 
-    assert!(term.dcs_active);
-    assert_eq!(term.dcs_action, Some('q'));
-    assert!(term.sixel_parser.is_some());
-    assert!(term.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, Some('q'));
+    assert!(term.dcs_state.sixel_parser.is_some());
+    assert!(term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
@@ -29,9 +29,9 @@ fn test_dcs_hook_sixel_with_params() {
 
     term.dcs_hook(&params, &[], false, 'q');
 
-    assert!(term.dcs_active);
-    assert_eq!(term.dcs_action, Some('q'));
-    assert!(term.sixel_parser.is_some());
+    assert!(term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, Some('q'));
+    assert!(term.dcs_state.sixel_parser.is_some());
 }
 
 #[test]
@@ -43,9 +43,9 @@ fn test_dcs_hook_sixel_blocked_by_security() {
     term.dcs_hook(&params, &[], false, 'q');
 
     // Should be blocked
-    assert!(!term.dcs_active);
-    assert_eq!(term.dcs_action, None);
-    assert!(term.sixel_parser.is_none());
+    assert!(!term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, None);
+    assert!(term.dcs_state.sixel_parser.is_none());
 }
 
 #[test]
@@ -55,9 +55,9 @@ fn test_dcs_hook_non_sixel_action() {
 
     term.dcs_hook(&params, &[], false, 'p');
 
-    assert!(term.dcs_active);
-    assert_eq!(term.dcs_action, Some('p'));
-    assert!(term.sixel_parser.is_none()); // Not created for non-sixel
+    assert!(term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, Some('p'));
+    assert!(term.dcs_state.sixel_parser.is_none()); // Not created for non-sixel
 }
 
 #[test]
@@ -67,7 +67,7 @@ fn test_dcs_put_sixel_data() {
 
     // Start sixel
     term.dcs_hook(&params, &[], false, 'q');
-    assert!(term.sixel_parser.is_some());
+    assert!(term.dcs_state.sixel_parser.is_some());
 
     // Send sixel data characters
     for &byte in b"????" {
@@ -75,7 +75,7 @@ fn test_dcs_put_sixel_data() {
     }
 
     // Parser should process the data
-    assert!(term.dcs_active);
+    assert!(term.dcs_state.dcs_active);
 }
 
 #[test]
@@ -86,7 +86,7 @@ fn test_dcs_put_not_active() {
     term.dcs_put(b'A');
 
     // Should be ignored
-    assert!(!term.dcs_active);
+    assert!(!term.dcs_state.dcs_active);
 }
 
 #[test]
@@ -100,7 +100,7 @@ fn test_dcs_put_color_command() {
     term.dcs_put(b'#');
     term.dcs_put(b'0');
 
-    assert_eq!(term.dcs_buffer, b"#0");
+    assert_eq!(term.dcs_state.dcs_buffer, b"#0");
 }
 
 #[test]
@@ -116,7 +116,7 @@ fn test_dcs_put_raster_attributes() {
     }
 
     // Should accumulate in buffer
-    assert!(!term.dcs_buffer.is_empty());
+    assert!(!term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
@@ -132,7 +132,7 @@ fn test_dcs_put_repeat_command() {
     }
 
     // Should process when complete
-    assert!(term.dcs_active);
+    assert!(term.dcs_state.dcs_active);
 }
 
 #[test]
@@ -146,7 +146,7 @@ fn test_dcs_put_carriage_return() {
     term.dcs_put(b'$');
 
     // Parser should handle it
-    assert!(term.dcs_active);
+    assert!(term.dcs_state.dcs_active);
 }
 
 #[test]
@@ -160,7 +160,7 @@ fn test_dcs_put_new_line() {
     term.dcs_put(b'-');
 
     // Parser should handle it
-    assert!(term.dcs_active);
+    assert!(term.dcs_state.dcs_active);
 }
 
 #[test]
@@ -169,14 +169,14 @@ fn test_dcs_unhook_cleans_up() {
     let params = create_empty_params();
 
     term.dcs_hook(&params, &[], false, 'q');
-    assert!(term.dcs_active);
+    assert!(term.dcs_state.dcs_active);
 
     term.dcs_unhook();
 
-    assert!(!term.dcs_active);
-    assert_eq!(term.dcs_action, None);
-    assert!(term.dcs_buffer.is_empty());
-    assert!(term.sixel_parser.is_none());
+    assert!(!term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, None);
+    assert!(term.dcs_state.dcs_buffer.is_empty());
+    assert!(term.dcs_state.sixel_parser.is_none());
 }
 
 #[test]
@@ -187,12 +187,12 @@ fn test_dcs_unhook_processes_remaining_buffer() {
     term.dcs_hook(&params, &[], false, 'q');
 
     // Add some data to buffer
-    term.dcs_buffer.extend_from_slice(b"#0");
+    term.dcs_state.dcs_buffer.extend_from_slice(b"#0");
 
     term.dcs_unhook();
 
     // Buffer should be processed and cleared
-    assert!(term.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
@@ -227,13 +227,13 @@ fn test_process_sixel_command_empty_buffer() {
     term.process_sixel_command();
 
     // Should handle gracefully
-    assert!(term.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
 fn test_process_sixel_command_no_parser() {
     let mut term = create_test_terminal();
-    term.dcs_buffer.extend_from_slice(b"#0");
+    term.dcs_state.dcs_buffer.extend_from_slice(b"#0");
 
     term.process_sixel_command();
 
@@ -250,13 +250,13 @@ fn test_dcs_sequence_isolation() {
     term.dcs_put(b'?');
     term.dcs_unhook();
 
-    assert!(!term.dcs_active);
-    assert!(term.sixel_parser.is_none());
+    assert!(!term.dcs_state.dcs_active);
+    assert!(term.dcs_state.sixel_parser.is_none());
 
     // Start second DCS
     term.dcs_hook(&params, &[], false, 'q');
-    assert!(term.dcs_active);
-    assert!(term.sixel_parser.is_some());
+    assert!(term.dcs_state.dcs_active);
+    assert!(term.dcs_state.sixel_parser.is_some());
 }
 
 #[test]
@@ -265,16 +265,16 @@ fn test_dcs_hook_clears_previous_state() {
     let params = create_empty_params();
 
     // Set some state
-    term.dcs_buffer.extend_from_slice(b"old data");
-    term.dcs_active = true;
+    term.dcs_state.dcs_buffer.extend_from_slice(b"old data");
+    term.dcs_state.dcs_active = true;
 
     // Hook new DCS
     term.dcs_hook(&params, &[], false, 'q');
 
     // Buffer should be cleared
-    assert!(term.dcs_buffer.is_empty());
-    assert!(term.dcs_active);
-    assert_eq!(term.dcs_action, Some('q'));
+    assert!(term.dcs_state.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, Some('q'));
 }
 
 #[test]
@@ -290,13 +290,13 @@ fn test_dcs_multiple_commands_in_sequence() {
     }
 
     // Buffer should accumulate
-    assert_eq!(term.dcs_buffer, b"#0");
+    assert_eq!(term.dcs_state.dcs_buffer, b"#0");
 
     // Process by sending data char
     term.dcs_put(b'?');
 
     // Buffer should be cleared after processing
-    assert_eq!(term.dcs_buffer.len(), 0);
+    assert_eq!(term.dcs_state.dcs_buffer.len(), 0);
 }
 
 #[test]
@@ -315,7 +315,7 @@ fn test_dcs_color_command_parsing() {
     term.dcs_put(b'?');
 
     // Should have processed color command
-    assert!(term.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
@@ -334,7 +334,7 @@ fn test_dcs_raster_attributes_parsing() {
     term.dcs_put(b'?');
 
     // Should have processed raster command
-    assert!(term.dcs_buffer.is_empty());
+    assert!(term.dcs_state.dcs_buffer.is_empty());
 }
 
 #[test]
@@ -432,16 +432,16 @@ fn test_dcs_non_sixel_action_ignored() {
     let params = create_empty_params();
 
     term.dcs_hook(&params, &[], false, 'x');
-    assert!(term.dcs_active);
-    assert_eq!(term.dcs_action, Some('x'));
+    assert!(term.dcs_state.dcs_active);
+    assert_eq!(term.dcs_state.dcs_action, Some('x'));
 
     // Put some data
     term.dcs_put(b'A');
     term.dcs_put(b'B');
 
     // Should not create sixel parser
-    assert!(term.sixel_parser.is_none());
+    assert!(term.dcs_state.sixel_parser.is_none());
 
     term.dcs_unhook();
-    assert!(!term.dcs_active);
+    assert!(!term.dcs_state.dcs_active);
 }
