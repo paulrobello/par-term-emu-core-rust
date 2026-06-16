@@ -1198,3 +1198,335 @@ macro_rules! impl_terminal_recording {
         }
     };
 }
+
+/// Emit cell / color / line query methods for `$ty`. (ARC-003/QA-001 batch:
+/// cell & line queries.) All read-only, using [`TerminalAccess::term_ref`].
+#[macro_export]
+macro_rules! impl_terminal_cell_line_queries {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get a cell's foreground color at the specified position
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     Tuple of (r, g, b) values, or None if out of bounds
+            fn get_fg_color(&self, col: usize, row: usize) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    Ok(Some(cell.fg.to_rgb()))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Get a cell's background color at the specified position
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     Tuple of (r, g, b) values, or None if out of bounds
+            fn get_bg_color(&self, col: usize, row: usize) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    Ok(Some(cell.bg.to_rgb()))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Get a cell's underline color at the specified position (SGR 58)
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     Tuple of (r, g, b) values, or None if no underline color set or out of bounds
+            fn get_underline_color(
+                &self,
+                col: usize,
+                row: usize,
+            ) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    Ok(cell.underline_color.map(|c| c.to_rgb()))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Get cell attributes at the specified position
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
+            fn get_attributes(
+                &self,
+                col: usize,
+                row: usize,
+            ) -> pyo3::PyResult<Option<$crate::python_bindings::types::PyAttributes>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    Ok(Some($crate::python_bindings::types::PyAttributes::from(
+                        cell,
+                    )))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Get hyperlink URL at the specified position
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     URL string if the cell has a hyperlink, or None if no hyperlink or out of bounds
+            fn get_hyperlink(&self, col: usize, row: usize) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    if let Some(id) = cell.flags.hyperlink_id {
+                        return Ok(t.get_hyperlink_url(id));
+                    }
+                }
+                Ok(None)
+            }
+
+            /// Check if a line wraps to the next row
+            ///
+            /// Args:
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     True if the line wraps to the next row, False otherwise
+            fn is_line_wrapped(&self, row: usize) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.active_grid().is_line_wrapped(row))
+            }
+
+            /// Get all cell data for a row in a single atomic operation
+            ///
+            /// This method retrieves all cell information for an entire row atomically,
+            /// preventing race conditions in multi-threaded scenarios.
+            ///
+            /// Args:
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes) for each column,
+            ///     or empty list if row is out of bounds
+            fn get_line_cells(
+                &self,
+                row: usize,
+            ) -> pyo3::PyResult<$crate::python_bindings::types::LineCellData> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let grid = t.active_grid();
+                let rows = grid.rows();
+
+                if row >= rows {
+                    return Ok(Vec::new());
+                }
+
+                let cols = grid.cols();
+                let result = (0..cols)
+                    .filter_map(|col| {
+                        grid.get(col, row).map(|cell| {
+                            (
+                                cell.get_grapheme(),
+                                cell.fg.to_rgb(),
+                                cell.bg.to_rgb(),
+                                $crate::python_bindings::types::PyAttributes::from(cell),
+                            )
+                        })
+                    })
+                    .collect();
+
+                Ok(result)
+            }
+
+            /// Get word at cursor position
+            ///
+            /// Args:
+            ///     col: Column position (0-indexed)
+            ///     row: Row position (0-indexed)
+            ///     word_chars: Optional custom word characters (default: "/-+\\~_." iTerm2-compatible)
+            ///
+            /// Returns:
+            ///     Word at position or None if not on a word
+            fn get_word_at(
+                &self,
+                col: usize,
+                row: usize,
+                word_chars: Option<&str>,
+            ) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.get_word_at(col, row, word_chars))
+            }
+
+            /// Get URL at cursor position
+            ///
+            /// Detects URLs with schemes: http://, https://, ftp://, file://, mailto:, ssh://
+            ///
+            /// Args:
+            ///     col: Column position (0-indexed)
+            ///     row: Row position (0-indexed)
+            ///
+            /// Returns:
+            ///     URL at position or None if not on a URL
+            fn get_url_at(&self, col: usize, row: usize) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.get_url_at(col, row))
+            }
+
+            /// Get full logical line following wrapping
+            ///
+            /// Args:
+            ///     row: Row position (0-indexed)
+            ///
+            /// Returns:
+            ///     Complete unwrapped line or None if row is invalid
+            fn get_line_unwrapped(&self, row: usize) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.get_line_unwrapped(row))
+            }
+        }
+    };
+}
+
+/// Emit content, clipboard, cursor-style, shell-integration, insecure-sequence,
+/// and focus/paste event-sequence methods for `$ty`. (ARC-003/QA-001 batch.)
+#[macro_export]
+macro_rules! impl_terminal_content_misc {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get the terminal content as a string
+            ///
+            /// Returns:
+            ///     String representation of the terminal buffer
+            fn content(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.content())
+            }
+
+            fn __str__(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.content())
+            }
+
+            /// Get the current clipboard content
+            ///
+            /// Returns:
+            ///     Clipboard content as string, or None if empty
+            fn clipboard(&self) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.clipboard().map(|s| s.to_string()))
+            }
+
+            /// Get the current cursor style
+            ///
+            /// Returns:
+            ///     CursorStyle enum value
+            fn cursor_style(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::enums::PyCursorStyle> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.cursor().style().into())
+            }
+
+            /// Get focus in event sequence
+            ///
+            /// Returns:
+            ///     Bytes for focus in event (if focus tracking is enabled)
+            fn get_focus_in_event(&self) -> pyo3::PyResult<Vec<u8>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.report_focus_in())
+            }
+
+            /// Get focus out event sequence
+            ///
+            /// Returns:
+            ///     Bytes for focus out event (if focus tracking is enabled)
+            fn get_focus_out_event(&self) -> pyo3::PyResult<Vec<u8>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.report_focus_out())
+            }
+
+            /// Get bracketed paste start sequence
+            ///
+            /// Returns:
+            ///     Bytes for paste start (if bracketed paste is enabled)
+            fn get_paste_start(&self) -> pyo3::PyResult<Vec<u8>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.bracketed_paste_start().to_vec())
+            }
+
+            /// Get bracketed paste end sequence
+            ///
+            /// Returns:
+            ///     Bytes for paste end (if bracketed paste is enabled)
+            fn get_paste_end(&self) -> pyo3::PyResult<Vec<u8>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.bracketed_paste_end().to_vec())
+            }
+
+            /// Get shell integration state
+            ///
+            /// Returns:
+            ///     Dictionary with shell integration info
+            fn shell_integration_state(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::types::PyShellIntegration> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let si = t.shell_integration();
+                Ok($crate::python_bindings::types::PyShellIntegration {
+                    in_prompt: si.in_prompt(),
+                    in_command_input: si.in_command_input(),
+                    in_command_output: si.in_command_output(),
+                    current_command: si.command().map(|s| s.to_string()),
+                    last_exit_code: si.exit_code(),
+                    cwd: si.cwd().map(|s| s.to_string()),
+                    hostname: si.hostname().map(|s| s.to_string()),
+                    username: si.username().map(|s| s.to_string()),
+                })
+            }
+
+            /// Check if insecure sequences are disabled
+            ///
+            /// Returns:
+            ///     True if insecure sequences are blocked, False otherwise
+            fn disable_insecure_sequences(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.disable_insecure_sequences())
+            }
+
+            /// Set whether to filter potentially insecure escape sequences
+            ///
+            /// When enabled, certain sequences that could pose security risks are blocked:
+            /// - OSC 52 (clipboard operations - can leak data)
+            /// - OSC 8 (hyperlinks - can be used for phishing)
+            /// - OSC 9/777 (notifications - can be annoying/misleading)
+            /// - Sixel graphics (can consume excessive memory)
+            ///
+            /// When disabled (default), all standard sequences are processed normally.
+            ///
+            /// Args:
+            ///     disable: True to block insecure sequences, False to allow (default)
+            fn set_disable_insecure_sequences(&mut self, disable: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_disable_insecure_sequences(disable);
+                Ok(())
+            }
+        }
+    };
+}

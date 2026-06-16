@@ -24,8 +24,7 @@ use crate::color::Color;
 use crate::pty_session;
 
 use super::conversions::parse_sixel_mode;
-use super::enums::PyCursorStyle;
-use super::types::{LineCellData, PyAttributes, PyScreenSnapshot, PyShellIntegration};
+use super::types::{PyAttributes, PyScreenSnapshot};
 
 /// Python wrapper for PtySession - a terminal with PTY support
 #[pyclass(name = "PtyTerminal", unsendable)]
@@ -54,6 +53,8 @@ crate::impl_terminal_sixel_graphics!(PyPtyTerminal);
 crate::impl_terminal_badge_session!(PyPtyTerminal);
 crate::impl_terminal_progress_notifications!(PyPtyTerminal);
 crate::impl_terminal_recording!(PyPtyTerminal);
+crate::impl_terminal_cell_line_queries!(PyPtyTerminal);
+crate::impl_terminal_content_misc!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {
@@ -248,13 +249,7 @@ impl PyPtyTerminal {
 
     // Terminal query methods
 
-    /// Get the terminal content as a string
-    ///
-    /// Returns:
-    ///     String representation of the terminal buffer
-    fn content(&self) -> PyResult<String> {
-        Ok(self.inner.content())
-    }
+    // content, __str__: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // title: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
@@ -582,170 +577,8 @@ impl PyPtyTerminal {
         Ok(result)
     }
 
-    /// Check if a line is wrapped (continues to the next line)
-    ///
-    /// Args:
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     True if the line wraps to the next row, False otherwise
-    fn is_line_wrapped(&self, row: usize) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.active_grid().is_line_wrapped(row)
-        } else {
-            false
-        };
-        Ok(result)
-    }
-
-    /// Get a cell's foreground color at the specified position
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) values, or None if out of bounds
-    fn get_fg_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.active_grid()
-                .get(col, row)
-                .map(|cell| cell.fg.to_rgb())
-        } else {
-            None
-        };
-        Ok(result)
-    }
-
-    /// Get a cell's background color at the specified position
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) values, or None if out of bounds
-    fn get_bg_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.active_grid()
-                .get(col, row)
-                .map(|cell| cell.bg.to_rgb())
-        } else {
-            None
-        };
-        Ok(result)
-    }
-
-    /// Get a cell's underline color at the specified position (SGR 58)
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) values, or None if no underline color set or out of bounds
-    fn get_underline_color(&self, col: usize, row: usize) -> PyResult<Option<(u8, u8, u8)>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.active_grid()
-                .get(col, row)
-                .and_then(|cell| cell.underline_color.map(|c| c.to_rgb()))
-        } else {
-            None
-        };
-        Ok(result)
-    }
-
-    /// Get cell attributes at the specified position
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
-    fn get_attributes(&self, col: usize, row: usize) -> PyResult<Option<PyAttributes>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.active_grid().get(col, row).map(PyAttributes::from)
-        } else {
-            None
-        };
-        Ok(result)
-    }
-
-    /// Get hyperlink URL at the specified position (OSC 8)
-    ///
-    /// Retrieves the URL associated with a hyperlink at the given position.
-    /// Hyperlinks are created using OSC 8 sequences (e.g., `\x1b]8;;URL\x07text\x1b]8;;\x07`).
-    ///
-    /// Args:
-    ///     col: Column position (0-based)
-    ///     row: Row position (0-based)
-    ///
-    /// Returns:
-    ///     URL string if a hyperlink exists at that position, None otherwise
-    fn get_hyperlink(&self, col: usize, row: usize) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            if let Some(cell) = term.active_grid().get(col, row) {
-                if let Some(id) = cell.flags.hyperlink_id {
-                    term.get_hyperlink_url(id)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        Ok(result)
-    }
-
-    /// Get all cell data for a row in a single atomic operation
-    ///
-    /// This method retrieves all cell information for an entire row with a single lock,
-    /// preventing race conditions where the PTY thread updates state between individual
-    /// cell attribute reads.
-    ///
-    /// Args:
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes) for each column,
-    ///     or empty list if row is out of bounds
-    fn get_line_cells(&self, row: usize) -> PyResult<LineCellData> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            let grid = term.active_grid();
-            let rows = grid.rows();
-
-            if row >= rows {
-                Vec::new()
-            } else {
-                let cols = grid.cols();
-                (0..cols)
-                    .filter_map(|col| {
-                        grid.get(col, row).map(|cell| {
-                            (
-                                cell.get_grapheme(),
-                                cell.fg.to_rgb(),
-                                cell.bg.to_rgb(),
-                                PyAttributes::from(cell),
-                            )
-                        })
-                    })
-                    .collect()
-            }
-        } else {
-            Vec::new()
-        };
-        Ok(result)
-    }
+    // is_line_wrapped, get_fg_color, get_bg_color, get_underline_color, get_attributes,
+    // get_hyperlink, get_line_cells: provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
     /// Create atomic snapshot of current screen state
     ///
@@ -1080,19 +913,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get clipboard content (OSC 52)
-    ///
-    /// Returns:
-    ///     Clipboard content as string, or None if empty
-    fn clipboard(&self) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let content = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.clipboard().map(|s| s.to_string())
-        } else {
-            None
-        };
-        Ok(content)
-    }
+    // clipboard: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // set_clipboard: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
@@ -1182,19 +1003,7 @@ impl PyPtyTerminal {
 
     // set_use_underline_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Get cursor style (DECSCUSR)
-    ///
-    /// Returns:
-    ///     CursorStyle enum value
-    fn cursor_style(&self) -> PyResult<PyCursorStyle> {
-        let terminal = self.inner.terminal();
-        let style = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.cursor().style().into()
-        } else {
-            PyCursorStyle::BlinkingBlock // Default if lock fails
-        };
-        Ok(style)
-    }
+    // cursor_style: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // set_cursor_style: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
@@ -1202,69 +1011,11 @@ impl PyPtyTerminal {
 
     // focus_tracking: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get focus in event sequence
-    ///
-    /// Returns the escape sequence to send when terminal gains focus.
-    /// Only relevant when focus tracking is enabled (CSI ? 1004 h).
-    ///
-    /// Returns:
-    ///     Bytes for focus in event: b'\x1b[I'
-    fn get_focus_in_event(&self) -> PyResult<Vec<u8>> {
-        let terminal = self.inner.terminal();
-        let event = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.report_focus_in()
-        } else {
-            Vec::new()
-        };
-        Ok(event)
-    }
-
-    /// Get focus out event sequence
-    ///
-    /// Returns the escape sequence to send when terminal loses focus.
-    /// Only relevant when focus tracking is enabled (CSI ? 1004 h).
-    ///
-    /// Returns:
-    ///     Bytes for focus out event: b'\x1b[O'
-    fn get_focus_out_event(&self) -> PyResult<Vec<u8>> {
-        let terminal = self.inner.terminal();
-        let event = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.report_focus_out()
-        } else {
-            Vec::new()
-        };
-        Ok(event)
-    }
+    // get_focus_in_event, get_focus_out_event: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // bracketed_paste: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
-    /// Get bracketed paste start sequence
-    ///
-    /// Returns:
-    ///     Bytes for paste start (if bracketed paste is enabled)
-    fn get_paste_start(&self) -> PyResult<Vec<u8>> {
-        let terminal = self.inner.terminal();
-        let sequence = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.bracketed_paste_start().to_vec()
-        } else {
-            Vec::new()
-        };
-        Ok(sequence)
-    }
-
-    /// Get bracketed paste end sequence
-    ///
-    /// Returns:
-    ///     Bytes for paste end (if bracketed paste is enabled)
-    fn get_paste_end(&self) -> PyResult<Vec<u8>> {
-        let terminal = self.inner.terminal();
-        let sequence = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.bracketed_paste_end().to_vec()
-        } else {
-            Vec::new()
-        };
-        Ok(sequence)
-    }
+    // get_paste_start, get_paste_end: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     /// Paste text content into terminal with bracketed paste support
     ///
@@ -1360,25 +1111,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get shell integration state
-    ///
-    /// Returns:
-    ///     Dictionary with shell integration info
-    fn shell_integration_state(&self) -> PyResult<PyShellIntegration> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        let si = term.shell_integration();
-        Ok(PyShellIntegration {
-            in_prompt: si.in_prompt(),
-            in_command_input: si.in_command_input(),
-            in_command_output: si.in_command_output(),
-            current_command: si.command().map(|s| s.to_string()),
-            last_exit_code: si.exit_code(),
-            cwd: si.cwd().map(|s| s.to_string()),
-            hostname: si.hostname().map(|s| s.to_string()),
-            username: si.username().map(|s| s.to_string()),
-        })
-    }
+    // shell_integration_state: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // current_directory: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
@@ -1400,39 +1133,8 @@ impl PyPtyTerminal {
 
     // char_width: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Check if insecure sequence filtering is enabled
-    ///
-    /// Returns:
-    ///     True if insecure sequences are blocked, False otherwise
-    fn disable_insecure_sequences(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let disabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.disable_insecure_sequences()
-        } else {
-            false // Default
-        };
-        Ok(disabled)
-    }
-
-    /// Set whether to filter potentially insecure escape sequences
-    ///
-    /// When enabled, certain sequences that could pose security risks are blocked:
-    /// - OSC 52 (clipboard operations - can leak data)
-    /// - OSC 8 (hyperlinks - can be used for phishing)
-    /// - OSC 9/777 (notifications - can be annoying/misleading)
-    /// - Sixel graphics (can consume excessive memory)
-    ///
-    /// When disabled (default), all standard sequences are processed normally.
-    ///
-    /// Args:
-    ///     disable: True to block insecure sequences, False to allow (default)
-    fn set_disable_insecure_sequences(&mut self, disable: bool) -> PyResult<()> {
-        let terminal = self.inner.terminal();
-        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
-            term.set_disable_insecure_sequences(disable);
-        }
-        Ok(())
-    }
+    // disable_insecure_sequences, set_disable_insecure_sequences:
+    //   provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     /// Get current debug information as a dictionary
     ///
@@ -1508,9 +1210,7 @@ impl PyPtyTerminal {
         ))
     }
 
-    fn __str__(&self) -> PyResult<String> {
-        Ok(self.inner.content())
-    }
+    // __str__: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
     // Context manager support
     fn __enter__(slf: PyRef<'_, Self>) -> PyResult<PyRef<'_, Self>> {
@@ -1531,55 +1231,8 @@ impl PyPtyTerminal {
     }
 
     // ========== Text Extraction Utilities ==========
-
-    /// Get word at cursor position
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///     word_chars: Optional custom word characters (default: "/-+\\~_." iTerm2-compatible)
-    ///
-    /// Returns:
-    ///     Word at position or None if not on a word
-    fn get_word_at(
-        &self,
-        col: usize,
-        row: usize,
-        word_chars: Option<&str>,
-    ) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.get_word_at(col, row, word_chars))
-    }
-
-    /// Get URL at cursor position
-    ///
-    /// Detects URLs with schemes: http://, https://, ftp://, file://, mailto:, ssh://
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///
-    /// Returns:
-    ///     URL at position or None if not on a URL
-    fn get_url_at(&self, col: usize, row: usize) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.get_url_at(col, row))
-    }
-
-    /// Get full logical line following wrapping
-    ///
-    /// Args:
-    ///     row: Row position (0-indexed)
-    ///
-    /// Returns:
-    ///     Complete unwrapped line or None if row is invalid
-    fn get_line_unwrapped(&self, row: usize) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.get_line_unwrapped(row))
-    }
+    // get_word_at, get_url_at, get_line_unwrapped:
+    //   provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
     /// Get word boundaries at cursor position for smart selection
     ///

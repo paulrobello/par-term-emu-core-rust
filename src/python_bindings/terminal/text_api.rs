@@ -9,49 +9,8 @@ use super::PyTerminal;
 #[pymethods]
 impl PyTerminal {
     // ========== Text Extraction Utilities ==========
-
-    /// Get word at cursor position
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///     word_chars: Optional custom word characters (default: "/-+\\~_." iTerm2-compatible)
-    ///
-    /// Returns:
-    ///     Word at position or None if not on a word
-    fn get_word_at(
-        &self,
-        col: usize,
-        row: usize,
-        word_chars: Option<&str>,
-    ) -> PyResult<Option<String>> {
-        Ok(self.inner.get_word_at(col, row, word_chars))
-    }
-
-    /// Get URL at cursor position
-    ///
-    /// Detects URLs with schemes: http://, https://, ftp://, file://, mailto:, ssh://
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///
-    /// Returns:
-    ///     URL at position or None if not on a URL
-    fn get_url_at(&self, col: usize, row: usize) -> PyResult<Option<String>> {
-        Ok(self.inner.get_url_at(col, row))
-    }
-
-    /// Get full logical line following wrapping
-    ///
-    /// Args:
-    ///     row: Row position (0-indexed)
-    ///
-    /// Returns:
-    ///     Complete unwrapped line or None if row is invalid
-    fn get_line_unwrapped(&self, row: usize) -> PyResult<Option<String>> {
-        Ok(self.inner.get_line_unwrapped(row))
-    }
+    // get_word_at, get_url_at, get_line_unwrapped:
+    //   provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
     /// Get word boundaries at cursor position for smart selection
     ///
