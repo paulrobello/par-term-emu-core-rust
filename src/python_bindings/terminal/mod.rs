@@ -56,6 +56,8 @@ crate::impl_terminal_color_setters!(PyTerminal);
 crate::impl_terminal_state_setters!(PyTerminal);
 crate::impl_terminal_static_helpers!(PyTerminal);
 crate::impl_terminal_sixel_graphics!(PyTerminal);
+crate::impl_terminal_badge_session!(PyTerminal);
+crate::impl_terminal_progress_notifications!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -1287,123 +1289,9 @@ impl PyTerminal {
 
     // Device query response methods
 
-    /// Drain and return pending device query responses
-    ///
-    /// Device queries like DA (Device Attributes) and DSR (Device Status Report)
-    /// generate responses that are buffered. This method retrieves and clears them.
-    ///
-    /// Returns:
-    ///     Bytes containing all pending responses
-    fn drain_responses(&mut self) -> PyResult<Vec<u8>> {
-        Ok(self.inner.drain_responses())
-    }
-
-    /// Check if there are pending device query responses
-    ///
-    /// Returns:
-    ///     True if there are responses waiting to be retrieved
-    fn has_pending_responses(&self) -> PyResult<bool> {
-        Ok(self.inner.has_pending_responses())
-    }
-
-    // Notification methods (OSC 9 / OSC 777)
-
-    /// Check if there are pending notifications
-    ///
-    /// Returns:
-    ///     True if there are notifications waiting to be retrieved
-    fn has_notifications(&self) -> PyResult<bool> {
-        Ok(self.inner.has_notifications())
-    }
-
-    /// Get all pending notifications
-    ///
-    /// Returns a list of tuples: [(title, message), ...]
-    /// For OSC 9 notifications, title will be empty string.
-    /// Clears the notification queue after retrieval.
-    ///
-    /// Returns:
-    ///     List of (title, message) tuples
-    fn take_notifications(&mut self) -> PyResult<Vec<(String, String)>> {
-        let notifications = self.inner.take_notifications();
-        Ok(notifications
-            .into_iter()
-            .map(|n| (n.title, n.message))
-            .collect())
-    }
-
-    /// Get all pending notifications (alias for take_notifications)
-    ///
-    /// Returns a list of tuples: [(title, message), ...]
-    /// Clears the notification queue after retrieval.
-    ///
-    /// Returns:
-    ///     List of (title, message) tuples
-    fn drain_notifications(&mut self) -> PyResult<Vec<(String, String)>> {
-        self.take_notifications()
-    }
-
-    // Progress bar methods (OSC 9;4 - ConEmu/Windows Terminal style)
-
-    /// Get the current progress bar state
-    ///
-    /// Returns the progress bar state set via OSC 9;4 sequences.
-    /// The progress bar has a state (hidden, normal, indeterminate, warning, error)
-    /// and a percentage (0-100) for states that support it.
-    ///
-    /// Returns:
-    ///     ProgressBar object with state and progress fields
-    fn progress_bar(&self) -> PyResult<super::types::PyProgressBar> {
-        Ok(self.inner.progress_bar().into())
-    }
-
-    /// Check if the progress bar is currently active (visible)
-    ///
-    /// Returns:
-    ///     True if the progress bar is in any state other than Hidden
-    fn has_progress(&self) -> PyResult<bool> {
-        Ok(self.inner.has_progress())
-    }
-
-    /// Get the current progress percentage (0-100)
-    ///
-    /// Returns the progress percentage. Only meaningful when the progress bar
-    /// state is Normal, Warning, or Error.
-    ///
-    /// Returns:
-    ///     Progress percentage (0-100)
-    fn progress_value(&self) -> PyResult<u8> {
-        Ok(self.inner.progress_value())
-    }
-
-    /// Get the current progress bar state enum
-    ///
-    /// Returns:
-    ///     ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
-    fn progress_state(&self) -> PyResult<super::enums::PyProgressState> {
-        Ok(self.inner.progress_state().into())
-    }
-
-    /// Manually set the progress bar state
-    ///
-    /// This can be used to programmatically control the progress bar
-    /// without receiving OSC 9;4 sequences.
-    ///
-    /// Args:
-    ///     state: ProgressState enum value
-    ///     progress: Progress percentage (0-100, clamped if out of range)
-    fn set_progress(&mut self, state: super::enums::PyProgressState, progress: u8) -> PyResult<()> {
-        self.inner.set_progress(state.into(), progress);
-        Ok(())
-    }
-
-    /// Clear/hide the progress bar
-    ///
-    /// Equivalent to receiving OSC 9;4;0 (hidden state).
-    fn clear_progress(&mut self) -> PyResult<()> {
-        self.inner.clear_progress();
-        Ok(())
-    }
+    // drain_responses, has_pending_responses, has_notifications, take_notifications,
+    // drain_notifications, progress_bar, has_progress, progress_value, progress_state,
+    // set_progress, clear_progress: provided by impl_terminal_progress_notifications! (ARC-003/QA-001)
 
     // Named progress bar methods (OSC 934)
 

@@ -807,3 +807,295 @@ macro_rules! impl_terminal_sixel_graphics {
         }
     };
 }
+
+/// Emit badge / session-variable methods for `$ty`. (ARC-003/QA-001 batch:
+/// badge API.) `set_badge_color` already lives in `impl_terminal_color_setters!`.
+#[macro_export]
+macro_rules! impl_terminal_badge_session {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get the current badge format template
+            ///
+            /// Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
+            /// The format may contain `\(variable)` placeholders for session variables.
+            ///
+            /// Returns:
+            ///     Optional string containing the badge format template, or None if not set
+            fn badge_format(&self) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.badge_format().map(|s| s.to_string()))
+            }
+
+            /// Set the badge format template
+            ///
+            /// This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
+            /// The format string should contain `\(variable)` placeholders.
+            ///
+            /// Args:
+            ///     format: The badge format template string, or None to clear
+            fn set_badge_format(&mut self, format: Option<String>) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_badge_format(format);
+                Ok(())
+            }
+
+            /// Clear the badge format
+            ///
+            /// Removes any previously set badge format template.
+            fn clear_badge_format(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.clear_badge_format();
+                Ok(())
+            }
+
+            /// Evaluate the current badge format with session variables
+            ///
+            /// Returns the evaluated badge string with all variables substituted,
+            /// or None if no badge format is set.
+            ///
+            /// Returns:
+            ///     Evaluated badge string with variables replaced, or None
+            fn evaluate_badge(&self) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.evaluate_badge())
+            }
+
+            /// Get a session variable value by name
+            ///
+            /// Session variables are used for badge format evaluation.
+            /// Supports both `session.variable` and just `variable` syntax.
+            ///
+            /// Args:
+            ///     name: Variable name (e.g., "username", "hostname", "session.path")
+            ///
+            /// Returns:
+            ///     Variable value as string, or None if not set
+            fn get_badge_session_variable(&self, name: &str) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.session_variables().get(name))
+            }
+
+            /// Set a session variable for badge format evaluation
+            ///
+            /// Sets a custom session variable that can be referenced in badge formats.
+            ///
+            /// Args:
+            ///     name: Variable name
+            ///     value: Variable value
+            fn set_badge_session_variable(
+                &mut self,
+                name: &str,
+                value: &str,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.session_variables_mut().set_custom(name, value);
+                Ok(())
+            }
+
+            /// Get all session variables as a dictionary
+            ///
+            /// Returns all session variables that can be used in badge evaluation,
+            /// including built-in variables like columns, rows, bell_count, etc.
+            ///
+            /// Returns:
+            ///     Dictionary mapping variable names to their string values
+            fn get_badge_session_variables(
+                &self,
+            ) -> pyo3::PyResult<std::collections::HashMap<String, String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let vars = t.session_variables();
+                let mut result = std::collections::HashMap::new();
+
+                // Add built-in variables
+                if let Some(hostname) = &vars.hostname {
+                    result.insert("hostname".to_string(), hostname.clone());
+                }
+                if let Some(username) = &vars.username {
+                    result.insert("username".to_string(), username.clone());
+                }
+                if let Some(path) = &vars.path {
+                    result.insert("path".to_string(), path.clone());
+                }
+                if let Some(job) = &vars.job {
+                    result.insert("job".to_string(), job.clone());
+                }
+                if let Some(last_command) = &vars.last_command {
+                    result.insert("last_command".to_string(), last_command.clone());
+                }
+                if let Some(profile_name) = &vars.profile_name {
+                    result.insert("profile_name".to_string(), profile_name.clone());
+                }
+                if let Some(tty) = &vars.tty {
+                    result.insert("tty".to_string(), tty.clone());
+                }
+                if let Some(selection) = &vars.selection {
+                    result.insert("selection".to_string(), selection.clone());
+                }
+                if let Some(tmux_pane_title) = &vars.tmux_pane_title {
+                    result.insert("tmux_pane_title".to_string(), tmux_pane_title.clone());
+                }
+                if let Some(session_name) = &vars.session_name {
+                    result.insert("session_name".to_string(), session_name.clone());
+                }
+                if let Some(title) = &vars.title {
+                    result.insert("title".to_string(), title.clone());
+                }
+
+                // Always include dimension and bell count
+                result.insert("columns".to_string(), vars.columns.to_string());
+                result.insert("rows".to_string(), vars.rows.to_string());
+                result.insert("bell_count".to_string(), vars.bell_count.to_string());
+
+                // Add custom variables
+                for (k, v) in &vars.custom {
+                    result.insert(k.clone(), v.clone());
+                }
+
+                Ok(result)
+            }
+        }
+    };
+}
+
+/// Emit progress-bar (OSC 9;4) and notification (OSC 9 / OSC 777) methods
+/// plus device-query response drainers for `$ty`. (ARC-003/QA-001 batch.)
+#[macro_export]
+macro_rules! impl_terminal_progress_notifications {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Drain and return pending device query responses
+            ///
+            /// Device queries like DA (Device Attributes) and DSR (Device Status Report)
+            /// generate responses that are buffered. This method retrieves and clears them.
+            ///
+            /// Returns:
+            ///     Bytes containing all pending responses
+            fn drain_responses(&mut self) -> pyo3::PyResult<Vec<u8>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.drain_responses())
+            }
+
+            /// Check if there are pending device query responses
+            ///
+            /// Returns:
+            ///     True if there are responses waiting to be retrieved
+            fn has_pending_responses(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.has_pending_responses())
+            }
+
+            /// Check if there are pending notifications
+            ///
+            /// Returns:
+            ///     True if there are notifications waiting to be retrieved
+            fn has_notifications(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.has_notifications())
+            }
+
+            /// Get all pending notifications
+            ///
+            /// Returns a list of tuples: [(title, message), ...]
+            /// For OSC 9 notifications, title will be empty string.
+            /// Clears the notification queue after retrieval.
+            ///
+            /// Returns:
+            ///     List of (title, message) tuples
+            fn take_notifications(&mut self) -> pyo3::PyResult<Vec<(String, String)>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                let notifications = t.take_notifications();
+                Ok(notifications
+                    .into_iter()
+                    .map(|n| (n.title, n.message))
+                    .collect())
+            }
+
+            /// Get all pending notifications (alias for take_notifications)
+            ///
+            /// Returns a list of tuples: [(title, message), ...]
+            /// Clears the notification queue after retrieval.
+            ///
+            /// Returns:
+            ///     List of (title, message) tuples
+            fn drain_notifications(&mut self) -> pyo3::PyResult<Vec<(String, String)>> {
+                self.take_notifications()
+            }
+
+            /// Get the current progress bar state
+            ///
+            /// Returns the progress bar state set via OSC 9;4 sequences.
+            /// The progress bar has a state (hidden, normal, indeterminate, warning, error)
+            /// and a percentage (0-100) for states that support it.
+            ///
+            /// Returns:
+            ///     ProgressBar object with state and progress fields
+            fn progress_bar(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::types::PyProgressBar> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.progress_bar().into())
+            }
+
+            /// Check if the progress bar is currently active (visible)
+            ///
+            /// Returns:
+            ///     True if the progress bar is in any state other than Hidden
+            fn has_progress(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.has_progress())
+            }
+
+            /// Get the current progress percentage (0-100)
+            ///
+            /// Returns the progress percentage. Only meaningful when the progress bar
+            /// state is Normal, Warning, or Error.
+            ///
+            /// Returns:
+            ///     Progress percentage (0-100)
+            fn progress_value(&self) -> pyo3::PyResult<u8> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.progress_value())
+            }
+
+            /// Get the current progress bar state enum
+            ///
+            /// Returns:
+            ///     ProgressState enum value (Hidden, Normal, Indeterminate, Warning, Error)
+            fn progress_state(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::enums::PyProgressState> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.progress_state().into())
+            }
+
+            /// Manually set the progress bar state
+            ///
+            /// This can be used to programmatically control the progress bar
+            /// without receiving OSC 9;4 sequences.
+            ///
+            /// Args:
+            ///     state: ProgressState enum value
+            ///     progress: Progress percentage (0-100, clamped if out of range)
+            fn set_progress(
+                &mut self,
+                state: $crate::python_bindings::enums::PyProgressState,
+                progress: u8,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_progress(state.into(), progress);
+                Ok(())
+            }
+
+            /// Clear/hide the progress bar
+            ///
+            /// Equivalent to receiving OSC 9;4;0 (hidden state).
+            fn clear_progress(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.clear_progress();
+                Ok(())
+            }
+        }
+    };
+}
