@@ -336,6 +336,18 @@ pub(crate) struct NotificationState {
     pub(crate) custom_triggers: HashMap<u32, String>,
 }
 
+/// Terminal replay/recording state (Feature 24).
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct RecordingState {
+    /// Current recording session
+    pub(crate) recording_session: Option<RecordingSession>,
+    /// Recording active flag
+    pub(crate) is_recording: bool,
+    /// Recording start timestamp (for relative timing)
+    pub(crate) recording_start_time: u64,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -587,12 +599,8 @@ pub struct Terminal {
     pub(crate) max_cwd_history: usize,
 
     // === Feature 24: Terminal Replay/Recording ===
-    /// Current recording session
-    pub(crate) recording_session: Option<RecordingSession>,
-    /// Recording active flag
-    pub(crate) is_recording: bool,
-    /// Recording start timestamp (for relative timing)
-    pub(crate) recording_start_time: u64,
+    /// Recording session, active flag, start timestamp (ARC-001 sub-struct)
+    pub(crate) recording_state: RecordingState,
 
     // === Feature 38: Macro Recording and Playback ===
     /// Macro library and playback state (ARC-001 sub-struct)
@@ -839,9 +847,11 @@ impl Terminal {
                 custom_triggers: HashMap::new(),
             },
             // Replay/Recording
-            recording_session: None,
-            is_recording: false,
-            recording_start_time: 0,
+            recording_state: RecordingState {
+                recording_session: None,
+                is_recording: false,
+                recording_start_time: 0,
+            },
             // Macros
             macros: MacroState {
                 macro_library: HashMap::new(),
@@ -2284,7 +2294,7 @@ impl Terminal {
 
     /// Process incoming data from the PTY
     pub fn process(&mut self, data: &[u8]) {
-        if self.is_recording {
+        if self.recording_state.is_recording {
             self.record_event(RecordingEventType::Output, data.to_vec());
         }
 

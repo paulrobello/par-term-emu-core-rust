@@ -91,7 +91,7 @@ impl Terminal {
             env.insert("CWD".to_string(), cwd.to_string());
         }
 
-        self.recording_session = Some(RecordingSession {
+        self.recording_state.recording_session = Some(RecordingSession {
             id: uuid::Uuid::new_v4().to_string(),
             title: title.unwrap_or_else(|| self.title().to_string()),
             initial_size: (cols, rows),
@@ -100,26 +100,28 @@ impl Terminal {
             duration: 0,
             created_at: crate::terminal::unix_millis(),
         });
-        self.is_recording = true;
-        self.recording_start_time = crate::terminal::unix_millis();
+        self.recording_state.is_recording = true;
+        self.recording_state.recording_start_time = crate::terminal::unix_millis();
     }
 
     /// Stop recording terminal session
     pub fn stop_recording(&mut self) -> Option<RecordingSession> {
-        self.is_recording = false;
-        let mut session = self.recording_session.take()?;
-        session.duration = crate::terminal::unix_millis() - self.recording_start_time;
+        self.recording_state.is_recording = false;
+        let mut session = self.recording_state.recording_session.take()?;
+        session.duration =
+            crate::terminal::unix_millis() - self.recording_state.recording_start_time;
         Some(session)
     }
 
     /// Record an event
     pub fn record_event(&mut self, event_type: RecordingEventType, data: Vec<u8>) {
-        if !self.is_recording {
+        if !self.recording_state.is_recording {
             return;
         }
 
-        if let Some(ref mut session) = self.recording_session {
-            let timestamp = crate::terminal::unix_millis() - self.recording_start_time;
+        if let Some(ref mut session) = self.recording_state.recording_session {
+            let timestamp =
+                crate::terminal::unix_millis() - self.recording_state.recording_start_time;
             session.events.push(RecordingEvent {
                 timestamp,
                 event_type,
@@ -131,12 +133,12 @@ impl Terminal {
 
     /// Check if recording is active
     pub fn is_recording(&self) -> bool {
-        self.is_recording
+        self.recording_state.is_recording
     }
 
     /// Get current recording session (if any)
     pub fn get_recording_session(&self) -> Option<&RecordingSession> {
-        self.recording_session.as_ref()
+        self.recording_state.recording_session.as_ref()
     }
 
     /// Export a recording session to asciicast format
@@ -202,12 +204,13 @@ impl Terminal {
 
     /// Record a resize event
     pub fn record_resize(&mut self, cols: usize, rows: usize) {
-        if !self.is_recording {
+        if !self.recording_state.is_recording {
             return;
         }
 
-        if let Some(ref mut session) = self.recording_session {
-            let timestamp = crate::terminal::unix_millis() - self.recording_start_time;
+        if let Some(ref mut session) = self.recording_state.recording_session {
+            let timestamp =
+                crate::terminal::unix_millis() - self.recording_state.recording_start_time;
             session.events.push(RecordingEvent {
                 timestamp,
                 event_type: RecordingEventType::Resize,
@@ -267,7 +270,7 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         term.start_recording(None);
 
-        let start_time = term.recording_start_time;
+        let start_time = term.recording_state.recording_start_time;
 
         // Record events with small delays
         term.record_input(b"echo hello");
