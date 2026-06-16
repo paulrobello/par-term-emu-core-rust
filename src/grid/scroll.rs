@@ -39,7 +39,7 @@ impl Grid {
                 self.scrollback_cells[dst_start..dst_end]
                     .clone_from_slice(&self.cells[src_start..src_end]);
                 self.scrollback_wrapped[write_idx] = is_wrapped;
-                self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
+                self.advance_scrollback_head();
             }
         }
     }
@@ -310,7 +310,7 @@ impl Grid {
                         self.scrollback_cells[sb_start..sb_start + new_cols]
                             .clone_from_slice(row_cells);
                         self.scrollback_wrapped[physical_index] = is_wrapped;
-                        self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
+                        self.advance_scrollback_head();
                     }
                 }
             }

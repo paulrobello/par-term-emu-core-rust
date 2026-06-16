@@ -160,10 +160,23 @@ impl Grid {
         }
     }
 
+    /// Physical index into `scrollback_cells` for a logical scrollback line
+    /// (0 = oldest). Centralized circular-buffer math (ARC-026).
+    #[inline]
+    fn scrollback_physical_index(&self, logical: usize) -> usize {
+        (self.scrollback_start + logical) % self.max_scrollback
+    }
+
+    /// Advance the circular-buffer write head by one (ARC-026).
+    #[inline]
+    fn advance_scrollback_head(&mut self) {
+        self.scrollback_start = (self.scrollback_start + 1) % self.max_scrollback;
+    }
+
     /// Get a line from scrollback by index
     pub fn scrollback_line(&self, index: usize) -> Option<&[Cell]> {
         if index < self.scrollback_lines {
-            let physical_index = (self.scrollback_start + index) % self.max_scrollback;
+            let physical_index = self.scrollback_physical_index(index);
             let start = physical_index * self.cols;
             let end = start + self.cols;
             Some(&self.scrollback_cells[start..end])
@@ -175,7 +188,7 @@ impl Grid {
     /// Check if a scrollback line is wrapped
     pub fn is_scrollback_wrapped(&self, index: usize) -> bool {
         if index < self.scrollback_lines {
-            let physical_index = (self.scrollback_start + index) % self.max_scrollback;
+            let physical_index = self.scrollback_physical_index(index);
             self.scrollback_wrapped
                 .get(physical_index)
                 .copied()
