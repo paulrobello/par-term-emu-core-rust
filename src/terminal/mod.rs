@@ -139,6 +139,11 @@ impl Charset {
 const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
 const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
 const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
+/// Maximum number of unpolled terminal events retained (ARC-006). Past this,
+/// the oldest events are evicted to bound memory under sustained output when
+/// the host polls infrequently. Events already dispatched to observers are
+/// evicted first; only under extreme load are not-yet-dispatched events dropped.
+const MAX_TERMINAL_EVENTS: usize = 10_000;
 const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// Hard upper limit for clipboard content (10 MB), regardless of configured max_bytes
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
@@ -2583,6 +2588,26 @@ impl Terminal {
         }
 
         self.dispatch_events();
+        self.cap_terminal_events();
+    }
+
+    /// Evict the oldest terminal events when the queue exceeds the cap
+    /// (ARC-006). Bounds memory under sustained output when the host polls
+    /// infrequently; shifts `events_dispatched_up_to` so observer dispatch
+    /// stays consistent with the moved positions. Front (oldest) events are
+    /// dropped — preferentially ones already dispatched to observers.
+    fn cap_terminal_events(&mut self) {
+        let excess = self
+            .events
+            .terminal_events
+            .len()
+            .saturating_sub(MAX_TERMINAL_EVENTS);
+        if excess == 0 {
+            return;
+        }
+        self.events.terminal_events.drain(..excess);
+        self.events.events_dispatched_up_to =
+            self.events.events_dispatched_up_to.saturating_sub(excess);
     }
 
     /// Dispatch pending events to all registered observers.
@@ -2791,20 +2816,32 @@ impl Terminal {
         }
     }
 
+    /// Drain `events`, splitting each into either an extracted value (when
+    /// `try_extract` returns `Ok`) or a leftover event (`Err`). Powers the
+    /// typed `poll_*` methods so they can pull one event kind without
+    /// consuming the others, without copy-pasting the partition loop (ARC-006).
+    fn extract_terminal_events<T>(
+        events: Vec<TerminalEvent>,
+        mut try_extract: impl FnMut(TerminalEvent) -> Result<T, TerminalEvent>,
+    ) -> (Vec<T>, Vec<TerminalEvent>) {
+        let mut extracted = Vec::new();
+        let mut remaining = Vec::new();
+        for event in events {
+            match try_extract(event) {
+                Ok(value) => extracted.push(value),
+                Err(other) => remaining.push(other),
+            }
+        }
+        (extracted, remaining)
+    }
+
     /// Poll for CWD change events
     pub fn poll_cwd_events(&mut self) -> Vec<CwdChange> {
         let events = std::mem::take(&mut self.events.terminal_events);
-        let mut cwd_changes = Vec::new();
-        let mut remaining = Vec::new();
-
-        for event in events {
-            if let TerminalEvent::CwdChanged(change) = event {
-                cwd_changes.push(change);
-            } else {
-                remaining.push(event);
-            }
-        }
-
+        let (cwd_changes, remaining) = Self::extract_terminal_events(events, |event| match event {
+            TerminalEvent::CwdChanged(change) => Ok(change),
+            other => Err(other),
+        });
         self.events.terminal_events = remaining;
         cwd_changes
     }
@@ -2814,17 +2851,11 @@ impl Terminal {
     /// Returns all pending UploadRequested events and removes them from the queue.
     pub fn poll_upload_requests(&mut self) -> Vec<String> {
         let events = std::mem::take(&mut self.events.terminal_events);
-        let mut upload_formats = Vec::new();
-        let mut remaining = Vec::new();
-
-        for event in events {
-            if let TerminalEvent::UploadRequested { format } = event {
-                upload_formats.push(format);
-            } else {
-                remaining.push(event);
-            }
-        }
-
+        let (upload_formats, remaining) =
+            Self::extract_terminal_events(events, |event| match event {
+                TerminalEvent::UploadRequested { format } => Ok(format),
+                other => Err(other),
+            });
         self.events.terminal_events = remaining;
         upload_formats
     }
@@ -2832,24 +2863,17 @@ impl Terminal {
     /// Poll for shell integration events
     pub fn poll_shell_integration_events(&mut self) -> Vec<ShellEvent> {
         let events = std::mem::take(&mut self.events.terminal_events);
-        let mut shell_events = Vec::new();
-        let mut remaining = Vec::new();
-
-        for event in events {
-            if let TerminalEvent::ShellIntegrationEvent {
-                event_type,
-                command,
-                exit_code,
-                timestamp,
-                cursor_line,
-            } = event
-            {
-                shell_events.push((event_type, command, exit_code, timestamp, cursor_line));
-            } else {
-                remaining.push(event);
-            }
-        }
-
+        let (shell_events, remaining) =
+            Self::extract_terminal_events(events, |event| match event {
+                TerminalEvent::ShellIntegrationEvent {
+                    event_type,
+                    command,
+                    exit_code,
+                    timestamp,
+                    cursor_line,
+                } => Ok((event_type, command, exit_code, timestamp, cursor_line)),
+                other => Err(other),
+            });
         self.events.terminal_events = remaining;
         shell_events
     }
@@ -2861,17 +2885,11 @@ impl Terminal {
     /// only the visible screen was cleared (ESC[2J).
     pub fn poll_screen_cleared_events(&mut self) -> Vec<bool> {
         let events = std::mem::take(&mut self.events.terminal_events);
-        let mut cleared_events = Vec::new();
-        let mut remaining = Vec::new();
-
-        for event in events {
-            if let TerminalEvent::ScreenCleared { include_scrollback } = event {
-                cleared_events.push(include_scrollback);
-            } else {
-                remaining.push(event);
-            }
-        }
-
+        let (cleared_events, remaining) =
+            Self::extract_terminal_events(events, |event| match event {
+                TerminalEvent::ScreenCleared { include_scrollback } => Ok(include_scrollback),
+                other => Err(other),
+            });
         self.events.terminal_events = remaining;
         cleared_events
     }
