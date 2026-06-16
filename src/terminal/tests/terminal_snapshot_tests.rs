@@ -219,9 +219,9 @@ fn test_snapshot_title() {
 
     // Change title
     term.process(b"\x1b]0;Changed\x07");
-    assert_eq!(term.title, "Changed");
+    assert_eq!(term.title_state.title, "Changed");
 
     // Restore
     term.restore_from_snapshot(snap.clone());
-    assert_eq!(term.title, "My Title");
+    assert_eq!(term.title_state.title, "My Title");
 }

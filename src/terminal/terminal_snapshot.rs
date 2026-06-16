@@ -194,7 +194,7 @@ impl Terminal {
             saved_bg: self.saved_bg,
             saved_underline_color: self.saved_underline_color,
             saved_flags: self.saved_flags,
-            title: self.title.clone(),
+            title: self.title_state.title.clone(),
             auto_wrap: self.auto_wrap,
             origin_mode: self.origin_mode,
             insert_mode: self.insert_mode,
@@ -238,7 +238,7 @@ impl Terminal {
         self.saved_bg = snap.saved_bg;
         self.saved_underline_color = snap.saved_underline_color;
         self.saved_flags = snap.saved_flags;
-        self.title = snap.title;
+        self.title_state.title = snap.title;
         self.auto_wrap = snap.auto_wrap;
         self.origin_mode = snap.origin_mode;
         self.insert_mode = snap.insert_mode;

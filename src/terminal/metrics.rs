@@ -410,7 +410,7 @@ impl Terminal {
             hyperlink_count: self.hyperlinks.len(),
             hyperlink_memory_bytes: 0, // Should be calculated
             color_stack_depth: self.color_stack.len(),
-            title_stack_depth: self.title_stack.len(),
+            title_stack_depth: self.title_state.title_stack.len(),
             keyboard_stack_depth: self.keyboard_state.keyboard_stack.len(),
             response_buffer_size: self.response_buffer.len(),
             dirty_row_count: self.dirty_rows.len(),

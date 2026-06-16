@@ -229,12 +229,12 @@ impl Terminal {
                     }
                     22 => {
                         // Push icon name and window title to stack
-                        self.title_stack.push(self.title.clone());
+                        self.title_state.title_stack.push(self.title_state.title.clone());
                     }
                     23 => {
                         // Pop icon name and window title from stack
-                        if let Some(title) = self.title_stack.pop() {
-                            self.title = title;
+                        if let Some(title) = self.title_state.title_stack.pop() {
+                            self.title_state.title = title;
                         }
                     }
                     _ => {}

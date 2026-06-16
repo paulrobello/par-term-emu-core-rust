@@ -376,6 +376,20 @@ pub(crate) struct SyncState {
     pub(crate) sync_update_explicitly_disabled: bool,
 }
 
+/// Window title, title stack, and answerback string.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct TitleState {
+    /// Terminal title
+    pub(crate) title: String,
+    /// Window title stack for XTWINOPS 22/23 (push/pop title)
+    pub(crate) title_stack: Vec<String>,
+    /// Answerback string sent in response to ENQ (0x05).
+    /// Default: empty (no response) for security
+    /// Common values: "par-term", "vt100", or custom identification
+    pub(crate) answerback_string: Option<String>,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -403,8 +417,8 @@ pub struct Terminal {
     pub(crate) saved_bg: Color,
     pub(crate) saved_underline_color: Option<Color>,
     pub(crate) saved_flags: CellFlags,
-    /// Terminal title
-    pub(crate) title: String,
+    /// Window title, title stack, answerback string (ARC-001 sub-struct)
+    pub(crate) title_state: TitleState,
     /// Mouse tracking mode
     pub(crate) mouse_mode: MouseMode,
     /// Mouse encoding format
@@ -513,8 +527,6 @@ pub struct Terminal {
     pub(crate) reverse_video: bool,
     /// Bold brightening - when enabled, bold ANSI colors 0-7 brighten to 8-15
     pub(crate) bold_brightening: bool,
-    /// Window title stack for XTWINOPS 22/23 (push/pop title)
-    pub(crate) title_stack: Vec<String>,
     /// Accept OSC 7 directory tracking sequences
     pub(crate) accept_osc7: bool,
     /// Disable potentially insecure escape sequences
@@ -624,10 +636,7 @@ pub struct Terminal {
     pub(crate) macros: MacroState,
 
     // === Answerback String (ENQ response) ===
-    /// Answerback string sent in response to ENQ (0x05) control character
-    /// Default: empty (no response) for security
-    /// Common values: "par-term", "vt100", or custom identification
-    pub(crate) answerback_string: Option<String>,
+    /// Answerback handled by `title_state` (ARC-001 sub-struct)
 
     /// Unicode width configuration for character width calculations
     pub(crate) width_config: crate::unicode_width_config::WidthConfig,
@@ -701,7 +710,11 @@ impl Terminal {
             saved_bg: Color::Named(NamedColor::Black),
             saved_underline_color: None,
             saved_flags: CellFlags::default(),
-            title: String::new(),
+            title_state: TitleState {
+                title: String::new(),
+                title_stack: Vec::new(),
+                answerback_string: None,
+            },
             mouse_mode: MouseMode::Off,
             mouse_encoding: MouseEncoding::Default,
             focus_tracking: false,
@@ -764,7 +777,6 @@ impl Terminal {
             char_protected: false,
             reverse_video: false,
             bold_brightening: true, // iTerm2 default behavior
-            title_stack: Vec::new(),
             accept_osc7: true,
             disable_insecure_sequences: false,
             // iTerm2 default colors (matching Python implementation)
@@ -880,7 +892,6 @@ impl Terminal {
                 macro_screenshot_triggers: Vec::new(),
             },
             // Answerback
-            answerback_string: None,
             // Unicode
             width_config: crate::unicode_width_config::WidthConfig::default(),
             normalization_form: crate::unicode_normalization_config::NormalizationForm::default(),
@@ -1088,14 +1099,14 @@ impl Terminal {
 
     /// Get the title
     pub fn title(&self) -> &str {
-        &self.title
+        &self.title_state.title
     }
 
     /// Set the title
     pub fn set_title(&mut self, title: String) {
         // Also update session variables for badge evaluation
         self.session_variables.title = Some(title.clone());
-        self.title = title;
+        self.title_state.title = title;
     }
 
     // === Badge Format Support ===
@@ -1758,7 +1769,7 @@ impl Terminal {
 
     /// Get the answerback string sent in response to ENQ (0x05)
     pub fn answerback_string(&self) -> Option<&str> {
-        self.answerback_string.as_deref()
+        self.title_state.answerback_string.as_deref()
     }
 
     /// Set the answerback string sent in response to ENQ (0x05) control character
@@ -1774,7 +1785,7 @@ impl Terminal {
     /// # Arguments
     /// * `answerback` - The string to send, or None to disable
     pub fn set_answerback_string(&mut self, answerback: Option<String>) {
-        self.answerback_string = answerback;
+        self.title_state.answerback_string = answerback;
     }
 
     /// Get the current Unicode width configuration

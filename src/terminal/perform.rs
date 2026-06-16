@@ -45,7 +45,7 @@ impl Perform for Terminal {
             b'\x08' => self.write_char('\x08'),
             b'\x05' => {
                 // ENQ (Enquiry) - send answerback string if configured
-                if let Some(ref answerback) = self.answerback_string {
+                if let Some(ref answerback) = self.title_state.answerback_string {
                     self.response_buffer
                         .extend_from_slice(answerback.as_bytes());
                 }
