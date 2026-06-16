@@ -407,6 +407,16 @@ pub(crate) struct ShellState {
     pub(crate) in_command_output: bool,
 }
 
+/// Bookmark registry for quick navigation.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct BookmarksState {
+    /// Bookmarks for quick navigation
+    pub(crate) bookmarks: Vec<Bookmark>,
+    /// Next available bookmark ID
+    pub(crate) next_bookmark_id: usize,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -599,10 +609,8 @@ pub struct Terminal {
     pub(crate) next_zone_id: usize,
     /// Current selection state
     pub(crate) selection: Option<Selection>,
-    /// Bookmarks for quick navigation
-    pub(crate) bookmarks: Vec<Bookmark>,
-    /// Next available bookmark ID
-    pub(crate) next_bookmark_id: usize,
+    /// Bookmarks and next bookmark ID (ARC-001 sub-struct)
+    pub(crate) bookmarks_state: BookmarksState,
     /// Performance metrics and profiling state (ARC-001 sub-struct)
     pub(crate) profiling: ProfilingState,
     /// Clipboard history (multiple slots)
@@ -829,8 +837,10 @@ impl Terminal {
             next_zone_id: 0,
             // Selection and bookmarks
             selection: None,
-            bookmarks: Vec::new(),
-            next_bookmark_id: 0,
+            bookmarks_state: BookmarksState {
+                bookmarks: Vec::new(),
+                next_bookmark_id: 0,
+            },
             // Performance metrics
             profiling: ProfilingState {
                 metrics: PerformanceMetrics::default(),

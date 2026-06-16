@@ -769,8 +769,8 @@ impl Terminal {
     ///
     /// Returns the bookmark ID.
     pub fn add_bookmark(&mut self, row: isize, label: Option<String>) -> usize {
-        let id = self.next_bookmark_id;
-        self.next_bookmark_id += 1;
+        let id = self.bookmarks_state.next_bookmark_id;
+        self.bookmarks_state.next_bookmark_id += 1;
 
         let bookmark = Bookmark {
             id,
@@ -778,19 +778,24 @@ impl Terminal {
             label: label.unwrap_or_else(|| format!("Bookmark {}", id)),
         };
 
-        self.bookmarks.push(bookmark);
+        self.bookmarks_state.bookmarks.push(bookmark);
         id
     }
 
     /// Get all bookmarks
     pub fn get_bookmarks(&self) -> Vec<Bookmark> {
-        self.bookmarks.clone()
+        self.bookmarks_state.bookmarks.clone()
     }
 
     /// Remove a bookmark by ID
     pub fn remove_bookmark(&mut self, id: usize) -> bool {
-        if let Some(pos) = self.bookmarks.iter().position(|b| b.id == id) {
-            self.bookmarks.remove(pos);
+        if let Some(pos) = self
+            .bookmarks_state
+            .bookmarks
+            .iter()
+            .position(|b| b.id == id)
+        {
+            self.bookmarks_state.bookmarks.remove(pos);
             true
         } else {
             false
@@ -799,7 +804,7 @@ impl Terminal {
 
     /// Clear all bookmarks
     pub fn clear_bookmarks(&mut self) {
-        self.bookmarks.clear();
+        self.bookmarks_state.bookmarks.clear();
     }
 
     /// Get the terminal content as a string (visible area)
