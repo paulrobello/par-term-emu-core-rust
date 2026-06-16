@@ -582,6 +582,16 @@ pub(crate) struct CommandHistoryState {
     pub(crate) max_cwd_history: usize,
 }
 
+/// Progress bars (OSC 9;4 + named OSC 934) + bell event counter (ARC-001 sub-struct)
+pub(crate) struct ProgressBellState {
+    /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
+    pub(crate) progress_bar: ProgressBar,
+    /// Named progress bars from OSC 934 sequences (keyed by ID)
+    pub(crate) named_progress_bars: HashMap<String, NamedProgressBar>,
+    /// Bell event counter - incremented each time bell (BEL/\x07) is received
+    pub(crate) bell_count: u64,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -642,12 +652,8 @@ pub struct Terminal {
     pub(crate) theme: ColorThemeState,
     /// Notifications, config, events, silence/activity tracking (ARC-001 sub-struct)
     pub(crate) notifications_state: NotificationState,
-    /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
-    pub(crate) progress_bar: ProgressBar,
-    /// Named progress bars from OSC 934 sequences (keyed by ID)
-    pub(crate) named_progress_bars: HashMap<String, NamedProgressBar>,
-    /// Bell event counter - incremented each time bell (BEL/\x07) is received
-    pub(crate) bell_count: u64,
+    /// Progress bars + bell counter (ARC-001 sub-struct)
+    pub(crate) progress_state: ProgressBellState,
     /// VTE parser instance (maintains state across process() calls)
     pub(crate) parser: vte::Parser,
     /// Streaming state for the Kitty TGP APC pre-filter (vte 0.15 doesn't
@@ -886,9 +892,11 @@ impl Terminal {
                 smart_cursor_color: false,
                 faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
             },
-            progress_bar: ProgressBar::default(),
-            named_progress_bars: HashMap::new(),
-            bell_count: 0,
+            progress_state: ProgressBellState {
+                progress_bar: ProgressBar::default(),
+                named_progress_bars: HashMap::new(),
+                bell_count: 0,
+            },
             parser: vte::Parser::new(),
             apc_filter_state: ApcFilterState::default(),
             apc_buffer: Vec::new(),
@@ -2069,14 +2077,14 @@ impl Terminal {
     /// The progress bar has a state (hidden, normal, indeterminate, warning, error)
     /// and a percentage (0-100) for states that support it.
     pub fn progress_bar(&self) -> &ProgressBar {
-        &self.progress_bar
+        &self.progress_state.progress_bar
     }
 
     /// Check if the progress bar is currently active (visible)
     ///
     /// Returns true if the progress bar is in any state other than Hidden.
     pub fn has_progress(&self) -> bool {
-        self.progress_bar.is_active()
+        self.progress_state.progress_bar.is_active()
     }
 
     /// Get the current progress percentage (0-100)
@@ -2084,14 +2092,14 @@ impl Terminal {
     /// Returns the progress percentage. Only meaningful when the progress bar
     /// state is Normal, Warning, or Error.
     pub fn progress_value(&self) -> u8 {
-        self.progress_bar.progress
+        self.progress_state.progress_bar.progress
     }
 
     /// Get the current progress bar state
     ///
     /// Returns the state (Hidden, Normal, Indeterminate, Warning, Error).
     pub fn progress_state(&self) -> ProgressState {
-        self.progress_bar.state
+        self.progress_state.progress_bar.state
     }
 
     /// Manually set the progress bar state
@@ -2099,14 +2107,14 @@ impl Terminal {
     /// This can be used to programmatically control the progress bar
     /// without receiving OSC 9;4 sequences.
     pub fn set_progress(&mut self, state: ProgressState, progress: u8) {
-        self.progress_bar = ProgressBar::new(state, progress);
+        self.progress_state.progress_bar = ProgressBar::new(state, progress);
     }
 
     /// Clear/hide the progress bar
     ///
     /// Equivalent to receiving OSC 9;4;0.
     pub fn clear_progress(&mut self) {
-        self.progress_bar = ProgressBar::hidden();
+        self.progress_state.progress_bar = ProgressBar::hidden();
     }
 
     // Named progress bar methods (OSC 934)
@@ -2115,12 +2123,12 @@ impl Terminal {
     ///
     /// Returns the map of active named progress bars set via OSC 934 sequences.
     pub fn named_progress_bars(&self) -> &HashMap<String, NamedProgressBar> {
-        &self.named_progress_bars
+        &self.progress_state.named_progress_bars
     }
 
     /// Get a specific named progress bar by ID
     pub fn get_named_progress_bar(&self, id: &str) -> Option<&NamedProgressBar> {
-        self.named_progress_bars.get(id)
+        self.progress_state.named_progress_bars.get(id)
     }
 
     /// Set or update a named progress bar and emit an event
@@ -2129,7 +2137,9 @@ impl Terminal {
         let state = bar.state;
         let percent = bar.percent;
         let label = bar.label.clone();
-        self.named_progress_bars.insert(id.clone(), bar);
+        self.progress_state
+            .named_progress_bars
+            .insert(id.clone(), bar);
         self.terminal_events
             .push(TerminalEvent::ProgressBarChanged {
                 action: ProgressBarAction::Set,
@@ -2144,7 +2154,7 @@ impl Terminal {
     ///
     /// Returns true if the bar existed and was removed.
     pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
-        if self.named_progress_bars.remove(id).is_some() {
+        if self.progress_state.named_progress_bars.remove(id).is_some() {
             self.terminal_events
                 .push(TerminalEvent::ProgressBarChanged {
                     action: ProgressBarAction::Remove,
@@ -2161,8 +2171,8 @@ impl Terminal {
 
     /// Remove all named progress bars and emit an event
     pub fn remove_all_named_progress_bars(&mut self) {
-        if !self.named_progress_bars.is_empty() {
-            self.named_progress_bars.clear();
+        if !self.progress_state.named_progress_bars.is_empty() {
+            self.progress_state.named_progress_bars.clear();
             self.terminal_events
                 .push(TerminalEvent::ProgressBarChanged {
                     action: ProgressBarAction::RemoveAll,
@@ -2181,7 +2191,7 @@ impl Terminal {
     ///
     /// Returns the total number of bell events received since terminal creation.
     pub fn bell_count(&self) -> u64 {
-        self.bell_count
+        self.progress_state.bell_count
     }
 
     /// Get the grid with scrollback applied (for screenshots/export)

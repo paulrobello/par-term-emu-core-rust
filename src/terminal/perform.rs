@@ -52,7 +52,7 @@ impl Perform for Terminal {
             }
             b'\x07' => {
                 // Bell - increment counter for visual bell support
-                self.bell_count = self.bell_count.wrapping_add(1);
+                self.progress_state.bell_count = self.progress_state.bell_count.wrapping_add(1);
                 // Also increment in session variables for badge evaluation
                 self.session_variables.increment_bell_count();
                 // Add bell event based on volume settings

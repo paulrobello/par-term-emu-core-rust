@@ -66,7 +66,7 @@ impl Terminal {
             0
         };
 
-        self.progress_bar = ProgressBar::new(state, progress);
+        self.progress_state.progress_bar = ProgressBar::new(state, progress);
 
         debug::log(
             debug::DebugLevel::Debug,
