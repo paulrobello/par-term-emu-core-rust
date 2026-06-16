@@ -607,3 +607,203 @@ macro_rules! impl_terminal_state_setters {
         }
     };
 }
+
+/// Emit pure-function static utility helpers for `$ty`. These do not access
+/// the terminal at all (they wrap `crate::ansi_utils`); they are duplicated
+/// only for API symmetry. (ARC-003/QA-001 batch: static helpers.)
+#[macro_export]
+macro_rules! impl_terminal_static_helpers {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Strip ANSI escape sequences from text
+            ///
+            /// Args:
+            ///     text: Text containing ANSI codes
+            ///
+            /// Returns:
+            ///     Text with all ANSI sequences removed
+            #[staticmethod]
+            fn strip_ansi(text: &str) -> pyo3::PyResult<String> {
+                Ok($crate::ansi_utils::strip_ansi(text))
+            }
+
+            /// Measure text width without ANSI codes
+            ///
+            /// Accounts for wide characters (CJK, emoji) and strips ANSI sequences.
+            ///
+            /// Args:
+            ///     text: Text to measure
+            ///
+            /// Returns:
+            ///     Display width in columns
+            #[staticmethod]
+            fn measure_text_width(text: &str) -> pyo3::PyResult<usize> {
+                Ok($crate::ansi_utils::measure_text_width(text))
+            }
+
+            /// Parse color from string (hex, rgb, or name)
+            ///
+            /// Supported formats:
+            /// - Hex: "#RRGGBB" or "#RGB"
+            /// - RGB: "rgb(r, g, b)"
+            /// - Names: "red", "blue", "green", etc.
+            ///
+            /// Args:
+            ///     color_string: Color specification
+            ///
+            /// Returns:
+            ///     RGB tuple (r, g, b) or None if invalid
+            #[staticmethod]
+            fn parse_color(color_string: &str) -> pyo3::PyResult<Option<(u8, u8, u8)>> {
+                if let Some(color) = $crate::ansi_utils::parse_color(color_string) {
+                    Ok(Some(color.to_rgb()))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    };
+}
+
+/// Emit the Sixel resource-limit / graphics-query methods for `$ty`.
+/// (ARC-003/QA-001 batch: sixel + graphics.)
+#[macro_export]
+macro_rules! impl_terminal_sixel_graphics {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get graphics that overlap the specified row
+            ///
+            /// Args:
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     List of graphics that overlap the given row
+            fn graphics_at_row(
+                &self,
+                row: usize,
+            ) -> pyo3::PyResult<Vec<$crate::python_bindings::types::PyGraphic>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let graphics = t.graphics_at_row(row);
+                Ok(graphics
+                    .iter()
+                    .map(|g| $crate::python_bindings::types::PyGraphic::from(*g))
+                    .collect())
+            }
+
+            /// Get total number of graphics
+            ///
+            /// Returns:
+            ///     Total count of Sixel graphics
+            fn graphics_count(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.graphics_count())
+            }
+
+            /// Get all graphics
+            ///
+            /// Returns:
+            ///     List of all Sixel graphics
+            fn graphics(&self) -> pyo3::PyResult<Vec<$crate::python_bindings::types::PyGraphic>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let graphics = t.all_graphics();
+                Ok(graphics
+                    .iter()
+                    .map($crate::python_bindings::types::PyGraphic::from)
+                    .collect())
+            }
+
+            /// Clear all graphics
+            fn clear_graphics(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.clear_graphics();
+                Ok(())
+            }
+
+            /// Get Sixel resource limits (max width, height, repeat)
+            ///
+            /// Returns:
+            ///     Tuple of (max_width_px, max_height_px, max_repeat)
+            fn get_sixel_limits(&self) -> pyo3::PyResult<(usize, usize, usize)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let limits = t.sixel_limits();
+                Ok((limits.max_width, limits.max_height, limits.max_repeat))
+            }
+
+            /// Set Sixel resource limits (max width, height, repeat)
+            ///
+            /// Args:
+            ///     max_width: Maximum Sixel bitmap width in pixels
+            ///     max_height: Maximum Sixel bitmap height in pixels
+            ///     max_repeat: Maximum repeat count for !Pn sequences
+            ///
+            /// Limits are clamped to safe hard maxima at the Rust layer.
+            fn set_sixel_limits(
+                &mut self,
+                max_width: usize,
+                max_height: usize,
+                max_repeat: usize,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_sixel_limits(max_width, max_height, max_repeat);
+                Ok(())
+            }
+
+            /// Get maximum number of Sixel graphics retained
+            ///
+            /// Returns:
+            ///     Maximum number of in-memory Sixel graphics for this terminal
+            fn get_sixel_graphics_limit(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.max_sixel_graphics())
+            }
+
+            /// Set maximum number of Sixel graphics retained
+            ///
+            /// Args:
+            ///     max_graphics: Maximum number of in-memory Sixel graphics
+            ///
+            /// Oldest graphics are dropped if the new limit is lower than the
+            /// current number of graphics. The value is clamped to a safe range.
+            fn set_sixel_graphics_limit(&mut self, max_graphics: usize) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_max_sixel_graphics(max_graphics);
+                Ok(())
+            }
+
+            /// Get count of Sixel graphics dropped due to limits
+            ///
+            /// Returns:
+            ///     Number of Sixel graphics that have been dropped because of size or count limits
+            fn get_dropped_sixel_graphics(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.dropped_sixel_graphics())
+            }
+
+            /// Get Sixel statistics as a dictionary
+            ///
+            /// Returns:
+            ///     {
+            ///       "max_width_px": int,
+            ///       "max_height_px": int,
+            ///       "max_repeat": int,
+            ///       "max_graphics": int,
+            ///       "current_graphics": int,
+            ///       "dropped_graphics": int,
+            ///     }
+            fn get_sixel_stats(&self) -> pyo3::PyResult<std::collections::HashMap<String, usize>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let (limits, max_graphics, current_graphics, dropped_graphics) = t.sixel_stats();
+                let mut stats = std::collections::HashMap::new();
+                stats.insert("max_width_px".to_string(), limits.max_width);
+                stats.insert("max_height_px".to_string(), limits.max_height);
+                stats.insert("max_repeat".to_string(), limits.max_repeat);
+                stats.insert("max_graphics".to_string(), max_graphics);
+                stats.insert("current_graphics".to_string(), current_graphics);
+                stats.insert("dropped_graphics".to_string(), dropped_graphics);
+                Ok(stats)
+            }
+        }
+    };
+}

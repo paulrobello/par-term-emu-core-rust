@@ -31,7 +31,7 @@ use std::collections::HashMap;
 use crate::color::Color;
 
 use super::enums::{PyCursorStyle, PyMouseEncoding};
-use super::types::{LineCellData, PyAttributes, PyGraphic, PyScreenSnapshot, PyShellIntegration};
+use super::types::{LineCellData, PyAttributes, PyScreenSnapshot, PyShellIntegration};
 
 /// Python wrapper for the Terminal
 #[pyclass(name = "Terminal")]
@@ -54,6 +54,8 @@ impl crate::python_bindings::common::TerminalAccess for PyTerminal {
 crate::impl_terminal_query_getters!(PyTerminal);
 crate::impl_terminal_color_setters!(PyTerminal);
 crate::impl_terminal_state_setters!(PyTerminal);
+crate::impl_terminal_static_helpers!(PyTerminal);
+crate::impl_terminal_sixel_graphics!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -1226,41 +1228,8 @@ impl PyTerminal {
     }
 
     // Sixel graphics methods
-
-    /// Get graphics that overlap the specified row
-    ///
-    /// Args:
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     List of graphics that overlap the given row
-    fn graphics_at_row(&self, row: usize) -> PyResult<Vec<PyGraphic>> {
-        let graphics = self.inner.graphics_at_row(row);
-        Ok(graphics.iter().map(|g| PyGraphic::from(*g)).collect())
-    }
-
-    /// Get total number of graphics
-    ///
-    /// Returns:
-    ///     Total count of Sixel graphics
-    fn graphics_count(&self) -> PyResult<usize> {
-        Ok(self.inner.graphics_count())
-    }
-
-    /// Get all graphics
-    ///
-    /// Returns:
-    ///     List of all Sixel graphics
-    fn graphics(&self) -> PyResult<Vec<PyGraphic>> {
-        let graphics = self.inner.all_graphics();
-        Ok(graphics.iter().map(PyGraphic::from).collect())
-    }
-
-    /// Clear all graphics
-    fn clear_graphics(&mut self) -> PyResult<()> {
-        self.inner.clear_graphics();
-        Ok(())
-    }
+    // graphics_at_row, graphics_count, graphics, clear_graphics:
+    //   provided by impl_terminal_sixel_graphics! (ARC-003/QA-001)
 
     /// Export all graphics metadata as a JSON string for session persistence
     ///
@@ -1691,132 +1660,9 @@ impl PyTerminal {
     }
 
     // ========== Static Utility Methods ==========
-
-    /// Strip ANSI escape sequences from text
-    ///
-    /// Args:
-    ///     text: Text containing ANSI codes
-    ///
-    /// Returns:
-    ///     Text with all ANSI sequences removed
-    #[staticmethod]
-    fn strip_ansi(text: &str) -> PyResult<String> {
-        Ok(crate::ansi_utils::strip_ansi(text))
-    }
-
-    /// Measure text width without ANSI codes
-    ///
-    /// Accounts for wide characters (CJK, emoji) and strips ANSI sequences.
-    ///
-    /// Args:
-    ///     text: Text to measure
-    ///
-    /// Returns:
-    ///     Display width in columns
-    #[staticmethod]
-    fn measure_text_width(text: &str) -> PyResult<usize> {
-        Ok(crate::ansi_utils::measure_text_width(text))
-    }
-
-    /// Parse color from string (hex, rgb, or name)
-    ///
-    /// Supported formats:
-    /// - Hex: "#RRGGBB" or "#RGB"
-    /// - RGB: "rgb(r, g, b)"
-    /// - Names: "red", "blue", "green", etc.
-    ///
-    /// Args:
-    ///     color_string: Color specification
-    ///
-    /// Returns:
-    ///     RGB tuple (r, g, b) or None if invalid
-    #[staticmethod]
-    fn parse_color(color_string: &str) -> PyResult<Option<(u8, u8, u8)>> {
-        if let Some(color) = crate::ansi_utils::parse_color(color_string) {
-            Ok(Some(color.to_rgb()))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Get Sixel resource limits (max width, height, repeat)
-    ///
-    /// Returns:
-    ///     Tuple of (max_width_px, max_height_px, max_repeat)
-    fn get_sixel_limits(&self) -> PyResult<(usize, usize, usize)> {
-        let limits = self.inner.sixel_limits();
-        Ok((limits.max_width, limits.max_height, limits.max_repeat))
-    }
-
-    /// Set Sixel resource limits (max width, height, repeat)
-    ///
-    /// Args:
-    ///     max_width: Maximum Sixel bitmap width in pixels
-    ///     max_height: Maximum Sixel bitmap height in pixels
-    ///     max_repeat: Maximum repeat count for !Pn sequences
-    ///
-    /// Limits are clamped to safe hard maxima at the Rust layer.
-    fn set_sixel_limits(
-        &mut self,
-        max_width: usize,
-        max_height: usize,
-        max_repeat: usize,
-    ) -> PyResult<()> {
-        self.inner
-            .set_sixel_limits(max_width, max_height, max_repeat);
-        Ok(())
-    }
-
-    /// Get maximum number of Sixel graphics retained
-    ///
-    /// Returns:
-    ///     Maximum number of in-memory Sixel graphics for this terminal
-    fn get_sixel_graphics_limit(&self) -> PyResult<usize> {
-        Ok(self.inner.max_sixel_graphics())
-    }
-
-    /// Set maximum number of Sixel graphics retained
-    ///
-    /// Args:
-    ///     max_graphics: Maximum number of in-memory Sixel graphics
-    ///
-    /// Oldest graphics are dropped if the new limit is lower than the
-    /// current number of graphics. The value is clamped to a safe range.
-    fn set_sixel_graphics_limit(&mut self, max_graphics: usize) -> PyResult<()> {
-        self.inner.set_max_sixel_graphics(max_graphics);
-        Ok(())
-    }
-
-    /// Get count of Sixel graphics dropped due to limits
-    ///
-    /// Returns:
-    ///     Number of Sixel graphics that have been dropped because of size or count limits
-    fn get_dropped_sixel_graphics(&self) -> PyResult<usize> {
-        Ok(self.inner.dropped_sixel_graphics())
-    }
-
-    /// Get Sixel statistics as a dictionary
-    ///
-    /// Returns:
-    ///     {
-    ///       "max_width_px": int,
-    ///       "max_height_px": int,
-    ///       "max_repeat": int,
-    ///       "max_graphics": int,
-    ///       "current_graphics": int,
-    ///       "dropped_graphics": int,
-    ///     }
-    fn get_sixel_stats(&self) -> PyResult<HashMap<String, usize>> {
-        let (limits, max_graphics, current_graphics, dropped_graphics) = self.inner.sixel_stats();
-        let mut stats = HashMap::new();
-        stats.insert("max_width_px".to_string(), limits.max_width);
-        stats.insert("max_height_px".to_string(), limits.max_height);
-        stats.insert("max_repeat".to_string(), limits.max_repeat);
-        stats.insert("max_graphics".to_string(), max_graphics);
-        stats.insert("current_graphics".to_string(), current_graphics);
-        stats.insert("dropped_graphics".to_string(), dropped_graphics);
-        Ok(stats)
-    }
+    // strip_ansi, measure_text_width, parse_color: provided by impl_terminal_static_helpers! (ARC-003/QA-001)
+    // get_sixel_limits, set_sixel_limits, get_sixel_graphics_limit, set_sixel_graphics_limit,
+    // get_dropped_sixel_graphics, get_sixel_stats: provided by impl_terminal_sixel_graphics! (ARC-003/QA-001)
 
     /// Enable or disable tmux control mode
     ///
