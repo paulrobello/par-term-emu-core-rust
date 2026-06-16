@@ -68,3 +68,210 @@ macro_rules! impl_terminal_simple_getters {
         }
     };
 }
+
+/// Emit a batch of read-only query/state getters for `$ty`, using
+/// [`TerminalAccess::term_ref`]. (ARC-003/QA-001 scaling batch 1.)
+#[macro_export]
+macro_rules! impl_terminal_query_getters {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get the current terminal dimensions
+            ///
+            /// Returns:
+            ///     Tuple of (cols, rows)
+            fn size(&self) -> pyo3::PyResult<(usize, usize)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.size())
+            }
+
+            /// Get the terminal title
+            ///
+            /// Returns:
+            ///     Current terminal title string
+            fn title(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.title().to_string())
+            }
+
+            /// Get the cursor position
+            ///
+            /// Returns:
+            ///     Tuple of (col, row)
+            fn cursor_position(&self) -> pyo3::PyResult<(usize, usize)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let cursor = t.cursor();
+                Ok((cursor.col, cursor.row))
+            }
+
+            /// Get current Kitty Keyboard Protocol flags
+            ///
+            /// Returns:
+            ///     Current keyboard protocol flags (u16)
+            ///     Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
+            fn keyboard_flags(&self) -> pyo3::PyResult<u16> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.keyboard_flags())
+            }
+
+            /// Get insert mode (IRM - Mode 4) state
+            ///
+            /// Returns:
+            ///     True if insert mode is enabled (characters are inserted), False if replace mode (default)
+            fn insert_mode(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.insert_mode())
+            }
+
+            /// Get line feed/new line mode (LNM - Mode 20) state
+            ///
+            /// Returns:
+            ///     True if LNM is enabled (LF does CR+LF), False if LF only (default)
+            fn line_feed_new_line_mode(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.line_feed_new_line_mode())
+            }
+
+            /// Get default foreground color (OSC 10)
+            ///
+            /// Returns RGB tuple (r, g, b) where each component is 0-255.
+            ///
+            /// Returns:
+            ///     Tuple of (r, g, b) integers
+            fn default_fg(&self) -> pyo3::PyResult<(u8, u8, u8)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.default_fg().to_rgb())
+            }
+
+            /// Get default background color (OSC 11)
+            ///
+            /// Returns RGB tuple (r, g, b) where each component is 0-255.
+            ///
+            /// Returns:
+            ///     Tuple of (r, g, b) integers
+            fn default_bg(&self) -> pyo3::PyResult<(u8, u8, u8)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.default_bg().to_rgb())
+            }
+
+            /// Get faint/dim text alpha multiplier
+            ///
+            /// This value is applied to SGR 2 (dim/faint) text during rendering.
+            /// A value of 0.5 means 50% opacity (the default).
+            ///
+            /// Returns:
+            ///     Alpha multiplier between 0.0 and 1.0
+            fn faint_text_alpha(&self) -> pyo3::PyResult<f32> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.faint_text_alpha())
+            }
+
+            /// Get scrollback content as a list of strings
+            ///
+            /// Returns:
+            ///     List of scrollback lines
+            fn scrollback(&self) -> pyo3::PyResult<Vec<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.scrollback())
+            }
+
+            /// Check if alternate screen is active
+            ///
+            /// Returns:
+            ///     True if alternate screen is active
+            fn is_alt_screen_active(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.is_alt_screen_active())
+            }
+
+            /// Get mouse tracking mode
+            ///
+            /// Returns:
+            ///     String representing the mouse mode: "off", "normal", "button", "any"
+            fn mouse_mode(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let mode = match t.mouse_mode() {
+                    $crate::mouse::MouseMode::Off => "off",
+                    $crate::mouse::MouseMode::X10 => "x10",
+                    $crate::mouse::MouseMode::Normal => "normal",
+                    $crate::mouse::MouseMode::ButtonEvent => "button",
+                    $crate::mouse::MouseMode::AnyEvent => "any",
+                };
+                Ok(mode.to_string())
+            }
+
+            /// Check if focus tracking is enabled
+            ///
+            /// Returns:
+            ///     True if focus tracking is enabled
+            fn focus_tracking(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.focus_tracking())
+            }
+
+            /// Check if synchronized updates mode is enabled (DEC 2026)
+            ///
+            /// Returns:
+            ///     True if synchronized updates mode is enabled
+            fn synchronized_updates(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.synchronized_updates())
+            }
+
+            /// Get the Unicode width configuration
+            ///
+            /// Returns:
+            ///     WidthConfig: The current width configuration
+            fn width_config(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::enums::PyWidthConfig> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok((*t.width_config()).into())
+            }
+
+            /// Get the configured answerback string (ENQ response)
+            ///
+            /// Returns:
+            ///     The current answerback string or None if disabled (default)
+            fn answerback_string(&self) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.answerback_string().map(std::string::ToString::to_string))
+            }
+
+            /// Get the current working directory reported via OSC 7,
+            /// or None if no directory has been reported yet.
+            ///
+            /// Returns:
+            ///     Optional string with current directory path
+            fn current_directory(&self) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.current_directory().map(|s| s.to_string()))
+            }
+
+            /// Get the display width of a single character
+            ///
+            /// Args:
+            ///     c: A single character to measure
+            ///
+            /// Returns:
+            ///     int: The display width in cells (0, 1, or 2)
+            fn char_width(&self, c: &str) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(ch) = c.chars().next() {
+                    Ok(t.char_width(ch))
+                } else {
+                    Ok(0)
+                }
+            }
+
+            /// Count non-whitespace lines in visible screen
+            ///
+            /// Returns:
+            ///     Number of lines containing non-whitespace characters
+            fn count_non_whitespace_lines(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.count_non_whitespace_lines())
+            }
+        }
+    };
+}

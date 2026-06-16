@@ -39,6 +39,20 @@ pub struct PyTerminal {
     pub(crate) inner: crate::terminal::Terminal,
 }
 
+// ARC-003/QA-001: unified Terminal access so shared methods can be emitted once
+// (see `python_bindings::common`).
+impl crate::python_bindings::common::TerminalAccess for PyTerminal {
+    fn term_ref(&self) -> impl std::ops::Deref<Target = crate::terminal::Terminal> {
+        &self.inner
+    }
+    fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = crate::terminal::Terminal> {
+        &mut self.inner
+    }
+}
+
+// ARC-003/QA-001: shared query/state getters generated from one definition.
+crate::impl_terminal_query_getters!(PyTerminal);
+
 #[pymethods]
 impl PyTerminal {
     /// Create a new terminal with the specified dimensions
@@ -322,13 +336,7 @@ impl PyTerminal {
             .map_err(|e| PyIOError::new_err(format!("Failed to write file: {}", e)))
     }
 
-    /// Get the current terminal dimensions
-    ///
-    /// Returns:
-    ///     Tuple of (cols, rows)
-    fn size(&self) -> PyResult<(usize, usize)> {
-        Ok(self.inner.size())
-    }
+    // size: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Resize the terminal
     ///
@@ -372,13 +380,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get the terminal title
-    ///
-    /// Returns:
-    ///     Current terminal title string
-    fn title(&self) -> PyResult<String> {
-        Ok(self.inner.title().to_string())
-    }
+    // title: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set the terminal title directly
     ///
@@ -392,14 +394,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get the cursor position
-    ///
-    /// Returns:
-    ///     Tuple of (col, row)
-    fn cursor_position(&self) -> PyResult<(usize, usize)> {
-        let cursor = self.inner.cursor();
-        Ok((cursor.col, cursor.row))
-    }
+    // cursor_position: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Check if cursor is visible
     ///
@@ -409,14 +404,7 @@ impl PyTerminal {
         Ok(self.inner.cursor().visible)
     }
 
-    /// Get current Kitty Keyboard Protocol flags
-    ///
-    /// Returns:
-    ///     Current keyboard protocol flags (u16)
-    ///     Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
-    fn keyboard_flags(&self) -> PyResult<u16> {
-        Ok(self.inner.keyboard_flags())
-    }
+    // keyboard_flags: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set Kitty Keyboard Protocol flags
     ///
@@ -534,21 +522,9 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get insert mode (IRM - Mode 4) state
-    ///
-    /// Returns:
-    ///     True if insert mode is enabled (characters are inserted), False if replace mode (default)
-    fn insert_mode(&self) -> PyResult<bool> {
-        Ok(self.inner.insert_mode())
-    }
+    // insert_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get line feed/new line mode (LNM - Mode 20) state
-    ///
-    /// Returns:
-    ///     True if LNM is enabled (LF does CR+LF), False if LF only (default)
-    fn line_feed_new_line_mode(&self) -> PyResult<bool> {
-        Ok(self.inner.line_feed_new_line_mode())
-    }
+    // line_feed_new_line_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Push current keyboard flags to stack and set new flags
     ///
@@ -645,15 +621,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get default foreground color (OSC 10)
-    ///
-    /// Returns RGB tuple (r, g, b) where each component is 0-255.
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) integers
-    fn default_fg(&self) -> PyResult<(u8, u8, u8)> {
-        Ok(self.inner.default_fg().to_rgb())
-    }
+    // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set default foreground color (OSC 10)
     ///
@@ -675,15 +643,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get default background color (OSC 11)
-    ///
-    /// Returns RGB tuple (r, g, b) where each component is 0-255.
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) integers
-    fn default_bg(&self) -> PyResult<(u8, u8, u8)> {
-        Ok(self.inner.default_bg().to_rgb())
-    }
+    // default_bg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set default background color (OSC 11)
     ///
@@ -945,16 +905,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get faint/dim text alpha multiplier
-    ///
-    /// This value is applied to SGR 2 (dim/faint) text during rendering.
-    /// A value of 0.5 means 50% opacity (the default).
-    ///
-    /// Returns:
-    ///     Alpha multiplier between 0.0 and 1.0
-    fn faint_text_alpha(&self) -> PyResult<f32> {
-        Ok(self.inner.faint_text_alpha())
-    }
+    // faint_text_alpha: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set faint/dim text alpha multiplier
     ///
@@ -1002,13 +953,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get scrollback content as a list of strings
-    ///
-    /// Returns:
-    ///     List of scrollback lines
-    fn scrollback(&self) -> PyResult<Vec<String>> {
-        Ok(self.inner.scrollback())
-    }
+    // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get the number of scrollback lines
     ///
@@ -1281,13 +1226,7 @@ impl PyTerminal {
 
     // Advanced features
 
-    /// Check if alternate screen is active
-    ///
-    /// Returns:
-    ///     True if alternate screen is active
-    fn is_alt_screen_active(&self) -> PyResult<bool> {
-        Ok(self.inner.is_alt_screen_active())
-    }
+    // is_alt_screen_active: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Switch to alternate screen buffer
     ///
@@ -1309,21 +1248,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get mouse tracking mode
-    ///
-    /// Returns:
-    ///     String representing the mouse mode: "off", "normal", "button", "any"
-    fn mouse_mode(&self) -> PyResult<String> {
-        use crate::mouse::MouseMode;
-        let mode = match self.inner.mouse_mode() {
-            MouseMode::Off => "off",
-            MouseMode::X10 => "x10",
-            MouseMode::Normal => "normal",
-            MouseMode::ButtonEvent => "button",
-            MouseMode::AnyEvent => "any",
-        };
-        Ok(mode.to_string())
-    }
+    // mouse_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get mouse encoding format
     ///
@@ -1348,13 +1273,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Check if focus tracking is enabled
-    ///
-    /// Returns:
-    ///     True if focus tracking is enabled
-    fn focus_tracking(&self) -> PyResult<bool> {
-        Ok(self.inner.focus_tracking())
-    }
+    // focus_tracking: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set focus tracking mode
     ///
@@ -1388,13 +1307,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Check if synchronized updates mode is enabled (DEC 2026)
-    ///
-    /// Returns:
-    ///     True if synchronized updates mode is enabled
-    fn synchronized_updates(&self) -> PyResult<bool> {
-        Ok(self.inner.synchronized_updates())
-    }
+    // synchronized_updates: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Manually flush the synchronized update buffer
     ///
@@ -1850,16 +1763,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get current working directory from shell integration (OSC 7)
-    ///
-    /// Returns the directory path reported by the shell via OSC 7 sequences,
-    /// or None if no directory has been reported yet.
-    ///
-    /// Returns:
-    ///     Optional string with current directory path
-    fn current_directory(&self) -> PyResult<Option<String>> {
-        Ok(self.inner.current_directory().map(|s| s.to_string()))
-    }
+    // current_directory: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Check if OSC 7 directory tracking is enabled
     ///
@@ -1869,16 +1773,7 @@ impl PyTerminal {
         Ok(self.inner.accept_osc7())
     }
 
-    /// Get the configured answerback string (ENQ response)
-    ///
-    /// Returns:
-    ///     The current answerback string or None if disabled (default)
-    fn answerback_string(&self) -> PyResult<Option<String>> {
-        Ok(self
-            .inner
-            .answerback_string()
-            .map(std::string::ToString::to_string))
-    }
+    // answerback_string: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set the answerback string sent in response to ENQ (0x05)
     ///
@@ -1893,13 +1788,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get the current Unicode width configuration
-    ///
-    /// Returns:
-    ///     WidthConfig: The current width configuration
-    fn width_config(&self) -> PyResult<super::enums::PyWidthConfig> {
-        Ok((*self.inner.width_config()).into())
-    }
+    // width_config: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set the Unicode width configuration
     ///
@@ -1963,20 +1852,7 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Calculate the display width of a character using the terminal's width config
-    ///
-    /// Args:
-    ///     c: A single character to measure
-    ///
-    /// Returns:
-    ///     int: The display width in cells (0, 1, or 2)
-    fn char_width(&self, c: &str) -> PyResult<usize> {
-        if let Some(ch) = c.chars().next() {
-            Ok(self.inner.char_width(ch))
-        } else {
-            Ok(0)
-        }
-    }
+    // char_width: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set whether OSC 7 directory tracking sequences are accepted
     ///

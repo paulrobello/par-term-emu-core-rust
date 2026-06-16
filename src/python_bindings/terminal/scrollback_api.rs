@@ -58,13 +58,7 @@ impl PyTerminal {
         Ok(result)
     }
 
-    /// Count non-whitespace lines in visible screen
-    ///
-    /// Returns:
-    ///     Number of lines containing non-whitespace characters
-    fn count_non_whitespace_lines(&self) -> PyResult<usize> {
-        Ok(self.inner.count_non_whitespace_lines())
-    }
+    // count_non_whitespace_lines: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get scrollback usage
     ///

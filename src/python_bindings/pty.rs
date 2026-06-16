@@ -46,6 +46,7 @@ impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
 
 // ARC-003/QA-001 validation: shared getters generated from one definition.
 crate::impl_terminal_simple_getters!(PyPtyTerminal);
+crate::impl_terminal_query_getters!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {
@@ -248,21 +249,7 @@ impl PyPtyTerminal {
         Ok(self.inner.content())
     }
 
-    /// Get the terminal title
-    ///
-    /// Returns the title string set by OSC 0, 1, or 2 sequences.
-    ///
-    /// Returns:
-    ///     Current terminal title string
-    fn title(&self) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let title = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.title().to_string()
-        } else {
-            String::new()
-        };
-        Ok(title)
-    }
+    // title: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Export entire buffer (scrollback + current screen) as plain text
     ///
@@ -511,29 +498,11 @@ impl PyPtyTerminal {
             .map_err(|e| PyIOError::new_err(format!("Failed to write file: {}", e)))
     }
 
-    /// Get the current terminal dimensions
-    ///
-    /// Returns:
-    ///     Tuple of (cols, rows)
-    fn size(&self) -> PyResult<(usize, usize)> {
-        Ok(self.inner.size())
-    }
+    // size: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get the cursor position
-    ///
-    /// Returns:
-    ///     Tuple of (col, row)
-    fn cursor_position(&self) -> PyResult<(usize, usize)> {
-        Ok(self.inner.cursor_position())
-    }
+    // cursor_position: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get scrollback content as a list of strings
-    ///
-    /// Returns:
-    ///     List of scrollback lines
-    fn scrollback(&self) -> PyResult<Vec<String>> {
-        Ok(self.inner.scrollback())
-    }
+    // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get the number of scrollback lines
     ///
@@ -1027,43 +996,11 @@ impl PyPtyTerminal {
             .map_err(PyRuntimeError::new_err)
     }
 
-    /// Get mouse tracking mode
-    ///
-    /// Returns:
-    ///     String representing the mouse mode: "off", "x10", "normal", "button", "any"
-    fn mouse_mode(&self) -> PyResult<String> {
-        use crate::mouse::MouseMode;
-        let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            match term.mouse_mode() {
-                MouseMode::Off => "off",
-                MouseMode::X10 => "x10",
-                MouseMode::Normal => "normal",
-                MouseMode::ButtonEvent => "button",
-                MouseMode::AnyEvent => "any",
-            }
-        } else {
-            "off"
-        };
-        Ok(mode.to_string())
-    }
+    // mouse_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // cursor_visible: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
-    /// Get current Kitty Keyboard Protocol flags
-    ///
-    /// Returns:
-    ///     Current keyboard protocol flags (u16)
-    ///     Flags: 1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text
-    fn keyboard_flags(&self) -> PyResult<u16> {
-        let terminal = self.inner.terminal();
-        let flags = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.keyboard_flags()
-        } else {
-            0
-        };
-        Ok(flags)
-    }
+    // keyboard_flags: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set Kitty Keyboard Protocol flags
     ///
@@ -1088,33 +1025,9 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get insert mode (IRM - Mode 4) state
-    ///
-    /// Returns:
-    ///     True if insert mode is enabled (characters are inserted), False if replace mode (default)
-    fn insert_mode(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.insert_mode()
-        } else {
-            false
-        };
-        Ok(mode)
-    }
+    // insert_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get line feed/new line mode (LNM - Mode 20) state
-    ///
-    /// Returns:
-    ///     True if LNM is enabled (LF does CR+LF), False if LF only (default)
-    fn line_feed_new_line_mode(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let mode = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.line_feed_new_line_mode()
-        } else {
-            false
-        };
-        Ok(mode)
-    }
+    // line_feed_new_line_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Push current keyboard flags to stack and set new flags
     ///
@@ -1206,21 +1119,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get default foreground color (OSC 10)
-    ///
-    /// Returns RGB tuple (r, g, b) where each component is 0-255.
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) integers
-    fn default_fg(&self) -> PyResult<(u8, u8, u8)> {
-        let terminal = self.inner.terminal();
-        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.default_fg().to_rgb()
-        } else {
-            (192, 192, 192) // Default white if lock fails
-        };
-        Ok(color)
-    }
+    // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set default foreground color (OSC 10)
     ///
@@ -1245,21 +1144,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get default background color (OSC 11)
-    ///
-    /// Returns RGB tuple (r, g, b) where each component is 0-255.
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) integers
-    fn default_bg(&self) -> PyResult<(u8, u8, u8)> {
-        let terminal = self.inner.terminal();
-        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.default_bg().to_rgb()
-        } else {
-            (0, 0, 0) // Default black if lock fails
-        };
-        Ok(color)
-    }
+    // default_bg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set default background color (OSC 11)
     ///
@@ -1455,20 +1340,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get faint/dim text alpha multiplier
-    ///
-    /// This value is applied to SGR 2 (dim/faint) text during rendering.
-    /// A value of 0.5 means 50% opacity (the default).
-    ///
-    /// Returns:
-    ///     Alpha multiplier between 0.0 and 1.0
-    fn faint_text_alpha(&self) -> PyResult<f32> {
-        let terminal = self.inner.terminal();
-        if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            return Ok(term.faint_text_alpha());
-        }
-        Ok(0.5) // Default if lock fails
-    }
+    // faint_text_alpha: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set faint/dim text alpha multiplier
     ///
@@ -1543,33 +1415,9 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Check if alternate screen is active
-    ///
-    /// Returns:
-    ///     True if alternate screen is active
-    fn is_alt_screen_active(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let is_alt = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.is_alt_screen_active()
-        } else {
-            false
-        };
-        Ok(is_alt)
-    }
+    // is_alt_screen_active: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Check if focus tracking is enabled
-    ///
-    /// Returns:
-    ///     True if focus tracking is enabled (DECSET 1004)
-    fn focus_tracking(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.focus_tracking()
-        } else {
-            false
-        };
-        Ok(enabled)
-    }
+    // focus_tracking: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get focus in event sequence
     ///
@@ -1665,19 +1513,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Check if synchronized updates mode is enabled (DEC 2026)
-    ///
-    /// Returns:
-    ///     True if synchronized updates mode is enabled
-    fn synchronized_updates(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.synchronized_updates()
-        } else {
-            false
-        };
-        Ok(enabled)
-    }
+    // synchronized_updates: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Flush synchronized updates (DEC 2026)
     ///
@@ -1923,22 +1759,7 @@ impl PyPtyTerminal {
         })
     }
 
-    /// Get current working directory from shell integration (OSC 7)
-    ///
-    /// Returns the directory path reported by the shell via OSC 7 sequences,
-    /// or None if no directory has been reported yet.
-    ///
-    /// Returns:
-    ///     Optional string with current directory path
-    fn current_directory(&self) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let cwd = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.current_directory().map(|s| s.to_string())
-        } else {
-            None
-        };
-        Ok(cwd)
-    }
+    // current_directory: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // accept_osc7: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
@@ -1957,20 +1778,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get the configured answerback string (ENQ response)
-    ///
-    /// Returns:
-    ///     The current answerback string or None if disabled (default)
-    fn answerback_string(&self) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let answerback = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.answerback_string()
-                .map(std::string::ToString::to_string)
-        } else {
-            None
-        };
-        Ok(answerback)
-    }
+    // answerback_string: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set the answerback string sent in response to ENQ (0x05)
     ///
@@ -1988,19 +1796,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get the current Unicode width configuration
-    ///
-    /// Returns:
-    ///     WidthConfig: The current width configuration
-    fn width_config(&self) -> PyResult<super::enums::PyWidthConfig> {
-        let terminal = self.inner.terminal();
-        let config = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            (*term.width_config()).into()
-        } else {
-            crate::unicode_width_config::WidthConfig::default().into()
-        };
-        Ok(config)
-    }
+    // width_config: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Set the Unicode width configuration
     ///
@@ -2048,26 +1844,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Calculate the display width of a character using the terminal's width config
-    ///
-    /// Args:
-    ///     c: A single character to measure
-    ///
-    /// Returns:
-    ///     int: The display width in cells (0, 1, or 2)
-    fn char_width(&self, c: &str) -> PyResult<usize> {
-        let terminal = self.inner.terminal();
-        let width = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            if let Some(ch) = c.chars().next() {
-                term.char_width(ch)
-            } else {
-                0
-            }
-        } else {
-            0
-        };
-        Ok(width)
-    }
+    // char_width: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Check if insecure sequence filtering is enabled
     ///
@@ -2399,15 +2176,7 @@ impl PyPtyTerminal {
         Ok(result)
     }
 
-    /// Count non-whitespace lines in visible screen
-    ///
-    /// Returns:
-    ///     Number of lines containing non-whitespace characters
-    fn count_non_whitespace_lines(&self) -> PyResult<usize> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.count_non_whitespace_lines())
-    }
+    // count_non_whitespace_lines: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     /// Get scrollback usage
     ///
