@@ -1040,20 +1040,7 @@ impl PyTerminal {
                         cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
-                        PyAttributes {
-                            bold: cell.flags.bold(),
-                            dim: cell.flags.dim(),
-                            italic: cell.flags.italic(),
-                            underline: cell.flags.underline(),
-                            blink: cell.flags.blink(),
-                            reverse: cell.flags.reverse(),
-                            hidden: cell.flags.hidden(),
-                            strikethrough: cell.flags.strikethrough(),
-                            underline_style: cell.flags.underline_style.into(),
-                            wide_char: cell.flags.wide_char(),
-                            wide_char_spacer: cell.flags.wide_char_spacer(),
-                            hyperlink_id: cell.flags.hyperlink_id,
-                        },
+                        PyAttributes::from(cell),
                     )
                 })
                 .collect();
@@ -1169,20 +1156,7 @@ impl PyTerminal {
     ///     Dictionary with boolean flags: bold, italic, underline, etc., or None if out of bounds
     fn get_attributes(&self, col: usize, row: usize) -> PyResult<Option<PyAttributes>> {
         if let Some(cell) = self.inner.active_grid().get(col, row) {
-            Ok(Some(PyAttributes {
-                bold: cell.flags.bold(),
-                dim: cell.flags.dim(),
-                italic: cell.flags.italic(),
-                underline: cell.flags.underline(),
-                blink: cell.flags.blink(),
-                reverse: cell.flags.reverse(),
-                hidden: cell.flags.hidden(),
-                strikethrough: cell.flags.strikethrough(),
-                underline_style: cell.flags.underline_style.into(),
-                wide_char: cell.flags.wide_char(),
-                wide_char_spacer: cell.flags.wide_char_spacer(),
-                hyperlink_id: cell.flags.hyperlink_id,
-            }))
+            Ok(Some(PyAttributes::from(cell)))
         } else {
             Ok(None)
         }
@@ -1232,20 +1206,7 @@ impl PyTerminal {
                         cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
-                        PyAttributes {
-                            bold: cell.flags.bold(),
-                            dim: cell.flags.dim(),
-                            italic: cell.flags.italic(),
-                            underline: cell.flags.underline(),
-                            blink: cell.flags.blink(),
-                            reverse: cell.flags.reverse(),
-                            hidden: cell.flags.hidden(),
-                            strikethrough: cell.flags.strikethrough(),
-                            underline_style: cell.flags.underline_style.into(),
-                            wide_char: cell.flags.wide_char(),
-                            wide_char_spacer: cell.flags.wide_char_spacer(),
-                            hyperlink_id: cell.flags.hyperlink_id,
-                        },
+                        PyAttributes::from(cell),
                     )
                 })
             })
@@ -1279,20 +1240,7 @@ impl PyTerminal {
                         cell.get_grapheme(),
                         cell.fg.to_rgb(),
                         cell.bg.to_rgb(),
-                        PyAttributes {
-                            bold: cell.flags.bold(),
-                            dim: cell.flags.dim(),
-                            italic: cell.flags.italic(),
-                            underline: cell.flags.underline(),
-                            blink: cell.flags.blink(),
-                            reverse: cell.flags.reverse(),
-                            hidden: cell.flags.hidden(),
-                            strikethrough: cell.flags.strikethrough(),
-                            underline_style: cell.flags.underline_style.into(),
-                            wide_char: cell.flags.wide_char(),
-                            wide_char_spacer: cell.flags.wide_char_spacer(),
-                            hyperlink_id: cell.flags.hyperlink_id,
-                        },
+                        PyAttributes::from(cell),
                     ));
                 } else {
                     // Empty cell
