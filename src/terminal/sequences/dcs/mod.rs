@@ -16,7 +16,7 @@ impl Terminal {
         _ignore: bool,
         action: char,
     ) {
-        if action == 'q' && self.disable_insecure_sequences {
+        if action == 'q' && self.security_state.disable_insecure_sequences {
             debug::log(
                 debug::DebugLevel::Debug,
                 "SECURITY",

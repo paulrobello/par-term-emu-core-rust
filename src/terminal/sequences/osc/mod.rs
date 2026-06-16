@@ -18,7 +18,7 @@ const MAX_OSC_DATA_LENGTH: usize = 128 * 1024 * 1024;
 impl Terminal {
     /// Check if an OSC command should be filtered due to security settings
     pub(crate) fn is_insecure_osc(&self, command: &str) -> bool {
-        if !self.disable_insecure_sequences {
+        if !self.security_state.disable_insecure_sequences {
             return false;
         }
 

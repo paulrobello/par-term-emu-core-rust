@@ -343,7 +343,7 @@ fn test_notifications_security() {
 
     // Create a terminal with insecure sequences disabled
     let mut secure_term = Terminal::new(80, 24);
-    secure_term.disable_insecure_sequences = true;
+    secure_term.security_state.disable_insecure_sequences = true;
 
     // OSC 9 should be blocked
     secure_term.process(b"\x1b]9;Should be blocked\x1b\\");
@@ -411,7 +411,7 @@ fn test_is_insecure_osc() {
 
     // With security enabled
     let mut secure_term = Terminal::new(80, 24);
-    secure_term.disable_insecure_sequences = true;
+    secure_term.security_state.disable_insecure_sequences = true;
 
     assert!(!secure_term.is_insecure_osc("0")); // Title is safe
     assert!(secure_term.is_insecure_osc("8")); // Hyperlinks

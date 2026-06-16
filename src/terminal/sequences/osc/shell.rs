@@ -11,7 +11,7 @@ impl Terminal {
         match command {
             "7"
                 // Set current working directory (OSC 7)
-                if self.accept_osc7 && params.len() >= 2 => {
+                if self.security_state.accept_osc7 && params.len() >= 2 => {
                     if let Ok(cwd_url) = std::str::from_utf8(params[1]) {
                         if let Some((path, hostname, username)) = Self::parse_osc7_url(cwd_url) {
                             // record_cwd_change handles setting shell_integration state

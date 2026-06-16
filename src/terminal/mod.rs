@@ -600,6 +600,14 @@ pub(crate) struct UnicodeConfigState {
     pub(crate) normalization_form: crate::unicode_normalization_config::NormalizationForm,
 }
 
+/// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
+pub(crate) struct SecurityFlagsState {
+    /// Accept OSC 7 directory tracking sequences
+    pub(crate) accept_osc7: bool,
+    /// Disable potentially insecure escape sequences
+    pub(crate) disable_insecure_sequences: bool,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -678,10 +686,8 @@ pub struct Terminal {
     pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
     pub(crate) pixel_height: usize,
-    /// Accept OSC 7 directory tracking sequences
-    pub(crate) accept_osc7: bool,
-    /// Disable potentially insecure escape sequences
-    pub(crate) disable_insecure_sequences: bool,
+    /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
+    pub(crate) security_state: SecurityFlagsState,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
     pub(crate) conformance_level: crate::conformance_level::ConformanceLevel,
     /// Warning bell volume (0=off, 1-8=volume levels) - VT520 DECSWBV
@@ -911,8 +917,10 @@ impl Terminal {
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
             pixel_width: cols * 10,
             pixel_height: rows * 20,
-            accept_osc7: true,
-            disable_insecure_sequences: false,
+            security_state: SecurityFlagsState {
+                accept_osc7: true,
+                disable_insecure_sequences: false,
+            },
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
             // VT520 bell volume controls - default to moderate volume (4)
@@ -1868,7 +1876,7 @@ impl Terminal {
 
     /// Check if OSC 7 directory tracking is enabled
     pub fn accept_osc7(&self) -> bool {
-        self.accept_osc7
+        self.security_state.accept_osc7
     }
 
     /// Set whether OSC 7 directory tracking sequences are accepted
@@ -1876,12 +1884,12 @@ impl Terminal {
     /// When disabled, OSC 7 sequences are silently ignored.
     /// When enabled (default), allows shell to report current working directory.
     pub fn set_accept_osc7(&mut self, accept: bool) {
-        self.accept_osc7 = accept;
+        self.security_state.accept_osc7 = accept;
     }
 
     /// Check if insecure sequence filtering is enabled
     pub fn disable_insecure_sequences(&self) -> bool {
-        self.disable_insecure_sequences
+        self.security_state.disable_insecure_sequences
     }
 
     /// Set whether to filter potentially insecure escape sequences
@@ -1889,7 +1897,7 @@ impl Terminal {
     /// When enabled, certain sequences that could pose security risks are blocked.
     /// When disabled (default), all standard sequences are processed normally.
     pub fn set_disable_insecure_sequences(&mut self, disable: bool) {
-        self.disable_insecure_sequences = disable;
+        self.security_state.disable_insecure_sequences = disable;
     }
 
     /// Get the answerback string sent in response to ENQ (0x05)

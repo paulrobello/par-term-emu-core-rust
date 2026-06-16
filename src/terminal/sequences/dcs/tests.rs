@@ -37,7 +37,7 @@ fn test_dcs_hook_sixel_with_params() {
 #[test]
 fn test_dcs_hook_sixel_blocked_by_security() {
     let mut term = create_test_terminal();
-    term.disable_insecure_sequences = true;
+    term.security_state.disable_insecure_sequences = true;
     let params = create_empty_params();
 
     term.dcs_hook(&params, &[], false, 'q');

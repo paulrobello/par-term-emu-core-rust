@@ -44,7 +44,7 @@ impl Terminal {
         match command {
             "4"
                 // Set ANSI color palette entry (OSC 4)
-                if !self.disable_insecure_sequences && params.len() >= 3 => {
+                if !self.security_state.disable_insecure_sequences && params.len() >= 3 => {
                     if let Ok(data) = std::str::from_utf8(params[1]) {
                         if let Ok(index) = data.trim().parse::<usize>() {
                             if index < 16 {
@@ -59,7 +59,7 @@ impl Terminal {
                 }
             "104"
                 // Reset ANSI color palette (OSC 104)
-                if !self.disable_insecure_sequences => {
+                if !self.security_state.disable_insecure_sequences => {
                     if params.len() == 1 || (params.len() >= 2 && params[1].is_empty()) {
                         self.theme.ansi_palette = Self::default_ansi_palette();
                     } else if params.len() >= 2 {
@@ -94,7 +94,7 @@ impl Terminal {
                                 command, r16, g16, b16
                             );
                             self.push_response(response.as_bytes());
-                        } else if !self.disable_insecure_sequences {
+                        } else if !self.security_state.disable_insecure_sequences {
                             if let Some((r, g, b)) = Self::parse_color_spec(data) {
                                 match command {
                                     "10" => self.theme.default_fg = Color::Rgb(r, g, b),
@@ -107,15 +107,15 @@ impl Terminal {
                     }
                 }
             "110"
-                if !self.disable_insecure_sequences => {
+                if !self.security_state.disable_insecure_sequences => {
                     self.theme.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             "111"
-                if !self.disable_insecure_sequences => {
+                if !self.security_state.disable_insecure_sequences => {
                     self.theme.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
                 }
             "112"
-                if !self.disable_insecure_sequences => {
+                if !self.security_state.disable_insecure_sequences => {
                     self.theme.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             _ => {}
