@@ -5,18 +5,24 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::protocol::ServerMessage;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-/// Manages broadcasting messages to multiple connected clients
-pub struct Broadcaster {
+/// Manages broadcasting messages to multiple connected clients.
+///
+/// Generic over the client transport stream `S` to match `Client<S>`.
+pub struct Broadcaster<S> {
     /// Map of client ID to client connection
-    clients: Arc<RwLock<HashMap<Uuid, Client>>>,
+    clients: Arc<RwLock<HashMap<Uuid, Client<S>>>>,
     /// Maximum number of concurrent clients
     max_clients: usize,
 }
 
-impl Broadcaster {
+impl<S> Broadcaster<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     /// Create a new broadcaster with default settings
     pub fn new() -> Self {
         Self::with_max_clients(1000)
@@ -33,7 +39,7 @@ impl Broadcaster {
     /// Add a new client to the broadcaster
     ///
     /// Returns an error if the maximum number of clients has been reached
-    pub async fn add_client(&self, client: Client) -> Result<Uuid> {
+    pub async fn add_client(&self, client: Client<S>) -> Result<Uuid> {
         let mut clients = self.clients.write().await;
 
         if clients.len() >= self.max_clients {
@@ -166,13 +172,16 @@ impl Broadcaster {
     }
 }
 
-impl Default for Broadcaster {
+impl<S> Default for Broadcaster<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Debug for Broadcaster {
+impl<S> std::fmt::Debug for Broadcaster<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Broadcaster")
             .field("max_clients", &self.max_clients)
@@ -183,43 +192,44 @@ impl std::fmt::Debug for Broadcaster {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpStream;
 
     #[tokio::test]
     async fn test_broadcaster_client_count() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         assert_eq!(broadcaster.client_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_broadcaster_max_clients() {
-        let broadcaster = Broadcaster::with_max_clients(10);
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::with_max_clients(10);
         assert_eq!(broadcaster.max_clients(), 10);
     }
 
     #[tokio::test]
     async fn test_broadcaster_has_client() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         let fake_id = Uuid::new_v4();
         assert!(!broadcaster.has_client(fake_id).await);
     }
 
     #[tokio::test]
     async fn test_broadcaster_default() {
-        let broadcaster = Broadcaster::default();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::default();
         assert_eq!(broadcaster.max_clients(), 1000);
         assert_eq!(broadcaster.client_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_broadcaster_client_ids_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         let ids = broadcaster.client_ids().await;
         assert!(ids.is_empty());
     }
 
     #[tokio::test]
     async fn test_broadcaster_remove_nonexistent_client() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         let fake_id = Uuid::new_v4();
         // Removing a client that doesn't exist should return false
         assert!(!broadcaster.remove_client(fake_id).await);
@@ -227,7 +237,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_disconnect_all_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         // Should not panic when disconnecting from empty broadcaster
         broadcaster.disconnect_all().await;
         assert_eq!(broadcaster.client_count().await, 0);
@@ -235,7 +245,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_ping_all_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         // Should not panic when pinging empty broadcaster
         broadcaster.ping_all().await;
         assert_eq!(broadcaster.client_count().await, 0);
@@ -243,7 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_broadcast_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         // Should not panic when broadcasting to empty broadcaster
         broadcaster
             .broadcast(ServerMessage::output("test".to_string()))
@@ -253,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_broadcast_with_errors_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         let errors = broadcaster
             .broadcast_with_errors(ServerMessage::bell())
             .await;
@@ -263,7 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_send_to_nonexistent_client() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         let fake_id = Uuid::new_v4();
         let result = broadcaster
             .send_to_client(fake_id, ServerMessage::bell())
@@ -280,19 +290,19 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_read_only_count_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         assert_eq!(broadcaster.read_only_client_count().await, 0);
     }
 
     #[tokio::test]
     async fn test_broadcaster_read_write_count_empty() {
-        let broadcaster = Broadcaster::new();
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::new();
         assert_eq!(broadcaster.read_write_client_count().await, 0);
     }
 
     #[test]
     fn test_broadcaster_debug() {
-        let broadcaster = Broadcaster::with_max_clients(50);
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::with_max_clients(50);
         let debug_str = format!("{:?}", broadcaster);
         assert!(debug_str.contains("Broadcaster"));
         assert!(debug_str.contains("max_clients"));
@@ -301,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_broadcaster_custom_max_clients() {
-        let broadcaster = Broadcaster::with_max_clients(5);
+        let broadcaster: Broadcaster<TcpStream> = Broadcaster::with_max_clients(5);
         assert_eq!(broadcaster.max_clients(), 5);
         assert_eq!(broadcaster.client_count().await, 0);
     }

@@ -1904,27 +1904,76 @@ impl StreamingServer {
         ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
         params: &ConnectionParams,
     ) -> Result<()> {
-        // Resolve session first (before reserving client slots)
-        let session = self.resolve_session(params)?;
+        let (session, _global_guard, _session_guard, read_only) =
+            self.prepare_ws_session(params)?;
+        let client = Client::new(ws_stream, read_only);
+        self.run_ws_session(client, session, read_only, "Client")
+            .await
+    }
 
-        // Try to reserve a global client slot
+    /// Handle a new TLS WebSocket connection (already upgraded)
+    async fn handle_tls_connection_ws(
+        self: &Arc<Self>,
+        ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
+        params: &ConnectionParams,
+    ) -> Result<()> {
+        let (session, _global_guard, _session_guard, read_only) =
+            self.prepare_ws_session(params)?;
+        let client = Client::new(ws_stream, read_only);
+        self.run_ws_session(client, session, read_only, "TLS Client")
+            .await
+    }
+
+    /// Common pre-loop setup shared by both tungstenite WebSocket handlers.
+    ///
+    /// Resolves the session, reserves the global + per-session client slots
+    /// (returning RAII guards whose `Drop` releases them), and computes the
+    /// read-only flag. The caller wraps the accepted stream in a `Client<S>`
+    /// and hands it to `run_ws_session`.
+    fn prepare_ws_session(
+        self: &Arc<Self>,
+        params: &ConnectionParams,
+    ) -> Result<(
+        Arc<SessionState>,
+        GlobalClientGuard<'_>,
+        SessionClientGuard,
+        bool,
+    )> {
+        let session = self.resolve_session(params)?;
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
-        let _global_guard = GlobalClientGuard { server: self };
-
-        // Try to add client to session
+        let global_guard = GlobalClientGuard { server: self };
         if !session.try_add_client(self.config.max_clients_per_session) {
             return Err(StreamingError::MaxClientsReached);
         }
-        let _session_guard = SessionClientGuard {
+        let session_guard = SessionClientGuard {
             session: Arc::clone(&session),
         };
-
-        // Determine readonly
         let read_only = params.readonly || self.config.default_read_only;
+        Ok((session, global_guard, session_guard, read_only))
+    }
 
-        let mut client = Client::new(ws_stream, read_only);
+    /// Shared dispatch loop for both tungstenite WebSocket transports
+    /// (plain TCP and TLS). The transport stream type is captured by the
+    /// `Client<S>` generic; all protobuf encode/decode and ping/pong handling
+    /// lives in `Client`. `transport_label` is used only in debug logs so the
+    /// two transports remain distinguishable.
+    ///
+    /// This implements the full client-message dispatch (all `ClientMessage`
+    /// arms). Both transports now share identical message handling —
+    /// previously the TLS path silently dropped Mouse/Focus/Paste/Selection/
+    /// Clipboard messages; they are now handled uniformly.
+    async fn run_ws_session<S>(
+        self: &Arc<Self>,
+        mut client: Client<S>,
+        session: Arc<SessionState>,
+        read_only: bool,
+        transport_label: &'static str,
+    ) -> Result<()>
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send,
+    {
         let client_id = client.id();
 
         // Send initial connection message
@@ -1938,7 +1987,8 @@ impl StreamingServer {
 
         crate::debug_info!(
             "STREAMING",
-            "Client {} connected to session {} (total: {})",
+            "{} {} connected to session {} (total: {})",
+            transport_label,
             client_id,
             session.id,
             self.client_count()
@@ -1972,7 +2022,7 @@ impl StreamingServer {
                 msg = client.recv() => {
                     match msg {
                         Err(e) => {
-                            crate::debug_error!("STREAMING", "Client {} error: {}", client_id, e);
+                            crate::debug_error!("STREAMING", "{} {} error: {}", transport_label, client_id, e);
                             break;
                         }
                         Ok(msg_opt) => match msg_opt {
@@ -1984,7 +2034,7 @@ impl StreamingServer {
                                     }
                                     if let Some(ref mut limiter) = rate_limiter {
                                         if !limiter.try_consume(data.len()) {
-                                            crate::debug_error!("STREAMING", "Rate limit exceeded for client {}", client_id);
+                                            crate::debug_error!("STREAMING", "Rate limit exceeded for {} {}", transport_label, client_id);
                                             continue;
                                         }
                                     }
@@ -2000,14 +2050,14 @@ impl StreamingServer {
                                 }
                                 crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
                                     if let Err(e) = validate_terminal_size(cols, rows) {
-                                        crate::debug_error!("STREAMING", "Client {} sent invalid resize: {}", client_id, e);
+                                        crate::debug_error!("STREAMING", "{} {} sent invalid resize: {}", transport_label, client_id, e);
                                     } else {
                                         let _ = session.resize_tx.send((cols, rows));
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Ping => {
                                     if let Err(e) = client.send(ServerMessage::pong()).await {
-                                        crate::debug_error!("STREAMING", "Failed to send pong to client {}: {}", client_id, e);
+                                        crate::debug_error!("STREAMING", "Failed to send pong to {} {}: {}", transport_label, client_id, e);
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
@@ -2019,7 +2069,7 @@ impl StreamingServer {
                                     };
                                     if let Some(msg) = refresh_msg {
                                         if let Err(e) = client.send(msg).await {
-                                            crate::debug_error!("STREAMING", "Failed to send refresh to client {}: {}", client_id, e);
+                                            crate::debug_error!("STREAMING", "Failed to send refresh to {} {}: {}", transport_label, client_id, e);
                                         }
                                     }
                                 }
@@ -2087,7 +2137,7 @@ impl StreamingServer {
                                     if read_only { continue; }
                                     if let Some(ref mut limiter) = rate_limiter {
                                         if !limiter.try_consume(content.len()) {
-                                            crate::debug_error!("STREAMING", "Rate limit exceeded for client {}", client_id);
+                                            crate::debug_error!("STREAMING", "Rate limit exceeded for {} {}", transport_label, client_id);
                                             continue;
                                         }
                                     }
@@ -2222,7 +2272,7 @@ impl StreamingServer {
                                                 "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
                                             ));
                                             if let Err(e) = client.send(err_msg).await {
-                                                crate::debug_error!("STREAMING", "Failed to send error to client {}: {}", client_id, e);
+                                                crate::debug_error!("STREAMING", "Failed to send error to {} {}: {}", transport_label, client_id, e);
                                             }
                                             None
                                         }
@@ -2235,7 +2285,7 @@ impl StreamingServer {
                                         };
                                         if let Some(msg) = snapshot_msg {
                                             if let Err(e) = client.send(msg).await {
-                                                crate::debug_error!("STREAMING", "Failed to send snapshot to client {}: {}", client_id, e);
+                                                crate::debug_error!("STREAMING", "Failed to send snapshot to {} {}: {}", transport_label, client_id, e);
                                             }
                                         }
                                     }
@@ -2243,7 +2293,7 @@ impl StreamingServer {
                             }
                         }
                         None => {
-                            crate::debug_info!("STREAMING", "Client {} disconnected from session {}", client_id, session.id);
+                            crate::debug_info!("STREAMING", "{} {} disconnected from session {}", transport_label, client_id, session.id);
                             break;
                         }
                         }
@@ -2267,7 +2317,7 @@ impl StreamingServer {
                     }
                 } => {
                     if let Err(e) = client.ping().await {
-                        crate::debug_error!("STREAMING", "Failed to ping client {}: {}", client_id, e);
+                        crate::debug_error!("STREAMING", "Failed to ping {} {}: {}", transport_label, client_id, e);
                         break;
                     }
                 }
@@ -2276,239 +2326,8 @@ impl StreamingServer {
 
         crate::debug_info!(
             "STREAMING",
-            "Client {} cleanup (remaining: {})",
-            client_id,
-            self.client_count() - 1
-        );
-
-        Ok(())
-    }
-
-    /// Handle a new TLS WebSocket connection (already upgraded)
-    async fn handle_tls_connection_ws(
-        self: &Arc<Self>,
-        ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
-        params: &ConnectionParams,
-    ) -> Result<()> {
-        // Resolve session first
-        let session = self.resolve_session(params)?;
-
-        // Try to reserve a global client slot
-        if !self.try_add_client() {
-            return Err(StreamingError::MaxClientsReached);
-        }
-        let _global_guard = GlobalClientGuard { server: self };
-
-        // Try to add client to session
-        if !session.try_add_client(self.config.max_clients_per_session) {
-            return Err(StreamingError::MaxClientsReached);
-        }
-        let _session_guard = SessionClientGuard {
-            session: Arc::clone(&session),
-        };
-
-        let read_only = params.readonly || self.config.default_read_only;
-
-        let client_id = uuid::Uuid::new_v4();
-
-        // Send initial connection message
-        let connect_msg = session.build_connect_message(&client_id.to_string(), read_only);
-
-        use futures_util::{SinkExt, StreamExt};
-        use tokio_tungstenite::tungstenite::Message;
-
-        let (mut ws_tx, mut ws_rx) = ws_stream.split();
-
-        let msg_bytes = encode_server_message(&connect_msg)?;
-        ws_tx
-            .send(Message::Binary(msg_bytes.into()))
-            .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-
-        // Sync terminal mode state for existing sessions
-        for mode_msg in session.build_mode_sync_messages() {
-            let mode_bytes = encode_server_message(&mode_msg)?;
-            ws_tx
-                .send(Message::Binary(mode_bytes.into()))
-                .await
-                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "TLS Client {} connected to session {} (total: {})",
-            client_id,
-            session.id,
-            self.client_count()
-        );
-
-        // Subscribe to session broadcasts
-        let mut output_rx = session.broadcast_tx.subscribe();
-
-        let terminal_for_refresh = Arc::clone(&session.terminal);
-        let resize_tx = session.resize_tx.clone();
-
-        // Setup keepalive timer
-        let keepalive_interval = if self.config.keepalive_interval > 0 {
-            Some(Duration::from_secs(self.config.keepalive_interval))
-        } else {
-            None
-        };
-        let mut keepalive_timer = keepalive_interval.map(|d| tokio::time::interval(d));
-        let mut subscriptions: Option<
-            std::collections::HashSet<crate::streaming::protocol::EventType>,
-        > = None;
-        let mut rate_limiter = if self.config.input_rate_limit_bytes_per_sec > 0 {
-            Some(InputRateLimiter::new(
-                self.config.input_rate_limit_bytes_per_sec,
-            ))
-        } else {
-            None
-        };
-
-        loop {
-            tokio::select! {
-                msg = ws_rx.next() => {
-                    match msg {
-                        Some(Ok(Message::Binary(data))) => {
-                            match decode_client_message(&data) {
-                                Ok(client_msg) => {
-                                    match client_msg {
-                                        crate::streaming::protocol::ClientMessage::Input { data } => {
-                                            if read_only {
-                                                continue;
-                                            }
-                                            if let Some(ref mut limiter) = rate_limiter {
-                                                if !limiter.try_consume(data.len()) {
-                                                    crate::debug_error!("STREAMING", "Rate limit exceeded for TLS client {}", client_id);
-                                                    continue;
-                                                }
-                                            }
-                                            if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                                session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                                let mut w = writer.lock();
-                                                use std::io::Write;
-                                                if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                                    crate::debug_error!("STREAMING", "PTY write error for TLS session {}: {}", session.id, e);
-                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                }
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                            if let Err(e) = validate_terminal_size(cols, rows) {
-                                                crate::debug_error!("STREAMING", "TLS client {} sent invalid resize: {}", client_id, e);
-                                            } else {
-                                                let _ = resize_tx.send((cols, rows));
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::Ping => {
-                                            if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
-                                                let _ = ws_tx.send(Message::Binary(bytes.into())).await;
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                            let refresh_msg = {
-                                                let terminal = terminal_for_refresh.lock();
-                                                let content = terminal.export_visible_screen_styled();
-                                                let (cols, rows) = terminal.size();
-                                                Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                            };
-                                            if let Some(msg) = refresh_msg {
-                                                if let Ok(bytes) = encode_server_message(&msg) {
-                                                    let _ = ws_tx.send(Message::Binary(bytes.into())).await;
-                                                }
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                            use crate::terminal::snapshot::SnapshotScope;
-                                            let snapshot_scope = match scope.as_str() {
-                                                "visible" => Some(SnapshotScope::Visible),
-                                                "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
-                                                "full" => Some(SnapshotScope::Full),
-                                                other => {
-                                                    let err_msg = crate::streaming::protocol::ServerMessage::error(format!(
-                                                        "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
-                                                    ));
-                                                    if let Ok(bytes) = encode_server_message(&err_msg) {
-                                                        let _ = ws_tx.send(Message::Binary(bytes.into())).await;
-                                                    }
-                                                    None
-                                                }
-                                            };
-                                            if let Some(ss) = snapshot_scope {
-                                                let snapshot_msg = {
-                                                    let terminal = terminal_for_refresh.lock();
-                                                    let json = terminal.get_semantic_snapshot_json(ss);
-                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                };
-                                                if let Some(msg) = snapshot_msg {
-                                                    if let Ok(bytes) = encode_server_message(&msg) {
-                                                        let _ = ws_tx.send(Message::Binary(bytes.into())).await;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::Subscribe { events } => {
-                                            subscriptions = Some(events.into_iter().collect());
-                                        }
-                                        // Mouse, Focus, Paste, Selection, Clipboard handled only in primary handlers
-                                        _ => {}
-                                    }
-                                }
-                                Err(e) => {
-                                    crate::debug_error!("STREAMING", "Failed to parse TLS client message: {}", e);
-                                }
-                            }
-                        }
-                        Some(Ok(Message::Text(_))) => {
-                            crate::debug_error!("STREAMING", "Text messages not supported, use binary protocol");
-                        }
-                        Some(Ok(Message::Ping(data))) => {
-                            let _ = ws_tx.send(Message::Pong(data)).await;
-                        }
-                        Some(Ok(Message::Pong(_))) => {}
-                        Some(Ok(Message::Close(_))) | None => {
-                            crate::debug_info!("STREAMING", "TLS Client {} disconnected from session {}", client_id, session.id);
-                            break;
-                        }
-                        Some(Ok(Message::Frame(_))) => {}
-                        Some(Err(e)) => {
-                            crate::debug_error!("STREAMING", "TLS WebSocket error: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                output_msg = output_rx.recv() => {
-                    if let Ok(msg) = output_msg {
-                        if should_send(&msg, &subscriptions) {
-                            if let Ok(bytes) = encode_server_message(&msg) {
-                                if ws_tx.send(Message::Binary(bytes.into())).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                _ = async {
-                    if let Some(ref mut timer) = keepalive_timer {
-                        timer.tick().await
-                    } else {
-                        std::future::pending::<tokio::time::Instant>().await
-                    }
-                } => {
-                    if ws_tx.send(Message::Ping(vec![].into())).await.is_err() {
-                        crate::debug_error!("STREAMING", "Failed to ping TLS client {}", client_id);
-                        break;
-                    }
-                }
-            }
-        }
-
-        crate::debug_info!(
-            "STREAMING",
-            "TLS Client {} cleanup (remaining: {})",
+            "{} {} cleanup (remaining: {})",
+            transport_label,
             client_id,
             self.client_count() - 1
         );

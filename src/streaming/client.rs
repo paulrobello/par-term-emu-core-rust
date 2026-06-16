@@ -4,24 +4,32 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ClientMessage, ServerMessage};
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use uuid::Uuid;
 
-/// Represents a connected WebSocket client
-pub struct Client {
+/// Represents a connected WebSocket client.
+///
+/// Generic over the underlying transport stream `S` so the same client
+/// abstraction serves both plain TCP (`Client<TcpStream>`) and TLS
+/// (`Client<tokio_rustls::server::TlsStream<TcpStream>>`) WebSocket
+/// connections. All protobuf encode/decode and ping/pong handling lives here.
+pub struct Client<S> {
     /// Unique client identifier
     id: Uuid,
     /// WebSocket stream
-    ws: WebSocketStream<TcpStream>,
+    ws: WebSocketStream<S>,
     /// Whether this client is read-only (cannot send input)
     read_only: bool,
 }
 
-impl Client {
+impl<S> Client<S>
+where
+    S: AsyncRead + AsyncWrite + Unpin + Send,
+{
     /// Create a new client from a WebSocket stream
-    pub fn new(ws: WebSocketStream<TcpStream>, read_only: bool) -> Self {
+    pub fn new(ws: WebSocketStream<S>, read_only: bool) -> Self {
         Self {
             id: Uuid::new_v4(),
             ws,
@@ -107,7 +115,7 @@ impl Client {
     }
 }
 
-impl std::fmt::Debug for Client {
+impl<S> std::fmt::Debug for Client<S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Client")
             .field("id", &self.id)
