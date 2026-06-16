@@ -3,6 +3,7 @@
 //! Provides `PyCallbackObserver` (sync callback) and `PyQueueObserver` (asyncio.Queue)
 //! that bridge the Rust `TerminalObserver` trait to Python callables.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
@@ -288,6 +289,38 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
     map
 }
 
+thread_local! {
+    /// Reentrancy guard for Python observer callbacks (ARC-016).
+    ///
+    /// While a Python observer callback runs on this thread, further observer
+    /// events are dropped instead of dispatched. This breaks the reentrant
+    /// cycle — `process()` → dispatch → Python callback → terminal method →
+    /// `process()` again — that would otherwise deadlock on the non-reentrant
+    /// `parking_lot` Terminal mutex already held by the calling thread.
+    static IN_PY_OBSERVER_CALLBACK: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Clears the reentrancy flag on drop, including when the callback panics.
+struct PyCallbackReentrancyGuard;
+impl Drop for PyCallbackReentrancyGuard {
+    fn drop(&mut self) {
+        IN_PY_OBSERVER_CALLBACK.set(false);
+    }
+}
+
+/// Run `f` only if this thread is not already inside a Python observer
+/// callback; arm the reentrancy guard while it runs. Returns `None` (and skips
+/// dispatch) on reentrant entry. See ARC-016.
+fn with_py_callback_reentrancy_guard<R>(f: impl FnOnce() -> R) -> Option<R> {
+    let already_inside = IN_PY_OBSERVER_CALLBACK.replace(true);
+    if already_inside {
+        // Nested entry: the outer callback is still running (flag stays true).
+        return None;
+    }
+    let _guard = PyCallbackReentrancyGuard;
+    Some(f())
+}
+
 /// Observer that calls a Python callable for each event
 pub(crate) struct PyCallbackObserver {
     callback: Py<PyAny>,
@@ -311,10 +344,15 @@ unsafe impl Sync for PyCallbackObserver {}
 impl TerminalObserver for PyCallbackObserver {
     fn on_event(&self, event: &TerminalEvent) {
         let dict = event_to_dict(event);
-        Python::attach(|py| {
-            if let Err(e) = self.callback.call1(py, (dict,)) {
-                eprintln!("Observer callback error: {e}");
-            }
+        // Guard against reentrant dispatch deadlocking on the Terminal mutex
+        // (ARC-016): drop the event if this thread is already inside a Python
+        // observer callback.
+        let _ = with_py_callback_reentrancy_guard(|| {
+            Python::attach(|py| {
+                if let Err(e) = self.callback.call1(py, (dict,)) {
+                    eprintln!("Observer callback error: {e}");
+                }
+            });
         });
     }
 
@@ -346,14 +384,50 @@ unsafe impl Sync for PyQueueObserver {}
 impl TerminalObserver for PyQueueObserver {
     fn on_event(&self, event: &TerminalEvent) {
         let dict = event_to_dict(event);
-        Python::attach(|py| {
-            if let Err(e) = self.queue.call_method1(py, "put_nowait", (dict,)) {
-                eprintln!("Observer queue.put_nowait error: {e}");
-            }
+        // Same reentrancy guard as the sync callback (ARC-016).
+        let _ = with_py_callback_reentrancy_guard(|| {
+            Python::attach(|py| {
+                if let Err(e) = self.queue.call_method1(py, "put_nowait", (dict,)) {
+                    eprintln!("Observer queue.put_nowait error: {e}");
+                }
+            });
         });
     }
 
     fn subscriptions(&self) -> Option<&HashSet<TerminalEventKind>> {
         self.subscriptions.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reentrancy_guard_blocks_nested_dispatch_and_clears_on_exit() {
+        // Start from a known state on this test thread.
+        IN_PY_OBSERVER_CALLBACK.with(|c| c.set(false));
+
+        let mut outer_ran = false;
+        let mut nested_result: Option<()> = None;
+
+        let outer = with_py_callback_reentrancy_guard(|| {
+            outer_ran = true;
+            // Simulate a callback re-entering dispatch on the same thread:
+            nested_result = with_py_callback_reentrancy_guard(|| {
+                panic!("nested dispatch must not run");
+            });
+            IN_PY_OBSERVER_CALLBACK.with(|c| {
+                assert!(c.get(), "flag must remain true while outer callback runs");
+            });
+        });
+
+        assert!(outer.is_some(), "outer (first) dispatch should run");
+        assert!(outer_ran);
+        assert_eq!(nested_result, None, "nested dispatch must be suppressed");
+        assert!(
+            !IN_PY_OBSERVER_CALLBACK.with(Cell::get),
+            "flag must be cleared once the callback returns"
+        );
     }
 }
