@@ -3,7 +3,149 @@
 //! This module defines the message formats used for WebSocket-based
 //! terminal streaming between the server and web clients.
 
+use crate::terminal::file_transfer::TransferDirection;
+use crate::terminal::TerminalEvent;
 use serde::{Deserialize, Serialize};
+
+/// Convert a `TerminalEvent` into the `ServerMessage` a streaming client
+/// should receive, or `None` for events with no streaming representation
+/// (e.g. `DirtyRegion`, a local rendering hint).
+///
+/// Single source of truth for the TerminalEvent -> ServerMessage mapping
+/// (ARC-020), shared by the broadcast and per-session dispatch paths in the
+/// streaming server (previously duplicated as two ~25-arm `match` blocks).
+pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMessage> {
+    Some(match event {
+        TerminalEvent::BellRang(_) => ServerMessage::bell(),
+        TerminalEvent::TitleChanged(title) => ServerMessage::title(title),
+        TerminalEvent::SizeChanged(cols, rows) => ServerMessage::resize(cols as u16, rows as u16),
+        TerminalEvent::CwdChanged(cwd) => ServerMessage::cwd_changed_full(
+            cwd.old_cwd,
+            cwd.new_cwd,
+            cwd.hostname,
+            cwd.username,
+            cwd.timestamp,
+        ),
+        TerminalEvent::TriggerMatched(tm) => ServerMessage::trigger_matched(
+            tm.trigger_id,
+            tm.row as u16,
+            tm.col as u16,
+            tm.end_col as u16,
+            tm.text,
+            tm.captures,
+            tm.timestamp,
+        ),
+        TerminalEvent::ModeChanged(mode, enabled) => ServerMessage::mode_changed(mode, enabled),
+        TerminalEvent::GraphicsAdded(row) => ServerMessage::graphics_added(row as u16),
+        TerminalEvent::HyperlinkAdded { url, row, col, id } => {
+            if let Some(id) = id {
+                ServerMessage::hyperlink_added_with_id(url, row as u16, col as u16, id.to_string())
+            } else {
+                ServerMessage::hyperlink_added(url, row as u16, col as u16)
+            }
+        }
+        TerminalEvent::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } => ServerMessage::user_var_changed_full(name, value, old_value),
+        TerminalEvent::ProgressBarChanged {
+            action,
+            id,
+            state,
+            percent,
+            label,
+        } => ServerMessage::progress_bar_changed(action, id, state, percent, label),
+        TerminalEvent::BadgeChanged(badge) => ServerMessage::badge_changed(badge),
+        TerminalEvent::ShellIntegrationEvent {
+            event_type,
+            command,
+            exit_code,
+            timestamp,
+            cursor_line,
+        } => ServerMessage::shell_integration_event(
+            event_type,
+            command,
+            exit_code,
+            timestamp,
+            cursor_line.map(|l| l as u64),
+        ),
+        TerminalEvent::DirtyRegion(_, _) => return None,
+        TerminalEvent::ZoneOpened {
+            zone_id,
+            zone_type,
+            abs_row_start,
+        } => {
+            ServerMessage::zone_opened(zone_id as u64, zone_type.to_string(), abs_row_start as u64)
+        }
+        TerminalEvent::ZoneClosed {
+            zone_id,
+            zone_type,
+            abs_row_start,
+            abs_row_end,
+            exit_code,
+        } => ServerMessage::zone_closed(
+            zone_id as u64,
+            zone_type.to_string(),
+            abs_row_start as u64,
+            abs_row_end as u64,
+            exit_code,
+        ),
+        TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
+            ServerMessage::zone_scrolled_out(zone_id as u64, zone_type.to_string())
+        }
+        TerminalEvent::EnvironmentChanged {
+            key,
+            value,
+            old_value,
+        } => ServerMessage::environment_changed(key, value, old_value),
+        TerminalEvent::RemoteHostTransition {
+            hostname,
+            username,
+            old_hostname,
+            old_username,
+        } => ServerMessage::remote_host_transition(hostname, username, old_hostname, old_username),
+        TerminalEvent::SubShellDetected { depth, shell_type } => {
+            ServerMessage::sub_shell_detected(depth as u64, shell_type)
+        }
+        TerminalEvent::FileTransferStarted {
+            id,
+            direction,
+            filename,
+            total_bytes,
+        } => {
+            let dir_str = match direction {
+                TransferDirection::Download => "download",
+                TransferDirection::Upload => "upload",
+            };
+            ServerMessage::file_transfer_started(
+                id,
+                dir_str.to_string(),
+                filename,
+                total_bytes.map(|b| b as u64),
+            )
+        }
+        TerminalEvent::FileTransferProgress {
+            id,
+            bytes_transferred,
+            total_bytes,
+        } => ServerMessage::file_transfer_progress(
+            id,
+            bytes_transferred as u64,
+            total_bytes.map(|b| b as u64),
+        ),
+        TerminalEvent::FileTransferCompleted { id, filename, size } => {
+            ServerMessage::file_transfer_completed(id, filename, size as u64)
+        }
+        TerminalEvent::FileTransferFailed { id, reason } => {
+            ServerMessage::file_transfer_failed(id, reason)
+        }
+        TerminalEvent::UploadRequested { format } => ServerMessage::upload_requested(format),
+        TerminalEvent::ScreenCleared { include_scrollback } => {
+            ServerMessage::screen_cleared(include_scrollback)
+        }
+    })
+}
 
 /// Theme information for terminal color scheme
 #[derive(Debug, Clone, Serialize, Deserialize)]
