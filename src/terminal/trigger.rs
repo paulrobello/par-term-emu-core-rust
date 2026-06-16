@@ -140,32 +140,32 @@ impl Terminal {
         pattern: String,
         actions: Vec<TriggerAction>,
     ) -> Result<TriggerId, String> {
-        self.trigger_registry.add(name, pattern, actions)
+        self.triggers.trigger_registry.add(name, pattern, actions)
     }
 
     /// Remove a trigger by ID
     pub fn remove_trigger(&mut self, id: TriggerId) -> bool {
-        self.trigger_registry.remove(id)
+        self.triggers.trigger_registry.remove(id)
     }
 
     /// Enable or disable a trigger
     pub fn set_trigger_enabled(&mut self, id: TriggerId, enabled: bool) -> bool {
-        self.trigger_registry.set_enabled(id, enabled)
+        self.triggers.trigger_registry.set_enabled(id, enabled)
     }
 
     /// List all registered triggers
     pub fn list_triggers(&self) -> Vec<&Trigger> {
-        self.trigger_registry.list()
+        self.triggers.trigger_registry.list()
     }
 
     /// Get a trigger by ID
     pub fn get_trigger(&self, id: TriggerId) -> Option<&Trigger> {
-        self.trigger_registry.get(id)
+        self.triggers.trigger_registry.get(id)
     }
 
     /// Drain all pending trigger match events
     pub fn poll_trigger_matches(&mut self) -> Vec<TriggerMatch> {
-        self.trigger_registry.poll_matches()
+        self.triggers.trigger_registry.poll_matches()
     }
 
     /// Process trigger scans on pending dirty rows
@@ -173,12 +173,12 @@ impl Terminal {
     /// Called automatically in the PTY reader thread after `process()`.
     /// Can also be called manually for non-PTY terminals.
     pub fn process_trigger_scans(&mut self) {
-        if !self.trigger_registry.has_active_triggers() {
-            self.pending_trigger_rows.clear();
+        if !self.triggers.trigger_registry.has_active_triggers() {
+            self.triggers.pending_trigger_rows.clear();
             return;
         }
 
-        let rows_to_scan: Vec<usize> = self.pending_trigger_rows.drain().collect();
+        let rows_to_scan: Vec<usize> = self.triggers.pending_trigger_rows.drain().collect();
         let grid = self.active_grid();
         let cols = grid.cols();
 
@@ -206,9 +206,10 @@ impl Terminal {
 
         // Scan each row
         for (row, text, mapping) in &row_data {
-            let matches = self
-                .trigger_registry
-                .scan_line(*row, text, Some(mapping.as_slice()));
+            let matches =
+                self.triggers
+                    .trigger_registry
+                    .scan_line(*row, text, Some(mapping.as_slice()));
 
             for trigger_match in &matches {
                 // Execute actions for this match
@@ -226,7 +227,7 @@ impl Terminal {
     /// Execute trigger actions for a match
     fn execute_trigger_actions(&mut self, trigger_match: &TriggerMatch) {
         let trigger_id = trigger_match.trigger_id;
-        let actions = match self.trigger_registry.get(trigger_id) {
+        let actions = match self.triggers.trigger_registry.get(trigger_id) {
             Some(t) => t.actions.clone(),
             None => return,
         };
@@ -245,7 +246,7 @@ impl Terminal {
                     } else {
                         now.saturating_add(*duration_ms)
                     };
-                    self.trigger_highlights.push(TriggerHighlight {
+                    self.triggers.trigger_highlights.push(TriggerHighlight {
                         row: trigger_match.row,
                         col_start: trigger_match.col,
                         col_end: trigger_match.end_col,
@@ -257,22 +258,26 @@ impl Terminal {
                 TriggerAction::Notify { title, message } => {
                     let title = substitute_captures(title, &trigger_match.captures);
                     let message = substitute_captures(message, &trigger_match.captures);
-                    self.trigger_action_results.push(ActionResult::Notify {
-                        trigger_id: trigger_match.trigger_id,
-                        title,
-                        message,
-                    });
+                    self.triggers
+                        .trigger_action_results
+                        .push(ActionResult::Notify {
+                            trigger_id: trigger_match.trigger_id,
+                            title,
+                            message,
+                        });
                 }
                 TriggerAction::MarkLine { label, color } => {
                     let label = label
                         .as_ref()
                         .map(|l| substitute_captures(l, &trigger_match.captures));
-                    self.trigger_action_results.push(ActionResult::MarkLine {
-                        trigger_id: trigger_match.trigger_id,
-                        row: trigger_match.row,
-                        label,
-                        color: *color,
-                    });
+                    self.triggers
+                        .trigger_action_results
+                        .push(ActionResult::MarkLine {
+                            trigger_id: trigger_match.trigger_id,
+                            row: trigger_match.row,
+                            label,
+                            color: *color,
+                        });
                 }
                 TriggerAction::SetVariable { name, value } => {
                     let name = substitute_captures(name, &trigger_match.captures);
@@ -285,32 +290,41 @@ impl Terminal {
                         .iter()
                         .map(|a| substitute_captures(a, &trigger_match.captures))
                         .collect();
-                    if self.trigger_action_results.len() < self.max_action_results {
-                        self.trigger_action_results.push(ActionResult::RunCommand {
-                            trigger_id,
-                            command,
-                            args,
-                        });
+                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    {
+                        self.triggers
+                            .trigger_action_results
+                            .push(ActionResult::RunCommand {
+                                trigger_id,
+                                command,
+                                args,
+                            });
                     }
                 }
                 TriggerAction::PlaySound { sound_id, volume } => {
                     let sound_id = substitute_captures(sound_id, &trigger_match.captures);
-                    if self.trigger_action_results.len() < self.max_action_results {
-                        self.trigger_action_results.push(ActionResult::PlaySound {
-                            trigger_id,
-                            sound_id,
-                            volume: *volume,
-                        });
+                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    {
+                        self.triggers
+                            .trigger_action_results
+                            .push(ActionResult::PlaySound {
+                                trigger_id,
+                                sound_id,
+                                volume: *volume,
+                            });
                     }
                 }
                 TriggerAction::SendText { text, delay_ms } => {
                     let text = substitute_captures(text, &trigger_match.captures);
-                    if self.trigger_action_results.len() < self.max_action_results {
-                        self.trigger_action_results.push(ActionResult::SendText {
-                            trigger_id,
-                            text,
-                            delay_ms: *delay_ms,
-                        });
+                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    {
+                        self.triggers
+                            .trigger_action_results
+                            .push(ActionResult::SendText {
+                                trigger_id,
+                                text,
+                                delay_ms: *delay_ms,
+                            });
                     }
                 }
                 TriggerAction::SplitPane {
@@ -319,14 +333,16 @@ impl Terminal {
                     focus_new_pane,
                     target,
                 } => {
-                    self.trigger_action_results.push(ActionResult::SplitPane {
-                        trigger_id,
-                        direction: direction.clone(),
-                        command: command.clone(),
-                        focus_new_pane: *focus_new_pane,
-                        target: target.clone(),
-                        source_pane_id: None, // per-pane polling not yet wired
-                    });
+                    self.triggers
+                        .trigger_action_results
+                        .push(ActionResult::SplitPane {
+                            trigger_id,
+                            direction: direction.clone(),
+                            command: command.clone(),
+                            focus_new_pane: *focus_new_pane,
+                            target: target.clone(),
+                            source_pane_id: None, // per-pane polling not yet wired
+                        });
                 }
                 TriggerAction::StopPropagation => {
                     break;
@@ -338,7 +354,8 @@ impl Terminal {
     /// Get active trigger highlights (filters expired ones)
     pub fn get_trigger_highlights(&self) -> Vec<TriggerHighlight> {
         let now = crate::terminal::unix_millis();
-        self.trigger_highlights
+        self.triggers
+            .trigger_highlights
             .iter()
             .filter(|h| h.expiry > now)
             .cloned()
@@ -347,28 +364,28 @@ impl Terminal {
 
     /// Clear all trigger highlights
     pub fn clear_trigger_highlights(&mut self) {
-        self.trigger_highlights.clear();
+        self.triggers.trigger_highlights.clear();
     }
 
     /// Remove expired trigger highlights
     pub fn clear_expired_highlights(&mut self) {
         let now = crate::terminal::unix_millis();
-        self.trigger_highlights.retain(|h| h.expiry > now);
+        self.triggers.trigger_highlights.retain(|h| h.expiry > now);
     }
 
     /// Drain pending action results for frontend consumption
     pub fn poll_action_results(&mut self) -> Vec<ActionResult> {
-        std::mem::take(&mut self.trigger_action_results)
+        std::mem::take(&mut self.triggers.trigger_action_results)
     }
 
     /// Get access to the trigger registry
     pub fn trigger_registry(&self) -> &TriggerRegistry {
-        &self.trigger_registry
+        &self.triggers.trigger_registry
     }
 
     /// Get mutable access to the trigger registry
     pub fn trigger_registry_mut(&mut self) -> &mut TriggerRegistry {
-        &mut self.trigger_registry
+        &mut self.triggers.trigger_registry
     }
 }
 

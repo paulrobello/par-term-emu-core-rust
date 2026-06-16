@@ -298,6 +298,22 @@ pub(crate) struct MacroState {
     pub(crate) macro_screenshot_triggers: Vec<String>,
 }
 
+/// tmux control-protocol parser and notification buffer.
+pub(crate) struct TmuxState {
+    pub(crate) tmux_parser: crate::tmux_control::TmuxControlParser,
+    pub(crate) tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
+}
+
+/// Trigger registry, highlights, action results, and pending scan rows
+/// (Feature 18: Triggers & Automation).
+pub(crate) struct TriggerState {
+    pub(crate) trigger_registry: trigger::TriggerRegistry,
+    pub(crate) trigger_highlights: Vec<trigger::TriggerHighlight>,
+    pub(crate) trigger_action_results: Vec<trigger::ActionResult>,
+    pub(crate) max_action_results: usize,
+    pub(crate) pending_trigger_rows: HashSet<usize>,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -485,10 +501,8 @@ pub struct Terminal {
     pub(crate) warning_bell_volume: u8,
     /// Margin bell volume (0=off, 1-8=volume levels) - VT520 DECSMBV
     pub(crate) margin_bell_volume: u8,
-    /// Tmux control protocol parser
-    pub(crate) tmux_parser: crate::tmux_control::TmuxControlParser,
-    /// Tmux control protocol notifications buffer
-    pub(crate) tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
+    /// tmux control-protocol state (ARC-001 sub-struct)
+    pub(crate) tmux: TmuxState,
     /// Dirty rows tracking (0-indexed row numbers that have changed)
     pub(crate) dirty_rows: HashSet<usize>,
     /// Bell events buffer
@@ -598,16 +612,8 @@ pub struct Terminal {
     pub(crate) event_subscription: Option<HashSet<TerminalEventKind>>,
 
     // === Feature 18: Triggers & Automation ===
-    /// Trigger registry for pattern matching on terminal output
-    pub(crate) trigger_registry: trigger::TriggerRegistry,
-    /// Active trigger highlight overlays
-    pub(crate) trigger_highlights: Vec<trigger::TriggerHighlight>,
-    /// Pending action results for frontend consumption
-    pub(crate) trigger_action_results: Vec<trigger::ActionResult>,
-    /// Maximum action results to retain
-    pub(crate) max_action_results: usize,
-    /// Rows pending trigger scan (populated from dirty_rows when triggers exist)
-    pub(crate) pending_trigger_rows: HashSet<usize>,
+    /// Trigger & automation state (ARC-001 sub-struct)
+    pub(crate) triggers: TriggerState,
 
     // === ACS (Alternate Character Set) state ===
     /// G0 charset slot designation (ESC ( 0 / ESC ( B)
@@ -746,8 +752,10 @@ impl Terminal {
             warning_bell_volume: 4,
             margin_bell_volume: 4,
             // Tmux control protocol - default to disabled
-            tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
-            tmux_notifications: Vec::new(),
+            tmux: TmuxState {
+                tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
+                tmux_notifications: Vec::new(),
+            },
             // Event tracking
             dirty_rows: HashSet::new(),
             bell_events: Vec::new(),
@@ -843,11 +851,13 @@ impl Terminal {
             ),
             event_subscription: None,
             // Triggers
-            trigger_registry: TriggerRegistry::default(),
-            trigger_highlights: Vec::new(),
-            trigger_action_results: Vec::new(),
-            max_action_results: 100,
-            pending_trigger_rows: HashSet::new(),
+            triggers: TriggerState {
+                trigger_registry: TriggerRegistry::default(),
+                trigger_highlights: Vec::new(),
+                trigger_action_results: Vec::new(),
+                max_action_results: 100,
+                pending_trigger_rows: HashSet::new(),
+            },
             g0_charset: Charset::Ascii,
             g1_charset: Charset::Ascii,
             active_g: 0,
@@ -2140,42 +2150,42 @@ impl Terminal {
 
     /// Enable or disable tmux control mode
     pub fn set_tmux_control_mode(&mut self, enabled: bool) {
-        self.tmux_parser.set_control_mode(enabled);
+        self.tmux.tmux_parser.set_control_mode(enabled);
     }
 
     /// Check if tmux control mode is enabled
     pub fn is_tmux_control_mode(&self) -> bool {
-        self.tmux_parser.is_control_mode()
+        self.tmux.tmux_parser.is_control_mode()
     }
 
     /// Enable or disable tmux control mode auto-detection
     pub fn set_tmux_auto_detect(&mut self, enabled: bool) {
-        self.tmux_parser.set_auto_detect(enabled);
+        self.tmux.tmux_parser.set_auto_detect(enabled);
     }
 
     /// Check if tmux control mode auto-detection is enabled
     pub fn is_tmux_auto_detect(&self) -> bool {
-        self.tmux_parser.is_auto_detect()
+        self.tmux.tmux_parser.is_auto_detect()
     }
 
     /// Get tmux control protocol notifications
     pub fn tmux_notifications(&self) -> &[crate::tmux_control::TmuxNotification] {
-        &self.tmux_notifications
+        &self.tmux.tmux_notifications
     }
 
     /// Drain and return tmux control protocol notifications
     pub fn drain_tmux_notifications(&mut self) -> Vec<crate::tmux_control::TmuxNotification> {
-        std::mem::take(&mut self.tmux_notifications)
+        std::mem::take(&mut self.tmux.tmux_notifications)
     }
 
     /// Check if there are pending tmux control protocol notifications
     pub fn has_tmux_notifications(&self) -> bool {
-        !self.tmux_notifications.is_empty()
+        !self.tmux.tmux_notifications.is_empty()
     }
 
     /// Clear the tmux control protocol notifications buffer
     pub fn clear_tmux_notifications(&mut self) {
-        self.tmux_notifications.clear();
+        self.tmux.tmux_notifications.clear();
     }
 
     /// Run the Kitty APC pre-filter on `data` and feed the non-APC remainder
@@ -2279,9 +2289,9 @@ impl Terminal {
             return;
         }
 
-        if self.tmux_parser.is_control_mode() || self.tmux_parser.is_auto_detect() {
+        if self.tmux.tmux_parser.is_control_mode() || self.tmux.tmux_parser.is_auto_detect() {
             // Process as tmux control protocol (handles auto-detect internally)
-            let notifications = self.tmux_parser.parse(data);
+            let notifications = self.tmux.tmux_parser.parse(data);
             for notification in notifications {
                 match notification {
                     crate::tmux_control::TmuxNotification::TerminalOutput { data } => {
@@ -2291,7 +2301,7 @@ impl Terminal {
                     }
                     _ => {
                         // Store tmux notification
-                        self.tmux_notifications.push(notification);
+                        self.tmux.tmux_notifications.push(notification);
                     }
                 }
             }
@@ -2363,8 +2373,8 @@ impl Terminal {
         self.dirty_rows.insert(row);
 
         // If we have triggers, also add to pending trigger rows
-        if self.trigger_registry.has_active_triggers() {
-            self.pending_trigger_rows.insert(row);
+        if self.triggers.trigger_registry.has_active_triggers() {
+            self.triggers.pending_trigger_rows.insert(row);
         }
     }
 
