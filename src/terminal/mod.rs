@@ -363,6 +363,19 @@ pub(crate) struct KeyboardState {
     pub(crate) modify_other_keys_mode: u8,
 }
 
+/// Synchronized update state (DEC 2026).
+///
+/// Holds the active flag, batched update buffer, and the "explicitly disabled
+/// during flush" tracking flag. Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct SyncState {
+    /// Synchronized update mode (DEC 2026)
+    pub(crate) synchronized_updates: bool,
+    /// Buffer for batched updates (when synchronized mode is active)
+    pub(crate) update_buffer: Vec<u8>,
+    /// Flag to track if synchronized updates were explicitly disabled during a flush
+    pub(crate) sync_update_explicitly_disabled: bool,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -400,12 +413,8 @@ pub struct Terminal {
     pub(crate) focus_tracking: bool,
     /// Bracketed paste mode
     pub(crate) bracketed_paste: bool,
-    /// Synchronized update mode (DEC 2026)
-    pub(crate) synchronized_updates: bool,
-    /// Buffer for batched updates (when synchronized mode is active)
-    pub(crate) update_buffer: Vec<u8>,
-    /// Flag to track if synchronized updates were explicitly disabled during a flush
-    pub(crate) sync_update_explicitly_disabled: bool,
+    /// Synchronized update mode, buffer, disable-during-flush flag (ARC-001 sub-struct)
+    pub(crate) sync_state: SyncState,
     /// Shell integration state
     pub(crate) shell_integration: ShellIntegration,
     /// Scroll region top (0-indexed)
@@ -697,9 +706,11 @@ impl Terminal {
             mouse_encoding: MouseEncoding::Default,
             focus_tracking: false,
             bracketed_paste: false,
-            synchronized_updates: false,
-            update_buffer: Vec::new(),
-            sync_update_explicitly_disabled: false,
+            sync_state: SyncState {
+                synchronized_updates: false,
+                update_buffer: Vec::new(),
+                sync_update_explicitly_disabled: false,
+            },
             shell_integration: ShellIntegration::new(),
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
@@ -1534,27 +1545,30 @@ impl Terminal {
 
     /// Check if synchronized updates mode is enabled
     pub fn synchronized_updates(&self) -> bool {
-        self.synchronized_updates
+        self.sync_state.synchronized_updates
     }
 
     /// Flush the synchronized update buffer
     pub fn flush_synchronized_updates(&mut self) {
-        if !self.update_buffer.is_empty() {
-            let buffer = std::mem::take(&mut self.update_buffer);
+        if !self.sync_state.update_buffer.is_empty() {
+            let buffer = std::mem::take(&mut self.sync_state.update_buffer);
             debug::log(
                 debug::DebugLevel::Debug,
                 "SYNC_UPDATE",
                 &format!("Flushing buffer ({} bytes)", buffer.len()),
             );
             // Process the buffered data without synchronized mode
-            let saved_mode = self.synchronized_updates;
-            self.sync_update_explicitly_disabled = false;
-            self.synchronized_updates = false;
+            let saved_mode = self.sync_state.synchronized_updates;
+            self.sync_state.sync_update_explicitly_disabled = false;
+            self.sync_state.synchronized_updates = false;
             self.process(&buffer);
 
             // Restore only if it was originally enabled and not explicitly disabled
-            if saved_mode && !self.sync_update_explicitly_disabled && !self.synchronized_updates {
-                self.synchronized_updates = true;
+            if saved_mode
+                && !self.sync_state.sync_update_explicitly_disabled
+                && !self.sync_state.synchronized_updates
+            {
+                self.sync_state.synchronized_updates = true;
             }
         }
     }
@@ -2310,15 +2324,15 @@ impl Terminal {
             self.record_event(RecordingEventType::Output, data.to_vec());
         }
 
-        if self.synchronized_updates {
+        if self.sync_state.synchronized_updates {
             // Buffer data instead of processing it immediately
-            self.update_buffer.extend_from_slice(data);
+            self.sync_state.update_buffer.extend_from_slice(data);
 
             // Peek at the end of the buffer to see if it contains the disable sequence
             // We check the last 32 bytes to account for sequences split across chunks
-            let peek_len = 32.min(self.update_buffer.len());
-            let peek_start = self.update_buffer.len() - peek_len;
-            if contains_bytes(&self.update_buffer[peek_start..], b"\x1b[?2026l") {
+            let peek_len = 32.min(self.sync_state.update_buffer.len());
+            let peek_start = self.sync_state.update_buffer.len() - peek_len;
+            if contains_bytes(&self.sync_state.update_buffer[peek_start..], b"\x1b[?2026l") {
                 self.flush_synchronized_updates();
             }
             return;

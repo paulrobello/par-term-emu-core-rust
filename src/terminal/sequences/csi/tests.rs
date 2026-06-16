@@ -950,12 +950,12 @@ fn test_synchronized_updates_mode_toggle() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[?2026h"); // enable
     assert!(
-        term.synchronized_updates,
+        term.sync_state.synchronized_updates,
         "synchronized_updates should be true after enable"
     );
     term.process(b"\x1b[?2026l"); // disable
     assert!(
-        !term.synchronized_updates,
+        !term.sync_state.synchronized_updates,
         "synchronized_updates should be false after disable"
     );
 }

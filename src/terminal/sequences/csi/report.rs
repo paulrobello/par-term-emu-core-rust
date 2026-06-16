@@ -149,7 +149,7 @@ impl Terminal {
                                 }
                             }
                             2026 => {
-                                if self.synchronized_updates {
+                                if self.sync_state.synchronized_updates {
                                     1
                                 } else {
                                     2

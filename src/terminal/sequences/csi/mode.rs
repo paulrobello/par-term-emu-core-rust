@@ -22,7 +22,7 @@ impl Terminal {
         }
 
         if is_sync_update {
-            self.synchronized_updates = false;
+            self.sync_state.synchronized_updates = false;
             self.handle_csi_mode_impl(action, params, intermediates);
             // We do NOT restore synchronized_updates here because handle_csi_mode_impl
             // just set it to its new intended value (true for SM, false for RM).
@@ -112,7 +112,10 @@ impl Terminal {
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.bracketed_paste)),
-            2026 => Some(format!("sync_updates:{}", self.synchronized_updates)),
+            2026 => Some(format!(
+                "sync_updates:{}",
+                self.sync_state.synchronized_updates
+            )),
             _ => None,
         };
 
@@ -134,7 +137,7 @@ impl Terminal {
             1049 => self.use_alt_screen(),
             1004 => self.focus_tracking = true,
             2004 => self.bracketed_paste = true,
-            2026 => self.synchronized_updates = true,
+            2026 => self.sync_state.synchronized_updates = true,
             _ => {
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -155,7 +158,10 @@ impl Terminal {
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.bracketed_paste)),
-            2026 => Some(format!("sync_updates:{}", self.synchronized_updates)),
+            2026 => Some(format!(
+                "sync_updates:{}",
+                self.sync_state.synchronized_updates
+            )),
             _ => None,
         };
 
@@ -198,7 +204,10 @@ impl Terminal {
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.bracketed_paste)),
-            2026 => Some(format!("sync_updates:{}", self.synchronized_updates)),
+            2026 => Some(format!(
+                "sync_updates:{}",
+                self.sync_state.synchronized_updates
+            )),
             _ => None,
         };
 
@@ -217,8 +226,8 @@ impl Terminal {
             1004 => self.focus_tracking = false,
             2004 => self.bracketed_paste = false,
             2026 => {
-                self.synchronized_updates = false;
-                self.sync_update_explicitly_disabled = true;
+                self.sync_state.synchronized_updates = false;
+                self.sync_state.sync_update_explicitly_disabled = true;
                 self.flush_synchronized_updates();
             }
             _ => {
@@ -241,7 +250,10 @@ impl Terminal {
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.bracketed_paste)),
-            2026 => Some(format!("sync_updates:{}", self.synchronized_updates)),
+            2026 => Some(format!(
+                "sync_updates:{}",
+                self.sync_state.synchronized_updates
+            )),
             _ => None,
         };
 
