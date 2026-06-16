@@ -63,6 +63,7 @@ crate::impl_terminal_cell_line_queries!(PyTerminal);
 crate::impl_terminal_content_misc!(PyTerminal);
 crate::impl_terminal_search_select!(PyTerminal);
 crate::impl_terminal_debug_snapshots!(PyTerminal);
+crate::impl_terminal_file_transfer!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -1869,7 +1870,7 @@ pub(super) fn parse_clipboard_slot(slot: &str) -> PyResult<crate::terminal::Clip
 ///
 /// Creates a `PyDict` with the transfer's metadata fields. When `include_data`
 /// is true, also includes the raw file data as `PyBytes` under the `"data"` key.
-pub(super) fn transfer_to_py_dict(
+pub(crate) fn transfer_to_py_dict(
     py: Python<'_>,
     transfer: &crate::terminal::file_transfer::FileTransfer,
     include_data: bool,

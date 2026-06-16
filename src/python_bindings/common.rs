@@ -1746,3 +1746,159 @@ macro_rules! impl_terminal_debug_snapshots {
         }
     };
 }
+
+/// Emit file-transfer API methods for `$ty`. (ARC-003/QA-001 batch: file transfer.)
+/// Uses `transfer_to_py_dict` defined in `python_bindings::terminal::mod` (pub(super),
+/// visible to both the `terminal::*` submodules and the sibling `pty` module).
+#[macro_export]
+macro_rules! impl_terminal_file_transfer {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get all active (in-progress) file transfers
+            ///
+            /// Returns a list of dictionaries, each describing an active transfer.
+            ///
+            /// Returns:
+            ///     List of transfer dictionaries
+            #[pyo3(text_signature = "($self)")]
+            fn get_active_transfers(&self) -> pyo3::PyResult<Vec<pyo3::Py<pyo3::types::PyDict>>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let transfers = t.get_active_transfers();
+                pyo3::Python::attach(|py| {
+                    let mut result = Vec::with_capacity(transfers.len());
+                    for transfer in &transfers {
+                        result.push($crate::python_bindings::terminal::transfer_to_py_dict(
+                            py, transfer, false,
+                        )?);
+                    }
+                    Ok(result)
+                })
+            }
+
+            /// Get all completed file transfers (includes failed and cancelled)
+            ///
+            /// Returns:
+            ///     List of transfer dictionaries
+            #[pyo3(text_signature = "($self)")]
+            fn get_completed_transfers(
+                &self,
+            ) -> pyo3::PyResult<Vec<pyo3::Py<pyo3::types::PyDict>>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let transfers = t.get_completed_transfers();
+                pyo3::Python::attach(|py| {
+                    let mut result = Vec::with_capacity(transfers.len());
+                    for transfer in &transfers {
+                        result.push($crate::python_bindings::terminal::transfer_to_py_dict(
+                            py, transfer, false,
+                        )?);
+                    }
+                    Ok(result)
+                })
+            }
+
+            /// Get a specific active transfer by ID
+            ///
+            /// Args:
+            ///     transfer_id: The unique transfer identifier
+            ///
+            /// Returns:
+            ///     Transfer dictionary if found, None otherwise
+            #[pyo3(text_signature = "($self, transfer_id)")]
+            fn get_transfer(
+                &self,
+                transfer_id: u64,
+            ) -> pyo3::PyResult<Option<pyo3::Py<pyo3::types::PyDict>>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                match t.get_transfer(transfer_id) {
+                    Some(transfer) => pyo3::Python::attach(|py| {
+                        Ok(Some(
+                            $crate::python_bindings::terminal::transfer_to_py_dict(
+                                py, &transfer, false,
+                            )?,
+                        ))
+                    }),
+                    None => Ok(None),
+                }
+            }
+
+            /// Take a completed transfer by ID, removing it from the completed buffer
+            ///
+            /// Args:
+            ///     transfer_id: The unique transfer identifier
+            ///
+            /// Returns:
+            ///     Transfer dictionary with "data" key (bytes) if found, None otherwise
+            #[pyo3(text_signature = "($self, transfer_id)")]
+            fn take_completed_transfer(
+                &mut self,
+                transfer_id: u64,
+            ) -> pyo3::PyResult<Option<pyo3::Py<pyo3::types::PyDict>>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                match t.take_completed_transfer(transfer_id) {
+                    Some(transfer) => pyo3::Python::attach(|py| {
+                        Ok(Some(
+                            $crate::python_bindings::terminal::transfer_to_py_dict(
+                                py, &transfer, true,
+                            )?,
+                        ))
+                    }),
+                    None => Ok(None),
+                }
+            }
+
+            /// Cancel an active file transfer
+            ///
+            /// Args:
+            ///     transfer_id: The unique transfer identifier
+            ///
+            /// Returns:
+            ///     True if the transfer was found and cancelled, False otherwise
+            #[pyo3(text_signature = "($self, transfer_id)")]
+            fn cancel_file_transfer(&mut self, transfer_id: u64) -> pyo3::PyResult<bool> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.cancel_file_transfer(transfer_id))
+            }
+
+            /// Send upload data in response to an UploadRequested event
+            ///
+            /// Args:
+            ///     data: Raw file data bytes to upload
+            #[pyo3(text_signature = "($self, data)")]
+            fn send_upload_data(&mut self, data: &[u8]) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.send_upload_data(data);
+                Ok(())
+            }
+
+            /// Cancel an upload request
+            #[pyo3(text_signature = "($self)")]
+            fn cancel_upload(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.cancel_upload();
+                Ok(())
+            }
+
+            /// Set the maximum allowed file transfer size in bytes
+            ///
+            /// Args:
+            ///     max_bytes: Maximum transfer size in bytes
+            #[pyo3(text_signature = "($self, max_bytes)")]
+            fn set_max_transfer_size(&mut self, max_bytes: usize) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_max_transfer_size(max_bytes);
+                Ok(())
+            }
+
+            /// Get the current maximum allowed file transfer size in bytes
+            ///
+            /// Returns:
+            ///     Maximum transfer size in bytes (default: 50 MB)
+            #[pyo3(text_signature = "($self)")]
+            fn get_max_transfer_size(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.get_max_transfer_size())
+            }
+        }
+    };
+}
