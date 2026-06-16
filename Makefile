@@ -384,7 +384,7 @@ streamer-build:
 	@echo "  Building Streaming Server (Debug)"
 	@echo "======================================================================"
 	@echo ""
-	cargo build --bin par-term-streamer --no-default-features --features streaming
+	cargo build --bin par-term-streamer --no-default-features --features streaming-bin
 	@echo ""
 	@echo "Binary built: target/debug/par-term-streamer"
 	@echo ""
@@ -394,7 +394,7 @@ streamer-build-release:
 	@echo "  Building Streaming Server (Release)"
 	@echo "======================================================================"
 	@echo ""
-	cargo build --bin par-term-streamer --no-default-features --features streaming --release
+	cargo build --bin par-term-streamer --no-default-features --features streaming-bin --release
 	@echo ""
 	@echo "Binary built: target/release/par-term-streamer"
 	@echo ""
@@ -477,7 +477,7 @@ streamer-install: streamer-build-release
 	@echo "  Installing Streaming Server"
 	@echo "======================================================================"
 	@echo ""
-	cargo install --path . --bin par-term-streamer --no-default-features --features streaming --force
+	cargo install --path . --bin par-term-streamer --no-default-features --features streaming-bin --force
 	@echo ""
 	@echo "======================================================================"
 	@echo "  Installation Complete!"

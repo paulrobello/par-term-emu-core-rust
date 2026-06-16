@@ -44,7 +44,7 @@ crate-type = ["cdylib", "rlib"]
 [[bin]]
 name = "par-term-streamer"
 path = "src/bin/streaming_server.rs"
-required-features = ["streaming"]
+required-features = ["streaming-bin"]
 
 [dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
@@ -143,7 +143,13 @@ tempfile = "3.27"
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module"]
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
+# Library streaming: WebSocket/protobuf server for embedders. Excludes the
+# binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
+
+# Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
+# deps the library streaming module never uses. Depends on `streaming`.
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms
@@ -154,7 +160,7 @@ regenerate-proto = ["prost-build"]
 
 # Convenience feature combinations
 rust-only = []
-full = ["python", "streaming"]
+full = ["python", "streaming", "streaming-bin"]
 
 [profile.release]
 opt-level = 3

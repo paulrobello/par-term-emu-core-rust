@@ -163,7 +163,7 @@ jobs:
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build streaming server binary
-        run: cargo build --release --bin par-term-streamer --no-default-features --features streaming --target ${{ matrix.target }}
+        run: cargo build --release --bin par-term-streamer --no-default-features --features streaming-bin --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
