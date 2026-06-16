@@ -2768,8 +2768,10 @@ fn test_clipboard_sync_event_limits() {
 #[test]
 fn test_silence_check_does_not_fire_immediately() {
     let mut term = Terminal::new(80, 24);
-    term.notification_config.silence_enabled = true;
-    term.notification_config.silence_threshold = 1;
+    term.notifications_state.notification_config.silence_enabled = true;
+    term.notifications_state
+        .notification_config
+        .silence_threshold = 1;
     term.check_silence();
     assert!(!term.has_notifications());
 }

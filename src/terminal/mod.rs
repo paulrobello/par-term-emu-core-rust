@@ -314,6 +314,28 @@ pub(crate) struct TriggerState {
     pub(crate) pending_trigger_rows: HashSet<usize>,
 }
 
+/// Terminal notification state.
+///
+/// Combines the OSC 9/777 notification buffer with the Feature 37 notification
+/// config, event log, silence/activity tracking, size cap, and custom triggers.
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct NotificationState {
+    /// Notifications from OSC 9 / OSC 777 sequences
+    pub(crate) notifications: Vec<Notification>,
+    /// Notification configuration
+    pub(crate) notification_config: NotificationConfig,
+    /// Notification events log
+    pub(crate) notification_events: Vec<NotificationEvent>,
+    /// Last activity timestamp (for silence detection)
+    pub(crate) last_activity_time: u64,
+    /// Last silence check timestamp
+    pub(crate) last_silence_check: u64,
+    /// Maximum OSC 9/777 notifications retained
+    pub(crate) max_notifications: usize,
+    /// Custom notification triggers (ID -> message)
+    pub(crate) custom_triggers: HashMap<u32, String>,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -428,8 +450,8 @@ pub struct Terminal {
     pub(crate) ansi_palette: [Color; 16],
     /// Color stack for XTPUSHCOLORS/XTPOPCOLORS (fg, bg, underline)
     pub(crate) color_stack: Vec<(Color, Color, Option<Color>)>,
-    /// Notifications from OSC 9 / OSC 777 sequences
-    pub(crate) notifications: Vec<Notification>,
+    /// Notifications, config, events, silence/activity tracking (ARC-001 sub-struct)
+    pub(crate) notifications_state: NotificationState,
     /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
     pub(crate) progress_bar: ProgressBar,
     /// Named progress bars from OSC 934 sequences (keyed by ID)
@@ -564,20 +586,6 @@ pub struct Terminal {
     /// Maximum CWD change history
     pub(crate) max_cwd_history: usize,
 
-    // === Feature 37: Terminal Notifications ===
-    /// Notification configuration
-    pub(crate) notification_config: NotificationConfig,
-    /// Notification events log
-    pub(crate) notification_events: Vec<NotificationEvent>,
-    /// Last activity timestamp (for silence detection)
-    pub(crate) last_activity_time: u64,
-    /// Last silence check timestamp
-    pub(crate) last_silence_check: u64,
-    /// Maximum OSC 9/777 notifications retained
-    pub(crate) max_notifications: usize,
-    /// Custom notification triggers (ID -> message)
-    pub(crate) custom_triggers: HashMap<u32, String>,
-
     // === Feature 24: Terminal Replay/Recording ===
     /// Current recording session
     pub(crate) recording_session: Option<RecordingSession>,
@@ -710,7 +718,6 @@ impl Terminal {
             cursor_color: Color::Named(NamedColor::White),
             ansi_palette: Self::default_ansi_palette(),
             color_stack: Vec::new(),
-            notifications: Vec::new(),
             progress_bar: ProgressBar::default(),
             named_progress_bars: HashMap::new(),
             bell_count: 0,
@@ -822,12 +829,15 @@ impl Terminal {
             max_command_history: 100,
             max_cwd_history: 50,
             // Notifications
-            notification_config: NotificationConfig::default(),
-            notification_events: Vec::new(),
-            last_activity_time: now,
-            last_silence_check: now,
-            max_notifications: DEFAULT_MAX_NOTIFICATIONS,
-            custom_triggers: HashMap::new(),
+            notifications_state: NotificationState {
+                notifications: Vec::new(),
+                notification_config: NotificationConfig::default(),
+                notification_events: Vec::new(),
+                last_activity_time: now,
+                last_silence_check: now,
+                max_notifications: DEFAULT_MAX_NOTIFICATIONS,
+                custom_triggers: HashMap::new(),
+            },
             // Replay/Recording
             recording_session: None,
             is_recording: false,
@@ -1848,48 +1858,51 @@ impl Terminal {
     /// Returns a reference to the list of notifications that have been received
     /// but not yet retrieved.
     pub fn notifications(&self) -> &[Notification] {
-        &self.notifications
+        &self.notifications_state.notifications
     }
 
     /// Take all pending notifications
     ///
     /// Returns and clears the notification queue. Use this to poll for new notifications.
     pub fn take_notifications(&mut self) -> Vec<Notification> {
-        std::mem::take(&mut self.notifications)
+        std::mem::take(&mut self.notifications_state.notifications)
     }
 
     /// Check if there are pending notifications
     pub fn has_notifications(&self) -> bool {
-        !self.notifications.is_empty()
+        !self.notifications_state.notifications.is_empty()
     }
 
     fn enqueue_notification(&mut self, notification: Notification) {
-        if self.max_notifications == 0 {
+        if self.notifications_state.max_notifications == 0 {
             return;
         }
 
-        if self.notifications.len() >= self.max_notifications {
-            let excess = self.notifications.len() + 1 - self.max_notifications;
-            self.notifications.drain(0..excess);
+        if self.notifications_state.notifications.len()
+            >= self.notifications_state.max_notifications
+        {
+            let excess = self.notifications_state.notifications.len() + 1
+                - self.notifications_state.max_notifications;
+            self.notifications_state.notifications.drain(0..excess);
         }
 
-        self.notifications.push(notification);
+        self.notifications_state.notifications.push(notification);
     }
 
     /// Set maximum OSC 9/777 notifications retained (0 disables buffering)
     pub fn set_max_notifications(&mut self, max: usize) {
-        self.max_notifications = max;
+        self.notifications_state.max_notifications = max;
         if max == 0 {
-            self.notifications.clear();
-        } else if self.notifications.len() > max {
-            let excess = self.notifications.len() - max;
-            self.notifications.drain(0..excess);
+            self.notifications_state.notifications.clear();
+        } else if self.notifications_state.notifications.len() > max {
+            let excess = self.notifications_state.notifications.len() - max;
+            self.notifications_state.notifications.drain(0..excess);
         }
     }
 
     /// Get maximum OSC 9/777 notifications retained
     pub fn max_notifications(&self) -> usize {
-        self.max_notifications
+        self.notifications_state.max_notifications
     }
 
     // === Progress Bar Methods (OSC 9;4) ===
