@@ -1,6 +1,7 @@
 use crate::color::Color;
 use crate::unicode_width_config::{char_width, str_width, WidthConfig};
 use bitflags::bitflags;
+use smallvec::SmallVec;
 
 /// Underline style for text decoration (SGR 4:x)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -195,15 +196,20 @@ impl CellFlags {
 
 /// A single cell in the terminal grid
 ///
-/// Note: Cell is Clone but not Copy because it contains a Vec<char> for combining characters.
-/// Use .clone() explicitly when you need to copy a cell.
+/// Note: Cell is Clone but not Copy because `combining` (a `SmallVec<[char; 4]>`)
+/// is not `Copy`. The inline capacity covers >99.9% of combining sequences, so
+/// the common case (0–4 combining marks) never heap-allocates; only rare long
+/// sequences spill to the heap. Use `.clone()` explicitly when you need to copy
+/// a cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The character stored in this cell
     pub c: char,
     /// Combining characters (variation selectors, ZWJ, modifiers, etc.)
-    /// These follow the base character to form a complete grapheme cluster
-    pub combining: Vec<char>,
+    /// These follow the base character to form a complete grapheme cluster.
+    /// Stored inline (no heap alloc) for up to 4 marks — the overwhelmingly
+    /// common case — spilling to the heap only for rare long clusters.
+    pub combining: SmallVec<[char; 4]>,
     /// Foreground color
     pub fg: Color,
     /// Background color
@@ -220,7 +226,7 @@ impl Default for Cell {
     fn default() -> Self {
         Self {
             c: ' ',
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             fg: Color::Named(crate::color::NamedColor::White),
             bg: Color::Named(crate::color::NamedColor::Black),
             underline_color: None,
@@ -238,7 +244,7 @@ impl Cell {
         let width = char_width(c, &WidthConfig::default()) as u8;
         Self {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             width,
             ..Default::default()
         }
@@ -252,7 +258,7 @@ impl Cell {
         let width = char_width(c, config) as u8;
         Self {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             width,
             ..Default::default()
         }
@@ -265,7 +271,7 @@ impl Cell {
         let width = char_width(c, &WidthConfig::default()) as u8;
         Self {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             fg,
             bg,
             underline_color: None,
@@ -279,7 +285,7 @@ impl Cell {
         let width = char_width(c, config) as u8;
         Self {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             fg,
             bg,
             underline_color: None,
@@ -348,7 +354,7 @@ impl Cell {
     pub fn from_grapheme(grapheme: &str) -> Self {
         let mut chars = grapheme.chars();
         let base_char = chars.next().unwrap_or(' ');
-        let combining: Vec<char> = chars.collect();
+        let combining: SmallVec<[char; 4]> = chars.collect();
         let width = str_width(grapheme, &WidthConfig::default()).max(1) as u8;
 
         Self {
@@ -363,7 +369,7 @@ impl Cell {
     pub fn from_grapheme_with_config(grapheme: &str, config: &WidthConfig) -> Self {
         let mut chars = grapheme.chars();
         let base_char = chars.next().unwrap_or(' ');
-        let combining: Vec<char> = chars.collect();
+        let combining: SmallVec<[char; 4]> = chars.collect();
         let width = str_width(grapheme, config).max(1) as u8;
 
         Self {
@@ -385,7 +391,7 @@ impl Cell {
         let normalized = normalization.normalize(grapheme);
         let mut chars = normalized.chars();
         let base_char = chars.next().unwrap_or(' ');
-        let combining: Vec<char> = chars.collect();
+        let combining: SmallVec<[char; 4]> = chars.collect();
         let width = str_width(&normalized, config).max(1) as u8;
 
         Self {
@@ -696,5 +702,36 @@ mod tests {
         assert_eq!(cell1.c, cell2.c);
         assert_eq!(cell1.fg, cell2.fg);
         assert_eq!(cell1.flags, cell2.flags);
+    }
+
+    /// ARC-005/QA-004: bulk-cloning cells that carry combining marks must stay
+    /// cheap. Before SmallVec, every clone of a combining-bearing cell allocated
+    /// a fresh heap buffer, so a scroll/reflow over a full screen of such cells
+    /// (the audit's ~800k-clone reflow case) was allocation-bound. With
+    /// `SmallVec<[char; 4]>`, ≤4 marks are inline → each clone is a memcpy with
+    /// no heap allocation. This locks that characteristic in.
+    #[test]
+    fn cloning_combining_cells_is_fast_at_scale() {
+        // base char + 3 combining marks (inline in SmallVec<[char; 4]>)
+        let cell = Cell::from_grapheme("e\u{0301}\u{0302}\u{0303}");
+        assert_eq!(cell.combining.len(), 3);
+
+        // ~800k clones ≈ a 10k-line × 80-col reflow/scroll (the audit's worst case).
+        let start = std::time::Instant::now();
+        let clones: Vec<Cell> = std::iter::repeat_with(|| cell.clone())
+            .take(80 * 10_000)
+            .collect();
+        let elapsed = start.elapsed();
+        assert!(!clones.is_empty());
+        drop(clones);
+
+        // Generous budget for slow CI. The point is a regression guard: inline
+        // SmallVec clones are memcpy-fast; a revert to Vec<char> (per-clone heap
+        // alloc) would blow well past this on a loaded machine.
+        assert!(
+            elapsed < std::time::Duration::from_millis(200),
+            "cloning 800k combining-bearing cells took {:?}, expected < 200ms",
+            elapsed
+        );
     }
 }

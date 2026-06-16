@@ -13,6 +13,7 @@ use crate::cell::Cell;
 use crate::debug;
 use crate::grapheme;
 use crate::terminal::Terminal;
+use smallvec::SmallVec;
 
 impl Terminal {
     /// Write a character to the terminal at the current cursor position
@@ -63,7 +64,7 @@ impl Terminal {
                         spacer_flags.set_wide_char_spacer(true);
                         Some(Cell {
                             c: ' ',
-                            combining: Vec::new(),
+                            combining: SmallVec::new(),
                             fg: target_cell.fg,
                             bg: target_cell.bg,
                             underline_color: target_cell.underline_color,
@@ -197,7 +198,7 @@ impl Terminal {
 
                         let spacer = Cell {
                             c: ' ',
-                            combining: Vec::new(),
+                            combining: SmallVec::new(),
                             fg: target_cell.fg,
                             bg: target_cell.bg,
                             underline_color: target_cell.underline_color,
@@ -271,7 +272,7 @@ impl Terminal {
 
                                 let spacer = Cell {
                                     c: ' ',
-                                    combining: Vec::new(),
+                                    combining: SmallVec::new(),
                                     fg: target_cell_mut.fg,
                                     bg: target_cell_mut.bg,
                                     underline_color: target_cell_mut.underline_color,
@@ -469,7 +470,7 @@ impl Terminal {
 
         let cell = Cell {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             fg: self.fg,
             bg: self.bg,
             underline_color: self.underline_color,
@@ -502,7 +503,7 @@ impl Terminal {
 
             let spacer = Cell {
                 c: ' ', // Spacer character
-                combining: Vec::new(),
+                combining: SmallVec::new(),
                 fg: self.fg,
                 bg: self.bg,
                 underline_color: self.underline_color,
@@ -574,7 +575,7 @@ impl Terminal {
 
         let cell = Cell {
             c,
-            combining: Vec::new(),
+            combining: SmallVec::new(),
             fg: self.fg,
             bg: self.bg,
             underline_color: self.underline_color,
