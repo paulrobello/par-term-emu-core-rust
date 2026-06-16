@@ -53,6 +53,7 @@ crate::impl_terminal_static_helpers!(PyPtyTerminal);
 crate::impl_terminal_sixel_graphics!(PyPtyTerminal);
 crate::impl_terminal_badge_session!(PyPtyTerminal);
 crate::impl_terminal_progress_notifications!(PyPtyTerminal);
+crate::impl_terminal_recording!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {
@@ -1747,101 +1748,9 @@ impl PyPtyTerminal {
     // get_sixel_limits, set_sixel_limits, get_sixel_graphics_limit, set_sixel_graphics_limit,
     // get_dropped_sixel_graphics, get_sixel_stats: provided by impl_terminal_sixel_graphics! (ARC-003/QA-001)
 
-    /// Start recording terminal session
-    ///
-    /// Args:
-    ///     title: Optional session title (defaults to timestamp)
-    fn start_recording(&self, title: Option<String>) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.start_recording(title);
-        }
-        Ok(())
-    }
-
-    /// Stop recording and return the session
-    ///
-    /// Returns:
-    ///     RecordingSession object if recording was active, None otherwise
-    fn stop_recording(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            Ok(term
-                .stop_recording()
-                .map(super::types::PyRecordingSession::from))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Check if terminal is currently recording
-    ///
-    /// Returns:
-    ///     True if recording is active, False otherwise
-    fn is_recording(&self) -> PyResult<bool> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            Ok(term.is_recording())
-        } else {
-            Ok(false)
-        }
-    }
-
-    /// Record output data
-    ///
-    /// Args:
-    ///     data: Output data bytes
-    fn record_output(&self, data: &[u8]) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.record_output(data);
-        }
-        Ok(())
-    }
-
-    /// Record input data
-    ///
-    /// Args:
-    ///     data: Input data bytes
-    fn record_input(&self, data: &[u8]) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.record_input(data);
-        }
-        Ok(())
-    }
-
-    /// Record terminal resize
-    ///
-    /// Args:
-    ///     cols: Number of columns
-    ///     rows: Number of rows
-    fn record_resize(&self, cols: usize, rows: usize) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.record_resize(cols, rows);
-        }
-        Ok(())
-    }
-
-    /// Add a marker/bookmark to the recording
-    ///
-    /// Args:
-    ///     label: Marker label
-    fn record_marker(&self, label: String) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            term.record_marker(label);
-        }
-        Ok(())
-    }
-
-    /// Get current recording session
-    ///
-    /// Returns:
-    ///     RecordingSession object if recording is active, None otherwise
-    fn get_recording_session(&self) -> PyResult<Option<super::types::PyRecordingSession>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
-            Ok(term
-                .get_recording_session()
-                .map(super::types::PyRecordingSession::from))
-        } else {
-            Ok(None)
-        }
-    }
+    // start_recording, stop_recording, is_recording, record_output, record_input,
+    // record_resize, record_marker, get_recording_session:
+    //   provided by impl_terminal_recording! (ARC-003/QA-001)
 
     /// Export recording to asciicast v2 format
     ///

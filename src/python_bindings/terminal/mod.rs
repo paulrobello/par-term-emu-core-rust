@@ -58,6 +58,7 @@ crate::impl_terminal_static_helpers!(PyTerminal);
 crate::impl_terminal_sixel_graphics!(PyTerminal);
 crate::impl_terminal_badge_session!(PyTerminal);
 crate::impl_terminal_progress_notifications!(PyTerminal);
+crate::impl_terminal_recording!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {

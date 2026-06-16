@@ -1099,3 +1099,102 @@ macro_rules! impl_terminal_progress_notifications {
         }
     };
 }
+
+/// Emit session-recording methods for `$ty`. (ARC-003/QA-001 batch: recording.)
+/// NOTE: the pty.rs copies were declared `&self` despite mutating recording
+/// state (an artifact of the lock-from-shared-ref pattern); the canonical
+/// `&mut self` form from `mod.rs`/`recording_api.rs` is used here, which is
+/// the correct receiver since these mutate terminal state. Python-visible
+/// behavior is unchanged (PyO3 does not enforce `&mut self` at the Python
+/// level — the GIL already provides exclusive access).
+#[macro_export]
+macro_rules! impl_terminal_recording {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Start recording a terminal session
+            ///
+            /// Args:
+            ///     title: Optional session title
+            fn start_recording(&mut self, title: Option<String>) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.start_recording(title);
+                Ok(())
+            }
+
+            /// Stop recording and return the session
+            ///
+            /// Returns:
+            ///     RecordingSession object if recording was active, None otherwise
+            fn stop_recording(
+                &mut self,
+            ) -> pyo3::PyResult<Option<$crate::python_bindings::types::PyRecordingSession>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.stop_recording()
+                    .map($crate::python_bindings::types::PyRecordingSession::from))
+            }
+
+            /// Record output data
+            ///
+            /// Args:
+            ///     data: Output data bytes
+            fn record_output(&mut self, data: &[u8]) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.record_output(data);
+                Ok(())
+            }
+
+            /// Record input data
+            ///
+            /// Args:
+            ///     data: Input data bytes
+            fn record_input(&mut self, data: &[u8]) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.record_input(data);
+                Ok(())
+            }
+
+            /// Record terminal resize
+            ///
+            /// Args:
+            ///     cols: Number of columns
+            ///     rows: Number of rows
+            fn record_resize(&mut self, cols: usize, rows: usize) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.record_resize(cols, rows);
+                Ok(())
+            }
+
+            /// Add a marker/bookmark to the recording
+            ///
+            /// Args:
+            ///     label: Marker label
+            fn record_marker(&mut self, label: String) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.record_marker(label);
+                Ok(())
+            }
+
+            /// Get current recording session
+            ///
+            /// Returns:
+            ///     RecordingSession object if recording is active, None otherwise
+            fn get_recording_session(
+                &self,
+            ) -> pyo3::PyResult<Option<$crate::python_bindings::types::PyRecordingSession>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.get_recording_session()
+                    .map($crate::python_bindings::types::PyRecordingSession::from))
+            }
+
+            /// Check if currently recording
+            ///
+            /// Returns:
+            ///     True if recording is active
+            fn is_recording(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.is_recording())
+            }
+        }
+    };
+}
