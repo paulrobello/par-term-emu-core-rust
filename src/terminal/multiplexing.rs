@@ -96,7 +96,12 @@ impl Terminal {
             title: self.title().to_string(),
             size: (cols, rows),
             position: (0, 0), // Layout position should be set by manager
-            cwd: cwd.or_else(|| self.shell_integration.cwd().map(|s| s.to_string())),
+            cwd: cwd.or_else(|| {
+                self.shell_state
+                    .shell_integration
+                    .cwd()
+                    .map(|s| s.to_string())
+            }),
             env: HashMap::new(), // Environment could be captured if available
             content: self.get_logical_lines(),
             cursor: (self.cursor.col, self.cursor.row),

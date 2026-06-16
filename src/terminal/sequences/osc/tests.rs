@@ -80,28 +80,28 @@ fn test_shell_integration_markers() {
     // OSC 133 A - Prompt start
     term.process(b"\x1b]133;A\x1b\\");
     assert_eq!(
-        term.shell_integration.marker(),
+        term.shell_state.shell_integration.marker(),
         Some(ShellIntegrationMarker::PromptStart)
     );
 
     // OSC 133 B - Command start
     term.process(b"\x1b]133;B\x1b\\");
     assert_eq!(
-        term.shell_integration.marker(),
+        term.shell_state.shell_integration.marker(),
         Some(ShellIntegrationMarker::CommandStart)
     );
 
     // OSC 133 C - Command executed
     term.process(b"\x1b]133;C\x1b\\");
     assert_eq!(
-        term.shell_integration.marker(),
+        term.shell_state.shell_integration.marker(),
         Some(ShellIntegrationMarker::CommandExecuted)
     );
 
     // OSC 133 D - Command finished
     term.process(b"\x1b]133;D\x1b\\");
     assert_eq!(
-        term.shell_integration.marker(),
+        term.shell_state.shell_integration.marker(),
         Some(ShellIntegrationMarker::CommandFinished)
     );
 }
@@ -142,7 +142,10 @@ fn test_osc7_set_directory() {
 
     // OSC 7 with file:// URL (localhost)
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/project")
+    );
     assert_eq!(
         term.session_variables().path,
         Some("/home/user/project".to_string())
@@ -150,7 +153,10 @@ fn test_osc7_set_directory() {
 
     // OSC 7 with hostname
     term.process(b"\x1b]7;file://hostname/home/user/test\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/test"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/test")
+    );
     assert_eq!(
         term.session_variables().hostname,
         Some("hostname".to_string())
@@ -163,28 +169,43 @@ fn test_osc7_hostname_extraction() {
 
     // file:///path - localhost implicit, hostname should be None
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
-    assert!(term.shell_integration.hostname().is_none());
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/project")
+    );
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     // file://hostname/path - hostname should be extracted
     term.process(b"\x1b]7;file://myserver/home/user/test\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/test"));
-    assert_eq!(term.shell_integration.hostname(), Some("myserver"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/test")
+    );
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("myserver")
+    );
 
     // file://localhost/path - localhost should be treated as None
     term.process(b"\x1b]7;file://localhost/var/log\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/var/log"));
-    assert!(term.shell_integration.hostname().is_none());
+    assert_eq!(term.shell_state.shell_integration.cwd(), Some("/var/log"));
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     // file://LOCALHOST/path - case insensitive localhost check
     term.process(b"\x1b]7;file://LOCALHOST/tmp\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/tmp"));
-    assert!(term.shell_integration.hostname().is_none());
+    assert_eq!(term.shell_state.shell_integration.cwd(), Some("/tmp"));
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     // Remote host with full path
     term.process(b"\x1b]7;file://remote.server.com/home/alice/work\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/alice/work"));
-    assert_eq!(term.shell_integration.hostname(), Some("remote.server.com"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/alice/work")
+    );
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("remote.server.com")
+    );
 }
 
 #[test]
@@ -193,9 +214,15 @@ fn test_osc7_username_and_port_and_decoding() {
 
     // Username and port should be parsed, port stripped from hostname
     term.process(b"\x1b]7;file://alice@example.com:2222/home/alice/Work%20Dir\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/alice/Work Dir"));
-    assert_eq!(term.shell_integration.hostname(), Some("example.com"));
-    assert_eq!(term.shell_integration.username(), Some("alice"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/alice/Work Dir")
+    );
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("example.com")
+    );
+    assert_eq!(term.shell_state.shell_integration.username(), Some("alice"));
     assert_eq!(
         term.session_variables().path,
         Some("/home/alice/Work Dir".to_string())
@@ -208,12 +235,21 @@ fn test_osc7_username_and_port_and_decoding() {
 
     // Query/fragment stripped and percent-decoded unicode
     term.process(b"\x1b]7;file://remote.host/home/alice/caf%C3%A9?foo=bar#frag\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/alice/café"));
-    assert_eq!(term.shell_integration.hostname(), Some("remote.host"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/alice/café")
+    );
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("remote.host")
+    );
 
     // Non-file scheme should be ignored (no change)
     term.process(b"\x1b]7;http://example.com/should_not_set\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/alice/café"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/alice/café")
+    );
 }
 
 #[test]
@@ -222,15 +258,21 @@ fn test_osc7_hostname_updates() {
 
     // Start with remote host
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("server1"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("server1")
+    );
 
     // Switch to localhost
     term.process(b"\x1b]7;file:///home/user\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     // Switch to different remote host
     term.process(b"\x1b]7;file://server2/home/user\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("server2"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("server2")
+    );
 }
 
 #[test]
@@ -1219,10 +1261,10 @@ fn test_remote_host_user_and_hostname() {
     term.process(b"\x1b]1337;RemoteHost=alice@server1.example.com\x1b\\");
 
     assert_eq!(
-        term.shell_integration.hostname(),
+        term.shell_state.shell_integration.hostname(),
         Some("server1.example.com")
     );
-    assert_eq!(term.shell_integration.username(), Some("alice"));
+    assert_eq!(term.shell_state.shell_integration.username(), Some("alice"));
 }
 
 #[test]
@@ -1232,8 +1274,11 @@ fn test_remote_host_hostname_only() {
     // No username, just hostname
     term.process(b"\x1b]1337;RemoteHost=myserver\x1b\\");
 
-    assert_eq!(term.shell_integration.hostname(), Some("myserver"));
-    assert!(term.shell_integration.username().is_none());
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("myserver")
+    );
+    assert!(term.shell_state.shell_integration.username().is_none());
 }
 
 #[test]
@@ -1243,8 +1288,11 @@ fn test_remote_host_empty_user_at_hostname() {
     // Empty username with @ prefix
     term.process(b"\x1b]1337;RemoteHost=@myserver\x1b\\");
 
-    assert_eq!(term.shell_integration.hostname(), Some("myserver"));
-    assert!(term.shell_integration.username().is_none());
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("myserver")
+    );
+    assert!(term.shell_state.shell_integration.username().is_none());
 }
 
 #[test]
@@ -1253,12 +1301,15 @@ fn test_remote_host_localhost_clears_hostname() {
 
     // First set a remote host
     term.process(b"\x1b]1337;RemoteHost=alice@remote\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("remote"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("remote")
+    );
 
     // Then switch back to localhost
     term.process(b"\x1b]1337;RemoteHost=alice@localhost\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
-    assert_eq!(term.shell_integration.username(), Some("alice"));
+    assert!(term.shell_state.shell_integration.hostname().is_none());
+    assert_eq!(term.shell_state.shell_integration.username(), Some("alice"));
 }
 
 #[test]
@@ -1266,10 +1317,10 @@ fn test_remote_host_localhost_case_insensitive() {
     let mut term = Terminal::new(80, 24);
 
     term.process(b"\x1b]1337;RemoteHost=user@LOCALHOST\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     term.process(b"\x1b]1337;RemoteHost=user@Localhost\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 }
 
 #[test]
@@ -1297,8 +1348,8 @@ fn test_remote_host_bell_terminated() {
     // BEL-terminated variant
     term.process(b"\x1b]1337;RemoteHost=bob@host2\x07");
 
-    assert_eq!(term.shell_integration.hostname(), Some("host2"));
-    assert_eq!(term.shell_integration.username(), Some("bob"));
+    assert_eq!(term.shell_state.shell_integration.hostname(), Some("host2"));
+    assert_eq!(term.shell_state.shell_integration.username(), Some("bob"));
 }
 
 #[test]
@@ -1318,8 +1369,8 @@ fn test_remote_host_empty_payload_ignored() {
 
     // Empty payload should be ignored
     term.process(b"\x1b]1337;RemoteHost=\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
-    assert!(term.shell_integration.username().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.username().is_none());
 }
 
 #[test]
@@ -1328,8 +1379,8 @@ fn test_remote_host_empty_hostname_ignored() {
 
     // user@ with no hostname
     term.process(b"\x1b]1337;RemoteHost=alice@\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
-    assert!(term.shell_integration.username().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.username().is_none());
 }
 
 #[test]
@@ -1338,12 +1389,18 @@ fn test_remote_host_overrides_osc7_hostname() {
 
     // Set hostname via OSC 7
     term.process(b"\x1b]7;file://server1/home/user\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("server1"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("server1")
+    );
 
     // Override via RemoteHost
     term.process(b"\x1b]1337;RemoteHost=bob@server2\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("server2"));
-    assert_eq!(term.shell_integration.username(), Some("bob"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("server2")
+    );
+    assert_eq!(term.shell_state.shell_integration.username(), Some("bob"));
 }
 
 #[test]
@@ -1352,13 +1409,13 @@ fn test_remote_host_updates_sequence() {
 
     // First remote host
     term.process(b"\x1b]1337;RemoteHost=alice@host1\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("host1"));
-    assert_eq!(term.shell_integration.username(), Some("alice"));
+    assert_eq!(term.shell_state.shell_integration.hostname(), Some("host1"));
+    assert_eq!(term.shell_state.shell_integration.username(), Some("alice"));
 
     // Second remote host
     term.process(b"\x1b]1337;RemoteHost=bob@host2\x1b\\");
-    assert_eq!(term.shell_integration.hostname(), Some("host2"));
-    assert_eq!(term.shell_integration.username(), Some("bob"));
+    assert_eq!(term.shell_state.shell_integration.hostname(), Some("host2"));
+    assert_eq!(term.shell_state.shell_integration.username(), Some("bob"));
 }
 
 #[test]
@@ -1367,11 +1424,11 @@ fn test_remote_host_loopback_addresses() {
 
     // IPv4 loopback
     term.process(b"\x1b]1337;RemoteHost=user@127.0.0.1\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 
     // IPv6 loopback
     term.process(b"\x1b]1337;RemoteHost=user@::1\x1b\\");
-    assert!(term.shell_integration.hostname().is_none());
+    assert!(term.shell_state.shell_integration.hostname().is_none());
 }
 
 #[test]
@@ -1380,12 +1437,21 @@ fn test_remote_host_preserves_existing_cwd() {
 
     // Set cwd via OSC 7
     term.process(b"\x1b]7;file:///home/user/project\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/project")
+    );
 
     // Set remote host - should not clear cwd
     term.process(b"\x1b]1337;RemoteHost=alice@remote\x1b\\");
-    assert_eq!(term.shell_integration.cwd(), Some("/home/user/project"));
-    assert_eq!(term.shell_integration.hostname(), Some("remote"));
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/home/user/project")
+    );
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("remote")
+    );
 }
 
 // ========== Semantic Zone Tests ==========

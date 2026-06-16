@@ -734,7 +734,11 @@ impl Terminal {
             scrollback_text: None,
             zones: Vec::new(),
             commands: Vec::new(),
-            cwd: self.shell_integration.cwd().map(|s| s.to_string()),
+            cwd: self
+                .shell_state
+                .shell_integration
+                .cwd()
+                .map(|s| s.to_string()),
             hostname: None, // Could be extracted from shell_integration
             username: None, // Could be extracted from shell_integration
             cwd_history: Vec::new(),

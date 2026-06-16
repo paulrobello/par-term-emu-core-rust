@@ -62,7 +62,11 @@ impl Terminal {
     pub fn start_command_execution(&mut self, command: String) {
         let execution = CommandExecution {
             command,
-            cwd: self.shell_integration.cwd().map(|s| s.to_string()),
+            cwd: self
+                .shell_state
+                .shell_integration
+                .cwd()
+                .map(|s| s.to_string()),
             start_time: crate::terminal::unix_millis(),
             end_time: None,
             exit_code: None,
@@ -149,16 +153,26 @@ impl Terminal {
 
     /// Record a CWD change
     pub fn record_cwd_change(&mut self, change: crate::terminal::CwdChange) {
-        let old_hostname = self.last_hostname.clone();
-        let old_username = self.last_username.clone();
-        let old_cwd = self.shell_integration.cwd().map(|s| s.to_string());
+        let old_hostname = self.shell_state.last_hostname.clone();
+        let old_username = self.shell_state.last_username.clone();
+        let old_cwd = self
+            .shell_state
+            .shell_integration
+            .cwd()
+            .map(|s| s.to_string());
 
         // Update current state
-        self.last_hostname = change.hostname.clone();
-        self.last_username = change.username.clone();
-        self.shell_integration.set_cwd(change.new_cwd.clone());
-        self.shell_integration.set_hostname(change.hostname.clone());
-        self.shell_integration.set_username(change.username.clone());
+        self.shell_state.last_hostname = change.hostname.clone();
+        self.shell_state.last_username = change.username.clone();
+        self.shell_state
+            .shell_integration
+            .set_cwd(change.new_cwd.clone());
+        self.shell_state
+            .shell_integration
+            .set_hostname(change.hostname.clone());
+        self.shell_state
+            .shell_integration
+            .set_username(change.username.clone());
 
         // Update session variables for badges
         self.session_variables.set_path(change.new_cwd.clone());

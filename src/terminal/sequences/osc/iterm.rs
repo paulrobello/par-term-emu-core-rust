@@ -102,6 +102,7 @@ impl Terminal {
         let username = username.and_then(|u| if u.is_empty() { None } else { Some(u) });
 
         let current_cwd = self
+            .shell_state
             .shell_integration
             .cwd()
             .map(|s| s.to_string())

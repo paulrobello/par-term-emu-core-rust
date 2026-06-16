@@ -87,7 +87,7 @@ impl Terminal {
     pub fn start_recording(&mut self, title: Option<String>) {
         let (cols, rows) = self.size();
         let mut env = HashMap::new();
-        if let Some(cwd) = self.shell_integration.cwd() {
+        if let Some(cwd) = self.shell_state.shell_integration.cwd() {
             env.insert("CWD".to_string(), cwd.to_string());
         }
 

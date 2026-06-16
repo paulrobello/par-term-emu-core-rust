@@ -390,6 +390,23 @@ pub(crate) struct TitleState {
     pub(crate) answerback_string: Option<String>,
 }
 
+/// Shell-integration core: integration state, host/user tracking, nesting depth,
+/// and command-output flag.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct ShellState {
+    /// Shell integration state
+    pub(crate) shell_integration: ShellIntegration,
+    /// Last known hostname (for detecting remote host transitions)
+    pub(crate) last_hostname: Option<String>,
+    /// Last known username (for detecting remote host transitions)
+    pub(crate) last_username: Option<String>,
+    /// Current shell nesting depth (for sub-shell detection)
+    pub(crate) shell_depth: usize,
+    /// Whether we are currently inside command output (between OSC 133 C and D)
+    pub(crate) in_command_output: bool,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -429,8 +446,8 @@ pub struct Terminal {
     pub(crate) bracketed_paste: bool,
     /// Synchronized update mode, buffer, disable-during-flush flag (ARC-001 sub-struct)
     pub(crate) sync_state: SyncState,
-    /// Shell integration state
-    pub(crate) shell_integration: ShellIntegration,
+    /// Shell integration state, host/user, depth, command-output flag (ARC-001 sub-struct)
+    pub(crate) shell_state: ShellState,
     /// Scroll region top (0-indexed)
     pub(crate) scroll_region_top: usize,
     /// Scroll region bottom (0-indexed)
@@ -580,14 +597,6 @@ pub struct Terminal {
     pub(crate) next_observer_id: crate::observer::ObserverId,
     /// Next zone ID to assign (monotonically increasing)
     pub(crate) next_zone_id: usize,
-    /// Last known hostname (for detecting remote host transitions)
-    pub(crate) last_hostname: Option<String>,
-    /// Last known username (for detecting remote host transitions)
-    pub(crate) last_username: Option<String>,
-    /// Current shell nesting depth (for sub-shell detection)
-    pub(crate) shell_depth: usize,
-    /// Whether we are currently inside command output (between OSC 133 C and D)
-    pub(crate) in_command_output: bool,
     /// Current selection state
     pub(crate) selection: Option<Selection>,
     /// Bookmarks for quick navigation
@@ -724,7 +733,13 @@ impl Terminal {
                 update_buffer: Vec::new(),
                 sync_update_explicitly_disabled: false,
             },
-            shell_integration: ShellIntegration::new(),
+            shell_state: ShellState {
+                shell_integration: ShellIntegration::new(),
+                last_hostname: None,
+                last_username: None,
+                shell_depth: 0,
+                in_command_output: false,
+            },
             scroll_region_top: 0,
             scroll_region_bottom: rows.saturating_sub(1),
             use_lr_margins: false,
@@ -812,10 +827,6 @@ impl Terminal {
             observers: Vec::new(),
             next_observer_id: 1,
             next_zone_id: 0,
-            last_hostname: None,
-            last_username: None,
-            shell_depth: 0,
-            in_command_output: false,
             // Selection and bookmarks
             selection: None,
             bookmarks: Vec::new(),
@@ -1377,12 +1388,12 @@ impl Terminal {
 
     /// Get shell integration state
     pub fn shell_integration(&self) -> &ShellIntegration {
-        &self.shell_integration
+        &self.shell_state.shell_integration
     }
 
     /// Get shell integration state mutably
     pub fn shell_integration_mut(&mut self) -> &mut ShellIntegration {
-        &mut self.shell_integration
+        &mut self.shell_state.shell_integration
     }
 
     // ========== Semantic Zone Methods ==========
@@ -1738,7 +1749,7 @@ impl Terminal {
     /// Returns the directory path reported by the shell via OSC 7 sequences,
     /// or None if no directory has been reported yet.
     pub fn current_directory(&self) -> Option<&str> {
-        self.shell_integration.cwd()
+        self.shell_state.shell_integration.cwd()
     }
 
     /// Check if OSC 7 directory tracking is enabled

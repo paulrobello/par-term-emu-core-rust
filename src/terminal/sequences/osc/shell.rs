@@ -17,7 +17,7 @@ impl Terminal {
                             // record_cwd_change handles setting shell_integration state
                             // and reads old values before updating
                             self.record_cwd_change(crate::terminal::event::CwdChange {
-                                old_cwd: self.shell_integration.cwd().map(|s| s.to_string()),
+                                old_cwd: self.shell_state.shell_integration.cwd().map(|s| s.to_string()),
                                 new_cwd: path.clone(),
                                 hostname: hostname.clone(),
                                 username,
@@ -39,7 +39,7 @@ impl Terminal {
                         let abs_line = self.active_grid().scrollback_len() + self.cursor.row;
                         match marker.chars().next() {
                             Some('A') => {
-                                self.shell_integration
+                                self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::PromptStart);
                                 self.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
@@ -50,18 +50,18 @@ impl Terminal {
                                         cursor_line: Some(abs_line),
                                     },
                                 );
-                                if self.in_command_output && self.shell_depth > 0 {
-                                    self.shell_depth += 1;
+                                if self.shell_state.in_command_output && self.shell_state.shell_depth > 0 {
+                                    self.shell_state.shell_depth += 1;
                                     self.terminal_events.push(
                                         crate::terminal::TerminalEvent::SubShellDetected {
-                                            depth: self.shell_depth,
+                                            depth: self.shell_state.shell_depth,
                                             shell_type: None,
                                         },
                                     );
-                                } else if self.shell_depth == 0 {
-                                    self.shell_depth = 1;
+                                } else if self.shell_state.shell_depth == 0 {
+                                    self.shell_state.shell_depth = 1;
                                 }
-                                self.in_command_output = false;
+                                self.shell_state.in_command_output = false;
                                 if !self.alt_screen_active {
                                     let close_row = if abs_line > 0 { abs_line - 1 } else { 0 };
                                     if let Some(zone) = self.grid.zones().last() {
@@ -99,14 +99,12 @@ impl Terminal {
                                 }
                             }
                             Some('B') => {
-                                self.shell_integration
+                                self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandStart);
                                 self.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "command_start".to_string(),
-                                        command: self
-                                            .shell_integration
-                                            .command()
+                                        command: self.shell_state.shell_integration.command()
                                             .map(|s| s.to_string()),
                                         exit_code: None,
                                         timestamp: Some(ts),
@@ -141,7 +139,7 @@ impl Terminal {
                                         Some(ts),
                                     );
                                     zone.command =
-                                        self.shell_integration.command().map(|s| s.to_string());
+                                        self.shell_state.shell_integration.command().map(|s| s.to_string());
                                     self.grid.push_zone(zone);
                                     self.terminal_events.push(
                                         crate::terminal::TerminalEvent::ZoneOpened {
@@ -159,18 +157,16 @@ impl Terminal {
                                     if let Ok(cmd) = std::str::from_utf8(cmd_bytes) {
                                         let cmd = cmd.trim();
                                         if !cmd.is_empty() {
-                                            self.shell_integration.set_command(cmd.to_string());
+                                            self.shell_state.shell_integration.set_command(cmd.to_string());
                                         }
                                     }
                                 }
-                                self.shell_integration
+                                self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandExecuted);
                                 self.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "command_executed".to_string(),
-                                        command: self
-                                            .shell_integration
-                                            .command()
+                                        command: self.shell_state.shell_integration.command()
                                             .map(|s| s.to_string()),
                                         exit_code: None,
                                         timestamp: Some(ts),
@@ -211,7 +207,7 @@ impl Terminal {
                                         Some(ts),
                                     );
                                     zone.command =
-                                        self.shell_integration.command().map(|s| s.to_string());
+                                        self.shell_state.shell_integration.command().map(|s| s.to_string());
                                     self.grid.push_zone(zone);
                                     self.terminal_events.push(
                                         crate::terminal::TerminalEvent::ZoneOpened {
@@ -221,17 +217,17 @@ impl Terminal {
                                         },
                                     );
                                 }
-                                self.in_command_output = true;
+                                self.shell_state.in_command_output = true;
                             }
                             Some('D') => {
-                                self.shell_integration
+                                self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandFinished);
                                 let exit_param = params.get(2).or_else(|| params.get(1));
                                 let mut parsed_code: Option<i32> = None;
                                 if let Some(code_bytes) = exit_param {
                                     if let Ok(code_str) = std::str::from_utf8(code_bytes) {
                                         if let Ok(code) = code_str.parse::<i32>() {
-                                            self.shell_integration.set_exit_code(code);
+                                            self.shell_state.shell_integration.set_exit_code(code);
                                             parsed_code = Some(code);
                                         }
                                     }
@@ -269,12 +265,12 @@ impl Terminal {
                                         );
                                     }
                                 }
-                                self.in_command_output = false;
-                                if self.shell_depth > 1 {
-                                    self.shell_depth -= 1;
+                                self.shell_state.in_command_output = false;
+                                if self.shell_state.shell_depth > 1 {
+                                    self.shell_state.shell_depth -= 1;
                                     self.terminal_events.push(
                                         crate::terminal::TerminalEvent::SubShellDetected {
-                                            depth: self.shell_depth,
+                                            depth: self.shell_state.shell_depth,
                                             shell_type: None,
                                         },
                                     );
