@@ -1898,6 +1898,56 @@ impl StreamingServer {
         }
     }
 
+    /// Build a refresh message from the session's current visible terminal
+    /// state. Pure (no side effects, no async) so the tungstenite and axum
+    /// WebSocket handlers share one implementation.
+    fn build_refresh_message(terminal_for_refresh: &Arc<Mutex<Terminal>>) -> Option<ServerMessage> {
+        let terminal = terminal_for_refresh.lock();
+        let content = terminal.export_visible_screen_styled();
+        let (cols, rows) = terminal.size();
+        Some(ServerMessage::refresh(cols as u16, rows as u16, content))
+    }
+
+    /// Build a semantic-snapshot message (or an error message for an invalid
+    /// scope). Pure (no side effects, no async) so the tungstenite and axum
+    /// WebSocket handlers share one implementation.
+    ///
+    /// Returns `Some(msg)` for a valid scope (including the snapshot payload),
+    /// `Some(error_msg)` for an invalid scope string, and `None` only when a
+    /// valid scope produced no payload (currently never).
+    fn build_snapshot_message(
+        terminal_for_refresh: &Arc<Mutex<Terminal>>,
+        scope: &str,
+        max_commands: Option<u32>,
+    ) -> ServerMessage {
+        use crate::terminal::snapshot::SnapshotScope;
+        match scope {
+            "visible" => {
+                let terminal = terminal_for_refresh.lock();
+                ServerMessage::semantic_snapshot(
+                    terminal.get_semantic_snapshot_json(SnapshotScope::Visible),
+                )
+            }
+            "recent" => {
+                let n = max_commands.unwrap_or(10) as usize;
+                let terminal = terminal_for_refresh.lock();
+                ServerMessage::semantic_snapshot(
+                    terminal.get_semantic_snapshot_json(SnapshotScope::Recent(n)),
+                )
+            }
+            "full" => {
+                let terminal = terminal_for_refresh.lock();
+                ServerMessage::semantic_snapshot(
+                    terminal.get_semantic_snapshot_json(SnapshotScope::Full),
+                )
+            }
+            other => ServerMessage::error(format!(
+                "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'",
+                other
+            )),
+        }
+    }
+
     /// Handle a new WebSocket connection (already upgraded)
     async fn handle_connection_ws(
         self: &Arc<Self>,
@@ -2061,13 +2111,7 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    let refresh_msg = {
-                                        let terminal = terminal_for_refresh.lock();
-                                        let content = terminal.export_visible_screen_styled();
-                                        let (cols, rows) = terminal.size();
-                                        Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                    };
-                                    if let Some(msg) = refresh_msg {
+                                    if let Some(msg) = Self::build_refresh_message(&terminal_for_refresh) {
                                         if let Err(e) = client.send(msg).await {
                                             crate::debug_error!("STREAMING", "Failed to send refresh to {} {}: {}", transport_label, client_id, e);
                                         }
@@ -2262,32 +2306,9 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                    use crate::terminal::snapshot::SnapshotScope;
-                                    let snapshot_scope = match scope.as_str() {
-                                        "visible" => Some(SnapshotScope::Visible),
-                                        "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
-                                        "full" => Some(SnapshotScope::Full),
-                                        other => {
-                                            let err_msg = ServerMessage::error(format!(
-                                                "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
-                                            ));
-                                            if let Err(e) = client.send(err_msg).await {
-                                                crate::debug_error!("STREAMING", "Failed to send error to {} {}: {}", transport_label, client_id, e);
-                                            }
-                                            None
-                                        }
-                                    };
-                                    if let Some(ss) = snapshot_scope {
-                                        let snapshot_msg = {
-                                            let terminal = terminal_for_refresh.lock();
-                                            let json = terminal.get_semantic_snapshot_json(ss);
-                                            Some(ServerMessage::semantic_snapshot(json))
-                                        };
-                                        if let Some(msg) = snapshot_msg {
-                                            if let Err(e) = client.send(msg).await {
-                                                crate::debug_error!("STREAMING", "Failed to send snapshot to {} {}: {}", transport_label, client_id, e);
-                                            }
-                                        }
+                                    let msg = Self::build_snapshot_message(&terminal_for_refresh, &scope, max_commands);
+                                    if let Err(e) = client.send(msg).await {
+                                        crate::debug_error!("STREAMING", "Failed to send snapshot to {} {}: {}", transport_label, client_id, e);
                                     }
                                 }
                             }
@@ -2610,45 +2631,16 @@ impl StreamingServer {
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                            let refresh_msg = {
-                                                let terminal = terminal_for_refresh.lock();
-                                                let content = terminal.export_visible_screen_styled();
-                                                let (cols, rows) = terminal.size();
-                                                Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                            };
-                                            if let Some(msg) = refresh_msg {
+                                            if let Some(msg) = Self::build_refresh_message(&terminal_for_refresh) {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
                                                     let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
                                                 }
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                            use crate::terminal::snapshot::SnapshotScope;
-                                            let snapshot_scope = match scope.as_str() {
-                                                "visible" => Some(SnapshotScope::Visible),
-                                                "recent" => Some(SnapshotScope::Recent(max_commands.unwrap_or(10) as usize)),
-                                                "full" => Some(SnapshotScope::Full),
-                                                other => {
-                                                    let err_msg = crate::streaming::protocol::ServerMessage::error(format!(
-                                                        "Invalid snapshot scope '{}': must be 'visible', 'recent', or 'full'", other
-                                                    ));
-                                                    if let Ok(bytes) = encode_server_message(&err_msg) {
-                                                        let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
-                                                    }
-                                                    None
-                                                }
-                                            };
-                                            if let Some(ss) = snapshot_scope {
-                                                let snapshot_msg = {
-                                                    let terminal = terminal_for_refresh.lock();
-                                                    let json = terminal.get_semantic_snapshot_json(ss);
-                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                };
-                                                if let Some(msg) = snapshot_msg {
-                                                    if let Ok(bytes) = encode_server_message(&msg) {
-                                                        let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
-                                                    }
-                                                }
+                                            let msg = Self::build_snapshot_message(&terminal_for_refresh, &scope, max_commands);
+                                            if let Ok(bytes) = encode_server_message(&msg) {
+                                                let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::Subscribe { events } => {
