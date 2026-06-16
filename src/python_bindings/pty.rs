@@ -55,6 +55,8 @@ crate::impl_terminal_progress_notifications!(PyPtyTerminal);
 crate::impl_terminal_recording!(PyPtyTerminal);
 crate::impl_terminal_cell_line_queries!(PyPtyTerminal);
 crate::impl_terminal_content_misc!(PyPtyTerminal);
+crate::impl_terminal_search_select!(PyPtyTerminal);
+crate::impl_terminal_debug_snapshots!(PyPtyTerminal);
 
 #[pymethods]
 impl PyPtyTerminal {
@@ -514,39 +516,7 @@ impl PyPtyTerminal {
         Ok(self.inner.scrollback_len())
     }
 
-    /// Get a specific line from the scrollback buffer with full cell data
-    ///
-    /// Args:
-    ///     index: Scrollback line index (0 = oldest, scrollback_len()-1 = most recent)
-    ///
-    /// Returns:
-    ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
-    ///     or None if index is out of bounds
-    #[allow(clippy::type_complexity)]
-    fn scrollback_line(
-        &self,
-        index: usize,
-    ) -> PyResult<Option<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        let grid = term.grid();
-        if let Some(line) = grid.scrollback_line(index) {
-            let cells: Vec<_> = line
-                .iter()
-                .map(|cell| {
-                    (
-                        cell.get_grapheme(),
-                        cell.fg.to_rgb(),
-                        cell.bg.to_rgb(),
-                        PyAttributes::from(cell),
-                    )
-                })
-                .collect();
-            Ok(Some(cells))
-        } else {
-            Ok(None)
-        }
-    }
+    // scrollback_line: provided by impl_terminal_search_select! (ARC-003/QA-001)
 
     /// Get a specific line from the terminal buffer
     ///
@@ -1056,60 +1026,9 @@ impl PyPtyTerminal {
     // drain_notifications, progress_bar, has_progress, progress_value, progress_state,
     // set_progress, clear_progress: provided by impl_terminal_progress_notifications! (ARC-003/QA-001)
 
-    /// Get a debug snapshot of the current buffer state
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the buffer
-    fn debug_snapshot_buffer(&self) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        let grid = term.active_grid();
-        Ok(grid.debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the grid
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the grid
-    fn debug_snapshot_grid(&self) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.grid().debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the primary screen buffer
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the primary buffer
-    fn debug_snapshot_primary(&self) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.grid().debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the alternate screen buffer
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the alternate buffer
-    fn debug_snapshot_alt(&self) -> PyResult<String> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.alt_grid().debug_snapshot())
-    }
-
-    /// Log a debug snapshot with a label
-    ///
-    /// Args:
-    ///     label: Description of this snapshot
-    fn debug_log_snapshot(&self, label: &str) -> PyResult<()> {
-        use crate::debug;
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        let grid = term.active_grid();
-        let snapshot = grid.debug_snapshot();
-        debug::log_buffer_snapshot(label, grid.rows(), grid.cols(), &snapshot);
-        Ok(())
-    }
+    // debug_snapshot_buffer, debug_snapshot_grid, debug_snapshot_primary,
+    // debug_snapshot_alt, debug_log_snapshot:
+    //   provided by impl_terminal_debug_snapshots! (ARC-003/QA-001)
 
     // shell_integration_state: provided by impl_terminal_content_misc! (ARC-003/QA-001)
 
@@ -1234,72 +1153,10 @@ impl PyPtyTerminal {
     // get_word_at, get_url_at, get_line_unwrapped:
     //   provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
-    /// Get word boundaries at cursor position for smart selection
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///     word_chars: Optional custom word characters
-    ///
-    /// Returns:
-    ///     ((start_col, start_row), (end_col, end_row)) or None if not on a word
-    #[allow(clippy::type_complexity)]
-    fn select_word(
-        &self,
-        col: usize,
-        row: usize,
-        word_chars: Option<&str>,
-    ) -> PyResult<Option<((usize, usize), (usize, usize))>> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.lock();
-        Ok(term.select_word(col, row, word_chars))
-    }
+    // select_word, find_text, find_next:
+    //   provided by impl_terminal_search_select! (ARC-003/QA-001)
 
     // ========== Content Search ==========
-
-    /// Find all occurrences of text in the visible screen
-    ///
-    /// Args:
-    ///     pattern: Text to search for
-    ///     case_sensitive: Whether search is case-sensitive (default: True)
-    ///
-    /// Returns:
-    ///     List of (col, row) positions where pattern was found
-    #[pyo3(signature = (pattern, case_sensitive = true))]
-    fn find_text(&self, pattern: &str, case_sensitive: bool) -> PyResult<Vec<(usize, usize)>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term
-            .find_text(pattern, case_sensitive)
-            .into_iter()
-            .map(|m| (m.col, m.row as usize))
-            .collect())
-    }
-
-    /// Find next occurrence of text from given position
-    ///
-    /// Args:
-    ///     pattern: Text to search for
-    ///     from_col: Starting column position
-    ///     from_row: Starting row position
-    ///     case_sensitive: Whether search is case-sensitive (default: True)
-    ///
-    /// Returns:
-    ///     (col, row) of next match, or None if not found
-    #[pyo3(signature = (pattern, from_col, from_row, case_sensitive = true))]
-    fn find_next(
-        &self,
-        pattern: &str,
-        from_col: usize,
-        from_row: usize,
-        case_sensitive: bool,
-    ) -> PyResult<Option<(usize, usize)>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term
-            .find_next(pattern, from_col, from_row, case_sensitive)
-            .map(|m| (m.col, m.row as usize)))
-    }
 
     // ========== Buffer Statistics ==========
 
@@ -1341,46 +1198,8 @@ impl PyPtyTerminal {
         Ok((term.get_scrollback_usage(), term.grid().max_scrollback()))
     }
 
-    // ========== Advanced Text Selection ==========
-
-    /// Find matching bracket/parenthesis at cursor position
-    ///
-    /// Supports: (), [], {}, <>
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///
-    /// Returns:
-    ///     (col, row) position of matching bracket, or None
-    fn find_matching_bracket(&self, col: usize, row: usize) -> PyResult<Option<(usize, usize)>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.lock();
-        Ok(term.find_matching_bracket(col, row))
-    }
-
-    /// Select text within semantic delimiters
-    ///
-    /// Extracts content between matching delimiters around cursor.
-    /// Supports: (), [], {}, <>, "", '', ``
-    ///
-    /// Args:
-    ///     col: Column position (0-indexed)
-    ///     row: Row position (0-indexed)
-    ///     delimiters: String of delimiters to check (e.g., "()[]{}\"'")
-    ///
-    /// Returns:
-    ///     Content between delimiters, or None if not inside delimiters
-    fn select_semantic_region(
-        &self,
-        col: usize,
-        row: usize,
-        delimiters: &str,
-    ) -> PyResult<Option<String>> {
-        let terminal = self.inner.terminal();
-        let mut term = terminal.lock();
-        Ok(term.select_semantic_region(col, row, Some(delimiters)))
-    }
+    // find_matching_bracket, select_semantic_region:
+    //   provided by impl_terminal_search_select! (ARC-003/QA-001)
 
     /// Export terminal content as HTML
     ///

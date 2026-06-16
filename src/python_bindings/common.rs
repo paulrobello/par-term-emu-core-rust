@@ -1530,3 +1530,219 @@ macro_rules! impl_terminal_content_misc {
         }
     };
 }
+
+/// Emit search / selection / scrollback-line-query methods for `$ty`.
+/// (ARC-003/QA-001 batch: search & selection.)
+#[macro_export]
+macro_rules! impl_terminal_search_select {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Find all occurrences of text in the visible screen
+            ///
+            /// Args:
+            ///     pattern: Text to search for
+            ///     case_sensitive: Whether search is case-sensitive (default: True)
+            ///
+            /// Returns:
+            ///     List of (col, row) positions where pattern was found
+            #[pyo3(signature = (pattern, case_sensitive = true))]
+            fn find_text(
+                &self,
+                pattern: &str,
+                case_sensitive: bool,
+            ) -> pyo3::PyResult<Vec<(usize, usize)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.find_text(pattern, case_sensitive)
+                    .into_iter()
+                    .map(|m| (m.col, m.row as usize))
+                    .collect())
+            }
+
+            /// Find next occurrence of text from given position
+            ///
+            /// Args:
+            ///     pattern: Text to search for
+            ///     from_col: Starting column position
+            ///     from_row: Starting row position
+            ///     case_sensitive: Whether search is case-sensitive (default: True)
+            ///
+            /// Returns:
+            ///     (col, row) of next match, or None if not found
+            #[pyo3(signature = (pattern, from_col, from_row, case_sensitive = true))]
+            fn find_next(
+                &self,
+                pattern: &str,
+                from_col: usize,
+                from_row: usize,
+                case_sensitive: bool,
+            ) -> pyo3::PyResult<Option<(usize, usize)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.find_next(pattern, from_col, from_row, case_sensitive)
+                    .map(|m| (m.col, m.row as usize)))
+            }
+
+            /// Find matching bracket/parenthesis at cursor position
+            ///
+            /// Supports: (), [], {}, <>
+            ///
+            /// Args:
+            ///     col: Column position (0-indexed)
+            ///     row: Row position (0-indexed)
+            ///
+            /// Returns:
+            ///     (col, row) position of matching bracket, or None
+            fn find_matching_bracket(
+                &self,
+                col: usize,
+                row: usize,
+            ) -> pyo3::PyResult<Option<(usize, usize)>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.find_matching_bracket(col, row))
+            }
+
+            /// Get word boundaries at cursor position for smart selection
+            ///
+            /// Args:
+            ///     col: Column position (0-indexed)
+            ///     row: Row position (0-indexed)
+            ///     word_chars: Optional custom word characters
+            ///
+            /// Returns:
+            ///     ((start_col, start_row), (end_col, end_row)) or None if not on a word
+            #[allow(clippy::type_complexity)]
+            fn select_word(
+                &mut self,
+                col: usize,
+                row: usize,
+                word_chars: Option<&str>,
+            ) -> pyo3::PyResult<Option<((usize, usize), (usize, usize))>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.select_word(col, row, word_chars))
+            }
+
+            /// Select text within semantic delimiters
+            ///
+            /// Extracts content between matching delimiters around cursor.
+            /// Supports: (), [], {}, <>, "", '', ``
+            ///
+            /// Args:
+            ///     col: Column position (0-indexed)
+            ///     row: Row position (0-indexed)
+            ///     delimiters: String of delimiters to check (e.g., "()[]{}\"'")
+            ///
+            /// Returns:
+            ///     Content between delimiters, or None if not inside delimiters
+            fn select_semantic_region(
+                &mut self,
+                col: usize,
+                row: usize,
+                delimiters: &str,
+            ) -> pyo3::PyResult<Option<String>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                Ok(t.select_semantic_region(col, row, Some(delimiters)))
+            }
+
+            /// Get a specific line from the scrollback buffer with full cell data
+            ///
+            /// Args:
+            ///     index: Scrollback line index (0 = oldest, scrollback_len()-1 = most recent)
+            ///
+            /// Returns:
+            ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
+            ///     or None if index is out of bounds
+            #[allow(clippy::type_complexity)]
+            fn scrollback_line(
+                &self,
+                index: usize,
+            ) -> pyo3::PyResult<
+                Option<
+                    Vec<(
+                        String,
+                        (u8, u8, u8),
+                        (u8, u8, u8),
+                        $crate::python_bindings::types::PyAttributes,
+                    )>,
+                >,
+            > {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let grid = t.grid();
+                if let Some(line) = grid.scrollback_line(index) {
+                    let cells: Vec<_> = line
+                        .iter()
+                        .map(|cell| {
+                            (
+                                cell.get_grapheme(),
+                                cell.fg.to_rgb(),
+                                cell.bg.to_rgb(),
+                                $crate::python_bindings::types::PyAttributes::from(cell),
+                            )
+                        })
+                        .collect();
+                    Ok(Some(cells))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    };
+}
+
+/// Emit debug-snapshot methods for `$ty`. (ARC-003/QA-001 batch: debug.)
+#[macro_export]
+macro_rules! impl_terminal_debug_snapshots {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Get a debug snapshot of the current buffer state
+            ///
+            /// Returns:
+            ///     String containing a formatted view of the buffer
+            fn debug_snapshot_buffer(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let grid = t.active_grid();
+                Ok(grid.debug_snapshot())
+            }
+
+            /// Get a debug snapshot of the grid
+            ///
+            /// Returns:
+            ///     String containing a formatted view of the grid
+            fn debug_snapshot_grid(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.grid().debug_snapshot())
+            }
+
+            /// Get a debug snapshot of the primary screen buffer
+            ///
+            /// Returns:
+            ///     String containing a formatted view of the primary buffer
+            fn debug_snapshot_primary(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.grid().debug_snapshot())
+            }
+
+            /// Get a debug snapshot of the alternate screen buffer
+            ///
+            /// Returns:
+            ///     String containing a formatted view of the alternate buffer
+            fn debug_snapshot_alt(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.alt_grid().debug_snapshot())
+            }
+
+            /// Log a debug snapshot with a label
+            ///
+            /// Args:
+            ///     label: Description of this snapshot
+            fn debug_log_snapshot(&self, label: &str) -> pyo3::PyResult<()> {
+                use $crate::debug;
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let grid = t.active_grid();
+                let snapshot = grid.debug_snapshot();
+                debug::log_buffer_snapshot(label, grid.rows(), grid.cols(), &snapshot);
+                Ok(())
+            }
+        }
+    };
+}

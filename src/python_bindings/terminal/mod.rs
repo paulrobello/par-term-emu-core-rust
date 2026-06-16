@@ -61,6 +61,8 @@ crate::impl_terminal_progress_notifications!(PyTerminal);
 crate::impl_terminal_recording!(PyTerminal);
 crate::impl_terminal_cell_line_queries!(PyTerminal);
 crate::impl_terminal_content_misc!(PyTerminal);
+crate::impl_terminal_search_select!(PyTerminal);
+crate::impl_terminal_debug_snapshots!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -782,37 +784,7 @@ impl PyTerminal {
         Ok(self.inner.grid().scrollback_len())
     }
 
-    /// Get a specific line from the scrollback buffer with full cell data
-    ///
-    /// Args:
-    ///     index: Scrollback line index (0 = oldest, scrollback_len()-1 = most recent)
-    ///
-    /// Returns:
-    ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
-    ///     or None if index is out of bounds
-    #[allow(clippy::type_complexity)]
-    fn scrollback_line(
-        &self,
-        index: usize,
-    ) -> PyResult<Option<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>> {
-        let grid = self.inner.grid();
-        if let Some(line) = grid.scrollback_line(index) {
-            let cells: Vec<_> = line
-                .iter()
-                .map(|cell| {
-                    (
-                        cell.get_grapheme(),
-                        cell.fg.to_rgb(),
-                        cell.bg.to_rgb(),
-                        PyAttributes::from(cell),
-                    )
-                })
-                .collect();
-            Ok(Some(cells))
-        } else {
-            Ok(None)
-        }
-    }
+    // scrollback_line: provided by impl_terminal_search_select! (ARC-003/QA-001)
 
     /// Get a specific line from the terminal buffer
     ///
@@ -1211,50 +1183,9 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get a debug snapshot of the current buffer state
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the buffer
-    fn debug_snapshot_buffer(&self) -> PyResult<String> {
-        let grid = self.inner.active_grid();
-        Ok(grid.debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the grid
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the grid
-    fn debug_snapshot_grid(&self) -> PyResult<String> {
-        Ok(self.inner.grid().debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the primary screen buffer
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the primary buffer
-    fn debug_snapshot_primary(&self) -> PyResult<String> {
-        Ok(self.inner.grid().debug_snapshot())
-    }
-
-    /// Get a debug snapshot of the alternate screen buffer
-    ///
-    /// Returns:
-    ///     String containing a formatted view of the alternate buffer
-    fn debug_snapshot_alt(&self) -> PyResult<String> {
-        Ok(self.inner.alt_grid().debug_snapshot())
-    }
-
-    /// Log a debug snapshot with a label
-    ///
-    /// Args:
-    ///     label: Description of this snapshot
-    fn debug_log_snapshot(&self, label: &str) -> PyResult<()> {
-        use crate::debug;
-        let grid = self.inner.active_grid();
-        let snapshot = grid.debug_snapshot();
-        debug::log_buffer_snapshot(label, grid.rows(), grid.cols(), &snapshot);
-        Ok(())
-    }
+    // debug_snapshot_buffer, debug_snapshot_grid, debug_snapshot_primary,
+    // debug_snapshot_alt, debug_log_snapshot:
+    //   provided by impl_terminal_debug_snapshots! (ARC-003/QA-001)
 
     // current_directory: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
