@@ -554,6 +554,20 @@ pub(crate) struct TerminalModes {
     pub(crate) focus_tracking: bool,
 }
 
+/// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
+pub(crate) struct SavedCursorState {
+    /// Saved cursor position (for save/restore)
+    pub(crate) saved_cursor: Option<Cursor>,
+    /// Saved foreground color
+    pub(crate) saved_fg: Color,
+    /// Saved background color
+    pub(crate) saved_bg: Color,
+    /// Saved underline color (SGR 58)
+    pub(crate) saved_underline_color: Option<Color>,
+    /// Saved cell flags
+    pub(crate) saved_flags: CellFlags,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -574,13 +588,8 @@ pub struct Terminal {
     pub(crate) underline_color: Option<Color>,
     /// Current cell flags
     pub(crate) flags: CellFlags,
-    /// Saved cursor position (for save/restore)
-    pub(crate) saved_cursor: Option<Cursor>,
-    /// Saved colors and flags
-    pub(crate) saved_fg: Color,
-    pub(crate) saved_bg: Color,
-    pub(crate) saved_underline_color: Option<Color>,
-    pub(crate) saved_flags: CellFlags,
+    /// DECSC/DECRC saved terminal state: cursor + SGR colors/flags (ARC-001 sub-struct)
+    pub(crate) saved_state: SavedCursorState,
     /// Window title, title stack, answerback string (ARC-001 sub-struct)
     pub(crate) title_state: TitleState,
     /// Synchronized update mode, buffer, disable-during-flush flag (ARC-001 sub-struct)
@@ -774,11 +783,13 @@ impl Terminal {
             bg: Color::Named(NamedColor::Black),
             underline_color: None,
             flags: CellFlags::default(),
-            saved_cursor: None,
-            saved_fg: Color::Named(NamedColor::White),
-            saved_bg: Color::Named(NamedColor::Black),
-            saved_underline_color: None,
-            saved_flags: CellFlags::default(),
+            saved_state: SavedCursorState {
+                saved_cursor: None,
+                saved_fg: Color::Named(NamedColor::White),
+                saved_bg: Color::Named(NamedColor::Black),
+                saved_underline_color: None,
+                saved_flags: CellFlags::default(),
+            },
             title_state: TitleState {
                 title: String::new(),
                 title_stack: Vec::new(),
@@ -1388,21 +1399,21 @@ impl Terminal {
 
     /// Save current cursor state
     pub fn save_cursor(&mut self) {
-        self.saved_cursor = Some(self.cursor);
-        self.saved_fg = self.fg;
-        self.saved_bg = self.bg;
-        self.saved_underline_color = self.underline_color;
-        self.saved_flags = self.flags;
+        self.saved_state.saved_cursor = Some(self.cursor);
+        self.saved_state.saved_fg = self.fg;
+        self.saved_state.saved_bg = self.bg;
+        self.saved_state.saved_underline_color = self.underline_color;
+        self.saved_state.saved_flags = self.flags;
     }
 
     /// Restore previously saved cursor state
     pub fn restore_cursor(&mut self) {
-        if let Some(saved) = self.saved_cursor {
+        if let Some(saved) = self.saved_state.saved_cursor {
             self.cursor = saved;
-            self.fg = self.saved_fg;
-            self.bg = self.saved_bg;
-            self.underline_color = self.saved_underline_color;
-            self.flags = self.saved_flags;
+            self.fg = self.saved_state.saved_fg;
+            self.bg = self.saved_state.saved_bg;
+            self.underline_color = self.saved_state.saved_underline_color;
+            self.flags = self.saved_state.saved_flags;
         }
     }
 

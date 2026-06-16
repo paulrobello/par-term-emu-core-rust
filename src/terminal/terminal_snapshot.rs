@@ -185,15 +185,15 @@ impl Terminal {
             alt_screen_active: self.alt_screen_active,
             cursor: self.cursor,
             alt_cursor: self.alt_cursor,
-            saved_cursor: self.saved_cursor,
+            saved_cursor: self.saved_state.saved_cursor,
             fg: self.fg,
             bg: self.bg,
             underline_color: self.underline_color,
             flags: self.flags,
-            saved_fg: self.saved_fg,
-            saved_bg: self.saved_bg,
-            saved_underline_color: self.saved_underline_color,
-            saved_flags: self.saved_flags,
+            saved_fg: self.saved_state.saved_fg,
+            saved_bg: self.saved_state.saved_bg,
+            saved_underline_color: self.saved_state.saved_underline_color,
+            saved_flags: self.saved_state.saved_flags,
             title: self.title_state.title.clone(),
             auto_wrap: self.modes.auto_wrap,
             origin_mode: self.modes.origin_mode,
@@ -229,15 +229,15 @@ impl Terminal {
         self.alt_screen_active = snap.alt_screen_active;
         self.cursor = snap.cursor;
         self.alt_cursor = snap.alt_cursor;
-        self.saved_cursor = snap.saved_cursor;
+        self.saved_state.saved_cursor = snap.saved_cursor;
         self.fg = snap.fg;
         self.bg = snap.bg;
         self.underline_color = snap.underline_color;
         self.flags = snap.flags;
-        self.saved_fg = snap.saved_fg;
-        self.saved_bg = snap.saved_bg;
-        self.saved_underline_color = snap.saved_underline_color;
-        self.saved_flags = snap.saved_flags;
+        self.saved_state.saved_fg = snap.saved_fg;
+        self.saved_state.saved_bg = snap.saved_bg;
+        self.saved_state.saved_underline_color = snap.saved_underline_color;
+        self.saved_state.saved_flags = snap.saved_flags;
         self.title_state.title = snap.title;
         self.modes.auto_wrap = snap.auto_wrap;
         self.modes.origin_mode = snap.origin_mode;
