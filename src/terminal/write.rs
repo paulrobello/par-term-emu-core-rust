@@ -150,7 +150,7 @@ impl Terminal {
                 };
 
             // Copy normalization form before mutable borrow
-            let norm_form = self.normalization_form;
+            let norm_form = self.unicode_state.normalization_form;
 
             // Add combining character to the target cell
             if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
@@ -384,7 +384,8 @@ impl Terminal {
         }
 
         // Handle wide characters (emoji, CJK, etc.)
-        let char_width = crate::unicode_width_config::char_width(c, &self.width_config);
+        let char_width =
+            crate::unicode_width_config::char_width(c, &self.unicode_state.width_config);
 
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {

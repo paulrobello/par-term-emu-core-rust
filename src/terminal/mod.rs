@@ -592,6 +592,14 @@ pub(crate) struct ProgressBellState {
     pub(crate) bell_count: u64,
 }
 
+/// Unicode width configuration + normalization form (ARC-001 sub-struct)
+pub(crate) struct UnicodeConfigState {
+    /// Unicode width configuration for character width calculations
+    pub(crate) width_config: crate::unicode_width_config::WidthConfig,
+    /// Unicode normalization form for text stored in cells
+    pub(crate) normalization_form: crate::unicode_normalization_config::NormalizationForm,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -732,11 +740,8 @@ pub struct Terminal {
     // === Answerback String (ENQ response) ===
     /// Answerback handled by `title_state` (ARC-001 sub-struct)
 
-    /// Unicode width configuration for character width calculations
-    pub(crate) width_config: crate::unicode_width_config::WidthConfig,
-
-    /// Unicode normalization form for text stored in cells
-    pub(crate) normalization_form: crate::unicode_normalization_config::NormalizationForm,
+    /// Unicode width configuration + normalization form (ARC-001 sub-struct)
+    pub(crate) unicode_state: UnicodeConfigState,
 
     // === Badge Support (OSC 1337 SetBadgeFormat) ===
     /// Badge format string (from OSC 1337 SetBadgeFormat)
@@ -1005,8 +1010,11 @@ impl Terminal {
             },
             // Answerback
             // Unicode
-            width_config: crate::unicode_width_config::WidthConfig::default(),
-            normalization_form: crate::unicode_normalization_config::NormalizationForm::default(),
+            unicode_state: UnicodeConfigState {
+                width_config: crate::unicode_width_config::WidthConfig::default(),
+                normalization_form: crate::unicode_normalization_config::NormalizationForm::default(
+                ),
+            },
             // Badge
             badge_format: None,
             session_variables: crate::badge::SessionVariables::with_dimensions(
@@ -1910,7 +1918,7 @@ impl Terminal {
     /// Returns the configuration used for character width calculations,
     /// including Unicode version and ambiguous width handling.
     pub fn width_config(&self) -> &crate::unicode_width_config::WidthConfig {
-        &self.width_config
+        &self.unicode_state.width_config
     }
 
     /// Set the Unicode width configuration
@@ -1923,7 +1931,7 @@ impl Terminal {
     /// # Arguments
     /// * `config` - The new width configuration to use
     pub fn set_width_config(&mut self, config: crate::unicode_width_config::WidthConfig) {
-        self.width_config = config;
+        self.unicode_state.width_config = config;
     }
 
     /// Set the ambiguous width setting
@@ -1934,7 +1942,7 @@ impl Terminal {
     /// # Arguments
     /// * `width` - The ambiguous width setting (Narrow or Wide)
     pub fn set_ambiguous_width(&mut self, width: crate::unicode_width_config::AmbiguousWidth) {
-        self.width_config.ambiguous_width = width;
+        self.unicode_state.width_config.ambiguous_width = width;
     }
 
     /// Set the Unicode version for width calculations
@@ -1945,7 +1953,7 @@ impl Terminal {
     /// # Arguments
     /// * `version` - The Unicode version to use for width tables
     pub fn set_unicode_version(&mut self, version: crate::unicode_width_config::UnicodeVersion) {
-        self.width_config.unicode_version = version;
+        self.unicode_state.width_config.unicode_version = version;
     }
 
     /// Calculate the display width of a character using current config
@@ -1960,7 +1968,7 @@ impl Terminal {
     /// The display width in cells (0, 1, or 2)
     #[inline]
     pub fn char_width(&self, c: char) -> usize {
-        crate::unicode_width_config::char_width(c, &self.width_config)
+        crate::unicode_width_config::char_width(c, &self.unicode_state.width_config)
     }
 
     // === Tab Stop Management ===
@@ -2000,7 +2008,7 @@ impl Terminal {
     ///
     /// Returns the normalization form used for text stored in terminal cells.
     pub fn normalization_form(&self) -> crate::unicode_normalization_config::NormalizationForm {
-        self.normalization_form
+        self.unicode_state.normalization_form
     }
 
     /// Set the Unicode normalization form
@@ -2014,7 +2022,7 @@ impl Terminal {
         &mut self,
         form: crate::unicode_normalization_config::NormalizationForm,
     ) {
-        self.normalization_form = form;
+        self.unicode_state.normalization_form = form;
     }
 
     /// Get pending notifications (OSC 9 / OSC 777)

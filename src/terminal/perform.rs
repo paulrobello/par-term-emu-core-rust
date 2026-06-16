@@ -22,8 +22,8 @@ impl Perform for Terminal {
         }
 
         // Apply Unicode normalization if configured
-        if !self.normalization_form.is_none() {
-            let normalized = self.normalization_form.normalize_char(c);
+        if !self.unicode_state.normalization_form.is_none() {
+            let normalized = self.unicode_state.normalization_form.normalize_char(c);
             let mut chars = normalized.chars();
             if let Some(first) = chars.next() {
                 self.write_char(first);
