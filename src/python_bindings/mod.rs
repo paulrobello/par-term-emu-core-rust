@@ -9,6 +9,7 @@
 //! - `color_utils`: Color utility functions for contrast adjustment
 
 pub mod color_utils;
+pub mod common;
 pub mod conversions;
 pub mod enums;
 pub mod observer;

@@ -33,6 +33,20 @@ pub struct PyPtyTerminal {
     inner: pty_session::PtySession,
 }
 
+// ARC-003/QA-001: unified Terminal access so shared methods can be emitted once
+// (see `python_bindings::common`).
+impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
+    fn term_ref(&self) -> impl std::ops::Deref<Target = crate::terminal::Terminal> {
+        self.inner.terminal_ref().lock()
+    }
+    fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = crate::terminal::Terminal> {
+        self.inner.terminal_ref().lock()
+    }
+}
+
+// ARC-003/QA-001 validation: shared getters generated from one definition.
+crate::impl_terminal_simple_getters!(PyPtyTerminal);
+
 #[pymethods]
 impl PyPtyTerminal {
     /// Create a new PTY terminal with the specified dimensions
@@ -1034,19 +1048,7 @@ impl PyPtyTerminal {
         Ok(mode.to_string())
     }
 
-    /// Check if cursor is visible
-    ///
-    /// Returns:
-    ///     True if cursor is visible
-    fn cursor_visible(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let visible = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.cursor().visible
-        } else {
-            false
-        };
-        Ok(visible)
-    }
+    // cursor_visible: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     /// Get current Kitty Keyboard Protocol flags
     ///
@@ -1187,19 +1189,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Check if clipboard read operations are allowed
-    ///
-    /// Returns:
-    ///     True if OSC 52 queries (ESC ] 52 ; c ; ? ST) are allowed
-    fn allow_clipboard_read(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let allowed = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.allow_clipboard_read()
-        } else {
-            false
-        };
-        Ok(allowed)
-    }
+    // allow_clipboard_read: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     /// Set whether clipboard read operations are allowed
     ///
@@ -1294,21 +1284,7 @@ impl PyPtyTerminal {
         Ok(())
     }
 
-    /// Get cursor color (OSC 12)
-    ///
-    /// Returns RGB tuple (r, g, b) where each component is 0-255.
-    ///
-    /// Returns:
-    ///     Tuple of (r, g, b) integers
-    fn cursor_color(&self) -> PyResult<(u8, u8, u8)> {
-        let terminal = self.inner.terminal();
-        let color = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.cursor_color().to_rgb()
-        } else {
-            (192, 192, 192) // Default white if lock fails
-        };
-        Ok(color)
-    }
+    // Get cursor color: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     /// Set cursor color (OSC 12)
     ///
@@ -1629,19 +1605,7 @@ impl PyPtyTerminal {
         Ok(event)
     }
 
-    /// Check if bracketed paste mode is enabled
-    ///
-    /// Returns:
-    ///     True if bracketed paste mode is enabled (DECSET 2004)
-    fn bracketed_paste(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let enabled = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.bracketed_paste()
-        } else {
-            false
-        };
-        Ok(enabled)
-    }
+    // bracketed_paste: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     /// Get bracketed paste start sequence
     ///
@@ -1976,19 +1940,7 @@ impl PyPtyTerminal {
         Ok(cwd)
     }
 
-    /// Check if OSC 7 directory tracking is enabled
-    ///
-    /// Returns:
-    ///     True if OSC 7 sequences are accepted, False otherwise
-    fn accept_osc7(&self) -> PyResult<bool> {
-        let terminal = self.inner.terminal();
-        let accepted = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
-            term.accept_osc7()
-        } else {
-            true // Default
-        };
-        Ok(accepted)
-    }
+    // accept_osc7: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     /// Set whether OSC 7 directory tracking sequences are accepted
     ///

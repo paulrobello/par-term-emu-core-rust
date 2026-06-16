@@ -1105,6 +1105,15 @@ impl PtySession {
         Arc::clone(&self.terminal)
     }
 
+    /// Get a borrowed reference to the underlying terminal `Arc`.
+    ///
+    /// Unlike [`terminal`](Self::terminal), this does not clone the `Arc`, so a
+    /// locked guard derived from it borrows `self` directly (no temporary `Arc`
+    /// to outlive). Used by the shared Python-binding accessors (ARC-003/QA-001).
+    pub fn terminal_ref(&self) -> &Arc<Mutex<Terminal>> {
+        &self.terminal
+    }
+
     /// Get the terminal content as a string
     pub fn content(&self) -> String {
         let term = self.terminal.lock();
