@@ -119,6 +119,7 @@ zeroize = "1.8.2"
 # Unicode text handling
 unicode-segmentation = "1.13.3"
 unicode-normalization = "0.1.25"
+lru = "0.18.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"

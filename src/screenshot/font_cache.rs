@@ -1,4 +1,6 @@
+use lru::LruCache;
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use swash::scale::{Render, ScaleContext, Source, StrikeWith};
@@ -26,6 +28,11 @@ const DEFAULT_FONT: &[u8] = include_bytes!("JetBrainsMono-Regular.ttf");
 // License: OFL-1.1 (SIL Open Font License)
 // Size: ~409 KB
 const EMOJI_FALLBACK_FONT: &[u8] = include_bytes!("NotoEmoji-Regular.ttf");
+
+/// Maximum number of glyphs retained in the LRU font cache (ARC-017).
+/// Past this limit the least-recently-used glyph is evicted one at a time
+/// instead of clearing the entire cache (which caused re-rasterization spikes).
+const GLYPH_CACHE_CAPACITY: usize = 10_000;
 
 /// Bitmap format for cached glyphs
 #[derive(Clone, Debug)]
@@ -92,8 +99,10 @@ pub struct FontCache {
     cjk_fonts: Vec<SwashFont>,
     /// Cache mapping characters to their font index in cjk_fonts
     cjk_font_cache: HashMap<char, usize>,
-    /// Glyph cache: (char, size, bold, italic) -> glyph
-    cache: HashMap<(char, u32, bool, bool), CachedGlyph>,
+    /// Glyph cache: (char, size, bold, italic) -> glyph.
+    /// Bounded LRU (ARC-017) — least-recently-used glyphs are evicted at
+    /// `GLYPH_CACHE_CAPACITY` instead of clearing the whole cache.
+    cache: LruCache<(char, u32, bool, bool), CachedGlyph>,
     /// Font size in pixels
     font_size: f32,
     /// Cached cell dimensions (width, height)
@@ -124,7 +133,9 @@ impl FontCache {
             emoji_font: None,               // Lazy-loaded when needed
             cjk_fonts: Vec::new(),          // Lazy-loaded when needed
             cjk_font_cache: HashMap::new(), // Cache for character-to-font mapping
-            cache: HashMap::new(),
+            cache: LruCache::new(
+                NonZeroUsize::new(GLYPH_CACHE_CAPACITY).expect("capacity is nonzero"),
+            ),
             font_size,
             cell_dimensions: None,
             font_metrics: None,
@@ -403,9 +414,13 @@ impl FontCache {
         let size_key = (self.font_size * 100.0) as u32; // Convert to integer for hash key
         let key = (c, size_key, bold, italic);
 
-        // Check if already cached
-        if self.cache.contains_key(&key) {
-            return self.cache.get(&key).expect("just inserted");
+        // Check if already cached. Use `peek` (shared borrow, does not escape the
+        // statement) for the test, then `get` in the return arm to refresh LRU
+        // recency. Combining them as `if let Some = get(..)` would extend a
+        // `&mut self.cache` borrow across the whole function and block the later
+        // `put` (ARC-017).
+        if self.cache.peek(&key).is_some() {
+            return self.cache.get(&key).expect("just checked");
         }
 
         // Render new glyph - try main font first
@@ -460,7 +475,7 @@ impl FontCache {
                                 if (cjk_metrics.advance_width > 0.0 || cjk_metrics.width > 0)
                                     && !Self::is_bitmap_empty(&cjk_bitmap)
                                 {
-                                    self.cache.insert(
+                                    self.cache.put(
                                         key,
                                         CachedGlyph {
                                             metrics: cjk_metrics,
@@ -492,7 +507,7 @@ impl FontCache {
                                 self.cjk_font_cache.insert(c, font_idx);
                             }
 
-                            self.cache.insert(
+                            self.cache.put(
                                 key,
                                 CachedGlyph {
                                     metrics: cjk_metrics,
@@ -557,7 +572,7 @@ impl FontCache {
                                 (emoji_bitmap, emoji_metrics)
                             };
 
-                            self.cache.insert(
+                            self.cache.put(
                                 key,
                                 CachedGlyph {
                                     metrics: scaled_metrics,
@@ -586,13 +601,10 @@ impl FontCache {
             }
         };
 
-        // Evict oldest entries if cache is too large
-        if self.cache.len() > 10000 {
-            self.cache.clear();
-        }
-
-        // Insert and return reference
-        self.cache.insert(key, cached_glyph);
+        // Insert and return reference.
+        // LRU auto-evicts the least-recently-used entry at GLYPH_CACHE_CAPACITY
+        // (ARC-017), replacing the previous nuclear `clear()` on overflow.
+        self.cache.put(key, cached_glyph);
         self.cache.get(&key).expect("just inserted")
     }
 
