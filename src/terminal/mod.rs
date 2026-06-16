@@ -348,6 +348,21 @@ pub(crate) struct RecordingState {
     pub(crate) recording_start_time: u64,
 }
 
+/// Keyboard protocol state: Kitty flags, per-screen stacks, and modifyOtherKeys mode.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct KeyboardState {
+    /// Kitty keyboard protocol flags (progressive enhancement)
+    pub(crate) keyboard_flags: u16,
+    /// Stack for keyboard protocol flags (main screen)
+    pub(crate) keyboard_stack: Vec<u16>,
+    /// Stack for keyboard protocol flags (alternate screen)
+    pub(crate) keyboard_stack_alt: Vec<u16>,
+    /// modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
+    /// 0 = disabled, 1 = report modifiers for special keys, 2 = report modifiers for all keys
+    pub(crate) modify_other_keys_mode: u8,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -411,15 +426,8 @@ pub struct Terminal {
     pub(crate) tab_stops: Vec<bool>,
     /// Application cursor keys mode
     pub(crate) application_cursor: bool,
-    /// Kitty keyboard protocol flags (progressive enhancement)
-    pub(crate) keyboard_flags: u16,
-    /// Stack for keyboard protocol flags (main screen)
-    pub(crate) keyboard_stack: Vec<u16>,
-    /// Stack for keyboard protocol flags (alternate screen)
-    pub(crate) keyboard_stack_alt: Vec<u16>,
-    /// modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
-    /// 0 = disabled, 1 = report modifiers for special keys, 2 = report modifiers for all keys
-    pub(crate) modify_other_keys_mode: u8,
+    /// Keyboard protocol flags, stacks, modifyOtherKeys mode (ARC-001 sub-struct)
+    pub(crate) keyboard_state: KeyboardState,
     /// Response buffer for device queries (DA/DSR/etc)
     pub(crate) response_buffer: Vec<u8>,
     /// Hyperlink storage: ID -> URL mapping (for deduplication)
@@ -702,10 +710,12 @@ impl Terminal {
             origin_mode: false,
             tab_stops,
             application_cursor: false,
-            keyboard_flags: 0,
-            keyboard_stack: Vec::new(),
-            keyboard_stack_alt: Vec::new(),
-            modify_other_keys_mode: 0,
+            keyboard_state: KeyboardState {
+                keyboard_flags: 0,
+                keyboard_stack: Vec::new(),
+                keyboard_stack_alt: Vec::new(),
+                modify_other_keys_mode: 0,
+            },
             response_buffer: Vec::new(),
             hyperlinks: HashMap::new(),
             current_hyperlink_id: None,
@@ -1201,18 +1211,18 @@ impl Terminal {
             self.alt_cursor = alt_cursor;
             // Reset keyboard protocol flags when exiting alternate screen
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
-            if self.keyboard_flags != 0 {
-                self.keyboard_flags = 0;
+            if self.keyboard_state.keyboard_flags != 0 {
+                self.keyboard_state.keyboard_flags = 0;
                 self.terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "keyboard_protocol".to_string(),
                         false,
                     ));
             }
-            self.keyboard_stack_alt.clear();
+            self.keyboard_state.keyboard_stack_alt.clear();
             // Also reset modifyOtherKeys mode
-            if self.modify_other_keys_mode != 0 {
-                self.modify_other_keys_mode = 0;
+            if self.keyboard_state.modify_other_keys_mode != 0 {
+                self.keyboard_state.modify_other_keys_mode = 0;
                 self.terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "modify_other_keys".to_string(),
@@ -1632,20 +1642,22 @@ impl Terminal {
     /// Process a buffered Sixel command (color, raster, repeat)
     /// Get current Kitty keyboard protocol flags
     pub fn keyboard_flags(&self) -> u16 {
-        self.keyboard_flags
+        self.keyboard_state.keyboard_flags
     }
 
     /// Push keyboard flags to stack
     pub fn push_keyboard_flags(&mut self, flags: u16) {
-        self.keyboard_stack.push(self.keyboard_flags);
-        self.keyboard_flags = flags;
+        self.keyboard_state
+            .keyboard_stack
+            .push(self.keyboard_state.keyboard_flags);
+        self.keyboard_state.keyboard_flags = flags;
     }
 
     /// Pop keyboard flags from stack
     pub fn pop_keyboard_flags(&mut self, count: usize) {
         for _ in 0..count {
-            if let Some(flags) = self.keyboard_stack.pop() {
-                self.keyboard_flags = flags;
+            if let Some(flags) = self.keyboard_state.keyboard_stack.pop() {
+                self.keyboard_state.keyboard_flags = flags;
             }
         }
     }
@@ -1662,19 +1674,19 @@ impl Terminal {
 
     /// Set Kitty keyboard protocol flags (for testing/direct control)
     pub fn set_keyboard_flags(&mut self, flags: u16) {
-        self.keyboard_flags = flags;
+        self.keyboard_state.keyboard_flags = flags;
     }
 
     /// Get modifyOtherKeys mode (XTerm extension)
     /// 0 = disabled, 1 = report modifiers for special keys, 2 = report modifiers for all keys
     pub fn modify_other_keys_mode(&self) -> u8 {
-        self.modify_other_keys_mode
+        self.keyboard_state.modify_other_keys_mode
     }
 
     /// Set modifyOtherKeys mode (for testing/direct control)
     pub fn set_modify_other_keys_mode(&mut self, mode: u8) {
         // Clamp to valid range (0-2)
-        self.modify_other_keys_mode = mode.min(2);
+        self.keyboard_state.modify_other_keys_mode = mode.min(2);
     }
 
     /// Get clipboard content (OSC 52)

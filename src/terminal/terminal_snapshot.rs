@@ -208,8 +208,8 @@ impl Terminal {
             use_lr_margins: self.use_lr_margins,
             left_margin: self.left_margin,
             right_margin: self.right_margin,
-            keyboard_flags: self.keyboard_flags,
-            modify_other_keys_mode: self.modify_other_keys_mode,
+            keyboard_flags: self.keyboard_state.keyboard_flags,
+            modify_other_keys_mode: self.keyboard_state.modify_other_keys_mode,
             char_protected: self.char_protected,
             bold_brightening: self.bold_brightening,
             scroll_region_top: self.scroll_region_top,
@@ -252,8 +252,8 @@ impl Terminal {
         self.use_lr_margins = snap.use_lr_margins;
         self.left_margin = snap.left_margin;
         self.right_margin = snap.right_margin;
-        self.keyboard_flags = snap.keyboard_flags;
-        self.modify_other_keys_mode = snap.modify_other_keys_mode;
+        self.keyboard_state.keyboard_flags = snap.keyboard_flags;
+        self.keyboard_state.modify_other_keys_mode = snap.modify_other_keys_mode;
         self.char_protected = snap.char_protected;
         self.bold_brightening = snap.bold_brightening;
         self.scroll_region_top = snap.scroll_region_top;

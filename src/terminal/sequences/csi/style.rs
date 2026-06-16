@@ -24,13 +24,13 @@ impl Terminal {
                         .and_then(|p| p.first())
                         .copied()
                         .unwrap_or(0) as u8;
-                    self.modify_other_keys_mode = mode.min(2);
+                    self.keyboard_state.modify_other_keys_mode = mode.min(2);
                     debug::log(
                         debug::DebugLevel::Info,
                         "CSI",
                         &format!(
                             "modifyOtherKeys mode set to {}",
-                            self.modify_other_keys_mode
+                            self.keyboard_state.modify_other_keys_mode
                         ),
                     );
                 }
@@ -46,7 +46,8 @@ impl Terminal {
                     .copied()
                     .unwrap_or(0);
                 if param == 4 {
-                    let response = format!("\x1b[>4;{}m", self.modify_other_keys_mode);
+                    let response =
+                        format!("\x1b[>4;{}m", self.keyboard_state.modify_other_keys_mode);
                     self.push_response(response.as_bytes());
                 }
                 return;

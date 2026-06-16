@@ -411,7 +411,7 @@ impl Terminal {
             hyperlink_memory_bytes: 0, // Should be calculated
             color_stack_depth: self.color_stack.len(),
             title_stack_depth: self.title_stack.len(),
-            keyboard_stack_depth: self.keyboard_stack.len(),
+            keyboard_stack_depth: self.keyboard_state.keyboard_stack.len(),
             response_buffer_size: self.response_buffer.len(),
             dirty_row_count: self.dirty_rows.len(),
             pending_bell_events: self.bell_events.len(),
