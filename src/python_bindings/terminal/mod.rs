@@ -52,6 +52,7 @@ impl crate::python_bindings::common::TerminalAccess for PyTerminal {
 
 // ARC-003/QA-001: shared query/state getters generated from one definition.
 crate::impl_terminal_query_getters!(PyTerminal);
+crate::impl_terminal_color_setters!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -712,104 +713,23 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Set link/hyperlink color
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_link_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_link_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_link_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set bold text color (when use_bold_color is enabled)
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_bold_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_bold_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_bold_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set cursor guide color (vertical line following cursor)
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_cursor_guide_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_cursor_guide_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_cursor_guide_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set badge color
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_badge_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_badge_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_badge_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set match/search highlight color
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_match_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_match_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_match_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set selection background color
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_selection_bg_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_selection_bg_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_selection_bg_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Set selection foreground/text color
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_selection_fg_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_selection_fg_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_selection_fg_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Enable/disable custom bold color
-    ///
-    /// When enabled, bold text uses set_bold_color() instead of bright ANSI variant.
-    ///
-    /// Args:
-    ///     use_bold: Whether to use custom bold color
-    fn set_use_bold_color(&mut self, use_bold: bool) -> PyResult<()> {
-        self.inner.set_use_bold_color(use_bold);
-        Ok(())
-    }
+    // set_use_bold_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
-    /// Enable/disable custom underline color
-    ///
-    /// When enabled, underlined text uses a custom underline color.
-    ///
-    /// Args:
-    ///     use_underline: Whether to use custom underline color
-    fn set_use_underline_color(&mut self, use_underline: bool) -> PyResult<()> {
-        self.inner.set_use_underline_color(use_underline);
-        Ok(())
-    }
+    // set_use_underline_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
     /// Get link/hyperlink color
     ///
@@ -893,17 +813,7 @@ impl PyTerminal {
         Ok(self.inner.bold_brightening())
     }
 
-    /// Set bold brightening mode
-    ///
-    /// When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
-    /// This is a legacy terminal behavior that some applications rely on.
-    ///
-    /// Args:
-    ///     enabled: True to enable bold brightening, False to disable
-    fn set_bold_brightening(&mut self, enabled: bool) -> PyResult<()> {
-        self.inner.set_bold_brightening(enabled);
-        Ok(())
-    }
+    // set_bold_brightening: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
     // faint_text_alpha: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 

@@ -275,3 +275,134 @@ macro_rules! impl_terminal_query_getters {
         }
     };
 }
+
+/// Emit the custom rendering-hint color setters for `$ty`, using
+/// [`TerminalAccess::term_mut`]. (ARC-003/QA-001 scaling batch 2.)
+#[macro_export]
+macro_rules! impl_terminal_color_setters {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Set link/hyperlink color
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_link_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_link_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set bold text color (when use_bold_color is enabled)
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_bold_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_bold_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set cursor guide color (vertical line following cursor)
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_cursor_guide_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_cursor_guide_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set badge color
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_badge_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_badge_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set match/search highlight color
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_match_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_match_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set selection background color
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_selection_bg_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_selection_bg_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set selection foreground/text color
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_selection_fg_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_selection_fg_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Enable/disable custom bold color
+            ///
+            /// When enabled, bold text uses set_bold_color() instead of bright ANSI variant.
+            ///
+            /// Args:
+            ///     use_bold: Whether to use custom bold color
+            fn set_use_bold_color(&mut self, use_bold: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_use_bold_color(use_bold);
+                Ok(())
+            }
+
+            /// Enable/disable custom underline color
+            ///
+            /// When enabled, underlined text uses a custom underline color.
+            ///
+            /// Args:
+            ///     use_underline: Whether to use custom underline color
+            fn set_use_underline_color(&mut self, use_underline: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_use_underline_color(use_underline);
+                Ok(())
+            }
+
+            /// Set bold brightening mode
+            ///
+            /// When enabled, bold text with ANSI colors 0-7 is brightened to 8-15.
+            /// This is a legacy terminal behavior that some applications rely on.
+            ///
+            /// Args:
+            ///     enabled: True to enable bold brightening, False to disable
+            fn set_bold_brightening(&mut self, enabled: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_bold_brightening(enabled);
+                Ok(())
+            }
+        }
+    };
+}
