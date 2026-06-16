@@ -14,12 +14,13 @@
 | **Security (all)** | ✅ **All 7 resolved** | SEC-001 (zlib cap); SEC-002 (public-bind warning); SEC-003 (replaced htpasswd-verify → maintained bcrypt/md-5/sha1, openssl-vector-tested); SEC-004 (PyO3 0.28→0.29, zero source changes); SEC-005 (WS Origin + CORS defense); SEC-006 (rustls-pemfile → pki-types PemObject); SEC-007 (AVIF disabled → `paste` no longer compiled). `cargo audit`: **5 vulnerabilities → 0**. |
 | **ARC-001** (Terminal god object) | ✅ **Complete** | Decomposed from ~150 flat fields → **56** (31 cohesive sub-struct holders + 25 irreducible core: buffer, cursor, parser, current cell render state, event dispatch, graphics store). 31 sub-structs across 25 commits, all behavior-preserving (1834 tests pass). See the [ARC-001 Decomposition](#arc-001-decomposition) inventory. |
 | **ARC-007** (observer dispatch) | ✅ **Safe fix done** | Observer callbacks now run inside `catch_unwind` — a panicking observer is isolated instead of unwinding through the `parking_lot` mutex (which doesn't poison → would silently corrupt state + re-fire events). Regression test added. The full out-of-lock dispatch redesign remains future work. |
-| **Architecture (other)** | ✅ 4 / ⏭️ rest | ARC-007 (safe fix), ARC-011, ARC-019, ARC-025 resolved. ARC-002/003/004/005/006/008/009/010/012–028 remain (see Remaining). |
+| **ARC-002** (`PyTerminal` god object) | ✅ **Structural split done** | The single 5768-line / ~384-method `#[pymethods]` block is split into **18 cohesive blocks** (core in `mod.rs` + 17 themed `*_api.rs` files) via the pyo3 `multiple-pymethods` feature. `mod.rs` halved (→ 2869 lines); the Python `Terminal` class surface is **unchanged** (1834 Rust + 492 Python tests pass). The audit's stretch remedy — nested sub-objects (`term.colors.x`) for autocomplete discoverability — is a breaking major-version API change and remains future work. |
+| **Architecture (other)** | ✅ 4 / ⏭️ rest | ARC-007 (safe fix), ARC-011, ARC-019, ARC-025 resolved. ARC-003/004/005/006/008/009/010/012–028 remain (see Remaining). |
 | **Code Quality** | ✅ 3 / ⏭️ rest | QA-003, QA-007, QA-010 resolved. QA-001/002/004/005/006/008/009/011/012/013 remain. |
 | **Documentation** | ✅ 8 / ⏭️ rest | DOC-005/013/017/019/020/021/022/023/024 resolved. DOC-001–004/006–012/015/016/018 remain. |
 | **Verification** | ✅ | `make checkall` green: cargo check + clippy (0 warnings) + fmt + ruff + pyright + 1834 Rust tests + 492 Python tests. One known-flaky PTY timing test (passes in isolation). |
 
-**Totals**: ~50 audit items resolved across all rounds. **All Security closed.** ARC-001 (the largest finding, rated Critical) complete. Remaining work is ARC-002 (PyTerminal) + the long tail of Medium/Low architecture, code-quality, and documentation items.
+**Totals**: ~51 audit items resolved across all rounds. **All Security closed; both Critical architecture findings (ARC-001, ARC-002) substantially done.** Remaining work is the long tail of Medium/Low architecture, code-quality, and documentation items — ARC-003/004/005/006/008/009/010 and the doc/code-quality tail.
 
 ---
 
@@ -39,6 +40,7 @@
 - **[ARC-019]** Coprocess output buffer `Vec::remove(0)` (O(n)/line) — `src/coprocess.rs` — `output_buffer`/`error_buffer` switched `Vec<String>` → `VecDeque<String>` with O(1) `push_back`/`pop_front`; the two drain consumers (`read()`/`read_errors()`) convert back to `Vec<String>` via `mem::take().into_iter().collect()`, so the public API is unchanged.
 - **[ARC-025]** Duplicated `emit_style` SGR closure (~78 lines × 2) — `src/grid/export.rs` — verified byte-for-byte identical, extracted a private `push_sgr_style(result, fg, bg, flags)` helper; both closures removed, 3 call sites updated. Output identical.
 - **[ARC-001]** `Terminal` god-object decomposition — **complete**. See the dedicated [ARC-001 Decomposition](#arc-001-decomposition) section below for the full sub-struct inventory.
+- **[ARC-002]** `PyTerminal` god-object split — **structural core done**. The single ~384-method `#[pymethods]` block is split into 18 cohesive blocks: core methods in `mod.rs` (halved, 5768→2869 lines) + 17 themed `*_api.rs` files (triggers, color, clipboard, metrics, search, selection, snapshot, scrollback, bookmark, multiplexing, image, shell-integration, notification, recording, badge, file-transfer, mouse, text). Enabled pyo3's `multiple-pymethods` feature so PyO3 merges them into the same Python `Terminal` class — **zero API change** (492 Python tests pass). The nested-sub-object discoverability (`term.colors.x`) — the audit's stretch remedy — is a breaking major-version change and remains future work.
 
 ### Code Quality
 - **[QA-003]** `Ok::<_, ()>(x.lock())` dead-branch anti-pattern (12 sites) — `src/streaming/server.rs` — collapsed `if let Ok(mut w) = Ok::<_, ()>(writer.lock()) { … }` → `let mut w = writer.lock(); …` (Pattern A, 6 sites); the 6 `terminal_for_refresh.lock()` sites (Pattern B, with dead `else { None }`) collapsed to direct evaluation. (Note: ~120 identical sites in `src/python_bindings/pty.rs` were deliberately left — out of scope; should be folded into the deferred ARC-003/QA-001 binding-dedup work.)
@@ -62,10 +64,10 @@
 These issues could not be safely auto-remediated. They require dedicated planning, are breaking changes, or depend on a codegen/design decision.
 
 ### Critical — remaining architecture
-- **[ARC-002] Decompose `PyTerminal` god object (383 methods)** — `src/python_bindings/terminal/mod.rs`
-  - **Why open**: Breaking Python API change requiring a major-version bump or a compatibility shim. ARC-001 (its Rust-side prerequisite) is now complete, so this is unblocked.
-  - **Recommended approach**: Expose cohesive nested `#[pyclass]` sub-objects (`term.clipboard`, `term.colors`, `term.triggers`, `term.metrics`); provide a deprecation shim proxying flat methods to the new nested objects.
-  - **Estimated effort**: Large (multi-sprint).
+- **[ARC-002 tail] Nested sub-objects for Python discoverability** — `src/python_bindings/terminal/mod.rs`
+  - **Status**: The structural core is **done** — the god-object `#[pymethods]` block is split into 18 cohesive files (above). What remains is the audit's *stretch* remedy: exposing cohesive nested `#[pyclass]` sub-objects (`term.clipboard.history`, `term.colors.default_fg`, `term.triggers.add(...)`) so autocomplete becomes usable.
+  - **Why open**: It's a **breaking Python API change** (the audit itself flags it for a major-version bump / compat shim). It also needs the PyO3 parent-child sharing pattern (the sub-objects must reach the underlying `Terminal`, which `PyTerminal` owns directly — so it requires either the fiddly `Py<PyTerminal>` parent-ref pattern or restructuring `PyTerminal` to hold `Arc<Mutex<Terminal>>`). Defer to a dedicated major-version effort, not this branch.
+  - **Recommended approach**: At the next major version, expose nested `#[pyclass]` sub-objects holding a parent ref; keep the flat methods as a deprecation shim for one release.
 
 ### High — large refactors (Security fully closed; these remain)
 - **[ARC-003 / QA-001] ~155 duplicated methods PyTerminal/PyPtyTerminal** — `src/python_bindings/terminal/mod.rs`, `src/python_bindings/pty.rs`
@@ -175,10 +177,11 @@ Highlights by round:
 
 ## Next Steps
 
-1. **ARC-002 (`PyTerminal` decomposition)** is now the highest-leverage open item — and it's unblocked because ARC-001 is complete. Nearly every remaining Code Quality finding (QA-001/005/008/009) is downstream of it.
+1. **Both Critical architecture findings are substantially done** (ARC-001 `Terminal` decomposition + ARC-002 `PyTerminal` split). The highest-leverage REMAINING item is now **ARC-003 / QA-001** (the ~155 duplicated PyTerminal/PyPtyTerminal methods) — now unblocked by the ARC-002 split, since the shared method bodies live in cohesive files that can be extracted into a shared trait/macro.
 2. **ARC-007 full redesign (optional)** — the panic-isolation safe fix is done (`catch_unwind`); the remaining ARC-007 work is moving observer dispatch *fully out of the `Terminal` mutex* (to remove reader-thread latency amplification from slow observers). Lower priority now that the correctness risk is contained.
-3. **ARC-005 (Cell SmallVec)** remains the best self-contained perf win (own benchmarked PR).
-4. **Make the DOC-001 codegen decision** — a `#[pyo3(get)]` → API_REFERENCE generator fixes the largest doc defect permanently and folds in DOC-002/003/004/006/007/009/010/011.
-5. **Investigate the flaky `test_generation_counter_increments_on_pty_output`** as a separate item — it intermittently fails under full-suite parallel load (passes in isolation). Likely needs a more robust wait/poll. (Not introduced by this work.)
-6. **Re-run `/audit`** to refresh `AUDIT.md` against the current (much-improved) state.
-7. When ready to release: the `[Unreleased]` CHANGELOG entry already covers SEC-001 through SEC-007; add the ARC-001 decomposition note, then merge `fix/audit-remediation` to `main`.
+3. **ARC-002 tail (major version)** — the nested-sub-object discoverability (`term.colors.x`) is a breaking API change; defer to a dedicated major-version release with a deprecation shim.
+4. **ARC-005 (Cell SmallVec)** remains the best self-contained perf win (own benchmarked PR).
+5. **Make the DOC-001 codegen decision** — a `#[pyo3(get)]` → API_REFERENCE generator fixes the largest doc defect permanently and folds in DOC-002/003/004/006/007/009/010/011.
+6. **Investigate the flaky `test_generation_counter_increments_on_pty_output`** as a separate item — it intermittently fails under full-suite parallel load (passes in isolation). Likely needs a more robust wait/poll. (Not introduced by this work.)
+7. **Re-run `/audit`** to refresh `AUDIT.md` against the current (much-improved) state.
+8. When ready to release: the `[Unreleased]` CHANGELOG entry covers SEC-001→007 + ARC-001; add the ARC-002 split note, then merge `fix/audit-remediation` to `main`.
