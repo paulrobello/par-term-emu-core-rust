@@ -107,13 +107,14 @@ impl Terminal {
 
                     self.hyperlink_state.current_hyperlink_id = Some(id);
 
-                    self.terminal_events
-                        .push(crate::terminal::TerminalEvent::HyperlinkAdded {
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::HyperlinkAdded {
                             url: url.to_string(),
                             row: self.cursor.row,
                             col: self.cursor.col,
                             id: Some(id),
-                        });
+                        },
+                    );
                 }
             }
         } else if params.len() == 2 {

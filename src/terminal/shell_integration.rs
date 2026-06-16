@@ -195,11 +195,13 @@ impl Terminal {
         }
 
         // Emit CwdChanged event
-        self.terminal_events
+        self.events
+            .terminal_events
             .push(crate::terminal::TerminalEvent::CwdChanged(change.clone()));
 
         // Emit EnvironmentChanged event for CWD
-        self.terminal_events
+        self.events
+            .terminal_events
             .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                 key: "cwd".to_string(),
                 value: change.new_cwd.clone(),
@@ -208,7 +210,8 @@ impl Terminal {
 
         // Emit EnvironmentChanged for hostname if changed
         if change.hostname != old_hostname {
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                     key: "hostname".to_string(),
                     value: change.hostname.clone().unwrap_or_default(),
@@ -216,8 +219,8 @@ impl Terminal {
                 });
 
             // Emit RemoteHostTransition event
-            self.terminal_events
-                .push(crate::terminal::TerminalEvent::RemoteHostTransition {
+            self.events.terminal_events.push(
+                crate::terminal::TerminalEvent::RemoteHostTransition {
                     hostname: change
                         .hostname
                         .clone()
@@ -225,12 +228,14 @@ impl Terminal {
                     username: change.username.clone(),
                     old_hostname,
                     old_username: old_username.clone(),
-                });
+                },
+            );
         }
 
         // Emit EnvironmentChanged for username if changed
         if change.username != old_username {
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(crate::terminal::TerminalEvent::EnvironmentChanged {
                     key: "username".to_string(),
                     value: change.username.clone().unwrap_or_default(),

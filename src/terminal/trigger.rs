@@ -216,7 +216,8 @@ impl Terminal {
                 self.execute_trigger_actions(trigger_match);
 
                 // Emit event
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::TriggerMatched(
                         trigger_match.clone(),
                     ));

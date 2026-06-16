@@ -635,6 +635,24 @@ pub(crate) struct GraphicsState {
     pub(crate) file_transfer_manager: FileTransferManager,
 }
 
+/// Event broker subsystem: terminal event buffer, bell event buffer, dispatch
+/// index, observer registry, and ID counters. The dispatch logic stays as
+/// methods on Terminal; only the STATE moves here. (ARC-001 sub-struct)
+pub(crate) struct EventBrokerState {
+    /// Bell events buffer
+    pub(crate) bell_events: Vec<BellEvent>,
+    /// Terminal events buffer
+    pub(crate) terminal_events: Vec<TerminalEvent>,
+    /// Index of the next event to dispatch to observers (prevents duplicate dispatch)
+    pub(crate) events_dispatched_up_to: usize,
+    /// Registered observers for push-based event delivery
+    pub(crate) observers: Vec<crate::observer::ObserverEntry>,
+    /// Next observer ID to assign (monotonically increasing)
+    pub(crate) next_observer_id: crate::observer::ObserverId,
+    /// Next zone ID to assign (monotonically increasing)
+    pub(crate) next_zone_id: usize,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -716,18 +734,8 @@ pub struct Terminal {
     pub(crate) tmux: TmuxState,
     /// Dirty rows tracking (0-indexed row numbers that have changed)
     pub(crate) dirty_rows: HashSet<usize>,
-    /// Bell events buffer
-    pub(crate) bell_events: Vec<BellEvent>,
-    /// Terminal events buffer
-    pub(crate) terminal_events: Vec<TerminalEvent>,
-    /// Index of the next event to dispatch to observers (prevents duplicate dispatch)
-    pub(crate) events_dispatched_up_to: usize,
-    /// Registered observers for push-based event delivery
-    pub(crate) observers: Vec<crate::observer::ObserverEntry>,
-    /// Next observer ID to assign (monotonically increasing)
-    pub(crate) next_observer_id: crate::observer::ObserverId,
-    /// Next zone ID to assign (monotonically increasing)
-    pub(crate) next_zone_id: usize,
+    /// Event buffer + observer registry + dispatch index + ID counters (ARC-001 sub-struct)
+    pub(crate) events: EventBrokerState,
     /// Current selection state
     pub(crate) selection: Option<Selection>,
     /// Bookmarks and next bookmark ID (ARC-001 sub-struct)
@@ -950,12 +958,14 @@ impl Terminal {
             },
             // Event tracking
             dirty_rows: HashSet::new(),
-            bell_events: Vec::new(),
-            terminal_events: Vec::new(),
-            events_dispatched_up_to: 0,
-            observers: Vec::new(),
-            next_observer_id: 1,
-            next_zone_id: 0,
+            events: EventBrokerState {
+                bell_events: Vec::new(),
+                terminal_events: Vec::new(),
+                events_dispatched_up_to: 0,
+                observers: Vec::new(),
+                next_observer_id: 1,
+                next_zone_id: 0,
+            },
             // Selection and bookmarks
             selection: None,
             bookmarks_state: BookmarksState {
@@ -1346,11 +1356,13 @@ impl Terminal {
             .custom
             .insert(name.clone(), value.clone());
         if changed {
-            self.terminal_events.push(TerminalEvent::UserVarChanged {
-                name,
-                value,
-                old_value,
-            });
+            self.events
+                .terminal_events
+                .push(TerminalEvent::UserVarChanged {
+                    name,
+                    value,
+                    old_value,
+                });
         }
     }
 
@@ -1373,7 +1385,8 @@ impl Terminal {
             // Clear the alternate screen buffer to ensure it starts blank
             self.alt_grid.clear();
             // Notify about alt screen entry
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(crate::terminal::TerminalEvent::ModeChanged(
                     "alternate_screen".to_string(),
                     true,
@@ -1396,7 +1409,8 @@ impl Terminal {
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
             if self.keyboard_state.keyboard_flags != 0 {
                 self.keyboard_state.keyboard_flags = 0;
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "keyboard_protocol".to_string(),
                         false,
@@ -1406,7 +1420,8 @@ impl Terminal {
             // Also reset modifyOtherKeys mode
             if self.keyboard_state.modify_other_keys_mode != 0 {
                 self.keyboard_state.modify_other_keys_mode = 0;
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "modify_other_keys".to_string(),
                         false,
@@ -1415,14 +1430,16 @@ impl Terminal {
             // And focus tracking
             if self.modes.focus_tracking {
                 self.modes.focus_tracking = false;
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "focus_tracking".to_string(),
                         false,
                     ));
             }
             // Notify about alt screen exit
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(crate::terminal::TerminalEvent::ModeChanged(
                     "alternate_screen".to_string(),
                     false,
@@ -2187,7 +2204,8 @@ impl Terminal {
         self.progress_state
             .named_progress_bars
             .insert(id.clone(), bar);
-        self.terminal_events
+        self.events
+            .terminal_events
             .push(TerminalEvent::ProgressBarChanged {
                 action: ProgressBarAction::Set,
                 id,
@@ -2202,7 +2220,8 @@ impl Terminal {
     /// Returns true if the bar existed and was removed.
     pub fn remove_named_progress_bar(&mut self, id: &str) -> bool {
         if self.progress_state.named_progress_bars.remove(id).is_some() {
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(TerminalEvent::ProgressBarChanged {
                     action: ProgressBarAction::Remove,
                     id: id.to_string(),
@@ -2220,7 +2239,8 @@ impl Terminal {
     pub fn remove_all_named_progress_bars(&mut self) {
         if !self.progress_state.named_progress_bars.is_empty() {
             self.progress_state.named_progress_bars.clear();
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(TerminalEvent::ProgressBarChanged {
                     action: ProgressBarAction::RemoveAll,
                     id: String::new(),
@@ -2543,19 +2563,19 @@ impl Terminal {
     /// Uses `events_dispatched_up_to` index to avoid sending duplicate events
     /// when `process()` is called multiple times before `poll_events()`.
     fn dispatch_events(&mut self) {
-        if self.observers.is_empty() || self.terminal_events.is_empty() {
+        if self.events.observers.is_empty() || self.events.terminal_events.is_empty() {
             return;
         }
 
-        let start = self.events_dispatched_up_to;
-        if start >= self.terminal_events.len() {
+        let start = self.events.events_dispatched_up_to;
+        if start >= self.events.terminal_events.len() {
             return;
         }
 
-        for event in &self.terminal_events[start..] {
+        for event in &self.events.terminal_events[start..] {
             let category = crate::observer::event_category(event);
             let event_kind = event.kind();
-            for entry in &self.observers {
+            for entry in &self.events.observers {
                 // Check subscriptions
                 if let Some(subs) = entry.observer.subscriptions() {
                     if !subs.contains(&event_kind) {
@@ -2577,7 +2597,7 @@ impl Terminal {
             }
         }
 
-        self.events_dispatched_up_to = self.terminal_events.len();
+        self.events.events_dispatched_up_to = self.events.terminal_events.len();
     }
 
     /// Reset the terminal to its initial state (RIS)
@@ -2652,17 +2672,18 @@ impl Terminal {
         &mut self,
         observer: std::sync::Arc<dyn crate::observer::TerminalObserver>,
     ) -> crate::observer::ObserverId {
-        let id = self.next_observer_id;
-        self.next_observer_id += 1;
-        self.observers
+        let id = self.events.next_observer_id;
+        self.events.next_observer_id += 1;
+        self.events
+            .observers
             .push(crate::observer::ObserverEntry { id, observer });
         id
     }
 
     /// Remove an observer by ID
     pub fn remove_observer(&mut self, id: crate::observer::ObserverId) -> bool {
-        if let Some(pos) = self.observers.iter().position(|o| o.id == id) {
-            self.observers.remove(pos);
+        if let Some(pos) = self.events.observers.iter().position(|o| o.id == id) {
+            self.events.observers.remove(pos);
             true
         } else {
             false
@@ -2671,7 +2692,7 @@ impl Terminal {
 
     /// Get the number of registered observers
     pub fn observer_count(&self) -> usize {
-        self.observers.len()
+        self.events.observers.len()
     }
 
     /// Poll for pending events
@@ -2679,26 +2700,30 @@ impl Terminal {
         // Drain evicted zones and emit ZoneScrolledOut events
         let evicted = self.grid.drain_evicted_zones();
         for zone in evicted {
-            self.terminal_events.push(TerminalEvent::ZoneScrolledOut {
-                zone_id: zone.id,
-                zone_type: zone.zone_type,
-            });
+            self.events
+                .terminal_events
+                .push(TerminalEvent::ZoneScrolledOut {
+                    zone_id: zone.id,
+                    zone_type: zone.zone_type,
+                });
         }
         // Also check alt grid
         let alt_evicted = self.alt_grid.drain_evicted_zones();
         for zone in alt_evicted {
-            self.terminal_events.push(TerminalEvent::ZoneScrolledOut {
-                zone_id: zone.id,
-                zone_type: zone.zone_type,
-            });
+            self.events
+                .terminal_events
+                .push(TerminalEvent::ZoneScrolledOut {
+                    zone_id: zone.id,
+                    zone_type: zone.zone_type,
+                });
         }
-        self.events_dispatched_up_to = 0;
-        std::mem::take(&mut self.terminal_events)
+        self.events.events_dispatched_up_to = 0;
+        std::mem::take(&mut self.events.terminal_events)
     }
 
     /// Drain pending bell events
     pub fn drain_bell_events(&mut self) -> Vec<BellEvent> {
-        std::mem::take(&mut self.bell_events)
+        std::mem::take(&mut self.events.bell_events)
     }
 
     // === Event Subscription ===
@@ -2716,10 +2741,10 @@ impl Terminal {
     /// Poll for events that match the current subscription filter
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
         if let Some(ref filter) = self.event_subscription {
-            let events = std::mem::take(&mut self.terminal_events);
+            let events = std::mem::take(&mut self.events.terminal_events);
             let (matched, remaining): (Vec<_>, Vec<_>) =
                 events.into_iter().partition(|e| filter.contains(&e.kind()));
-            self.terminal_events = remaining;
+            self.events.terminal_events = remaining;
             matched
         } else {
             self.poll_events()
@@ -2728,7 +2753,7 @@ impl Terminal {
 
     /// Poll for CWD change events
     pub fn poll_cwd_events(&mut self) -> Vec<CwdChange> {
-        let events = std::mem::take(&mut self.terminal_events);
+        let events = std::mem::take(&mut self.events.terminal_events);
         let mut cwd_changes = Vec::new();
         let mut remaining = Vec::new();
 
@@ -2740,7 +2765,7 @@ impl Terminal {
             }
         }
 
-        self.terminal_events = remaining;
+        self.events.terminal_events = remaining;
         cwd_changes
     }
 
@@ -2748,7 +2773,7 @@ impl Terminal {
     ///
     /// Returns all pending UploadRequested events and removes them from the queue.
     pub fn poll_upload_requests(&mut self) -> Vec<String> {
-        let events = std::mem::take(&mut self.terminal_events);
+        let events = std::mem::take(&mut self.events.terminal_events);
         let mut upload_formats = Vec::new();
         let mut remaining = Vec::new();
 
@@ -2760,13 +2785,13 @@ impl Terminal {
             }
         }
 
-        self.terminal_events = remaining;
+        self.events.terminal_events = remaining;
         upload_formats
     }
 
     /// Poll for shell integration events
     pub fn poll_shell_integration_events(&mut self) -> Vec<ShellEvent> {
-        let events = std::mem::take(&mut self.terminal_events);
+        let events = std::mem::take(&mut self.events.terminal_events);
         let mut shell_events = Vec::new();
         let mut remaining = Vec::new();
 
@@ -2785,7 +2810,7 @@ impl Terminal {
             }
         }
 
-        self.terminal_events = remaining;
+        self.events.terminal_events = remaining;
         shell_events
     }
 
@@ -2795,7 +2820,7 @@ impl Terminal {
     /// `true` means the scrollback was also cleared (ESC[3J), `false` means
     /// only the visible screen was cleared (ESC[2J).
     pub fn poll_screen_cleared_events(&mut self) -> Vec<bool> {
-        let events = std::mem::take(&mut self.terminal_events);
+        let events = std::mem::take(&mut self.events.terminal_events);
         let mut cleared_events = Vec::new();
         let mut remaining = Vec::new();
 
@@ -2807,7 +2832,7 @@ impl Terminal {
             }
         }
 
-        self.terminal_events = remaining;
+        self.events.terminal_events = remaining;
         cleared_events
     }
 

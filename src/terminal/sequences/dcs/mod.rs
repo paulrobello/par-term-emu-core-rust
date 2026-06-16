@@ -137,7 +137,8 @@ impl Terminal {
 
                 let row = self.cursor.row;
                 self.graphics.graphics_store.add_graphic(graphic);
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::GraphicsAdded(row));
 
                 // Advance cursor to next line(s) as per test expectation

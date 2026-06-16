@@ -41,7 +41,7 @@ impl Terminal {
                             Some('A') => {
                                 self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::PromptStart);
-                                self.terminal_events.push(
+                                self.events.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "prompt_start".to_string(),
                                         command: None,
@@ -52,7 +52,7 @@ impl Terminal {
                                 );
                                 if self.shell_state.in_command_output && self.shell_state.shell_depth > 0 {
                                     self.shell_state.shell_depth += 1;
-                                    self.terminal_events.push(
+                                    self.events.terminal_events.push(
                                         crate::terminal::TerminalEvent::SubShellDetected {
                                             depth: self.shell_state.shell_depth,
                                             shell_type: None,
@@ -69,7 +69,7 @@ impl Terminal {
                                         let closed_type = zone.zone_type;
                                         let closed_start = zone.abs_row_start;
                                         self.grid.close_current_zone(close_row);
-                                        self.terminal_events.push(
+                                        self.events.terminal_events.push(
                                             crate::terminal::TerminalEvent::ZoneClosed {
                                                 zone_id: closed_id,
                                                 zone_type: closed_type,
@@ -81,15 +81,15 @@ impl Terminal {
                                     } else {
                                         self.grid.close_current_zone(close_row);
                                     }
-                                    let zone_id = self.next_zone_id;
-                                    self.next_zone_id += 1;
+                                    let zone_id = self.events.next_zone_id;
+                                    self.events.next_zone_id += 1;
                                     self.grid.push_zone(crate::zone::Zone::new(
                                         zone_id,
                                         crate::zone::ZoneType::Prompt,
                                         abs_line,
                                         Some(ts),
                                     ));
-                                    self.terminal_events.push(
+                                    self.events.terminal_events.push(
                                         crate::terminal::TerminalEvent::ZoneOpened {
                                             zone_id,
                                             zone_type: crate::zone::ZoneType::Prompt,
@@ -101,7 +101,7 @@ impl Terminal {
                             Some('B') => {
                                 self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandStart);
-                                self.terminal_events.push(
+                                self.events.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "command_start".to_string(),
                                         command: self.shell_state.shell_integration.command()
@@ -118,7 +118,7 @@ impl Terminal {
                                         let closed_type = zone.zone_type;
                                         let closed_start = zone.abs_row_start;
                                         self.grid.close_current_zone(close_row);
-                                        self.terminal_events.push(
+                                        self.events.terminal_events.push(
                                             crate::terminal::TerminalEvent::ZoneClosed {
                                                 zone_id: closed_id,
                                                 zone_type: closed_type,
@@ -130,8 +130,8 @@ impl Terminal {
                                     } else {
                                         self.grid.close_current_zone(close_row);
                                     }
-                                    let zone_id = self.next_zone_id;
-                                    self.next_zone_id += 1;
+                                    let zone_id = self.events.next_zone_id;
+                                    self.events.next_zone_id += 1;
                                     let mut zone = crate::zone::Zone::new(
                                         zone_id,
                                         crate::zone::ZoneType::Command,
@@ -141,7 +141,7 @@ impl Terminal {
                                     zone.command =
                                         self.shell_state.shell_integration.command().map(|s| s.to_string());
                                     self.grid.push_zone(zone);
-                                    self.terminal_events.push(
+                                    self.events.terminal_events.push(
                                         crate::terminal::TerminalEvent::ZoneOpened {
                                             zone_id,
                                             zone_type: crate::zone::ZoneType::Command,
@@ -163,7 +163,7 @@ impl Terminal {
                                 }
                                 self.shell_state.shell_integration
                                     .set_marker(ShellIntegrationMarker::CommandExecuted);
-                                self.terminal_events.push(
+                                self.events.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "command_executed".to_string(),
                                         command: self.shell_state.shell_integration.command()
@@ -186,7 +186,7 @@ impl Terminal {
                                         let closed_type = zone.zone_type;
                                         let closed_start = zone.abs_row_start;
                                         self.grid.close_current_zone(close_row);
-                                        self.terminal_events.push(
+                                        self.events.terminal_events.push(
                                             crate::terminal::TerminalEvent::ZoneClosed {
                                                 zone_id: closed_id,
                                                 zone_type: closed_type,
@@ -198,8 +198,8 @@ impl Terminal {
                                     } else {
                                         self.grid.close_current_zone(close_row);
                                     }
-                                    let zone_id = self.next_zone_id;
-                                    self.next_zone_id += 1;
+                                    let zone_id = self.events.next_zone_id;
+                                    self.events.next_zone_id += 1;
                                     let mut zone = crate::zone::Zone::new(
                                         zone_id,
                                         crate::zone::ZoneType::Output,
@@ -209,7 +209,7 @@ impl Terminal {
                                     zone.command =
                                         self.shell_state.shell_integration.command().map(|s| s.to_string());
                                     self.grid.push_zone(zone);
-                                    self.terminal_events.push(
+                                    self.events.terminal_events.push(
                                         crate::terminal::TerminalEvent::ZoneOpened {
                                             zone_id,
                                             zone_type: crate::zone::ZoneType::Output,
@@ -232,7 +232,7 @@ impl Terminal {
                                         }
                                     }
                                 }
-                                self.terminal_events.push(
+                                self.events.terminal_events.push(
                                     crate::terminal::TerminalEvent::ShellIntegrationEvent {
                                         event_type: "command_finished".to_string(),
                                         command: None,
@@ -254,7 +254,7 @@ impl Terminal {
                                         }
                                     }
                                     if let Some((id, zt, start)) = closed_info {
-                                        self.terminal_events.push(
+                                        self.events.terminal_events.push(
                                             crate::terminal::TerminalEvent::ZoneClosed {
                                                 zone_id: id,
                                                 zone_type: zt,
@@ -268,7 +268,7 @@ impl Terminal {
                                 self.shell_state.in_command_output = false;
                                 if self.shell_state.shell_depth > 1 {
                                     self.shell_state.shell_depth -= 1;
-                                    self.terminal_events.push(
+                                    self.events.terminal_events.push(
                                         crate::terminal::TerminalEvent::SubShellDetected {
                                             depth: self.shell_state.shell_depth,
                                             shell_type: None,

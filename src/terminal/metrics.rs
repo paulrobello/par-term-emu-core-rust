@@ -414,8 +414,8 @@ impl Terminal {
             keyboard_stack_depth: self.keyboard_state.keyboard_stack.len(),
             response_buffer_size: self.response_buffer.len(),
             dirty_row_count: self.dirty_rows.len(),
-            pending_bell_events: self.bell_events.len(),
-            pending_terminal_events: self.terminal_events.len(),
+            pending_bell_events: self.events.bell_events.len(),
+            pending_terminal_events: self.events.terminal_events.len(),
         }
     }
 }

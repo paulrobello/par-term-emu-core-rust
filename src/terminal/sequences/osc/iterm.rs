@@ -33,7 +33,8 @@ impl Terminal {
 
         if encoded.is_empty() {
             self.badge_state.badge_format = None;
-            self.terminal_events
+            self.events
+                .terminal_events
                 .push(crate::terminal::TerminalEvent::BadgeChanged(None));
             debug::log(debug::DebugLevel::Debug, "OSC1337", "Cleared badge format");
             return;
@@ -48,7 +49,8 @@ impl Terminal {
                 );
                 self.badge_state.badge_format = Some(format.clone());
                 let badge_text = self.evaluate_badge();
-                self.terminal_events
+                self.events
+                    .terminal_events
                     .push(crate::terminal::TerminalEvent::BadgeChanged(badge_text));
             }
             Err(e) => {
@@ -124,7 +126,8 @@ impl Terminal {
         } else {
             payload.to_string()
         };
-        self.terminal_events
+        self.events
+            .terminal_events
             .push(crate::terminal::TerminalEvent::UploadRequested { format });
     }
 }

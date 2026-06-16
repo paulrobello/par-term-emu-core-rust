@@ -10,7 +10,8 @@ impl Terminal {
                     let new_title = title.to_string();
                     if self.title_state.title != new_title {
                         self.title_state.title = new_title.clone();
-                        self.terminal_events
+                        self.events
+                            .terminal_events
                             .push(crate::terminal::TerminalEvent::TitleChanged(new_title));
                     }
                 }
