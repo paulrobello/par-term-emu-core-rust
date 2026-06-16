@@ -55,6 +55,9 @@ pub mod broadcaster;
 #[cfg(feature = "streaming")]
 pub mod server;
 
+#[cfg(feature = "streaming")]
+pub mod auth_hash;
+
 // Re-export main types
 pub use error::{Result, StreamingError};
 pub use protocol::{ClientMessage, EventType, ServerMessage};

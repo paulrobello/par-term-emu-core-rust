@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
+use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
 use tokio_rustls::TlsAcceptor;
@@ -97,7 +98,7 @@ impl TlsConfig {
             ))
         })?;
         let mut cert_reader = BufReader::new(cert_file);
-        let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_reader_iter(&mut cert_reader)
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| {
                 StreamingError::ServerError(format!(
@@ -141,20 +142,22 @@ impl TlsConfig {
         }
 
         let mut key_reader = BufReader::new(key_file);
-        let key = rustls_pemfile::private_key(&mut key_reader)
-            .map_err(|e| {
-                StreamingError::ServerError(format!(
+        let key = match PrivateKeyDer::pem_reader_iter(&mut key_reader).next() {
+            Some(Ok(k)) => k,
+            Some(Err(e)) => {
+                return Err(StreamingError::ServerError(format!(
                     "Failed to parse key file '{}': {}",
                     key_path.display(),
                     e
-                ))
-            })?
-            .ok_or_else(|| {
-                StreamingError::ServerError(format!(
+                )))
+            }
+            None => {
+                return Err(StreamingError::ServerError(format!(
                     "No private key found in '{}'",
                     key_path.display()
-                ))
-            })?;
+                )))
+            }
+        };
 
         Ok(Self { certs, key })
     }
@@ -169,45 +172,24 @@ impl TlsConfig {
     pub fn from_pem<P: AsRef<Path>>(pem_path: P) -> Result<Self> {
         let pem_path = pem_path.as_ref();
 
-        let pem_file = File::open(pem_path).map_err(|e| {
+        let pem_bytes = std::fs::read(pem_path).map_err(|e| {
             StreamingError::ServerError(format!(
                 "Failed to open PEM file '{}': {}",
                 pem_path.display(),
                 e
             ))
         })?;
-        let mut reader = BufReader::new(pem_file);
 
-        // Read all items from PEM file
-        let mut certs: Vec<CertificateDer<'static>> = Vec::new();
-        let mut key: Option<PrivateKeyDer<'static>> = None;
-
-        for item in rustls_pemfile::read_all(&mut reader) {
-            match item {
-                Ok(rustls_pemfile::Item::X509Certificate(cert)) => {
-                    certs.push(cert);
-                }
-                Ok(rustls_pemfile::Item::Pkcs1Key(k)) => {
-                    key = Some(PrivateKeyDer::Pkcs1(k));
-                }
-                Ok(rustls_pemfile::Item::Pkcs8Key(k)) => {
-                    key = Some(PrivateKeyDer::Pkcs8(k));
-                }
-                Ok(rustls_pemfile::Item::Sec1Key(k)) => {
-                    key = Some(PrivateKeyDer::Sec1(k));
-                }
-                Ok(_) => {
-                    // Ignore other items (CRLs, etc.)
-                }
-                Err(e) => {
-                    return Err(StreamingError::ServerError(format!(
-                        "Failed to parse PEM file '{}': {}",
-                        pem_path.display(),
-                        e
-                    )));
-                }
-            }
-        }
+        // Read all certificates from the combined PEM file.
+        let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(&pem_bytes)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| {
+                StreamingError::ServerError(format!(
+                    "Failed to parse PEM file '{}': {}",
+                    pem_path.display(),
+                    e
+                ))
+            })?;
 
         if certs.is_empty() {
             return Err(StreamingError::ServerError(format!(
@@ -216,9 +198,23 @@ impl TlsConfig {
             )));
         }
 
-        let key = key.ok_or_else(|| {
-            StreamingError::ServerError(format!("No private key found in '{}'", pem_path.display()))
-        })?;
+        // Locate the private key in the same file.
+        let key = match PrivateKeyDer::pem_slice_iter(&pem_bytes).next() {
+            Some(Ok(k)) => k,
+            Some(Err(e)) => {
+                return Err(StreamingError::ServerError(format!(
+                    "Failed to parse PEM file '{}': {}",
+                    pem_path.display(),
+                    e
+                )))
+            }
+            None => {
+                return Err(StreamingError::ServerError(format!(
+                    "No private key found in '{}'",
+                    pem_path.display()
+                )))
+            }
+        };
 
         Ok(Self { certs, key })
     }
@@ -303,11 +299,9 @@ impl HttpBasicAuthConfig {
                 bool::from(password.as_bytes().ct_eq(expected.as_bytes()))
             }
             PasswordConfig::Hash(hash) => {
-                // Use htpasswd-verify crate to check the password
-                // Format: "username:hash" for htpasswd library
-                let htpasswd_line = format!("{}:{}", self.username, hash);
-                let htpasswd = htpasswd_verify::Htpasswd::from(htpasswd_line.as_str());
-                htpasswd.check(username, password)
+                // Verify htpasswd-format hashes (bcrypt / apr1 / md5crypt / {SHA})
+                // using maintained RustCrypto crates — see `auth_hash`.
+                crate::streaming::auth_hash::verify_htpasswd_hash(hash, password)
             }
         }
     }
@@ -356,6 +350,16 @@ pub struct StreamingConfig {
     /// Disabled by default because query params are logged by proxies/firewalls,
     /// saved in browser history, and leaked via Referer headers.
     pub allow_api_key_in_query: bool,
+    /// Allowed browser `Origin` allowlist for WebSocket and HTTP CORS (SEC-005).
+    ///
+    /// When `Some`, WebSocket handshakes whose `Origin` header is present are
+    /// accepted only if the origin is in this list, and HTTP CORS reflects the
+    /// same list. When `None` (default), WebSocket connections are accepted if
+    /// they have no `Origin` header (non-browser clients — always allowed) or a
+    /// local origin (`localhost` / `127.0.0.1` / `::1`); remote browser origins
+    /// are rejected to prevent CSRF-via-WebSocket. Set this to expose the server
+    /// to specific remote browser origins.
+    pub allowed_origins: Option<Vec<String>>,
 }
 
 impl Default for StreamingConfig {
@@ -380,6 +384,7 @@ impl Default for StreamingConfig {
             system_stats_interval_secs: 5,
             api_key: None,
             allow_api_key_in_query: false,
+            allowed_origins: None,
         }
     }
 }
@@ -1550,7 +1555,8 @@ impl StreamingServer {
         // Merge API routes with unprotected static file serving
         let app = api_routes
             .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone());
+            .with_state(self.clone())
+            .layer(build_cors_layer(&self.config.allowed_origins));
 
         // Start server
         let listener = tokio::net::TcpListener::bind(&self.addr)
@@ -1610,7 +1616,8 @@ impl StreamingServer {
         // Merge API routes with unprotected static file serving
         let app = api_routes
             .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone());
+            .with_state(self.clone())
+            .layer(build_cors_layer(&self.config.allowed_origins));
 
         // Build TLS config for axum-server
         let rustls_config = RustlsConfig::from_der(
@@ -1673,6 +1680,7 @@ impl StreamingServer {
                         let ws_api_key = server.config.api_key.clone();
                         let ws_basic_auth = server.config.http_basic_auth.clone();
                         let ws_allow_query = server.config.allow_api_key_in_query;
+                        let ws_allowed_origins = server.config.allowed_origins.clone();
 
                         // The tungstenite `Callback` trait fixes `ErrorResponse` as
                         // `HttpResponse<Option<String>>` — we cannot box or shrink it
@@ -1683,6 +1691,19 @@ impl StreamingServer {
                                 if let Ok(mut guard) = uri_query_clone.lock() {
                                     *guard = Some(q.to_string());
                                 }
+                            }
+
+                            // Validate Origin header (SEC-005: CSRF-via-WebSocket defense)
+                            let origin = req
+                                .headers()
+                                .get("origin")
+                                .and_then(|v| v.to_str().ok());
+                            if !check_ws_origin(origin, ws_allowed_origins.as_deref()) {
+                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                                    .status(403)
+                                    .body(Some("Origin not allowed".to_string()))
+                                    .unwrap();
+                                return Err(reject);
                             }
 
                             // Validate auth if configured
@@ -1783,6 +1804,7 @@ impl StreamingServer {
                                 let ws_api_key = server.config.api_key.clone();
                                 let ws_basic_auth = server.config.http_basic_auth.clone();
                                 let ws_allow_query = server.config.allow_api_key_in_query;
+                                let ws_allowed_origins = server.config.allowed_origins.clone();
 
                                 // Same as above: ErrorResponse type is fixed by the
                                 // tungstenite Callback trait and cannot be reduced.
@@ -1801,7 +1823,20 @@ impl StreamingServer {
                                             }
                                         }
 
-                                        // Validate auth if configured
+                                        // Validate Origin header (SEC-005: CSRF-via-WebSocket defense)
+                            let origin = req
+                                .headers()
+                                .get("origin")
+                                .and_then(|v| v.to_str().ok());
+                            if !check_ws_origin(origin, ws_allowed_origins.as_deref()) {
+                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                                    .status(403)
+                                    .body(Some("Origin not allowed".to_string()))
+                                    .unwrap();
+                                return Err(reject);
+                            }
+
+                            // Validate auth if configured
                                         if (ws_api_key.is_some() || ws_basic_auth.is_some())
                                             && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref(), ws_allow_query) {
                                                 let reject = tokio_tungstenite::tungstenite::http::Response::builder()
@@ -3036,6 +3071,124 @@ async fn api_auth_middleware(
 /// Validate auth credentials during WebSocket handshake (for non-HTTP server modes).
 /// Checks Bearer header → X-API-Key header → ?api_key= query (if allowed) → Basic Auth header.
 /// Returns true if auth passes (or no auth is configured).
+/// Check a WebSocket / HTTP request's `Origin` header against the security
+/// policy (SEC-005, CSRF-via-WebSocket defense).
+///
+/// Rules:
+/// - No `Origin` header (non-browser client: curl, native TUI, the embedded
+///   library) → always allowed.
+/// - `Origin` present + `allowed_origins` configured → allowed only if the
+///   origin exactly matches an entry in the list.
+/// - `Origin` present + no allowlist (default) → allowed only if the origin's
+///   host is local (`localhost` / `127.0.0.1` / `::1`), blocking remote browser
+///   origins (e.g. a malicious page on `evil.com`) from driving the PTY.
+fn check_ws_origin(origin: Option<&str>, allowed_origins: Option<&[String]>) -> bool {
+    let Some(origin) = origin else {
+        return true;
+    };
+    match allowed_origins {
+        Some(list) => list.iter().any(|o| o == origin),
+        None => is_local_origin(origin),
+    }
+}
+
+/// True if `origin` (e.g. `http://localhost:8099`) points at a loopback host.
+fn is_local_origin(origin: &str) -> bool {
+    let after_scheme = origin
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(origin);
+    let authority = after_scheme.split('/').next().unwrap_or(after_scheme);
+    let host = host_of_authority(authority);
+    let h = host.to_ascii_lowercase();
+    h == "localhost" || h == "127.0.0.1" || h == "::1"
+}
+
+/// Extract the host portion of a URL authority, stripping the port.
+/// Handles IPv6 literals (`[::1]:8099` → `::1`).
+fn host_of_authority(authority: &str) -> &str {
+    if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().unwrap_or(rest)
+    } else if let Some((host, _port)) = authority.rsplit_once(':') {
+        host
+    } else {
+        authority
+    }
+}
+
+/// Build a CORS layer for the HTTP server reflecting the `allowed_origins`
+/// policy (SEC-005). When an allowlist is configured, only those origins may
+/// make cross-origin browser requests; otherwise CORS is fully permissive.
+fn build_cors_layer(allowed_origins: &Option<Vec<String>>) -> tower_http::cors::CorsLayer {
+    use axum::http::HeaderValue;
+    use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+    match allowed_origins {
+        Some(list) if !list.is_empty() => {
+            let origins: Vec<HeaderValue> = list.iter().filter_map(|o| o.parse().ok()).collect();
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(origins))
+                .allow_methods(Any)
+                .allow_headers(Any)
+        }
+        _ => CorsLayer::very_permissive(),
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::{check_ws_origin, is_local_origin};
+
+    #[test]
+    fn no_origin_is_allowed_non_browser() {
+        assert!(check_ws_origin(None, None));
+        assert!(check_ws_origin(
+            None,
+            Some(&["https://app.example.com".to_string()][..])
+        ));
+    }
+
+    #[test]
+    fn default_rejects_remote_browser_origin() {
+        // CSRF-via-WebSocket: a remote page must be blocked when no allowlist is set.
+        assert!(!check_ws_origin(Some("https://evil.com"), None));
+        assert!(!check_ws_origin(Some("http://attacker.example:8080"), None));
+    }
+
+    #[test]
+    fn default_allows_local_browser_origin() {
+        assert!(check_ws_origin(Some("http://localhost:8099"), None));
+        assert!(check_ws_origin(Some("https://127.0.0.1:8099"), None));
+        assert!(check_ws_origin(Some("http://[::1]:8099"), None));
+    }
+
+    #[test]
+    fn allowlist_enforced_when_configured() {
+        let list = vec!["https://app.example.com".to_string()];
+        let allowed: &[String] = &list;
+        assert!(check_ws_origin(
+            Some("https://app.example.com"),
+            Some(allowed)
+        ));
+        assert!(!check_ws_origin(Some("https://evil.com"), Some(allowed)));
+        // Even a local origin is rejected if it's not in the explicit allowlist.
+        assert!(!check_ws_origin(
+            Some("http://localhost:8099"),
+            Some(allowed)
+        ));
+    }
+
+    #[test]
+    fn is_local_origin_host_extraction() {
+        assert!(is_local_origin("http://localhost:8099"));
+        assert!(is_local_origin("https://127.0.0.1:443"));
+        assert!(is_local_origin("http://[::1]:8099"));
+        assert!(!is_local_origin("http://localhost.evil.com:8099"));
+        assert!(!is_local_origin("https://example.com"));
+        // A look-alike host must not match.
+        assert!(!is_local_origin("http://127.0.0.1.evil.com"));
+    }
+}
+
 fn validate_ws_handshake_auth(
     req: &tokio_tungstenite::tungstenite::http::Request<()>,
     api_key: Option<&str>,
@@ -3115,8 +3268,18 @@ fn validate_ws_handshake_auth(
 async fn ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     axum::extract::Query(query): axum::extract::Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    // SEC-005: reject browser connections whose Origin is not allowed.
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    if !check_ws_origin(origin, server.config.allowed_origins.as_deref()) {
+        return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
+    }
+
     let params = ConnectionParams::from_query(&query);
     ws.max_message_size(WS_MAX_MESSAGE_SIZE)
         .max_frame_size(WS_MAX_FRAME_SIZE)
@@ -3125,6 +3288,7 @@ async fn ws_handler(
                 crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
             }
         })
+        .into_response()
 }
 
 /// Sessions list HTTP handler
@@ -3147,6 +3311,7 @@ async fn sessions_handler(
 async fn stats_ws_handler(
     ws: axum::extract::ws::WebSocketUpgrade,
     axum::extract::Query(_query): axum::extract::Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
     use axum::http::StatusCode;
@@ -3155,6 +3320,12 @@ async fn stats_ws_handler(
     // Check if system stats are enabled
     if !server.config.enable_system_stats {
         return (StatusCode::NOT_FOUND, "System stats not enabled").into_response();
+    }
+
+    // SEC-005: reject browser connections whose Origin is not allowed.
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    if !check_ws_origin(origin, server.config.allowed_origins.as_deref()) {
+        return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
     }
 
     // Note: API key auth is handled by the basic_auth middleware if configured

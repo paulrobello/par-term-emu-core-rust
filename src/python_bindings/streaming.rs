@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -50,6 +50,7 @@ impl PyStreamingConfig {
         system_stats_interval_secs: u64,
         api_key: Option<String>,
         allow_api_key_in_query: bool,
+        allowed_origins: Option<Vec<String>>,
     ) -> Self {
         Self {
             inner: StreamingConfig {
@@ -72,6 +73,7 @@ impl PyStreamingConfig {
                 system_stats_interval_secs,
                 api_key,
                 allow_api_key_in_query,
+                allowed_origins,
             },
         }
     }
@@ -267,6 +269,21 @@ impl PyStreamingConfig {
     #[setter]
     fn set_allow_api_key_in_query(&mut self, allow: bool) {
         self.inner.allow_api_key_in_query = allow;
+    }
+
+    /// Get the allowed browser origins allowlist (None = local/non-browser only).
+    #[getter]
+    fn allowed_origins(&self) -> Option<Vec<String>> {
+        self.inner.allowed_origins.clone()
+    }
+
+    /// Set the allowed browser origins for WebSocket and CORS (SEC-005).
+    /// When None, only non-browser clients and local (loopback) browser origins
+    /// are accepted. Set to a list of origin strings (e.g.
+    /// ["https://app.example.com"]) to allow specific remote browser origins.
+    #[setter]
+    fn set_allowed_origins(&mut self, origins: Option<Vec<String>>) {
+        self.inner.allowed_origins = origins;
     }
 
     fn __repr__(&self) -> String {

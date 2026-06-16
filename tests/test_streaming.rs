@@ -498,6 +498,7 @@ mod streaming_tests {
                 system_stats_interval_secs: 5,
                 api_key: Some("test-key-123".to_string()),
                 allow_api_key_in_query: false,
+                allowed_origins: None,
             };
 
             assert_eq!(config.max_clients, 50);

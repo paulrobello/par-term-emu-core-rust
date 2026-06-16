@@ -413,6 +413,18 @@ struct Args {
     #[arg(long, env = "PAR_TERM_ALLOW_API_KEY_IN_QUERY")]
     allow_api_key_in_query: bool,
 
+    /// Allowed browser origins for WebSocket and CORS (SEC-005).
+    /// Repeatable, e.g. --allowed-origins https://app.example.com.
+    /// When omitted, only non-browser clients and local (loopback) browser
+    /// origins are accepted; set this to allow specific remote browser origins.
+    #[arg(
+        long,
+        value_name = "ORIGIN",
+        env = "PAR_TERM_ALLOWED_ORIGINS",
+        value_delimiter = ','
+    )]
+    allowed_origins: Option<Vec<String>>,
+
     /// Maximum number of concurrent clients
     #[arg(long, default_value = "100", env = "PAR_TERM_MAX_CLIENTS")]
     max_clients: usize,
@@ -1870,6 +1882,12 @@ fn looks_like_hash(s: &str) -> bool {
         || s.starts_with("{SHA}")
 }
 
+/// True if `host` binds only to the loopback interface (not reachable from the network).
+fn is_loopback_host(host: &str) -> bool {
+    let h = host.trim().to_ascii_lowercase();
+    h == "127.0.0.1" || h == "::1" || h == "localhost" || h.starts_with("127.")
+}
+
 /// Resolve HTTP Basic Auth configuration from CLI arguments
 ///
 /// Priority: password_file > password_hash > password
@@ -2081,11 +2099,33 @@ async fn main() -> Result<()> {
         system_stats_interval_secs: args.system_stats_interval,
         api_key: args.api_key.clone(),
         allow_api_key_in_query: args.allow_api_key_in_query,
+        allowed_origins: args.allowed_origins.clone(),
     };
 
     // Create streaming server
     let addr = format!("{}:{}", args.host, args.port);
     info!("Creating streaming server on {}", addr);
+
+    // SEC-002: Warn loudly when binding a non-loopback interface without any
+    // authentication configured. A public bind with no auth exposes an
+    // interactive shell (the PTY) to anyone who can reach the port.
+    if !is_loopback_host(&args.host) && args.api_key.is_none() && http_basic_auth.is_none() {
+        eprintln!();
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!(
+            "!!  SECURITY WARNING: binding {} WITHOUT AUTHENTICATION       !!",
+            addr
+        );
+        eprintln!("!!  The standalone streamer exposes an interactive shell over !!");
+        eprintln!("!!  WebSocket. Anyone who can reach this port gets full shell !!");
+        eprintln!("!!  access with your privileges.                              !!");
+        eprintln!("!!  Fix one of:                                               !!");
+        eprintln!("!!    - bind loopback:  --host 127.0.0.1  (the default)       !!");
+        eprintln!("!!    - add an API key: --api-key <secret>                    !!");
+        eprintln!("!!    - add HTTP Basic: --http-user <user> --http-password ... !!");
+        eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+        eprintln!();
+    }
     if args.enable_system_stats {
         info!(
             "System stats enabled (interval: {}s)",
