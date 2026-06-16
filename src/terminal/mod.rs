@@ -2583,17 +2583,31 @@ impl Terminal {
                     }
                 }
 
-                match category {
-                    crate::observer::EventCategory::Zone => entry.observer.on_zone_event(event),
-                    crate::observer::EventCategory::Command => {
-                        entry.observer.on_command_event(event)
+                // ARC-007: isolate observer panics. A panicking observer (e.g. a
+                // misbehaving Python callback via PyCallbackObserver) must not
+                // unwind through the Terminal mutex — `parking_lot` does not
+                // poison, so an unwound dispatch would silently leave the Terminal
+                // inconsistent and re-fire already-dispatched events. Catch the
+                // panic, log, and continue with the remaining observers/events.
+                let observer = &entry.observer;
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match category {
+                        crate::observer::EventCategory::Zone => observer.on_zone_event(event),
+                        crate::observer::EventCategory::Command => observer.on_command_event(event),
+                        crate::observer::EventCategory::Environment => {
+                            observer.on_environment_event(event)
+                        }
+                        crate::observer::EventCategory::Screen => observer.on_screen_event(event),
                     }
-                    crate::observer::EventCategory::Environment => {
-                        entry.observer.on_environment_event(event)
-                    }
-                    crate::observer::EventCategory::Screen => entry.observer.on_screen_event(event),
+                    observer.on_event(event);
+                }))
+                .is_err();
+                if panicked {
+                    eprintln!(
+                        "par-term-emu: terminal observer panicked during dispatch; \
+                         isolating to keep Terminal state consistent (ARC-007)"
+                    );
                 }
-                entry.observer.on_event(event);
             }
         }
 

@@ -357,3 +357,49 @@ fn test_poll_events_still_works_with_observers() {
         "poll_events should contain the bell event"
     );
 }
+
+/// Observer that panics on every callback — used to verify ARC-007 isolation.
+struct PanickingObserver;
+impl TerminalObserver for PanickingObserver {
+    fn on_zone_event(&self, _: &TerminalEvent) {
+        panic!("ARC-007 isolation test (zone)");
+    }
+    fn on_command_event(&self, _: &TerminalEvent) {
+        panic!("ARC-007 isolation test (command)");
+    }
+    fn on_environment_event(&self, _: &TerminalEvent) {
+        panic!("ARC-007 isolation test (environment)");
+    }
+    fn on_screen_event(&self, _: &TerminalEvent) {
+        panic!("ARC-007 isolation test (screen)");
+    }
+    fn on_event(&self, _: &TerminalEvent) {
+        panic!("ARC-007 isolation test (on_event)");
+    }
+}
+
+#[test]
+fn test_panicking_observer_is_isolated() {
+    // ARC-007: a panicking observer must NOT unwind through `dispatch_events`
+    // and leave the Terminal inconsistent (`parking_lot` does not poison, so an
+    // unwound dispatch would silently corrupt state and re-fire events). The
+    // panic is caught inside `dispatch_events`; dispatch completes, the Terminal
+    // stays usable, and a healthy peer observer still receives its events.
+    let mut term = Terminal::new(80, 24);
+    term.add_observer(Arc::new(PanickingObserver));
+    let healthy = Arc::new(MockObserver::new());
+    let healthy_ref = Arc::clone(&healthy);
+    term.add_observer(healthy);
+
+    // A bell (\x07) queues an event that triggers observer dispatch at the end
+    // of `process()`. If isolation is broken, this call panics and the test fails.
+    term.process(b"\x07");
+
+    assert!(
+        healthy_ref.all_event_count() >= 1,
+        "a healthy observer should still receive events after a peer observer panicked"
+    );
+
+    // The Terminal must remain usable after the isolated panic.
+    term.process(b"still alive");
+}
