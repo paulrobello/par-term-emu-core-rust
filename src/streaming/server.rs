@@ -19,7 +19,8 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
 use tokio_rustls::TlsAcceptor;
-use tokio_tungstenite::accept_hdr_async;
+use tokio_tungstenite::accept_hdr_async_with_config;
+use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 
 /// TLS/SSL configuration for secure connections
 ///
@@ -37,6 +38,26 @@ use tokio_tungstenite::accept_hdr_async;
 /// // Using a combined PEM file (certificate + key in one file)
 /// let tls = TlsConfig::from_pem("combined.pem").unwrap();
 /// ```
+///
+/// # WebSocket size limits
+///
+/// Inbound WebSocket frames are capped at [`WS_MAX_MESSAGE_SIZE`] /
+/// [`WS_MAX_FRAME_SIZE`] bytes (16 MiB each). This is well above any
+/// legitimate terminal streaming frame but far below tungstenite's 64 MiB
+/// default, limiting the blast radius of a malicious or buggy client.
+const WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
+
+/// Build the [`WebSocketConfig`] applied to every WS acceptor.
+fn ws_accept_config() -> Option<WebSocketConfig> {
+    // `WebSocketConfig` is `#[non_exhaustive]`, so use the builder API rather
+    // than a struct literal.
+    Some(
+        WebSocketConfig::default()
+            .max_message_size(Some(WS_MAX_MESSAGE_SIZE))
+            .max_frame_size(Some(WS_MAX_FRAME_SIZE)),
+    )
+}
 #[derive(Debug)]
 pub struct TlsConfig {
     /// Certificate chain in DER format
@@ -1657,7 +1678,7 @@ impl StreamingServer {
                         // `HttpResponse<Option<String>>` — we cannot box or shrink it
                         // without violating the external API contract.
                         #[allow(clippy::result_large_err)]
-                        let ws_result = accept_hdr_async(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
+                        let ws_result = accept_hdr_async_with_config(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
                             if let Some(q) = req.uri().query() {
                                 if let Ok(mut guard) = uri_query_clone.lock() {
                                     *guard = Some(q.to_string());
@@ -1675,7 +1696,7 @@ impl StreamingServer {
                                 }
 
                             Ok(resp)
-                        }).await;
+                        }, ws_accept_config()).await;
 
                         match ws_result {
                             Ok(ws_stream) => {
@@ -1766,7 +1787,7 @@ impl StreamingServer {
                                 // Same as above: ErrorResponse type is fixed by the
                                 // tungstenite Callback trait and cannot be reduced.
                                 #[allow(clippy::result_large_err)]
-                                let ws_result = accept_hdr_async(
+                                let ws_result = accept_hdr_async_with_config(
                                     tls_stream,
                                     move |req: &tokio_tungstenite::tungstenite::http::Request<
                                         (),
@@ -1792,6 +1813,7 @@ impl StreamingServer {
 
                                         Ok(resp)
                                     },
+                                    ws_accept_config(),
                                 )
                                 .await;
 
@@ -3120,11 +3142,13 @@ async fn ws_handler(
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
     let params = ConnectionParams::from_query(&query);
-    ws.on_upgrade(move |socket| async move {
-        if let Err(e) = server.handle_axum_websocket(socket, params).await {
-            crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
-        }
-    })
+    ws.max_message_size(WS_MAX_MESSAGE_SIZE)
+        .max_frame_size(WS_MAX_FRAME_SIZE)
+        .on_upgrade(move |socket| async move {
+            if let Err(e) = server.handle_axum_websocket(socket, params).await {
+                crate::debug_error!("STREAMING", "WebSocket handler error: {}", e);
+            }
+        })
 }
 
 /// Sessions list HTTP handler
@@ -3160,12 +3184,14 @@ async fn stats_ws_handler(
     // Note: API key auth is handled by the basic_auth middleware if configured
     let interval_secs = server.config.system_stats_interval_secs.max(1);
 
-    ws.on_upgrade(move |socket| async move {
-        if let Err(e) = handle_stats_websocket(socket, interval_secs).await {
-            crate::debug_error!("STREAMING", "Stats WebSocket error: {}", e);
-        }
-    })
-    .into_response()
+    ws.max_message_size(WS_MAX_MESSAGE_SIZE)
+        .max_frame_size(WS_MAX_FRAME_SIZE)
+        .on_upgrade(move |socket| async move {
+            if let Err(e) = handle_stats_websocket(socket, interval_secs).await {
+                crate::debug_error!("STREAMING", "Stats WebSocket error: {}", e);
+            }
+        })
+        .into_response()
 }
 
 /// Handle stats-only WebSocket connection

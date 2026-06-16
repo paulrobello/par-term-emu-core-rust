@@ -36,6 +36,15 @@ pub mod pb;
 /// (prompts, short commands) is 200-800 bytes
 const COMPRESSION_THRESHOLD: usize = 256;
 
+/// Maximum size of a decompressed payload (1 MiB).
+///
+/// Caps zlib-inflated output to prevent zip-bomb denial of service: a small
+/// compressed frame could otherwise expand into gigabytes and OOM the server.
+/// 1 MiB is far above any legitimate terminal streaming frame (the WS layer
+/// also caps inbound frames, but this defends against the decompression path
+/// directly).
+const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024;
+
 /// Wire format flags
 const FLAG_UNCOMPRESSED: u8 = 0x00;
 const FLAG_COMPRESSED: u8 = 0x01;
@@ -102,6 +111,10 @@ fn encode_with_compression(payload: &[u8]) -> Result<Vec<u8>> {
 }
 
 /// Internal: decode payload with optional decompression
+///
+/// Decompressed output is capped at [`MAX_DECOMPRESSED_SIZE`] to mitigate
+/// zip-bomb denial of service. Reads from the decoder in fixed chunks and
+/// bails as soon as the cap is exceeded.
 fn decode_with_decompression(data: &[u8]) -> Result<Vec<u8>> {
     if data.is_empty() {
         return Err(StreamingError::InvalidMessage("Empty message".into()));
@@ -112,9 +125,24 @@ fn decode_with_decompression(data: &[u8]) -> Result<Vec<u8>> {
     if flags[0] & FLAG_COMPRESSED != 0 {
         let mut decoder = ZlibDecoder::new(payload);
         let mut decompressed = Vec::new();
-        decoder
-            .read_to_end(&mut decompressed)
-            .map_err(|e| StreamingError::InvalidMessage(format!("Decompression error: {}", e)))?;
+        // Read in chunks so we can abort the moment the output exceeds the cap,
+        // rather than letting `read_to_end` allocate unboundedly.
+        let mut chunk = [0u8; 8192];
+        loop {
+            let read = decoder.read(&mut chunk).map_err(|e| {
+                StreamingError::InvalidMessage(format!("Decompression error: {}", e))
+            })?;
+            if read == 0 {
+                break;
+            }
+            if decompressed.len() + read > MAX_DECOMPRESSED_SIZE {
+                return Err(StreamingError::InvalidMessage(format!(
+                    "Decompressed payload exceeds {} byte limit",
+                    MAX_DECOMPRESSED_SIZE
+                )));
+            }
+            decompressed.extend_from_slice(&chunk[..read]);
+        }
         Ok(decompressed)
     } else {
         Ok(payload.to_vec())
