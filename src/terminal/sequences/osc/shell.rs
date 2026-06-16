@@ -175,7 +175,7 @@ impl Terminal {
                                 );
 
                                 // Record output start row in current command execution
-                                if let Some(ref mut execution) = self.current_command {
+                                if let Some(ref mut execution) = self.command_history_state.current_command {
                                     execution.output_start_row = Some(abs_line);
                                 }
 

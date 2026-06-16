@@ -75,12 +75,12 @@ impl Terminal {
             output_start_row: None, // Will be set when Output zone opens
             output_end_row: None,
         };
-        self.current_command = Some(execution);
+        self.command_history_state.current_command = Some(execution);
     }
 
     /// End tracking the current command execution
     pub fn end_command_execution(&mut self, exit_code: Option<i32>) {
-        if let Some(mut execution) = self.current_command.take() {
+        if let Some(mut execution) = self.command_history_state.current_command.take() {
             let now = crate::terminal::unix_millis();
             execution.end_time = Some(now);
             execution.duration_ms = Some(now - execution.start_time);
@@ -98,36 +98,41 @@ impl Terminal {
 
     /// Record a command execution in history
     pub fn record_command(&mut self, execution: CommandExecution) {
-        self.command_history.push(execution);
-        if self.command_history.len() > self.max_command_history {
-            self.command_history.remove(0);
+        self.command_history_state.command_history.push(execution);
+        if self.command_history_state.command_history.len()
+            > self.command_history_state.max_command_history
+        {
+            self.command_history_state.command_history.remove(0);
         }
     }
 
     /// Get command history
     pub fn get_command_history(&self) -> &[CommandExecution] {
-        &self.command_history
+        &self.command_history_state.command_history
     }
 
     /// Get the currently executing command
     pub fn get_current_command(&self) -> Option<&CommandExecution> {
-        self.current_command.as_ref()
+        self.command_history_state.current_command.as_ref()
     }
 
     /// Get shell integration statistics
     pub fn get_shell_stats(&self) -> ShellIntegrationStats {
-        let total = self.command_history.len();
+        let total = self.command_history_state.command_history.len();
         let successful = self
+            .command_history_state
             .command_history
             .iter()
             .filter(|c| c.success == Some(true))
             .count();
         let failed = self
+            .command_history_state
             .command_history
             .iter()
             .filter(|c| c.success == Some(false))
             .count();
         let total_ms: u64 = self
+            .command_history_state
             .command_history
             .iter()
             .filter_map(|c| c.duration_ms)
@@ -231,15 +236,16 @@ impl Terminal {
                 });
         }
 
-        self.cwd_changes.push(change);
-        if self.cwd_changes.len() > self.max_cwd_history {
-            self.cwd_changes.remove(0);
+        self.command_history_state.cwd_changes.push(change);
+        if self.command_history_state.cwd_changes.len() > self.command_history_state.max_cwd_history
+        {
+            self.command_history_state.cwd_changes.remove(0);
         }
     }
 
     /// Get CWD change history
     pub fn get_cwd_history(&self) -> &[crate::terminal::event::CwdChange] {
-        &self.cwd_changes
+        &self.command_history_state.cwd_changes
     }
 
     /// Alias for get_cwd_history
@@ -249,39 +255,42 @@ impl Terminal {
 
     /// Set the maximum number of command history entries to retain
     pub fn set_max_command_history(&mut self, max: usize) {
-        self.max_command_history = max;
-        if self.command_history.len() > max {
-            self.command_history
-                .drain(0..self.command_history.len() - max);
+        self.command_history_state.max_command_history = max;
+        if self.command_history_state.command_history.len() > max {
+            self.command_history_state
+                .command_history
+                .drain(0..self.command_history_state.command_history.len() - max);
         }
     }
 
     /// Set the maximum number of CWD change entries to retain
     pub fn set_max_cwd_history(&mut self, max: usize) {
-        self.max_cwd_history = max;
-        if self.cwd_changes.len() > max {
-            self.cwd_changes.drain(0..self.cwd_changes.len() - max);
+        self.command_history_state.max_cwd_history = max;
+        if self.command_history_state.cwd_changes.len() > max {
+            self.command_history_state
+                .cwd_changes
+                .drain(0..self.command_history_state.cwd_changes.len() - max);
         }
     }
 
     /// Clear command execution history
     pub fn clear_command_history(&mut self) {
-        self.command_history.clear();
+        self.command_history_state.command_history.clear();
     }
 
     /// Clear CWD change history
     pub fn clear_cwd_history(&mut self) {
-        self.cwd_changes.clear();
+        self.command_history_state.cwd_changes.clear();
     }
 
     /// Get output for a command by history index
     /// index 0 is the most recent command
     pub fn get_command_output(&self, index: usize) -> Option<CommandOutput> {
-        let len = self.command_history.len();
+        let len = self.command_history_state.command_history.len();
         if index >= len {
             return None;
         }
-        let execution = &self.command_history[len - 1 - index];
+        let execution = &self.command_history_state.command_history[len - 1 - index];
 
         // Use destructuring to ensure we have both rows
         let (start, end) = match (execution.output_start_row, execution.output_end_row) {
@@ -316,7 +325,7 @@ impl Terminal {
 
     /// Get all command outputs in history, most recent first
     pub fn get_command_outputs(&self) -> Vec<CommandOutput> {
-        (0..self.command_history.len())
+        (0..self.command_history_state.command_history.len())
             .filter_map(|i| self.get_command_output(i))
             .collect()
     }

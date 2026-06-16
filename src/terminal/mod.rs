@@ -568,6 +568,20 @@ pub(crate) struct SavedCursorState {
     pub(crate) saved_flags: CellFlags,
 }
 
+/// Feature 31 command/CWD execution history (ARC-001 sub-struct)
+pub(crate) struct CommandHistoryState {
+    /// Command execution history
+    pub(crate) command_history: Vec<CommandExecution>,
+    /// Current executing command
+    pub(crate) current_command: Option<CommandExecution>,
+    /// Working directory change history
+    pub(crate) cwd_changes: Vec<CwdChange>,
+    /// Maximum command history entries
+    pub(crate) max_command_history: usize,
+    /// Maximum CWD change history
+    pub(crate) max_cwd_history: usize,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -698,16 +712,8 @@ pub struct Terminal {
     pub(crate) clipboard_sync: ClipboardSyncState,
 
     // === Feature 31: Shell Integration++ ===
-    /// Command execution history
-    pub(crate) command_history: Vec<CommandExecution>,
-    /// Current executing command
-    pub(crate) current_command: Option<CommandExecution>,
-    /// Working directory change history
-    pub(crate) cwd_changes: Vec<CwdChange>,
-    /// Maximum command history entries
-    pub(crate) max_command_history: usize,
-    /// Maximum CWD change history
-    pub(crate) max_cwd_history: usize,
+    /// Command/CWD execution history (ARC-001 sub-struct)
+    pub(crate) command_history_state: CommandHistoryState,
 
     // === Feature 24: Terminal Replay/Recording ===
     /// Recording session, active flag, start timestamp (ARC-001 sub-struct)
@@ -960,11 +966,13 @@ impl Terminal {
                 remote_session_id: None,
             },
             // Shell Integration++
-            command_history: Vec::new(),
-            current_command: None,
-            cwd_changes: Vec::new(),
-            max_command_history: 100,
-            max_cwd_history: 50,
+            command_history_state: CommandHistoryState {
+                command_history: Vec::new(),
+                current_command: None,
+                cwd_changes: Vec::new(),
+                max_command_history: 100,
+                max_cwd_history: 50,
+            },
             // Notifications
             notifications_state: NotificationState {
                 notifications: Vec::new(),

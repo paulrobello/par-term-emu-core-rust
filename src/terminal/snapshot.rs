@@ -744,7 +744,7 @@ impl Terminal {
             cwd_history: Vec::new(),
             scrollback_lines: scrollback_len,
             total_zones: self.grid.zones().len(),
-            total_commands: self.command_history.len(),
+            total_commands: self.command_history_state.command_history.len(),
         };
 
         if scope == SnapshotScope::Full {
