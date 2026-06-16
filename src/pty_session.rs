@@ -1316,10 +1316,22 @@ impl Drop for PtySession {
             let _ = self.kill();
         }
 
-        // Close writer to help unblock the reader thread
-        // This will cause the PTY to close, which should make the reader's read() return an error
+        // Signal the reader thread to stop (best-effort: it is typically blocked
+        // in `read()` and only actually unblocks once the master fd / child
+        // process closes below).
+        self.running.store(false, Ordering::SeqCst);
+
+        // Force-close the writer AND the PTY master fd BEFORE waiting for the
+        // reader thread (ARC-018). The reader is blocked on `read()`; combined
+        // with the child kill above (which closes the slave side), closing our
+        // copy of the master lets the blocked read return EOF so the thread
+        // joins promptly instead of being detached at the timeout. This mirrors
+        // the already-correct restart path `cleanup_previous_session()`.
         if let Some(writer) = self.writer.take() {
             drop(writer);
+        }
+        if let Some(master) = self.pty_master.take() {
+            drop(master);
         }
 
         // Wait for the reader thread to finish with timeout
