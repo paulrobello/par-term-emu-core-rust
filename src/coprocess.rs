@@ -4,7 +4,7 @@
 //! for API consumption. This enables log processing, filtering, and automation
 //! without injecting data back into the PTY.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -70,8 +70,8 @@ struct Coprocess {
     reader_thread: Option<JoinHandle<()>>,
     stderr_thread: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
-    output_buffer: Arc<Mutex<Vec<String>>>,
-    error_buffer: Arc<Mutex<Vec<String>>>,
+    output_buffer: Arc<Mutex<VecDeque<String>>>,
+    error_buffer: Arc<Mutex<VecDeque<String>>>,
     copy_terminal_output: bool,
     restart_policy: RestartPolicy,
     restart_delay_ms: u64,
@@ -86,8 +86,8 @@ struct SpawnResult {
     reader_thread: Option<JoinHandle<()>>,
     stderr_thread: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
-    output_buffer: Arc<Mutex<Vec<String>>>,
-    error_buffer: Arc<Mutex<Vec<String>>>,
+    output_buffer: Arc<Mutex<VecDeque<String>>>,
+    error_buffer: Arc<Mutex<VecDeque<String>>>,
 }
 
 /// Manager for multiple coprocesses
@@ -152,8 +152,8 @@ impl CoprocessManager {
             Arc::new(Mutex::new(boxed))
         });
 
-        let output_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let error_buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let output_buffer: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let error_buffer: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
         let running = Arc::new(AtomicBool::new(true));
 
         // Start stdout reader thread
@@ -169,9 +169,9 @@ impl CoprocessManager {
                         Ok(text) => {
                             let mut buf = buffer_clone.lock();
                             if buf.len() >= max_lines {
-                                buf.remove(0);
+                                buf.pop_front();
                             }
-                            buf.push(text);
+                            buf.push_back(text);
                         }
                         Err(_) => break,
                     }
@@ -194,9 +194,9 @@ impl CoprocessManager {
                         Ok(text) => {
                             let mut buf = err_buf_clone.lock();
                             if buf.len() >= max_lines {
-                                buf.remove(0);
+                                buf.pop_front();
                             }
-                            buf.push(text);
+                            buf.push_back(text);
                         }
                         Err(_) => break,
                     }
@@ -334,7 +334,7 @@ impl CoprocessManager {
             .ok_or_else(|| format!("Coprocess {} not found", id))?;
 
         let mut buf = coproc.output_buffer.lock();
-        Ok(std::mem::take(&mut *buf))
+        Ok(std::mem::take(&mut *buf).into_iter().collect())
     }
 
     /// List all coprocess IDs
@@ -359,7 +359,7 @@ impl CoprocessManager {
             .ok_or_else(|| format!("Coprocess {} not found", id))?;
 
         let mut buf = coproc.error_buffer.lock();
-        Ok(std::mem::take(&mut *buf))
+        Ok(std::mem::take(&mut *buf).into_iter().collect())
     }
 
     /// Determine if a dead coprocess should be restarted based on its exit status

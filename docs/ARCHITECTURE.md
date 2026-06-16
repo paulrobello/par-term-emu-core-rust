@@ -163,6 +163,7 @@ pub struct Grid {
 The main terminal emulator that ties everything together, organized into submodules:
 
 **Core Submodules:**
+- `apc_filter.rs` - Kitty TGP APC pre-filter (strips Kitty `ESC _ G ... ST` sequences before `vte` parsing)
 - `clipboard.rs` - Clipboard management (OSC 52)
 - `colors.rs` - Color configuration and palette
 - `compliance.rs` - VT conformance testing
@@ -295,6 +296,7 @@ The main terminal emulator that ties everything together, organized into submodu
 **PTY Support**
 - `pty_session.rs` - PTY session management with portable-pty
 - `pty_error.rs` - PTY-specific error types
+- `badge.rs` - iTerm2 OSC 1337 SetBadgeFormat parsing and badge format evaluation
 
 `PtySession` owns:
 
@@ -658,12 +660,12 @@ All public methods are wrapped with `#[pymethods]` and provide:
 
 ### Test Coverage
 
-**Current test counts (as of latest commit):**
-- **Rust tests:** 1,652 unit and integration tests
-- **Python tests:** 552 test functions across 13+ test modules
+**Running the test suites:**
+- **Rust tests:** run `cargo test --lib --no-default-features --features pyo3/auto-initialize` (or `make test-rust`) to see the current count.
+- **Python tests:** run `uv run pytest tests/` (or `make test-python`) to see the current count.
   - PTY tests excluded in CI (hang in automated environments)
   - All tests run locally for comprehensive validation
-- **Total:** 2,204 tests ensuring comprehensive coverage and reliability
+- Test counts grow with every PR; run the commands above rather than relying on a number printed here.
 
 ### Rust Tests
 

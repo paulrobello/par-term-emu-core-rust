@@ -18,7 +18,7 @@
 //! ## Usage
 //!
 //! ```bash
-//! par-term-streamer --host 127.0.0.1 --port 8080 --theme iterm2-dark
+//! par-term-streamer --host 127.0.0.1 --port 8099 --theme iterm2-dark
 //! ```
 //!
 //! ## Environment Variables
@@ -27,7 +27,7 @@
 //!
 //! ```bash
 //! export PAR_TERM_HOST=0.0.0.0
-//! export PAR_TERM_PORT=8080
+//! export PAR_TERM_PORT=8099
 //! export PAR_TERM_HTTP_USER=admin
 //! export PAR_TERM_HTTP_PASSWORD=secret
 //! par-term-streamer --enable-http
@@ -43,7 +43,7 @@
 //!
 //! Clients can then authenticate using either:
 //! - Header: `Authorization: Bearer my-secret-key`
-//! - URL param: `ws://localhost:8080?api_key=my-secret-key`
+//! - URL param: `ws://localhost:8099?api_key=my-secret-key`
 //!
 //! ## HTTP Basic Authentication
 //!

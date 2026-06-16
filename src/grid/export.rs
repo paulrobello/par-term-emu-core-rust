@@ -4,6 +4,90 @@ use crate::cell::Cell;
 use crate::color::{Color, NamedColor};
 use crate::grid::Grid;
 
+/// Append the ANSI SGR escape sequence for `fg`/`bg`/`flags` to `result`.
+///
+/// Emits `\x1b[0` followed by the foreground, background, and attribute codes,
+/// terminating with `m`. Used by the styled export paths so the SGR-building
+/// logic lives in exactly one place.
+fn push_sgr_style(result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags) {
+    result.push_str("\x1b[0");
+    match fg {
+        Color::Named(nc) => {
+            let code = match nc {
+                NamedColor::Black => 30,
+                NamedColor::Red => 31,
+                NamedColor::Green => 32,
+                NamedColor::Yellow => 33,
+                NamedColor::Blue => 34,
+                NamedColor::Magenta => 35,
+                NamedColor::Cyan => 36,
+                NamedColor::White => 37,
+                NamedColor::BrightBlack => 90,
+                NamedColor::BrightRed => 91,
+                NamedColor::BrightGreen => 92,
+                NamedColor::BrightYellow => 93,
+                NamedColor::BrightBlue => 94,
+                NamedColor::BrightMagenta => 95,
+                NamedColor::BrightCyan => 96,
+                NamedColor::BrightWhite => 97,
+            };
+            result.push_str(&format!(";{}", code));
+        }
+        Color::Indexed(i) => result.push_str(&format!(";38;5;{}", i)),
+        Color::Rgb(r, g, b) => result.push_str(&format!(";38;2;{};{};{}", r, g, b)),
+    }
+    match bg {
+        Color::Named(nc) => {
+            let code = match nc {
+                NamedColor::Black => 40,
+                NamedColor::Red => 41,
+                NamedColor::Green => 42,
+                NamedColor::Yellow => 43,
+                NamedColor::Blue => 44,
+                NamedColor::Magenta => 45,
+                NamedColor::Cyan => 46,
+                NamedColor::White => 47,
+                NamedColor::BrightBlack => 100,
+                NamedColor::BrightRed => 101,
+                NamedColor::BrightGreen => 102,
+                NamedColor::BrightYellow => 103,
+                NamedColor::BrightBlue => 104,
+                NamedColor::BrightMagenta => 105,
+                NamedColor::BrightCyan => 106,
+                NamedColor::BrightWhite => 107,
+            };
+            result.push_str(&format!(";{}", code));
+        }
+        Color::Indexed(i) => result.push_str(&format!(";48;5;{}", i)),
+        Color::Rgb(r, g, b) => result.push_str(&format!(";48;2;{};{};{}", r, g, b)),
+    }
+    if flags.bold() {
+        result.push_str(";1");
+    }
+    if flags.dim() {
+        result.push_str(";2");
+    }
+    if flags.italic() {
+        result.push_str(";3");
+    }
+    if flags.underline() {
+        result.push_str(";4");
+    }
+    if flags.blink() {
+        result.push_str(";5");
+    }
+    if flags.reverse() {
+        result.push_str(";7");
+    }
+    if flags.hidden() {
+        result.push_str(";8");
+    }
+    if flags.strikethrough() {
+        result.push_str(";9");
+    }
+    result.push('m');
+}
+
 impl Grid {
     /// Export the entire buffer (scrollback + visible) as plain text
     pub fn export_text_buffer(&self) -> String {
@@ -97,86 +181,6 @@ impl Grid {
         let mut current_bg = Color::Named(NamedColor::Black);
         let mut current_flags = crate::cell::CellFlags::default();
 
-        let emit_style =
-            |result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags| {
-                result.push_str("\x1b[0");
-                match fg {
-                    Color::Named(nc) => {
-                        let code = match nc {
-                            NamedColor::Black => 30,
-                            NamedColor::Red => 31,
-                            NamedColor::Green => 32,
-                            NamedColor::Yellow => 33,
-                            NamedColor::Blue => 34,
-                            NamedColor::Magenta => 35,
-                            NamedColor::Cyan => 36,
-                            NamedColor::White => 37,
-                            NamedColor::BrightBlack => 90,
-                            NamedColor::BrightRed => 91,
-                            NamedColor::BrightGreen => 92,
-                            NamedColor::BrightYellow => 93,
-                            NamedColor::BrightBlue => 94,
-                            NamedColor::BrightMagenta => 95,
-                            NamedColor::BrightCyan => 96,
-                            NamedColor::BrightWhite => 97,
-                        };
-                        result.push_str(&format!(";{}", code));
-                    }
-                    Color::Indexed(i) => result.push_str(&format!(";38;5;{}", i)),
-                    Color::Rgb(r, g, b) => result.push_str(&format!(";38;2;{};{};{}", r, g, b)),
-                }
-                match bg {
-                    Color::Named(nc) => {
-                        let code = match nc {
-                            NamedColor::Black => 40,
-                            NamedColor::Red => 41,
-                            NamedColor::Green => 42,
-                            NamedColor::Yellow => 43,
-                            NamedColor::Blue => 44,
-                            NamedColor::Magenta => 45,
-                            NamedColor::Cyan => 46,
-                            NamedColor::White => 47,
-                            NamedColor::BrightBlack => 100,
-                            NamedColor::BrightRed => 101,
-                            NamedColor::BrightGreen => 102,
-                            NamedColor::BrightYellow => 103,
-                            NamedColor::BrightBlue => 104,
-                            NamedColor::BrightMagenta => 105,
-                            NamedColor::BrightCyan => 106,
-                            NamedColor::BrightWhite => 107,
-                        };
-                        result.push_str(&format!(";{}", code));
-                    }
-                    Color::Indexed(i) => result.push_str(&format!(";48;5;{}", i)),
-                    Color::Rgb(r, g, b) => result.push_str(&format!(";48;2;{};{};{}", r, g, b)),
-                }
-                if flags.bold() {
-                    result.push_str(";1");
-                }
-                if flags.dim() {
-                    result.push_str(";2");
-                }
-                if flags.italic() {
-                    result.push_str(";3");
-                }
-                if flags.underline() {
-                    result.push_str(";4");
-                }
-                if flags.blink() {
-                    result.push_str(";5");
-                }
-                if flags.reverse() {
-                    result.push_str(";7");
-                }
-                if flags.hidden() {
-                    result.push_str(";8");
-                }
-                if flags.strikethrough() {
-                    result.push_str(";9");
-                }
-                result.push('m');
-            };
-
         for i in 0..self.scrollback_lines {
             if let Some(line) = self.scrollback_line(i) {
                 let last_sig = self.find_last_significant(line);
@@ -189,7 +193,7 @@ impl Grid {
                     }
                     if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
                     {
-                        emit_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
                         current_fg = cell.fg;
                         current_bg = cell.bg;
                         current_flags = cell.flags;
@@ -220,7 +224,7 @@ impl Grid {
                     }
                     if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
                     {
-                        emit_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
                         current_fg = cell.fg;
                         current_bg = cell.bg;
                         current_flags = cell.flags;
@@ -254,86 +258,6 @@ impl Grid {
         let mut current_bg = Color::Named(NamedColor::Black);
         let mut current_flags = crate::cell::CellFlags::default();
 
-        let emit_style =
-            |result: &mut String, fg: &Color, bg: &Color, flags: &crate::cell::CellFlags| {
-                result.push_str("\x1b[0");
-                match fg {
-                    Color::Named(nc) => {
-                        let code = match nc {
-                            NamedColor::Black => 30,
-                            NamedColor::Red => 31,
-                            NamedColor::Green => 32,
-                            NamedColor::Yellow => 33,
-                            NamedColor::Blue => 34,
-                            NamedColor::Magenta => 35,
-                            NamedColor::Cyan => 36,
-                            NamedColor::White => 37,
-                            NamedColor::BrightBlack => 90,
-                            NamedColor::BrightRed => 91,
-                            NamedColor::BrightGreen => 92,
-                            NamedColor::BrightYellow => 93,
-                            NamedColor::BrightBlue => 94,
-                            NamedColor::BrightMagenta => 95,
-                            NamedColor::BrightCyan => 96,
-                            NamedColor::BrightWhite => 97,
-                        };
-                        result.push_str(&format!(";{}", code));
-                    }
-                    Color::Indexed(i) => result.push_str(&format!(";38;5;{}", i)),
-                    Color::Rgb(r, g, b) => result.push_str(&format!(";38;2;{};{};{}", r, g, b)),
-                }
-                match bg {
-                    Color::Named(nc) => {
-                        let code = match nc {
-                            NamedColor::Black => 40,
-                            NamedColor::Red => 41,
-                            NamedColor::Green => 42,
-                            NamedColor::Yellow => 43,
-                            NamedColor::Blue => 44,
-                            NamedColor::Magenta => 45,
-                            NamedColor::Cyan => 46,
-                            NamedColor::White => 47,
-                            NamedColor::BrightBlack => 100,
-                            NamedColor::BrightRed => 101,
-                            NamedColor::BrightGreen => 102,
-                            NamedColor::BrightYellow => 103,
-                            NamedColor::BrightBlue => 104,
-                            NamedColor::BrightMagenta => 105,
-                            NamedColor::BrightCyan => 106,
-                            NamedColor::BrightWhite => 107,
-                        };
-                        result.push_str(&format!(";{}", code));
-                    }
-                    Color::Indexed(i) => result.push_str(&format!(";48;5;{}", i)),
-                    Color::Rgb(r, g, b) => result.push_str(&format!(";48;2;{};{};{}", r, g, b)),
-                }
-                if flags.bold() {
-                    result.push_str(";1");
-                }
-                if flags.dim() {
-                    result.push_str(";2");
-                }
-                if flags.italic() {
-                    result.push_str(";3");
-                }
-                if flags.underline() {
-                    result.push_str(";4");
-                }
-                if flags.blink() {
-                    result.push_str(";5");
-                }
-                if flags.reverse() {
-                    result.push_str(";7");
-                }
-                if flags.hidden() {
-                    result.push_str(";8");
-                }
-                if flags.strikethrough() {
-                    result.push_str(";9");
-                }
-                result.push('m');
-            };
-
         for row in 0..self.rows {
             if let Some(row_cells) = self.row(row) {
                 let last_sig = self.find_last_significant(row_cells);
@@ -350,7 +274,7 @@ impl Grid {
                     }
                     if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
                     {
-                        emit_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
                         current_fg = cell.fg;
                         current_bg = cell.bg;
                         current_flags = cell.flags;

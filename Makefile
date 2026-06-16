@@ -352,7 +352,7 @@ examples-streaming: dev-streaming
 	@echo "Starting WebSocket streaming server..."
 	@echo ""
 	@echo "Once the server starts, open examples/streaming_client.html"
-	@echo "in your web browser and connect to ws://localhost:8080"
+	@echo "in your web browser and connect to ws://localhost:8099"
 	@echo ""
 	@echo "Press Ctrl+C to stop the server"
 	@echo ""
@@ -476,7 +476,7 @@ streamer-install: streamer-build-release
 	@echo ""
 	@echo "Run it with:"
 	@echo "  par-term-streamer --help"
-	@echo "  par-term-streamer --port 8080"
+	@echo "  par-term-streamer --port 8099"
 	@echo ""
 
 # ============================================================================

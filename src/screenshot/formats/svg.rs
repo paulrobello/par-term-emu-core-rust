@@ -177,11 +177,18 @@ fn is_default_color(color: &Color) -> bool {
 
 /// Escape XML special characters
 fn escape_xml(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+    let mut result = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&apos;"),
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 #[cfg(test)]

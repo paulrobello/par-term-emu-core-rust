@@ -1069,7 +1069,7 @@ pip install par-term-emu-core-rust
 
 ### From Source
 
-Requires Rust 1.75+ and Python 3.12+:
+Requires Rust 1.88+ and Python 3.12+:
 
 ```bash
 # Install maturin (build tool)
@@ -1388,7 +1388,7 @@ See the `examples/` directory for comprehensive examples:
 
 **Standalone Rust Server:**
 ```bash
-# Build and run (default: ws://127.0.0.1:8080)
+# Build and run (default: ws://127.0.0.1:8099)
 make streamer-run
 
 # Run with authentication
@@ -1396,7 +1396,7 @@ make streamer-run-auth
 
 # Or use cargo directly
 cargo build --bin par-term-streamer --no-default-features --features streaming --release
-./target/release/par-term-streamer --port 8080 --theme dracula
+./target/release/par-term-streamer --port 8099 --theme dracula
 
 # With authentication
 ./target/release/par-term-streamer --api-key my-secret --theme monokai
@@ -1424,7 +1424,7 @@ tar -xzf par-term-web-frontend-v0.10.0.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term
-# Open browser to http://localhost:8080
+# Open browser to http://localhost:8099
 ```
 
 See [web_term/README.md](web_term/README.md) for detailed usage instructions.
@@ -1472,7 +1472,7 @@ A full-featured TUI (Text User Interface) application is available in the sister
 
 ## Technology
 
-- **Rust** (1.75+) - Core library implementation
+- **Rust** (1.88+) - Core library implementation
 - **Python** (3.12+) - Python bindings
 - **PyO3** - Zero-cost Python/Rust bindings
 - **VTE** - ANSI sequence parsing

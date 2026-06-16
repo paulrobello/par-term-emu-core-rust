@@ -1955,12 +1955,11 @@ impl StreamingServer {
                                     }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                        if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                            use std::io::Write;
-                                            if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                                crate::debug_error!("STREAMING", "PTY write error for session {}: {}", session.id, e);
-                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                            }
+                                        let mut w = writer.lock();
+                                        use std::io::Write;
+                                        if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                            crate::debug_error!("STREAMING", "PTY write error for session {}: {}", session.id, e);
+                                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -1978,13 +1977,10 @@ impl StreamingServer {
                                 }
                                 crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                     let refresh_msg = {
-                                        if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                            let content = terminal.export_visible_screen_styled();
-                                            let (cols, rows) = terminal.size();
-                                            Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                        } else {
-                                            None
-                                        }
+                                        let terminal = terminal_for_refresh.lock();
+                                        let content = terminal.export_visible_screen_styled();
+                                        let (cols, rows) = terminal.size();
+                                        Some(ServerMessage::refresh(cols as u16, rows as u16, content))
                                     };
                                     if let Some(msg) = refresh_msg {
                                         if let Err(e) = client.send(msg).await {
@@ -2018,12 +2014,11 @@ impl StreamingServer {
                                         };
                                         if !bytes.is_empty() {
                                             session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
-                                            if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                                use std::io::Write;
-                                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                                                    crate::debug_error!("STREAMING", "PTY mouse write error for session {}: {}", session.id, e);
-                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                }
+                                            let mut w = writer.lock();
+                                            use std::io::Write;
+                                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                                crate::debug_error!("STREAMING", "PTY mouse write error for session {}: {}", session.id, e);
+                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                             }
                                         }
                                     }
@@ -2044,12 +2039,11 @@ impl StreamingServer {
                                         };
                                         if !bytes.is_empty() {
                                             session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
-                                            if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                                use std::io::Write;
-                                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                                                    crate::debug_error!("STREAMING", "PTY focus write error for session {}: {}", session.id, e);
-                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                }
+                                            let mut w = writer.lock();
+                                            use std::io::Write;
+                                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                                crate::debug_error!("STREAMING", "PTY focus write error for session {}: {}", session.id, e);
+                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                             }
                                         }
                                     }
@@ -2065,21 +2059,20 @@ impl StreamingServer {
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         let terminal = session.terminal.lock();
                                         session.metrics.input_bytes.fetch_add(content.len(), Ordering::Relaxed);
-                                        if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                            use std::io::Write;
-                                            let result = if terminal.bracketed_paste() {
-                                                w.write_all(terminal.bracketed_paste_start())
-                                                    .and_then(|_| w.write_all(content.as_bytes()))
-                                                    .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
-                                                    .and_then(|_| w.flush())
-                                            } else {
-                                                w.write_all(content.as_bytes())
-                                                    .and_then(|_| w.flush())
-                                            };
-                                            if let Err(e) = result {
-                                                crate::debug_error!("STREAMING", "PTY paste write error for session {}: {}", session.id, e);
-                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                            }
+                                        let mut w = writer.lock();
+                                        use std::io::Write;
+                                        let result = if terminal.bracketed_paste() {
+                                            w.write_all(terminal.bracketed_paste_start())
+                                                .and_then(|_| w.write_all(content.as_bytes()))
+                                                .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
+                                                .and_then(|_| w.flush())
+                                        } else {
+                                            w.write_all(content.as_bytes())
+                                                .and_then(|_| w.flush())
+                                        };
+                                        if let Err(e) = result {
+                                            crate::debug_error!("STREAMING", "PTY paste write error for session {}: {}", session.id, e);
+                                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                         }
                                     }
                                 }
@@ -2201,12 +2194,9 @@ impl StreamingServer {
                                     };
                                     if let Some(ss) = snapshot_scope {
                                         let snapshot_msg = {
-                                            if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                let json = terminal.get_semantic_snapshot_json(ss);
-                                                Some(ServerMessage::semantic_snapshot(json))
-                                            } else {
-                                                None
-                                            }
+                                            let terminal = terminal_for_refresh.lock();
+                                            let json = terminal.get_semantic_snapshot_json(ss);
+                                            Some(ServerMessage::semantic_snapshot(json))
                                         };
                                         if let Some(msg) = snapshot_msg {
                                             if let Err(e) = client.send(msg).await {
@@ -2361,12 +2351,11 @@ impl StreamingServer {
                                             }
                                             if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                                if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                                    use std::io::Write;
-                                                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                                        crate::debug_error!("STREAMING", "PTY write error for TLS session {}: {}", session.id, e);
-                                                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                    }
+                                                let mut w = writer.lock();
+                                                use std::io::Write;
+                                                if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                                    crate::debug_error!("STREAMING", "PTY write error for TLS session {}: {}", session.id, e);
+                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                                 }
                                             }
                                         }
@@ -2384,13 +2373,10 @@ impl StreamingServer {
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {
-                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                    let content = terminal.export_visible_screen_styled();
-                                                    let (cols, rows) = terminal.size();
-                                                    Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                                } else {
-                                                    None
-                                                }
+                                                let terminal = terminal_for_refresh.lock();
+                                                let content = terminal.export_visible_screen_styled();
+                                                let (cols, rows) = terminal.size();
+                                                Some(ServerMessage::refresh(cols as u16, rows as u16, content))
                                             };
                                             if let Some(msg) = refresh_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
@@ -2416,12 +2402,9 @@ impl StreamingServer {
                                             };
                                             if let Some(ss) = snapshot_scope {
                                                 let snapshot_msg = {
-                                                    if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                        let json = terminal.get_semantic_snapshot_json(ss);
-                                                        Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                    } else {
-                                                        None
-                                                    }
+                                                    let terminal = terminal_for_refresh.lock();
+                                                    let json = terminal.get_semantic_snapshot_json(ss);
+                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
                                                 };
                                                 if let Some(msg) = snapshot_msg {
                                                     if let Ok(bytes) = encode_server_message(&msg) {
@@ -2752,12 +2735,11 @@ impl StreamingServer {
                                             }
                                             if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                                 session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                                if let Ok(mut w) = Ok::<_, ()>(writer.lock()) {
-                                                    use std::io::Write;
-                                                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                                        crate::debug_error!("STREAMING", "PTY write error for Axum session {}: {}", session.id, e);
-                                                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                    }
+                                                let mut w = writer.lock();
+                                                use std::io::Write;
+                                                if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                                                    crate::debug_error!("STREAMING", "PTY write error for Axum session {}: {}", session.id, e);
+                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                                                 }
                                             }
                                         }
@@ -2775,13 +2757,10 @@ impl StreamingServer {
                                         }
                                         crate::streaming::protocol::ClientMessage::RequestRefresh => {
                                             let refresh_msg = {
-                                                if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                    let content = terminal.export_visible_screen_styled();
-                                                    let (cols, rows) = terminal.size();
-                                                    Some(ServerMessage::refresh(cols as u16, rows as u16, content))
-                                                } else {
-                                                    None
-                                                }
+                                                let terminal = terminal_for_refresh.lock();
+                                                let content = terminal.export_visible_screen_styled();
+                                                let (cols, rows) = terminal.size();
+                                                Some(ServerMessage::refresh(cols as u16, rows as u16, content))
                                             };
                                             if let Some(msg) = refresh_msg {
                                                 if let Ok(bytes) = encode_server_message(&msg) {
@@ -2807,12 +2786,9 @@ impl StreamingServer {
                                             };
                                             if let Some(ss) = snapshot_scope {
                                                 let snapshot_msg = {
-                                                    if let Ok(terminal) = Ok::<_, ()>(terminal_for_refresh.lock()) {
-                                                        let json = terminal.get_semantic_snapshot_json(ss);
-                                                        Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
-                                                    } else {
-                                                        None
-                                                    }
+                                                    let terminal = terminal_for_refresh.lock();
+                                                    let json = terminal.get_semantic_snapshot_json(ss);
+                                                    Some(crate::streaming::protocol::ServerMessage::semantic_snapshot(json))
                                                 };
                                                 if let Some(msg) = snapshot_msg {
                                                     if let Ok(bytes) = encode_server_message(&msg) {

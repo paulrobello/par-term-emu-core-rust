@@ -99,7 +99,7 @@ graph TB
 
     PTY -->|ANSI Output| Term
     Term -->|Screen State| Server
-    Server -->|JSON Messages| Broadcast
+    Server -->|Protobuf (binary)| Broadcast
     Broadcast -->|Broadcast| WS
     WS -->|Terminal Data| React
     React -->|Write| XTerm

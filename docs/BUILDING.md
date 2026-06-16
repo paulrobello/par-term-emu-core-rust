@@ -2,6 +2,8 @@
 
 This guide explains how to build and install the par-term-emu-core-rust library.
 
+> ⚠️ **Never use `cargo build` directly for this PyO3 module.** Bare `cargo build` fails at the link stage because the `extension-module` feature produces a Python extension that cannot be linked as a normal Rust binary. Always build with **`make dev`** (which drives `maturin`) for Python bindings, or the streaming-server-specific targets (`make dev-streaming`, `make streamer-run`) for the server binary. The only time you invoke `cargo` directly is for tests, which require the `--no-default-features --features pyo3/auto-initialize` workaround (see [Running Tests](#running-tests) below). See `CLAUDE.md` and `docs/ARCHITECTURE.md` for background.
+
 ## Table of Contents
 
 - [Prerequisites](#prerequisites)

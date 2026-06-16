@@ -187,16 +187,18 @@ pub fn cells_to_text(cells: &[Cell]) -> String {
 
 /// Helper function to escape HTML special characters
 pub fn html_escape(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            '<' => "&lt;".to_string(),
-            '>' => "&gt;".to_string(),
-            '&' => "&amp;".to_string(),
-            '"' => "&quot;".to_string(),
-            '\'' => "&#39;".to_string(),
-            _ => c.to_string(),
-        })
-        .collect()
+    let mut result = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '&' => result.push_str("&amp;"),
+            '"' => result.push_str("&quot;"),
+            '\'' => result.push_str("&#39;"),
+            _ => result.push(c),
+        }
+    }
+    result
 }
 
 /// Get current timestamp in microseconds
@@ -2322,12 +2324,14 @@ impl Terminal {
 
     /// Get the bounding box of the dirty region
     pub fn get_dirty_region(&self) -> Option<(usize, usize, usize, usize)> {
-        if self.dirty_rows.is_empty() {
-            return None;
-        }
-
-        let first_row = *self.dirty_rows.iter().min().unwrap();
-        let last_row = *self.dirty_rows.iter().max().unwrap();
+        // Single pass: fold into (min, max), return None for empty.
+        let (first_row, last_row) = self.dirty_rows.iter().copied().fold(
+            None,
+            |acc: Option<(usize, usize)>, row| match acc {
+                None => Some((row, row)),
+                Some((min, max)) => Some((min.min(row), max.max(row))),
+            },
+        )?;
         let cols = self.grid.cols();
 
         Some((first_row, 0, last_row, cols.saturating_sub(1)))
@@ -2419,52 +2423,8 @@ impl Terminal {
     pub fn poll_subscribed_events(&mut self) -> Vec<TerminalEvent> {
         if let Some(ref filter) = self.event_subscription {
             let events = std::mem::take(&mut self.terminal_events);
-            let (matched, remaining): (Vec<_>, Vec<_>) = events.into_iter().partition(|e| {
-                let kind = match e {
-                    TerminalEvent::BellRang(_) => TerminalEventKind::BellRang,
-                    TerminalEvent::TitleChanged(_) => TerminalEventKind::TitleChanged,
-                    TerminalEvent::SizeChanged(_, _) => TerminalEventKind::SizeChanged,
-                    TerminalEvent::ModeChanged(_, _) => TerminalEventKind::ModeChanged,
-                    TerminalEvent::GraphicsAdded(_) => TerminalEventKind::GraphicsAdded,
-                    TerminalEvent::HyperlinkAdded { .. } => TerminalEventKind::HyperlinkAdded,
-                    TerminalEvent::DirtyRegion(_, _) => TerminalEventKind::DirtyRegion,
-                    TerminalEvent::CwdChanged(_) => TerminalEventKind::CwdChanged,
-                    TerminalEvent::TriggerMatched(_) => TerminalEventKind::TriggerMatched,
-                    TerminalEvent::UserVarChanged { .. } => TerminalEventKind::UserVarChanged,
-                    TerminalEvent::ProgressBarChanged { .. } => {
-                        TerminalEventKind::ProgressBarChanged
-                    }
-                    TerminalEvent::BadgeChanged(_) => TerminalEventKind::BadgeChanged,
-                    TerminalEvent::ShellIntegrationEvent { .. } => {
-                        TerminalEventKind::ShellIntegrationEvent
-                    }
-                    TerminalEvent::ZoneOpened { .. } => TerminalEventKind::ZoneOpened,
-                    TerminalEvent::ZoneClosed { .. } => TerminalEventKind::ZoneClosed,
-                    TerminalEvent::ZoneScrolledOut { .. } => TerminalEventKind::ZoneScrolledOut,
-                    TerminalEvent::EnvironmentChanged { .. } => {
-                        TerminalEventKind::EnvironmentChanged
-                    }
-                    TerminalEvent::RemoteHostTransition { .. } => {
-                        TerminalEventKind::RemoteHostTransition
-                    }
-                    TerminalEvent::SubShellDetected { .. } => TerminalEventKind::SubShellDetected,
-                    TerminalEvent::FileTransferStarted { .. } => {
-                        TerminalEventKind::FileTransferStarted
-                    }
-                    TerminalEvent::FileTransferProgress { .. } => {
-                        TerminalEventKind::FileTransferProgress
-                    }
-                    TerminalEvent::FileTransferCompleted { .. } => {
-                        TerminalEventKind::FileTransferCompleted
-                    }
-                    TerminalEvent::FileTransferFailed { .. } => {
-                        TerminalEventKind::FileTransferFailed
-                    }
-                    TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
-                    TerminalEvent::ScreenCleared { .. } => TerminalEventKind::ScreenCleared,
-                };
-                filter.contains(&kind)
-            });
+            let (matched, remaining): (Vec<_>, Vec<_>) =
+                events.into_iter().partition(|e| filter.contains(&e.kind()));
             self.terminal_events = remaining;
             matched
         } else {

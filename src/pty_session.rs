@@ -1,3 +1,34 @@
+//! PTY session management.
+//!
+//! `PtySession` owns a shell process running under a pseudoterminal and feeds
+//! its output into a [`Terminal`]. All terminal state lives behind an
+//! `Arc<Mutex<Terminal>>` (using `parking_lot::Mutex` for performance and to
+//! avoid mutex poisoning), shared between the public API and a background
+//! reader thread.
+//!
+//! ## Reader thread
+//!
+//! A dedicated background thread reads raw bytes from the PTY master and calls
+//! `term.process(..)` while holding the terminal lock. It also forwards
+//! device-query responses (DA/DSR/DECRQM/etc.) back to the child through the
+//! shared writer. Raw output callbacks (if registered) fire before processing,
+//! allowing recording, logging, or streaming to clients.
+//!
+//! ## Lifetime signaling
+//!
+//! The `running` flag is an `Arc<AtomicBool>` that the session sets to `true`
+//! on spawn and clears on PTY EOF or when `try_wait()` observes an exited
+//! child. It is a **best-effort** indicator: there is a window where the child
+//! has exited but the flag has not yet been cleared. For a precise exit
+//! status, call `try_wait()` (non-blocking) or `wait()` (blocking) instead.
+//!
+//! ## Generation counter
+//!
+//! A monotonically increasing generation counter is bumped whenever observable
+//! terminal state changes (new output, resize, mode change, etc.). Callers
+//! that poll state can compare the generation to detect whether anything has
+//! changed since their last read without diffing the full grid.
+
 use crate::coprocess::{CoprocessConfig, CoprocessId, CoprocessManager};
 use crate::debug;
 use crate::pty_error::PtyError;
