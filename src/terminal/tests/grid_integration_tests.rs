@@ -299,7 +299,7 @@ fn test_character_wrap_enabled() {
     let mut term = Terminal::new(10, 5); // Small terminal
 
     // Autowrap is enabled by default
-    assert!(term.auto_wrap);
+    assert!(term.modes.auto_wrap);
 
     // Write 15 characters (should wrap to next line)
     term.process(b"ABCDEFGHIJKLMNO");
@@ -323,7 +323,7 @@ fn test_character_wrap_disabled() {
 
     // Disable autowrap
     term.process(b"\x1b[?7l");
-    assert!(!term.auto_wrap);
+    assert!(!term.modes.auto_wrap);
 
     // Move to start
     term.process(b"\x1b[H");

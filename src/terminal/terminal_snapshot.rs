@@ -195,23 +195,23 @@ impl Terminal {
             saved_underline_color: self.saved_underline_color,
             saved_flags: self.saved_flags,
             title: self.title_state.title.clone(),
-            auto_wrap: self.auto_wrap,
-            origin_mode: self.origin_mode,
-            insert_mode: self.insert_mode,
-            reverse_video: self.reverse_video,
-            line_feed_new_line_mode: self.line_feed_new_line_mode,
-            application_cursor: self.application_cursor,
-            bracketed_paste: self.bracketed_paste,
-            focus_tracking: self.focus_tracking,
-            mouse_mode: self.mouse_mode,
-            mouse_encoding: self.mouse_encoding,
+            auto_wrap: self.modes.auto_wrap,
+            origin_mode: self.modes.origin_mode,
+            insert_mode: self.modes.insert_mode,
+            reverse_video: self.modes.reverse_video,
+            line_feed_new_line_mode: self.modes.line_feed_new_line_mode,
+            application_cursor: self.modes.application_cursor,
+            bracketed_paste: self.modes.bracketed_paste,
+            focus_tracking: self.modes.focus_tracking,
+            mouse_mode: self.modes.mouse_mode,
+            mouse_encoding: self.modes.mouse_encoding,
             use_lr_margins: self.margins.use_lr_margins,
             left_margin: self.margins.left_margin,
             right_margin: self.margins.right_margin,
             keyboard_flags: self.keyboard_state.keyboard_flags,
             modify_other_keys_mode: self.keyboard_state.modify_other_keys_mode,
-            char_protected: self.char_protected,
-            bold_brightening: self.bold_brightening,
+            char_protected: self.modes.char_protected,
+            bold_brightening: self.modes.bold_brightening,
             scroll_region_top: self.margins.scroll_region_top,
             scroll_region_bottom: self.margins.scroll_region_bottom,
             tab_stops: self.tab_stops.clone(),
@@ -239,23 +239,23 @@ impl Terminal {
         self.saved_underline_color = snap.saved_underline_color;
         self.saved_flags = snap.saved_flags;
         self.title_state.title = snap.title;
-        self.auto_wrap = snap.auto_wrap;
-        self.origin_mode = snap.origin_mode;
-        self.insert_mode = snap.insert_mode;
-        self.reverse_video = snap.reverse_video;
-        self.line_feed_new_line_mode = snap.line_feed_new_line_mode;
-        self.application_cursor = snap.application_cursor;
-        self.bracketed_paste = snap.bracketed_paste;
-        self.focus_tracking = snap.focus_tracking;
-        self.mouse_mode = snap.mouse_mode;
-        self.mouse_encoding = snap.mouse_encoding;
+        self.modes.auto_wrap = snap.auto_wrap;
+        self.modes.origin_mode = snap.origin_mode;
+        self.modes.insert_mode = snap.insert_mode;
+        self.modes.reverse_video = snap.reverse_video;
+        self.modes.line_feed_new_line_mode = snap.line_feed_new_line_mode;
+        self.modes.application_cursor = snap.application_cursor;
+        self.modes.bracketed_paste = snap.bracketed_paste;
+        self.modes.focus_tracking = snap.focus_tracking;
+        self.modes.mouse_mode = snap.mouse_mode;
+        self.modes.mouse_encoding = snap.mouse_encoding;
         self.margins.use_lr_margins = snap.use_lr_margins;
         self.margins.left_margin = snap.left_margin;
         self.margins.right_margin = snap.right_margin;
         self.keyboard_state.keyboard_flags = snap.keyboard_flags;
         self.keyboard_state.modify_other_keys_mode = snap.modify_other_keys_mode;
-        self.char_protected = snap.char_protected;
-        self.bold_brightening = snap.bold_brightening;
+        self.modes.char_protected = snap.char_protected;
+        self.modes.bold_brightening = snap.bold_brightening;
         self.margins.scroll_region_top = snap.scroll_region_top;
         self.margins.scroll_region_bottom = snap.scroll_region_bottom;
         self.tab_stops = snap.tab_stops;

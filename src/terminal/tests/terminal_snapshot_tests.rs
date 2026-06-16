@@ -171,22 +171,22 @@ fn test_snapshot_mode_flags() {
     term.process(b"\x1b[?1004l"); // Disable focus tracking
     term.process(b"\x1b[?1l"); // Disable application cursor keys
 
-    assert!(term.auto_wrap);
-    assert!(!term.origin_mode);
-    assert!(!term.insert_mode);
-    assert!(!term.bracketed_paste);
-    assert!(!term.focus_tracking);
-    assert!(!term.application_cursor);
+    assert!(term.modes.auto_wrap);
+    assert!(!term.modes.origin_mode);
+    assert!(!term.modes.insert_mode);
+    assert!(!term.modes.bracketed_paste);
+    assert!(!term.modes.focus_tracking);
+    assert!(!term.modes.application_cursor);
 
     // Restore from snapshot
     term.restore_from_snapshot(snap.clone());
 
-    assert!(!term.auto_wrap);
-    assert!(term.origin_mode);
-    assert!(term.insert_mode);
-    assert!(term.bracketed_paste);
-    assert!(term.focus_tracking);
-    assert!(term.application_cursor);
+    assert!(!term.modes.auto_wrap);
+    assert!(term.modes.origin_mode);
+    assert!(term.modes.insert_mode);
+    assert!(term.modes.bracketed_paste);
+    assert!(term.modes.focus_tracking);
+    assert!(term.modes.application_cursor);
 }
 
 #[test]

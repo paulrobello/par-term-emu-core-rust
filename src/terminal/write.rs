@@ -92,7 +92,7 @@ impl Terminal {
                 // Advance cursor past the spacer
                 self.cursor.col += 1;
                 if self.cursor.col >= cols {
-                    if self.auto_wrap {
+                    if self.modes.auto_wrap {
                         self.cursor.col = cols - 1;
                         self.pending_wrap = true;
                     } else {
@@ -305,7 +305,7 @@ impl Terminal {
             }
             '\n' => {
                 // LNM (Line Feed/New Line Mode): when enabled, LF does CR+LF
-                if self.line_feed_new_line_mode {
+                if self.modes.line_feed_new_line_mode {
                     // Do carriage return first
                     if self.margins.use_lr_margins {
                         self.cursor.col = self.margins.left_margin.min(cols.saturating_sub(1));
@@ -423,7 +423,7 @@ impl Terminal {
         }
 
         // If wide character won't fit on current line, wrap first
-        if char_width == 2 && self.cursor.col >= cols - 1 && self.auto_wrap {
+        if char_width == 2 && self.cursor.col >= cols - 1 && self.modes.auto_wrap {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
@@ -464,7 +464,7 @@ impl Terminal {
         // Apply current hyperlink ID
         cell_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
         // Apply character protection (DECSCA)
-        cell_flags.set_guarded(self.char_protected);
+        cell_flags.set_guarded(self.modes.char_protected);
 
         let cell = Cell {
             c,
@@ -480,7 +480,7 @@ impl Terminal {
         let cursor_row = self.cursor.row;
 
         // If insert mode (IRM) is enabled, insert space by shifting chars right
-        if self.insert_mode {
+        if self.modes.insert_mode {
             self.active_grid_mut()
                 .insert_chars(cursor_col, cursor_row, char_width);
         }
@@ -515,7 +515,7 @@ impl Terminal {
         }
 
         // Handle delayed autowrap for width-1 characters
-        if self.auto_wrap && char_width == 1 && self.cursor.col >= cols {
+        if self.modes.auto_wrap && char_width == 1 && self.cursor.col >= cols {
             // Stay at last column and set wrap-pending; do not move yet
             self.cursor.col = cols - 1;
             self.pending_wrap = true;
@@ -569,7 +569,7 @@ impl Terminal {
         // (It will become width 2 if followed by another regional indicator)
         let mut cell_flags = self.flags;
         cell_flags.hyperlink_id = self.hyperlink_state.current_hyperlink_id;
-        cell_flags.set_guarded(self.char_protected);
+        cell_flags.set_guarded(self.modes.char_protected);
 
         let cell = Cell {
             c,
@@ -585,7 +585,7 @@ impl Terminal {
         let cursor_row = self.cursor.row;
 
         // If insert mode (IRM) is enabled, insert space by shifting chars right
-        if self.insert_mode {
+        if self.modes.insert_mode {
             self.active_grid_mut()
                 .insert_chars(cursor_col, cursor_row, 1);
         }
@@ -597,7 +597,7 @@ impl Terminal {
         self.cursor.col += 1;
 
         // Handle delayed autowrap
-        if self.auto_wrap && self.cursor.col >= cols {
+        if self.modes.auto_wrap && self.cursor.col >= cols {
             self.cursor.col = cols - 1;
             self.pending_wrap = true;
         } else if self.cursor.col >= cols {
@@ -668,7 +668,7 @@ mod tests {
     #[test]
     fn test_write_char_line_feed_new_line_mode() {
         let mut term = create_test_terminal();
-        term.line_feed_new_line_mode = true;
+        term.modes.line_feed_new_line_mode = true;
         term.cursor.col = 5;
         term.write_char('\n');
 
@@ -779,7 +779,7 @@ mod tests {
     #[test]
     fn test_write_char_wide_character_wrap() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.cursor.col = 79; // Last column
 
         term.write_char('😀'); // Wide char won't fit
@@ -799,7 +799,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
 
         // Fill line to last column
         for _ in 0..80 {
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn test_write_char_no_auto_wrap() {
         let mut term = create_test_terminal();
-        term.auto_wrap = false;
+        term.modes.auto_wrap = false;
 
         // Fill line to last column
         for _ in 0..80 {
@@ -844,7 +844,7 @@ mod tests {
     #[test]
     fn test_write_char_insert_mode() {
         let mut term = create_test_terminal();
-        term.insert_mode = true;
+        term.modes.insert_mode = true;
 
         // Write some characters
         term.write_char('A');
@@ -896,7 +896,7 @@ mod tests {
     #[test]
     fn test_write_char_guarded() {
         let mut term = create_test_terminal();
-        term.char_protected = true;
+        term.modes.char_protected = true;
 
         term.write_char('A');
 
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap_clears_on_cr() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.pending_wrap = true;
 
         term.write_char('\r');
@@ -917,7 +917,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap_clears_on_lf() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.pending_wrap = true;
 
         term.write_char('\n');
@@ -927,7 +927,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap_clears_on_tab() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.pending_wrap = true;
 
         term.write_char('\t');
@@ -937,7 +937,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap_clears_on_backspace() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.pending_wrap = true;
 
         term.write_char('\x08');
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn test_write_char_line_wrapping_marks() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
 
         // Fill first line
         for _ in 0..80 {
@@ -970,7 +970,7 @@ mod tests {
         term.margins.scroll_region_bottom = 23;
         term.cursor.row = 23;
         term.cursor.col = 79;
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
 
         // Write wide char that triggers wrap and scroll
         term.write_char('😀');
@@ -1003,7 +1003,7 @@ mod tests {
     #[test]
     fn test_write_char_insert_mode_wide_char() {
         let mut term = create_test_terminal();
-        term.insert_mode = true;
+        term.modes.insert_mode = true;
 
         term.write_char('A');
         term.write_char('B');
@@ -1045,7 +1045,7 @@ mod tests {
     #[test]
     fn test_write_char_pending_wrap_with_lr_margins() {
         let mut term = create_test_terminal();
-        term.auto_wrap = true;
+        term.modes.auto_wrap = true;
         term.margins.use_lr_margins = true;
         term.margins.left_margin = 10;
         term.margins.right_margin = 70;

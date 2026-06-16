@@ -486,6 +486,34 @@ pub(crate) struct MarginState {
     pub(crate) right_margin: usize,
 }
 
+/// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
+pub(crate) struct TerminalModes {
+    /// Auto wrap mode (DECAWM)
+    pub(crate) auto_wrap: bool,
+    /// Origin mode (DECOM) - cursor addressing relative to scroll region
+    pub(crate) origin_mode: bool,
+    /// Insert mode (IRM) - Mode 4: when enabled, new characters are inserted
+    pub(crate) insert_mode: bool,
+    /// Line Feed/New Line Mode (LNM) - Mode 20: when enabled, LF does CR+LF
+    pub(crate) line_feed_new_line_mode: bool,
+    /// Character protection mode (DECSCA) - when enabled, new chars are guarded
+    pub(crate) char_protected: bool,
+    /// Reverse video mode (DECSCNM) - globally inverts fg/bg colors
+    pub(crate) reverse_video: bool,
+    /// Bold brightening - when enabled, bold ANSI colors 0-7 brighten to 8-15
+    pub(crate) bold_brightening: bool,
+    /// Application cursor keys mode
+    pub(crate) application_cursor: bool,
+    /// Bracketed paste mode
+    pub(crate) bracketed_paste: bool,
+    /// Mouse tracking mode
+    pub(crate) mouse_mode: MouseMode,
+    /// Mouse encoding format
+    pub(crate) mouse_encoding: MouseEncoding,
+    /// Focus tracking enabled
+    pub(crate) focus_tracking: bool,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -515,28 +543,16 @@ pub struct Terminal {
     pub(crate) saved_flags: CellFlags,
     /// Window title, title stack, answerback string (ARC-001 sub-struct)
     pub(crate) title_state: TitleState,
-    /// Mouse tracking mode
-    pub(crate) mouse_mode: MouseMode,
-    /// Mouse encoding format
-    pub(crate) mouse_encoding: MouseEncoding,
-    /// Focus tracking enabled
-    pub(crate) focus_tracking: bool,
-    /// Bracketed paste mode
-    pub(crate) bracketed_paste: bool,
     /// Synchronized update mode, buffer, disable-during-flush flag (ARC-001 sub-struct)
     pub(crate) sync_state: SyncState,
     /// Shell integration state, host/user, depth, command-output flag (ARC-001 sub-struct)
     pub(crate) shell_state: ShellState,
     /// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
     pub(crate) margins: MarginState,
-    /// Auto wrap mode (DECAWM)
-    pub(crate) auto_wrap: bool,
-    /// Origin mode (DECOM) - cursor addressing relative to scroll region
-    pub(crate) origin_mode: bool,
+    /// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
+    pub(crate) modes: TerminalModes,
     /// Tab stops (columns where tab stops are set)
     pub(crate) tab_stops: Vec<bool>,
-    /// Application cursor keys mode
-    pub(crate) application_cursor: bool,
     /// Keyboard protocol flags, stacks, modifyOtherKeys mode (ARC-001 sub-struct)
     pub(crate) keyboard_state: KeyboardState,
     /// Response buffer for device queries (DA/DSR/etc)
@@ -593,16 +609,6 @@ pub struct Terminal {
     pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
     pub(crate) pixel_height: usize,
-    /// Insert mode (IRM) - Mode 4: when enabled, new characters are inserted
-    pub(crate) insert_mode: bool,
-    /// Line Feed/New Line Mode (LNM) - Mode 20: when enabled, LF does CR+LF
-    pub(crate) line_feed_new_line_mode: bool,
-    /// Character protection mode (DECSCA) - when enabled, new chars are guarded
-    pub(crate) char_protected: bool,
-    /// Reverse video mode (DECSCNM) - globally inverts fg/bg colors
-    pub(crate) reverse_video: bool,
-    /// Bold brightening - when enabled, bold ANSI colors 0-7 brighten to 8-15
-    pub(crate) bold_brightening: bool,
     /// Accept OSC 7 directory tracking sequences
     pub(crate) accept_osc7: bool,
     /// Disable potentially insecure escape sequences
@@ -773,10 +779,6 @@ impl Terminal {
                 title_stack: Vec::new(),
                 answerback_string: None,
             },
-            mouse_mode: MouseMode::Off,
-            mouse_encoding: MouseEncoding::Default,
-            focus_tracking: false,
-            bracketed_paste: false,
             sync_state: SyncState {
                 synchronized_updates: false,
                 update_buffer: Vec::new(),
@@ -796,10 +798,21 @@ impl Terminal {
                 left_margin: 0,
                 right_margin: cols.saturating_sub(1),
             },
-            auto_wrap: true,
-            origin_mode: false,
+            modes: TerminalModes {
+                auto_wrap: true,
+                origin_mode: false,
+                insert_mode: false,
+                line_feed_new_line_mode: false,
+                char_protected: false,
+                reverse_video: false,
+                bold_brightening: true, // iTerm2 default behavior
+                application_cursor: false,
+                bracketed_paste: false,
+                mouse_mode: MouseMode::Off,
+                mouse_encoding: MouseEncoding::Default,
+                focus_tracking: false,
+            },
             tab_stops,
-            application_cursor: false,
             keyboard_state: KeyboardState {
                 keyboard_flags: 0,
                 keyboard_stack: Vec::new(),
@@ -846,11 +859,6 @@ impl Terminal {
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
             pixel_width: cols * 10,
             pixel_height: rows * 20,
-            insert_mode: false,
-            line_feed_new_line_mode: false,
-            char_protected: false,
-            reverse_video: false,
-            bold_brightening: true, // iTerm2 default behavior
             accept_osc7: true,
             disable_insecure_sequences: false,
             // iTerm2 default colors (matching Python implementation)
@@ -1324,8 +1332,8 @@ impl Terminal {
                     ));
             }
             // And focus tracking
-            if self.focus_tracking {
-                self.focus_tracking = false;
+            if self.modes.focus_tracking {
+                self.modes.focus_tracking = false;
                 self.terminal_events
                     .push(crate::terminal::TerminalEvent::ModeChanged(
                         "focus_tracking".to_string(),
@@ -1343,32 +1351,32 @@ impl Terminal {
 
     /// Get mouse mode
     pub fn mouse_mode(&self) -> MouseMode {
-        self.mouse_mode
+        self.modes.mouse_mode
     }
 
     /// Set mouse mode
     pub fn set_mouse_mode(&mut self, mode: MouseMode) {
-        self.mouse_mode = mode;
+        self.modes.mouse_mode = mode;
     }
 
     /// Get mouse encoding
     pub fn mouse_encoding(&self) -> MouseEncoding {
-        self.mouse_encoding
+        self.modes.mouse_encoding
     }
 
     /// Set mouse encoding
     pub fn set_mouse_encoding(&mut self, encoding: MouseEncoding) {
-        self.mouse_encoding = encoding;
+        self.modes.mouse_encoding = encoding;
     }
 
     /// Check if focus tracking is enabled
     pub fn focus_tracking(&self) -> bool {
-        self.focus_tracking
+        self.modes.focus_tracking
     }
 
     /// Set focus tracking
     pub fn set_focus_tracking(&mut self, enabled: bool) {
-        self.focus_tracking = enabled;
+        self.modes.focus_tracking = enabled;
     }
 
     /// Save current cursor state
@@ -1393,43 +1401,43 @@ impl Terminal {
 
     /// Check if bracketed paste is enabled
     pub fn bracketed_paste(&self) -> bool {
-        self.bracketed_paste
+        self.modes.bracketed_paste
     }
 
     /// Set bracketed paste mode
     pub fn set_bracketed_paste(&mut self, enabled: bool) {
-        self.bracketed_paste = enabled;
+        self.modes.bracketed_paste = enabled;
     }
 
     /// Check if reverse video mode is enabled (DECSCNM)
     pub fn reverse_video(&self) -> bool {
-        self.reverse_video
+        self.modes.reverse_video
     }
 
     /// Check if bold brightening is enabled
     /// When enabled, bold text with ANSI colors 0-7 brightens to 8-15
     pub fn bold_brightening(&self) -> bool {
-        self.bold_brightening
+        self.modes.bold_brightening
     }
 
     /// Set bold brightening mode
     pub fn set_bold_brightening(&mut self, enabled: bool) {
-        self.bold_brightening = enabled;
+        self.modes.bold_brightening = enabled;
     }
 
     /// Get auto-wrap mode state
     pub fn auto_wrap_mode(&self) -> bool {
-        self.auto_wrap
+        self.modes.auto_wrap
     }
 
     /// Get origin mode state
     pub fn origin_mode(&self) -> bool {
-        self.origin_mode
+        self.modes.origin_mode
     }
 
     /// Get application cursor mode state
     pub fn application_cursor(&self) -> bool {
-        self.application_cursor
+        self.modes.application_cursor
     }
 
     /// Get current scroll region (top, bottom)
@@ -1571,15 +1579,15 @@ impl Terminal {
 
     /// Report mouse event
     pub fn report_mouse(&mut self, event: MouseEvent) -> Vec<u8> {
-        if self.mouse_mode == MouseMode::Off {
+        if self.modes.mouse_mode == MouseMode::Off {
             return Vec::new();
         }
-        event.encode(self.mouse_mode, self.mouse_encoding)
+        event.encode(self.modes.mouse_mode, self.modes.mouse_encoding)
     }
 
     /// Report focus in event
     pub fn report_focus_in(&self) -> Vec<u8> {
-        if self.focus_tracking {
+        if self.modes.focus_tracking {
             b"\x1b[I".to_vec()
         } else {
             Vec::new()
@@ -1588,7 +1596,7 @@ impl Terminal {
 
     /// Report focus out event
     pub fn report_focus_out(&self) -> Vec<u8> {
-        if self.focus_tracking {
+        if self.modes.focus_tracking {
             b"\x1b[O".to_vec()
         } else {
             Vec::new()
@@ -1597,7 +1605,7 @@ impl Terminal {
 
     /// Get bracketed paste start sequence
     pub fn bracketed_paste_start(&self) -> &[u8] {
-        if self.bracketed_paste {
+        if self.modes.bracketed_paste {
             b"\x1b[200~"
         } else {
             b""
@@ -1606,7 +1614,7 @@ impl Terminal {
 
     /// Get bracketed paste end sequence
     pub fn bracketed_paste_end(&self) -> &[u8] {
-        if self.bracketed_paste {
+        if self.modes.bracketed_paste {
             b"\x1b[201~"
         } else {
             b""
@@ -1618,7 +1626,7 @@ impl Terminal {
     /// If bracketed paste mode is enabled, wraps the content with ESC[200~ and ESC[201~
     /// Otherwise, processes the content directly
     pub fn paste(&mut self, content: &str) {
-        if self.bracketed_paste {
+        if self.modes.bracketed_paste {
             // Send: ESC[200~ + content + ESC[201~
             self.process(b"\x1b[200~");
             self.process(content.as_bytes());
@@ -1764,12 +1772,12 @@ impl Terminal {
 
     /// Get insert mode (IRM) state
     pub fn insert_mode(&self) -> bool {
-        self.insert_mode
+        self.modes.insert_mode
     }
 
     /// Get line feed/new line mode (LNM) state
     pub fn line_feed_new_line_mode(&self) -> bool {
-        self.line_feed_new_line_mode
+        self.modes.line_feed_new_line_mode
     }
 
     /// Set Kitty keyboard protocol flags (for testing/direct control)
@@ -2205,7 +2213,7 @@ impl Terminal {
             config.bold_color = Some(self.bold_color.to_rgb());
         }
         config.use_bold_color = self.use_bold_color;
-        config.bold_brightening = self.bold_brightening;
+        config.bold_brightening = self.modes.bold_brightening;
         config.faint_text_alpha = self.faint_text_alpha;
 
         // Use terminal's default background if not specified
@@ -2244,7 +2252,7 @@ impl Terminal {
             config.bold_color = Some(self.bold_color.to_rgb());
         }
         config.use_bold_color = self.use_bold_color;
-        config.bold_brightening = self.bold_brightening;
+        config.bold_brightening = self.modes.bold_brightening;
         config.faint_text_alpha = self.faint_text_alpha;
 
         // Use terminal's default background if not specified

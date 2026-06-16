@@ -256,7 +256,7 @@ impl Terminal {
                     self.margins.scroll_region_top = top;
                     self.margins.scroll_region_bottom = bottom;
                     // Reset cursor to (0,0) relative to region if origin mode
-                    self.cursor.goto(0, if self.origin_mode { top } else { 0 });
+                    self.cursor.goto(0, if self.modes.origin_mode { top } else { 0 });
                 }
             }
             's'

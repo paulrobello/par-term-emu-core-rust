@@ -32,7 +32,7 @@ impl Terminal {
                         let (col, row) = if private {
                             // Private mode CPR (some terminals use this)
                             (self.cursor.col, self.cursor.row)
-                        } else if self.origin_mode {
+                        } else if self.modes.origin_mode {
                             // Respect origin mode: report relative to scroll region
                             (
                                 self.cursor.col,
@@ -102,21 +102,21 @@ impl Terminal {
                         // DEC Private Mode
                         let s = match mode {
                             1 => {
-                                if self.application_cursor {
+                                if self.modes.application_cursor {
                                     1
                                 } else {
                                     2
                                 }
                             }
                             6 => {
-                                if self.origin_mode {
+                                if self.modes.origin_mode {
                                     1
                                 } else {
                                     2
                                 }
                             }
                             7 => {
-                                if self.auto_wrap {
+                                if self.modes.auto_wrap {
                                     1
                                 } else {
                                     2
@@ -130,7 +130,7 @@ impl Terminal {
                                 }
                             }
                             1000 | 1002 | 1003 => {
-                                if self.mouse_mode != crate::mouse::MouseMode::Off {
+                                if self.modes.mouse_mode != crate::mouse::MouseMode::Off {
                                     1
                                 } else {
                                     2
@@ -144,7 +144,7 @@ impl Terminal {
                                 }
                             }
                             2004 => {
-                                if self.bracketed_paste {
+                                if self.modes.bracketed_paste {
                                     1
                                 } else {
                                     2
@@ -164,14 +164,14 @@ impl Terminal {
                         // ANSI Mode
                         let s = match mode {
                             4 => {
-                                if self.insert_mode {
+                                if self.modes.insert_mode {
                                     1
                                 } else {
                                     2
                                 }
                             }
                             20 => {
-                                if self.line_feed_new_line_mode {
+                                if self.modes.line_feed_new_line_mode {
                                     1
                                 } else {
                                     2

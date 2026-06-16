@@ -272,11 +272,11 @@ fn test_private_mode_application_cursor() {
 
     // Enable application cursor
     term.process(b"\x1b[?1h");
-    assert!(term.application_cursor);
+    assert!(term.modes.application_cursor);
 
     // Disable
     term.process(b"\x1b[?1l");
-    assert!(!term.application_cursor);
+    assert!(!term.modes.application_cursor);
 }
 
 #[test]
@@ -285,11 +285,11 @@ fn test_private_mode_autowrap() {
 
     // Disable autowrap
     term.process(b"\x1b[?7l");
-    assert!(!term.auto_wrap);
+    assert!(!term.modes.auto_wrap);
 
     // Enable autowrap
     term.process(b"\x1b[?7h");
-    assert!(term.auto_wrap);
+    assert!(term.modes.auto_wrap);
 }
 
 #[test]
@@ -311,19 +311,19 @@ fn test_private_mode_mouse() {
 
     // Normal mouse tracking
     term.process(b"\x1b[?1000h");
-    assert!(matches!(term.mouse_mode, MouseMode::Normal));
+    assert!(matches!(term.modes.mouse_mode, MouseMode::Normal));
 
     // Button event mode
     term.process(b"\x1b[?1002h");
-    assert!(matches!(term.mouse_mode, MouseMode::ButtonEvent));
+    assert!(matches!(term.modes.mouse_mode, MouseMode::ButtonEvent));
 
     // Any event mode
     term.process(b"\x1b[?1003h");
-    assert!(matches!(term.mouse_mode, MouseMode::AnyEvent));
+    assert!(matches!(term.modes.mouse_mode, MouseMode::AnyEvent));
 
     // Disable
     term.process(b"\x1b[?1000l");
-    assert!(matches!(term.mouse_mode, MouseMode::Off));
+    assert!(matches!(term.modes.mouse_mode, MouseMode::Off));
 }
 
 #[test]
@@ -332,19 +332,19 @@ fn test_private_mode_mouse_encoding() {
 
     // SGR mouse
     term.process(b"\x1b[?1006h");
-    assert!(matches!(term.mouse_encoding, MouseEncoding::Sgr));
+    assert!(matches!(term.modes.mouse_encoding, MouseEncoding::Sgr));
 
     // UTF-8 mouse
     term.process(b"\x1b[?1005h");
-    assert!(matches!(term.mouse_encoding, MouseEncoding::Utf8));
+    assert!(matches!(term.modes.mouse_encoding, MouseEncoding::Utf8));
 
     // URXVT mouse
     term.process(b"\x1b[?1015h");
-    assert!(matches!(term.mouse_encoding, MouseEncoding::Urxvt));
+    assert!(matches!(term.modes.mouse_encoding, MouseEncoding::Urxvt));
 
     // Reset to default
     term.process(b"\x1b[?1006l");
-    assert!(matches!(term.mouse_encoding, MouseEncoding::Default));
+    assert!(matches!(term.modes.mouse_encoding, MouseEncoding::Default));
 }
 
 #[test]
@@ -353,11 +353,11 @@ fn test_private_mode_bracketed_paste() {
 
     // Enable bracketed paste
     term.process(b"\x1b[?2004h");
-    assert!(term.bracketed_paste);
+    assert!(term.modes.bracketed_paste);
 
     // Disable
     term.process(b"\x1b[?2004l");
-    assert!(!term.bracketed_paste);
+    assert!(!term.modes.bracketed_paste);
 }
 
 // ========== Device Response Tests ==========
@@ -540,11 +540,11 @@ fn test_insert_mode() {
 
     // Enable insert mode (IRM)
     term.process(b"\x1b[4h");
-    assert!(term.insert_mode);
+    assert!(term.modes.insert_mode);
 
     // Disable insert mode
     term.process(b"\x1b[4l");
-    assert!(!term.insert_mode);
+    assert!(!term.modes.insert_mode);
 }
 
 // ========== Mode Changed Event Tests ==========

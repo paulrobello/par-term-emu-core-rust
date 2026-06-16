@@ -115,11 +115,11 @@ impl Terminal {
             .unwrap_or(0);
         match ps {
             1 => {
-                self.char_protected = true;
+                self.modes.char_protected = true;
                 debug::log(debug::DebugLevel::Debug, "DECSCA", "Protection enabled");
             }
             0 | 2 => {
-                self.char_protected = false;
+                self.modes.char_protected = false;
                 debug::log(debug::DebugLevel::Debug, "DECSCA", "Protection disabled");
             }
             _ => {}

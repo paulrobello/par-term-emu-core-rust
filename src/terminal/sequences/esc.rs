@@ -106,12 +106,12 @@ impl Terminal {
             (b'V', _) => {
                 // SPA - Start of Protected Area (DECSCA)
                 // Enable character protection for subsequent characters
-                self.char_protected = true;
+                self.modes.char_protected = true;
             }
             (b'W', _) => {
                 // EPA - End of Protected Area (DECSCA)
                 // Disable character protection
-                self.char_protected = false;
+                self.modes.char_protected = false;
             }
             // SCS — Select Character Set (G0 slot)
             // ESC ( 0  → G0 = DEC Special / Line Drawing
@@ -266,8 +266,8 @@ mod tests {
         assert_eq!(term.cursor.row, 0);
         assert_eq!(term.cursor.col, 0);
         assert!(!term.flags.bold());
-        assert!(term.auto_wrap); // Default is true
-        assert!(!term.application_cursor); // Default is false
+        assert!(term.modes.auto_wrap); // Default is true
+        assert!(!term.modes.application_cursor); // Default is false
         assert!(!term.alt_screen_active); // Back to primary screen
     }
 
@@ -277,11 +277,11 @@ mod tests {
 
         // ESC V - Start Protected Area (SPA)
         term.process(b"\x1bV");
-        assert!(term.char_protected);
+        assert!(term.modes.char_protected);
 
         // ESC W - End Protected Area (EPA)
         term.process(b"\x1bW");
-        assert!(!term.char_protected);
+        assert!(!term.modes.char_protected);
     }
 
     #[test]

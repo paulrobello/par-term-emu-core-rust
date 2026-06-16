@@ -70,7 +70,7 @@ impl Terminal {
                 let col = col.saturating_sub(1);
                 let row = row.saturating_sub(1);
 
-                if self.origin_mode {
+                if self.modes.origin_mode {
                     let region_height = self
                         .margins.scroll_region_bottom
                         .saturating_sub(self.margins.scroll_region_top)

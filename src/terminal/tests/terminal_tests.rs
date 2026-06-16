@@ -610,13 +610,13 @@ fn test_origin_mode() {
     term.process(b"\x1b[5;15r"); // Set scroll region
     term.process(b"\x1b[?6h"); // Enable origin mode
 
-    assert!(term.origin_mode);
+    assert!(term.modes.origin_mode);
 
     // The current implementation sets scroll region but cursor positioning
     // doesn't implement full origin mode yet, so test what it does
     term.process(b"\x1b[1;1H"); // Position to "home"
                                 // For now, just verify origin mode is enabled
-    assert!(term.origin_mode);
+    assert!(term.modes.origin_mode);
 }
 
 #[test]
