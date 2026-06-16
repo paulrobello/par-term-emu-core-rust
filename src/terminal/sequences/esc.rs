@@ -37,12 +37,12 @@ impl Terminal {
             (b'M', _) => {
                 // Reverse index (RI) - move cursor up one line, scroll if at top
                 self.pending_wrap = false;
-                if self.cursor.row > self.scroll_region_top {
+                if self.cursor.row > self.margins.scroll_region_top {
                     self.cursor.row -= 1;
                 } else {
                     // At top of scroll region, scroll down
-                    let scroll_top = self.scroll_region_top;
-                    let scroll_bottom = self.scroll_region_bottom;
+                    let scroll_top = self.margins.scroll_region_top;
+                    let scroll_bottom = self.margins.scroll_region_bottom;
                     self.active_grid_mut()
                         .scroll_region_down(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
@@ -54,17 +54,17 @@ impl Terminal {
                 // If outside left/right margins (DECLRMM), ignore scroll-at-bottom to match iTerm2.
                 self.pending_wrap = false;
                 let (_, rows) = self.size();
-                let outside_lr_margin = self.use_lr_margins
-                    && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
-                if outside_lr_margin || self.cursor.row < self.scroll_region_bottom {
+                let outside_lr_margin = self.margins.use_lr_margins
+                    && (self.cursor.col < self.margins.left_margin || self.cursor.col > self.margins.right_margin);
+                if outside_lr_margin || self.cursor.row < self.margins.scroll_region_bottom {
                     self.cursor.row += 1;
                     if self.cursor.row >= rows {
                         self.cursor.row = rows - 1;
                     }
                 } else {
                     // At bottom of scroll region - scroll within region per VT spec
-                    let scroll_top = self.scroll_region_top;
-                    let scroll_bottom = self.scroll_region_bottom;
+                    let scroll_top = self.margins.scroll_region_top;
+                    let scroll_bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("ind-at-scroll-bottom", scroll_top, scroll_bottom, 1);
                     self.active_grid_mut()
                         .scroll_region_up(1, scroll_top, scroll_bottom);
@@ -75,23 +75,23 @@ impl Terminal {
             (b'E', _) => {
                 // Next line (NEL): move to first column of next line; if at bottom of scroll region, scroll the region.
                 self.pending_wrap = false;
-                self.cursor.col = if self.use_lr_margins {
-                    self.left_margin
+                self.cursor.col = if self.margins.use_lr_margins {
+                    self.margins.left_margin
                 } else {
                     0
                 };
                 let (_, rows) = self.size();
-                let outside_lr_margin = self.use_lr_margins
-                    && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
-                if outside_lr_margin || self.cursor.row < self.scroll_region_bottom {
+                let outside_lr_margin = self.margins.use_lr_margins
+                    && (self.cursor.col < self.margins.left_margin || self.cursor.col > self.margins.right_margin);
+                if outside_lr_margin || self.cursor.row < self.margins.scroll_region_bottom {
                     self.cursor.row += 1;
                     if self.cursor.row >= rows {
                         self.cursor.row = rows - 1;
                     }
                 } else {
                     // At bottom of scroll region - scroll within region per VT spec
-                    let scroll_top = self.scroll_region_top;
-                    let scroll_bottom = self.scroll_region_bottom;
+                    let scroll_top = self.margins.scroll_region_top;
+                    let scroll_bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("nel-at-scroll-bottom", scroll_top, scroll_bottom, 1);
                     self.active_grid_mut()
                         .scroll_region_up(1, scroll_top, scroll_bottom);
@@ -332,7 +332,7 @@ mod tests {
         term.process(b"\x1b[5;1H"); // row 4 (0-indexed), col 0 (0-indexed) - col < left_margin
         assert_eq!(term.cursor.col, 0);
         assert!(
-            term.cursor.col < term.left_margin,
+            term.cursor.col < term.margins.left_margin,
             "cursor should be outside LR margin"
         );
         // ESC D - because outside_lr_margin, cursor should move down instead of scrolling

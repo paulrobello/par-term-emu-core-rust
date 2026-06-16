@@ -36,7 +36,9 @@ impl Terminal {
                             // Respect origin mode: report relative to scroll region
                             (
                                 self.cursor.col,
-                                self.cursor.row.saturating_sub(self.scroll_region_top),
+                                self.cursor
+                                    .row
+                                    .saturating_sub(self.margins.scroll_region_top),
                             )
                         } else {
                             (self.cursor.col, self.cursor.row)

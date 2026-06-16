@@ -205,15 +205,15 @@ impl Terminal {
             focus_tracking: self.focus_tracking,
             mouse_mode: self.mouse_mode,
             mouse_encoding: self.mouse_encoding,
-            use_lr_margins: self.use_lr_margins,
-            left_margin: self.left_margin,
-            right_margin: self.right_margin,
+            use_lr_margins: self.margins.use_lr_margins,
+            left_margin: self.margins.left_margin,
+            right_margin: self.margins.right_margin,
             keyboard_flags: self.keyboard_state.keyboard_flags,
             modify_other_keys_mode: self.keyboard_state.modify_other_keys_mode,
             char_protected: self.char_protected,
             bold_brightening: self.bold_brightening,
-            scroll_region_top: self.scroll_region_top,
-            scroll_region_bottom: self.scroll_region_bottom,
+            scroll_region_top: self.margins.scroll_region_top,
+            scroll_region_bottom: self.margins.scroll_region_bottom,
             tab_stops: self.tab_stops.clone(),
             pending_wrap: self.pending_wrap,
             estimated_size_bytes: 0,
@@ -249,15 +249,15 @@ impl Terminal {
         self.focus_tracking = snap.focus_tracking;
         self.mouse_mode = snap.mouse_mode;
         self.mouse_encoding = snap.mouse_encoding;
-        self.use_lr_margins = snap.use_lr_margins;
-        self.left_margin = snap.left_margin;
-        self.right_margin = snap.right_margin;
+        self.margins.use_lr_margins = snap.use_lr_margins;
+        self.margins.left_margin = snap.left_margin;
+        self.margins.right_margin = snap.right_margin;
         self.keyboard_state.keyboard_flags = snap.keyboard_flags;
         self.keyboard_state.modify_other_keys_mode = snap.modify_other_keys_mode;
         self.char_protected = snap.char_protected;
         self.bold_brightening = snap.bold_brightening;
-        self.scroll_region_top = snap.scroll_region_top;
-        self.scroll_region_bottom = snap.scroll_region_bottom;
+        self.margins.scroll_region_top = snap.scroll_region_top;
+        self.margins.scroll_region_bottom = snap.scroll_region_bottom;
         self.tab_stops = snap.tab_stops;
         self.pending_wrap = snap.pending_wrap;
     }

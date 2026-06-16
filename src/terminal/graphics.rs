@@ -522,8 +522,8 @@ impl Terminal {
                     if new_cursor_row >= rows {
                         // Graphic pushed cursor past bottom, need to scroll
                         let scroll_amount = new_cursor_row - rows + 1;
-                        let scroll_top = self.scroll_region_top;
-                        let scroll_bottom = self.scroll_region_bottom;
+                        let scroll_top = self.margins.scroll_region_top;
+                        let scroll_bottom = self.margins.scroll_region_bottom;
 
                         // Scroll the grid and existing graphics
                         self.active_grid_mut().scroll_region_up(

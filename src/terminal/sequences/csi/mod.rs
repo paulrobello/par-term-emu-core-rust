@@ -74,7 +74,7 @@ impl Terminal {
             's' => {
                 // s can be SCOSC (no params) or DECSLRM (with params, only if DECLRMM is set)
                 // We check if there are any parameters to distinguish them
-                if !params_vec.is_empty() && self.use_lr_margins {
+                if !params_vec.is_empty() && self.margins.use_lr_margins {
                     self.handle_csi_window(action, params, intermediates);
                 } else {
                     self.handle_csi_cursor(action, params, intermediates);

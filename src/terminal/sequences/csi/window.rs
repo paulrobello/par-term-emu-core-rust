@@ -253,15 +253,15 @@ impl Terminal {
                 let bottom = bottom.saturating_sub(1).min(rows.saturating_sub(1));
 
                 if top < bottom {
-                    self.scroll_region_top = top;
-                    self.scroll_region_bottom = bottom;
+                    self.margins.scroll_region_top = top;
+                    self.margins.scroll_region_bottom = bottom;
                     // Reset cursor to (0,0) relative to region if origin mode
                     self.cursor.goto(0, if self.origin_mode { top } else { 0 });
                 }
             }
             's'
                 // Set left and right margins (DECSLRM) - only if DECLRMM is set
-                if self.use_lr_margins => {
+                if self.margins.use_lr_margins => {
                     let mut iter = params.iter();
                     let left = iter.next().and_then(|p| p.first()).copied().unwrap_or(1) as usize;
                     let right = iter
@@ -274,8 +274,8 @@ impl Terminal {
                     let right = right.saturating_sub(1).min(cols.saturating_sub(1));
 
                     if left < right {
-                        self.left_margin = left;
-                        self.right_margin = right;
+                        self.margins.left_margin = left;
+                        self.margins.right_margin = right;
                     }
                 }
             _ => {}

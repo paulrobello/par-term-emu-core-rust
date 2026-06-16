@@ -424,13 +424,13 @@ fn test_scroll_region() {
 
     // Set scroll region rows 6-16 (1-indexed)
     term.process(b"\x1b[6;16r");
-    assert_eq!(term.scroll_region_top, 5); // 0-indexed
-    assert_eq!(term.scroll_region_bottom, 15);
+    assert_eq!(term.margins.scroll_region_top, 5); // 0-indexed
+    assert_eq!(term.margins.scroll_region_bottom, 15);
 
     // Reset to full screen
     term.process(b"\x1b[r");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 23);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 23);
 }
 
 #[test]
@@ -878,9 +878,12 @@ fn test_decslrm_sets_margins_when_declrmm_enabled() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[?69h"); // enable DECLRMM
     term.process(b"\x1b[10;70s"); // set left=10, right=70 (1-indexed)
-    assert_eq!(term.left_margin, 9, "left margin should be 9 (0-indexed)");
     assert_eq!(
-        term.right_margin, 69,
+        term.margins.left_margin, 9,
+        "left margin should be 9 (0-indexed)"
+    );
+    assert_eq!(
+        term.margins.right_margin, 69,
         "right margin should be 69 (0-indexed)"
     );
 }
@@ -892,11 +895,11 @@ fn test_decslrm_ignored_when_declrmm_disabled() {
     term.process(b"\x1b[5;10H");
     term.process(b"\x1b[s"); // save cursor (not DECSLRM since DECLRMM is off and no params)
     assert_eq!(
-        term.left_margin, 0,
+        term.margins.left_margin, 0,
         "left margin should remain 0 without DECLRMM"
     );
     assert_eq!(
-        term.right_margin, 79,
+        term.margins.right_margin, 79,
         "right margin should remain 79 without DECLRMM"
     );
 }

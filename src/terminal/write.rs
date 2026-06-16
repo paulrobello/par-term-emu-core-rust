@@ -294,8 +294,8 @@ impl Terminal {
         match c {
             '\r' => {
                 // Carriage return moves to left margin when DECLRMM is enabled
-                if self.use_lr_margins {
-                    self.cursor.col = self.left_margin.min(cols.saturating_sub(1));
+                if self.margins.use_lr_margins {
+                    self.cursor.col = self.margins.left_margin.min(cols.saturating_sub(1));
                 } else {
                     self.cursor.move_to_line_start();
                 }
@@ -307,8 +307,8 @@ impl Terminal {
                 // LNM (Line Feed/New Line Mode): when enabled, LF does CR+LF
                 if self.line_feed_new_line_mode {
                     // Do carriage return first
-                    if self.use_lr_margins {
-                        self.cursor.col = self.left_margin.min(cols.saturating_sub(1));
+                    if self.margins.use_lr_margins {
+                        self.cursor.col = self.margins.left_margin.min(cols.saturating_sub(1));
                     } else {
                         self.cursor.move_to_line_start();
                     }
@@ -317,21 +317,22 @@ impl Terminal {
                 // Per VT220 manual: "Index (IND) moves the cursor down one line in the same column.
                 // If the cursor is at the bottom margin, the screen performs a scroll up."
                 let (_, rows) = self.size();
-                let in_scroll_region = self.cursor.row >= self.scroll_region_top
-                    && self.cursor.row <= self.scroll_region_bottom;
+                let in_scroll_region = self.cursor.row >= self.margins.scroll_region_top
+                    && self.cursor.row <= self.margins.scroll_region_bottom;
                 // If DECLRMM is enabled and the cursor is outside left/right margins,
                 // ignore the scroll (match iTerm2 behavior) to avoid corrupting panes/status bars.
-                let outside_lr_margin = self.use_lr_margins
-                    && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
+                let outside_lr_margin = self.margins.use_lr_margins
+                    && (self.cursor.col < self.margins.left_margin
+                        || self.cursor.col > self.margins.right_margin);
 
                 if in_scroll_region
-                    && self.cursor.row == self.scroll_region_bottom
+                    && self.cursor.row == self.margins.scroll_region_bottom
                     && !outside_lr_margin
                 {
                     // At bottom of scroll region - scroll the region per VT spec
                     // The scroll is confined to the region boundaries, preserving content outside it
-                    let top = self.scroll_region_top;
-                    let bottom = self.scroll_region_bottom;
+                    let top = self.margins.scroll_region_top;
+                    let bottom = self.margins.scroll_region_bottom;
                     debug::log_scroll("newline-at-scroll-bottom", top, bottom, 1);
                     self.active_grid_mut().scroll_region_up(1, top, bottom);
                     // Adjust graphics to scroll with content
@@ -388,8 +389,9 @@ impl Terminal {
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {
             let (cols, rows) = self.size();
-            let was_outside_lr = self.use_lr_margins
-                && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
+            let was_outside_lr = self.margins.use_lr_margins
+                && (self.cursor.col < self.margins.left_margin
+                    || self.cursor.col > self.margins.right_margin);
 
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
@@ -397,14 +399,14 @@ impl Terminal {
             self.mark_row_dirty(current_row);
 
             // Move to left margin or column 0
-            self.cursor.col = if self.use_lr_margins {
-                self.left_margin.min(cols.saturating_sub(1))
+            self.cursor.col = if self.margins.use_lr_margins {
+                self.margins.left_margin.min(cols.saturating_sub(1))
             } else {
                 0
             };
-            if self.cursor.row == self.scroll_region_bottom && !was_outside_lr {
-                let scroll_top = self.scroll_region_top;
-                let scroll_bottom = self.scroll_region_bottom;
+            if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
+                let scroll_top = self.margins.scroll_region_top;
+                let scroll_bottom = self.margins.scroll_region_bottom;
                 debug::log_scroll("wrap-pending-advance", scroll_top, scroll_bottom, 1);
                 self.active_grid_mut()
                     .scroll_region_up(1, scroll_top, scroll_bottom);
@@ -428,18 +430,19 @@ impl Terminal {
             self.mark_row_dirty(current_row);
 
             // Wrap to left margin if DECLRMM is enabled
-            self.cursor.col = if self.use_lr_margins {
-                self.left_margin.min(cols.saturating_sub(1))
+            self.cursor.col = if self.margins.use_lr_margins {
+                self.margins.left_margin.min(cols.saturating_sub(1))
             } else {
                 0
             };
             // VT spec behavior: scroll if at scroll region bottom
             let (_, rows) = self.size();
-            let outside_lr_margin = self.use_lr_margins
-                && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
-            if self.cursor.row == self.scroll_region_bottom && !outside_lr_margin {
-                let scroll_top = self.scroll_region_top;
-                let scroll_bottom = self.scroll_region_bottom;
+            let outside_lr_margin = self.margins.use_lr_margins
+                && (self.cursor.col < self.margins.left_margin
+                    || self.cursor.col > self.margins.right_margin);
+            if self.cursor.row == self.margins.scroll_region_bottom && !outside_lr_margin {
+                let scroll_top = self.margins.scroll_region_top;
+                let scroll_bottom = self.margins.scroll_region_bottom;
                 self.active_grid_mut()
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
@@ -529,8 +532,9 @@ impl Terminal {
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {
             let (_cols, rows) = self.size();
-            let was_outside_lr = self.use_lr_margins
-                && (self.cursor.col < self.left_margin || self.cursor.col > self.right_margin);
+            let was_outside_lr = self.margins.use_lr_margins
+                && (self.cursor.col < self.margins.left_margin
+                    || self.cursor.col > self.margins.right_margin);
 
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
@@ -538,14 +542,14 @@ impl Terminal {
             self.mark_row_dirty(current_row);
 
             // Move to left margin or column 0
-            self.cursor.col = if self.use_lr_margins {
-                self.left_margin.min(cols.saturating_sub(1))
+            self.cursor.col = if self.margins.use_lr_margins {
+                self.margins.left_margin.min(cols.saturating_sub(1))
             } else {
                 0
             };
-            if self.cursor.row == self.scroll_region_bottom && !was_outside_lr {
-                let scroll_top = self.scroll_region_top;
-                let scroll_bottom = self.scroll_region_bottom;
+            if self.cursor.row == self.margins.scroll_region_bottom && !was_outside_lr {
+                let scroll_top = self.margins.scroll_region_top;
+                let scroll_bottom = self.margins.scroll_region_bottom;
                 debug::log_scroll("wrap-pending-regional", scroll_top, scroll_bottom, 1);
                 self.active_grid_mut()
                     .scroll_region_up(1, scroll_top, scroll_bottom);
@@ -639,9 +643,9 @@ mod tests {
     #[test]
     fn test_write_char_carriage_return_with_lr_margins() {
         let mut term = create_test_terminal();
-        term.use_lr_margins = true;
-        term.left_margin = 5;
-        term.right_margin = 75;
+        term.margins.use_lr_margins = true;
+        term.margins.left_margin = 5;
+        term.margins.right_margin = 75;
 
         term.cursor.col = 10;
         term.write_char('\r');
@@ -675,8 +679,8 @@ mod tests {
     #[test]
     fn test_write_char_line_feed_at_scroll_bottom() {
         let mut term = create_test_terminal();
-        term.scroll_region_top = 0;
-        term.scroll_region_bottom = 23;
+        term.margins.scroll_region_top = 0;
+        term.margins.scroll_region_bottom = 23;
         term.cursor.row = 23;
 
         // Write some content in first row
@@ -962,8 +966,8 @@ mod tests {
     #[test]
     fn test_write_char_wide_at_scroll_bottom() {
         let mut term = create_test_terminal();
-        term.scroll_region_top = 0;
-        term.scroll_region_bottom = 23;
+        term.margins.scroll_region_top = 0;
+        term.margins.scroll_region_bottom = 23;
         term.cursor.row = 23;
         term.cursor.col = 79;
         term.auto_wrap = true;
@@ -1022,11 +1026,11 @@ mod tests {
     #[test]
     fn test_write_char_lf_with_lr_margins_outside() {
         let mut term = create_test_terminal();
-        term.use_lr_margins = true;
-        term.left_margin = 10;
-        term.right_margin = 70;
-        term.scroll_region_top = 0;
-        term.scroll_region_bottom = 23;
+        term.margins.use_lr_margins = true;
+        term.margins.left_margin = 10;
+        term.margins.right_margin = 70;
+        term.margins.scroll_region_top = 0;
+        term.margins.scroll_region_bottom = 23;
 
         // Position cursor outside left/right margins but in scroll region
         term.cursor.col = 5;
@@ -1042,9 +1046,9 @@ mod tests {
     fn test_write_char_pending_wrap_with_lr_margins() {
         let mut term = create_test_terminal();
         term.auto_wrap = true;
-        term.use_lr_margins = true;
-        term.left_margin = 10;
-        term.right_margin = 70;
+        term.margins.use_lr_margins = true;
+        term.margins.left_margin = 10;
+        term.margins.right_margin = 70;
 
         term.cursor.col = 79;
         term.pending_wrap = true;

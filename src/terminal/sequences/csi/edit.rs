@@ -7,8 +7,8 @@ impl Terminal {
     pub(crate) fn handle_csi_edit(&mut self, action: char, params: &Params, _intermediates: &[u8]) {
         let (_cols, _rows) = self.size();
         let cursor_row = self.cursor.row;
-        let scroll_top = self.scroll_region_top;
-        let scroll_bottom = self.scroll_region_bottom;
+        let scroll_top = self.margins.scroll_region_top;
+        let scroll_bottom = self.margins.scroll_region_bottom;
 
         match action {
             'L' => {

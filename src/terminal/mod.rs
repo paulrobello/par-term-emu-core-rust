@@ -472,6 +472,20 @@ pub(crate) struct DcsState {
     pub(crate) dcs_action: Option<char>,
 }
 
+/// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
+pub(crate) struct MarginState {
+    /// Scroll region top (0-indexed)
+    pub(crate) scroll_region_top: usize,
+    /// Scroll region bottom (0-indexed)
+    pub(crate) scroll_region_bottom: usize,
+    /// Use left/right column scroll region (DECLRMM)
+    pub(crate) use_lr_margins: bool,
+    /// Left column margin (0-indexed, inclusive)
+    pub(crate) left_margin: usize,
+    /// Right column margin (0-indexed, inclusive)
+    pub(crate) right_margin: usize,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -513,16 +527,8 @@ pub struct Terminal {
     pub(crate) sync_state: SyncState,
     /// Shell integration state, host/user, depth, command-output flag (ARC-001 sub-struct)
     pub(crate) shell_state: ShellState,
-    /// Scroll region top (0-indexed)
-    pub(crate) scroll_region_top: usize,
-    /// Scroll region bottom (0-indexed)
-    pub(crate) scroll_region_bottom: usize,
-    /// Use left/right column scroll region (DECLRMM)
-    pub(crate) use_lr_margins: bool,
-    /// Left column margin (0-indexed, inclusive)
-    pub(crate) left_margin: usize,
-    /// Right column margin (0-indexed, inclusive)
-    pub(crate) right_margin: usize,
+    /// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
+    pub(crate) margins: MarginState,
     /// Auto wrap mode (DECAWM)
     pub(crate) auto_wrap: bool,
     /// Origin mode (DECOM) - cursor addressing relative to scroll region
@@ -783,11 +789,13 @@ impl Terminal {
                 shell_depth: 0,
                 in_command_output: false,
             },
-            scroll_region_top: 0,
-            scroll_region_bottom: rows.saturating_sub(1),
-            use_lr_margins: false,
-            left_margin: 0,
-            right_margin: cols.saturating_sub(1),
+            margins: MarginState {
+                scroll_region_top: 0,
+                scroll_region_bottom: rows.saturating_sub(1),
+                use_lr_margins: false,
+                left_margin: 0,
+                right_margin: cols.saturating_sub(1),
+            },
             auto_wrap: true,
             origin_mode: false,
             tab_stops,
@@ -1128,23 +1136,23 @@ impl Terminal {
         // scroll regions from causing rendering issues when terminal is resized
         // (e.g., tmux pane splits/closes). The application can re-set a custom
         // scroll region via DECSTBM after the resize if needed.
-        self.scroll_region_top = 0;
-        self.scroll_region_bottom = rows.saturating_sub(1);
+        self.margins.scroll_region_top = 0;
+        self.margins.scroll_region_bottom = rows.saturating_sub(1);
         debug::log(
             debug::DebugLevel::Debug,
             "TERMINAL_RESIZE",
             &format!(
                 "Reset scroll region to full screen: 0-{}",
-                self.scroll_region_bottom
+                self.margins.scroll_region_bottom
             ),
         );
 
         // Clamp left/right margins to new width
-        self.left_margin = self.left_margin.min(cols.saturating_sub(1));
-        self.right_margin = self.right_margin.min(cols.saturating_sub(1));
-        if self.left_margin > self.right_margin {
-            self.left_margin = 0;
-            self.right_margin = cols.saturating_sub(1);
+        self.margins.left_margin = self.margins.left_margin.min(cols.saturating_sub(1));
+        self.margins.right_margin = self.margins.right_margin.min(cols.saturating_sub(1));
+        if self.margins.left_margin > self.margins.right_margin {
+            self.margins.left_margin = 0;
+            self.margins.right_margin = cols.saturating_sub(1);
         }
 
         // Ensure cursor is within bounds
@@ -1426,12 +1434,15 @@ impl Terminal {
 
     /// Get current scroll region (top, bottom)
     pub fn scroll_region(&self) -> (usize, usize) {
-        (self.scroll_region_top, self.scroll_region_bottom)
+        (
+            self.margins.scroll_region_top,
+            self.margins.scroll_region_bottom,
+        )
     }
 
     /// Get left and right margins
     pub fn left_right_margins(&self) -> (usize, usize) {
-        (self.left_margin, self.right_margin)
+        (self.margins.left_margin, self.margins.right_margin)
     }
 
     /// Get ANSI color by index

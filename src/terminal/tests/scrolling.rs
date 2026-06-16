@@ -6,8 +6,8 @@ fn test_scroll_region_basic() {
     let mut term = Terminal::new(80, 24);
     term.process(b"\x1b[5;10r"); // Set scroll region lines 5-10
 
-    assert_eq!(term.scroll_region_top, 4); // 0-indexed
-    assert_eq!(term.scroll_region_bottom, 9);
+    assert_eq!(term.margins.scroll_region_top, 4); // 0-indexed
+    assert_eq!(term.margins.scroll_region_bottom, 9);
 }
 
 #[test]
@@ -23,8 +23,8 @@ fn test_scroll_region_with_content() {
 
     // After deleting a line in the scroll region, content should shift
     // Just verify the operation completed without checking exact content
-    assert_eq!(term.scroll_region_top, 2); // 0-indexed
-    assert_eq!(term.scroll_region_bottom, 6); // 0-indexed
+    assert_eq!(term.margins.scroll_region_top, 2); // 0-indexed
+    assert_eq!(term.margins.scroll_region_bottom, 6); // 0-indexed
 }
 
 #[test]
@@ -33,14 +33,14 @@ fn test_index_within_scroll_region() {
     term.process(b"\x1b[3;7r"); // Set scroll region lines 3-7 (1-indexed)
 
     // Verify scroll region was set correctly
-    assert_eq!(term.scroll_region_top, 2); // 0-indexed
-    assert_eq!(term.scroll_region_bottom, 6); // 0-indexed
+    assert_eq!(term.margins.scroll_region_top, 2); // 0-indexed
+    assert_eq!(term.margins.scroll_region_bottom, 6); // 0-indexed
 
     term.process(b"\x1b[7;1H"); // Move to row 7 (bottom of region, 1-indexed)
     term.process(b"Test\n"); // This should handle newline within scroll region
 
     // Just verify the scroll region is still set correctly
-    assert_eq!(term.scroll_region_bottom, 6);
+    assert_eq!(term.margins.scroll_region_bottom, 6);
 }
 
 #[test]
@@ -51,23 +51,23 @@ fn test_decstbm_zero_defaults() {
 
     // CSI 0;0 r → full screen
     term.process(b"\x1b[0;0r");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 11);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 11);
 
     // CSI r (no params) → reset to full screen
     term.process(b"\x1br");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 11);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 11);
 
     // CSI 0;5 r → top defaults to 1, bottom=5
     term.process(b"\x1b[0;5r");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 4);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 4);
 
     // CSI 3;0 r → top=3, bottom defaults to rows
     term.process(b"\x1b[3;0r");
-    assert_eq!(term.scroll_region_top, 2);
-    assert_eq!(term.scroll_region_bottom, 11);
+    assert_eq!(term.margins.scroll_region_top, 2);
+    assert_eq!(term.margins.scroll_region_bottom, 11);
 }
 
 #[test]
@@ -75,19 +75,19 @@ fn test_preserve_margins_on_resize() {
     let mut term = Terminal::new(20, 15);
     // Set a non-trivial region
     term.process(b"\x1b[2;10r");
-    assert_eq!(term.scroll_region_top, 1);
-    assert_eq!(term.scroll_region_bottom, 9);
+    assert_eq!(term.margins.scroll_region_top, 1);
+    assert_eq!(term.margins.scroll_region_bottom, 9);
 
     // Resize should reset scroll region to full screen (matches xterm behavior)
     // This prevents stale scroll regions from causing rendering issues (e.g., in tmux)
     term.resize(25, 25);
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 24); // full screen
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 24); // full screen
 
     // Another resize also resets
     term.resize(25, 8);
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 7); // full screen
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 7); // full screen
 }
 
 #[test]
@@ -109,8 +109,8 @@ fn test_tmux_scroll_region_with_status_bar() {
 
     // Set scroll region to exclude status bar: rows 1-50 (0-indexed: 0-49)
     term.process(b"\x1b[1;50r");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 49);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 49);
 
     // Move cursor to row 50 (VT) = row 49 (0-indexed) - bottom of scroll region
     term.process(b"\x1b[50;1H");
@@ -163,8 +163,8 @@ fn test_wrap_at_scroll_region_bottom_scrolls_region() {
 
     // Set scroll region to exclude status bar: rows 1-23 -> 0..=22 (0-indexed)
     term.process(b"\x1b[1;23r");
-    assert_eq!(term.scroll_region_top, 0);
-    assert_eq!(term.scroll_region_bottom, 22);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 22);
 
     // Move cursor to bottom of scroll region, last column
     term.process(b"\x1b[23;80H"); // row 23 (VT) -> 22 (0-indexed), col 80 -> 79
@@ -197,7 +197,7 @@ fn test_ind_scrolls_within_region_not_screen() {
         term.process(format!("R{:02}", row).as_bytes());
     }
     term.process(b"\x1b[1;23r");
-    assert_eq!(term.scroll_region_bottom, 22);
+    assert_eq!(term.margins.scroll_region_bottom, 22);
     // Move to bottom of region
     term.process(b"\x1b[23;1H");
     assert_eq!(term.cursor.row, 22);
