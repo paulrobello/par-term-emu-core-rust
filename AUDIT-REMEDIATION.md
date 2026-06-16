@@ -3,7 +3,7 @@
 > **Project**: par-term-emu-core-rust
 > **Audit Date**: 2026-06-15
 > **Last Updated**: 2026-06-16
-> **Scope**: cumulative — round 1 (safe-surgical subset), round 2 (all remaining Security), and ARC-001 (Terminal god-object decomposition). All work is on branch `fix/audit-remediation`, **not merged**.
+> **Scope**: cumulative — round 1 (safe-surgical subset), round 2 (all remaining Security), ARC-001 (Terminal god-object decomposition), and **round 3 (ARC sweep, 2026-06-16: 13 more Architecture items)**. All work is on branch `fix/audit-remediation`, **not merged**.
 
 ---
 
@@ -16,12 +16,45 @@
 | **ARC-007** (observer dispatch) | ✅ **Safe fix done** | Observer callbacks now run inside `catch_unwind` — a panicking observer is isolated instead of unwinding through the `parking_lot` mutex (which doesn't poison → would silently corrupt state + re-fire events). Regression test added. The full out-of-lock dispatch redesign remains future work. |
 | **ARC-002** (`PyTerminal` god object) | ✅ **Structural split done** | The single 5768-line / ~384-method `#[pymethods]` block is split into **18 cohesive blocks** (core in `mod.rs` + 17 themed `*_api.rs` files) via the pyo3 `multiple-pymethods` feature. `mod.rs` halved (→ 2869 lines); the Python `Terminal` class surface is **unchanged** (1834 Rust + 492 Python tests pass). The audit's stretch remedy — nested sub-objects (`term.colors.x`) for autocomplete discoverability — is a breaking major-version API change and remains future work. |
 | **ARC-003 / QA-001** (PyTerminal↔PyPtyTerminal dup) | ✅ **Substantially done** | The ~155 duplicated methods are reduced to **26** via a shared `TerminalAccess` trait + `#[macro_export]` method macros in `python_bindings/common.rs` (emitted once, invoked for both types). **129 methods unified, ~258 duplicate copies deleted, net −1,200+ lines.** Also deduped the 8 hand-written `PyAttributes` literals → `From<&Cell>`. The remaining 26 are **genuinely non-unifiable** (8 diverge write-to-PTY vs process-locally, 13 complex/different return types, `scrollback_len` alt-screen, etc.) — unifying them would change behavior. Behavior preserved throughout (492 Python tests pass). |
-| **Architecture (other)** | ✅ 7 / ⏭️ rest | ARC-003, ARC-004, ARC-005, ARC-007 (safe fix), ARC-011, ARC-019, ARC-025 resolved. ARC-006/008/009/010/012–028 remain (see Remaining). |
+| **Architecture (other)** | ✅ 20 / ⏭️ 6 | Previously: ARC-003, ARC-004, ARC-005, ARC-007 (safe fix), ARC-011, ARC-019, ARC-025. **Round 3 added: ARC-006, 008, 010, 015, 016, 017, 018, 020, 022, 023, 024, 026, 027.** Remain: ARC-009, 012, 013, 014, 021, 028 (each a large focused effort — see [Round 3](#round-3--arc-sweep-2026-06-16)). |
 | **Code Quality** | ✅ 6 / ⏭️ rest | QA-001, QA-002, QA-003, QA-004, QA-007, QA-010 resolved. QA-005/006/008/009/011/012/013 remain. |
 | **Documentation** | ✅ 8 / ⏭️ rest | DOC-005/013/017/019/020/021/022/023/024 resolved. DOC-001–004/006–012/015/016/018 remain. |
-| **Verification** | ✅ | `make checkall` green: cargo check + clippy (0 warnings) + fmt + ruff + pyright + 1834 Rust tests + 492 Python tests. One known-flaky PTY timing test (passes in isolation). |
+| **Verification** | ✅ | `make checkall` green: cargo check + clippy (0 warnings) + fmt + ruff + pyright + **1702 Rust tests (non-streaming) + 174 streaming tests + 492 Python tests**. One known-flaky PTY timing test (passes in isolation). |
 
-**Totals**: ~54 audit items resolved across all rounds. **All Security closed; both Critical architecture findings (ARC-001, ARC-002) substantially done; ARC-003/QA-001 (binding dedup), ARC-004/QA-002 (WS-handler collapse), ARC-005/QA-004 (Cell SmallVec) done.** Remaining work is the long tail of Medium/Low architecture, code-quality, and documentation items — ARC-006/008/009/010, QA-006, and the doc/code-quality tail.
+**Totals**: ~67 audit items resolved across all rounds (round 3 alone closed 13 Architecture items). **All Security closed; both Critical architecture findings (ARC-001, ARC-002) substantially done; ARC-003/QA-001, ARC-004/QA-002, ARC-005/QA-004 done; round 3 closed ARC-006/008/010/015/016/017/018/020/022/023/024/026/027.** Remaining work: ARC-009, 012, 013, 014, 021, 028 (each a large, focused effort — see [Round 3](#round-3--arc-sweep-2026-06-16)), QA-005/006/008/009, and the documentation tail (DOC-001 etc.).
+
+---
+
+## Round 3 — ARC sweep (2026-06-16)
+
+A focused pass closing 13 Architecture items. Each landed as its own verified commit on `fix/audit-remediation`; the full suite stayed green throughout (1702 Rust + 174 streaming + 492 Python tests; clippy 0 warnings).
+
+| ID | Title | What changed |
+|----|-------|--------------|
+| **ARC-006** | Cap `terminal_events` + DRY typed polls | `MAX_TERMINAL_EVENTS` (10k) cap with oldest-eviction at the end of `process()`, shifting the observer dispatch index so it stays consistent. The 4 typed `poll_*` methods share one `extract_terminal_events` partition helper. Full consolidation to a single `poll_events()` (breaking API) remains future work. Tests: oldest-eviction + index-shift + under-cap-untouched. |
+| **ARC-008** | Reuse `process()` APC passthrough buffer | New reusable `apc_passthrough` field (`mem::take`/restore = no per-call realloc) + a fast path that feeds ESC-free chunks straight to vte when the APC filter is idle (skips the copy + filter pass entirely). Extracted an `advance_parser` helper for the vte borrow workaround. |
+| **ARC-010** | Pack `Cell.hyperlink_id` (NonZeroU32) | `Option<u32>` → `Option<NonZeroU32>` (niche-opt: `None` costs 0 extra bytes → ~4 bytes/Cell saved across millions of scrollback cells). Hyperlink IDs now start at 1. Boundaries converted (osc mint, write assign, search lookup, `PyAttributes` keeps Python-facing `Option<u32>` via `.get()`). **Part B (group the 9 Kitty fields in `TerminalGraphic`) deferred** — 119 access sites for negligible memory gain on a rare structure; not worth the regression risk. |
+| **ARC-015** | Split `streaming` mega-feature | Moved the 6 binary-only deps (clap, anyhow, tracing, tracing-subscriber, reqwest, tar — **0 library uses**) behind a new `streaming-bin` feature. Library embedders using `streaming` no longer pull a CLI parser / HTTP client / tar extractor. Binary `required-features`, Makefile, and CI updated. Deeper `streaming-tls`/`auth`/`sysinfo` sub-features (cfg-gating the library) deferred. |
+| **ARC-016** | `PyCallbackObserver` reentrancy guard | `thread_local!` flag + Drop guard: a Python observer callback that re-enters terminal processing on the same thread (which would deadlock on the non-reentrant Terminal mutex) now drops the reentrant event instead. Applied to both sync + queue observers; panic-safe; unit-tested. |
+| **ARC-017** | `glyph_cache` → bounded LRU | Replaced the nuclear `cache.clear()` at 10k entries with `lru::LruCache` (cap 10k, evicts LRU one-at-a-time, hits refresh recency). `peek()`+`get()` pattern avoids the long-lived `&mut` borrow. |
+| **ARC-018** | Reader-thread cancellation on Drop | `Drop for PtySession` now force-closes the PTY master fd **before** the 2s join-wait (mirroring the already-correct `cleanup_previous_session`), so the blocked `read()` can return EOF and the thread joins instead of being detached. Also sets `running=false`. Timeout kept as backstop. |
+| **ARC-020** | Single `TerminalEvent→ServerMessage` dispatch + proto staleness | Extracted `protocol::terminal_event_to_server_message()`; the two ~25-arm duplicated `match` blocks (broadcast + per-session, ~560 lines) collapse to 5-line if-lets. `send_*` broadcast methods retained (Python binding uses them). `build.rs` now warns when `proto/terminal.proto` is newer than the checked-in `terminal.pb.rs` (no more silent wire-format drift). |
+| **ARC-022** | Screenshot iTerm2 P3 boost behind config | The hardcoded Display-P3 conversion + 1.4× brightness is now gated on `ScreenshotConfig.iterm2_color_boost` (default `true` = behavior-preserving); Rust callers can opt into raw sRGB. Python picks it up when QA-005's options-dict lands (no new positional param added now). |
+| **ARC-023** | pyright `pythonVersion` 3.14→3.12 | Aligned with `requires-python >=3.12` (the floor) so pyright flags 3.13/3.14-only syntax. 0 errors. |
+| **ARC-024** | Makefile `typecheck` + `clippy` targets | Added standalone `typecheck` (cargo check --all-targets --all-features + pyright) and `clippy` (check-only, no auto-fix) + help/.PHONY. |
+| **ARC-026** | Centralize scrollback circular-buffer math | The `(start+i)%max` read-index and `(start+1)%max` head-advance (4 sites across `grid/mod.rs` + `grid/scroll.rs`) now route through two `#[inline]` helpers — one auditable place for the modulo invariant. Deeper `ScrollbackBuffer` type (resize without full rebuild) deferred. |
+| **ARC-027** | Rename confusing snapshot modules | `terminal_snapshot.rs`→`replay_snapshot.rs`, `snapshot.rs`→`semantic_snapshot.rs` (+ test file), `snapshot_manager.rs` kept. All mod/use refs updated; 101 snapshot/replay tests pass. |
+
+### Remaining Architecture items (each a dedicated, focused effort)
+
+These were assessed but **deliberately not rushed** — each is large and/or high-regression-risk, and the branch is currently fully green. They are the next focused work items, not quick wins:
+
+- **ARC-009** (split coarse Terminal mutex) — concurrency refactor; must not regress the GIL-vs-mutex invariant. High risk.
+- **ARC-012** (make Cell/Grid fields private) — large cascade across every `grid/` submodule + external readers.
+- **ARC-013** (centralized `PyErr` mapping) — **lower leverage than the audit assumed**: most of the ~98 `new_err` sites are *direct constructions* for input-validation/lock-failures (not `Result<_, DomainError>` conversions a `From` impl could replace), and the exception-type-per-variant is a Python-visible design decision. Needs a scoped plan, not a blanket migration.
+- **ARC-014** / **ARC-028** (derive macros for PyXxx data-classes / StreamingConfig getters) — each requires a **new proc-macro crate** in the workspace; substantial infrastructure.
+- **ARC-021** (`TerminalAction` enum) — large architectural change separating parse from mutate; the audit itself flags it "large; defer."
+- **ARC-002 tail** (nested sub-objects) / **ARC-007 full** (out-of-lock dispatch) — stretch / breaking-major-version, as previously noted.
 
 ---
 
@@ -69,6 +102,8 @@
 ## Requires Manual Intervention 🔧
 
 These issues could not be safely auto-remediated. They require dedicated planning, are breaking changes, or depend on a codegen/design decision.
+
+> **Update (round 3, 2026-06-16):** ARC-006, 008, 010, 015, 016, 020, 026, and 027 — previously listed below as open — are now **resolved** (see [Round 3](#round-3--arc-sweep-2026-06-16)). The entries that remain relevant below are the genuinely large/risky items: ARC-009, 012, 013, 014, 021, 028, the ARC-002 tail, QA-005/006/008/009, and DOC-001/018.
 
 ### Critical — remaining architecture
 - **[ARC-002 tail] Nested sub-objects for Python discoverability** — `src/python_bindings/terminal/mod.rs`
@@ -178,10 +213,9 @@ Highlights by round:
 
 ## Next Steps
 
-1. **Both Critical architecture findings + all the High architecture/code-quality items are substantially done** (ARC-001 `Terminal` decomposition + ARC-002 `PyTerminal` split + ARC-003/QA-001 binding dedup + ARC-004/QA-002 WS-handler collapse + ARC-005/QA-004 Cell SmallVec). The highest-leverage REMAINING items are now **QA-006** (the companion `row_text` allocation fix) and the **ARC-006/008/009/010** hot-path/locking group (all unblocked by ARC-001), plus the **DOC-001** API-reference regeneration (the only remaining Critical).
-2. **ARC-007 full redesign (optional)** — the panic-isolation safe fix is done (`catch_unwind`); the remaining ARC-007 work is moving observer dispatch *fully out of the `Terminal` mutex* (to remove reader-thread latency amplification from slow observers). Lower priority now that the correctness risk is contained.
-3. **ARC-002 tail (major version)** — the nested-sub-object discoverability (`term.colors.x`) is a breaking API change; defer to a dedicated major-version release with a deprecation shim.
-4. **Make the DOC-001 codegen decision** — a `#[pyo3(get)]` → API_REFERENCE generator fixes the largest doc defect permanently and folds in DOC-002/003/004/006/007/009/010/011.
-6. **Investigate the flaky `test_generation_counter_increments_on_pty_output`** as a separate item — it intermittently fails under full-suite parallel load (passes in isolation). Likely needs a more robust wait/poll. (Not introduced by this work.)
-7. **Re-run `/audit`** to refresh `AUDIT.md` against the current (much-improved) state.
-8. When ready to release: the `[Unreleased]` CHANGELOG entry covers SEC-001→007 + ARC-001; add the ARC-002 split note, then merge `fix/audit-remediation` to `main`.
+1. **Round 3 (2026-06-16) closed 13 more Architecture items** (ARC-006/008/010/015/016/017/018/020/022/023/024/026/027) — see the [Round 3 table](#round-3--arc-sweep-2026-06-16). The branch is fully green (1702 Rust + 174 streaming + 492 Python tests; clippy 0 warnings).
+2. **Remaining Architecture** — each is a dedicated, focused effort (not quick wins): **ARC-009** (coarse mutex split — high-risk concurrency, must not regress the GIL-vs-mutex invariant), **ARC-012** (Cell/Grid field privacy — large cascade), **ARC-013** (centralized `PyErr` mapping — *low leverage* per round-3 analysis: most `new_err` sites are direct constructions, not conversions), **ARC-014**/**ARC-028** (each needs a **new proc-macro crate**), **ARC-021** (`TerminalAction` enum — large), and the stretch items **ARC-002 tail** (nested sub-objects, breaking/major-version) + **ARC-007 full** (out-of-lock observer dispatch).
+3. **Highest-leverage remaining non-ARC items**: **QA-006** (the `row_text`/`cells_to_text` single-String allocation fix — companion to ARC-005), **DOC-001** (the `API_REFERENCE.md` regeneration codegen decision — the only remaining *Critical* doc defect; folds in DOC-002/003/004/006/007/009/010/011), and **QA-005/008/009**.
+4. **Investigate the flaky** `test_generation_counter_increments_on_pty_output` (passes in isolation; not introduced by this work).
+5. **Re-run `/audit`** to refresh `AUDIT.md` against the current (much-improved) state.
+6. **When ready to release**: extend the `[Unreleased]` CHANGELOG entry with the round-3 items, then merge `fix/audit-remediation` to `main`.
