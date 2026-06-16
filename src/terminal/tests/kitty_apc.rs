@@ -14,7 +14,7 @@ fn ingests_complete_kitty_transmit_apc() {
     // 16 chars of base64 'A' decode to 12 zero bytes = 2 * 2 * 3 (s*v*RGB)
     term.process(b"\x1b_Ga=t,f=24,i=42,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
 
-    let img = term.graphics_store.get_kitty_image(42);
+    let img = term.graphics.graphics_store.get_kitty_image(42);
     assert!(img.is_some(), "image id 42 should be stored");
     let (w, h, data) = img.unwrap();
     assert_eq!(w, 2);
@@ -32,7 +32,7 @@ fn ingests_virtual_placement_apc() {
     // Then place it virtually.
     term.process(b"\x1b_Ga=p,U=1,i=42,c=10,r=5\x1b\\");
 
-    let placements = term.graphics_store.all_virtual_placements();
+    let placements = term.graphics.graphics_store.all_virtual_placements();
     assert!(
         placements.contains_key(&(42, 0)),
         "virtual placement for (image=42, placement=0) should exist; got keys: {:?}",
@@ -48,7 +48,7 @@ fn handles_apc_split_across_process_calls() {
     term.process(b"\x1b_Ga=t,f=24,i=99,s=2,v=2;AAAA");
     term.process(b"AAAAAAAAAAAA\x1b\\");
 
-    let img = term.graphics_store.get_kitty_image(99);
+    let img = term.graphics.graphics_store.get_kitty_image(99);
     assert!(
         img.is_some(),
         "image id 99 should be stored after split APC"
@@ -69,7 +69,7 @@ fn passes_surrounding_text_through() {
 
     // Image should have been stored.
     assert!(
-        term.graphics_store.get_kitty_image(7).is_some(),
+        term.graphics.graphics_store.get_kitty_image(7).is_some(),
         "image id 7 should be stored"
     );
 
@@ -100,7 +100,7 @@ fn query_emits_ok_response_on_response_buffer() {
     );
 
     // Query must not register an image.
-    assert!(term.graphics_store.get_kitty_image(42).is_none());
+    assert!(term.graphics.graphics_store.get_kitty_image(42).is_none());
 }
 
 #[test]
@@ -137,7 +137,7 @@ fn transmit_does_not_emit_response() {
     term.process(b"\x1b_Ga=t,f=24,i=77,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
 
     assert!(
-        term.graphics_store.get_kitty_image(77).is_some(),
+        term.graphics.graphics_store.get_kitty_image(77).is_some(),
         "transmit should still register the image"
     );
     assert!(
@@ -221,8 +221,12 @@ fn non_kitty_apc_is_left_alone() {
     term.process(b"\x1b_Xstuff\x1b\\");
 
     // No image stored.
-    assert!(term.graphics_store.get_kitty_image(0).is_none());
-    assert!(term.graphics_store.all_virtual_placements().is_empty());
+    assert!(term.graphics.graphics_store.get_kitty_image(0).is_none());
+    assert!(term
+        .graphics
+        .graphics_store
+        .all_virtual_placements()
+        .is_empty());
 
     // First cell should still be empty/blank (default).
     let grid = term.active_grid();

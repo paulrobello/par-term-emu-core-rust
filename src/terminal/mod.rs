@@ -617,6 +617,24 @@ pub(crate) struct BadgeState {
     pub(crate) session_variables: crate::badge::SessionVariables,
 }
 
+/// Unified graphics/inline-image/file machinery: graphics store, Sixel limits,
+/// cell pixel dimensions, iTerm2 multipart transfer state, file transfer manager.
+/// (ARC-001 sub-struct)
+pub(crate) struct GraphicsState {
+    /// Unified graphics storage (Sixel, iTerm2, Kitty)
+    pub(crate) graphics_store: GraphicsStore,
+    /// Sixel resource limits (per-terminal, for decoding)
+    pub(crate) sixel_limits: sixel::SixelLimits,
+    /// Cell dimensions in pixels (width, height) for sixel graphics
+    /// Default (1, 2) is for text-mode TUI with half-block rendering
+    /// Pixel renderers should set actual cell dimensions
+    pub(crate) cell_dimensions: (u32, u32),
+    /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
+    pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
+    /// File transfer manager for tracking file downloads and uploads
+    pub(crate) file_transfer_manager: FileTransferManager,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -657,20 +675,11 @@ pub struct Terminal {
     pub(crate) response_buffer: Vec<u8>,
     /// Hyperlinks map, current ID, next ID (ARC-001 sub-struct)
     pub(crate) hyperlink_state: HyperlinkState,
-    /// Unified graphics storage (Sixel, iTerm2, Kitty)
-    pub(crate) graphics_store: GraphicsStore,
-    /// Sixel resource limits (per-terminal, for decoding)
-    pub(crate) sixel_limits: sixel::SixelLimits,
-    /// Cell dimensions in pixels (width, height) for sixel graphics
-    /// Default (1, 2) is for text-mode TUI with half-block rendering
-    /// Pixel renderers should set actual cell dimensions
-    pub(crate) cell_dimensions: (u32, u32),
+    /// Unified graphics storage + Sixel limits + cell pixel dimensions +
+    /// iTerm2 multipart transfer state + file transfer manager (ARC-001 sub-struct)
+    pub(crate) graphics: GraphicsState,
     /// Sixel parser, DCS buffer, active flag, action char (ARC-001 sub-struct)
     pub(crate) dcs_state: DcsState,
-    /// iTerm2 multi-part image transfer state (MultipartFile/FilePart protocol)
-    pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
-    /// File transfer manager for tracking file downloads and uploads
-    pub(crate) file_transfer_manager: FileTransferManager,
     /// OSC 52 clipboard content, read flag, history, cap (ARC-001 sub-struct)
     pub(crate) clipboard_state: ClipboardState,
     /// Color theme: OSC-queryable colors + iTerm2-style rendering color prefs (ARC-001 sub-struct)
@@ -870,17 +879,19 @@ impl Terminal {
                 current_hyperlink_id: None,
                 next_hyperlink_id: 0,
             },
-            graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
-            sixel_limits: sixel::SixelLimits::default(),
-            cell_dimensions: (1, 2), // Default for TUI half-block rendering
+            graphics: GraphicsState {
+                graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
+                sixel_limits: sixel::SixelLimits::default(),
+                cell_dimensions: (1, 2), // Default for TUI half-block rendering
+                iterm_multipart_buffer: None,
+                file_transfer_manager: FileTransferManager::default(),
+            },
             dcs_state: DcsState {
                 sixel_parser: None,
                 dcs_buffer: Vec::new(),
                 dcs_active: false,
                 dcs_action: None,
             },
-            iterm_multipart_buffer: None,
-            file_transfer_manager: FileTransferManager::default(),
             clipboard_state: ClipboardState {
                 clipboard_content: None,
                 allow_clipboard_read: false,
@@ -1739,7 +1750,7 @@ impl Terminal {
 
     /// Get current Sixel resource limits
     pub fn sixel_limits(&self) -> sixel::SixelLimits {
-        self.sixel_limits
+        self.graphics.sixel_limits
     }
 
     /// Set Sixel resource limits (pixels and repeat count).
@@ -1748,7 +1759,7 @@ impl Terminal {
     /// applied to new Sixel parser instances created for subsequent DCS
     /// sequences.
     pub fn set_sixel_limits(&mut self, max_width: usize, max_height: usize, max_repeat: usize) {
-        self.sixel_limits = sixel::SixelLimits::new(max_width, max_height, max_repeat);
+        self.graphics.sixel_limits = sixel::SixelLimits::new(max_width, max_height, max_repeat);
     }
 
     /// Get cell dimensions in pixels (width, height)
@@ -1756,7 +1767,7 @@ impl Terminal {
     /// Used for sixel graphics scroll calculations.
     /// Default is (1, 2) for TUI half-block rendering.
     pub fn cell_dimensions(&self) -> (u32, u32) {
-        self.cell_dimensions
+        self.graphics.cell_dimensions
     }
 
     /// Set cell dimensions in pixels (width, height)
@@ -1765,12 +1776,12 @@ impl Terminal {
     /// so sixel graphics scroll correctly. TUI renderers using half-blocks
     /// should use the default (1, 2).
     pub fn set_cell_dimensions(&mut self, width: u32, height: u32) {
-        self.cell_dimensions = (width.max(1), height.max(1));
+        self.graphics.cell_dimensions = (width.max(1), height.max(1));
     }
 
     /// Get the maximum number of graphics retained for this terminal
     pub fn max_sixel_graphics(&self) -> usize {
-        self.graphics_store.limits().max_graphics_count
+        self.graphics.graphics_store.limits().max_graphics_count
     }
 
     /// Set the maximum number of graphics retained for this terminal.
@@ -1782,12 +1793,12 @@ impl Terminal {
         use crate::sixel::SIXEL_HARD_MAX_GRAPHICS;
 
         let clamped = max_graphics.clamp(1, SIXEL_HARD_MAX_GRAPHICS);
-        self.graphics_store.set_max_graphics(clamped);
+        self.graphics.graphics_store.set_max_graphics(clamped);
     }
 
     /// Get the number of graphics dropped due to limits
     pub fn dropped_sixel_graphics(&self) -> usize {
-        self.graphics_store.dropped_count()
+        self.graphics.graphics_store.dropped_count()
     }
 
     /// Update all Kitty graphics animations and return list of image IDs that changed frames
@@ -1799,7 +1810,7 @@ impl Terminal {
     /// Returns:
     ///     List of image IDs that changed frames
     pub fn update_animations(&mut self) -> Vec<u32> {
-        self.graphics_store.update_animations()
+        self.graphics.graphics_store.update_animations()
     }
 
     /// Get Sixel statistics for this terminal.
@@ -1810,10 +1821,10 @@ impl Terminal {
     /// - current_graphics: current number of graphics stored
     /// - dropped_graphics: number of graphics dropped due to limits
     pub fn sixel_stats(&self) -> (sixel::SixelLimits, usize, usize, usize) {
-        let limits = self.sixel_limits;
-        let max_graphics = self.graphics_store.limits().max_graphics_count;
-        let current_graphics = self.graphics_store.graphics_count();
-        let dropped_graphics = self.graphics_store.dropped_count();
+        let limits = self.graphics.sixel_limits;
+        let max_graphics = self.graphics.graphics_store.limits().max_graphics_count;
+        let current_graphics = self.graphics.graphics_store.graphics_count();
+        let dropped_graphics = self.graphics.graphics_store.dropped_count();
         (limits, max_graphics, current_graphics, dropped_graphics)
     }
 
@@ -2465,7 +2476,7 @@ impl Terminal {
                         let position = (self.cursor.col, self.cursor.row);
                         let _ = self
                             .kitty_parser
-                            .build_graphic(position, &mut self.graphics_store);
+                            .build_graphic(position, &mut self.graphics.graphics_store);
                         self.kitty_parser.reset();
                     }
                 }

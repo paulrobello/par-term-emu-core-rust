@@ -292,7 +292,8 @@ impl Terminal {
 
     /// Get a list of all active file transfers
     pub fn get_active_transfers(&self) -> Vec<FileTransfer> {
-        self.file_transfer_manager
+        self.graphics
+            .file_transfer_manager
             .active_transfers()
             .into_iter()
             .cloned()
@@ -301,16 +302,21 @@ impl Terminal {
 
     /// Get a list of all completed file transfers
     pub fn get_completed_transfers(&self) -> Vec<FileTransfer> {
-        self.file_transfer_manager.completed_transfers().to_vec()
+        self.graphics
+            .file_transfer_manager
+            .completed_transfers()
+            .to_vec()
     }
 
     /// Get a specific transfer by ID (active or completed)
     pub fn get_transfer(&self, id: TransferId) -> Option<FileTransfer> {
-        self.file_transfer_manager
+        self.graphics
+            .file_transfer_manager
             .get_transfer(id)
             .cloned()
             .or_else(|| {
-                self.file_transfer_manager
+                self.graphics
+                    .file_transfer_manager
                     .completed_transfers()
                     .iter()
                     .find(|t| t.id == id)
@@ -320,12 +326,17 @@ impl Terminal {
 
     /// Take a completed transfer by ID, removing it from the manager
     pub fn take_completed_transfer(&mut self, id: TransferId) -> Option<FileTransfer> {
-        self.file_transfer_manager.take_completed_transfer(id)
+        self.graphics
+            .file_transfer_manager
+            .take_completed_transfer(id)
     }
 
     /// Cancel an active file transfer
     pub fn cancel_file_transfer(&mut self, id: TransferId) -> bool {
-        self.file_transfer_manager.cancel_transfer(id).is_ok()
+        self.graphics
+            .file_transfer_manager
+            .cancel_transfer(id)
+            .is_ok()
     }
 
     /// Send data for an active upload
@@ -348,12 +359,14 @@ impl Terminal {
 
     /// Set the maximum allowed transfer size in bytes
     pub fn set_max_transfer_size(&mut self, size: usize) {
-        self.file_transfer_manager.set_max_transfer_size(size);
+        self.graphics
+            .file_transfer_manager
+            .set_max_transfer_size(size);
     }
 
     /// Get the maximum allowed transfer size in bytes
     pub fn get_max_transfer_size(&self) -> usize {
-        self.file_transfer_manager.max_transfer_size()
+        self.graphics.file_transfer_manager.max_transfer_size()
     }
 }
 

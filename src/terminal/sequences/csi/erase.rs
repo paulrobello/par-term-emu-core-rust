@@ -32,8 +32,8 @@ impl Terminal {
                         .clear_screen_above(cursor_col, cursor_row, bg),
                     2 => {
                         self.active_grid_mut().clear_with_bg(bg);
-                        self.graphics_store.clear();
-                        self.graphics_store.clear_scrollback_graphics();
+                        self.graphics.graphics_store.clear();
+                        self.graphics.graphics_store.clear_scrollback_graphics();
                         self.terminal_events
                             .push(crate::terminal::TerminalEvent::ScreenCleared {
                                 include_scrollback: false,
@@ -47,8 +47,8 @@ impl Terminal {
                     3 => {
                         self.active_grid_mut().clear_with_bg(bg);
                         self.active_grid_mut().clear_scrollback();
-                        self.graphics_store.clear();
-                        self.graphics_store.clear_scrollback_graphics();
+                        self.graphics.graphics_store.clear();
+                        self.graphics.graphics_store.clear_scrollback_graphics();
                         self.terminal_events
                             .push(crate::terminal::TerminalEvent::ScreenCleared {
                                 include_scrollback: true,

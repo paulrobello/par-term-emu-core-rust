@@ -132,11 +132,11 @@ impl Terminal {
                     pixels,
                 );
 
-                let (cell_w, cell_h) = self.cell_dimensions;
+                let (cell_w, cell_h) = self.graphics.cell_dimensions;
                 graphic.set_cell_dimensions(cell_w, cell_h);
 
                 let row = self.cursor.row;
-                self.graphics_store.add_graphic(graphic);
+                self.graphics.graphics_store.add_graphic(graphic);
                 self.terminal_events
                     .push(crate::terminal::TerminalEvent::GraphicsAdded(row));
 

@@ -405,7 +405,7 @@ impl Terminal {
             scrollback_lines,
             total_cells,
             non_whitespace_lines: self.count_non_whitespace_lines(),
-            graphics_count: self.graphics_store.graphics_count(),
+            graphics_count: self.graphics.graphics_store.graphics_count(),
             estimated_memory_bytes: 0, // Should be calculated
             hyperlink_count: self.hyperlink_state.hyperlinks.len(),
             hyperlink_memory_bytes: 0, // Should be calculated

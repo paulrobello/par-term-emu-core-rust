@@ -79,7 +79,7 @@ impl Terminal {
     }
 
     pub(crate) fn handle_sixel_hook(&mut self, params: &Params) {
-        let mut parser = sixel::SixelParser::new_with_limits(self.sixel_limits);
+        let mut parser = sixel::SixelParser::new_with_limits(self.graphics.sixel_limits);
 
         // Convert Params to Vec<u16> for set_params
         let params_vec: Vec<u16> = params
