@@ -50,7 +50,7 @@ impl Terminal {
                             if index < 16 {
                                 if let Ok(colorspec) = std::str::from_utf8(params[2]) {
                                     if let Some((r, g, b)) = Self::parse_color_spec(colorspec) {
-                                        self.ansi_palette[index] = Color::Rgb(r, g, b);
+                                        self.theme.ansi_palette[index] = Color::Rgb(r, g, b);
                                     }
                                 }
                             }
@@ -61,13 +61,13 @@ impl Terminal {
                 // Reset ANSI color palette (OSC 104)
                 if !self.disable_insecure_sequences => {
                     if params.len() == 1 || (params.len() >= 2 && params[1].is_empty()) {
-                        self.ansi_palette = Self::default_ansi_palette();
+                        self.theme.ansi_palette = Self::default_ansi_palette();
                     } else if params.len() >= 2 {
                         if let Ok(data) = std::str::from_utf8(params[1]) {
                             if let Ok(index) = data.trim().parse::<usize>() {
                                 if index < 16 {
                                     let defaults = Self::default_ansi_palette();
-                                    self.ansi_palette[index] = defaults[index];
+                                    self.theme.ansi_palette[index] = defaults[index];
                                 }
                             }
                         }
@@ -80,9 +80,9 @@ impl Terminal {
                         let data = data.trim();
                         if data == "?" {
                             let color = match command {
-                                "10" => self.default_fg,
-                                "11" => self.default_bg,
-                                "12" => self.cursor_color,
+                                "10" => self.theme.default_fg,
+                                "11" => self.theme.default_bg,
+                                "12" => self.theme.cursor_color,
                                 _ => unreachable!(),
                             };
                             let (r, g, b) = color.to_rgb();
@@ -97,9 +97,9 @@ impl Terminal {
                         } else if !self.disable_insecure_sequences {
                             if let Some((r, g, b)) = Self::parse_color_spec(data) {
                                 match command {
-                                    "10" => self.default_fg = Color::Rgb(r, g, b),
-                                    "11" => self.default_bg = Color::Rgb(r, g, b),
-                                    "12" => self.cursor_color = Color::Rgb(r, g, b),
+                                    "10" => self.theme.default_fg = Color::Rgb(r, g, b),
+                                    "11" => self.theme.default_bg = Color::Rgb(r, g, b),
+                                    "12" => self.theme.cursor_color = Color::Rgb(r, g, b),
                                     _ => unreachable!(),
                                 }
                             }
@@ -108,15 +108,15 @@ impl Terminal {
                 }
             "110"
                 if !self.disable_insecure_sequences => {
-                    self.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
+                    self.theme.default_fg = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             "111"
                 if !self.disable_insecure_sequences => {
-                    self.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
+                    self.theme.default_bg = Color::Rgb(0x14, 0x19, 0x1E);
                 }
             "112"
                 if !self.disable_insecure_sequences => {
-                    self.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
+                    self.theme.cursor_color = Color::Rgb(0xE5, 0xE5, 0xE5);
                 }
             _ => {}
         }

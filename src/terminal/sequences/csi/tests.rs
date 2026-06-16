@@ -220,9 +220,9 @@ fn test_sgr_basic_colors() {
 
     // Reset to defaults
     term.process(b"\x1b[39m");
-    assert_eq!(term.fg, term.default_fg);
+    assert_eq!(term.fg, term.theme.default_fg);
     term.process(b"\x1b[49m");
-    assert_eq!(term.bg, term.default_bg);
+    assert_eq!(term.bg, term.theme.default_bg);
 }
 
 #[test]

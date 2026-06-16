@@ -486,6 +486,46 @@ pub(crate) struct MarginState {
     pub(crate) right_margin: usize,
 }
 
+/// Color theme: OSC-queryable colors + iTerm2-style rendering color prefs (ARC-001 sub-struct)
+pub(crate) struct ColorThemeState {
+    /// Default foreground color (for OSC 10 queries)
+    pub(crate) default_fg: Color,
+    /// Default background color (for OSC 11 queries)
+    pub(crate) default_bg: Color,
+    /// Cursor color (for OSC 12 queries)
+    pub(crate) cursor_color: Color,
+    /// ANSI color palette (0-15) - modified by OSC 4/104
+    pub(crate) ansi_palette: [Color; 16],
+    /// Color stack for XTPUSHCOLORS/XTPOPCOLORS (fg, bg, underline)
+    pub(crate) color_stack: Vec<(Color, Color, Option<Color>)>,
+    /// Link/hyperlink color (iTerm2 default: blue #0645ad)
+    pub(crate) link_color: Color,
+    /// Bold text custom color (iTerm2 default: white #ffffff)
+    pub(crate) bold_color: Color,
+    /// Cursor guide color (iTerm2 default: light blue #a6e8ff with alpha)
+    pub(crate) cursor_guide_color: Color,
+    /// Badge color (iTerm2 default: red #ff0000 with alpha)
+    pub(crate) badge_color: Color,
+    /// Match/search highlight color (iTerm2 default: yellow #ffff00)
+    pub(crate) match_color: Color,
+    /// Selection background color (iTerm2 default: #b5d5ff)
+    pub(crate) selection_bg_color: Color,
+    /// Selection foreground/text color (iTerm2 default: #000000)
+    pub(crate) selection_fg_color: Color,
+    /// Use custom bold color instead of bright variant (iTerm2: "Use custom color for bold text")
+    pub(crate) use_bold_color: bool,
+    /// Use custom underline color (iTerm2: "Use custom underline color")
+    pub(crate) use_underline_color: bool,
+    /// Show cursor guide (iTerm2: "Use cursor guide")
+    pub(crate) use_cursor_guide: bool,
+    /// Use custom selected text color (iTerm2: "Use custom color for selected text")
+    pub(crate) use_selected_text_color: bool,
+    /// Smart cursor color - auto-adjust based on background (iTerm2: "Smart Cursor Color")
+    pub(crate) smart_cursor_color: bool,
+    /// Faint/dim text alpha multiplier (0.0-1.0, default 0.5)
+    pub(crate) faint_text_alpha: f32,
+}
+
 /// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
 pub(crate) struct TerminalModes {
     /// Auto wrap mode (DECAWM)
@@ -575,16 +615,8 @@ pub struct Terminal {
     pub(crate) file_transfer_manager: FileTransferManager,
     /// OSC 52 clipboard content, read flag, history, cap (ARC-001 sub-struct)
     pub(crate) clipboard_state: ClipboardState,
-    /// Default foreground color (for OSC 10 queries)
-    pub(crate) default_fg: Color,
-    /// Default background color (for OSC 11 queries)
-    pub(crate) default_bg: Color,
-    /// Cursor color (for OSC 12 queries)
-    pub(crate) cursor_color: Color,
-    /// ANSI color palette (0-15) - modified by OSC 4/104
-    pub(crate) ansi_palette: [Color; 16],
-    /// Color stack for XTPUSHCOLORS/XTPOPCOLORS (fg, bg, underline)
-    pub(crate) color_stack: Vec<(Color, Color, Option<Color>)>,
+    /// Color theme: OSC-queryable colors + iTerm2-style rendering color prefs (ARC-001 sub-struct)
+    pub(crate) theme: ColorThemeState,
     /// Notifications, config, events, silence/activity tracking (ARC-001 sub-struct)
     pub(crate) notifications_state: NotificationState,
     /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
@@ -613,33 +645,6 @@ pub struct Terminal {
     pub(crate) accept_osc7: bool,
     /// Disable potentially insecure escape sequences
     pub(crate) disable_insecure_sequences: bool,
-    /// Link/hyperlink color (iTerm2 default: blue #0645ad)
-    pub(crate) link_color: Color,
-    /// Bold text custom color (iTerm2 default: white #ffffff)
-    pub(crate) bold_color: Color,
-    /// Cursor guide color (iTerm2 default: light blue #a6e8ff with alpha)
-    pub(crate) cursor_guide_color: Color,
-    /// Badge color (iTerm2 default: red #ff0000 with alpha)
-    pub(crate) badge_color: Color,
-    /// Match/search highlight color (iTerm2 default: yellow #ffff00)
-    pub(crate) match_color: Color,
-    /// Selection background color (iTerm2 default: #b5d5ff)
-    pub(crate) selection_bg_color: Color,
-    /// Selection foreground/text color (iTerm2 default: #000000)
-    pub(crate) selection_fg_color: Color,
-    /// Use custom bold color instead of bright variant (iTerm2: "Use custom color for bold text")
-    pub(crate) use_bold_color: bool,
-    /// Use custom underline color (iTerm2: "Use custom underline color")
-    pub(crate) use_underline_color: bool,
-    /// Show cursor guide (iTerm2: "Use cursor guide")
-    pub(crate) use_cursor_guide: bool,
-    /// Use custom selected text color (iTerm2: "Use custom color for selected text")
-    pub(crate) use_selected_text_color: bool,
-    /// Smart cursor color - auto-adjust based on background (iTerm2: "Smart Cursor Color")
-    pub(crate) smart_cursor_color: bool,
-    /// Faint/dim text alpha multiplier (0.0-1.0, default 0.5)
-    /// Applied to SGR 2 (dim) text during rendering
-    pub(crate) faint_text_alpha: f32,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
     pub(crate) conformance_level: crate::conformance_level::ConformanceLevel,
     /// Warning bell volume (0=off, 1-8=volume levels) - VT520 DECSWBV
@@ -842,11 +847,28 @@ impl Terminal {
                 clipboard_history: HashMap::new(),
                 max_clipboard_history: 10,
             },
-            default_fg: Color::Named(NamedColor::White),
-            default_bg: Color::Named(NamedColor::Black),
-            cursor_color: Color::Named(NamedColor::White),
-            ansi_palette: Self::default_ansi_palette(),
-            color_stack: Vec::new(),
+            theme: ColorThemeState {
+                default_fg: Color::Named(NamedColor::White),
+                default_bg: Color::Named(NamedColor::Black),
+                cursor_color: Color::Named(NamedColor::White),
+                ansi_palette: Self::default_ansi_palette(),
+                color_stack: Vec::new(),
+                // iTerm2 default colors (matching Python implementation)
+                link_color: Color::Rgb(0x06, 0x45, 0xad), // RGB(0.023, 0.270, 0.678)
+                bold_color: Color::Rgb(0xff, 0xff, 0xff), // RGB(1.0, 1.0, 1.0)
+                cursor_guide_color: Color::Rgb(0xa6, 0xe8, 0xff), // RGB(0.650, 0.910, 1.000)
+                badge_color: Color::Rgb(0xff, 0x00, 0x00), // RGB(1.0, 0.0, 0.0)
+                match_color: Color::Rgb(0xff, 0xff, 0x00), // RGB(1.0, 1.0, 1.0)
+                selection_bg_color: Color::Rgb(0xb5, 0xd5, 0xff), // #b5d5ff
+                selection_fg_color: Color::Rgb(0x00, 0x00, 0x00), // #000000
+                // iTerm2 default rendering control options
+                use_bold_color: false,
+                use_underline_color: false,
+                use_cursor_guide: false,
+                use_selected_text_color: false,
+                smart_cursor_color: false,
+                faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
+            },
             progress_bar: ProgressBar::default(),
             named_progress_bars: HashMap::new(),
             bell_count: 0,
@@ -861,21 +883,6 @@ impl Terminal {
             pixel_height: rows * 20,
             accept_osc7: true,
             disable_insecure_sequences: false,
-            // iTerm2 default colors (matching Python implementation)
-            link_color: Color::Rgb(0x06, 0x45, 0xad), // RGB(0.023, 0.270, 0.678)
-            bold_color: Color::Rgb(0xff, 0xff, 0xff), // RGB(1.0, 1.0, 1.0)
-            cursor_guide_color: Color::Rgb(0xa6, 0xe8, 0xff), // RGB(0.650, 0.910, 1.000)
-            badge_color: Color::Rgb(0xff, 0x00, 0x00), // RGB(1.0, 0.0, 0.0)
-            match_color: Color::Rgb(0xff, 0xff, 0x00), // RGB(1.0, 1.0, 0.0)
-            selection_bg_color: Color::Rgb(0xb5, 0xd5, 0xff), // #b5d5ff
-            selection_fg_color: Color::Rgb(0x00, 0x00, 0x00), // #000000
-            // iTerm2 default rendering control options
-            use_bold_color: false,
-            use_underline_color: false,
-            use_cursor_guide: false,
-            use_selected_text_color: false,
-            smart_cursor_color: false,
-            faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
             // VT520 bell volume controls - default to moderate volume (4)
@@ -1455,7 +1462,7 @@ impl Terminal {
 
     /// Get ANSI color by index
     pub fn get_ansi_color(&self, index: usize) -> Option<Color> {
-        self.ansi_palette.get(index).cloned()
+        self.theme.ansi_palette.get(index).cloned()
     }
 
     /// Get shell integration state
@@ -2207,18 +2214,18 @@ impl Terminal {
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
         // Populate theme colors if not already set
         if config.link_color.is_none() {
-            config.link_color = Some(self.link_color.to_rgb());
+            config.link_color = Some(self.theme.link_color.to_rgb());
         }
         if config.bold_color.is_none() {
-            config.bold_color = Some(self.bold_color.to_rgb());
+            config.bold_color = Some(self.theme.bold_color.to_rgb());
         }
-        config.use_bold_color = self.use_bold_color;
+        config.use_bold_color = self.theme.use_bold_color;
         config.bold_brightening = self.modes.bold_brightening;
-        config.faint_text_alpha = self.faint_text_alpha;
+        config.faint_text_alpha = self.theme.faint_text_alpha;
 
         // Use terminal's default background if not specified
         if config.background_color.is_none() {
-            config.background_color = Some(self.default_bg.to_rgb());
+            config.background_color = Some(self.theme.default_bg.to_rgb());
         }
 
         let grid = self.grid_with_scrollback(scrollback_offset);
@@ -2246,18 +2253,18 @@ impl Terminal {
     ) -> crate::screenshot::ScreenshotResult<()> {
         // Populate theme colors if not already set
         if config.link_color.is_none() {
-            config.link_color = Some(self.link_color.to_rgb());
+            config.link_color = Some(self.theme.link_color.to_rgb());
         }
         if config.bold_color.is_none() {
-            config.bold_color = Some(self.bold_color.to_rgb());
+            config.bold_color = Some(self.theme.bold_color.to_rgb());
         }
-        config.use_bold_color = self.use_bold_color;
+        config.use_bold_color = self.theme.use_bold_color;
         config.bold_brightening = self.modes.bold_brightening;
-        config.faint_text_alpha = self.faint_text_alpha;
+        config.faint_text_alpha = self.theme.faint_text_alpha;
 
         // Use terminal's default background if not specified
         if config.background_color.is_none() {
-            config.background_color = Some(self.default_bg.to_rgb());
+            config.background_color = Some(self.theme.default_bg.to_rgb());
         }
 
         let grid = self.grid_with_scrollback(scrollback_offset);

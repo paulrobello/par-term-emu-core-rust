@@ -55,8 +55,8 @@ impl Terminal {
 
             if params.is_empty() {
                 self.flags = CellFlags::default();
-                self.fg = self.default_fg;
-                self.bg = self.default_bg;
+                self.fg = self.theme.default_fg;
+                self.bg = self.theme.default_bg;
                 self.underline_color = None;
             } else {
                 let mut iter = params.iter();
@@ -65,8 +65,8 @@ impl Terminal {
                     match param {
                         0 => {
                             self.flags = CellFlags::default();
-                            self.fg = self.default_fg;
-                            self.bg = self.default_bg;
+                            self.fg = self.theme.default_fg;
+                            self.bg = self.theme.default_bg;
                             self.underline_color = None;
                         }
                         1 => self.flags.set_bold(true),
@@ -168,7 +168,7 @@ impl Terminal {
                                 }
                             }
                         }
-                        39 => self.fg = self.default_fg,
+                        39 => self.fg = self.theme.default_fg,
                         40..=47 => self.bg = Color::Named(NamedColor::from_u8((param - 40) as u8)),
                         48 => {
                             if let Some(&mode) = param_slice.get(1) {
@@ -220,7 +220,7 @@ impl Terminal {
                                 }
                             }
                         }
-                        49 => self.bg = self.default_bg,
+                        49 => self.bg = self.theme.default_bg,
                         58 => {
                             // Set underline color
                             if let Some(&mode) = param_slice.get(1) {

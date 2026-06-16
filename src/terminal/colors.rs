@@ -39,152 +39,152 @@ impl Terminal {
 
     /// Get default foreground color (OSC 10)
     pub fn default_fg(&self) -> Color {
-        self.default_fg
+        self.theme.default_fg
     }
 
     /// Set default foreground color (OSC 10)
     pub fn set_default_fg(&mut self, color: Color) {
-        self.default_fg = color;
+        self.theme.default_fg = color;
     }
 
     /// Get default background color (OSC 11)
     pub fn default_bg(&self) -> Color {
-        self.default_bg
+        self.theme.default_bg
     }
 
     /// Set default background color (OSC 11)
     pub fn set_default_bg(&mut self, color: Color) {
-        self.default_bg = color;
+        self.theme.default_bg = color;
     }
 
     /// Get cursor color (OSC 12)
     pub fn cursor_color(&self) -> Color {
-        self.cursor_color
+        self.theme.cursor_color
     }
 
     /// Set cursor color (OSC 12)
     pub fn set_cursor_color(&mut self, color: Color) {
-        self.cursor_color = color;
+        self.theme.cursor_color = color;
     }
 
     /// Get link/hyperlink color
     pub fn link_color(&self) -> Color {
-        self.link_color
+        self.theme.link_color
     }
 
     /// Set link/hyperlink color
     pub fn set_link_color(&mut self, color: Color) {
-        self.link_color = color;
+        self.theme.link_color = color;
     }
 
     /// Get bold text custom color
     pub fn bold_color(&self) -> Color {
-        self.bold_color
+        self.theme.bold_color
     }
 
     /// Set bold text custom color
     pub fn set_bold_color(&mut self, color: Color) {
-        self.bold_color = color;
+        self.theme.bold_color = color;
     }
 
     /// Get cursor guide color
     pub fn cursor_guide_color(&self) -> Color {
-        self.cursor_guide_color
+        self.theme.cursor_guide_color
     }
 
     /// Set cursor guide color
     pub fn set_cursor_guide_color(&mut self, color: Color) {
-        self.cursor_guide_color = color;
+        self.theme.cursor_guide_color = color;
     }
 
     /// Get badge color
     pub fn badge_color(&self) -> Color {
-        self.badge_color
+        self.theme.badge_color
     }
 
     /// Set badge color
     pub fn set_badge_color(&mut self, color: Color) {
-        self.badge_color = color;
+        self.theme.badge_color = color;
     }
 
     /// Get match/search highlight color
     pub fn match_color(&self) -> Color {
-        self.match_color
+        self.theme.match_color
     }
 
     /// Set match/search highlight color
     pub fn set_match_color(&mut self, color: Color) {
-        self.match_color = color;
+        self.theme.match_color = color;
     }
 
     /// Get selection background color
     pub fn selection_bg_color(&self) -> Color {
-        self.selection_bg_color
+        self.theme.selection_bg_color
     }
 
     /// Set selection background color
     pub fn set_selection_bg_color(&mut self, color: Color) {
-        self.selection_bg_color = color;
+        self.theme.selection_bg_color = color;
     }
 
     /// Get selection foreground/text color
     pub fn selection_fg_color(&self) -> Color {
-        self.selection_fg_color
+        self.theme.selection_fg_color
     }
 
     /// Set selection foreground/text color
     pub fn set_selection_fg_color(&mut self, color: Color) {
-        self.selection_fg_color = color;
+        self.theme.selection_fg_color = color;
     }
 
     /// Get whether to use custom bold color
     pub fn use_bold_color(&self) -> bool {
-        self.use_bold_color
+        self.theme.use_bold_color
     }
 
     /// Set whether to use custom bold color
     pub fn set_use_bold_color(&mut self, use_bold: bool) {
-        self.use_bold_color = use_bold;
+        self.theme.use_bold_color = use_bold;
     }
 
     /// Get whether to use custom underline color
     pub fn use_underline_color(&self) -> bool {
-        self.use_underline_color
+        self.theme.use_underline_color
     }
 
     /// Set whether to use custom underline color
     pub fn set_use_underline_color(&mut self, use_underline: bool) {
-        self.use_underline_color = use_underline;
+        self.theme.use_underline_color = use_underline;
     }
 
     /// Get whether to show cursor guide
     pub fn use_cursor_guide(&self) -> bool {
-        self.use_cursor_guide
+        self.theme.use_cursor_guide
     }
 
     /// Set whether to show cursor guide
     pub fn set_use_cursor_guide(&mut self, use_guide: bool) {
-        self.use_cursor_guide = use_guide;
+        self.theme.use_cursor_guide = use_guide;
     }
 
     /// Get whether to use custom selected text color
     pub fn use_selected_text_color(&self) -> bool {
-        self.use_selected_text_color
+        self.theme.use_selected_text_color
     }
 
     /// Set whether to use custom selected text color
     pub fn set_use_selected_text_color(&mut self, use_selected: bool) {
-        self.use_selected_text_color = use_selected;
+        self.theme.use_selected_text_color = use_selected;
     }
 
     /// Get whether smart cursor color is enabled
     pub fn smart_cursor_color(&self) -> bool {
-        self.smart_cursor_color
+        self.theme.smart_cursor_color
     }
 
     /// Set whether smart cursor color is enabled
     pub fn set_smart_cursor_color(&mut self, smart_cursor: bool) {
-        self.smart_cursor_color = smart_cursor;
+        self.theme.smart_cursor_color = smart_cursor;
     }
 
     /// Set ANSI palette color (0-15)
@@ -199,43 +199,43 @@ impl Terminal {
         if index >= 16 {
             return Err(format!("Invalid palette index: {} (must be 0-15)", index));
         }
-        self.ansi_palette[index] = color;
+        self.theme.ansi_palette[index] = color;
         Ok(())
     }
 
     /// Set the faint/dim text alpha multiplier
     pub fn set_faint_text_alpha(&mut self, alpha: f32) {
-        self.faint_text_alpha = alpha.clamp(0.0, 1.0);
+        self.theme.faint_text_alpha = alpha.clamp(0.0, 1.0);
     }
 
     /// Get the faint/dim text alpha multiplier
     pub fn faint_text_alpha(&self) -> f32 {
-        self.faint_text_alpha
+        self.theme.faint_text_alpha
     }
 
     /// Get current ANSI palette (0-15)
     pub fn get_ansi_palette(&self) -> &[Color; 16] {
-        &self.ansi_palette
+        &self.theme.ansi_palette
     }
 
     /// Get current cursor color
     pub fn get_cursor_color(&self) -> Color {
-        self.cursor_color
+        self.theme.cursor_color
     }
 
     /// Get current link/hyperlink color
     pub fn get_link_color(&self) -> Color {
-        self.link_color
+        self.theme.link_color
     }
 
     /// Get current selection background color
     pub fn get_selection_bg_color(&self) -> Color {
-        self.selection_bg_color
+        self.theme.selection_bg_color
     }
 
     /// Get current selection foreground/text color
     pub fn get_selection_fg_color(&self) -> Color {
-        self.selection_fg_color
+        self.theme.selection_fg_color
     }
 
     /// Convert RGB to HSV
@@ -620,7 +620,7 @@ mod tests {
             );
             let result = term.set_ansi_palette_color(i, color);
             assert!(result.is_ok());
-            assert_eq!(term.ansi_palette[i], color);
+            assert_eq!(term.theme.ansi_palette[i], color);
         }
     }
 
@@ -680,15 +680,15 @@ mod tests {
         term.set_ansi_palette_color(4, blue).unwrap();
 
         // Verify they are preserved
-        assert_eq!(term.ansi_palette[1], red);
-        assert_eq!(term.ansi_palette[2], green);
-        assert_eq!(term.ansi_palette[4], blue);
+        assert_eq!(term.theme.ansi_palette[1], red);
+        assert_eq!(term.theme.ansi_palette[2], green);
+        assert_eq!(term.theme.ansi_palette[4], blue);
 
         // Verify others remain unchanged (default palette)
         let default_palette = Terminal::default_ansi_palette();
-        assert_eq!(term.ansi_palette[0], default_palette[0]);
-        assert_eq!(term.ansi_palette[3], default_palette[3]);
-        assert_eq!(term.ansi_palette[5], default_palette[5]);
+        assert_eq!(term.theme.ansi_palette[0], default_palette[0]);
+        assert_eq!(term.theme.ansi_palette[3], default_palette[3]);
+        assert_eq!(term.theme.ansi_palette[5], default_palette[5]);
     }
 
     #[test]
@@ -750,7 +750,7 @@ mod tests {
         }
 
         for (i, expected_color) in test_colors.iter().enumerate() {
-            assert_eq!(term.ansi_palette[i], *expected_color);
+            assert_eq!(term.theme.ansi_palette[i], *expected_color);
         }
     }
 }
