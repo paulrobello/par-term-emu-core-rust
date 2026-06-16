@@ -32,7 +32,7 @@ impl Terminal {
         let encoded = encoded.trim();
 
         if encoded.is_empty() {
-            self.badge_format = None;
+            self.badge_state.badge_format = None;
             self.terminal_events
                 .push(crate::terminal::TerminalEvent::BadgeChanged(None));
             debug::log(debug::DebugLevel::Debug, "OSC1337", "Cleared badge format");
@@ -46,7 +46,7 @@ impl Terminal {
                     "OSC1337",
                     &format!("Set badge format: {:?}", format),
                 );
-                self.badge_format = Some(format.clone());
+                self.badge_state.badge_format = Some(format.clone());
                 let badge_text = self.evaluate_badge();
                 self.terminal_events
                     .push(crate::terminal::TerminalEvent::BadgeChanged(badge_text));

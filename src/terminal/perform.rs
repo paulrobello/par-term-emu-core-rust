@@ -54,7 +54,7 @@ impl Perform for Terminal {
                 // Bell - increment counter for visual bell support
                 self.progress_state.bell_count = self.progress_state.bell_count.wrapping_add(1);
                 // Also increment in session variables for badge evaluation
-                self.session_variables.increment_bell_count();
+                self.badge_state.session_variables.increment_bell_count();
                 // Add bell event based on volume settings
                 let event = if self.warning_bell_volume > 0 {
                     BellEvent::WarningBell(self.warning_bell_volume)

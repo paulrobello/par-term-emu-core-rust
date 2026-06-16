@@ -282,7 +282,10 @@ impl Terminal {
                 TriggerAction::SetVariable { name, value } => {
                     let name = substitute_captures(name, &trigger_match.captures);
                     let value = substitute_captures(value, &trigger_match.captures);
-                    self.session_variables.custom.insert(name, value);
+                    self.badge_state
+                        .session_variables
+                        .custom
+                        .insert(name, value);
                 }
                 TriggerAction::RunCommand { command, args } => {
                     let command = substitute_captures(command, &trigger_match.captures);

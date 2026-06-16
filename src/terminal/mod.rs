@@ -608,6 +608,15 @@ pub(crate) struct SecurityFlagsState {
     pub(crate) disable_insecure_sequences: bool,
 }
 
+/// OSC 1337 badge format string + session variables for evaluation (ARC-001 sub-struct)
+pub(crate) struct BadgeState {
+    /// Badge format string (from OSC 1337 SetBadgeFormat)
+    /// Contains template with \(variable) placeholders
+    pub(crate) badge_format: Option<String>,
+    /// Session variables for badge format evaluation
+    pub(crate) session_variables: crate::badge::SessionVariables,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -750,11 +759,8 @@ pub struct Terminal {
     pub(crate) unicode_state: UnicodeConfigState,
 
     // === Badge Support (OSC 1337 SetBadgeFormat) ===
-    /// Badge format string (from OSC 1337 SetBadgeFormat)
-    /// Contains template with \(variable) placeholders
-    pub(crate) badge_format: Option<String>,
-    /// Session variables for badge format evaluation
-    pub(crate) session_variables: crate::badge::SessionVariables,
+    /// OSC 1337 badge format + session variables (ARC-001 sub-struct)
+    pub(crate) badge_state: BadgeState,
     /// Optional event subscription filter
     pub(crate) event_subscription: Option<HashSet<TerminalEventKind>>,
 
@@ -1024,11 +1030,13 @@ impl Terminal {
                 ),
             },
             // Badge
-            badge_format: None,
-            session_variables: crate::badge::SessionVariables::with_dimensions(
-                cols as u16,
-                rows as u16,
-            ),
+            badge_state: BadgeState {
+                badge_format: None,
+                session_variables: crate::badge::SessionVariables::with_dimensions(
+                    cols as u16,
+                    rows as u16,
+                ),
+            },
             event_subscription: None,
             // Triggers
             triggers: TriggerState {
@@ -1164,7 +1172,8 @@ impl Terminal {
         }
 
         // Update session variables for badges
-        self.session_variables
+        self.badge_state
+            .session_variables
             .set_dimensions(cols as u16, rows as u16);
 
         debug::log(
@@ -1221,7 +1230,8 @@ impl Terminal {
         self.alt_cursor.row = self.alt_cursor.row.min(active_rows.saturating_sub(1));
 
         // Update session variables for badge evaluation
-        self.session_variables
+        self.badge_state
+            .session_variables
             .set_dimensions(cols as u16, rows as u16);
 
         self.record_resize(cols, rows);
@@ -1235,7 +1245,7 @@ impl Terminal {
     /// Set the title
     pub fn set_title(&mut self, title: String) {
         // Also update session variables for badge evaluation
-        self.session_variables.title = Some(title.clone());
+        self.badge_state.session_variables.title = Some(title.clone());
         self.title_state.title = title;
     }
 
@@ -1246,7 +1256,7 @@ impl Terminal {
     /// Returns the badge format string if one has been set via OSC 1337 SetBadgeFormat.
     /// The format may contain `\(variable)` placeholders for session variables.
     pub fn badge_format(&self) -> Option<&str> {
-        self.badge_format.as_deref()
+        self.badge_state.badge_format.as_deref()
     }
 
     /// Set the badge format template
@@ -1254,26 +1264,26 @@ impl Terminal {
     /// This method is typically called when processing OSC 1337 SetBadgeFormat sequences.
     /// The format string should contain `\(variable)` placeholders.
     pub fn set_badge_format(&mut self, format: Option<String>) {
-        self.badge_format = format;
+        self.badge_state.badge_format = format;
     }
 
     /// Clear the badge format
     pub fn clear_badge_format(&mut self) {
-        self.badge_format = None;
+        self.badge_state.badge_format = None;
     }
 
     /// Get a reference to the session variables
     ///
     /// Session variables are used for badge format evaluation.
     pub fn session_variables(&self) -> &crate::badge::SessionVariables {
-        &self.session_variables
+        &self.badge_state.session_variables
     }
 
     /// Get a mutable reference to the session variables
     ///
     /// Use this to update session variables that will be used in badge evaluation.
     pub fn session_variables_mut(&mut self) -> &mut crate::badge::SessionVariables {
-        &mut self.session_variables
+        &mut self.badge_state.session_variables
     }
 
     /// Evaluate the current badge format with session variables
@@ -1289,9 +1299,9 @@ impl Terminal {
     /// assert_eq!(terminal.evaluate_badge(), Some("alice@server1".to_string()));
     /// ```
     pub fn evaluate_badge(&self) -> Option<String> {
-        self.badge_format
-            .as_ref()
-            .map(|format| crate::badge::evaluate_badge_format(format, &self.session_variables))
+        self.badge_state.badge_format.as_ref().map(|format| {
+            crate::badge::evaluate_badge_format(format, &self.badge_state.session_variables)
+        })
     }
 
     /// Get a user variable by name
@@ -1299,19 +1309,29 @@ impl Terminal {
     /// Returns the value of a user variable set via OSC 1337 SetUserVar,
     /// or None if the variable is not set.
     pub fn get_user_var(&self, name: &str) -> Option<&str> {
-        self.session_variables.custom.get(name).map(|s| s.as_str())
+        self.badge_state
+            .session_variables
+            .custom
+            .get(name)
+            .map(|s| s.as_str())
     }
 
     /// Get all user variables as a reference to the HashMap
     pub fn get_user_vars(&self) -> &HashMap<String, String> {
-        &self.session_variables.custom
+        &self.badge_state.session_variables.custom
     }
 
     /// Set a user variable, emitting a UserVarChanged event if the value changed
     pub fn set_user_var(&mut self, name: String, value: String) {
-        let old_value = self.session_variables.custom.get(&name).cloned();
+        let old_value = self
+            .badge_state
+            .session_variables
+            .custom
+            .get(&name)
+            .cloned();
         let changed = old_value.as_deref() != Some(&value);
-        self.session_variables
+        self.badge_state
+            .session_variables
             .custom
             .insert(name.clone(), value.clone());
         if changed {

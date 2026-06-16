@@ -180,16 +180,18 @@ impl Terminal {
             .set_username(change.username.clone());
 
         // Update session variables for badges
-        self.session_variables.set_path(change.new_cwd.clone());
+        self.badge_state
+            .session_variables
+            .set_path(change.new_cwd.clone());
         if let Some(ref h) = change.hostname {
-            self.session_variables.set_hostname(h.clone());
+            self.badge_state.session_variables.set_hostname(h.clone());
         } else {
-            self.session_variables.hostname = None;
+            self.badge_state.session_variables.hostname = None;
         }
         if let Some(ref u) = change.username {
-            self.session_variables.set_username(u.clone());
+            self.badge_state.session_variables.set_username(u.clone());
         } else {
-            self.session_variables.username = None;
+            self.badge_state.session_variables.username = None;
         }
 
         // Emit CwdChanged event
