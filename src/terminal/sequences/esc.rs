@@ -115,14 +115,14 @@ impl Terminal {
             }
             // SCS — Select Character Set (G0 slot)
             // ESC ( 0  → G0 = DEC Special / Line Drawing
-            (b'0', [b'(']) => self.g0_charset = Charset::DecLineDrawing,
+            (b'0', [b'(']) => self.charset_state.g0_charset = Charset::DecLineDrawing,
             // ESC ( B  → G0 = ASCII (reset)
-            (b'B', [b'(']) => self.g0_charset = Charset::Ascii,
+            (b'B', [b'(']) => self.charset_state.g0_charset = Charset::Ascii,
             // SCS — Select Character Set (G1 slot)
             // ESC ) 0  → G1 = DEC Special / Line Drawing
-            (b'0', [b')']) => self.g1_charset = Charset::DecLineDrawing,
+            (b'0', [b')']) => self.charset_state.g1_charset = Charset::DecLineDrawing,
             // ESC ) B  → G1 = ASCII (reset)
-            (b'B', [b')']) => self.g1_charset = Charset::Ascii,
+            (b'B', [b')']) => self.charset_state.g1_charset = Charset::Ascii,
             _ => {}
         }
     }
@@ -426,9 +426,9 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         // ESC ( 0 — designate G0 = DEC Special / Line Drawing
         term.process(b"\x1b(0");
-        assert_eq!(term.g0_charset, Charset::DecLineDrawing);
-        assert_eq!(term.g1_charset, Charset::Ascii);
-        assert_eq!(term.active_g, 0); // G0 is still the active slot
+        assert_eq!(term.charset_state.g0_charset, Charset::DecLineDrawing);
+        assert_eq!(term.charset_state.g1_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.active_g, 0); // G0 is still the active slot
     }
 
     #[test]
@@ -436,7 +436,7 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         term.process(b"\x1b(0"); // set G0 to DecLineDrawing
         term.process(b"\x1b(B"); // reset G0 to ASCII
-        assert_eq!(term.g0_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.g0_charset, Charset::Ascii);
     }
 
     #[test]
@@ -444,8 +444,8 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         // ESC ) 0 — designate G1 = DEC Special / Line Drawing
         term.process(b"\x1b)0");
-        assert_eq!(term.g1_charset, Charset::DecLineDrawing);
-        assert_eq!(term.g0_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.g1_charset, Charset::DecLineDrawing);
+        assert_eq!(term.charset_state.g0_charset, Charset::Ascii);
     }
 
     #[test]
@@ -453,26 +453,26 @@ mod tests {
         let mut term = Terminal::new(80, 24);
         term.process(b"\x1b)0");
         term.process(b"\x1b)B");
-        assert_eq!(term.g1_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.g1_charset, Charset::Ascii);
     }
 
     #[test]
     fn test_acs_so_shifts_to_g1() {
         let mut term = Terminal::new(80, 24);
-        assert_eq!(term.active_g, 0);
+        assert_eq!(term.charset_state.active_g, 0);
         // SO (0x0E) — shift out to G1
         term.process(b"\x0e");
-        assert_eq!(term.active_g, 1);
+        assert_eq!(term.charset_state.active_g, 1);
     }
 
     #[test]
     fn test_acs_si_shifts_to_g0() {
         let mut term = Terminal::new(80, 24);
         term.process(b"\x0e"); // shift to G1
-        assert_eq!(term.active_g, 1);
+        assert_eq!(term.charset_state.active_g, 1);
         // SI (0x0F) — shift in to G0
         term.process(b"\x0f");
-        assert_eq!(term.active_g, 0);
+        assert_eq!(term.charset_state.active_g, 0);
     }
 
     #[test]
@@ -576,9 +576,9 @@ mod tests {
         term.process(b"\x0e"); // SO — shift to G1
                                // Hard reset
         term.process(b"\x1bc");
-        assert_eq!(term.g0_charset, Charset::Ascii);
-        assert_eq!(term.g1_charset, Charset::Ascii);
-        assert_eq!(term.active_g, 0);
+        assert_eq!(term.charset_state.g0_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.g1_charset, Charset::Ascii);
+        assert_eq!(term.charset_state.active_g, 0);
     }
 
     #[test]

@@ -417,6 +417,18 @@ pub(crate) struct BookmarksState {
     pub(crate) next_bookmark_id: usize,
 }
 
+/// ACS (Alternate Character Set) state: G0/G1 slot designations and active slot.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001).
+pub(crate) struct CharsetState {
+    /// G0 charset slot designation (ESC ( 0 / ESC ( B)
+    pub(crate) g0_charset: Charset,
+    /// G1 charset slot designation (ESC ) 0 / ESC ) B)
+    pub(crate) g1_charset: Charset,
+    /// Active charset slot: 0 = G0, 1 = G1 (toggled by SO/SI)
+    pub(crate) active_g: u8,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -675,12 +687,8 @@ pub struct Terminal {
     pub(crate) triggers: TriggerState,
 
     // === ACS (Alternate Character Set) state ===
-    /// G0 charset slot designation (ESC ( 0 / ESC ( B)
-    pub(crate) g0_charset: Charset,
-    /// G1 charset slot designation (ESC ) 0 / ESC ) B)
-    pub(crate) g1_charset: Charset,
-    /// Active charset slot: 0 = G0, 1 = G1 (toggled by SO/SI)
-    pub(crate) active_g: u8,
+    /// G0/G1 charset designations and active slot (ARC-001 sub-struct)
+    pub(crate) charset_state: CharsetState,
 }
 
 impl std::fmt::Debug for Terminal {
@@ -931,19 +939,21 @@ impl Terminal {
                 max_action_results: 100,
                 pending_trigger_rows: HashSet::new(),
             },
-            g0_charset: Charset::Ascii,
-            g1_charset: Charset::Ascii,
-            active_g: 0,
+            charset_state: CharsetState {
+                g0_charset: Charset::Ascii,
+                g1_charset: Charset::Ascii,
+                active_g: 0,
+            },
         }
     }
 
     /// Return the currently-active character set (G0 or G1 based on SO/SI state).
     #[inline]
     pub(crate) fn active_charset(&self) -> Charset {
-        if self.active_g == 1 {
-            self.g1_charset
+        if self.charset_state.active_g == 1 {
+            self.charset_state.g1_charset
         } else {
-            self.g0_charset
+            self.charset_state.g0_charset
         }
     }
 
