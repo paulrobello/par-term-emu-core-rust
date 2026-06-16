@@ -85,6 +85,13 @@ pub struct ScreenshotConfig {
     /// Alpha multiplier for faint/dim text (0.0 = fully transparent, 1.0 = no dimming)
     /// Matches iTerm2's "Faint text" slider. Default: 0.5 (50%).
     pub faint_text_alpha: f32,
+
+    // Color-space emulation
+    /// Apply iTerm2-style Display P3 color-space conversion + ~40% brightness
+    /// boost to foreground colors, matching iTerm2's wide-gamut P3 rendering.
+    /// Default: true (preserves the historical screenshot appearance). Set to
+    /// false for raw sRGB colors. See ARC-022.
+    pub iterm2_color_boost: bool,
 }
 
 impl Default for ScreenshotConfig {
@@ -110,6 +117,7 @@ impl Default for ScreenshotConfig {
             bold_brightening: false,
             minimum_contrast: 0.5, // Moderate contrast by default (0.5 = 50% adjustment)
             faint_text_alpha: 0.5,
+            iterm2_color_boost: true,
         }
     }
 }
@@ -202,6 +210,12 @@ impl ScreenshotConfig {
     /// Set faint text alpha (dim strength)
     pub fn with_faint_text_alpha(mut self, alpha: f32) -> Self {
         self.faint_text_alpha = alpha.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Enable/disable the iTerm2-style Display P3 color boost (ARC-022)
+    pub fn with_iterm2_color_boost(mut self, enabled: bool) -> Self {
+        self.iterm2_color_boost = enabled;
         self
     }
 }

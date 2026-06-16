@@ -231,19 +231,22 @@ impl Renderer {
             }
         }
 
-        // Apply Display P3 color space conversion + brightness boost
-        // iTerm2's P3 rendering makes colors both more vibrant AND lighter
-        // First apply P3 conversion for saturation
-        fg_rgb = crate::color_utils::srgb_to_p3_rgb(fg_rgb.0, fg_rgb.1, fg_rgb.2);
+        // Apply Display P3 color space conversion + brightness boost (ARC-022)
+        // iTerm2's P3 rendering makes colors both more vibrant AND lighter.
+        // This emulates that appearance; disable via config for raw sRGB.
+        if self.config.iterm2_color_boost {
+            // First apply P3 conversion for saturation
+            fg_rgb = crate::color_utils::srgb_to_p3_rgb(fg_rgb.0, fg_rgb.1, fg_rgb.2);
 
-        // Then boost brightness to match iTerm2's visual appearance
-        // Testing shows ~40% brightness boost needed after P3 conversion
-        let boost = 1.4;
-        fg_rgb = (
-            ((fg_rgb.0 as f32 * boost).min(255.0)) as u8,
-            ((fg_rgb.1 as f32 * boost).min(255.0)) as u8,
-            ((fg_rgb.2 as f32 * boost).min(255.0)) as u8,
-        );
+            // Then boost brightness to match iTerm2's visual appearance
+            // Testing shows ~40% brightness boost needed after P3 conversion
+            let boost = 1.4;
+            fg_rgb = (
+                ((fg_rgb.0 as f32 * boost).min(255.0)) as u8,
+                ((fg_rgb.1 as f32 * boost).min(255.0)) as u8,
+                ((fg_rgb.2 as f32 * boost).min(255.0)) as u8,
+            );
+        }
 
         // Handle reverse video
         if cell.flags.reverse() {
@@ -1117,6 +1120,7 @@ mod tests {
             bold_brightening: false,
             minimum_contrast: 0.5,
             faint_text_alpha: 0.5,
+            iterm2_color_boost: true,
             quality: 90,
             format: crate::screenshot::config::ImageFormat::Png,
         }
