@@ -441,6 +441,22 @@ pub(crate) struct HyperlinkState {
     pub(crate) next_hyperlink_id: u32,
 }
 
+/// OSC 52 clipboard core: current content, read-permission flag, per-slot
+/// history, and per-slot size cap.
+///
+/// Extracted from `Terminal` for cohesion (ARC-001). Distinct from the
+/// already-extracted `ClipboardSyncState` (Feature 30 event log).
+pub(crate) struct ClipboardState {
+    /// Clipboard content (OSC 52)
+    pub(crate) clipboard_content: Option<String>,
+    /// Allow clipboard read operations (security flag for OSC 52 queries)
+    pub(crate) allow_clipboard_read: bool,
+    /// Clipboard history (multiple slots)
+    pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
+    /// Maximum clipboard history entries per slot
+    pub(crate) max_clipboard_history: usize,
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -526,10 +542,8 @@ pub struct Terminal {
     pub(crate) iterm_multipart_buffer: Option<ITermMultipartState>,
     /// File transfer manager for tracking file downloads and uploads
     pub(crate) file_transfer_manager: FileTransferManager,
-    /// Clipboard content (OSC 52)
-    pub(crate) clipboard_content: Option<String>,
-    /// Allow clipboard read operations (security flag for OSC 52 queries)
-    pub(crate) allow_clipboard_read: bool,
+    /// OSC 52 clipboard content, read flag, history, cap (ARC-001 sub-struct)
+    pub(crate) clipboard_state: ClipboardState,
     /// Default foreground color (for OSC 10 queries)
     pub(crate) default_fg: Color,
     /// Default background color (for OSC 11 queries)
@@ -633,10 +647,6 @@ pub struct Terminal {
     pub(crate) bookmarks_state: BookmarksState,
     /// Performance metrics and profiling state (ARC-001 sub-struct)
     pub(crate) profiling: ProfilingState,
-    /// Clipboard history (multiple slots)
-    pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
-    /// Maximum clipboard history entries per slot
-    pub(crate) max_clipboard_history: usize,
     /// Mouse event/position history (ARC-001 sub-struct)
     pub(crate) mouse_history: MouseHistoryState,
     /// Rendering hints and damage regions (ARC-001 sub-struct)
@@ -794,8 +804,12 @@ impl Terminal {
             dcs_action: None,
             iterm_multipart_buffer: None,
             file_transfer_manager: FileTransferManager::default(),
-            clipboard_content: None,
-            allow_clipboard_read: false,
+            clipboard_state: ClipboardState {
+                clipboard_content: None,
+                allow_clipboard_read: false,
+                clipboard_history: HashMap::new(),
+                max_clipboard_history: 10,
+            },
             default_fg: Color::Named(NamedColor::White),
             default_bg: Color::Named(NamedColor::Black),
             cursor_color: Color::Named(NamedColor::White),
@@ -868,8 +882,6 @@ impl Terminal {
                 enabled: false,
             },
             // Clipboard integration
-            clipboard_history: HashMap::new(),
-            max_clipboard_history: 10,
             // Mouse tracking
             mouse_history: MouseHistoryState {
                 mouse_events: Vec::new(),
@@ -1757,12 +1769,12 @@ impl Terminal {
 
     /// Get clipboard content (OSC 52)
     pub fn clipboard(&self) -> Option<&str> {
-        self.clipboard_content.as_deref()
+        self.clipboard_state.clipboard_content.as_deref()
     }
 
     /// Check if clipboard read operations are allowed (security flag for OSC 52 queries)
     pub fn allow_clipboard_read(&self) -> bool {
-        self.allow_clipboard_read
+        self.clipboard_state.allow_clipboard_read
     }
 
     /// Set whether clipboard read operations are allowed (security flag for OSC 52 queries)
@@ -1770,7 +1782,7 @@ impl Terminal {
     /// When disabled (default), OSC 52 queries (ESC ] 52 ; c ; ? ST) are silently ignored.
     /// When enabled, terminals can query clipboard contents, which has security implications.
     pub fn set_allow_clipboard_read(&mut self, allow: bool) {
-        self.allow_clipboard_read = allow;
+        self.clipboard_state.allow_clipboard_read = allow;
     }
 
     /// Get default foreground color (OSC 10)

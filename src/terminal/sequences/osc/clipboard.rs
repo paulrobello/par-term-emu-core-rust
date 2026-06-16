@@ -13,8 +13,8 @@ impl Terminal {
 
                     if selection.contains('c') || selection.is_empty() {
                         if data == "?" {
-                            if self.allow_clipboard_read {
-                                if let Some(content) = &self.clipboard_content {
+                            if self.clipboard_state.allow_clipboard_read {
+                                if let Some(content) = &self.clipboard_state.clipboard_content {
                                     let encoded = BASE64.encode(content.as_bytes());
                                     let response = format!("\x1b]52;c;{}\x1b\\", encoded);
                                     self.push_response(response.as_bytes());
@@ -26,7 +26,7 @@ impl Terminal {
                         } else if !data.is_empty() {
                             if let Ok(decoded_bytes) = BASE64.decode(data.as_bytes()) {
                                 if let Ok(text) = String::from_utf8(decoded_bytes) {
-                                    self.clipboard_content = Some(text);
+                                    self.clipboard_state.clipboard_content = Some(text);
                                 }
                             }
                         } else {

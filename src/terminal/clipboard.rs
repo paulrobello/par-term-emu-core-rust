@@ -110,18 +110,23 @@ impl Terminal {
             label,
         };
 
-        let history = self.clipboard_history.entry(slot).or_default();
+        let history = self
+            .clipboard_state
+            .clipboard_history
+            .entry(slot)
+            .or_default();
         history.push(entry);
 
         // Keep only last N entries
-        if history.len() > self.max_clipboard_history {
+        if history.len() > self.clipboard_state.max_clipboard_history {
             history.remove(0);
         }
     }
 
     /// Get clipboard history for a slot
     pub fn get_clipboard_history(&self, slot: ClipboardSlot) -> Vec<ClipboardEntry> {
-        self.clipboard_history
+        self.clipboard_state
+            .clipboard_history
             .get(&slot)
             .cloned()
             .unwrap_or_default()
@@ -129,19 +134,20 @@ impl Terminal {
 
     /// Get the most recent clipboard entry for a slot
     pub fn get_latest_clipboard(&self, slot: ClipboardSlot) -> Option<ClipboardEntry> {
-        self.clipboard_history
+        self.clipboard_state
+            .clipboard_history
             .get(&slot)
             .and_then(|history| history.last().cloned())
     }
 
     /// Clear clipboard history for a slot
     pub fn clear_clipboard_history(&mut self, slot: ClipboardSlot) {
-        self.clipboard_history.remove(&slot);
+        self.clipboard_state.clipboard_history.remove(&slot);
     }
 
     /// Clear all clipboard history
     pub fn clear_all_clipboard_history(&mut self) {
-        self.clipboard_history.clear();
+        self.clipboard_state.clipboard_history.clear();
     }
 
     /// Set clipboard content with slot
@@ -162,7 +168,7 @@ impl Terminal {
     ) -> Vec<ClipboardEntry> {
         let mut results = Vec::new();
         if let Some(s) = slot {
-            if let Some(history) = self.clipboard_history.get(&s) {
+            if let Some(history) = self.clipboard_state.clipboard_history.get(&s) {
                 results.extend(
                     history
                         .iter()
@@ -171,7 +177,7 @@ impl Terminal {
                 );
             }
         } else {
-            for history in self.clipboard_history.values() {
+            for history in self.clipboard_state.clipboard_history.values() {
                 results.extend(
                     history
                         .iter()
@@ -186,16 +192,16 @@ impl Terminal {
     /// Set clipboard content (OSC 52)
     pub fn set_clipboard(&mut self, content: Option<String>) {
         if let Some(c) = content {
-            self.clipboard_content = Some(c.clone());
+            self.clipboard_state.clipboard_content = Some(c.clone());
             self.add_to_clipboard_history(ClipboardSlot::Clipboard, c, Some("OSC 52".into()));
         } else {
-            self.clipboard_content = None;
+            self.clipboard_state.clipboard_content = None;
         }
     }
 
     /// Get clipboard content (OSC 52)
     pub fn get_clipboard(&self) -> Option<String> {
-        self.clipboard_content.clone()
+        self.clipboard_state.clipboard_content.clone()
     }
 
     // === Feature 30: OSC 52 Clipboard Sync ===

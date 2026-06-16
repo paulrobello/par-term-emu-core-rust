@@ -428,17 +428,23 @@ fn test_clipboard_operations() {
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"Hello");
     let sequence = format!("\x1b]52;c;{}\x1b\\", encoded);
     term.process(sequence.as_bytes());
-    assert_eq!(term.clipboard_content, Some("Hello".to_string()));
+    assert_eq!(
+        term.clipboard_state.clipboard_content,
+        Some("Hello".to_string())
+    );
 
     // Empty payload is treated as a no-op (preserve existing clipboard content)
     term.process(b"\x1b]52;c;\x1b\\");
-    assert_eq!(term.clipboard_content, Some("Hello".to_string()));
+    assert_eq!(
+        term.clipboard_state.clipboard_content,
+        Some("Hello".to_string())
+    );
 }
 
 #[test]
 fn test_clipboard_query_security() {
     let mut term = Terminal::new(80, 24);
-    term.allow_clipboard_read = false;
+    term.clipboard_state.allow_clipboard_read = false;
 
     // Set clipboard
     let encoded = base64::engine::general_purpose::STANDARD.encode(b"Secret");
