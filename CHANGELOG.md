@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Streaming server: unbounded zlib decompression (zip-bomb DoS).** `decode_with_decompression` in `src/streaming/proto.rs` called `ZlibDecoder::read_to_end` with no size cap, so a single small compressed protobuf frame could expand into gigabytes of memory and OOM-kill the server. It now reads from the decoder in 8 KiB chunks into a bounded `Vec` and returns `StreamingError::InvalidMessage` at the new 1 MiB `MAX_DECOMPRESSED_SIZE` cap. Additionally, both tungstenite WebSocket acceptors now use `accept_hdr_async_with_config` with an explicit `WebSocketConfig` (16 MiB `max_message_size` / `max_frame_size`) instead of relying on tungstenite's 64 MiB default, and the same 16 MiB caps are applied to both axum `WebSocketUpgrade` handlers. No new dependencies; return types and error variants unchanged.
+
+### Changed
+- **Internal code-quality refactors (no API or behavior change).** From the project audit: removed the `Ok::<_, ()>(lock())` dead-branch anti-pattern at 12 sites in `src/streaming/server.rs` (`parking_lot::Mutex::lock` cannot fail); rewrote `html_escape`/`escape_xml` to allocate a single `String` instead of one per character; made `get_dirty_region` a single pass with no panic-bait `unwrap()`; `poll_subscribed_events` now calls the existing `TerminalEvent::kind()` instead of duplicating its 25-arm match; the coprocess output/error buffers switched `Vec<String>` → `VecDeque<String>` (O(1) `push_back`/`pop_front` instead of O(n) `remove(0)`); and the duplicated `emit_style` SGR closure (~78 lines × 2) in `src/grid/export.rs` was extracted into a shared `push_sgr_style` helper.
+
+### Documentation
+- **Default streaming-server port corrected (8080 → 8099)** in README, Makefile, and the `streaming_server` module rustdoc to match the actual clap `default_value`. The README's Rust toolchain requirement was updated 1.75+ → 1.88+ to match `Cargo.toml`'s `rust-version`. The STREAMING.md architecture diagram label now reads "Protobuf (binary)" instead of "JSON Messages". ARCHITECTURE.md gained the missing `apc_filter.rs` and `badge.rs` modules and now points readers at runnable test-count commands instead of stale hard-coded numbers. BUILDING.md gained a prominent "never `cargo build`; use `make dev`" callout. A new `CONTRIBUTING.md` documents the dev workflow, the version-sync and Rust↔Python binding-sync rules, and the PR process. `src/pty_session.rs` gained a module-level rustdoc comment.
+
 ## [0.42.4] - 2026-06-08
 
 ### Fixed
