@@ -1296,7 +1296,7 @@ macro_rules! impl_terminal_cell_line_queries {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 if let Some(cell) = t.active_grid().get(col, row) {
                     if let Some(id) = cell.flags.hyperlink_id {
-                        return Ok(t.get_hyperlink_url(id));
+                        return Ok(t.get_hyperlink_url(id.get()));
                     }
                 }
                 Ok(None)

@@ -9,6 +9,7 @@ mod title;
 
 use crate::debug;
 use crate::terminal::Terminal;
+use std::num::NonZeroU32;
 
 /// Maximum total OSC data length in bytes (128 MB)
 /// Must be large enough for inline images (iTerm2/Kitty protocols send
@@ -105,7 +106,9 @@ impl Terminal {
                             id
                         });
 
-                    self.hyperlink_state.current_hyperlink_id = Some(id);
+                    // id >= 1 (next_hyperlink_id starts at 1); store as the
+                    // niche-optimized NonZeroU32 used on cells (ARC-010).
+                    self.hyperlink_state.current_hyperlink_id = NonZeroU32::new(id);
 
                     self.events.terminal_events.push(
                         crate::terminal::TerminalEvent::HyperlinkAdded {

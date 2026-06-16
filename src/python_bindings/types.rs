@@ -63,7 +63,7 @@ impl From<&crate::cell::Cell> for PyAttributes {
             underline_style: cell.flags.underline_style.into(),
             wide_char: cell.flags.wide_char(),
             wide_char_spacer: cell.flags.wide_char_spacer(),
-            hyperlink_id: cell.flags.hyperlink_id,
+            hyperlink_id: cell.flags.hyperlink_id.map(|nz| nz.get()),
         }
     }
 }

@@ -84,6 +84,7 @@ use crate::shell_integration::ShellIntegration;
 use crate::sixel;
 use crate::terminal::apc_filter::ApcFilterState;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 
 /// Character set designation for G0/G1 charset slots.
 ///
@@ -441,7 +442,7 @@ pub(crate) struct HyperlinkState {
     /// Hyperlink storage: ID -> URL mapping (for deduplication)
     pub(crate) hyperlinks: HashMap<u32, String>,
     /// Current hyperlink ID being written
-    pub(crate) current_hyperlink_id: Option<u32>,
+    pub(crate) current_hyperlink_id: Option<NonZeroU32>,
     /// Next available hyperlink ID
     pub(crate) next_hyperlink_id: u32,
 }
@@ -894,7 +895,9 @@ impl Terminal {
             hyperlink_state: HyperlinkState {
                 hyperlinks: HashMap::new(),
                 current_hyperlink_id: None,
-                next_hyperlink_id: 0,
+                // Start at 1: hyperlink IDs are `NonZeroU32` on cells (ARC-010
+                // niche optimization), so 0 is reserved for "no link" (None).
+                next_hyperlink_id: 1,
             },
             graphics: GraphicsState {
                 graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),

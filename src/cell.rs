@@ -2,6 +2,7 @@ use crate::color::Color;
 use crate::unicode_width_config::{char_width, str_width, WidthConfig};
 use bitflags::bitflags;
 use smallvec::SmallVec;
+use std::num::NonZeroU32;
 
 /// Underline style for text decoration (SGR 4:x)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -47,8 +48,10 @@ pub struct CellFlags {
     bits: CellBitflags,
     /// Underline style (SGR 4:x)
     pub underline_style: UnderlineStyle,
-    /// Hyperlink ID (reference to URL in Terminal's hyperlinks HashMap)
-    pub hyperlink_id: Option<u32>,
+    /// Hyperlink ID (reference to URL in Terminal's hyperlinks HashMap).
+    /// Niche-optimized via `NonZeroU32` so `None` (the common case — no link)
+    /// costs zero extra bytes in `CellFlags` (ARC-010). IDs are always >= 1.
+    pub hyperlink_id: Option<NonZeroU32>,
 }
 
 impl Default for CellFlags {
@@ -650,8 +653,9 @@ mod tests {
         let mut flags = CellFlags::default();
         assert_eq!(flags.hyperlink_id, None);
 
-        flags.hyperlink_id = Some(42);
-        assert_eq!(flags.hyperlink_id, Some(42));
+        let id = NonZeroU32::new(42).unwrap();
+        flags.hyperlink_id = Some(id);
+        assert_eq!(flags.hyperlink_id, Some(id));
 
         flags.hyperlink_id = None;
         assert_eq!(flags.hyperlink_id, None);

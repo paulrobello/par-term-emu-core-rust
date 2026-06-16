@@ -887,12 +887,13 @@ mod tests {
     #[test]
     fn test_write_char_with_hyperlink() {
         let mut term = create_test_terminal();
-        term.hyperlink_state.current_hyperlink_id = Some(42);
+        let id = std::num::NonZeroU32::new(42).unwrap();
+        term.hyperlink_state.current_hyperlink_id = Some(id);
 
         term.write_char('A');
 
         let cell = term.active_grid().get(0, 0).unwrap();
-        assert_eq!(cell.flags.hyperlink_id, Some(42));
+        assert_eq!(cell.flags.hyperlink_id, Some(id));
     }
 
     #[test]
