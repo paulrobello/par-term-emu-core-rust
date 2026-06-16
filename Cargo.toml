@@ -47,7 +47,7 @@ path = "src/bin/streaming_server.rs"
 required-features = ["streaming"]
 
 [dependencies]
-pyo3 = { version = "0.29", optional = true }
+pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
