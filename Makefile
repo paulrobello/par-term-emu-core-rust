@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open \
@@ -40,6 +40,8 @@ help:
 	@echo "  lint            - Run Rust linters (clippy + fmt, auto-fix)"
 	@echo "  lint-python     - Run Python linters (format + ruff + pyright, auto-fix)"
 	@echo "  check           - Check Rust code without building"
+	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
+	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
 	@echo ""
 	@echo "Pre-commit Hooks:"
@@ -229,6 +231,15 @@ lint-python:
 check:
 	@echo "Checking Rust code..."
 	cargo check
+
+typecheck:
+	@echo "Running type checks (Rust + Python)..."
+	cargo check --all-targets --all-features
+	uv run pyright
+
+clippy:
+	@echo "Running Rust clippy (check only, no auto-fix)..."
+	cargo clippy --all-targets --all-features -- -D warnings
 
 checkall: test-rust test-rust-streaming lint lint-python test-python
 	@echo ""

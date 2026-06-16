@@ -95,7 +95,9 @@ extend-exclude = [
 ]
 
 [tool.pyright]
-pythonVersion = "3.14"
+# Align with requires-python >= 3.12 (the lowest supported version) so
+# pyright flags any use of 3.13/3.14-only syntax. See ARC-023.
+pythonVersion = "3.12"
 typeCheckingMode = "basic"
 
 [dependency-groups]
