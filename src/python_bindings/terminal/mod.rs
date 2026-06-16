@@ -53,6 +53,7 @@ impl crate::python_bindings::common::TerminalAccess for PyTerminal {
 // ARC-003/QA-001: shared query/state getters generated from one definition.
 crate::impl_terminal_query_getters!(PyTerminal);
 crate::impl_terminal_color_setters!(PyTerminal);
+crate::impl_terminal_state_setters!(PyTerminal);
 
 #[pymethods]
 impl PyTerminal {
@@ -590,17 +591,7 @@ impl PyTerminal {
         Ok(self.inner.clipboard().map(|s| s.to_string()))
     }
 
-    /// Set clipboard content programmatically
-    ///
-    /// This bypasses OSC 52 sequences and directly sets the clipboard.
-    /// Useful for integration with system clipboard or testing.
-    ///
-    /// Args:
-    ///     content: Content to set (None to clear)
-    fn set_clipboard(&mut self, content: Option<String>) -> PyResult<()> {
-        self.inner.set_clipboard(content);
-        Ok(())
-    }
+    // set_clipboard: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Check if clipboard read operations are allowed
     ///
@@ -610,30 +601,11 @@ impl PyTerminal {
         Ok(self.inner.allow_clipboard_read())
     }
 
-    /// Set whether clipboard read operations are allowed
-    ///
-    /// When disabled (default), OSC 52 queries are silently ignored for security.
-    /// When enabled, terminal applications can query clipboard contents.
-    ///
-    /// Args:
-    ///     allow: True to allow clipboard read, False to block (default)
-    fn set_allow_clipboard_read(&mut self, allow: bool) -> PyResult<()> {
-        self.inner.set_allow_clipboard_read(allow);
-        Ok(())
-    }
+    // set_allow_clipboard_read: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     // default_fg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set default foreground color (OSC 10)
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_default_fg(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_default_fg(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_default_fg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Query default foreground color (OSC 10)
     ///
@@ -646,16 +618,7 @@ impl PyTerminal {
 
     // default_bg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set default background color (OSC 11)
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_default_bg(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_default_bg(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_default_bg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Query default background color (OSC 11)
     ///
@@ -676,16 +639,7 @@ impl PyTerminal {
         Ok(self.inner.cursor_color().to_rgb())
     }
 
-    /// Set cursor color (OSC 12)
-    ///
-    /// Args:
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    fn set_cursor_color(&mut self, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner.set_cursor_color(Color::Rgb(r, g, b));
-        Ok(())
-    }
+    // set_cursor_color: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Query cursor color (OSC 12)
     ///
@@ -817,20 +771,7 @@ impl PyTerminal {
 
     // faint_text_alpha: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set faint/dim text alpha multiplier
-    ///
-    /// This value is applied to SGR 2 (dim/faint) text during rendering.
-    /// Values are clamped to the range 0.0-1.0.
-    ///
-    /// Args:
-    ///     alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
-    ///
-    /// Example:
-    ///     >>> term.set_faint_text_alpha(0.3)  # 30% opacity for dim text
-    fn set_faint_text_alpha(&mut self, alpha: f32) -> PyResult<()> {
-        self.inner.set_faint_text_alpha(alpha);
-        Ok(())
-    }
+    // set_faint_text_alpha: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Get cursor style (DECSCUSR)
     ///
@@ -840,28 +781,7 @@ impl PyTerminal {
         Ok(self.inner.cursor().style().into())
     }
 
-    /// Set cursor style (DECSCUSR)
-    ///
-    /// This is equivalent to sending CSI <n> SP q escape sequence.
-    ///
-    /// Args:
-    ///     style: CursorStyle enum value (e.g., CursorStyle.BlinkingBlock)
-    fn set_cursor_style(&mut self, style: PyCursorStyle) -> PyResult<()> {
-        // Send DECSCUSR escape sequence (CSI <n> SP q)
-        let sequence = format!(
-            "\x1b[{} q",
-            match style {
-                PyCursorStyle::BlinkingBlock => 1,
-                PyCursorStyle::SteadyBlock => 2,
-                PyCursorStyle::BlinkingUnderline => 3,
-                PyCursorStyle::SteadyUnderline => 4,
-                PyCursorStyle::BlinkingBar => 5,
-                PyCursorStyle::SteadyBar => 6,
-            }
-        );
-        self.inner.process(sequence.as_bytes());
-        Ok(())
-    }
+    // set_cursor_style: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
@@ -1219,14 +1139,7 @@ impl PyTerminal {
 
     // synchronized_updates: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Manually flush the synchronized update buffer
-    ///
-    /// This is useful for flushing buffered updates without disabling synchronized mode.
-    /// Note: The buffer is automatically flushed when synchronized mode is disabled via CSI ? 2026 l
-    fn flush_synchronized_updates(&mut self) -> PyResult<()> {
-        self.inner.flush_synchronized_updates();
-        Ok(())
-    }
+    // flush_synchronized_updates: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Simulate a mouse event and get the escape sequence
     ///
@@ -1685,57 +1598,15 @@ impl PyTerminal {
 
     // answerback_string: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set the answerback string sent in response to ENQ (0x05)
-    ///
-    /// The answerback payload is sent whenever the terminal receives the ENQ
-    /// control character. Default is None (disabled) for security. Use with
-    /// caution in untrusted sessions.
-    ///
-    /// Args:
-    ///     answerback: Custom string to return, or None to disable
-    fn set_answerback_string(&mut self, answerback: Option<String>) -> PyResult<()> {
-        self.inner.set_answerback_string(answerback);
-        Ok(())
-    }
+    // set_answerback_string: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     // width_config: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set the Unicode width configuration
-    ///
-    /// This controls how character widths are calculated, particularly for:
-    /// - East Asian Ambiguous characters (Greek, Cyrillic, symbols)
-    /// - Unicode version-specific width tables
-    ///
-    /// Args:
-    ///     config: WidthConfig with unicode_version and ambiguous_width settings
-    fn set_width_config(&mut self, config: super::enums::PyWidthConfig) -> PyResult<()> {
-        self.inner.set_width_config(config.into());
-        Ok(())
-    }
+    // set_width_config: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Set the treatment of East Asian Ambiguous width characters
-    ///
-    /// This is a convenience method to just change the ambiguous width setting
-    /// without modifying the Unicode version.
-    ///
-    /// Args:
-    ///     width: AmbiguousWidth.Narrow (1 cell) or AmbiguousWidth.Wide (2 cells)
-    fn set_ambiguous_width(&mut self, width: super::enums::PyAmbiguousWidth) -> PyResult<()> {
-        self.inner.set_ambiguous_width(width.into());
-        Ok(())
-    }
+    // set_ambiguous_width: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Set the Unicode version for width calculation tables
-    ///
-    /// This is a convenience method to just change the Unicode version setting
-    /// without modifying the ambiguous width treatment.
-    ///
-    /// Args:
-    ///     version: UnicodeVersion enum value (e.g., UnicodeVersion.Auto)
-    fn set_unicode_version(&mut self, version: super::enums::PyUnicodeVersion) -> PyResult<()> {
-        self.inner.set_unicode_version(version.into());
-        Ok(())
-    }
+    // set_unicode_version: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Get the current Unicode normalization form
     ///
@@ -1764,17 +1635,7 @@ impl PyTerminal {
 
     // char_width: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set whether OSC 7 directory tracking sequences are accepted
-    ///
-    /// When disabled, OSC 7 sequences are silently ignored.
-    /// When enabled (default), allows shell to report current working directory.
-    ///
-    /// Args:
-    ///     accept: True to accept OSC 7 (default), False to ignore
-    fn set_accept_osc7(&mut self, accept: bool) -> PyResult<()> {
-        self.inner.set_accept_osc7(accept);
-        Ok(())
-    }
+    // set_accept_osc7: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
     /// Check if insecure sequence filtering is enabled
     ///

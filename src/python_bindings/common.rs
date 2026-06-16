@@ -406,3 +406,204 @@ macro_rules! impl_terminal_color_setters {
         }
     };
 }
+
+/// Emit core state/config setters for `$ty`, using [`TerminalAccess::term_mut`].
+/// (ARC-003/QA-001 scaling batch 3.)
+#[macro_export]
+macro_rules! impl_terminal_state_setters {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Set clipboard content programmatically
+            ///
+            /// This bypasses OSC 52 sequences and directly sets the clipboard.
+            /// Useful for integration with system clipboard or testing.
+            ///
+            /// Args:
+            ///     content: Content to set (None to clear)
+            fn set_clipboard(&mut self, content: Option<String>) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_clipboard(content);
+                Ok(())
+            }
+
+            /// Set whether clipboard read operations are allowed
+            ///
+            /// When disabled (default), OSC 52 queries are silently ignored for security.
+            /// When enabled, terminal applications can query clipboard contents.
+            ///
+            /// Args:
+            ///     allow: True to allow clipboard read, False to block (default)
+            fn set_allow_clipboard_read(&mut self, allow: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_allow_clipboard_read(allow);
+                Ok(())
+            }
+
+            /// Set default foreground color (OSC 10)
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_default_fg(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_default_fg($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set default background color (OSC 11)
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_default_bg(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_default_bg($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set cursor color (OSC 12)
+            ///
+            /// Args:
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            fn set_cursor_color(&mut self, r: u8, g: u8, b: u8) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_cursor_color($crate::color::Color::Rgb(r, g, b));
+                Ok(())
+            }
+
+            /// Set faint/dim text alpha multiplier
+            ///
+            /// This value is applied to SGR 2 (dim/faint) text during rendering.
+            /// Values are clamped to the range 0.0-1.0.
+            ///
+            /// Args:
+            ///     alpha: Alpha multiplier (0.0 = fully transparent, 1.0 = fully opaque)
+            ///
+            /// Example:
+            ///     >>> term.set_faint_text_alpha(0.3)  # 30% opacity for dim text
+            fn set_faint_text_alpha(&mut self, alpha: f32) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_faint_text_alpha(alpha);
+                Ok(())
+            }
+
+            /// Set cursor style (DECSCUSR)
+            ///
+            /// This is equivalent to sending CSI <n> SP q escape sequence.
+            ///
+            /// Args:
+            ///     style: CursorStyle enum value (e.g., CursorStyle.BlinkingBlock)
+            fn set_cursor_style(
+                &mut self,
+                style: $crate::python_bindings::enums::PyCursorStyle,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                // Send DECSCUSR escape sequence (CSI <n> SP q)
+                let sequence = format!(
+                    "\x1b[{} q",
+                    match style {
+                        $crate::python_bindings::enums::PyCursorStyle::BlinkingBlock => 1,
+                        $crate::python_bindings::enums::PyCursorStyle::SteadyBlock => 2,
+                        $crate::python_bindings::enums::PyCursorStyle::BlinkingUnderline => 3,
+                        $crate::python_bindings::enums::PyCursorStyle::SteadyUnderline => 4,
+                        $crate::python_bindings::enums::PyCursorStyle::BlinkingBar => 5,
+                        $crate::python_bindings::enums::PyCursorStyle::SteadyBar => 6,
+                    }
+                );
+                t.process(sequence.as_bytes());
+                Ok(())
+            }
+
+            /// Manually flush the synchronized update buffer
+            ///
+            /// This is useful for flushing buffered updates without disabling synchronized mode.
+            /// Note: The buffer is automatically flushed when synchronized mode is disabled via CSI ? 2026 l
+            fn flush_synchronized_updates(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.flush_synchronized_updates();
+                Ok(())
+            }
+
+            /// Set the answerback string sent in response to ENQ (0x05)
+            ///
+            /// The answerback payload is sent whenever the terminal receives the ENQ
+            /// control character. Default is None (disabled) for security. Use with
+            /// caution in untrusted sessions.
+            ///
+            /// Args:
+            ///     answerback: Custom string to return, or None to disable
+            fn set_answerback_string(&mut self, answerback: Option<String>) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_answerback_string(answerback);
+                Ok(())
+            }
+
+            /// Set the Unicode width configuration
+            ///
+            /// This controls how character widths are calculated, particularly for:
+            /// - East Asian Ambiguous characters (Greek, Cyrillic, symbols)
+            /// - Unicode version-specific width tables
+            ///
+            /// Args:
+            ///     config: WidthConfig with unicode_version and ambiguous_width settings
+            fn set_width_config(
+                &mut self,
+                config: $crate::python_bindings::enums::PyWidthConfig,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_width_config(config.into());
+                Ok(())
+            }
+
+            /// Set the treatment of East Asian Ambiguous width characters
+            ///
+            /// This is a convenience method to just change the ambiguous width setting
+            /// without modifying the Unicode version.
+            ///
+            /// Args:
+            ///     width: AmbiguousWidth.Narrow (1 cell) or AmbiguousWidth.Wide (2 cells)
+            fn set_ambiguous_width(
+                &mut self,
+                width: $crate::python_bindings::enums::PyAmbiguousWidth,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_ambiguous_width(width.into());
+                Ok(())
+            }
+
+            /// Set the Unicode version for width calculation tables
+            ///
+            /// This is a convenience method to just change the Unicode version setting
+            /// without modifying the ambiguous width treatment.
+            ///
+            /// Args:
+            ///     version: UnicodeVersion enum value (e.g., UnicodeVersion.Auto)
+            fn set_unicode_version(
+                &mut self,
+                version: $crate::python_bindings::enums::PyUnicodeVersion,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_unicode_version(version.into());
+                Ok(())
+            }
+
+            /// Set whether OSC 7 directory tracking sequences are accepted
+            ///
+            /// When disabled, OSC 7 sequences are silently ignored.
+            /// When enabled (default), allows shell to report current working directory.
+            ///
+            /// Args:
+            ///     accept: True to accept OSC 7 (default), False to ignore
+            fn set_accept_osc7(&mut self, accept: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_accept_osc7(accept);
+                Ok(())
+            }
+        }
+    };
+}
