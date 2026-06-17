@@ -49,7 +49,7 @@ required-features = ["streaming-bin"]
 [dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 # Proc-macro helpers (#[pyo3_get_all]) for the Python data classes (ARC-014).
-par-term-emu-derive = { path = "derive", optional = true }
+par-term-emu-derive = { path = "derive", version = "0.43.0", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"

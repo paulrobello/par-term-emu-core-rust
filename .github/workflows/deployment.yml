@@ -90,6 +90,17 @@ jobs:
       - name: Run Rust tests
         run: cargo test --lib --no-default-features
 
+      - name: Publish derive sub-crate (par-term-emu-derive)
+        # Must be published before the main crate: crates.io strips `path`
+        # and resolves the dependency from the registry, so the main crate's
+        # `par-term-emu-derive = { path = "derive", version = "0.43.0" }` can
+        # only resolve once this sub-crate exists on crates.io. Idempotent —
+        # a re-run after the first publish no-ops (version already exists).
+        run: cargo publish --manifest-path derive/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }} || echo "par-term-emu-derive already published, continuing..."
+        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
       - name: Dry run publish
         run: cargo publish --dry-run
 
