@@ -14,6 +14,7 @@ pub mod conversions;
 pub mod enums;
 pub mod observer;
 pub mod pty;
+pub mod screenshot_config;
 pub mod streaming;
 pub mod terminal;
 pub mod types;
@@ -31,6 +32,7 @@ pub use enums::{
     PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
 };
 pub use pty::PyPtyTerminal;
+pub use screenshot_config::PyScreenshotConfig;
 pub use streaming::{
     decode_client_message, decode_server_message, encode_client_message, encode_server_message,
     PyStreamingConfig, PyStreamingServer,

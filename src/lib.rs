@@ -110,8 +110,8 @@ pub use python_bindings::{
     PyMousePosition, PyNormalizationForm, PyNotificationConfig, PyNotificationEvent, PyPaneState,
     PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState, PyPtyTerminal,
     PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
-    PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode, PySessionState,
-    PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
+    PyScreenshotConfig, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
+    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
     PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch,
     PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
 };
@@ -153,6 +153,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyTerminal>()?;
     m.add_class::<PyPtyTerminal>()?;
+    m.add_class::<PyScreenshotConfig>()?;
     m.add_class::<PyAttributes>()?;
     m.add_class::<PyScreenSnapshot>()?;
     m.add_class::<PyShellIntegration>()?;

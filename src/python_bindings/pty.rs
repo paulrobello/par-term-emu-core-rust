@@ -480,6 +480,38 @@ impl PyPtyTerminal {
             .map_err(|e| PyIOError::new_err(format!("Failed to write file: {}", e)))
     }
 
+    /// Take a screenshot using a reusable [`PyScreenshotConfig`] (QA-005).
+    ///
+    /// Build a config once and pass it, instead of repeating 16+ keyword args:
+    /// ```python
+    /// cfg = ScreenshotConfig(format="png", font_size=16.0, render_cursor=True)
+    /// term.screenshot_config(cfg, scrollback_offset=0)
+    /// ```
+    #[pyo3(signature = (config, scrollback_offset=0))]
+    fn screenshot_config(
+        &self,
+        config: &super::screenshot_config::PyScreenshotConfig,
+        scrollback_offset: usize,
+    ) -> PyResult<Vec<u8>> {
+        let cfg = config.to_screenshot_config()?;
+        self.inner
+            .screenshot(cfg, scrollback_offset)
+            .map_err(|e| PyRuntimeError::new_err(format!("Screenshot error: {}", e)))
+    }
+
+    /// Take a screenshot to a file using a reusable [`PyScreenshotConfig`] (QA-005).
+    #[pyo3(signature = (path, config, scrollback_offset=0))]
+    fn screenshot_to_file_config(
+        &self,
+        path: &str,
+        config: &super::screenshot_config::PyScreenshotConfig,
+        scrollback_offset: usize,
+    ) -> PyResult<()> {
+        let bytes = self.screenshot_config(config, scrollback_offset)?;
+        std::fs::write(path, bytes)
+            .map_err(|e| PyIOError::new_err(format!("Failed to write file: {}", e)))
+    }
+
     // size: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // cursor_position: provided by impl_terminal_query_getters! (ARC-003/QA-001)
