@@ -26,7 +26,7 @@ jobs:
     outputs:
       version: ${{ steps.check.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -67,7 +67,7 @@ jobs:
     timeout-minutes: 15
     needs: [github-release]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -103,7 +103,7 @@ jobs:
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@master
+        uses: Ilshidur/action-discord@0.4.0
         with:
           args: 'Published {{ EVENT_PAYLOAD.repository.name }} to crates.io successfully!'
         continue-on-error: true
@@ -149,7 +149,7 @@ jobs:
             asset_name: par-term-streamer-windows-x86_64.exe
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -183,7 +183,7 @@ jobs:
           cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} release-binaries/${{ matrix.asset_name }}
 
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binary-${{ matrix.target }}
           path: release-binaries/${{ matrix.asset_name }}
@@ -200,10 +200,10 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
         target: [x86_64, aarch64]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -212,7 +212,7 @@ jobs:
 
       - name: Set up QEMU
         if: matrix.target == 'aarch64'
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
 
@@ -244,7 +244,7 @@ jobs:
           timeout 300 pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}-${{ matrix.python-version }}
           path: dist
@@ -259,9 +259,9 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
       - name: Install uv
@@ -292,7 +292,7 @@ jobs:
           source .venv/bin/activate
           pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.python-version }}
           path: dist
@@ -307,10 +307,10 @@ jobs:
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
 
@@ -341,7 +341,7 @@ jobs:
           pytest tests/ -v --timeout=30 --timeout-method=thread -k "not pty"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.python-version }}
           path: dist
@@ -353,7 +353,7 @@ jobs:
     timeout-minutes: 15
     needs: [version-check]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
@@ -362,7 +362,7 @@ jobs:
           args: --out dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wheels-sdist
           path: dist
@@ -374,7 +374,7 @@ jobs:
     timeout-minutes: 15
     needs: [version-check]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Get version
         id: get_version
@@ -408,7 +408,7 @@ jobs:
           unzip -l release-web/par-term-web-frontend-v${{ steps.get_version.outputs.version }}.zip | head -20
 
       - name: Upload web frontend artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-frontend
           path: release-web/*
@@ -425,10 +425,10 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.14'
 
@@ -440,27 +440,27 @@ jobs:
           echo "Package version: $version"
 
       - name: Download Python wheel artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
           merge-multiple: true
 
       - name: Download streaming server binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: binary-*
           path: binaries
           merge-multiple: true
 
       - name: Download web frontend artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: web-frontend
           path: web-frontend
 
       - name: Sign the dists with Sigstore
-        uses: sigstore/gh-action-sigstore-python@v3.0.0
+        uses: sigstore/gh-action-sigstore-python@v3
         with:
           inputs: >-
             ./dist/*.tar.gz
@@ -516,7 +516,7 @@ jobs:
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@master
+        uses: Ilshidur/action-discord@0.4.0
         with:
           args: 'A new release v${{ steps.get_version.outputs.version }} has been created for {{ EVENT_PAYLOAD.repository.full_name }}.'
         continue-on-error: true
@@ -534,10 +534,10 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.14'
 
@@ -549,7 +549,7 @@ jobs:
           echo "Package version: $version"
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: wheels-*
           path: dist
@@ -564,7 +564,7 @@ jobs:
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@master
+        uses: Ilshidur/action-discord@0.4.0
         with:
           args: 'The project {{ EVENT_PAYLOAD.repository.full_name }} v${{ steps.get_version.outputs.version }} has been published to PyPI.'
         continue-on-error: true

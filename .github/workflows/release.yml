@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger deployment workflow
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const result = await github.rest.actions.createWorkflowDispatch({
@@ -28,7 +28,7 @@ jobs:
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@master
+        uses: Ilshidur/action-discord@0.4.0
         with:
           args: 'Release and publish workflow has been triggered for {{ EVENT_PAYLOAD.repository.full_name }}.'
         continue-on-error: true
