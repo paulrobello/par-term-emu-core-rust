@@ -179,17 +179,17 @@ pub fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
 
 /// Helper function to convert cells to text
 pub fn cells_to_text(cells: &[Cell]) -> String {
-    cells
-        .iter()
-        .map(|c| {
-            if c.flags.wide_char_spacer() {
-                " ".to_string()
-            } else {
-                c.get_grapheme()
-            }
-        })
-        .collect::<Vec<String>>()
-        .join("")
+    // Write directly into one String instead of allocating a Vec<String> per
+    // row (QA-006).
+    let mut result = String::with_capacity(cells.len());
+    for c in cells {
+        if c.flags.wide_char_spacer() {
+            result.push(' ');
+        } else {
+            c.push_grapheme(&mut result);
+        }
+    }
+    result
 }
 
 /// Helper function to escape HTML special characters

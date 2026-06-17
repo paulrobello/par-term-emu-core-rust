@@ -121,15 +121,19 @@ impl Grid {
 
     /// Get the text content of a row
     pub fn row_text(&self, row: usize) -> String {
-        if let Some(cells) = self.row(row) {
-            cells
-                .iter()
-                .filter(|cell| !cell.flags.wide_char_spacer())
-                .map(|cell| cell.get_grapheme())
-                .collect::<Vec<String>>()
-                .join("")
-        } else {
-            String::new()
+        // Write directly into one String instead of allocating a Vec<String>
+        // per row (QA-006).
+        match self.row(row) {
+            Some(cells) => {
+                let mut result = String::with_capacity(cells.len());
+                for cell in cells.iter() {
+                    if !cell.flags.wide_char_spacer() {
+                        cell.push_grapheme(&mut result);
+                    }
+                }
+                result
+            }
+            None => String::new(),
         }
     }
 

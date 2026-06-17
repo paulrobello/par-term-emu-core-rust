@@ -361,12 +361,19 @@ impl Cell {
     /// **Performance Note**: This method allocates a new String on every call.
     /// For performance-critical code, consider using `base_char()` and `has_combining_chars()`
     /// to avoid allocations when possible.
+    /// Append this cell's grapheme (base char + combining marks) to `buf`
+    /// without allocating a per-cell `String` (QA-006).
+    #[inline]
+    pub fn push_grapheme(&self, buf: &mut String) {
+        buf.push(self.c);
+        for &ch in &self.combining {
+            buf.push(ch);
+        }
+    }
+
     pub fn get_grapheme(&self) -> String {
         let mut result = String::with_capacity(1 + self.combining.len());
-        result.push(self.c);
-        for &ch in &self.combining {
-            result.push(ch);
-        }
+        self.push_grapheme(&mut result);
         result
     }
 
