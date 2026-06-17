@@ -20,32 +20,21 @@ pub type LineCellData = Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>;
 type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
 
 /// Cell attributes
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "Attributes", from_py_object)]
 #[derive(Clone)]
 pub struct PyAttributes {
-    #[pyo3(get)]
     pub bold: bool,
-    #[pyo3(get)]
     pub dim: bool,
-    #[pyo3(get)]
     pub italic: bool,
-    #[pyo3(get)]
     pub underline: bool,
-    #[pyo3(get)]
     pub blink: bool,
-    #[pyo3(get)]
     pub reverse: bool,
-    #[pyo3(get)]
     pub hidden: bool,
-    #[pyo3(get)]
     pub strikethrough: bool,
-    #[pyo3(get)]
     pub underline_style: PyUnderlineStyle,
-    #[pyo3(get)]
     pub wide_char: bool,
-    #[pyo3(get)]
     pub wide_char_spacer: bool,
-    #[pyo3(get)]
     pub hyperlink_id: Option<u32>,
 }
 
@@ -136,40 +125,33 @@ impl From<crate::terminal::replay_snapshot::TerminalSnapshot> for PyScreenSnapsh
 /// Captures all lines, cursor state, and screen identity at a single point in time.
 /// This immutable snapshot prevents race conditions where alternate screen switches
 /// happen between individual line render calls.
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ScreenSnapshot")]
 #[allow(clippy::type_complexity)]
 pub struct PyScreenSnapshot {
     /// All screen lines captured atomically
     /// Format: Vec<Vec<(String, fg_rgb, bg_rgb, attributes)>>
-    #[pyo3(get)]
     pub lines: Vec<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>,
 
     /// Wrapped state for each line (true = line continues to next row)
-    #[pyo3(get)]
     pub wrapped_lines: Vec<bool>,
 
     /// Cursor position at snapshot time (col, row)
-    #[pyo3(get)]
     pub cursor_pos: (usize, usize),
 
     /// Cursor visibility at snapshot time
-    #[pyo3(get)]
     pub cursor_visible: bool,
 
     /// Cursor style at snapshot time
-    #[pyo3(get)]
     pub cursor_style: PyCursorStyle,
 
     /// Which screen buffer was active (true = alternate)
-    #[pyo3(get)]
     pub is_alt_screen: bool,
 
     /// Generation counter at snapshot time
-    #[pyo3(get)]
     pub generation: u64,
 
     /// Terminal dimensions at snapshot time (cols, rows)
-    #[pyo3(get)]
     pub size: (usize, usize),
 }
 
@@ -219,24 +201,17 @@ impl PyScreenSnapshot {
 }
 
 /// Shell integration state
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ShellIntegration", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegration {
-    #[pyo3(get)]
     pub in_prompt: bool,
-    #[pyo3(get)]
     pub in_command_input: bool,
-    #[pyo3(get)]
     pub in_command_output: bool,
-    #[pyo3(get)]
     pub current_command: Option<String>,
-    #[pyo3(get)]
     pub last_exit_code: Option<i32>,
-    #[pyo3(get)]
     pub cwd: Option<String>,
-    #[pyo3(get)]
     pub hostname: Option<String>,
-    #[pyo3(get)]
     pub username: Option<String>,
 }
 
@@ -299,14 +274,13 @@ impl PyShellIntegration {
 /// print(f"Progress: {pb.progress}%")  # Output: Progress: 50%
 /// print(f"State: {pb.state}")  # Output: State: ProgressState.NORMAL
 /// ```
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ProgressBar", from_py_object)]
 #[derive(Clone)]
 pub struct PyProgressBar {
     /// Current progress state
-    #[pyo3(get)]
     pub state: super::enums::PyProgressState,
     /// Progress percentage (0-100)
-    #[pyo3(get)]
     pub progress: u8,
 }
 
@@ -354,14 +328,13 @@ impl From<&crate::terminal::ProgressBar> for PyProgressBar {
 }
 
 /// Image dimension with unit for sizing
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ImageDimension", from_py_object)]
 #[derive(Clone)]
 pub struct PyImageDimension {
     /// Numeric value (0 means auto)
-    #[pyo3(get)]
     pub value: f64,
     /// Unit: "auto", "cells", "pixels", or "percent"
-    #[pyo3(get)]
     pub unit: String,
 }
 
@@ -391,35 +364,27 @@ impl From<&crate::graphics::ImageDimension> for PyImageDimension {
 }
 
 /// Image placement metadata for rendering
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ImagePlacement", from_py_object)]
 #[derive(Clone)]
 pub struct PyImagePlacement {
     /// Display mode: "inline" or "download"
-    #[pyo3(get)]
     pub display_mode: String,
     /// Requested width dimension
-    #[pyo3(get)]
     pub requested_width: PyImageDimension,
     /// Requested height dimension
-    #[pyo3(get)]
     pub requested_height: PyImageDimension,
     /// Whether to preserve aspect ratio when scaling
-    #[pyo3(get)]
     pub preserve_aspect_ratio: bool,
     /// Number of columns to display (Kitty)
-    #[pyo3(get)]
     pub columns: Option<u32>,
     /// Number of rows to display (Kitty)
-    #[pyo3(get)]
     pub rows: Option<u32>,
     /// Z-index for layering
-    #[pyo3(get)]
     pub z_index: i32,
     /// X offset within the cell in pixels
-    #[pyo3(get)]
     pub x_offset: u32,
     /// Y offset within the cell in pixels
-    #[pyo3(get)]
     pub y_offset: u32,
 }
 
@@ -598,75 +563,59 @@ impl From<&crate::graphics::TerminalGraphic> for PyGraphic {
 }
 
 /// Tmux control protocol notification
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "TmuxNotification", from_py_object)]
 #[derive(Clone)]
 pub struct PyTmuxNotification {
     /// Notification type (e.g., "output", "window-add", "session-changed")
-    #[pyo3(get)]
     pub notification_type: String,
 
     /// Pane ID (for notifications that involve a pane)
-    #[pyo3(get)]
     pub pane_id: Option<String>,
 
     /// Window ID (for notifications that involve a window)
-    #[pyo3(get)]
     pub window_id: Option<String>,
 
     /// Session ID (for notifications that involve a session)
-    #[pyo3(get)]
     pub session_id: Option<String>,
 
     /// Name (for window/session rename notifications)
-    #[pyo3(get)]
     pub name: Option<String>,
 
     /// Client name (for client-related notifications)
-    #[pyo3(get)]
     pub client: Option<String>,
 
     /// Output data (for output notifications, as bytes)
-    #[pyo3(get)]
     pub data: Option<Vec<u8>>,
 
     /// Timestamp (for begin/end/error notifications)
-    #[pyo3(get)]
     pub timestamp: Option<u64>,
 
     /// Command number (for begin/end/error notifications)
-    #[pyo3(get)]
     pub command_number: Option<u32>,
 
     /// Flags (for begin/end/error notifications)
-    #[pyo3(get)]
     pub flags: Option<String>,
 
     /// Delay in milliseconds (for extended-output notifications)
-    #[pyo3(get)]
     pub delay_ms: Option<u64>,
 
     /// Subscription name (for subscription-changed notifications)
-    #[pyo3(get)]
     pub subscription_name: Option<String>,
 
     /// Subscription value (for subscription-changed notifications)
-    #[pyo3(get)]
     pub value: Option<String>,
 
     /// Window layout (for layout-change notifications)
-    #[pyo3(get)]
     pub window_layout: Option<String>,
 
     /// Window visible layout (for layout-change notifications)
-    #[pyo3(get)]
     pub window_visible_layout: Option<String>,
 
     /// Window raw flags (for layout-change notifications)
-    #[pyo3(get)]
     pub window_raw_flags: Option<String>,
 
     /// Raw line (for unknown notifications)
-    #[pyo3(get)]
     pub raw_line: Option<String>,
 }
 
@@ -1264,20 +1213,17 @@ impl From<crate::terminal::search::RegexMatch> for PySearchMatch {
 }
 
 /// Search match result
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "SearchMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PySearchMatch {
     /// Row index (negative for scrollback, 0+ for visible screen)
-    #[pyo3(get)]
     pub row: isize,
     /// Column index
-    #[pyo3(get)]
     pub col: usize,
     /// Length of the match
-    #[pyo3(get)]
     pub length: usize,
     /// Matched text
-    #[pyo3(get)]
     pub text: String,
 }
 
@@ -1292,23 +1238,19 @@ impl PySearchMatch {
 }
 
 /// Detected semantic item
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "DetectedItem", from_py_object)]
 #[derive(Clone)]
 pub struct PyDetectedItem {
     /// Item type: "url", "filepath", "git_hash", "ip", or "email"
-    #[pyo3(get)]
     pub item_type: String,
     /// The detected text
-    #[pyo3(get)]
     pub text: String,
     /// Row index
-    #[pyo3(get)]
     pub row: usize,
     /// Column index
-    #[pyo3(get)]
     pub col: usize,
     /// Optional line number (for file paths like "file.txt:123")
-    #[pyo3(get)]
     pub line_number: Option<usize>,
 }
 
@@ -1332,17 +1274,15 @@ pub enum PySelectionMode {
 }
 
 /// Selection state
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "Selection", from_py_object)]
 #[derive(Clone)]
 pub struct PySelection {
     /// Start position (col, row)
-    #[pyo3(get)]
     pub start: (usize, usize),
     /// End position (col, row)
-    #[pyo3(get)]
     pub end: (usize, usize),
     /// Selection mode
-    #[pyo3(get)]
     pub mode: String,
 }
 
@@ -1357,17 +1297,15 @@ impl PySelection {
 }
 
 /// Scrollback statistics
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ScrollbackStats", from_py_object)]
 #[derive(Clone)]
 pub struct PyScrollbackStats {
     /// Total number of scrollback lines
-    #[pyo3(get)]
     pub total_lines: usize,
     /// Estimated memory usage in bytes
-    #[pyo3(get)]
     pub memory_bytes: usize,
     /// Whether the scrollback buffer has wrapped (cycled)
-    #[pyo3(get)]
     pub has_wrapped: bool,
 }
 
@@ -1382,17 +1320,15 @@ impl PyScrollbackStats {
 }
 
 /// Bookmark
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "Bookmark", from_py_object)]
 #[derive(Clone)]
 pub struct PyBookmark {
     /// Bookmark ID
-    #[pyo3(get)]
     pub id: usize,
     /// Row index (negative for scrollback, 0+ for visible screen)
-    #[pyo3(get)]
     pub row: isize,
     /// Bookmark label
-    #[pyo3(get)]
     pub label: String,
 }
 
@@ -1409,24 +1345,17 @@ impl PyBookmark {
 // === Feature 7: Performance Metrics ===
 
 /// Performance metrics
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "PerformanceMetrics", from_py_object)]
 #[derive(Clone)]
 pub struct PyPerformanceMetrics {
-    #[pyo3(get)]
     pub frames_rendered: u64,
-    #[pyo3(get)]
     pub cells_updated: u64,
-    #[pyo3(get)]
     pub bytes_processed: u64,
-    #[pyo3(get)]
     pub total_processing_us: u64,
-    #[pyo3(get)]
     pub peak_frame_us: u64,
-    #[pyo3(get)]
     pub scroll_count: u64,
-    #[pyo3(get)]
     pub wrap_count: u64,
-    #[pyo3(get)]
     pub escape_sequences: u64,
 }
 
@@ -1447,16 +1376,13 @@ impl PyPerformanceMetrics {
 }
 
 /// Frame timing
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "FrameTiming", from_py_object)]
 #[derive(Clone)]
 pub struct PyFrameTiming {
-    #[pyo3(get)]
     pub frame_number: u64,
-    #[pyo3(get)]
     pub processing_us: u64,
-    #[pyo3(get)]
     pub cells_updated: usize,
-    #[pyo3(get)]
     pub bytes_processed: usize,
 }
 
@@ -1473,14 +1399,12 @@ impl PyFrameTiming {
 // === Feature 8: Advanced Color Operations ===
 
 /// HSV color
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ColorHSV", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSV {
-    #[pyo3(get)]
     pub h: f32,
-    #[pyo3(get)]
     pub s: f32,
-    #[pyo3(get)]
     pub v: f32,
 }
 
@@ -1500,14 +1424,12 @@ impl PyColorHSV {
 }
 
 /// HSL color
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ColorHSL", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSL {
-    #[pyo3(get)]
     pub h: f32,
-    #[pyo3(get)]
     pub s: f32,
-    #[pyo3(get)]
     pub l: f32,
 }
 
@@ -1527,14 +1449,12 @@ impl PyColorHSL {
 }
 
 /// Color palette
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ColorPalette", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorPalette {
-    #[pyo3(get)]
     pub base: (u8, u8, u8),
-    #[pyo3(get)]
     pub colors: Vec<(u8, u8, u8)>,
-    #[pyo3(get)]
     pub mode: String,
 }
 
@@ -1552,16 +1472,13 @@ impl PyColorPalette {
 // === Feature 9: Line Wrapping Utilities ===
 
 /// Joined lines result
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "JoinedLines", from_py_object)]
 #[derive(Clone)]
 pub struct PyJoinedLines {
-    #[pyo3(get)]
     pub text: String,
-    #[pyo3(get)]
     pub start_row: usize,
-    #[pyo3(get)]
     pub end_row: usize,
-    #[pyo3(get)]
     pub lines_joined: usize,
 }
 
@@ -1581,14 +1498,12 @@ impl PyJoinedLines {
 // === Feature 10: Clipboard Integration ===
 
 /// Clipboard entry
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ClipboardEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardEntry {
-    #[pyo3(get)]
     pub content: String,
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub label: Option<String>,
 }
 
@@ -1606,24 +1521,17 @@ impl PyClipboardEntry {
 // === Feature 17: Advanced Mouse Support ===
 
 /// Mouse event
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "MouseEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMouseEvent {
-    #[pyo3(get)]
     pub event_type: String,
-    #[pyo3(get)]
     pub button: String,
-    #[pyo3(get)]
     pub col: usize,
-    #[pyo3(get)]
     pub row: usize,
-    #[pyo3(get)]
     pub pixel_x: Option<u16>,
-    #[pyo3(get)]
     pub pixel_y: Option<u16>,
-    #[pyo3(get)]
     pub modifiers: u8,
-    #[pyo3(get)]
     pub timestamp: u64,
 }
 
@@ -1673,14 +1581,12 @@ impl From<&crate::mouse::MouseEventRecord> for PyMouseEvent {
 }
 
 /// Mouse position
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "MousePosition", from_py_object)]
 #[derive(Clone)]
 pub struct PyMousePosition {
-    #[pyo3(get)]
     pub col: usize,
-    #[pyo3(get)]
     pub row: usize,
-    #[pyo3(get)]
     pub timestamp: u64,
 }
 
@@ -1707,16 +1613,13 @@ impl From<&crate::mouse::MousePosition> for PyMousePosition {
 // === Feature 19: Custom Rendering Hints ===
 
 /// Damage region
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "DamageRegion", from_py_object)]
 #[derive(Clone)]
 pub struct PyDamageRegion {
-    #[pyo3(get)]
     pub left: usize,
-    #[pyo3(get)]
     pub top: usize,
-    #[pyo3(get)]
     pub right: usize,
-    #[pyo3(get)]
     pub bottom: usize,
 }
 
@@ -1742,16 +1645,13 @@ impl From<&crate::terminal::DamageRegion> for PyDamageRegion {
 }
 
 /// Rendering hint
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "RenderingHint", from_py_object)]
 #[derive(Clone)]
 pub struct PyRenderingHint {
-    #[pyo3(get)]
     pub damage: PyDamageRegion,
-    #[pyo3(get)]
     pub layer: String,
-    #[pyo3(get)]
     pub animation: String,
-    #[pyo3(get)]
     pub priority: u8,
 }
 
@@ -1797,16 +1697,13 @@ impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
 // === Feature 16: Performance Profiling ===
 
 /// Escape sequence profile
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "EscapeSequenceProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyEscapeSequenceProfile {
-    #[pyo3(get)]
     pub count: u64,
-    #[pyo3(get)]
     pub total_time_us: u64,
-    #[pyo3(get)]
     pub peak_time_us: u64,
-    #[pyo3(get)]
     pub avg_time_us: u64,
 }
 
@@ -1832,16 +1729,13 @@ impl From<&crate::terminal::EscapeSequenceProfile> for PyEscapeSequenceProfile {
 }
 
 /// Profiling data
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ProfilingData", from_py_object)]
 #[derive(Clone)]
 pub struct PyProfilingData {
-    #[pyo3(get)]
     pub categories: std::collections::HashMap<String, PyEscapeSequenceProfile>,
-    #[pyo3(get)]
     pub allocations: u64,
-    #[pyo3(get)]
     pub bytes_allocated: u64,
-    #[pyo3(get)]
     pub peak_memory: usize,
 }
 
@@ -1887,18 +1781,14 @@ impl From<&crate::terminal::ProfilingData> for PyProfilingData {
 // === Feature 14: Snapshot Diffing ===
 
 /// Line diff
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "LineDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PyLineDiff {
-    #[pyo3(get)]
     pub change_type: String,
-    #[pyo3(get)]
     pub old_row: Option<usize>,
-    #[pyo3(get)]
     pub new_row: Option<usize>,
-    #[pyo3(get)]
     pub old_content: Option<String>,
-    #[pyo3(get)]
     pub new_content: Option<String>,
 }
 
@@ -1935,18 +1825,14 @@ impl From<&crate::terminal::LineDiff> for PyLineDiff {
 }
 
 /// Snapshot diff
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "SnapshotDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PySnapshotDiff {
-    #[pyo3(get)]
     pub diffs: Vec<PyLineDiff>,
-    #[pyo3(get)]
     pub added: usize,
-    #[pyo3(get)]
     pub removed: usize,
-    #[pyo3(get)]
     pub modified: usize,
-    #[pyo3(get)]
     pub unchanged: usize,
 }
 
@@ -1975,20 +1861,15 @@ impl From<&crate::terminal::SnapshotDiff> for PySnapshotDiff {
 // === Feature 15: Regex Search ===
 
 /// Regex match
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "RegexMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyRegexMatch {
-    #[pyo3(get)]
     pub row: usize,
-    #[pyo3(get)]
     pub col: usize,
-    #[pyo3(get)]
     pub end_row: usize,
-    #[pyo3(get)]
     pub end_col: usize,
-    #[pyo3(get)]
     pub text: String,
-    #[pyo3(get)]
     pub captures: Vec<String>,
 }
 
@@ -2018,30 +1899,20 @@ impl From<&crate::terminal::RegexMatch> for PyRegexMatch {
 // === Feature 13: Multiplexing ===
 
 /// Pane state
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "PaneState", from_py_object)]
 #[derive(Clone)]
 pub struct PyPaneState {
-    #[pyo3(get)]
     pub id: String,
-    #[pyo3(get)]
     pub title: String,
-    #[pyo3(get)]
     pub size: (usize, usize),
-    #[pyo3(get)]
     pub position: (usize, usize),
-    #[pyo3(get)]
     pub cwd: Option<String>,
-    #[pyo3(get)]
     pub content: Vec<String>,
-    #[pyo3(get)]
     pub cursor: (usize, usize),
-    #[pyo3(get)]
     pub alt_screen: bool,
-    #[pyo3(get)]
     pub scroll_offset: usize,
-    #[pyo3(get)]
     pub created_at: u64,
-    #[pyo3(get)]
     pub last_activity: u64,
 }
 
@@ -2074,20 +1945,15 @@ impl From<&crate::terminal::PaneState> for PyPaneState {
 }
 
 /// Window layout
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "WindowLayout", from_py_object)]
 #[derive(Clone)]
 pub struct PyWindowLayout {
-    #[pyo3(get)]
     pub id: String,
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub direction: String,
-    #[pyo3(get)]
     pub panes: Vec<String>,
-    #[pyo3(get)]
     pub sizes: Vec<u8>,
-    #[pyo3(get)]
     pub active_pane: usize,
 }
 
@@ -2125,22 +1991,16 @@ impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
 }
 
 /// Session state
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "SessionState", from_py_object)]
 #[derive(Clone)]
 pub struct PySessionState {
-    #[pyo3(get)]
     pub id: String,
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub panes: Vec<PyPaneState>,
-    #[pyo3(get)]
     pub layouts: Vec<PyWindowLayout>,
-    #[pyo3(get)]
     pub active_layout: usize,
-    #[pyo3(get)]
     pub created_at: u64,
-    #[pyo3(get)]
     pub last_saved: u64,
 }
 
@@ -2195,26 +2055,18 @@ pub enum PyImageFormat {
 }
 
 /// Inline image
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "InlineImage", from_py_object)]
 #[derive(Clone)]
 pub struct PyInlineImage {
-    #[pyo3(get)]
     pub id: Option<String>,
-    #[pyo3(get)]
     pub protocol: String,
-    #[pyo3(get)]
     pub format: String,
-    #[pyo3(get)]
     pub data: Vec<u8>,
-    #[pyo3(get)]
     pub width: u32,
-    #[pyo3(get)]
     pub height: u32,
-    #[pyo3(get)]
     pub position: (usize, usize),
-    #[pyo3(get)]
     pub display_cols: usize,
-    #[pyo3(get)]
     pub display_rows: usize,
 }
 
@@ -2266,26 +2118,18 @@ impl From<&crate::terminal::InlineImage> for PyInlineImage {
 // === Feature 28: Benchmarking Suite ===
 
 /// Benchmark result
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "BenchmarkResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkResult {
-    #[pyo3(get)]
     pub category: String,
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub iterations: u64,
-    #[pyo3(get)]
     pub total_time_us: u64,
-    #[pyo3(get)]
     pub avg_time_us: u64,
-    #[pyo3(get)]
     pub min_time_us: u64,
-    #[pyo3(get)]
     pub max_time_us: u64,
-    #[pyo3(get)]
     pub ops_per_sec: f64,
-    #[pyo3(get)]
     pub memory_bytes: Option<usize>,
 }
 
@@ -2328,14 +2172,12 @@ impl From<&crate::terminal::BenchmarkResult> for PyBenchmarkResult {
 }
 
 /// Benchmark suite
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "BenchmarkSuite", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkSuite {
-    #[pyo3(get)]
     pub results: Vec<PyBenchmarkResult>,
-    #[pyo3(get)]
     pub total_time_ms: u64,
-    #[pyo3(get)]
     pub suite_name: String,
 }
 
@@ -2364,20 +2206,15 @@ impl From<&crate::terminal::BenchmarkSuite> for PyBenchmarkSuite {
 // === Feature 29: Terminal Compliance Testing ===
 
 /// Compliance test
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ComplianceTest", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceTest {
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub category: String,
-    #[pyo3(get)]
     pub passed: bool,
-    #[pyo3(get)]
     pub expected: String,
-    #[pyo3(get)]
     pub actual: String,
-    #[pyo3(get)]
     pub notes: Option<String>,
 }
 
@@ -2405,20 +2242,15 @@ impl From<&crate::terminal::ComplianceTest> for PyComplianceTest {
 }
 
 /// Compliance report
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ComplianceReport", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceReport {
-    #[pyo3(get)]
     pub terminal_info: String,
-    #[pyo3(get)]
     pub level: String,
-    #[pyo3(get)]
     pub tests: Vec<PyComplianceTest>,
-    #[pyo3(get)]
     pub passed: usize,
-    #[pyo3(get)]
     pub failed: usize,
-    #[pyo3(get)]
     pub compliance_percent: f64,
 }
 
@@ -2464,20 +2296,15 @@ impl From<&crate::terminal::ComplianceReport> for PyComplianceReport {
 // === Feature 30: OSC 52 Clipboard Sync ===
 
 /// Clipboard sync event
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ClipboardSyncEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardSyncEvent {
-    #[pyo3(get)]
     pub target: String,
-    #[pyo3(get)]
     pub operation: String,
-    #[pyo3(get)]
     pub content: Option<String>,
-    #[pyo3(get)]
     pub is_write: bool,
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub is_remote: bool,
 }
 
@@ -2522,16 +2349,13 @@ impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
 }
 
 /// Clipboard history entry
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ClipboardHistoryEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardHistoryEntry {
-    #[pyo3(get)]
     pub target: String,
-    #[pyo3(get)]
     pub content: String,
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub source: Option<String>,
 }
 
@@ -2571,26 +2395,18 @@ impl From<&crate::terminal::ClipboardHistoryEntry> for PyClipboardHistoryEntry {
 // === Feature 31: Shell Integration++ ===
 
 /// Command execution record
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "CommandExecution", from_py_object)]
 #[derive(Clone)]
 pub struct PyCommandExecution {
-    #[pyo3(get)]
     pub command: String,
-    #[pyo3(get)]
     pub cwd: Option<String>,
-    #[pyo3(get)]
     pub start_time: u64,
-    #[pyo3(get)]
     pub end_time: Option<u64>,
-    #[pyo3(get)]
     pub exit_code: Option<i32>,
-    #[pyo3(get)]
     pub duration_ms: Option<u64>,
-    #[pyo3(get)]
     pub success: Option<bool>,
-    #[pyo3(get)]
     pub output_start_row: Option<usize>,
-    #[pyo3(get)]
     pub output_end_row: Option<usize>,
 }
 
@@ -2621,18 +2437,14 @@ impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
 }
 
 /// Shell integration statistics
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ShellIntegrationStats", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegrationStats {
-    #[pyo3(get)]
     pub total_commands: usize,
-    #[pyo3(get)]
     pub successful_commands: usize,
-    #[pyo3(get)]
     pub failed_commands: usize,
-    #[pyo3(get)]
     pub avg_duration_ms: f64,
-    #[pyo3(get)]
     pub total_duration_ms: u64,
 }
 
@@ -2662,18 +2474,14 @@ impl From<&crate::terminal::ShellIntegrationStats> for PyShellIntegrationStats {
 }
 
 /// CWD change notification
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "CwdChange", from_py_object)]
 #[derive(Clone)]
 pub struct PyCwdChange {
-    #[pyo3(get)]
     pub old_cwd: Option<String>,
-    #[pyo3(get)]
     pub new_cwd: String,
-    #[pyo3(get)]
     pub hostname: Option<String>,
-    #[pyo3(get)]
     pub username: Option<String>,
-    #[pyo3(get)]
     pub timestamp: u64,
 }
 
@@ -2702,18 +2510,14 @@ impl From<&crate::terminal::CwdChange> for PyCwdChange {
 // === Feature 37: Terminal Notifications ===
 
 /// Notification event
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "NotificationEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyNotificationEvent {
-    #[pyo3(get)]
     pub trigger: String,
-    #[pyo3(get)]
     pub alert: String,
-    #[pyo3(get)]
     pub message: Option<String>,
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub delivered: bool,
 }
 
@@ -2833,20 +2637,15 @@ impl From<&PyNotificationConfig> for crate::terminal::NotificationConfig {
 // === Feature 18: Triggers & Automation ===
 
 /// Trigger information (read-only view)
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "Trigger", from_py_object)]
 #[derive(Clone)]
 pub struct PyTrigger {
-    #[pyo3(get)]
     pub id: u64,
-    #[pyo3(get)]
     pub name: String,
-    #[pyo3(get)]
     pub pattern: String,
-    #[pyo3(get)]
     pub enabled: bool,
-    #[pyo3(get)]
     pub fire_once_per_line: bool,
-    #[pyo3(get)]
     pub match_count: usize,
 }
 
@@ -2874,22 +2673,16 @@ impl From<&crate::terminal::trigger::Trigger> for PyTrigger {
 }
 
 /// Trigger match result
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "TriggerMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyTriggerMatch {
-    #[pyo3(get)]
     pub trigger_id: u64,
-    #[pyo3(get)]
     pub row: usize,
-    #[pyo3(get)]
     pub col: usize,
-    #[pyo3(get)]
     pub end_col: usize,
-    #[pyo3(get)]
     pub text: String,
-    #[pyo3(get)]
     pub captures: Vec<String>,
-    #[pyo3(get)]
     pub timestamp: u64,
 }
 
@@ -2918,15 +2711,14 @@ impl From<&crate::terminal::trigger::TriggerMatch> for PyTriggerMatch {
 }
 
 /// Trigger action configuration (constructable from Python)
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "TriggerAction", from_py_object)]
 #[derive(Clone)]
 pub struct PyTriggerAction {
     /// Action type: "highlight", "notify", "mark_line", "set_variable",
     /// "run_command", "play_sound", "send_text", "split_pane", "stop"
-    #[pyo3(get)]
     pub action_type: String,
     /// Action parameters (key-value pairs, type-specific)
-    #[pyo3(get)]
     pub params: std::collections::HashMap<String, String>,
 }
 
@@ -3208,16 +3000,13 @@ impl From<&PyCoprocessConfig> for crate::coprocess::CoprocessConfig {
 // === Feature 24: Terminal Replay/Recording ===
 
 /// Recording event
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "RecordingEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyRecordingEvent {
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub event_type: String,
-    #[pyo3(get)]
     pub data: Vec<u8>,
-    #[pyo3(get)]
     pub metadata: Option<(usize, usize)>,
 }
 
@@ -3342,18 +3131,14 @@ impl From<crate::terminal::RecordingSession> for PyRecordingSession {
 }
 
 /// Macro event
+#[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "MacroEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMacroEvent {
-    #[pyo3(get)]
     pub event_type: String,
-    #[pyo3(get)]
     pub timestamp: u64,
-    #[pyo3(get)]
     pub key: Option<String>,
-    #[pyo3(get)]
     pub duration: Option<u64>,
-    #[pyo3(get)]
     pub label: Option<String>,
 }
 

@@ -1,0 +1,14 @@
+[package]
+name = "par-term-emu-derive"
+version = "0.42.4"
+edition = "2021"
+description = "Proc-macro helpers for par-term-emu-core-rust Python bindings (ARC-014)"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+proc-macro2 = "1"

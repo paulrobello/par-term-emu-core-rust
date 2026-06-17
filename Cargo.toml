@@ -48,6 +48,8 @@ required-features = ["streaming-bin"]
 
 [dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
+# Proc-macro helpers (#[pyo3_get_all]) for the Python data classes (ARC-014).
+par-term-emu-derive = { path = "derive", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
 portable-pty = "0.9.0"
@@ -142,7 +144,7 @@ tempfile = "3.27"
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
