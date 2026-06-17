@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No public changes yet._
 
+## [0.43.1] - 2026-06-17
+
+### Security
+- **Kitty graphics protocol: integer-overflow DoS in `decode_pixels`** (`src/graphics/kitty.rs`). Raw RGBA/RGB size checks and the RGB `Vec::with_capacity` used `width * height * (4|3)` with attacker-controlled `u32` dimensions that could wrap `usize`, bypass the size check, and yield a graphic with huge dimensions over a tiny buffer → out-of-bounds read/panic on malicious terminal/SSH graphics output. Now uses `checked_mul` and rejects overflowing dimensions. Regression tests added.
+- **Web-frontend dependency advisories resolved (`npm audit`: 4 → 0).** `@babel/core` (CVE-2026-49356, arbitrary file read via `sourceMappingURL`), `postcss` (CVE-2026-41305, XSS via unescaped `</style>`) nested under `next`, and `brace-expansion` (GHSA-jxxr-4gwj-5jf2). Fixed via `npm audit fix` plus an npm `overrides` entry that dedupes the nested `postcss` to the safe top-level 8.5.15 — deliberately avoiding npm's suggested `--force`, which would have downgraded Next.js 16 → 9. Build-time-only; the shipped `web_term/` output is unchanged.
+
+### Fixed
+- **Kitty `V=` relative offset now parsed unconditionally.** `parse_chunk` dropped `relative_y_offset` (`V=`) unless `P=` (parent) had already been parsed, while `H=` (`relative_x_offset`) was unconditional. The offset is only applied when a parent exists, so the guard only caused `V=` to be silently dropped; it now matches `H=`.
+- **Kitty `parse_delete_target` handles `i`/`p`/`x`/`y`.** The parser only emitted `All`/`AtCursor`/`OnScreen` (`a`/`c`/`z`), so `d=i`/`d=p`/`d=x`/`d=y` were silently ignored and the matching `build_graphic` Delete arms (`ById`/`ByPlacement`/`ByColumn`/`ByRow`) were dead code. They are now parsed (the identifying `i=`/`x=`/`y=` param must precede `d=`, else the delete is a safe no-op). Regression tests added.
+
 ## [0.43.0] - 2026-06-17
 
 ### Security

@@ -19,6 +19,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 > The entries below cover recent highlights; older entries may be archived
 > to CHANGELOG.md in future releases to keep this section concise (DOC-016).
 
+Version 0.43.1 is a **patch release** with security and correctness fixes. **Security:** closed a Kitty graphics integer-overflow DoS in `decode_pixels` (attacker-controlled image dimensions could wrap the size check → OOB/panic on malicious output), and resolved all open web-frontend npm advisories (`@babel/core` CVE-2026-49356, `postcss` CVE-2026-41305, `brace-expansion`) — `npm audit` now clean. **Fixed:** the Kitty `V=` relative-offset parsing asymmetry, and incomplete `parse_delete_target` (`d=i`/`p`/`x`/`y` now handled instead of silently ignored). See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.43.0
+
 Version 0.43.0 is a **minor release** that ships the full code-quality/audit remediation plus new public API. **Added:** `ScreenshotConfig` options object, runtime-configurable OSC data limit (`max_osc_data_length` / `set_max_osc_data_length`), streaming-server `allowed_origins` CSRF defense, and a `TerminalAction` enum for test-in-isolation / record→replay. **Hardened** the standalone streaming server (bounded zlib decompression, explicit WebSocket message-size caps, constant-time htpasswd auth, Origin validation, public-bind warning). **Refactored** (no API change): the `Terminal` and `PyTerminal` god objects are decomposed and the duplicated Python-binding methods + WebSocket handlers are consolidated. **Performance:** read/write-lock concurrency, inline combining marks (`SmallVec`), single-allocation `row_text`, bounded glyph LRU. **Fixed:** a trigger bug where `Notify` / `MarkLine` / `StopPropagation` actions were queued but never applied to terminal state. **Tooling:** integration tests and doctests now run in the CI gate, and new `make coverage` / `coverage-html` / `coverage-python` targets. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.42.4
@@ -1117,8 +1121,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.0.tar.gz
-tar -xzf par-term-web-frontend-v0.43.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.1.tar.gz
+tar -xzf par-term-web-frontend-v0.43.1.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -1427,8 +1431,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.0.tar.gz
-tar -xzf par-term-web-frontend-v0.43.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.1.tar.gz
+tar -xzf par-term-web-frontend-v0.43.1.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term
