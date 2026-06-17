@@ -64,11 +64,13 @@ jobs:
 
       - name: Dry run publish
         if: steps.check_version.outputs.exists == 'false'
-        run: cargo publish --dry-run
+        # --no-verify: PyO3 cdylib can't link libpython standalone; see
+        # deployment.yml. The crate is verified via maturin + tests.
+        run: cargo publish --dry-run --no-verify
 
       - name: Publish to crates.io
         if: steps.check_version.outputs.exists == 'false'
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --no-verify --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
