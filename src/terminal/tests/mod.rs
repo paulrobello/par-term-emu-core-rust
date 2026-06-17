@@ -9,6 +9,8 @@ mod bookmarks;
 #[cfg(test)]
 mod clipboard;
 #[cfg(test)]
+mod coverage_gaps;
+#[cfg(test)]
 mod cursor;
 #[cfg(test)]
 mod detection;

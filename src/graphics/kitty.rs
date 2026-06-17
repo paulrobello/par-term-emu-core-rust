@@ -1392,4 +1392,1278 @@ mod tests {
             _ => panic!("Expected Graphic result"),
         }
     }
+
+    // =========================================================================
+    // Additional coverage: malformed/edge-case parser input, decompression
+    // fallback, placement math, delete/query actions, file security, raw
+    // RGB/RGBA decoding, frame/animation-control error paths.
+    // =========================================================================
+
+    // --- parse_chunk edge cases ---
+
+    #[test]
+    fn test_parse_chunk_empty_payload() {
+        // Empty string: no pairs, no data — should succeed, no more_chunks.
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+        // Default action preserved
+        assert_eq!(parser.action, KittyAction::Transmit);
+    }
+
+    #[test]
+    fn test_parse_chunk_no_semicolon_uses_entire_payload_as_params() {
+        // Without ';' data_str is "" so nothing is decoded.
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=q,i=7");
+        assert!(result.is_ok());
+        assert_eq!(parser.action, KittyAction::Query);
+        assert_eq!(parser.image_id, Some(7));
+    }
+
+    #[test]
+    fn test_parse_chunk_pair_without_equals_is_ignored() {
+        // A pair with no '=' should be skipped silently (no panic).
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("garbage,a=q");
+        assert!(result.is_ok());
+        assert_eq!(parser.action, KittyAction::Query);
+    }
+
+    #[test]
+    fn test_parse_chunk_empty_value_leaves_action_unchanged() {
+        // Empty value -> value.chars().next() is None -> the action match arm's
+        // `if let Some(c)` body never runs, so action is UNCHANGED (not reset).
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Query; // pre-set something non-default
+        let _ = parser.parse_chunk("a=");
+        assert_eq!(parser.action, KittyAction::Query); // unchanged
+    }
+
+    #[test]
+    fn test_parse_chunk_invalid_format_code_falls_back_to_default() {
+        // Format code 99 is invalid -> falls back to default (Rgba).
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,f=99;");
+        assert_eq!(parser.format, KittyFormat::Rgba);
+    }
+
+    #[test]
+    fn test_parse_chunk_non_numeric_format_is_ignored() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Png;
+        let _ = parser.parse_chunk("a=T,f=abc;");
+        assert_eq!(parser.format, KittyFormat::Png); // unchanged
+    }
+
+    #[test]
+    fn test_parse_chunk_invalid_medium_char_falls_back_to_default() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,t=x;"); // 'x' is not a valid medium
+        assert_eq!(parser.medium, KittyMedium::Direct); // default
+    }
+
+    #[test]
+    fn test_parse_chunk_invalid_action_char_falls_back_to_default() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=Z;"); // 'Z' is not a valid action
+        assert_eq!(parser.action, KittyAction::Transmit); // default
+    }
+
+    #[test]
+    fn test_parse_chunk_non_numeric_id_is_ignored() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,i=notanumber,p=alsonot;");
+        assert_eq!(parser.image_id, None);
+        assert_eq!(parser.placement_id, None);
+    }
+
+    #[test]
+    fn test_parse_chunk_unknown_key_is_ignored() {
+        // Unknown key should hit the `_ => {}` arm cleanly.
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("zzz=123,a=q");
+        assert!(result.is_ok());
+        assert_eq!(parser.action, KittyAction::Query);
+    }
+
+    #[test]
+    fn test_parse_chunk_more_chunks_explicit_zero() {
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=T,m=0;");
+        assert!(result.is_ok());
+        assert!(!result.unwrap());
+    }
+
+    #[test]
+    fn test_parse_chunk_more_chunks_non_one_is_false() {
+        // m= only true when value == "1"; "2", "true", etc. are false.
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,m=2;");
+        assert!(!parser.more_chunks);
+    }
+
+    #[test]
+    fn test_parse_chunk_width_and_height_for_transmit() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,s=10,v=20;");
+        assert_eq!(parser.width, Some(10));
+        assert_eq!(parser.height, Some(20));
+    }
+
+    #[test]
+    fn test_parse_chunk_columns_rows_for_non_frame() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,c=8,r=4;");
+        assert_eq!(parser.columns, Some(8));
+        assert_eq!(parser.rows, Some(4));
+    }
+
+    #[test]
+    fn test_parse_chunk_frame_overloads_c_and_r() {
+        // For Frame: c= is composition, r= is frame number
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=f,c=1,r=5;");
+        assert_eq!(parser.frame_composition, Some(CompositionMode::Overwrite));
+        assert_eq!(parser.frame_number, Some(5));
+        // columns/rows should NOT be set for frame action
+        assert_eq!(parser.columns, None);
+        assert_eq!(parser.rows, None);
+    }
+
+    #[test]
+    fn test_parse_chunk_frame_composition_invalid_char() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=f,c=Z;");
+        assert_eq!(parser.frame_composition, None);
+    }
+
+    #[test]
+    fn test_parse_chunk_animation_control_overloads_s_and_v() {
+        // For AnimationControl: s= is control, v= is num_plays
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=a,s=3,v=5,i=1;");
+        assert_eq!(parser.action, KittyAction::AnimationControl);
+        assert_eq!(
+            parser.animation_control,
+            Some(AnimationControl::EnableLooping)
+        );
+        assert_eq!(parser.num_plays, Some(5));
+        // width/height should NOT be set for animation-control action
+        assert_eq!(parser.width, None);
+        assert_eq!(parser.height, None);
+    }
+
+    #[test]
+    fn test_parse_chunk_animation_control_invalid_s_value() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=a,s=99;");
+        assert_eq!(parser.animation_control, None);
+    }
+
+    #[test]
+    fn test_parse_chunk_quietness_levels() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,q=2;");
+        assert_eq!(parser.quietness, 2);
+
+        let mut parser2 = KittyParser::new();
+        let _ = parser2.parse_chunk("a=T,q=notanumber;");
+        assert_eq!(parser2.quietness, 0); // default, parse failed
+    }
+
+    #[test]
+    fn test_parse_chunk_offsets_and_parents() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=p,i=1,P=2,Q=3,H=10;");
+        assert_eq!(parser.x_offset, None); // x= not parsed here
+        assert_eq!(parser.y_offset, None); // y= not parsed here
+        assert_eq!(parser.parent_image_id, Some(2));
+        assert_eq!(parser.parent_placement_id, Some(3));
+        assert_eq!(parser.relative_x_offset, Some(10));
+    }
+
+    #[test]
+    fn test_parse_chunk_virtual_placement_flag() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=p,i=1,U=1;");
+        assert!(parser.is_virtual);
+
+        let mut parser2 = KittyParser::new();
+        let _ = parser2.parse_chunk("a=p,i=1,U=0;");
+        assert!(!parser2.is_virtual);
+    }
+
+    #[test]
+    fn test_parse_chunk_x_y_offsets_parsed() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,x=15,y=25;");
+        assert_eq!(parser.x_offset, Some(15));
+        assert_eq!(parser.y_offset, Some(25));
+    }
+
+    #[test]
+    fn test_parse_chunk_compression_invalid_char_ignored() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,o=Q;"); // 'Q' not a valid compression
+        assert_eq!(parser.compression, KittyCompression::None);
+    }
+
+    #[test]
+    fn test_parse_chunk_base64_invalid_returns_error() {
+        // Characters outside the base64 alphabet must produce Base64Error.
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=T;!!!!notbase64!!!!");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("base64") || err.contains("Invalid base64"));
+    }
+
+    #[test]
+    fn test_parse_chunk_base64_unpadded_decodes() {
+        // STANDARD_NO_PAD fallback path: "QUFB" is "AAA" with no padding.
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=T;QUFB");
+        assert!(result.is_ok());
+        let data = parser.get_data();
+        assert_eq!(data, b"AAA");
+    }
+
+    #[test]
+    fn test_parse_chunk_base64_padded_decodes() {
+        // Standard padded path: 5 bytes (QkFBQPI= is "AAAABBBB" tail) -- use a
+        // length that requires padding. 1 byte -> "QQ==" decodes to "A".
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=T;QQ==");
+        assert!(result.is_ok());
+        assert_eq!(parser.get_data(), b"A");
+    }
+
+    // --- reset() ---
+
+    #[test]
+    fn test_reset_clears_all_state() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,f=100,i=42,m=1;o=z,s=2,v=2;AAAA");
+        assert_eq!(parser.image_id, Some(42));
+        assert!(parser.more_chunks);
+
+        parser.reset();
+        assert_eq!(parser.action, KittyAction::Transmit);
+        assert_eq!(parser.image_id, None);
+        assert_eq!(parser.format, KittyFormat::Rgba);
+        assert!(!parser.more_chunks);
+        assert_eq!(parser.compression, KittyCompression::None);
+        // After reset, accumulated data chunks are gone.
+        assert!(parser.get_data().is_empty());
+    }
+
+    // --- get_data decompression fallback ---
+
+    #[test]
+    fn test_get_data_zlib_failure_falls_back_to_raw() {
+        // If o=z is set but the data is not actually zlib, get_data() must
+        // return the raw bytes (not propagate an error / panic).
+        let mut parser = KittyParser::new();
+        // Mark compressed with valid zlib marker but corrupt the body.
+        let bad = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"not zlib");
+        let _ = parser.parse_chunk(&format!("a=T,o=z;{}", bad));
+        assert!(parser.is_compressed());
+        // decompress fails -> should return raw concatenated data
+        let data = parser.get_data();
+        assert_eq!(data, b"not zlib");
+    }
+
+    #[test]
+    fn test_get_data_uncompressed_returns_raw_concat() {
+        let mut parser = KittyParser::new();
+        let _ = parser.parse_chunk("a=T,m=1;QUFB"); // "AAA"
+        let _ = parser.parse_chunk("m=0;QkJD"); // "BBC"
+        assert_eq!(parser.get_data(), b"AAABBC");
+    }
+
+    // --- parse_delete_target variants ---
+
+    #[test]
+    fn test_parse_delete_target_uppercase_letters() {
+        // A, C, Z uppercase are valid per parse_delete_target match arms.
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+
+        let _ = parser.parse_chunk("a=d,d=A;");
+        assert_eq!(parser.delete_target, Some(KittyDeleteTarget::All));
+
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=C;");
+        assert_eq!(parser.delete_target, Some(KittyDeleteTarget::AtCursor));
+
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=Z;");
+        assert_eq!(parser.delete_target, Some(KittyDeleteTarget::OnScreen));
+    }
+
+    #[test]
+    fn test_parse_delete_target_lowercase_c_and_z() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=c;");
+        assert_eq!(parser.delete_target, Some(KittyDeleteTarget::AtCursor));
+
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=z;");
+        assert_eq!(parser.delete_target, Some(KittyDeleteTarget::OnScreen));
+    }
+
+    #[test]
+    fn test_parse_delete_target_unknown_char_is_none() {
+        // 'x', 'y', 'i', 'p' are NOT handled by parse_delete_target,
+        // so the target stays None even though build_graphic has branches
+        // for ByColumn/ByRow/ById/ByPlacement/InCell that are never reached.
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=x;");
+        assert_eq!(parser.delete_target, None);
+
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=p;");
+        assert_eq!(parser.delete_target, None);
+    }
+
+    #[test]
+    fn test_parse_delete_target_empty_value_is_none() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let _ = parser.parse_chunk("a=d,d=;");
+        assert_eq!(parser.delete_target, None);
+    }
+
+    // --- build_graphic: Delete action coverage ---
+
+    #[test]
+    fn test_build_graphic_delete_no_target_returns_none() {
+        // Delete with no parsed target should be a no-op -> None.
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Delete;
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+    }
+
+    /// Helper: transmit a 1x1 RGBA image with the given id and placement_id at
+    /// the given position, and add the resulting placement to `store.placements`.
+    ///
+    /// `build_graphic()` calls `store.store_kitty_image()` internally but does
+    /// NOT push the returned graphic into `store.placements` — that is the
+    /// terminal-integration layer's job (see GraphicsStore::add_graphic).
+    fn transmit_and_add(
+        store: &mut GraphicsStore,
+        image_id: u32,
+        placement_id: Option<u32>,
+        position: (usize, usize),
+    ) {
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut tx = KittyParser::new();
+        let payload = match placement_id {
+            Some(pid) => format!("a=T,f=32,s=1,v=1,i={},p={};{}", image_id, pid, b64),
+            None => format!("a=T,f=32,s=1,v=1,i={};{}", image_id, b64),
+        };
+        tx.parse_chunk(&payload).unwrap();
+        match tx.build_graphic(position, store).unwrap() {
+            KittyGraphicResult::Graphic(g) => store.add_graphic(g),
+            other => panic!("transmit_and_add expected Graphic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_graphic_delete_all_clears_store() {
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, None, (0, 0));
+        assert_eq!(store.placements.len(), 1);
+
+        let mut del = KittyParser::new();
+        del.parse_chunk("a=d,d=a;").unwrap();
+        let result = del.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+        assert!(store.placements.is_empty());
+    }
+
+    #[test]
+    fn test_build_graphic_delete_at_cursor() {
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, None, (3, 4));
+        assert_eq!(store.placements.len(), 1);
+
+        // Delete at cursor (3,4) — should remove it.
+        let mut del = KittyParser::new();
+        del.parse_chunk("a=d,d=c;").unwrap();
+        let _ = del.build_graphic((3, 4), &mut store).unwrap();
+        assert!(store.placements.is_empty());
+
+        // A different cursor position should leave other placements alone.
+        transmit_and_add(&mut store, 2, None, (5, 6));
+        assert_eq!(store.placements.len(), 1);
+
+        let mut del2 = KittyParser::new();
+        del2.parse_chunk("a=d,d=c;").unwrap();
+        let _ = del2.build_graphic((0, 0), &mut store).unwrap(); // cursor elsewhere
+        assert_eq!(store.placements.len(), 1); // still there
+    }
+
+    #[test]
+    fn test_build_graphic_delete_in_cell_uses_cursor() {
+        // InCell behaves the same as AtCursor in this implementation.
+        // parse_delete_target never produces InCell, so we set it directly
+        // to cover the InCell branch.
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, None, (7, 8));
+        assert_eq!(store.placements.len(), 1);
+
+        let mut del = KittyParser::new();
+        del.action = KittyAction::Delete;
+        del.delete_target = Some(KittyDeleteTarget::InCell);
+        let _ = del.build_graphic((7, 8), &mut store).unwrap();
+        assert!(store.placements.is_empty());
+    }
+
+    #[test]
+    fn test_build_graphic_delete_on_screen() {
+        let mut store = GraphicsStore::new();
+        for i in 1..=3 {
+            transmit_and_add(&mut store, i, None, (i as usize, 0));
+        }
+        assert_eq!(store.placements.len(), 3);
+
+        let mut del = KittyParser::new();
+        del.parse_chunk("a=d,d=z;").unwrap();
+        let _ = del.build_graphic((0, 0), &mut store).unwrap();
+        assert!(store.placements.is_empty());
+    }
+
+    #[test]
+    fn test_build_graphic_delete_by_id() {
+        // parse_delete_target cannot produce ById, so we set it directly
+        // to cover the ById branch.
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, None, (0, 0));
+        transmit_and_add(&mut store, 2, None, (1, 0));
+        assert_eq!(store.placements.len(), 2);
+
+        // Delete only image id=1
+        let mut del = KittyParser::new();
+        del.action = KittyAction::Delete;
+        del.delete_target = Some(KittyDeleteTarget::ById(1));
+        let _ = del.build_graphic((0, 0), &mut store).unwrap();
+        // One placement should remain (image id=2).
+        assert_eq!(store.placements.len(), 1);
+        assert_eq!(store.placements[0].kitty_image_id, Some(2));
+    }
+
+    #[test]
+    fn test_build_graphic_delete_by_placement() {
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, Some(100), (0, 0));
+        transmit_and_add(&mut store, 1, Some(200), (1, 0));
+        assert_eq!(store.placements.len(), 2);
+
+        // Delete only (image_id=1, placement_id=100)
+        let mut del = KittyParser::new();
+        del.action = KittyAction::Delete;
+        del.delete_target = Some(KittyDeleteTarget::ByPlacement(1, Some(100)));
+        let _ = del.build_graphic((0, 0), &mut store).unwrap();
+        assert_eq!(store.placements.len(), 1);
+        assert_eq!(store.placements[0].kitty_placement_id, Some(200));
+    }
+
+    #[test]
+    fn test_build_graphic_delete_by_column_and_row() {
+        // These branches need cell_dimensions set; the retain math uses
+        // div_ceil over cell width/height. We construct targets directly
+        // (parse_delete_target cannot produce ByColumn/ByRow).
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 1, None, (0, 0));
+        transmit_and_add(&mut store, 2, None, (5, 5));
+        for g in store.placements.iter_mut() {
+            g.set_cell_dimensions(1, 1); // 1x1 pixel cell, simplest case
+        }
+        assert_eq!(store.placements.len(), 2);
+
+        // ByColumn(0): placement at col=0 spans col 0 -> removed.
+        // Placement at col=5 stays.
+        let mut del_col = KittyParser::new();
+        del_col.action = KittyAction::Delete;
+        del_col.delete_target = Some(KittyDeleteTarget::ByColumn(0));
+        let _ = del_col.build_graphic((0, 0), &mut store).unwrap();
+        assert_eq!(store.placements.len(), 1);
+        assert_eq!(store.placements[0].position.0, 5);
+
+        // ByRow(5): remaining placement is at row=5 -> removed.
+        let mut del_row = KittyParser::new();
+        del_row.action = KittyAction::Delete;
+        del_row.delete_target = Some(KittyDeleteTarget::ByRow(5));
+        let _ = del_row.build_graphic((0, 0), &mut store).unwrap();
+        assert!(store.placements.is_empty());
+    }
+
+    // --- build_graphic: Query ---
+
+    #[test]
+    fn test_build_graphic_query_returns_none() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Query;
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+    }
+
+    // --- build_graphic: Put ---
+
+    #[test]
+    fn test_build_graphic_put_missing_image_returns_error() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Put;
+        parser.image_id = Some(999); // never transmitted
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Image not found"));
+    }
+
+    #[test]
+    fn test_build_graphic_put_virtual_placement() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Put;
+        parser.image_id = Some(7);
+        parser.placement_id = Some(11);
+        parser.is_virtual = true;
+        parser.columns = Some(3);
+        parser.rows = Some(2);
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((4, 5), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::VirtualPlacement {
+                image_id,
+                placement_id,
+                position,
+                cols,
+                rows,
+            } => {
+                assert_eq!(image_id, 7);
+                assert_eq!(placement_id, 11);
+                assert_eq!(position, (4, 5));
+                assert_eq!(cols, 3);
+                assert_eq!(rows, 2);
+            }
+            other => panic!("Expected VirtualPlacement, got {:?}", other),
+        }
+        // Should also register a virtual placement in the store.
+        assert!(store.get_virtual_placement(7, 11).is_some());
+    }
+
+    #[test]
+    fn test_build_graphic_put_regular_uses_stored_pixels() {
+        // Transmit then Put.
+        let pixels: Vec<u8> = vec![10, 20, 30, 40];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+
+        let mut tx = KittyParser::new();
+        tx.parse_chunk(&format!("a=t,f=32,s=1,v=1,i=5;{}", b64))
+            .unwrap();
+        let _ = tx.build_graphic((0, 0), &mut store).unwrap();
+
+        let mut put = KittyParser::new();
+        put.parse_chunk("a=p,i=5,z=7,x=1,y=2;").unwrap();
+        let result = put.build_graphic((9, 9), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::Graphic(g) => {
+                assert_eq!(g.kitty_image_id, Some(5));
+                assert_eq!(g.position, (9, 9));
+                assert_eq!(g.placement.z_index, 7);
+                assert_eq!(g.placement.x_offset, 1);
+                assert_eq!(g.placement.y_offset, 2);
+            }
+            other => panic!("Expected Graphic, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_graphic_put_with_relative_positioning() {
+        let pixels: Vec<u8> = vec![1, 2, 3, 4];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+
+        let mut tx = KittyParser::new();
+        tx.parse_chunk(&format!("a=t,f=32,s=1,v=1,i=8;{}", b64))
+            .unwrap();
+        let _ = tx.build_graphic((0, 0), &mut store).unwrap();
+
+        let mut put = KittyParser::new();
+        // P= parent_image_id enables the relative-positioning branch.
+        put.parse_chunk("a=p,i=8,P=99,Q=88,H=5;").unwrap();
+        let result = put.build_graphic((1, 1), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::Graphic(g) => {
+                assert_eq!(g.parent_image_id, Some(99));
+                assert_eq!(g.parent_placement_id, Some(88));
+                assert_eq!(g.relative_x_offset, 5);
+                assert_eq!(g.relative_y_offset, 0); // V= not parseable without parent (chicken/egg), defaults to 0
+            }
+            other => panic!("Expected Graphic, got {:?}", other),
+        }
+    }
+
+    // --- build_graphic: Transmit / TransmitDisplay errors ---
+
+    #[test]
+    fn test_build_graphic_transmit_no_data_returns_error() {
+        let mut parser = KittyParser::new();
+        // TransmitDisplay with no data section.
+        parser.action = KittyAction::TransmitDisplay;
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No image data"));
+    }
+
+    #[test]
+    fn test_build_graphic_transmit_shared_memory_unsupported() {
+        let mut parser = KittyParser::new();
+        // Provide some data so we get past the empty check, then fail at SharedMem.
+        parser.action = KittyAction::TransmitDisplay;
+        parser.medium = KittyMedium::SharedMem;
+        // Manually push a data chunk by parsing one (compression stays None).
+        let _ = parser.parse_chunk("a=T,t=s;QUFB"); // sets medium=SharedMem
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Shared memory transmission not supported"));
+    }
+
+    #[test]
+    fn test_build_graphic_transmit_only_stores_but_no_placement() {
+        // Action 't' (Transmit, not TransmitDisplay) with image_id stores
+        // the image but returns KittyGraphicResult::None.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut parser = KittyParser::new();
+        parser
+            .parse_chunk(&format!("a=t,f=32,s=1,v=1,i=33;{}", b64))
+            .unwrap();
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+        assert!(store.get_kitty_image(33).is_some());
+        // No placement should have been created.
+        assert!(store.placements.is_empty());
+    }
+
+    #[test]
+    fn test_build_graphic_transmit_display_virtual() {
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut parser = KittyParser::new();
+        // U=1 makes TransmitDisplay produce a virtual placement.
+        parser
+            .parse_chunk(&format!("a=T,f=32,s=1,v=1,i=44,U=1,c=2,r=3;{}", b64))
+            .unwrap();
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((1, 2), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::VirtualPlacement {
+                image_id,
+                cols,
+                rows,
+                position,
+                ..
+            } => {
+                assert_eq!(image_id, 44);
+                assert_eq!(cols, 2);
+                assert_eq!(rows, 3);
+                assert_eq!(position, (1, 2));
+            }
+            other => panic!("Expected VirtualPlacement, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_graphic_transmit_display_with_relative_positioning() {
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut parser = KittyParser::new();
+        parser
+            .parse_chunk(&format!("a=T,f=32,s=1,v=1,i=55,P=1,Q=2,H=3;{}", b64))
+            .unwrap();
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::Graphic(g) => {
+                assert_eq!(g.parent_image_id, Some(1));
+                assert_eq!(g.parent_placement_id, Some(2));
+                assert_eq!(g.relative_x_offset, 3);
+                assert_eq!(g.relative_y_offset, 0);
+            }
+            other => panic!("Expected Graphic, got {:?}", other),
+        }
+    }
+
+    // --- decode_pixels error paths ---
+
+    #[test]
+    fn test_decode_pixels_rgba_missing_width() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgba;
+        parser.height = Some(2); // no width
+        let result = parser.decode_pixels(&[0u8; 8]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Width required"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgba_missing_height() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgba;
+        parser.width = Some(2); // no height
+        let result = parser.decode_pixels(&[0u8; 8]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Height required"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgba_size_mismatch() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgba;
+        parser.width = Some(2);
+        parser.height = Some(2);
+        // Expected 2*2*4 = 16 bytes, but we provide 8.
+        let result = parser.decode_pixels(&[0u8; 8]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Data size mismatch"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgba_exact_match() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgba;
+        parser.width = Some(1);
+        parser.height = Some(1);
+        let data = vec![1, 2, 3, 4];
+        let (w, h, px) = parser.decode_pixels(&data).unwrap();
+        assert_eq!(w, 1);
+        assert_eq!(h, 1);
+        assert_eq!(px, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_decode_pixels_rgb_missing_width() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgb;
+        parser.height = Some(2);
+        let result = parser.decode_pixels(&[0u8; 6]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Width required"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgb_missing_height() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgb;
+        parser.width = Some(2);
+        let result = parser.decode_pixels(&[0u8; 6]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Height required"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgb_size_mismatch() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgb;
+        parser.width = Some(2);
+        parser.height = Some(2);
+        // Expected 2*2*3 = 12 bytes, provide 6.
+        let result = parser.decode_pixels(&[0u8; 6]);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Data size mismatch"));
+    }
+
+    #[test]
+    fn test_decode_pixels_rgb_converts_to_rgba() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgb;
+        parser.width = Some(1);
+        parser.height = Some(2);
+        // 2 pixels RGB = 6 bytes
+        let data = vec![10, 20, 30, 40, 50, 60];
+        let (w, h, px) = parser.decode_pixels(&data).unwrap();
+        assert_eq!(w, 1);
+        assert_eq!(h, 2);
+        // Each RGB triple becomes RGBA with alpha=255.
+        assert_eq!(px, vec![10, 20, 30, 255, 40, 50, 60, 255]);
+    }
+
+    #[test]
+    fn test_decode_pixels_png_invalid() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Png;
+        let result = parser.decode_pixels(b"not a png");
+        assert!(result.is_err());
+        // ImageError carries "Image decode failed" in its Display.
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Image decode failed") || msg.contains("decode"));
+    }
+
+    #[test]
+    fn test_decode_pixels_png_valid() {
+        // Encode a real PNG and round-trip through decode_pixels.
+        let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([1, 2, 3, 4]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Png;
+        let (w, h, px) = parser.decode_pixels(&png).unwrap();
+        assert_eq!(w, 2);
+        assert_eq!(h, 1);
+        assert_eq!(px, vec![1, 2, 3, 4, 1, 2, 3, 4]);
+    }
+
+    // --- build_graphic: Frame action ---
+
+    #[test]
+    fn test_build_graphic_frame_missing_image_id_returns_error() {
+        let mut parser = KittyParser::new();
+        // Provide data so we get past the empty check.
+        let _ = parser.parse_chunk("a=f,f=32,s=1,v=1;QUFB"); // no i=
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Frame requires image ID"));
+    }
+
+    #[test]
+    fn test_build_graphic_frame_no_data_returns_error() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Frame;
+        parser.image_id = Some(1);
+        // No data parsed -> get_data() is empty.
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No frame data"));
+    }
+
+    #[test]
+    fn test_build_graphic_frame_shared_memory_unsupported() {
+        let mut parser = KittyParser::new();
+        // f=action, with data, medium=SharedMem.
+        let _ = parser.parse_chunk("a=f,f=32,s=1,v=1,t=s,i=1;QUFB");
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Shared memory not supported for frames"));
+    }
+
+    #[test]
+    fn test_build_graphic_frame_num_one_creates_placement_and_animation() {
+        let pixels: Vec<u8> = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255,
+        ];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut parser = KittyParser::new();
+        // Frame 1: should create both an animation frame AND a placement.
+        parser
+            .parse_chunk(&format!(
+                "a=f,f=32,s=2,v=2,i=77,r=1,z=50,c=1,x=1,y=2;{}",
+                b64
+            ))
+            .unwrap();
+        assert_eq!(parser.frame_number, Some(1));
+        assert_eq!(parser.frame_delay_ms, Some(50));
+        assert_eq!(parser.frame_composition, Some(CompositionMode::Overwrite));
+
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((3, 4), &mut store).unwrap();
+        match result {
+            KittyGraphicResult::Graphic(g) => {
+                assert_eq!(g.kitty_image_id, Some(77));
+                assert_eq!(g.position, (3, 4));
+                assert_eq!(g.placement.x_offset, 1);
+                assert_eq!(g.placement.y_offset, 2);
+                // x= was also used for frame offset
+            }
+            other => panic!("Expected Graphic for frame 1, got {:?}", other),
+        }
+        // Animation frame should be present.
+        let anim = store.get_animation(77);
+        assert!(anim.is_some(), "animation should exist for image_id=77");
+        let frame = anim.unwrap().get_frame(1);
+        assert!(frame.is_some());
+        assert_eq!(frame.unwrap().delay_ms, 50);
+        // Image should also be stored for Put reuse.
+        assert!(store.get_kitty_image(77).is_some());
+    }
+
+    #[test]
+    fn test_build_graphic_frame_subsequent_no_placement() {
+        // Pre-seed an animation by transmitting frame 1 first.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+
+        let mut f1 = KittyParser::new();
+        f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=9,r=1;{}", b64))
+            .unwrap();
+        let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+
+        // Now frame 2: should NOT create a new placement.
+        let mut f2 = KittyParser::new();
+        f2.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=9,r=2;{}", b64))
+            .unwrap();
+        let result = f2.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+        // Animation should now have 2 frames.
+        let anim = store.get_animation(9).unwrap();
+        assert_eq!(anim.frame_count(), 2);
+    }
+
+    // --- build_graphic: AnimationControl ---
+
+    #[test]
+    fn test_build_graphic_animation_control_missing_image_id() {
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::AnimationControl;
+        // No i=
+        let mut store = GraphicsStore::new();
+        let result = parser.build_graphic((0, 0), &mut store);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Animation control requires image ID"));
+    }
+
+    #[test]
+    fn test_build_graphic_animation_control_with_state() {
+        // Seed an animation so control_animation has something to act on.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+        let mut f1 = KittyParser::new();
+        f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=5,r=1;{}", b64))
+            .unwrap();
+        let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+
+        // Now send animation control: s=1 (stop), v=2 (num_plays=2).
+        let mut ctrl = KittyParser::new();
+        ctrl.parse_chunk("a=a,i=5,s=1,v=2;").unwrap();
+        let result = ctrl.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+
+        // num_plays=2 -> loop_count = N-1 = 1.
+        let anim = store.get_animation(5).unwrap();
+        assert_eq!(anim.loop_count, 1);
+    }
+
+    #[test]
+    fn test_build_graphic_animation_control_num_plays_zero_ignored() {
+        // Per spec, v=0 is ignored.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+        let mut f1 = KittyParser::new();
+        f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=6,r=1;{}", b64))
+            .unwrap();
+        let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+
+        let anim_before = store.get_animation(6).unwrap().loop_count;
+        let mut ctrl = KittyParser::new();
+        ctrl.parse_chunk("a=a,i=6,v=0;").unwrap();
+        let _ = ctrl.build_graphic((0, 0), &mut store).unwrap();
+        let anim_after = store.get_animation(6).unwrap().loop_count;
+        assert_eq!(anim_before, anim_after, "v=0 must be ignored");
+    }
+
+    #[test]
+    fn test_build_graphic_animation_control_num_plays_one_is_infinite() {
+        // v=1 means infinite -> loop_count = 0.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+        let mut f1 = KittyParser::new();
+        f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=7,r=1;{}", b64))
+            .unwrap();
+        let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+
+        let mut ctrl = KittyParser::new();
+        ctrl.parse_chunk("a=a,i=7,v=1;").unwrap();
+        let _ = ctrl.build_graphic((0, 0), &mut store).unwrap();
+        let anim = store.get_animation(7).unwrap();
+        assert_eq!(anim.loop_count, 0, "v=1 must mean infinite (loop_count=0)");
+    }
+
+    #[test]
+    fn test_build_graphic_animation_control_no_state_only_loops() {
+        // Animation control with only v= (no s=) should still set loop_count.
+        let pixels: Vec<u8> = vec![255, 0, 0, 255];
+        let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixels);
+        let mut store = GraphicsStore::new();
+        let mut f1 = KittyParser::new();
+        f1.parse_chunk(&format!("a=f,f=32,s=1,v=1,i=8,r=1;{}", b64))
+            .unwrap();
+        let _ = f1.build_graphic((0, 0), &mut store).unwrap();
+
+        let mut ctrl = KittyParser::new();
+        ctrl.parse_chunk("a=a,i=8,v=3;").unwrap(); // no s=
+        let result = ctrl.build_graphic((0, 0), &mut store).unwrap();
+        assert!(matches!(result, KittyGraphicResult::None));
+        // v=3 -> loop_count = 2
+        let anim = store.get_animation(8).unwrap();
+        assert_eq!(anim.loop_count, 2);
+    }
+
+    // --- load_file_data additional security/edge paths ---
+
+    #[test]
+    fn test_load_file_data_invalid_utf8_returns_error() {
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+        // 0xFF is invalid as leading byte in UTF-8.
+        let result = parser.load_file_data(&[0xFF, 0xFE, 0xFD]);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("Invalid UTF-8") || msg.contains("file path"));
+    }
+
+    #[test]
+    fn test_load_file_data_path_is_directory_returns_error() {
+        // A directory exists and is not a regular file.
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+        let dir = std::env::temp_dir(); // guaranteed to exist and be a dir
+        let result = parser.load_file_data(dir.to_string_lossy().as_bytes());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not a file"));
+    }
+
+    #[test]
+    fn test_load_file_data_directory_traversal_in_middle_of_path() {
+        // ".." anywhere in the path must be rejected.
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+        let result = parser.load_file_data(b"/tmp/foo/../bar.png");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Directory traversal"));
+    }
+
+    #[test]
+    fn test_load_file_data_temp_file_is_deleted_after_read() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Write a real PNG to a NamedTempFile, then close the handle (keep path).
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([9, 8, 7, 6]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let mut tf = NamedTempFile::new().unwrap();
+        tf.write_all(&png).unwrap();
+        let (file, path) = tf.keep().expect("keep temp file");
+        drop(file); // close OS handle so removal can succeed
+
+        let path_str = path.to_string_lossy().into_owned();
+        assert!(path.exists());
+
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::TempFile;
+        let data = parser.load_file_data(path_str.as_bytes()).unwrap();
+        assert_eq!(data, png);
+        // TempFile medium: file must have been removed during load.
+        assert!(!path.exists(), "temp file should be deleted after read");
+
+        // Clean up defensively in case the assertion above failed.
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_load_file_data_valid_file_round_trip() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 1, 1, 1]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let mut tf = NamedTempFile::new().unwrap();
+        tf.write_all(&png).unwrap();
+        let path = tf.path().to_string_lossy().into_owned();
+        // Keep tf alive so the file persists through the read.
+
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File; // NOT temp file -> should remain
+        let data = parser.load_file_data(path.as_bytes()).unwrap();
+        assert_eq!(data, png);
+        assert!(tf.path().exists(), "non-temp file should NOT be deleted");
+    }
+
+    // --- KittyGraphicResult Debug round-trip (cheap enum coverage) ---
+
+    #[test]
+    fn test_kitty_graphic_result_debug_repr() {
+        // Each variant's Debug impl should not panic; format! exercises it.
+        let none = KittyGraphicResult::None;
+        let s = format!("{:?}", none);
+        assert!(s.contains("None"));
+
+        let virt = KittyGraphicResult::VirtualPlacement {
+            image_id: 1,
+            placement_id: 2,
+            position: (0, 0),
+            cols: 1,
+            rows: 1,
+        };
+        let s = format!("{:?}", virt);
+        assert!(s.contains("VirtualPlacement"));
+        assert!(s.contains("image_id"));
+    }
+
+    // --- decompress_zlib: empty input ---
+
+    #[test]
+    fn test_decompress_zlib_empty_input_succeeds_with_empty_output() {
+        // ZlibDecoder treats empty input as a valid empty stream.
+        let result = KittyParser::decompress_zlib(&[]);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_decompress_zlib_empty_valid_stream() {
+        // A valid zlib stream that decompresses to zero bytes.
+        // RFC 1950 wrapper around deflate of empty stored block.
+        let empty_zlib: [u8; 8] = [0x78, 0x01, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01];
+        let result = KittyParser::decompress_zlib(&empty_zlib);
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_empty());
+    }
+
+    // --- is_compressed() reflects compression flag ---
+
+    #[test]
+    fn test_is_compressed_reflects_compression_field() {
+        let mut parser = KittyParser::new();
+        assert!(!parser.is_compressed());
+        parser.compression = KittyCompression::Zlib;
+        assert!(parser.is_compressed());
+    }
+
+    // --- build_placement: z_index populated when set ---
+
+    #[test]
+    fn test_build_placement_negative_z_index() {
+        let mut parser = KittyParser::new();
+        parser.z_index = Some(-100);
+        let placement = parser.build_placement();
+        assert_eq!(placement.z_index, -100);
+    }
+
+    #[test]
+    fn test_build_placement_all_fields_set() {
+        let mut parser = KittyParser::new();
+        parser.columns = Some(6);
+        parser.rows = Some(4);
+        parser.z_index = Some(2);
+        parser.x_offset = Some(7);
+        parser.y_offset = Some(9);
+        let placement = parser.build_placement();
+        assert_eq!(placement.columns, Some(6));
+        assert_eq!(placement.rows, Some(4));
+        assert_eq!(placement.z_index, 2);
+        assert_eq!(placement.x_offset, 7);
+        assert_eq!(placement.y_offset, 9);
+    }
+
+    // --- KittyAction/KittyFormat/KittyMedium/KittyCompression defaults & Debug ---
+
+    #[test]
+    fn test_kitty_action_default_is_transmit() {
+        assert_eq!(KittyAction::default(), KittyAction::Transmit);
+    }
+
+    #[test]
+    fn test_kitty_format_default_is_rgba() {
+        assert_eq!(KittyFormat::default(), KittyFormat::Rgba);
+    }
+
+    #[test]
+    fn test_kitty_medium_default_is_direct() {
+        assert_eq!(KittyMedium::default(), KittyMedium::Direct);
+    }
+
+    #[test]
+    fn test_kitty_compression_default_is_none() {
+        assert_eq!(KittyCompression::default(), KittyCompression::None);
+    }
+
+    #[test]
+    fn test_kitty_action_all_chars_covered() {
+        // Complete coverage of from_char for every documented action.
+        assert_eq!(KittyAction::from_char('f'), Some(KittyAction::Frame));
+        assert_eq!(
+            KittyAction::from_char('a'),
+            Some(KittyAction::AnimationControl)
+        );
+        // Empty string -> next() is None -> action is left unchanged.
+        let mut parser = KittyParser::new();
+        parser.action = KittyAction::Query;
+        let _ = parser.parse_chunk("a=;");
+        assert_eq!(parser.action, KittyAction::Query);
+    }
+
+    #[test]
+    fn test_kitty_format_from_code_uncovered_codes() {
+        // Confirm a couple of additional edge cases.
+        assert_eq!(KittyFormat::from_code(1), None);
+        assert_eq!(KittyFormat::from_code(u32::MAX), None);
+    }
+
+    #[test]
+    fn test_kitty_compression_from_char_only_z() {
+        // Every non-'z' char returns None.
+        for c in ['a', 'Z', '0', ' ', '\0'] {
+            assert_eq!(KittyCompression::from_char(c), None);
+        }
+    }
+
+    #[test]
+    fn test_kitty_medium_from_char_invalid_chars() {
+        assert_eq!(KittyMedium::from_char('D'), None); // uppercase not valid
+        assert_eq!(KittyMedium::from_char('F'), None);
+        assert_eq!(KittyMedium::from_char(' '), None);
+    }
 }

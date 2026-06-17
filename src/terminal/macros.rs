@@ -169,3 +169,108 @@ impl Terminal {
         macro_data
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::macros::Macro;
+
+    /// A macro with a key, a delay, another key, and a screenshot trigger.
+    fn make_macro(name: &str) -> Macro {
+        let mut m = Macro::new(name);
+        m.add_key("a");
+        m.add_delay(10);
+        m.add_key("enter");
+        m.add_screenshot();
+        m
+    }
+
+    #[test]
+    fn macro_library_load_get_remove_list() {
+        let mut term = Terminal::new(80, 24);
+        assert!(term.list_macros().is_empty());
+
+        term.load_macro("greet".to_string(), make_macro("greet"));
+        assert!(term.get_macro("greet").is_some());
+        assert!(term.get_macro("missing").is_none());
+        assert_eq!(term.list_macros(), vec!["greet".to_string()]);
+
+        assert!(term.remove_macro("greet").is_some());
+        assert!(term.remove_macro("greet").is_none()); // already gone
+        assert!(term.list_macros().is_empty());
+    }
+
+    #[test]
+    fn play_macro_unknown_name_errors() {
+        let mut term = Terminal::new(80, 24);
+        assert!(term.play_macro("nope").is_err());
+        assert!(!term.is_macro_playing());
+    }
+
+    #[test]
+    fn playback_lifecycle_pause_resume_speed_stop() {
+        let mut term = Terminal::new(80, 24);
+        term.load_macro("m".to_string(), make_macro("m"));
+
+        assert!(term.play_macro("m").is_ok());
+        assert!(term.is_macro_playing());
+        assert_eq!(term.get_current_macro_name().as_deref(), Some("m"));
+
+        let (done, total) = term.get_macro_progress().unwrap();
+        assert!(total >= done);
+
+        // Pause / resume toggle the paused flag.
+        term.pause_macro();
+        assert!(term.is_macro_paused());
+        term.resume_macro();
+        assert!(!term.is_macro_paused());
+
+        // set_macro_speed only affects an active playback (no panic here).
+        term.set_macro_speed(2.0);
+
+        term.stop_macro();
+        assert!(!term.is_macro_playing());
+        assert!(term.get_macro_progress().is_none());
+        assert!(term.get_macro_screenshot_triggers().is_empty());
+    }
+
+    #[test]
+    fn pause_resume_speed_are_noops_without_active_playback() {
+        let mut term = Terminal::new(80, 24);
+        // None of these should panic when no macro is playing.
+        term.pause_macro();
+        term.resume_macro();
+        term.set_macro_speed(0.5);
+        assert!(!term.is_macro_playing());
+        assert!(!term.is_macro_paused());
+    }
+
+    #[test]
+    fn tick_macro_emits_key_bytes_then_screenshot_trigger() {
+        let mut term = Terminal::new(80, 24);
+        let mut m = Macro::new("tick");
+        m.add_key("a");
+        m.add_screenshot();
+        term.load_macro("tick".to_string(), m);
+        term.play_macro("tick").unwrap();
+
+        // First event is the key press -> Some(bytes).
+        let key_bytes = term.tick_macro();
+        assert!(key_bytes.is_some(), "key event must emit bytes");
+
+        // Second event is the screenshot -> queues a trigger, no bytes.
+        assert!(term.get_macro_screenshot_triggers().is_empty());
+        assert!(term.tick_macro().is_none());
+        let triggers = term.get_macro_screenshot_triggers();
+        assert_eq!(triggers.len(), 1);
+
+        // Both events consumed -> playback auto-clears.
+        assert!(!term.is_macro_playing());
+    }
+
+    #[test]
+    fn tick_macro_with_no_playback_returns_none() {
+        let mut term = Terminal::new(80, 24);
+        assert!(term.tick_macro().is_none());
+    }
+}

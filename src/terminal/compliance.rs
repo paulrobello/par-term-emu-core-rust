@@ -125,3 +125,55 @@ Results:
         output
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terminal::Terminal;
+
+    #[test]
+    fn test_compliance_seeds_a_passing_report() {
+        let mut term = Terminal::new(80, 24);
+        let report = term.test_compliance(ComplianceLevel::VT100);
+
+        assert_eq!(report.terminal_info, "par-term-emu-core-rust");
+        assert_eq!(report.level, ComplianceLevel::VT100);
+        assert!(!report.tests.is_empty());
+        assert_eq!(report.passed + report.failed, report.tests.len());
+        // The single seeded test passes, so the percentage is 100.
+        assert_eq!(report.compliance_percent, 100.0);
+        assert_eq!(report.failed, 0);
+    }
+
+    #[test]
+    fn test_compliance_runs_for_every_level() {
+        let mut term = Terminal::new(80, 24);
+        let levels = [
+            ComplianceLevel::VT52,
+            ComplianceLevel::VT100,
+            ComplianceLevel::VT220,
+            ComplianceLevel::VT320,
+            ComplianceLevel::VT420,
+            ComplianceLevel::VT520,
+            ComplianceLevel::XTerm,
+        ];
+        for level in levels {
+            let report = term.test_compliance(level);
+            assert_eq!(report.level, level);
+            assert!(report.compliance_percent >= 0.0 && report.compliance_percent <= 100.0);
+        }
+    }
+
+    #[test]
+    fn format_compliance_report_renders_expected_sections() {
+        let mut term = Terminal::new(80, 24);
+        let report = term.test_compliance(ComplianceLevel::VT220);
+        let text = Terminal::format_compliance_report(&report);
+
+        assert!(text.contains("Compliance Report for par-term-emu-core-rust"));
+        assert!(text.contains("Level: VT220"));
+        assert!(text.contains("Score:"));
+        assert!(text.contains("[PASS]"));
+        assert!(text.contains("Cursor Position"));
+    }
+}

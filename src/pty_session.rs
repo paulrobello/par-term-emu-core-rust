@@ -1916,4 +1916,409 @@ mod tests {
         session.clear_output_callback();
         // After clear, no callback is set (smoke test, no panic)
     }
+
+    // ===================================================================
+    // Coverage-focused deterministic tests (no live PTY / no timing)
+    // ===================================================================
+
+    #[test]
+    fn test_child_pid_none_before_spawn() {
+        // child_pid() must return None when no process has been spawned.
+        let session = PtySession::new(80, 24, 1000);
+        assert_eq!(
+            session.child_pid(),
+            None,
+            "child_pid should be None before spawn"
+        );
+    }
+
+    #[test]
+    fn test_terminal_ref_returns_same_underlying_arc() {
+        // terminal_ref() must return a reference to the SAME Arc that
+        // terminal() clones — both should resolve to the same allocation.
+        let session = PtySession::new(80, 24, 1000);
+        let cloned = session.terminal();
+        let borrowed = session.terminal_ref();
+        // Arc::ptr_eq confirms they point at the same allocation.
+        assert!(
+            Arc::ptr_eq(&cloned, borrowed),
+            "terminal() and terminal_ref() must reference the same Arc"
+        );
+        // Sanity: the size reported through both is identical.
+        assert_eq!(cloned.read().size(), borrowed.read().size());
+    }
+
+    #[test]
+    fn test_cursor_position_initial_origin() {
+        // A freshly constructed terminal has its cursor at (0, 0).
+        let session = PtySession::new(80, 24, 1000);
+        let (col, row) = session.cursor_position();
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+    }
+
+    #[test]
+    fn test_get_line_in_bounds_initially_blank() {
+        // A fresh terminal row exists but consists of blank (' ') cells.
+        let session = PtySession::new(80, 24, 1000);
+        let line = session.get_line(0);
+        assert!(line.is_some(), "row 0 should exist");
+        let line = line.unwrap();
+        assert_eq!(
+            line.len(),
+            80,
+            "row 0 should have one cell per column initially"
+        );
+        assert!(
+            line.chars().all(|c| c == ' '),
+            "fresh row should be entirely blank spaces"
+        );
+    }
+
+    #[test]
+    fn test_get_line_out_of_bounds_returns_none() {
+        // Out-of-range rows must return None (no panic).
+        let session = PtySession::new(80, 24, 1000);
+        assert!(
+            session.get_line(24).is_none(),
+            "row == height is out of range"
+        );
+        assert!(
+            session.get_line(usize::MAX).is_none(),
+            "huge row index is out of range"
+        );
+    }
+
+    #[test]
+    fn test_content_initially_blank_or_empty() {
+        // content() on a fresh terminal must not panic. It returns the
+        // visible screen content; on a brand-new terminal it is blank.
+        let session = PtySession::new(80, 24, 1000);
+        let content = session.content();
+        // Every visible character should be whitespace (blank cells).
+        assert!(
+            content.chars().all(|c| c.is_whitespace() || c == '\n'),
+            "fresh content() must contain only whitespace, got: {:?}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_export_text_and_styled_on_fresh_terminal() {
+        // export_text / export_styled must succeed on a fresh terminal
+        // without panicking, even though no output has ever been processed.
+        let session = PtySession::new(80, 24, 1000);
+        let text = session.export_text();
+        let styled = session.export_styled();
+        // Both must be valid UTF-8 strings (returned as String already).
+        // text should be all-whitespace-or-newline; styled may contain
+        // ANSI escapes so we only assert it does not panic and is a String.
+        assert!(
+            text.chars().all(|c| c.is_whitespace() || c == '\n'),
+            "export_text on fresh terminal should be blank"
+        );
+        // Smoke check: styled is a string we can call .len() on without panic.
+        let _ = styled.len();
+    }
+
+    #[test]
+    fn test_list_coprocesses_initially_empty() {
+        // With no coprocess started, list must return an empty Vec.
+        let session = PtySession::new(80, 24, 1000);
+        assert!(
+            session.list_coprocesses().is_empty(),
+            "list_coprocesses() must be empty before any start_coprocess"
+        );
+    }
+
+    #[test]
+    fn test_coprocess_status_unknown_id_is_none() {
+        // status of an unregistered coprocess id must return None
+        // (distinguishes "no such id" from "stopped").
+        let session = PtySession::new(80, 24, 1000);
+        assert_eq!(
+            session.coprocess_status(999),
+            None,
+            "status for unknown id should be None"
+        );
+        assert_eq!(
+            session.coprocess_status(0),
+            None,
+            "status for id 0 should be None before any coprocess started"
+        );
+    }
+
+    #[test]
+    fn test_read_from_unknown_coprocess_is_err() {
+        // read_from_coprocess must surface a deterministic error for an
+        // unknown id (no panic, no blocking).
+        let session = PtySession::new(80, 24, 1000);
+        let result = session.read_from_coprocess(42);
+        assert!(
+            result.is_err(),
+            "read_from_coprocess on unknown id must return Err"
+        );
+        let msg = result.unwrap_err();
+        assert!(
+            msg.contains("42") || msg.to_lowercase().contains("not found"),
+            "error message should reference the missing id or 'not found': {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_read_coprocess_errors_unknown_id_is_err() {
+        let session = PtySession::new(80, 24, 1000);
+        let result = session.read_coprocess_errors(7);
+        assert!(
+            result.is_err(),
+            "read_coprocess_errors on unknown id must return Err"
+        );
+    }
+
+    #[test]
+    fn test_write_to_unknown_coprocess_is_err() {
+        // Writing to an unknown coprocess id must be a deterministic error
+        // without touching any I/O.
+        let session = PtySession::new(80, 24, 1000);
+        let result = session.write_to_coprocess(123, b"data");
+        assert!(
+            result.is_err(),
+            "write_to_coprocess on unknown id must return Err"
+        );
+    }
+
+    #[test]
+    fn test_stop_unknown_coprocess_is_err() {
+        // stop_coprocess on an unknown id must return Err (no panic).
+        let session = PtySession::new(80, 24, 1000);
+        let result = session.stop_coprocess(256);
+        assert!(
+            result.is_err(),
+            "stop_coprocess on unknown id must return Err"
+        );
+    }
+
+    #[test]
+    fn test_clear_output_callback_without_set_is_noop() {
+        // clear_output_callback before any set must be safe (no panic).
+        let mut session = PtySession::new(80, 24, 1000);
+        session.clear_output_callback();
+        session.clear_output_callback(); // idempotent
+    }
+
+    #[test]
+    fn test_set_env_does_not_affect_terminal_state() {
+        // set_env stores vars for later spawn; it must NOT mutate the
+        // terminal grid/size/cursor. Regression guard for accidental
+        // side effects.
+        let mut session = PtySession::new(80, 24, 1000);
+        let size_before = session.size();
+        let cursor_before = session.cursor_position();
+        let gen_before = session.update_generation();
+
+        session.set_env("FOO", "bar");
+        session.set_env("BAZ", "qux");
+
+        assert_eq!(session.size(), size_before, "size must not change");
+        assert_eq!(
+            session.cursor_position(),
+            cursor_before,
+            "cursor must not move"
+        );
+        assert_eq!(
+            session.update_generation(),
+            gen_before,
+            "generation must not advance from set_env"
+        );
+    }
+
+    #[test]
+    fn test_set_cwd_does_not_affect_terminal_state() {
+        // set_cwd stores a path string; it must not alter terminal state.
+        let mut session = PtySession::new(80, 24, 1000);
+        let size_before = session.size();
+        let gen_before = session.update_generation();
+
+        session.set_cwd(std::path::Path::new("/tmp"));
+
+        assert_eq!(session.size(), size_before);
+        assert_eq!(session.update_generation(), gen_before);
+    }
+
+    #[test]
+    fn test_resize_does_not_advance_generation() {
+        // resize() mutates terminal size but, unlike PTY reads, does NOT
+        // bump update_generation (the counter only advances on PTY reads).
+        // This pins that contract so callers relying on it for redraw
+        // detection keep working.
+        let mut session = PtySession::new(80, 24, 1000);
+        let gen_before = session.update_generation();
+        let res = session.resize(90, 30);
+        assert!(res.is_ok(), "resize before spawn should be ok");
+        assert_eq!(session.size(), (90, 30), "size must reflect new dimensions");
+        assert_eq!(
+            session.update_generation(),
+            gen_before,
+            "resize must NOT advance the update_generation counter"
+        );
+    }
+
+    #[test]
+    fn test_resize_with_pixels_zero_dimensions_no_div_by_zero() {
+        // resize_with_pixels guards against cols==0 / rows==0 in its
+        // per-cell division. Verify that path doesn't panic.
+        let mut session = PtySession::new(80, 24, 1000);
+        // cols = 0 -> cell math skipped; must not divide-by-zero.
+        let res = session.resize_with_pixels(0, 0, 100, 100);
+        assert!(res.is_ok(), "resize_with_pixels(0,0,...) should not panic");
+        // Valid resize with pixels should also work and be observable via size().
+        let res = session.resize_with_pixels(40, 12, 400, 240);
+        assert!(res.is_ok());
+        assert_eq!(session.size(), (40, 12));
+    }
+
+    #[test]
+    fn test_resize_with_pixels_advances_size_not_generation() {
+        // Same generation contract as plain resize (no PTY read happened).
+        let mut session = PtySession::new(80, 24, 1000);
+        let gen_before = session.update_generation();
+        let res = session.resize_with_pixels(100, 30, 700, 600);
+        assert!(res.is_ok());
+        assert_eq!(session.size(), (100, 30));
+        assert_eq!(
+            session.update_generation(),
+            gen_before,
+            "resize_with_pixels must NOT advance update_generation"
+        );
+    }
+
+    #[test]
+    fn test_get_default_shell_is_absolute_path_on_unix() {
+        // On Unix the default-shell resolver returns either $SHELL (when it
+        // is an existing file) or /bin/sh. Either way, the result must be
+        // non-empty and, on unix, start with '/' (absolute).
+        let shell = PtySession::get_default_shell();
+        assert!(!shell.is_empty());
+        #[cfg(unix)]
+        assert!(
+            shell.starts_with('/'),
+            "Unix default shell should be an absolute path, got: {}",
+            shell
+        );
+    }
+
+    #[test]
+    fn test_wait_before_spawn_returns_not_started_error() {
+        // wait() on a session that never spawned must surface NotStartedError,
+        // not block. (It cannot block because self.child is None.)
+        let mut session = PtySession::new(80, 24, 1000);
+        let result = session.wait();
+        assert!(
+            result.is_err(),
+            "wait() before spawn should return an error"
+        );
+        match result {
+            Err(PtyError::NotStartedError) => {}
+            other => panic!("expected NotStartedError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_try_wait_before_spawn_returns_not_started_error() {
+        // Mirror of the existing try_wait test, but pin the specific variant
+        // so future refactors don't silently swap error types.
+        let mut session = PtySession::new(80, 24, 1000);
+        match session.try_wait() {
+            Err(PtyError::NotStartedError) => {}
+            other => panic!("expected NotStartedError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_kill_before_spawn_returns_not_started_error() {
+        let mut session = PtySession::new(80, 24, 1000);
+        match session.kill() {
+            Err(PtyError::NotStartedError) => {}
+            other => panic!("expected NotStartedError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_write_before_spawn_returns_not_started_error() {
+        // write() must fail deterministically with NotStartedError before spawn.
+        let mut session = PtySession::new(80, 24, 1000);
+        match session.write(b"data") {
+            Err(PtyError::NotStartedError) => {}
+            other => panic!("expected NotStartedError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_write_str_before_spawn_returns_not_started_error() {
+        // write_str delegates to write(), so the same error path applies.
+        let mut session = PtySession::new(80, 24, 1000);
+        match session.write_str("data") {
+            Err(PtyError::NotStartedError) => {}
+            other => panic!("expected NotStartedError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_writer_is_none_before_and_after_no_spawn() {
+        // The writer field stays None until a successful spawn.
+        let session = PtySession::new(80, 24, 1000);
+        assert!(session.get_writer().is_none());
+    }
+
+    #[test]
+    fn test_scrollback_accessors_consistent_on_fresh_terminal() {
+        // scrollback() and scrollback_len() must agree on a fresh terminal:
+        // both should report "empty".
+        let session = PtySession::new(80, 24, 1000);
+        let sb_vec = session.scrollback();
+        let sb_len = session.scrollback_len();
+        assert_eq!(sb_len, 0);
+        assert_eq!(sb_vec.len(), 0);
+        assert!(
+            sb_len == sb_vec.len(),
+            "scrollback_len() ({}) and scrollback().len() ({}) must agree",
+            sb_len,
+            sb_vec.len()
+        );
+    }
+
+    #[test]
+    fn test_has_updates_since_future_generation_is_false() {
+        // has_updates_since(gen) where gen > current must be false
+        // (no updates between now and a future generation).
+        let session = PtySession::new(80, 24, 1000);
+        let current = session.update_generation();
+        assert!(
+            !session.has_updates_since(current + 1),
+            "has_updates_since(future_gen) must be false"
+        );
+        assert!(
+            !session.has_updates_since(current + 1000),
+            "has_updates_since(far_future_gen) must be false"
+        );
+    }
+
+    #[test]
+    fn test_drop_on_unspawned_session_does_not_panic() {
+        // Dropping a session that was constructed but never spawned must
+        // run Drop cleanly (kills coprocesses, signals reader) without
+        // panicking — there is no child, no reader thread, no writer.
+        let _session = PtySession::new(80, 24, 1000);
+        // Bound the scope so Drop runs before the assertion completes.
+        let dropped_ok = std::panic::catch_unwind(|| {
+            let _s = PtySession::new(10, 5, 100);
+            // explicit drop
+            drop(_s);
+        });
+        assert!(
+            dropped_ok.is_ok(),
+            "Dropping an unspawned PtySession must not panic"
+        );
+    }
 }

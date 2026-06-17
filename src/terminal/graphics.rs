@@ -694,6 +694,7 @@ impl Terminal {
 mod tests {
     use super::*;
     use crate::graphics::{next_graphic_id, GraphicProtocol, TerminalGraphic};
+    use crate::terminal::TerminalEvent;
 
     fn create_test_terminal() -> Terminal {
         Terminal::new(80, 24)
@@ -1081,5 +1082,530 @@ mod tests {
             0,
             "Graphic should be removed when n >= bottom"
         );
+    }
+
+    // ===== Helper: 4x4 solid-red PNG, base64-encoded (for inline image tests) =====
+    const TINY_PNG_B64: &str =
+        "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAFUlEQVR4nGP8z8DwnwEJMCFziBMAAIPRAgYEvCRHAAAAAElFTkSuQmCC";
+
+    // ====================================================================
+    // decode_iterm_filename
+    // ====================================================================
+
+    #[test]
+    fn test_decode_iterm_filename_missing_name() {
+        let mut params = std::collections::HashMap::new();
+        params.insert("size".to_string(), "10".to_string());
+        // No "name" key -> empty string
+        assert_eq!(Terminal::decode_iterm_filename(&params), "");
+    }
+
+    #[test]
+    fn test_decode_iterm_filename_invalid_base64() {
+        let mut params = std::collections::HashMap::new();
+        // Invalid base64 (contains illegal chars) -> falls back to empty
+        params.insert("name".to_string(), "not!!!valid!!!base64@@@".to_string());
+        assert_eq!(Terminal::decode_iterm_filename(&params), "");
+    }
+
+    #[test]
+    fn test_decode_iterm_filename_valid() {
+        use base64::Engine;
+        let original = "hello.txt";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(original.as_bytes());
+        let mut params = std::collections::HashMap::new();
+        params.insert("name".to_string(), encoded);
+        assert_eq!(Terminal::decode_iterm_filename(&params), original);
+    }
+
+    #[test]
+    fn test_decode_iterm_filename_invalid_utf8() {
+        use base64::Engine;
+        // 0xFF 0xFE is not valid UTF-8 on its own
+        let bad_bytes: [u8; 2] = [0xFF, 0xFE];
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bad_bytes);
+        let mut params = std::collections::HashMap::new();
+        params.insert("name".to_string(), encoded);
+        // Invalid UTF-8 after successful base64 decode -> falls back to empty
+        assert_eq!(Terminal::decode_iterm_filename(&params), "");
+    }
+
+    // ====================================================================
+    // handle_iterm_image dispatch
+    // ====================================================================
+
+    #[test]
+    fn test_handle_iterm_image_routes_multipart_file() {
+        let mut term = create_test_terminal();
+        // MultipartFile= with inline=1 and size param initializes multipart state
+        term.handle_iterm_image("MultipartFile=inline=1;size=4");
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_some(),
+            "MultipartFile= should initialize multipart buffer"
+        );
+        let state = term.graphics.iterm_multipart_buffer.as_ref().unwrap();
+        assert!(!state.is_file_transfer, "inline=1 -> not a file transfer");
+        assert_eq!(state.total_size, Some(4));
+    }
+
+    #[test]
+    fn test_handle_iterm_image_routes_file_part() {
+        let mut term = create_test_terminal();
+        // FilePart= without a preceding MultipartFile -> early return, no state, no panic
+        term.handle_iterm_image("FilePart=AAAA");
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
+        assert!(term.events.terminal_events.is_empty());
+    }
+
+    #[test]
+    fn test_handle_iterm_image_routes_single_file_no_colon() {
+        let mut term = create_test_terminal();
+        // No ':' separator -> early return, nothing added, no events
+        term.handle_iterm_image("File=inline=1");
+        assert_eq!(term.graphics_count(), 0);
+        assert!(term.events.terminal_events.is_empty());
+    }
+
+    // ====================================================================
+    // handle_multipart_file_start
+    // ====================================================================
+
+    #[test]
+    fn test_multipart_inline_rejected_on_total_memory_limit() {
+        let mut term = create_test_terminal();
+        let limits = *term.graphics.graphics_store.limits();
+        // Size one byte larger than max_total_memory should be rejected
+        let too_big = limits.max_total_memory + 1;
+        term.handle_iterm_image(&format!("MultipartFile=inline=1;size={}", too_big));
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_none(),
+            "Inline MultipartFile exceeding max_total_memory must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_multipart_inline_without_size_initiates_state() {
+        let mut term = create_test_terminal();
+        // inline=1 but no size -> state still initialized (size optional)
+        term.handle_iterm_image("MultipartFile=inline=1");
+        let state = term.graphics.iterm_multipart_buffer.as_ref();
+        assert!(state.is_some());
+        assert_eq!(state.unwrap().total_size, None);
+    }
+
+    #[test]
+    fn test_multipart_file_transfer_rejected_on_transfer_size_limit() {
+        let mut term = create_test_terminal();
+        // inline absent/0 -> file transfer path; size over max_transfer_size (50 MiB) rejected
+        let too_big = term.graphics.file_transfer_manager.max_transfer_size() + 1;
+        term.handle_iterm_image(&format!("MultipartFile=size={}", too_big));
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_none(),
+            "File-transfer MultipartFile exceeding max_transfer_size must be rejected"
+        );
+        // No FileTransferStarted event should be emitted
+        assert!(term.events.terminal_events.is_empty());
+    }
+
+    #[test]
+    fn test_multipart_file_transfer_initiates_with_started_event() {
+        use crate::terminal::TerminalEvent;
+        let mut term = create_test_terminal();
+        // inline absent -> file transfer path; small size accepted
+        term.handle_iterm_image("MultipartFile=size=4;name=aGV5LnR4dA==");
+        let state = term
+            .graphics
+            .iterm_multipart_buffer
+            .as_ref()
+            .expect("state");
+        assert!(state.is_file_transfer, "inline absent -> file transfer");
+        assert!(state.transfer_id.is_some());
+
+        // Should have emitted exactly one FileTransferStarted event with the decoded filename
+        let started = term
+            .events
+            .terminal_events
+            .iter()
+            .filter_map(|e| match e {
+                TerminalEvent::FileTransferStarted { filename, .. } => Some(filename.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(started, vec![Some("hey.txt".to_string())]);
+    }
+
+    // ====================================================================
+    // handle_file_part
+    // ====================================================================
+
+    #[test]
+    fn test_file_part_without_multipart_is_noop() {
+        let mut term = create_test_terminal();
+        term.handle_iterm_image("FilePart=AAAA");
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
+        assert!(term.events.terminal_events.is_empty());
+    }
+
+    #[test]
+    fn test_file_part_invalid_base64_clears_inline_state() {
+        let mut term = create_test_terminal();
+        term.handle_iterm_image("MultipartFile=inline=1;size=4");
+        assert!(term.graphics.iterm_multipart_buffer.is_some());
+
+        // Send an invalid base64 chunk -> decode error clears state, no panic
+        term.handle_iterm_image("FilePart=@@@not-base64@@@");
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_none(),
+            "Invalid base64 chunk must clear multipart buffer"
+        );
+    }
+
+    #[test]
+    fn test_file_part_invalid_base64_emits_failure_for_file_transfer() {
+        use crate::terminal::TerminalEvent;
+        let mut term = create_test_terminal();
+        // File transfer (inline absent)
+        term.handle_iterm_image("MultipartFile=size=4");
+        let transfer_id = term
+            .graphics
+            .iterm_multipart_buffer
+            .as_ref()
+            .unwrap()
+            .transfer_id
+            .unwrap();
+
+        term.handle_iterm_image("FilePart=@@@bad@@@");
+
+        // State cleared and a FileTransferFailed event emitted
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
+        let failed = term.events.terminal_events.iter().any(|e| {
+            matches!(
+                e,
+                TerminalEvent::FileTransferFailed { id, .. } if *id == transfer_id
+            )
+        });
+        assert!(failed, "expected FileTransferFailed for bad base64");
+    }
+
+    #[test]
+    fn test_file_part_inline_accumulated_exceeds_expected_clears_state() {
+        let mut term = create_test_terminal();
+        // inline=1 with size=2; we'll send one chunk decoding to more than 2 bytes
+        term.handle_iterm_image("MultipartFile=inline=1;size=2");
+
+        // "AAAA" decodes to 3 bytes (0x00 0x00 0x00), which exceeds size=2
+        term.handle_iterm_image("FilePart=AAAA");
+
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_none(),
+            "Exceeding expected size on inline transfer must clear state"
+        );
+        assert_eq!(term.graphics_count(), 0);
+    }
+
+    #[test]
+    fn test_file_part_missing_size_clears_state() {
+        let mut term = create_test_terminal();
+        // inline=1 with NO size param
+        term.handle_iterm_image("MultipartFile=inline=1");
+        assert!(term.graphics.iterm_multipart_buffer.is_some());
+
+        // Without a size parameter, completion can't be determined -> cleared
+        term.handle_iterm_image("FilePart=AAAA");
+        assert!(
+            term.graphics.iterm_multipart_buffer.is_none(),
+            "Missing size param must clear state after a FilePart"
+        );
+    }
+
+    // ====================================================================
+    // finalize_multipart_transfer (inline path -> single-file transfer)
+    // ====================================================================
+
+    #[test]
+    fn test_finalize_multipart_inline_image_end_to_end() {
+        use crate::graphics::GraphicProtocol;
+        let mut term = create_test_terminal();
+        // size must equal the decoded byte length of TINY_PNG_B64 (78)
+        use base64::Engine;
+        let decoded_len = base64::engine::general_purpose::STANDARD
+            .decode(TINY_PNG_B64.as_bytes())
+            .unwrap()
+            .len();
+        term.handle_iterm_image(&format!(
+            "MultipartFile=inline=1;size={};name={}",
+            decoded_len,
+            base64::engine::general_purpose::STANDARD.encode("img.png".as_bytes())
+        ));
+
+        // Send the entire image as a single FilePart
+        term.handle_iterm_image(&format!("FilePart={}", TINY_PNG_B64));
+
+        // Finalization should have decoded and stored the inline image
+        assert_eq!(
+            term.graphics_count(),
+            1,
+            "Completed inline multipart transfer should add a graphic"
+        );
+        let g = &term.all_graphics()[0];
+        assert_eq!(g.protocol, GraphicProtocol::ITermInline);
+        assert_eq!(g.width, 4);
+        assert_eq!(g.height, 4);
+    }
+
+    #[test]
+    fn test_finalize_multipart_file_transfer_completes() {
+        use crate::terminal::TerminalEvent;
+        let mut term = create_test_terminal();
+        // File transfer with known size = 5 bytes
+        use base64::Engine;
+        let payload = "hello";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(payload.as_bytes());
+        term.handle_iterm_image(&format!("MultipartFile=size={}", payload.len()));
+        let transfer_id = term
+            .graphics
+            .iterm_multipart_buffer
+            .as_ref()
+            .unwrap()
+            .transfer_id
+            .unwrap();
+
+        term.handle_iterm_image(&format!("FilePart={}", b64));
+
+        // Buffer cleared, transfer moved to completed, Completed event emitted
+        assert!(term.graphics.iterm_multipart_buffer.is_none());
+        let completed = term.events.terminal_events.iter().any(|e| matches!(
+            e,
+            TerminalEvent::FileTransferCompleted { id, size, .. } if *id == transfer_id && *size == payload.len()
+        ));
+        assert!(
+            completed,
+            "expected FileTransferCompleted after final chunk"
+        );
+        // After completion the transfer leaves the active map and lands in
+        // the completed ring buffer (FileTransferManager::get_transfer only
+        // inspects active transfers).
+        let in_completed = term
+            .graphics
+            .file_transfer_manager
+            .completed_transfers()
+            .iter()
+            .any(|t| t.id == transfer_id);
+        assert!(
+            in_completed,
+            "completed transfer should be in completed ring"
+        );
+    }
+
+    // ====================================================================
+    // handle_single_file_transfer error / file-download paths
+    // ====================================================================
+
+    #[test]
+    fn test_single_file_unsupported_command_prefix() {
+        let mut term = create_test_terminal();
+        // Looks like an iTerm2 sequence but prefix is not "File="
+        term.handle_iterm_image("SetUserVar=foo=bar:baz");
+        assert_eq!(term.graphics_count(), 0);
+        assert!(term.events.terminal_events.is_empty());
+    }
+
+    #[test]
+    fn test_single_file_inline_invalid_image_data_no_graphic() {
+        let mut term = create_test_terminal();
+        // inline=1 but the base64 payload is not a valid image -> decode_image errors, no graphic
+        term.handle_iterm_image("File=inline=1:ZGF0YQ=="); // "data"
+        assert_eq!(
+            term.graphics_count(),
+            0,
+            "Invalid image bytes must not produce a graphic"
+        );
+    }
+
+    #[test]
+    fn test_single_file_inline_valid_png_adds_graphic() {
+        use crate::graphics::GraphicProtocol;
+        let mut term = create_test_terminal();
+        term.handle_iterm_image(&format!("File=inline=1:{}", TINY_PNG_B64));
+        assert_eq!(term.graphics_count(), 1);
+        let g = &term.all_graphics()[0];
+        assert_eq!(g.protocol, GraphicProtocol::ITermInline);
+        assert_eq!(g.width, 4);
+        assert_eq!(g.height, 4);
+        // cell dimensions should be set on the stored graphic
+        assert!(g.cell_dimensions.is_some());
+    }
+
+    #[test]
+    fn test_single_file_inline_valid_png_moves_cursor() {
+        let mut term = create_test_terminal();
+        let start_row = term.cursor.row;
+        term.handle_iterm_image(&format!("File=inline=1:{}", TINY_PNG_B64));
+        // 4px tall image, cell height 2 -> 2 rows; cursor advances past it
+        assert!(
+            term.cursor.row >= start_row + 2,
+            "cursor should advance past graphic height"
+        );
+        assert_eq!(
+            term.cursor.col, 0,
+            "cursor column resets to 0 after inline image"
+        );
+    }
+
+    #[test]
+    fn test_single_file_download_path_completes_transfer() {
+        use crate::terminal::TerminalEvent;
+        let mut term = create_test_terminal();
+        use base64::Engine;
+        let payload = b"file-contents";
+        let b64 = base64::engine::general_purpose::STANDARD.encode(payload);
+        // inline=0 -> file download path; name is base64 of "doc.bin"
+        term.handle_iterm_image(&format!(
+            "File=inline=0;name={}:{}",
+            base64::engine::general_purpose::STANDARD.encode("doc.bin".as_bytes()),
+            b64
+        ));
+
+        // No graphic added (it's a download, not inline)
+        assert_eq!(term.graphics_count(), 0);
+
+        // Exactly one Started followed by one Completed for this transfer
+        let mut started = 0;
+        let mut completed = 0;
+        for e in &term.events.terminal_events {
+            match e {
+                TerminalEvent::FileTransferStarted { filename, .. } => {
+                    started += 1;
+                    assert_eq!(filename.as_deref(), Some("doc.bin"));
+                }
+                TerminalEvent::FileTransferCompleted { size, .. } => {
+                    completed += 1;
+                    assert_eq!(*size, payload.len());
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(started, 1);
+        assert_eq!(completed, 1);
+    }
+
+    #[test]
+    fn test_single_file_download_invalid_base64_is_noop() {
+        let mut term = create_test_terminal();
+        // inline=0 but payload is not valid base64 -> early return, no transfer started
+        term.handle_iterm_image("File=inline=0:@@@bad-base64@@@");
+        assert_eq!(term.graphics_count(), 0);
+        let any_transfer = !term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::FileTransferStarted { .. }));
+        assert!(any_transfer, "no transfer should start on bad base64");
+    }
+
+    // ====================================================================
+    // Scrollback query methods (scrollback_graphics / counts)
+    // ====================================================================
+
+    #[test]
+    fn test_scrollback_graphics_queries_empty() {
+        let term = create_test_terminal();
+        assert_eq!(term.scrollback_graphics_count(), 0);
+        assert_eq!(term.all_scrollback_graphics().len(), 0);
+        assert_eq!(term.scrollback_graphics(0, 10).len(), 0);
+    }
+
+    #[test]
+    fn test_scrollback_graphics_after_full_scroll_off() {
+        let mut term = create_test_terminal();
+        // Graphic at row 0, height 4px = 2 terminal rows. Scroll up 3 rows so it
+        // scrolls completely off (scroll_offset_rows=3 >= height_in_rows=2).
+        term.graphics
+            .graphics_store
+            .add_graphic(create_test_graphic(0, 0, 10, 4));
+
+        term.adjust_graphics_for_scroll_up(3, 0, 23);
+
+        // Graphic moved from placements to scrollback storage
+        assert_eq!(term.graphics_count(), 0);
+        assert_eq!(term.scrollback_graphics_count(), 1);
+        assert_eq!(term.all_scrollback_graphics().len(), 1);
+
+        // scrollback_row was set to old_scrollback_len. Terminal has no prior
+        // scrollback so old_scrollback_len = scrollback_len(3) - n(3) = 0.
+        let sb = &term.all_scrollback_graphics()[0];
+        assert_eq!(sb.scrollback_row, Some(0));
+
+        // Range query: scrollback_row 0 is in [0, 1) but not [1, 5)
+        assert_eq!(term.scrollback_graphics(0, 1).len(), 1);
+        assert_eq!(term.scrollback_graphics(1, 5).len(), 0);
+    }
+
+    // ====================================================================
+    // Export / import JSON round-trip
+    // ====================================================================
+
+    #[test]
+    fn test_export_json_graphics_empty() {
+        let term = create_test_terminal();
+        let json = term.export_json_graphics();
+        // Should be valid JSON (not necessarily non-empty, but must parse)
+        assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
+    }
+
+    #[test]
+    fn test_export_import_json_round_trip() {
+        let mut term = create_test_terminal();
+        term.graphics
+            .graphics_store
+            .add_graphic(create_test_graphic(3, 7, 20, 10));
+        term.graphics
+            .graphics_store
+            .add_graphic(create_test_graphic(0, 0, 5, 5));
+        let original_count = term.graphics_count();
+        let exported = term.export_json_graphics();
+
+        // Clear and re-import
+        term.clear_graphics();
+        assert_eq!(term.graphics_count(), 0);
+
+        let imported = term.import_json_graphics(&exported).expect("import ok");
+        assert_eq!(imported, original_count);
+        assert_eq!(term.graphics_count(), original_count);
+        // Verify one graphic landed back at its original position
+        let positions: Vec<(usize, usize)> =
+            term.all_graphics().iter().map(|g| g.position).collect();
+        assert!(positions.contains(&(3, 7)));
+        assert!(positions.contains(&(0, 0)));
+    }
+
+    #[test]
+    fn test_import_json_graphics_invalid_returns_error() {
+        let mut term = create_test_terminal();
+        let result = term.import_json_graphics("not valid json {{{");
+        assert!(result.is_err(), "invalid JSON should return Err");
+    }
+
+    // ====================================================================
+    // graphics_store_mut (mutable accessor) and scrollback_position
+    // ====================================================================
+
+    #[test]
+    fn test_graphics_store_mut_allows_mutation() {
+        let mut term = create_test_terminal();
+        // Use the mutable accessor to add a graphic directly
+        term.graphics_store_mut()
+            .add_graphic(create_test_graphic(0, 0, 8, 8));
+        assert_eq!(term.graphics_count(), 1);
+    }
+
+    #[test]
+    fn test_graphics_store_mut_notify_scrollback_advance() {
+        let mut term = create_test_terminal();
+        // Exercising the scrollback_position counter via the mutable accessor
+        term.graphics_store_mut().notify_scrollback_advance(5);
+        assert_eq!(term.graphics_store().scrollback_position(), 5);
+        term.graphics_store_mut().notify_scrollback_advance(3);
+        assert_eq!(term.graphics_store().scrollback_position(), 8);
     }
 }
