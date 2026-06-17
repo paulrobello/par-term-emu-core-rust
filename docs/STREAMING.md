@@ -294,6 +294,20 @@ par-term-streamer --enable-http
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
 | `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
 | `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Input rate limit (bytes/sec, 0=unlimited) |
+| `PAR_TERM_SCROLLBACK` | `--scrollback` | Scrollback buffer size (lines) |
+| `PAR_TERM_SHELL` | `--shell` | Shell to spawn (default: auto-detected) |
+| `PAR_TERM_COMMAND` | `--command` | Command to run instead of a shell |
+| `PAR_TERM_VERBOSE` | `--verbose` / `-v` | Enable verbose logging |
+| `PAR_TERM_KEEPALIVE` | `--keepalive` | WebSocket keepalive interval (seconds) |
+| `PAR_TERM_MAX_CLIENTS` | `--max-clients` | Maximum total clients (0=unlimited) |
+| `PAR_TERM_USE_TTY_SIZE` | `--use-tty-size` | Use the current TTY size for the terminal |
+| `PAR_TERM_NO_RESTART_SHELL` | `--no-restart-shell` | Don't restart the shell on exit |
+| `PAR_TERM_DOWNLOAD_FRONTEND` | `--download-frontend` | Download the web frontend on startup |
+| `PAR_TERM_FRONTEND_VERSION` | `--frontend-version` | Web frontend version to download |
+| `PAR_TERM_MACRO_FILE` | `--macro-file` | Macro file for playback |
+| `PAR_TERM_MACRO_SPEED` | `--macro-speed` | Macro playback speed multiplier |
+| `PAR_TERM_MACRO_LOOP` | `--macro-loop` | Loop macro playback |
+| `PAR_TERM_ALLOWED_ORIGINS` | `--allowed-origins` | Allowed browser origins (CORS/WS, SEC-005) |
 
 **Download Web Frontend:**
 

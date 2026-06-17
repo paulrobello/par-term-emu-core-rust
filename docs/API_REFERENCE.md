@@ -1717,6 +1717,39 @@ Unicode normalization form for terminal text storage.
 - `name() -> str`: Get human-readable name (`"none"`, `"NFC"`, `"NFD"`, `"NFKC"`, `"NFKD"`)
 - `is_none() -> bool`: Check if normalization is disabled
 
+### UnicodeVersion
+
+Unicode standard version for character width tables.
+
+**Values:**
+- `UnicodeVersion.Unicode9`: Unicode 9.0 (pre-emoji standardization)
+- `UnicodeVersion.Unicode10`: Unicode 10.0
+- `UnicodeVersion.Unicode11`: Unicode 11.0
+- `UnicodeVersion.Unicode12`: Unicode 12.0
+- `UnicodeVersion.Unicode13`: Unicode 13.0
+- `UnicodeVersion.Unicode14`: Unicode 14.0
+- `UnicodeVersion.Unicode15`: Unicode 15.0 (latest, default)
+
+### AmbiguousWidth
+
+Treatment of East Asian Ambiguous-width characters.
+
+**Values:**
+- `AmbiguousWidth.Narrow`: Treat ambiguous as narrow (1 cell) — Western/default behavior
+- `AmbiguousWidth.Wide`: Treat ambiguous as wide (2 cells) — CJK terminal behavior
+
+### WidthConfig
+
+Character width configuration combining Unicode version and ambiguous-width treatment.
+
+**Properties:**
+- `unicode_version: UnicodeVersion`: Unicode version for width tables (default: Unicode15)
+- `ambiguous_width: AmbiguousWidth`: Treatment of ambiguous characters (default: Narrow)
+
+**Methods:**
+- `char_width(c: str) -> int`: Get display width of a character (1 or 2)
+- `str_width(s: str) -> int`: Get total display width of a string
+
 ### CoprocessConfig
 
 Configuration for starting a coprocess.

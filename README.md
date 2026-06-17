@@ -15,6 +15,10 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 
 ## What's New
 
+> **Note:** For the complete release history, see [CHANGELOG.md](CHANGELOG.md).
+> The entries below cover recent highlights; older entries may be archived
+> to CHANGELOG.md in future releases to keep this section concise (DOC-016).
+
 Version 0.42.4 fixes `has_updates_since()` on Windows — the generation counter now increments immediately on PTY data arrival instead of at the end of terminal processing, preventing it from getting stuck after Ctrl+C on ConPTY. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.42.3

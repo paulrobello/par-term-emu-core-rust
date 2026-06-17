@@ -893,6 +893,59 @@ Before deploying PTY functionality:
 - [ ] Code has been reviewed for injection vulnerabilities
 - [ ] Input validation includes escape sequence filtering
 
+## Streaming Server Security (Network Attack Surface)
+
+The standalone `par-term-streamer` binary exposes an interactive shell over
+WebSocket. This section covers the network security model and mitigations.
+
+### Threat Model
+
+Exposing a PTY (arbitrary shell) over WebSocket is inherently high-risk. A
+connected client can execute arbitrary commands as the user running the server.
+**Only run the streamer on trusted networks or behind proper authentication.**
+
+### Authentication
+
+- **API Key** (`--api-key` / `PAR_TERM_API_KEY`): WebSocket connections must
+  include the key via `Authorization: Bearer <key>` header or `?api_key=` URL
+  param (the latter is disabled by default — `--allow-api-key-in-query` logs
+  the key in proxy/browser history).
+- **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
+  htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
+  `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See SEC-003.
+- **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
+  default and warns loudly if binding a public interface without auth (SEC-002).
+
+### Transport Security (TLS)
+
+- TLS via `--tls-cert` / `--tls-key` (or `--tls-pem`). Uses `rustls` with
+  `rustls-pki-types` for PEM loading (SEC-006 replaced unmaintained
+  `rustls-pemfile`). Certificate verification is never disabled.
+- Private key files are checked for `0o600` permissions on Unix.
+
+### WebSocket Origin Validation (CSRF Defense, SEC-005)
+
+- `--allowed-origins` / `PAR_TERM_ALLOWED_ORIGINS` controls which browser
+  origins can connect. By default, non-browser clients and loopback origins
+  are allowed; remote browser origins are rejected (HTTP 403).
+- A `tower-http` `CorsLayer` mirrors the policy on HTTP routes.
+
+### Input Safety
+
+- Client input is rate-limited (`--input-rate-limit`, default 0 = unlimited).
+- Read-only clients are enforced before PTY writes.
+- Terminal-size updates are validated server-side.
+- File transfers are capped at 50 MiB in memory; no path-traversal writes.
+- OSC data is capped (`MAX_OSC_DATA_LENGTH`, configurable via
+  `Terminal::set_max_osc_data_length` — QA-012).
+- zlib decompression is capped at 1 MiB (SEC-001).
+
+### See Also
+
+- [STREAMING.md](STREAMING.md#security-considerations) — detailed security
+  considerations for the streaming protocol.
+- `cargo audit` — 0 vulnerabilities (all Security items resolved).
+
 ## Reporting Security Issues
 
 If you discover a security vulnerability in par-term-emu-core-rust, please report it to the maintainers privately before public disclosure. Create a security advisory on GitHub or contact the maintainers directly.
