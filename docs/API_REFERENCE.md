@@ -205,7 +205,7 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 - `cursor_position() -> tuple[int, int]`: Get cursor position (col, row)
 - `cursor_visible() -> bool`: Check if cursor is visible
 - `cursor_style() -> CursorStyle`: Get cursor style (block, underline, bar)
-- `cursor_color() -> tuple[int, int, int] | None`: Get cursor color (RGB)
+- `cursor_color() -> tuple[int, int, int]`: Get cursor color (RGB)
 - `set_cursor_style(style: CursorStyle)`: Set cursor style
 - `set_cursor_color(r: int, g: int, b: int)`: Set cursor color (RGB)
 - `query_cursor_color()`: Query cursor color (response in drain_responses())
@@ -300,8 +300,8 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 - `clear_all_tab_stops()`: Clear all tab stops
 
 #### Colors and Appearance
-- `default_fg() -> tuple[int, int, int] | None`: Get default foreground color
-- `default_bg() -> tuple[int, int, int] | None`: Get default background color
+- `default_fg() -> tuple[int, int, int]`: Get default foreground color
+- `default_bg() -> tuple[int, int, int]`: Get default background color
 - `set_default_fg(r: int, g: int, b: int)`: Set default foreground color
 - `set_default_bg(r: int, g: int, b: int)`: Set default background color
 - `query_default_fg()`: Query default foreground color (response in drain_responses())
@@ -893,7 +893,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters
 
 #### Selection Management
-- `set_selection(start_col: int, start_row: int, end_col: int, end_row: int, mode: str = "character")`: Set text selection (mode: "character", "line", or "block")
+- `set_selection(start: tuple[int, int], end: tuple[int, int], mode: str = "character")`: Set text selection. `start`/`end` are `(col, row)` tuples. Mode: "character", "line", or "block"
 - `get_selection() -> Selection | None`: Get current selection
 - `get_selected_text() -> str | None`: Get text content of current selection
 - `clear_selection()`: Clear current selection
@@ -907,6 +907,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 
 ### Content Search
 
+- `search(pattern: str, case_sensitive: bool = False) -> list[SearchMatch]`: Search terminal content. **Note:** `search()` defaults to case-**insensitive** (`case_sensitive=False`), unlike `find_text()` which defaults to case-**sensitive** (`case_sensitive=True`).
 - `find_text(pattern: str, case_sensitive: bool = True) -> list[tuple[int, int]]`: Find all occurrences in visible screen
 - `find_next(pattern: str, from_col: int, from_row: int, case_sensitive: bool = True) -> tuple[int, int] | None`: Find next occurrence from position
 - `search_scrollback(pattern: str, case_sensitive: bool = True, max_results: int | None = None) -> list[tuple[int, int]]`: Search scrollback buffer
@@ -1037,7 +1038,7 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 
 #### Process Management
 - `spawn(cmd: str, args: list[str] = [], env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
-- `spawn_shell(shell: str | None = None)`: Spawn a shell (defaults to /bin/bash)
+- `spawn_shell(env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a shell (auto-detected from environment; defaults to /bin/bash on Unix, cmd.exe on Windows)
 - `child_pid() -> int | None`: Return the PID of the spawned child process, or `None` if not yet spawned
 - `is_running() -> bool`: Check if the child process is still running
 - `wait() -> int | None`: Wait for child process to exit and return exit code
@@ -1159,6 +1160,10 @@ Represents text attributes for a cell.
 - `reverse: bool`: Reverse video
 - `hidden: bool`: Hidden text
 - `strikethrough: bool`: Strikethrough text
+- `underline_style: UnderlineStyle`: Underline style (None, Straight, Double, Curly, Dotted, Dashed)
+- `wide_char: bool`: Whether this cell is a wide character (2 columns)
+- `wide_char_spacer: bool`: Whether this cell is a spacer following a wide character
+- `hyperlink_id: int | None`: Hyperlink ID (None if no hyperlink)
 
 ### ShellIntegration
 
@@ -1227,10 +1232,13 @@ Image dimension with unit for sizing.
 
 Immutable snapshot of screen state.
 
+**Properties:**
+- `lines -> list`: List of screen lines (each line is a list of `(char, fg_rgb, bg_rgb, Attributes)` tuples)
+- `cursor_pos -> tuple[int, int]`: Cursor position `(col, row)` at snapshot time
+- `size -> tuple[int, int]`: Terminal dimensions `(cols, rows)`
+
 **Methods:**
-- `content() -> str`: Get full screen content
-- `cursor_position() -> tuple[int, int]`: Cursor position at snapshot time
-- `size() -> tuple[int, int]`: Terminal dimensions
+- `get_line(row: int) -> list`: Get a single line's cell data (filtered for control characters)
 
 ### NotificationConfig
 
@@ -1431,30 +1439,30 @@ Detected semantic item (URL, file path, etc.).
 
 **Properties:**
 - `item_type: str`: Type of item ("url", "file_path", "email", etc.)
-- `value: str`: The detected value
-- `start_col: int`: Start column
-- `start_row: int`: Start row
-- `end_col: int`: End column
-- `end_row: int`: End row
+- `text: str`: The detected value
+- `row: int`: Row position
+- `col: int`: Column position
+- `line_number: int | None`: Line number (if applicable)
 
 ### EscapeSequenceProfile
 
 Profile data for escape sequence parsing.
 
 **Properties:**
-- `sequence_type: str`: Type of sequence (CSI, OSC, DCS, etc.)
 - `count: int`: Number of times seen
 - `total_time_us: int`: Total processing time in microseconds
-- `avg_time_us: float`: Average processing time in microseconds
+- `peak_time_us: int`: Peak (slowest) processing time
+- `avg_time_us: int`: Average processing time in microseconds
 
 ### FrameTiming
 
 Frame rendering timing information.
 
 **Properties:**
-- `timestamp: int`: Frame timestamp in milliseconds
-- `render_time_ms: float`: Rendering time in milliseconds
 - `frame_number: int`: Frame sequence number
+- `processing_us: int`: Processing time in microseconds
+- `cells_updated: int`: Number of cells updated this frame
+- `bytes_processed: int`: Bytes processed this frame
 
 ### ImageProtocol
 
@@ -1504,10 +1512,11 @@ Logical line formed by joining wrapped lines.
 Difference between two lines.
 
 **Properties:**
-- `row: int`: Row number
-- `old_text: str`: Old line content
-- `new_text: str`: New line content
-- `changed: bool`: Whether line changed
+- `change_type: str`: Type of change ("added", "removed", "modified", "unchanged")
+- `old_row: int | None`: Row in old snapshot
+- `new_row: int | None`: Row in new snapshot
+- `old_content: str | None`: Old line content
+- `new_content: str | None`: New line content
 
 ### MouseEncoding
 
@@ -1524,12 +1533,14 @@ Mouse encoding mode enumeration.
 Mouse event record.
 
 **Properties:**
-- `button: int`: Mouse button (0=left, 1=middle, 2=right, 64=wheel_up, 65=wheel_down)
+- `event_type: str`: Event type ("press", "release", "motion")
+- `button: str`: Mouse button ("left", "middle", "right", "wheel_up", "wheel_down")
 - `col: int`: Column position
 - `row: int`: Row position
+- `pixel_x: int | None`: Pixel X coordinate (if reported)
+- `pixel_y: int | None`: Pixel Y coordinate (if reported)
 - `modifiers: int`: Modifier keys bitmask
-- `event_type: str`: Event type ("press", "release", "motion")
-- `timestamp: int`: Event timestamp in milliseconds
+- `timestamp: int`: Event timestamp
 
 ### MousePosition
 
@@ -1545,64 +1556,76 @@ Mouse cursor position.
 Terminal pane state for window management.
 
 **Properties:**
-- `content: str`: Pane content
-- `cursor_col: int`: Cursor column
-- `cursor_row: int`: Cursor row
-- `scrollback_lines: int`: Number of scrollback lines
+- `id: str`: Pane identifier
 - `title: str`: Pane title
+- `size: tuple[int, int]`: Pane dimensions (cols, rows)
+- `position: tuple[int, int]`: Pane position (x, y)
+- `cwd: str | None`: Working directory
+- `content: list[str]`: Pane content (per line)
+- `cursor: tuple[int, int]`: Cursor position (col, row)
+- `alt_screen: bool`: Whether alternate screen is active
+- `scroll_offset: int`: Scroll offset
+- `created_at: int`: Creation timestamp
+- `last_activity: int`: Last activity timestamp
 
 ### PerformanceMetrics
 
 Performance metrics collection.
 
 **Properties:**
-- `total_frames: int`: Total frames rendered
-- `dropped_frames: int`: Frames dropped
-- `avg_frame_time_ms: float`: Average frame time
-- `peak_memory_bytes: int`: Peak memory usage
-- `total_bytes_processed: int`: Total bytes processed
+- `frames_rendered: int`: Total frames rendered
+- `cells_updated: int`: Total cells updated
+- `bytes_processed: int`: Total bytes processed
+- `total_processing_us: int`: Total processing time in microseconds
+- `peak_frame_us: int`: Peak (slowest) frame time in microseconds
+- `scroll_count: int`: Number of scroll operations
+- `wrap_count: int`: Number of line wraps
+- `escape_sequences: int`: Number of escape sequences processed
 
 ### ProfilingData
 
 Performance profiling data.
 
 **Properties:**
-- `escape_sequences: list[EscapeSequenceProfile]`: Escape sequence profiles
-- `total_sequences: int`: Total sequences processed
-- `total_time_us: int`: Total processing time in microseconds
-- `memory_allocations: int`: Number of memory allocations
-- `peak_memory_bytes: int`: Peak memory usage
+- `categories: dict[str, EscapeSequenceProfile]`: Escape sequence profiles by type (CSI, OSC, DCS, etc.)
+- `allocations: int`: Number of memory allocations
+- `bytes_allocated: int`: Total bytes allocated
+- `peak_memory: int`: Peak memory usage in bytes
 
 ### RegexMatch
 
 Regular expression match result.
 
 **Properties:**
-- `start_col: int`: Match start column
-- `start_row: int`: Match start row
-- `end_col: int`: Match end column
+- `row: int`: Match start row
+- `col: int`: Match start column
 - `end_row: int`: Match end row
+- `end_col: int`: Match end column
 - `text: str`: Matched text
+- `captures: list[str]`: Regex capture groups
 
 ### RenderingHint
 
 Rendering optimization hint.
 
 **Properties:**
-- `hint_type: str`: Hint type ("dirty_region", "cursor_moved", "scroll", etc.)
-- `data: dict[str, Any]`: Hint-specific data
+- `damage: DamageRegion`: Dirty/damaged region
+- `layer: str`: Z-layer hint
+- `animation: str`: Animation hint
+- `priority: int`: Update priority (0-255)
 
 ### SessionState
 
 Complete terminal session state.
 
 **Properties:**
-- `session_id: str`: Session identifier
-- `content: str`: Terminal content
-- `scrollback: list[str]`: Scrollback buffer
-- `cursor_position: tuple[int, int]`: Cursor position
-- `title: str`: Terminal title
-- `environment: dict[str, str]`: Environment variables
+- `id: str`: Session identifier
+- `name: str`: Session name
+- `panes: list[PaneState]`: Panes in this session
+- `layouts: list[WindowLayout]`: Window layouts
+- `active_layout: int`: Index of active layout
+- `created_at: int`: Creation timestamp
+- `last_saved: int`: Last saved timestamp
 
 ### ShellIntegrationStats
 
@@ -1620,18 +1643,32 @@ Shell integration statistics.
 Difference between two screen snapshots.
 
 **Properties:**
-- `changed_lines: list[LineDiff]`: Lines that changed
-- `cursor_moved: bool`: Whether cursor moved
-- `old_cursor: tuple[int, int]`: Old cursor position
-- `new_cursor: tuple[int, int]`: New cursor position
+- `diffs: list[LineDiff]`: Per-line differences
+- `added: int`: Number of lines added
+- `removed: int`: Number of lines removed
+- `modified: int`: Number of lines modified
+- `unchanged: int`: Number of lines unchanged
 
 ### TmuxNotification
 
 Tmux control mode notification.
 
 **Properties:**
-- `notification_type: str`: Notification type
-- `data: str`: Notification data
+- `notification_type: str`: Notification type (e.g. "layout_change", "output", "pane_mode")
+- `pane_id: str | None`: Pane identifier
+- `window_id: str | None`: Window identifier
+- `session_id: str | None`: Session identifier
+- `name: str | None`: Session/window name
+- `client: str | None`: Client name
+- `data: bytes | None`: Raw notification data
+- `timestamp: int | None`: Notification timestamp
+- `command_number: int | None`: Command number
+- `flags: str | None`: Raw flags
+- `delay_ms: int | None`: Delay in milliseconds
+- `subscription_name: str | None`: Subscription name
+- `value: str | None`: Subscription value
+- `window_layout: str | None`: Window layout string
+- `window_visible_layout: str | None`: Visible window layout
 
 ### Trigger
 
@@ -1709,7 +1746,9 @@ Window layout descriptor.
 HSL color representation.
 
 **Properties:**
-- `h: int`: Hue (0-360)
+- `h: float`: Hue (0-360)
+- `s: float`: Saturation (0-1)
+- `l: float`: Lightness (0-1)
 - `s: int`: Saturation (0-100)
 - `l: int`: Lightness (0-100)
 
@@ -1718,7 +1757,9 @@ HSL color representation.
 HSV color representation.
 
 **Properties:**
-- `h: int`: Hue (0-360)
+- `h: float`: Hue (0-360)
+- `s: float`: Saturation (0-1)
+- `v: float`: Value (0-1)
 - `s: int`: Saturation (0-100)
 - `v: int`: Value (0-100)
 

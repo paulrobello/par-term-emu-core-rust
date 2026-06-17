@@ -1094,10 +1094,10 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.10", default-features = false }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.10", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.10"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.10", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.42", default-features = false }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.42", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.42"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.42", features = ["full"] }` | All features |
 
 **Download pre-built streaming server (recommended):**
 
@@ -1109,8 +1109,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.10.0.tar.gz
-tar -xzf par-term-web-frontend-v0.10.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.42.4.tar.gz
+tar -xzf par-term-web-frontend-v0.42.4.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -1419,8 +1419,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.10.0.tar.gz
-tar -xzf par-term-web-frontend-v0.10.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.42.4.tar.gz
+tar -xzf par-term-web-frontend-v0.42.4.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term
