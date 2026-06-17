@@ -7,8 +7,8 @@ fn test_skin_tone_light() {
     term.process("👍🏻".as_bytes()); // Light skin
     let cell = term.active_grid().get(0, 0).unwrap();
     assert_eq!(cell.get_grapheme(), "👍🏻");
-    assert_eq!(cell.combining.len(), 1);
-    assert_eq!(cell.combining[0], '\u{1F3FB}');
+    assert_eq!(cell.combining().len(), 1);
+    assert_eq!(cell.combining()[0], '\u{1F3FB}');
 }
 
 #[test]
@@ -17,8 +17,8 @@ fn test_skin_tone_medium_light() {
     term.process("👍🏼".as_bytes()); // Medium-light skin
     let cell = term.active_grid().get(0, 0).unwrap();
     assert_eq!(cell.get_grapheme(), "👍🏼");
-    assert_eq!(cell.combining.len(), 1);
-    assert_eq!(cell.combining[0], '\u{1F3FC}');
+    assert_eq!(cell.combining().len(), 1);
+    assert_eq!(cell.combining()[0], '\u{1F3FC}');
 }
 
 #[test]
@@ -113,11 +113,11 @@ fn test_skin_tone_width() {
     // Emoji with skin tone should still be wide (2 cells)
     let cell = term.active_grid().get(0, 0).unwrap();
     assert_eq!(cell.width(), 2);
-    assert!(cell.flags.wide_char());
+    assert!(cell.flags().wide_char());
 
     // Next cell should be a spacer
     let spacer = term.active_grid().get(1, 0).unwrap();
-    assert!(spacer.flags.wide_char_spacer());
+    assert!(spacer.flags().wide_char_spacer());
 }
 
 #[test]

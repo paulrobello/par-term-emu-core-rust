@@ -101,12 +101,12 @@ fn test_zwj_sequence_width() {
     // ZWJ sequence should still be wide (2 cells)
     let cell = term.active_grid().get(0, 0).unwrap();
     assert_eq!(cell.width(), 2, "ZWJ sequence should be wide");
-    assert!(cell.flags.wide_char(), "Should be marked as wide char");
+    assert!(cell.flags().wide_char(), "Should be marked as wide char");
 
     // Next cell should be a spacer
     let spacer = term.active_grid().get(1, 0).unwrap();
     assert!(
-        spacer.flags.wide_char_spacer(),
+        spacer.flags().wide_char_spacer(),
         "Next cell should be spacer"
     );
 }

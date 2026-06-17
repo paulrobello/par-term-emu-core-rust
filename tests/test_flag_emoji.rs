@@ -12,7 +12,7 @@ fn test_us_flag_basic() {
     // Should have both regional indicators combined
     assert_eq!(grapheme, "🇺🇸", "Should contain US flag");
     assert!(cell.has_combining_chars(), "Should have combining chars");
-    assert_eq!(cell.combining.len(), 1, "Should have one combining char");
+    assert_eq!(cell.combining().len(), 1, "Should have one combining char");
 }
 
 #[test]
@@ -45,12 +45,12 @@ fn test_flag_width() {
     // Flag should be wide (2 cells)
     let cell = term.active_grid().get(0, 0).unwrap();
     assert_eq!(cell.width(), 2, "Flag should be wide");
-    assert!(cell.flags.wide_char(), "Should be marked as wide char");
+    assert!(cell.flags().wide_char(), "Should be marked as wide char");
 
     // Next cell should be a spacer
     let spacer = term.active_grid().get(1, 0).unwrap();
     assert!(
-        spacer.flags.wide_char_spacer(),
+        spacer.flags().wide_char_spacer(),
         "Next cell should be spacer"
     );
 }
@@ -79,13 +79,13 @@ fn test_flags_separated_by_space() {
     assert_eq!(term.active_grid().get(0, 0).unwrap().get_grapheme(), "🇺🇸");
 
     // Space at position 2
-    assert_eq!(term.active_grid().get(2, 0).unwrap().c, ' ');
+    assert_eq!(term.active_grid().get(2, 0).unwrap().c(), ' ');
 
     // UK flag at position 3
     assert_eq!(term.active_grid().get(3, 0).unwrap().get_grapheme(), "🇬🇧");
 
     // Space at position 5
-    assert_eq!(term.active_grid().get(5, 0).unwrap().c, ' ');
+    assert_eq!(term.active_grid().get(5, 0).unwrap().c(), ' ');
 
     // Japan flag at position 6
     assert_eq!(term.active_grid().get(6, 0).unwrap().get_grapheme(), "🇯🇵");
@@ -111,8 +111,8 @@ fn test_flags_with_text() {
     assert_eq!(term.active_grid().get(6, 0).unwrap().get_grapheme(), "🇺🇸");
 
     // " World" starts at position 8
-    assert_eq!(term.active_grid().get(8, 0).unwrap().c, ' ');
-    assert_eq!(term.active_grid().get(9, 0).unwrap().c, 'W');
+    assert_eq!(term.active_grid().get(8, 0).unwrap().c(), ' ');
+    assert_eq!(term.active_grid().get(9, 0).unwrap().c(), 'W');
 }
 
 #[test]
@@ -121,9 +121,9 @@ fn test_flag_at_line_end() {
     term.process("ABC🇺🇸".as_bytes()); // "ABC" + flag = 3 + 2 = 5 cells
 
     // ABC at positions 0-2
-    assert_eq!(term.active_grid().get(0, 0).unwrap().c, 'A');
-    assert_eq!(term.active_grid().get(1, 0).unwrap().c, 'B');
-    assert_eq!(term.active_grid().get(2, 0).unwrap().c, 'C');
+    assert_eq!(term.active_grid().get(0, 0).unwrap().c(), 'A');
+    assert_eq!(term.active_grid().get(1, 0).unwrap().c(), 'B');
+    assert_eq!(term.active_grid().get(2, 0).unwrap().c(), 'C');
 
     // Flag at position 3 (fits exactly in remaining 2 columns)
     assert_eq!(term.active_grid().get(3, 0).unwrap().get_grapheme(), "🇺🇸");
@@ -177,7 +177,7 @@ fn test_all_country_flags() {
         assert_eq!(grapheme, flag, "Should correctly store flag: {}", flag);
         assert_eq!(cell.width(), 2, "Flag {} should be wide", flag);
         assert!(
-            cell.flags.wide_char(),
+            cell.flags().wide_char(),
             "Flag {} should be marked as wide",
             flag
         );
@@ -196,12 +196,13 @@ fn test_regional_indicator_base_char() {
 
     // The combining should have the second indicator (S)
     assert_eq!(
-        cell.combining.len(),
+        cell.combining().len(),
         1,
         "Should have one combining character"
     );
     assert_eq!(
-        cell.combining[0], '🇸',
+        cell.combining()[0],
+        '🇸',
         "Combining should be second indicator"
     );
 }

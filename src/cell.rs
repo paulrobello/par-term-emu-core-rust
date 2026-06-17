@@ -207,20 +207,20 @@ impl CellFlags {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     /// The character stored in this cell
-    pub c: char,
+    pub(crate) c: char,
     /// Combining characters (variation selectors, ZWJ, modifiers, etc.)
     /// These follow the base character to form a complete grapheme cluster.
     /// Stored inline (no heap alloc) for up to 4 marks — the overwhelmingly
     /// common case — spilling to the heap only for rare long clusters.
-    pub combining: SmallVec<[char; 4]>,
+    pub(crate) combining: SmallVec<[char; 4]>,
     /// Foreground color
-    pub fg: Color,
+    pub(crate) fg: Color,
     /// Background color
-    pub bg: Color,
+    pub(crate) bg: Color,
     /// Underline color (SGR 58/59) - None means use foreground color
-    pub underline_color: Option<Color>,
+    pub(crate) underline_color: Option<Color>,
     /// Text attributes/flags
-    pub flags: CellFlags,
+    pub(crate) flags: CellFlags,
     /// Cached display width of the character (1 or 2, typically)
     pub(crate) width: u8,
 }
@@ -295,6 +295,47 @@ impl Cell {
             flags: CellFlags::default(),
             width,
         }
+    }
+
+    // --- Field accessors (ARC-012) ---
+    // Cell fields are `pub(crate)` (encapsulated from the public API); external
+    // consumers read them through these accessors so the representation can
+    // change without breaking the rlib API.
+
+    /// The base character stored in this cell.
+    #[inline]
+    pub fn c(&self) -> char {
+        self.c
+    }
+
+    /// Foreground color.
+    #[inline]
+    pub fn fg(&self) -> Color {
+        self.fg
+    }
+
+    /// Background color.
+    #[inline]
+    pub fn bg(&self) -> Color {
+        self.bg
+    }
+
+    /// Underline color (SGR 58/59); `None` means use the foreground color.
+    #[inline]
+    pub fn underline_color(&self) -> Option<Color> {
+        self.underline_color
+    }
+
+    /// Combining marks following the base character (empty for most cells).
+    #[inline]
+    pub fn combining(&self) -> &[char] {
+        &self.combining
+    }
+
+    /// The text attributes/flags.
+    #[inline]
+    pub fn flags(&self) -> &CellFlags {
+        &self.flags
     }
 
     /// Check if this cell is empty (contains a space with default attributes)

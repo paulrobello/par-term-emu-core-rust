@@ -17,29 +17,29 @@ mod zone;
 #[derive(Debug, Clone)]
 pub struct Grid {
     /// Number of columns
-    pub(crate) cols: usize,
+    pub(in crate::grid) cols: usize,
     /// Number of rows
-    pub(crate) rows: usize,
+    pub(in crate::grid) rows: usize,
     /// The actual grid data (row-major order)
-    pub(crate) cells: Vec<Cell>,
+    pub(in crate::grid) cells: Vec<Cell>,
     /// Scrollback buffer (flat Vec, row-major order like main grid)
-    pub(crate) scrollback_cells: Vec<Cell>,
+    pub(in crate::grid) scrollback_cells: Vec<Cell>,
     /// Index of oldest line in circular scrollback buffer
-    pub(crate) scrollback_start: usize,
+    pub(in crate::grid) scrollback_start: usize,
     /// Number of lines currently in scrollback
-    pub(crate) scrollback_lines: usize,
+    pub(in crate::grid) scrollback_lines: usize,
     /// Maximum scrollback lines
-    pub(crate) max_scrollback: usize,
+    pub(in crate::grid) max_scrollback: usize,
     /// Track which lines are wrapped
-    pub(crate) wrapped: Vec<bool>,
+    pub(in crate::grid) wrapped: Vec<bool>,
     /// Track wrapped state for scrollback lines
-    pub(crate) scrollback_wrapped: Vec<bool>,
+    pub(in crate::grid) scrollback_wrapped: Vec<bool>,
     /// Semantic zones tracking logical blocks (Prompt, Command, Output)
-    pub(crate) zones: Vec<Zone>,
+    pub(in crate::grid) zones: Vec<Zone>,
     /// Zones that were evicted from scrollback
-    pub(crate) evicted_zones: Vec<Zone>,
+    pub(in crate::grid) evicted_zones: Vec<Zone>,
     /// Total number of lines that have ever been scrolled into scrollback.
-    pub(crate) total_lines_scrolled: usize,
+    pub(in crate::grid) total_lines_scrolled: usize,
 }
 
 impl Grid {
