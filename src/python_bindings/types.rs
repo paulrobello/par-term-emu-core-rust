@@ -127,11 +127,10 @@ impl From<crate::terminal::replay_snapshot::TerminalSnapshot> for PyScreenSnapsh
 /// happen between individual line render calls.
 #[par_term_emu_derive::pyo3_get_all]
 #[pyclass(name = "ScreenSnapshot")]
-#[allow(clippy::type_complexity)]
 pub struct PyScreenSnapshot {
     /// All screen lines captured atomically
     /// Format: Vec<Vec<(String, fg_rgb, bg_rgb, attributes)>>
-    pub lines: Vec<Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)>>,
+    pub lines: Vec<LineCellData>,
 
     /// Wrapped state for each line (true = line continues to next row)
     pub wrapped_lines: Vec<bool>,
@@ -168,8 +167,7 @@ impl PyScreenSnapshot {
     /// Returns:
     ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
     ///     or empty list if row is out of bounds
-    #[allow(clippy::type_complexity)]
-    fn get_line(&self, row: usize) -> Vec<(String, (u8, u8, u8), (u8, u8, u8), PyAttributes)> {
+    fn get_line(&self, row: usize) -> LineCellData {
         if row < self.lines.len() {
             // Clone and filter control characters in one pass
             self.lines[row]
