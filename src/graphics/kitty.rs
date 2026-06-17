@@ -323,12 +323,14 @@ impl KittyParser {
                         // Relative X offset in pixels
                         self.relative_x_offset = value.parse().ok();
                     }
-                    "V"
-                        // Relative Y offset in pixels (note: different from v=height)
-                        // Only parse as relative offset if we have parent placement
-                        if self.parent_image_id.is_some() => {
-                            self.relative_y_offset = value.parse().ok();
-                        }
+                    "V" => {
+                        // Relative Y offset in pixels (note: different from v=height).
+                        // Parsed unconditionally to match H=; the offset is only *applied*
+                        // when a parent (P=) is set (see build_graphic), so storing it
+                        // early is harmless and removes the H=/V= asymmetry where V=
+                        // was silently dropped unless P= had already been parsed.
+                        self.relative_y_offset = value.parse().ok();
+                    }
                     "o" => {
                         // Compression format
                         if let Some(c) = value.chars().next() {
@@ -378,11 +380,20 @@ impl KittyParser {
 
     /// Parse delete target specification
     fn parse_delete_target(&mut self, value: &str) {
+        // Kitty graphics `d=` delete targets. The by-id / by-placement / by-column /
+        // by-row variants need a previously-parsed identifying param (`i=`/`p=`/`x=`/
+        // `y=`); if it hasn't been supplied yet the delete is a no-op (None).
         if let Some(c) = value.chars().next() {
             self.delete_target = match c {
                 'a' | 'A' => Some(KittyDeleteTarget::All),
                 'c' | 'C' => Some(KittyDeleteTarget::AtCursor),
                 'z' | 'Z' => Some(KittyDeleteTarget::OnScreen),
+                'i' | 'I' => self.image_id.map(KittyDeleteTarget::ById),
+                'p' | 'P' => self
+                    .image_id
+                    .map(|iid| KittyDeleteTarget::ByPlacement(iid, self.placement_id)),
+                'x' | 'X' => self.x_offset.map(KittyDeleteTarget::ByColumn),
+                'y' | 'Y' => self.y_offset.map(KittyDeleteTarget::ByRow),
                 _ => None,
             };
         }
@@ -872,12 +883,20 @@ impl KittyParser {
                 let height = self.height.ok_or_else(|| {
                     GraphicsError::KittyError("Height required for raw format".to_string())
                 })? as usize;
-
-                if data.len() != width * height * 4 {
+                // checked_mul: width/height are attacker-controlled u32 values; without
+                // this, `width * height * 4` can wrap usize and bypass the size check,
+                // yielding a graphic with huge dims over a tiny buffer (OOB/panic DoS).
+                let expected = width
+                    .checked_mul(height)
+                    .and_then(|px| px.checked_mul(4))
+                    .ok_or_else(|| {
+                        GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                    })?;
+                if data.len() != expected {
                     return Err(GraphicsError::KittyError(format!(
                         "Data size mismatch: got {}, expected {}",
                         data.len(),
-                        width * height * 4
+                        expected
                     )));
                 }
                 Ok((width, height, data.to_vec()))
@@ -891,17 +910,25 @@ impl KittyParser {
                 let height = self.height.ok_or_else(|| {
                     GraphicsError::KittyError("Height required for raw format".to_string())
                 })? as usize;
-
-                if data.len() != width * height * 3 {
+                // checked_mul throughout (see Rgba): attacker-controlled dimensions.
+                let pixels = width.checked_mul(height).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?;
+                let expected = pixels.checked_mul(3).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?;
+                if data.len() != expected {
                     return Err(GraphicsError::KittyError(format!(
                         "Data size mismatch: got {}, expected {}",
                         data.len(),
-                        width * height * 3
+                        expected
                     )));
                 }
 
-                // Convert RGB to RGBA
-                let mut rgba = Vec::with_capacity(width * height * 4);
+                // Convert RGB to RGBA (capacity validated non-overflowing).
+                let mut rgba = Vec::with_capacity(pixels.checked_mul(4).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?);
                 for chunk in data.chunks(3) {
                     rgba.push(chunk[0]);
                     rgba.push(chunk[1]);
@@ -1740,6 +1767,94 @@ mod tests {
         parser.action = KittyAction::Delete;
         let _ = parser.parse_chunk("a=d,d=;");
         assert_eq!(parser.delete_target, None);
+    }
+
+    // --- parse_delete_target: by-id / by-placement / by-column / by-row ---
+
+    #[test]
+    fn parse_delete_target_by_id_column_row_placement() {
+        // d=i -> ById(image_id)
+        let mut p = KittyParser::new();
+        p.image_id = Some(7);
+        let _ = p.parse_chunk("d=i;");
+        assert_eq!(p.delete_target, Some(KittyDeleteTarget::ById(7)));
+
+        // d=x -> ByColumn(x_offset)
+        let mut p = KittyParser::new();
+        p.x_offset = Some(3);
+        let _ = p.parse_chunk("d=x;");
+        assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByColumn(3)));
+
+        // d=y -> ByRow(y_offset)
+        let mut p = KittyParser::new();
+        p.y_offset = Some(9);
+        let _ = p.parse_chunk("d=y;");
+        assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByRow(9)));
+
+        // d=p -> ByPlacement(image_id, placement_id)
+        let mut p = KittyParser::new();
+        p.image_id = Some(5);
+        p.placement_id = Some(2);
+        let _ = p.parse_chunk("d=p;");
+        assert_eq!(
+            p.delete_target,
+            Some(KittyDeleteTarget::ByPlacement(5, Some(2)))
+        );
+    }
+
+    #[test]
+    fn parse_delete_target_by_id_without_identifying_param_is_none() {
+        // d=i with no image_id parsed yet -> no-op (None), not a panic.
+        let mut p = KittyParser::new();
+        let _ = p.parse_chunk("d=i;");
+        assert_eq!(p.delete_target, None);
+    }
+
+    // --- V= relative offset regression (was dropped unless P= preceded it) ---
+
+    #[test]
+    fn parse_chunk_v_offset_without_parent_is_parsed() {
+        // Regression: V= was silently dropped unless P= had been parsed first
+        // (unlike H=). It must be stored unconditionally; the offset is only
+        // applied when a parent exists (see build_graphic).
+        let mut parser = KittyParser::new();
+        let result = parser.parse_chunk("a=t,V=15;");
+        assert!(result.is_ok());
+        assert_eq!(parser.relative_y_offset, Some(15));
+    }
+
+    // --- decode_pixels dimension-overflow regression ---
+
+    #[test]
+    fn decode_pixels_rejects_rgba_dimension_overflow() {
+        // Regression: width*height*4 must not wrap usize. Attacker-controlled
+        // u32 dimensions that overflow must report "overflow" (previously the
+        // wrapping arithmetic bypassed the size check -> huge dims over a tiny
+        // buffer -> OOB/panic downstream).
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgba;
+        parser.width = Some(u32::MAX);
+        parser.height = Some(u32::MAX);
+        let result = parser.decode_pixels(&[0u8; 8]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("overflow"),
+            "overflowing dimensions must be reported as an overflow error"
+        );
+    }
+
+    #[test]
+    fn decode_pixels_rejects_rgb_dimension_overflow() {
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Rgb;
+        parser.width = Some(u32::MAX);
+        parser.height = Some(u32::MAX);
+        let result = parser.decode_pixels(&[0u8; 8]);
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().to_string().contains("overflow"),
+            "overflowing RGB dimensions must be reported as an overflow error"
+        );
     }
 
     // --- build_graphic: Delete action coverage ---
