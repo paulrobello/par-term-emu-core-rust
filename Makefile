@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python clean install install-force dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
@@ -194,16 +194,33 @@ watch:
 test: test-rust test-rust-streaming test-python
 
 test-rust:
-	@echo "Running Rust tests..."
-	cargo test --lib --no-default-features --features pyo3/auto-initialize
+	@echo "Running Rust tests (lib unit tests + integration tests in tests/)..."
+	cargo test --no-default-features --features pyo3/auto-initialize
 
 test-rust-streaming:
-	@echo "Running Rust streaming tests..."
-	cargo test --lib --no-default-features --features pyo3/auto-initialize,streaming
+	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
+	cargo test --no-default-features --features pyo3/auto-initialize,streaming
 
 test-python: dev
 	@echo "Running Python tests..."
 	uv run pytest tests/ -v
+
+coverage:
+	@echo "Running Rust coverage via cargo-llvm-cov (lib + integration tests, streaming feature)..."
+	@command -v cargo-llvm-cov >/dev/null 2>&1 || { \
+		echo "cargo-llvm-cov not installed. Install with:"; \
+		echo "  cargo install cargo-llvm-cov"; \
+		echo "  rustup component add llvm-tools-preview"; \
+		exit 1; }
+	cargo llvm-cov --no-default-features --features pyo3/auto-initialize,streaming --summary-only
+
+coverage-html:
+	@echo "Generating HTML Rust coverage report at target/llvm-cov/html/index.html ..."
+	cargo llvm-cov --no-default-features --features pyo3/auto-initialize,streaming --open
+
+coverage-python: dev
+	@echo "Running Python coverage via pytest-cov..."
+	uv run pytest tests/ --cov=par_term_emu_core_rust --cov-report=term-missing
 
 # ============================================================================
 # Code Quality

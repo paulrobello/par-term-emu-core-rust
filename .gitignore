@@ -39,6 +39,13 @@ claude_scratch/
 .gitnexus
 *.dSYM/
 
+# Coverage artifacts (make coverage / coverage-python)
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+
 # Local/user-specific configs
 CLAUDE.local.md
 settings.local.json

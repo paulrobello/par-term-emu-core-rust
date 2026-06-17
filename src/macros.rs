@@ -5,9 +5,9 @@
 //!
 //! ## Example
 //!
-//! ```rust
+//! ```rust,no_run
 //! use par_term_emu_core_rust::macros::{Macro, MacroEvent};
-//!
+//! # fn main() -> std::io::Result<()> {
 //! let mut macro_seq = Macro::new("Test Macro");
 //! macro_seq.add_key("ctrl+c");
 //! macro_seq.add_delay(100);
@@ -18,6 +18,8 @@
 //!
 //! // Load from YAML
 //! let loaded = Macro::load_yaml("/path/to/macro.yaml")?;
+//! # Ok(())
+//! # }
 //! ```
 
 use serde::{Deserialize, Serialize};

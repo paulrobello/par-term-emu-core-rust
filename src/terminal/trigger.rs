@@ -259,6 +259,13 @@ impl Terminal {
                 TriggerAction::Notify { title, message } => {
                     let title = substitute_captures(title, &trigger_match.captures);
                     let message = substitute_captures(message, &trigger_match.captures);
+                    // Apply immediately to terminal notification state so `notifications()`
+                    // reflects trigger-driven alerts, consistent with SetVariable/Highlight.
+                    // The ActionResult below is retained for host-side polling.
+                    self.enqueue_notification(crate::terminal::notification::Notification::new(
+                        title.clone(),
+                        message.clone(),
+                    ));
                     self.triggers
                         .trigger_action_results
                         .push(ActionResult::Notify {
@@ -271,6 +278,10 @@ impl Terminal {
                     let label = label
                         .as_ref()
                         .map(|l| substitute_captures(l, &trigger_match.captures));
+                    // Apply immediately to terminal bookmark state so `get_bookmarks()`
+                    // reflects trigger-driven marks, consistent with SetVariable/Highlight.
+                    // The ActionResult below is retained for host-side polling.
+                    self.add_bookmark(trigger_match.row as isize, label.clone());
                     self.triggers
                         .trigger_action_results
                         .push(ActionResult::MarkLine {

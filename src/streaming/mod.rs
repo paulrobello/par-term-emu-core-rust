@@ -27,12 +27,12 @@
 //! use par_term_emu_core_rust::terminal::Terminal;
 //! use par_term_emu_core_rust::streaming::StreamingServer;
 //! use std::sync::Arc;
-//! use parking_lot::Mutex;
+//! use parking_lot::RwLock;
 //!
 //! #[tokio::main]
 //! async fn main() {
 //!     let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
-//!     let server = StreamingServer::new(terminal, "127.0.0.1:8080".to_string());
+//!     let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:8080".to_string()));
 //!
 //!     // Start streaming (this will block)
 //!     server.start().await.unwrap();
