@@ -116,7 +116,7 @@ pub use python_bindings::{
     PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
 };
 
-/// Convert PtyError to PyErr
+/// Convert PtyError to PyErr (QA-009: centralized error mapping)
 #[cfg(feature = "python")]
 impl From<pty_error::PtyError> for PyErr {
     fn from(err: pty_error::PtyError) -> PyErr {
@@ -137,6 +137,38 @@ impl From<pty_error::PtyError> for PyErr {
             pty_error::PtyError::LockError(msg) => {
                 PyRuntimeError::new_err(format!("Mutex lock error: {}", msg))
             }
+        }
+    }
+}
+
+/// Convert ScreenshotError to PyErr (QA-009)
+#[cfg(feature = "python")]
+impl From<screenshot::ScreenshotError> for PyErr {
+    fn from(err: screenshot::ScreenshotError) -> PyErr {
+        use screenshot::ScreenshotError;
+        match err {
+            ScreenshotError::IoError(e) => PyIOError::new_err(e.to_string()),
+            other => PyRuntimeError::new_err(other.to_string()),
+        }
+    }
+}
+
+/// Convert GraphicsError to PyErr (QA-009)
+#[cfg(feature = "python")]
+impl From<graphics::GraphicsError> for PyErr {
+    fn from(err: graphics::GraphicsError) -> PyErr {
+        PyRuntimeError::new_err(err.to_string())
+    }
+}
+
+/// Convert StreamingError to PyErr (QA-009)
+#[cfg(all(feature = "python", feature = "streaming"))]
+impl From<streaming::StreamingError> for PyErr {
+    fn from(err: streaming::StreamingError) -> PyErr {
+        use streaming::StreamingError;
+        match err {
+            StreamingError::IoError(e) => PyIOError::new_err(e.to_string()),
+            other => PyRuntimeError::new_err(other.to_string()),
         }
     }
 }
