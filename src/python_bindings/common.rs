@@ -1,8 +1,9 @@
 //! Shared Terminal access + method macros (ARC-003 / QA-001).
 //!
 //! `PyTerminal` owns a `Terminal` directly; `PyPtyTerminal` holds one behind an
-//! `Arc<Mutex<Terminal>>` (via `PtySession`). Historically every shared method
-//! was hand-duplicated between the two — ~155 copies that drift on every PR.
+//! `Arc<RwLock<Terminal>>` (via `PtySession`; ARC-009 — Python read queries take
+//! a shared read lock, mutators take a write lock). Historically every shared
+//! method was hand-duplicated between the two — ~155 copies that drift on every PR.
 //!
 //! [`TerminalAccess`] abstracts the "give me the terminal" step (returning a
 //! `Deref<Target=Terminal>` guard for each type's native form), and the macros

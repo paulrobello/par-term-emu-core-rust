@@ -31,7 +31,7 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+//!     let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
 //!     let server = StreamingServer::new(terminal, "127.0.0.1:8080".to_string());
 //!
 //!     // Start streaming (this will block)

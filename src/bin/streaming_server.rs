@@ -690,7 +690,7 @@ impl ServerState {
             let events = {
                 let session = self.pty_session.lock();
                 let terminal = session.terminal();
-                let mut term = terminal.lock();
+                let mut term = terminal.write();
                 term.poll_events()
             };
 
@@ -838,7 +838,7 @@ impl SessionFactory for BinarySessionFactory {
         // Get the terminal and apply theme
         let terminal = pty_session.terminal();
         if let Some(ref theme) = self.theme {
-            let mut term = terminal.lock();
+            let mut term = terminal.write();
             theme.apply(&mut term);
         }
 
@@ -1028,7 +1028,7 @@ impl SessionFactory for BinarySessionFactory {
                 let events = {
                     let ps = pty_clone.lock();
                     let terminal = ps.terminal();
-                    let mut term = terminal.lock();
+                    let mut term = terminal.write();
                     term.poll_events()
                 };
 
@@ -1548,7 +1548,7 @@ async fn main() -> Result<()> {
         let ps = PtySession::new(cols as usize, rows as usize, args.scrollback);
         let terminal = ps.terminal();
         {
-            let mut term = terminal.lock();
+            let mut term = terminal.write();
             theme.apply(&mut term);
         }
         Some(Arc::new(Mutex::new(ps)))

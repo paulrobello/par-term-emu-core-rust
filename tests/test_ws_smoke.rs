@@ -20,7 +20,7 @@ use par_term_emu_core_rust::streaming::proto::{decode_server_message, encode_cli
 use par_term_emu_core_rust::streaming::protocol::{ClientMessage, ServerMessage};
 use par_term_emu_core_rust::streaming::StreamingServer;
 use par_term_emu_core_rust::terminal::Terminal;
-use parking_lot::Mutex;
+use parking_lot::RwLock;
 use std::sync::Arc;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
@@ -39,7 +39,7 @@ async fn ws_smoke_ping_pong_round_trip() {
     let port = ephemeral_port();
     let addr = format!("127.0.0.1:{}", port);
 
-    let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
     let server = Arc::new(StreamingServer::new(terminal, addr.clone()));
     let server_handle = tokio::spawn(async move { server.start().await });
 

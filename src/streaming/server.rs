@@ -6,7 +6,7 @@ use crate::streaming::error::{Result, StreamingError};
 use crate::streaming::proto::{decode_client_message, encode_server_message};
 use crate::streaming::protocol::{ServerMessage, ThemeInfo};
 use crate::terminal::{SelectionMode, Terminal};
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -464,7 +464,7 @@ pub struct SessionState {
     /// Unique session identifier
     pub id: String,
     /// Terminal instance for this session
-    pub terminal: Arc<Mutex<Terminal>>,
+    pub terminal: Arc<RwLock<Terminal>>,
     /// Broadcast channel for sending output to all clients in this session
     broadcast_tx: broadcast::Sender<ServerMessage>,
     /// Channel for sending output data into the broadcaster loop (bounded for backpressure)
@@ -498,7 +498,7 @@ impl SessionState {
     /// Create a new session state
     pub fn new(
         id: String,
-        terminal: Arc<Mutex<Terminal>>,
+        terminal: Arc<RwLock<Terminal>>,
         theme: Option<ThemeInfo>,
         send_initial_screen: bool,
     ) -> Self {
@@ -563,7 +563,7 @@ impl SessionState {
 
     /// Build a Connected message from current terminal state
     pub fn build_connect_message(&self, client_id: &str, readonly: bool) -> ServerMessage {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
 
         let initial_screen = if self.send_initial_screen {
@@ -598,7 +598,7 @@ impl SessionState {
     /// Returns a list of `ServerMessage::ModeChanged` for each mode that differs
     /// from its default value.
     pub fn build_mode_sync_messages(&self) -> Vec<ServerMessage> {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.write();
         let mut messages = Vec::new();
 
         // Mouse tracking mode
@@ -804,7 +804,7 @@ impl SessionState {
 
     /// Get session info for the /sessions endpoint
     pub fn session_info(&self) -> SessionInfo {
-        let terminal = self.terminal.lock();
+        let terminal = self.terminal.write();
         let (cols, rows) = terminal.size();
         let cwd = terminal.current_directory().map(|s| s.to_string());
 
@@ -945,7 +945,7 @@ impl SessionRegistry {
 /// Result returned by SessionFactory::create_session
 pub struct SessionFactoryResult {
     /// The terminal instance for the new session
-    pub terminal: Arc<Mutex<Terminal>>,
+    pub terminal: Arc<RwLock<Terminal>>,
     /// Optional PTY writer for the new session
     pub pty_writer: Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>,
 }
@@ -1135,13 +1135,13 @@ pub struct StreamingServer {
 
 impl StreamingServer {
     /// Create a new streaming server (backward-compatible single-session mode)
-    pub fn new(terminal: Arc<Mutex<Terminal>>, addr: String) -> Self {
+    pub fn new(terminal: Arc<RwLock<Terminal>>, addr: String) -> Self {
         Self::with_config(terminal, addr, StreamingConfig::default())
     }
 
     /// Create a new streaming server with custom configuration (backward-compatible)
     pub fn with_config(
-        terminal: Arc<Mutex<Terminal>>,
+        terminal: Arc<RwLock<Terminal>>,
         addr: String,
         config: StreamingConfig,
     ) -> Self {
@@ -1901,8 +1901,10 @@ impl StreamingServer {
     /// Build a refresh message from the session's current visible terminal
     /// state. Pure (no side effects, no async) so the tungstenite and axum
     /// WebSocket handlers share one implementation.
-    fn build_refresh_message(terminal_for_refresh: &Arc<Mutex<Terminal>>) -> Option<ServerMessage> {
-        let terminal = terminal_for_refresh.lock();
+    fn build_refresh_message(
+        terminal_for_refresh: &Arc<RwLock<Terminal>>,
+    ) -> Option<ServerMessage> {
+        let terminal = terminal_for_refresh.read();
         let content = terminal.export_visible_screen_styled();
         let (cols, rows) = terminal.size();
         Some(ServerMessage::refresh(cols as u16, rows as u16, content))
@@ -1916,27 +1918,27 @@ impl StreamingServer {
     /// `Some(error_msg)` for an invalid scope string, and `None` only when a
     /// valid scope produced no payload (currently never).
     fn build_snapshot_message(
-        terminal_for_refresh: &Arc<Mutex<Terminal>>,
+        terminal_for_refresh: &Arc<RwLock<Terminal>>,
         scope: &str,
         max_commands: Option<u32>,
     ) -> ServerMessage {
         use crate::terminal::semantic_snapshot::SnapshotScope;
         match scope {
             "visible" => {
-                let terminal = terminal_for_refresh.lock();
+                let terminal = terminal_for_refresh.read();
                 ServerMessage::semantic_snapshot(
                     terminal.get_semantic_snapshot_json(SnapshotScope::Visible),
                 )
             }
             "recent" => {
                 let n = max_commands.unwrap_or(10) as usize;
-                let terminal = terminal_for_refresh.lock();
+                let terminal = terminal_for_refresh.read();
                 ServerMessage::semantic_snapshot(
                     terminal.get_semantic_snapshot_json(SnapshotScope::Recent(n)),
                 )
             }
             "full" => {
-                let terminal = terminal_for_refresh.lock();
+                let terminal = terminal_for_refresh.read();
                 ServerMessage::semantic_snapshot(
                     terminal.get_semantic_snapshot_json(SnapshotScope::Full),
                 )
@@ -2126,7 +2128,7 @@ impl StreamingServer {
                                     if read_only { continue; }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         let bytes = {
-                                            let mut terminal = session.terminal.lock();
+                                            let mut terminal = session.terminal.write();
                                             // Build modifiers bitmask: shift=1, meta/alt=2, ctrl=4
                                             let mods = if shift { 1u8 } else { 0 }
                                                 | if alt { 2 } else { 0 }
@@ -2155,7 +2157,7 @@ impl StreamingServer {
                                 crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         let bytes = {
-                                            let terminal = session.terminal.lock();
+                                            let terminal = session.terminal.write();
                                             if terminal.focus_tracking() {
                                                 if focused {
                                                     terminal.report_focus_in()
@@ -2186,7 +2188,7 @@ impl StreamingServer {
                                         }
                                     }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        let terminal = session.terminal.lock();
+                                        let terminal = session.terminal.write();
                                         session.metrics.input_bytes.fetch_add(content.len(), Ordering::Relaxed);
                                         let mut w = writer.lock();
                                         use std::io::Write;
@@ -2209,7 +2211,7 @@ impl StreamingServer {
                                     start_col, start_row, end_col, end_row, mode,
                                 } => {
                                     let selection_msg = {
-                                        let mut terminal = session.terminal.lock();
+                                        let mut terminal = session.terminal.write();
                                         if mode == "clear" {
                                             terminal.clear_selection();
                                             Some(ServerMessage::selection_cleared())
@@ -2278,7 +2280,7 @@ impl StreamingServer {
                                     match operation.as_str() {
                                         "set" => {
                                             if let Some(ref text) = content {
-                                                let mut terminal = session.terminal.lock();
+                                                let mut terminal = session.terminal.write();
                                                 terminal.set_clipboard(Some(text.clone()));
                                                 self.broadcast_to_session(
                                                     &session.id,
@@ -2292,7 +2294,7 @@ impl StreamingServer {
                                         }
                                         "get" => {
                                             let clipboard = {
-                                                let terminal = session.terminal.lock();
+                                                let terminal = session.terminal.write();
                                                 terminal.clipboard().unwrap_or_default().to_string()
                                             };
                                             let response = ServerMessage::clipboard_sync(
@@ -3279,7 +3281,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_streaming_server_creation() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
         assert_eq!(server.addr, "127.0.0.1:0");
     }
@@ -3300,7 +3302,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_sender() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let server = StreamingServer::new(terminal, "127.0.0.1:0".to_string());
 
         let tx = server.get_output_sender();
@@ -3309,7 +3311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_state_creation() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = SessionState::new("test-session".to_string(), terminal, None, true);
         assert_eq!(session.id, "test-session");
         assert_eq!(session.client_count(), 0);
@@ -3318,7 +3320,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_state_client_count() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = SessionState::new("sess".to_string(), terminal, None, true);
 
         assert_eq!(session.client_count(), 0);
@@ -3334,7 +3336,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_session_state_idle_detection() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = SessionState::new("sess".to_string(), terminal, None, true);
 
         // No clients, no disconnect time yet → not idle
@@ -3356,7 +3358,7 @@ mod tests {
         let registry = SessionRegistry::new(10);
         assert_eq!(registry.session_count(), 0);
 
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = Arc::new(SessionState::new("s1".to_string(), terminal, None, true));
 
         registry
@@ -3380,13 +3382,13 @@ mod tests {
         let registry = SessionRegistry::new(2);
 
         for i in 0..2 {
-            let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+            let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
             let session = Arc::new(SessionState::new(format!("s{}", i), terminal, None, true));
             registry.insert(format!("s{}", i), session).unwrap();
         }
 
         // Third insert should fail
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = Arc::new(SessionState::new("s2".to_string(), terminal, None, true));
         let result = registry.insert("s2".to_string(), session);
         assert!(result.is_err());
@@ -3400,7 +3402,7 @@ mod tests {
     async fn test_session_registry_list_sessions() {
         let registry = SessionRegistry::new(10);
 
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = Arc::new(SessionState::new("s1".to_string(), terminal, None, true));
         registry.insert("s1".to_string(), session).unwrap();
 
@@ -3461,7 +3463,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_session_exists() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
 
         let params = ConnectionParams::from_uri_query(None);
@@ -3472,7 +3474,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_nonexistent_session_no_factory() {
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
 
         let params = ConnectionParams::from_uri_query(Some("session=nonexistent"));
@@ -3671,7 +3673,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_registry_remove_existing() {
         let registry = SessionRegistry::new(10);
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = Arc::new(SessionState::new("test".to_string(), terminal, None, true));
 
         registry
@@ -3694,7 +3696,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_registry_replace_existing() {
         let registry = SessionRegistry::new(2);
-        let terminal1 = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal1 = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session1 = Arc::new(SessionState::new("test".to_string(), terminal1, None, true));
 
         registry
@@ -3703,14 +3705,14 @@ mod tests {
         assert_eq!(registry.session_count(), 1);
 
         // Replace with new session (same ID, should not count toward limit)
-        let terminal2 = Arc::new(Mutex::new(Terminal::new(100, 30)));
+        let terminal2 = Arc::new(RwLock::new(Terminal::new(100, 30)));
         let session2 = Arc::new(SessionState::new("test".to_string(), terminal2, None, true));
         let result = registry.insert("test".to_string(), session2);
         assert!(result.is_ok());
         assert_eq!(registry.session_count(), 1);
 
         let retrieved = registry.get("test").unwrap();
-        assert_eq!(retrieved.terminal.lock().grid.cols(), 100);
+        assert_eq!(retrieved.terminal.write().grid.cols(), 100);
     }
 
     #[tokio::test]
@@ -3718,7 +3720,7 @@ mod tests {
         let registry = SessionRegistry::new(10);
 
         for i in 0..5 {
-            let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+            let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
             let session = Arc::new(SessionState::new(format!("s{}", i), terminal, None, true));
             registry.insert(format!("s{}", i), session).unwrap();
         }
@@ -3744,7 +3746,7 @@ mod tests {
     #[tokio::test]
     async fn test_session_registry_zero_capacity() {
         let registry = SessionRegistry::new(0);
-        let terminal = Arc::new(Mutex::new(Terminal::new(80, 24)));
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let session = Arc::new(SessionState::new("test".to_string(), terminal, None, true));
 
         let result = registry.insert("test".to_string(), session);

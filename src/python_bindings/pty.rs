@@ -36,10 +36,13 @@ pub struct PyPtyTerminal {
 // (see `python_bindings::common`).
 impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
     fn term_ref(&self) -> impl std::ops::Deref<Target = crate::terminal::Terminal> {
-        self.inner.terminal_ref().lock()
+        // Shared read access — multiple Python read queries can proceed
+        // concurrently (ARC-009). Methods using term_ref are &self-only
+        // (Deref, not DerefMut), so the compiler guarantees they don't mutate.
+        self.inner.terminal_ref().read()
     }
     fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = crate::terminal::Terminal> {
-        self.inner.terminal_ref().lock()
+        self.inner.terminal_ref().write()
     }
 }
 
@@ -342,7 +345,7 @@ impl PyPtyTerminal {
 
         // Get theme settings from terminal (used as defaults if not explicitly provided)
         let terminal = self.inner.terminal();
-        let (term_bold_brightening, term_bg_color) = if let Ok(term) = Ok::<_, ()>(terminal.lock())
+        let (term_bold_brightening, term_bg_color) = if let Ok(term) = Ok::<_, ()>(terminal.write())
         {
             (term.bold_brightening(), term.default_bg().to_rgb())
         } else {
@@ -514,7 +517,7 @@ impl PyPtyTerminal {
     ///     Character at the position, or None if out of bounds
     fn get_char(&self, col: usize, row: usize) -> PyResult<Option<char>> {
         let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+        let result = if let Ok(term) = Ok::<_, ()>(terminal.write()) {
             term.active_grid().get(col, row).map(|cell| cell.c)
         } else {
             None
@@ -535,7 +538,7 @@ impl PyPtyTerminal {
     ///     ScreenSnapshot with all terminal state
     fn create_snapshot(&self) -> PyResult<PyScreenSnapshot> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
+        let term = terminal.write();
 
         // Get current grid (will be either primary or alternate)
         let grid = term.active_grid();
@@ -853,7 +856,7 @@ impl PyPtyTerminal {
     ///     >>> term.force_set_keyboard_flags(0)  # Reset to normal mode
     fn force_set_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        let mut term = terminal.lock();
+        let mut term = terminal.write();
         term.set_keyboard_flags(flags);
         Ok(())
     }
@@ -917,7 +920,7 @@ impl PyPtyTerminal {
     ///     ValueError: If index is not in range 0-15
     fn set_ansi_palette_color(&mut self, index: usize, r: u8, g: u8, b: u8) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(mut term) = Ok::<_, ()>(terminal.lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(terminal.write()) {
             term.set_ansi_palette_color(index, Color::Rgb(r, g, b))
                 .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
         }
@@ -971,7 +974,7 @@ impl PyPtyTerminal {
     ///     content: String content to paste
     fn paste(&mut self, content: &str) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(term) = Ok::<_, ()>(terminal.lock()) {
+        if let Ok(term) = Ok::<_, ()>(terminal.write()) {
             // Get the paste sequences (handles bracketed paste mode)
             let start = term.bracketed_paste_start();
             let end = term.bracketed_paste_end();
@@ -1036,7 +1039,7 @@ impl PyPtyTerminal {
     ///     Dictionary containing terminal state for debugging
     fn debug_info(&self) -> PyResult<HashMap<String, String>> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
+        let term = terminal.write();
 
         let mut info = HashMap::new();
         let (cols, rows) = term.size();
@@ -1125,7 +1128,7 @@ impl PyPtyTerminal {
     ///     non_whitespace_lines, graphics_count, estimated_memory_bytes
     fn get_stats(&self) -> PyResult<HashMap<String, usize>> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
+        let term = terminal.write();
         let stats = term.get_stats();
         let mut result = HashMap::new();
         result.insert("cols".to_string(), stats.cols);
@@ -1152,7 +1155,7 @@ impl PyPtyTerminal {
     ///     Tuple of (used_lines, max_capacity)
     fn get_scrollback_usage(&self) -> PyResult<(usize, usize)> {
         let terminal = self.inner.terminal();
-        let term = terminal.lock();
+        let term = terminal.write();
         Ok((term.get_scrollback_usage(), term.grid().max_scrollback()))
     }
 
@@ -1182,12 +1185,12 @@ impl PyPtyTerminal {
         _py: Python,
     ) -> PyResult<String> {
         if let Some(session) = session {
-            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
                 Ok(term.export_asciicast(&session.inner))
             } else {
                 Err(PyRuntimeError::new_err("Failed to lock terminal"))
             }
-        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             if let Some(active) = term.get_recording_session() {
                 Ok(term.export_asciicast(active))
             } else {
@@ -1210,12 +1213,12 @@ impl PyPtyTerminal {
         _py: Python,
     ) -> PyResult<String> {
         if let Some(session) = session {
-            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
                 Ok(term.export_json(&session.inner))
             } else {
                 Err(PyRuntimeError::new_err("Failed to lock terminal"))
             }
-        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             if let Some(active) = term.get_recording_session() {
                 Ok(term.export_json(active))
             } else {
@@ -1236,7 +1239,7 @@ impl PyPtyTerminal {
     ///     name: Name to store the macro under
     ///     macro: Macro object to load
     fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.load_macro(name, macro_obj.inner.clone());
         }
         Ok(())
@@ -1250,7 +1253,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro object if found, None otherwise
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term
                 .get_macro(&name)
                 .cloned()
@@ -1268,7 +1271,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Removed Macro object if found, None otherwise
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
         } else {
             Ok(None)
@@ -1280,7 +1283,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of macro names
     fn list_macros(&self) -> PyResult<Vec<String>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.list_macros())
         } else {
             Ok(Vec::new())
@@ -1294,7 +1297,7 @@ impl PyPtyTerminal {
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
     #[pyo3(signature = (name, speed=None))]
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.play_macro(&name).map_err(PyValueError::new_err)?;
             if let Some(s) = speed {
                 term.set_macro_speed(s);
@@ -1307,7 +1310,7 @@ impl PyPtyTerminal {
 
     /// Stop macro playback
     fn stop_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.stop_macro();
         }
         Ok(())
@@ -1315,7 +1318,7 @@ impl PyPtyTerminal {
 
     /// Pause macro playback
     fn pause_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.pause_macro();
         }
         Ok(())
@@ -1323,7 +1326,7 @@ impl PyPtyTerminal {
 
     /// Resume macro playback
     fn resume_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.resume_macro();
         }
         Ok(())
@@ -1334,7 +1337,7 @@ impl PyPtyTerminal {
     /// Args:
     ///     speed: Speed multiplier (0.1 to 10.0)
     fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.set_macro_speed(speed);
         }
         Ok(())
@@ -1345,7 +1348,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if a macro is playing, False otherwise
     fn is_macro_playing(&self) -> PyResult<bool> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.is_macro_playing())
         } else {
             Ok(false)
@@ -1357,7 +1360,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if paused, False otherwise
     fn is_macro_paused(&self) -> PyResult<bool> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.is_macro_paused())
         } else {
             Ok(false)
@@ -1369,7 +1372,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Tuple of (current_event, total_events) if playing, None otherwise
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.get_macro_progress())
         } else {
             Ok(None)
@@ -1381,7 +1384,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro name if playing, None otherwise
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.get_current_macro_name())
         } else {
             Ok(None)
@@ -1395,7 +1398,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if an event was processed, False otherwise
     fn tick_macro(&mut self) -> PyResult<bool> {
-        let bytes = if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        let bytes = if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             term.tick_macro()
         } else {
             None
@@ -1414,7 +1417,7 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of screenshot labels
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(term.get_macro_screenshot_triggers())
         } else {
             Ok(Vec::new())
@@ -1434,7 +1437,7 @@ impl PyPtyTerminal {
         session: &super::types::PyRecordingSession,
         name: String,
     ) -> PyResult<super::types::PyMacro> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().lock()) {
+        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
             Ok(super::types::PyMacro::from(
                 term.recording_to_macro(&session.inner, name),
             ))
@@ -1463,7 +1466,7 @@ impl PyPtyTerminal {
     /// Get a clone of the terminal Arc (for use in streaming server)
     pub(crate) fn get_terminal_arc(
         &self,
-    ) -> std::sync::Arc<parking_lot::Mutex<crate::terminal::Terminal>> {
+    ) -> std::sync::Arc<parking_lot::RwLock<crate::terminal::Terminal>> {
         self.inner.terminal()
     }
 
@@ -1639,7 +1642,7 @@ mod tests {
     fn test_terminal_access() {
         let session = pty_session::PtySession::new(80, 24, 1000);
         let terminal = session.terminal();
-        let _guard = terminal.lock();
+        let _guard = terminal.write();
     }
 
     #[test]
@@ -1652,7 +1655,7 @@ mod tests {
     #[test]
     fn test_terminal_process_direct() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             term.process(b"Hello, World!");
             let content = term.content();
             assert!(content.contains("Hello, World!"));
@@ -1697,7 +1700,7 @@ mod tests {
     #[test]
     fn test_bell_count_after_bell() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             term.process(b"\x07"); // BEL character
         }
         assert_eq!(session.bell_count(), 1);
@@ -1727,7 +1730,7 @@ mod tests {
     #[test]
     fn test_get_line_valid() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             term.process(b"Line0\nLine1\nLine2");
         }
         let line = session.get_line(0);
@@ -1756,7 +1759,7 @@ mod tests {
     #[test]
     fn test_export_text_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             term.process(b"Test content here");
         }
         let text = session.export_text();
@@ -1766,7 +1769,7 @@ mod tests {
     #[test]
     fn test_export_styled_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             // Add colored text
             term.process(b"\x1b[31mRed text\x1b[0m");
         }
@@ -1893,7 +1896,7 @@ mod tests {
     #[test]
     fn test_cursor_position_after_write() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             term.process(b"Hello");
             let cursor = term.cursor();
             assert_eq!(cursor.col, 5);
@@ -1908,7 +1911,7 @@ mod tests {
     #[test]
     fn test_terminal_process_escape_sequences() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             // Test cursor movement
             term.process(b"\x1b[5;10H"); // Move to row 5, col 10
             let cursor = term.cursor();
@@ -1920,7 +1923,7 @@ mod tests {
     #[test]
     fn test_terminal_alt_screen() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             assert!(!term.is_alt_screen_active());
 
             // Enter alt screen
@@ -1936,7 +1939,7 @@ mod tests {
     #[test]
     fn test_terminal_colors() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().lock()) {
+        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
             // Set red foreground
             term.process(b"\x1b[31mRed\x1b[0m");
             let cell = term.active_grid().get(0, 0);
