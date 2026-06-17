@@ -613,7 +613,15 @@ pub(crate) struct SecurityFlagsState {
     pub(crate) accept_osc7: bool,
     /// Disable potentially insecure escape sequences
     pub(crate) disable_insecure_sequences: bool,
+    /// Maximum total OSC data length in bytes before a sequence is rejected as
+    /// a memory-exhaustion guard (QA-012). Defaults to 128 MiB so inline
+    /// images (iTerm2/Kitty base64) fit; security-conscious deployments can
+    /// tighten it via [`Terminal::set_max_osc_data_length`].
+    pub(crate) max_osc_data_length: usize,
 }
+
+/// Default max OSC data length: 128 MiB (room for inline images).
+pub const DEFAULT_MAX_OSC_DATA_LENGTH: usize = 128 * 1024 * 1024;
 
 /// OSC 1337 badge format string + session variables for evaluation (ARC-001 sub-struct)
 pub(crate) struct BadgeState {
@@ -959,6 +967,7 @@ impl Terminal {
             security_state: SecurityFlagsState {
                 accept_osc7: true,
                 disable_insecure_sequences: false,
+                max_osc_data_length: DEFAULT_MAX_OSC_DATA_LENGTH,
             },
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
@@ -1960,6 +1969,21 @@ impl Terminal {
     /// When disabled (default), all standard sequences are processed normally.
     pub fn set_disable_insecure_sequences(&mut self, disable: bool) {
         self.security_state.disable_insecure_sequences = disable;
+    }
+
+    /// Maximum total OSC data length in bytes before a sequence is rejected
+    /// (QA-012). Defaults to [`DEFAULT_MAX_OSC_DATA_LENGTH`] (128 MiB) so
+    /// inline images fit; lower it for tighter memory/security bounds.
+    pub fn max_osc_data_length(&self) -> usize {
+        self.security_state.max_osc_data_length
+    }
+
+    /// Set the maximum total OSC data length in bytes (QA-012).
+    ///
+    /// Sequences exceeding this are rejected as a memory-exhaustion guard.
+    /// Must be large enough for inline images (iTerm2/Kitty base64) if used.
+    pub fn set_max_osc_data_length(&mut self, max: usize) {
+        self.security_state.max_osc_data_length = max;
     }
 
     /// Get the answerback string sent in response to ENQ (0x05)
