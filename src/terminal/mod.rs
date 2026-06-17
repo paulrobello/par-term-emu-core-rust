@@ -4,6 +4,7 @@
 //! split across multiple submodules for maintainability.
 
 // Submodules
+pub mod action;
 mod apc_filter;
 pub mod clipboard;
 mod colors;
