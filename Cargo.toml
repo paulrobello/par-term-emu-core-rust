@@ -43,7 +43,7 @@ crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "par-term-streamer"
-path = "src/bin/streaming_server.rs"
+path = "src/bin/streaming_server/main.rs"
 required-features = ["streaming-bin"]
 
 [dependencies]
