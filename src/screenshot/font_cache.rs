@@ -58,8 +58,10 @@ pub struct GlyphMetrics {
 pub struct CachedGlyph {
     /// Glyph metrics (width, height, etc.)
     pub metrics: GlyphMetrics,
-    /// Bitmap data (grayscale or RGBA)
-    pub bitmap: Vec<u8>,
+    /// Bitmap data (grayscale or RGBA). Shared via `Arc` so cloning a
+    /// `CachedGlyph` out of the cache (to release the cache borrow) is a
+    /// cheap refcount bump instead of a heap copy of the pixel data.
+    pub bitmap: Arc<[u8]>,
     /// Bitmap format
     pub format: BitmapFormat,
 }
@@ -479,7 +481,7 @@ impl FontCache {
                                         key,
                                         CachedGlyph {
                                             metrics: cjk_metrics,
-                                            bitmap: cjk_bitmap,
+                                            bitmap: cjk_bitmap.into(),
                                             format: cjk_format,
                                         },
                                     );
@@ -511,7 +513,7 @@ impl FontCache {
                                 key,
                                 CachedGlyph {
                                     metrics: cjk_metrics,
-                                    bitmap: cjk_bitmap,
+                                    bitmap: cjk_bitmap.into(),
                                     format: cjk_format,
                                 },
                             );
@@ -576,7 +578,7 @@ impl FontCache {
                                 key,
                                 CachedGlyph {
                                     metrics: scaled_metrics,
-                                    bitmap: scaled_bitmap,
+                                    bitmap: scaled_bitmap.into(),
                                     format: emoji_format,
                                 },
                             );
@@ -589,14 +591,14 @@ impl FontCache {
             // Fallback failed, use main font result
             CachedGlyph {
                 metrics,
-                bitmap,
+                bitmap: bitmap.into(),
                 format,
             }
         } else {
             // Main font has the glyph
             CachedGlyph {
                 metrics,
-                bitmap,
+                bitmap: bitmap.into(),
                 format,
             }
         };
@@ -754,7 +756,7 @@ impl FontCache {
 
         Some(CachedGlyph {
             metrics: final_metrics,
-            bitmap: final_bitmap,
+            bitmap: final_bitmap.into(),
             format,
         })
     }

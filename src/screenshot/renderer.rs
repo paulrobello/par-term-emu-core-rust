@@ -98,11 +98,9 @@ impl Renderer {
 
         // Render each row - use shaped rendering for lines with Regional Indicators
         for row in 0..grid.rows() {
-            let row_text = grid.row_text(row);
-
             // Use shaped rendering if the line contains Regional Indicators (flags)
             // and we have a shaper available
-            if self.shaper.is_some() && Self::contains_regional_indicators(&row_text) {
+            if self.shaper.is_some() && Self::row_has_regional_indicators(grid, row) {
                 self.render_shaped_line(&mut image, row, grid)?;
             } else {
                 // Use normal character-by-character rendering
@@ -538,9 +536,29 @@ impl Renderer {
         Ok(())
     }
 
-    /// Check if a string contains Regional Indicator characters (flag emojis)
+    /// Check if a string contains Regional Indicator characters (flag emojis).
+    /// `render_grid` now uses `row_has_regional_indicators` (scans cells
+    /// directly, no `String` allocation); this string-based variant is kept
+    /// for tests.
+    #[allow(dead_code)]
     pub(crate) fn contains_regional_indicators(text: &str) -> bool {
         text.chars().any(|c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
+    }
+
+    /// Check if a grid row contains Regional Indicator characters (flag emojis)
+    /// by scanning cells directly, avoiding the per-row `String` allocation
+    /// that `row_text` + `contains_regional_indicators` would require.
+    fn row_has_regional_indicators(grid: &Grid, row: usize) -> bool {
+        match grid.row(row) {
+            Some(cells) => cells.iter().any(|cell| {
+                matches!(cell.c as u32, 0x1F1E6..=0x1F1FF)
+                    || cell
+                        .combining
+                        .iter()
+                        .any(|&c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
+            }),
+            None => false,
+        }
     }
 
     /// Render a line using text shaping (for flag emojis and complex emoji)
