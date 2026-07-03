@@ -668,6 +668,78 @@ pub(crate) struct EventBrokerState {
     pub(crate) next_zone_id: usize,
 }
 
+/// A batch of terminal events plus a snapshot of the observers interested in
+/// them, extracted from a `Terminal` for deferred delivery.
+///
+/// Building a batch ([`Terminal::process_deferred`]) only touches internal
+/// bookkeeping (owned clones, an index bump) and is fast/non-blocking.
+/// [`ObserverDispatchBatch::deliver`] performs the actual observer callbacks
+/// — which may be slow or re-entrant (e.g. `PyCallbackObserver` re-entering
+/// Python under the GIL) — and is designed to be called *without* holding
+/// any exclusive lock on the originating `Terminal` (see ARC-001: observer
+/// dispatch must not run while a `PtySession`'s `RwLock<Terminal>` write
+/// guard is held, or every concurrent reader stalls behind it).
+#[derive(Default)]
+pub struct ObserverDispatchBatch {
+    events: Vec<TerminalEvent>,
+    observers: Vec<std::sync::Arc<dyn crate::observer::TerminalObserver>>,
+}
+
+impl ObserverDispatchBatch {
+    /// True if there is nothing to deliver (no observers, or no new events).
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty() || self.observers.is_empty()
+    }
+
+    /// Deliver the batch to observers.
+    ///
+    /// Operates purely on the owned snapshot captured when the batch was
+    /// created — no `Terminal` borrow is held during this call, so it is
+    /// safe to invoke after dropping a `RwLock`/`Mutex` guard around the
+    /// `Terminal` that produced it.
+    ///
+    /// Mirrors the panic-isolation behavior of the old inline dispatch
+    /// (ARC-007): a panicking observer is caught and logged rather than
+    /// unwinding through the caller.
+    pub fn deliver(self) {
+        for event in &self.events {
+            let category = crate::observer::event_category(event);
+            let event_kind = event.kind();
+            for observer in &self.observers {
+                // Check subscriptions
+                if let Some(subs) = observer.subscriptions() {
+                    if !subs.contains(&event_kind) {
+                        continue;
+                    }
+                }
+
+                // ARC-007: isolate observer panics. A panicking observer (e.g. a
+                // misbehaving Python callback via PyCallbackObserver) must not
+                // unwind through the caller — catch the panic, log, and continue
+                // with the remaining observers/events.
+                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match category {
+                        crate::observer::EventCategory::Zone => observer.on_zone_event(event),
+                        crate::observer::EventCategory::Command => observer.on_command_event(event),
+                        crate::observer::EventCategory::Environment => {
+                            observer.on_environment_event(event)
+                        }
+                        crate::observer::EventCategory::Screen => observer.on_screen_event(event),
+                    }
+                    observer.on_event(event);
+                }))
+                .is_err();
+                if panicked {
+                    eprintln!(
+                        "par-term-emu: terminal observer panicked during dispatch; \
+                         isolating to keep Terminal state consistent (ARC-007)"
+                    );
+                }
+            }
+        }
+    }
+}
+
 // Terminal struct definition
 pub struct Terminal {
     /// The primary terminal grid
@@ -2576,6 +2648,46 @@ impl Terminal {
 
     /// Process incoming data from the PTY
     pub fn process(&mut self, data: &[u8]) {
+        if !self.process_internal(data) {
+            return;
+        }
+        self.dispatch_events();
+        self.cap_terminal_events();
+    }
+
+    /// Process incoming data from the PTY without invoking observer
+    /// callbacks synchronously (ARC-001).
+    ///
+    /// Identical to [`Terminal::process`] for all internal state (grid,
+    /// cursor, event queue, dispatched-index bookkeeping); the only
+    /// difference is that observer delivery is deferred instead of run
+    /// inline. Returns an [`ObserverDispatchBatch`] that the caller must
+    /// deliver via [`ObserverDispatchBatch::deliver`] — ideally *after*
+    /// releasing any exclusive lock held around this call.
+    ///
+    /// Intended for callers that hold an exclusive lock around `process()`
+    /// (e.g. `PtySession`'s `RwLock<Terminal>` write guard in its reader
+    /// thread). Observer callbacks can be slow or re-entrant (a
+    /// `PyCallbackObserver` re-enters Python under the GIL); running them
+    /// while the exclusive lock is held blocks every concurrent reader
+    /// (streaming clients, Python queries) — the exact problem the
+    /// `Mutex`→`RwLock` migration was meant to solve. Call this instead of
+    /// `process()`, drop the lock, then call `deliver()` on the batch.
+    pub fn process_deferred(&mut self, data: &[u8]) -> ObserverDispatchBatch {
+        if !self.process_internal(data) {
+            return ObserverDispatchBatch::default();
+        }
+        let batch = self.take_observer_dispatch_batch();
+        self.cap_terminal_events();
+        batch
+    }
+
+    /// Shared parsing/state-mutation body for [`Terminal::process`] and
+    /// [`Terminal::process_deferred`]. Returns `false` if the caller should
+    /// skip dispatch/cap-eviction for this call — mirrors `process()`'s
+    /// original early return when data is being buffered for synchronized-
+    /// update coalescing rather than parsed immediately.
+    fn process_internal(&mut self, data: &[u8]) -> bool {
         if self.recording_state.is_recording {
             self.record_event(RecordingEventType::Output, data.to_vec());
         }
@@ -2591,7 +2703,7 @@ impl Terminal {
             if contains_bytes(&self.sync_state.update_buffer[peek_start..], b"\x1b[?2026l") {
                 self.flush_synchronized_updates();
             }
-            return;
+            return false;
         }
 
         if self.tmux.tmux_parser.is_control_mode() || self.tmux.tmux_parser.is_auto_detect() {
@@ -2615,8 +2727,7 @@ impl Terminal {
             self.filter_apc_and_advance(data);
         }
 
-        self.dispatch_events();
-        self.cap_terminal_events();
+        true
     }
 
     /// Evict the oldest terminal events when the queue exceeds the cap
@@ -2638,59 +2749,44 @@ impl Terminal {
             self.events.events_dispatched_up_to.saturating_sub(excess);
     }
 
-    /// Dispatch pending events to all registered observers.
+    /// Dispatch pending events to all registered observers, inline.
     /// Uses `events_dispatched_up_to` index to avoid sending duplicate events
     /// when `process()` is called multiple times before `poll_events()`.
+    ///
+    /// Used by `process()`, which callers may invoke while holding an
+    /// exclusive lock — see [`Terminal::process_deferred`] and
+    /// [`ObserverDispatchBatch`] for the ARC-001 alternative that lets
+    /// callers deliver observer callbacks after releasing that lock.
     fn dispatch_events(&mut self) {
+        self.take_observer_dispatch_batch().deliver();
+    }
+
+    /// Extract the not-yet-dispatched events plus a snapshot of the
+    /// currently registered observers into an owned [`ObserverDispatchBatch`],
+    /// advancing `events_dispatched_up_to` so the same events aren't
+    /// re-dispatched later. Pure bookkeeping — no observer callback runs
+    /// here, so this is safe to call while holding an exclusive lock (unlike
+    /// [`ObserverDispatchBatch::deliver`]).
+    fn take_observer_dispatch_batch(&mut self) -> ObserverDispatchBatch {
         if self.events.observers.is_empty() || self.events.terminal_events.is_empty() {
-            return;
+            return ObserverDispatchBatch::default();
         }
 
         let start = self.events.events_dispatched_up_to;
         if start >= self.events.terminal_events.len() {
-            return;
+            return ObserverDispatchBatch::default();
         }
 
-        for event in &self.events.terminal_events[start..] {
-            let category = crate::observer::event_category(event);
-            let event_kind = event.kind();
-            for entry in &self.events.observers {
-                // Check subscriptions
-                if let Some(subs) = entry.observer.subscriptions() {
-                    if !subs.contains(&event_kind) {
-                        continue;
-                    }
-                }
-
-                // ARC-007: isolate observer panics. A panicking observer (e.g. a
-                // misbehaving Python callback via PyCallbackObserver) must not
-                // unwind through the Terminal mutex — `parking_lot` does not
-                // poison, so an unwound dispatch would silently leave the Terminal
-                // inconsistent and re-fire already-dispatched events. Catch the
-                // panic, log, and continue with the remaining observers/events.
-                let observer = &entry.observer;
-                let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    match category {
-                        crate::observer::EventCategory::Zone => observer.on_zone_event(event),
-                        crate::observer::EventCategory::Command => observer.on_command_event(event),
-                        crate::observer::EventCategory::Environment => {
-                            observer.on_environment_event(event)
-                        }
-                        crate::observer::EventCategory::Screen => observer.on_screen_event(event),
-                    }
-                    observer.on_event(event);
-                }))
-                .is_err();
-                if panicked {
-                    eprintln!(
-                        "par-term-emu: terminal observer panicked during dispatch; \
-                         isolating to keep Terminal state consistent (ARC-007)"
-                    );
-                }
-            }
-        }
-
+        let events = self.events.terminal_events[start..].to_vec();
+        let observers = self
+            .events
+            .observers
+            .iter()
+            .map(|entry| entry.observer.clone())
+            .collect();
         self.events.events_dispatched_up_to = self.events.terminal_events.len();
+
+        ObserverDispatchBatch { events, observers }
     }
 
     /// Reset the terminal to its initial state (RIS)
@@ -3027,3 +3123,151 @@ mod perform;
 
 #[cfg(test)]
 mod tests;
+
+/// ARC-001 regression tests: observer dispatch deferred out of the exclusive
+/// write-lock scope via `Terminal::process_deferred` +
+/// `ObserverDispatchBatch::deliver`.
+///
+/// These exercise the batch-building/delivery contract directly (ordering,
+/// process()-equivalence, empty-batch handling). The end-to-end proof that
+/// `PtySession`'s reader thread actually releases its `RwLock<Terminal>`
+/// write guard before delivering a batch lives in
+/// `pty_session::tests::test_observer_dispatch_does_not_hold_write_lock`,
+/// since that requires a real PTY + reader thread to observe.
+#[cfg(test)]
+mod arc001_observer_dispatch_tests {
+    use super::*;
+    use crate::observer::TerminalObserver;
+    use std::sync::{Arc, Mutex};
+
+    /// Records a description of every event delivered to `on_event`, in
+    /// delivery order.
+    struct OrderRecordingObserver {
+        seen: Mutex<Vec<String>>,
+    }
+
+    impl OrderRecordingObserver {
+        fn new() -> Self {
+            Self {
+                seen: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    fn describe(event: &TerminalEvent) -> String {
+        match event {
+            TerminalEvent::BellRang(_) => "bell".to_string(),
+            TerminalEvent::TitleChanged(t) => format!("title:{t}"),
+            other => format!("{:?}", other.kind()),
+        }
+    }
+
+    impl TerminalObserver for OrderRecordingObserver {
+        fn on_event(&self, event: &TerminalEvent) {
+            self.seen.lock().unwrap().push(describe(event));
+        }
+    }
+
+    #[test]
+    fn process_deferred_batch_preserves_event_order() {
+        let mut term = Terminal::new(80, 24);
+        let observer = Arc::new(OrderRecordingObserver::new());
+        term.add_observer(observer.clone());
+
+        // Three separate `process_deferred()` calls, each producing one
+        // distinct event -- mirroring how the PTY reader thread calls
+        // `process_deferred()` once per PTY read.
+        let batch1 = term.process_deferred(b"\x07"); // bell
+        let batch2 = term.process_deferred(b"\x1b]0;First\x07"); // title change
+        let batch3 = term.process_deferred(b"\x1b]0;Second\x07"); // title change
+
+        assert!(
+            observer.seen.lock().unwrap().is_empty(),
+            "nothing should be delivered before deliver() is called"
+        );
+
+        // Deliver in production order, exactly as pty_session.rs does
+        // (deliver each batch right after the write guard that produced it
+        // is dropped, before reading the next chunk).
+        batch1.deliver();
+        batch2.deliver();
+        batch3.deliver();
+
+        let seen = observer.seen.lock().unwrap();
+        assert_eq!(
+            *seen,
+            vec![
+                "bell".to_string(),
+                "title:First".to_string(),
+                "title:Second".to_string(),
+            ],
+            "observer must see events in the order they were produced"
+        );
+    }
+
+    #[test]
+    fn process_deferred_matches_process_for_observer_delivery() {
+        // Feed the identical byte sequence to two terminals: one via the
+        // synchronous `process()` path, one via
+        // `process_deferred()` + `deliver()`. Observer-visible results must
+        // be identical -- deferring delivery must not change *what* an
+        // observer sees, only *when* (and under what lock) it runs.
+        let mut term_sync = Terminal::new(80, 24);
+        let obs_sync = Arc::new(OrderRecordingObserver::new());
+        term_sync.add_observer(obs_sync.clone());
+
+        let mut term_deferred = Terminal::new(80, 24);
+        let obs_deferred = Arc::new(OrderRecordingObserver::new());
+        term_deferred.add_observer(obs_deferred.clone());
+
+        let inputs: [&[u8]; 3] = [b"\x07", b"\x1b]0;Hello\x07", b"\x1b]133;A\x07"];
+        for data in inputs {
+            term_sync.process(data);
+            let batch = term_deferred.process_deferred(data);
+            batch.deliver();
+        }
+
+        assert_eq!(
+            *obs_sync.seen.lock().unwrap(),
+            *obs_deferred.seen.lock().unwrap(),
+            "process_deferred()+deliver() must be observer-equivalent to process()"
+        );
+    }
+
+    #[test]
+    fn empty_batch_when_no_observers_or_no_new_events() {
+        let mut term = Terminal::new(80, 24);
+
+        // No observers registered yet -- the bell event is queued into
+        // `terminal_events` but `events_dispatched_up_to` is left untouched
+        // (matching `dispatch_events()`'s original early return), so it
+        // stays pending for whenever an observer *is* registered.
+        let batch = term.process_deferred(b"\x07");
+        assert!(
+            batch.is_empty(),
+            "batch should be empty when no observers are registered"
+        );
+        batch.deliver(); // must be a safe no-op
+
+        let observer = Arc::new(OrderRecordingObserver::new());
+        term.add_observer(observer.clone());
+
+        // The previously-queued bell is still undelivered; the next call
+        // flushes it even though no new bytes are processed.
+        let batch = term.process_deferred(b"");
+        assert!(
+            !batch.is_empty(),
+            "the bell queued before the observer was registered should now be included"
+        );
+        batch.deliver();
+        assert_eq!(*observer.seen.lock().unwrap(), vec!["bell".to_string()]);
+
+        // Now fully caught up: plain text queues no new TerminalEvent, so
+        // the batch is empty.
+        let batch = term.process_deferred(b"no events here");
+        assert!(
+            batch.is_empty(),
+            "batch should be empty when no new events were queued"
+        );
+    }
+}

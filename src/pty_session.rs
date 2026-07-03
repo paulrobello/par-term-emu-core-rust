@@ -680,18 +680,37 @@ impl PtySession {
                             mgr.feed_output(&buffer[..n]);
                         }
 
-                        // Process the bytes through the terminal
-                        {
+                        // Process the bytes through the terminal.
+                        //
+                        // ARC-001: use `process_deferred` instead of `process` so
+                        // observer callbacks (which may re-enter Python under the
+                        // GIL, or otherwise block) are NOT invoked while the write
+                        // guard below is held — that would stall every concurrent
+                        // reader of this terminal (streaming clients, Python
+                        // queries), nullifying the Mutex->RwLock migration
+                        // (ARC-009). The returned batch is delivered after the
+                        // write guard is dropped.
+                        // ARC-027: bytes to write back to the PTY master for pending
+                        // device-query responses. Populated inside the write guard
+                        // below (where has_pending_responses/drain_responses/XTWINOPS
+                        // filtering must run), but the actual blocking `write_all` +
+                        // `flush` syscall is deferred until AFTER the guard is
+                        // dropped, so it no longer stalls concurrent readers of this
+                        // terminal (streaming clients, Python queries, screenshot
+                        // rendering) for the syscall's duration.
+                        let mut response_bytes: Vec<u8> = Vec::new();
+                        let dispatch_batch = {
                             let mut term = terminal.write();
                             let was_alt_screen = term.is_alt_screen_active();
-                            term.process(&buffer[..n]);
+                            let batch = term.process_deferred(&buffer[..n]);
                             // Record output for session recording
                             term.record_output(&buffer[..n]);
                             // Process trigger scans on dirty rows
                             term.process_trigger_scans();
                             let is_alt_screen = term.is_alt_screen_active();
 
-                            // Check for device query responses and write them back to the PTY
+                            // Check for device query responses and stage them for
+                            // writing back to the PTY after the write guard drops.
                             // This enables nested TUI applications (vim, htop, etc.) to work correctly
                             if term.has_pending_responses() {
                                 let mut responses = term.drain_responses();
@@ -736,13 +755,7 @@ impl PtySession {
                                 }
 
                                 if !responses.is_empty() {
-                                    debug::log_device_query("pending", &responses);
-                                    {
-                                        let mut w = writer.lock();
-                                        // Write responses back to PTY master so child can read them
-                                        let _ = w.write_all(&responses);
-                                        let _ = w.flush();
-                                    }
+                                    response_bytes = responses;
                                 }
                             }
 
@@ -784,7 +797,29 @@ impl PtySession {
                                     }
                                 }
                             }
+
+                            batch
+                        }; // write guard (`term`) dropped here
+
+                        // ARC-027: write staged device-query responses back to the
+                        // PTY master now that the write guard is released, so the
+                        // blocking write_all/flush syscall no longer holds up
+                        // concurrent readers of this terminal. Done before
+                        // dispatch_batch.deliver() below so device replies (which
+                        // nested TUI apps like vim/htop block on) stay as prompt as
+                        // possible.
+                        if !response_bytes.is_empty() {
+                            debug::log_device_query("pending", &response_bytes);
+                            let mut w = writer.lock();
+                            // Write responses back to PTY master so child can read them
+                            let _ = w.write_all(&response_bytes);
+                            let _ = w.flush();
                         }
+
+                        // ARC-001: deliver observer callbacks now that the write
+                        // guard is released, so slow/re-entrant observers don't
+                        // block concurrent readers of this terminal.
+                        dispatch_batch.deliver();
                     }
                     Err(e) => {
                         // Log error but continue (could be temporary)
@@ -1875,6 +1910,80 @@ mod tests {
         assert!(
             session.has_updates_since(gen_before_echo),
             "has_updates_since() must detect changes after Ctrl+C"
+        );
+    }
+
+    /// ARC-001 regression: observer dispatch must run *after* the reader
+    /// thread's `RwLock<Terminal>` write guard is dropped, not while it is
+    /// still held.
+    ///
+    /// Before the fix, `process()` invoked observer callbacks inline from
+    /// inside the write-guard scope in the reader thread's read loop. A
+    /// callback that then tried to lock the same `Arc<RwLock<Terminal>>`
+    /// (directly, or indirectly via a Python callback calling back into a
+    /// terminal method) would find the lock already held by this very
+    /// thread — `parking_lot::RwLock` is not reentrant, so `try_write()`
+    /// would fail every time. After the fix (`process_deferred()` +
+    /// delivering the returned `ObserverDispatchBatch` only after the write
+    /// guard is dropped), the same `try_write()` call must succeed, proving
+    /// no exclusive lock is held while observers run.
+    ///
+    /// Unix-only: relies on `/bin/sh -c "printf '\007'"` to reliably emit a
+    /// single BEL byte through the PTY, which `Terminal` turns into a
+    /// `TerminalEvent::BellRang` observer event (see
+    /// `terminal::tests::observer_tests::test_observer_receives_bell_event`
+    /// for the non-PTY equivalent).
+    #[test]
+    #[cfg(unix)]
+    fn test_observer_dispatch_does_not_hold_write_lock() {
+        use crate::observer::TerminalObserver;
+        use crate::terminal::TerminalEvent;
+
+        /// Observer that, on every event, probes whether the write lock on
+        /// its own terminal is free.
+        struct LockProbeObserver {
+            terminal: Arc<RwLock<Terminal>>,
+            saw_any_invocation: AtomicBool,
+            lock_was_free: AtomicBool,
+        }
+
+        impl TerminalObserver for LockProbeObserver {
+            fn on_event(&self, _event: &TerminalEvent) {
+                self.saw_any_invocation.store(true, Ordering::SeqCst);
+                if self.terminal.try_write().is_some() {
+                    self.lock_was_free.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+
+        let mut session = PtySession::new(80, 24, 1000);
+        let terminal_arc = Arc::clone(session.terminal_ref());
+
+        let probe = Arc::new(LockProbeObserver {
+            terminal: Arc::clone(&terminal_arc),
+            saw_any_invocation: AtomicBool::new(false),
+            lock_was_free: AtomicBool::new(false),
+        });
+        {
+            let mut term = terminal_arc.write();
+            term.add_observer(probe.clone());
+        }
+
+        let result = session.spawn("/bin/sh", &["-c", "printf '\\007'"]);
+        assert!(result.is_ok(), "spawn should succeed: {:?}", result);
+
+        // Wait for the reader thread to read the BEL byte and dispatch it.
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        assert!(
+            probe.saw_any_invocation.load(Ordering::SeqCst),
+            "observer should have been invoked for the BEL event"
+        );
+        assert!(
+            probe.lock_was_free.load(Ordering::SeqCst),
+            "try_write() must succeed from inside the observer callback -- the \
+             reader thread must drop its write guard before delivering observer \
+             events (ARC-001)"
         );
     }
 
