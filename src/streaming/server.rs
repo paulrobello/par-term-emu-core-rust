@@ -49,6 +49,12 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 const WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
+/// Request/response types for the tungstenite WS handshake header callback,
+/// aliased for readability (the `Callback` trait fixes these exactly).
+type WsHandshakeRequest = tokio_tungstenite::tungstenite::http::Request<()>;
+type WsHandshakeResponse = tokio_tungstenite::tungstenite::http::Response<()>;
+type WsHandshakeErrorResponse = tokio_tungstenite::tungstenite::http::Response<Option<String>>;
+
 /// Build the [`WebSocketConfig`] applied to every WS acceptor.
 fn ws_accept_config() -> Option<WebSocketConfig> {
     // `WebSocketConfig` is `#[non_exhaustive]`, so use the builder API rather
@@ -58,6 +64,78 @@ fn ws_accept_config() -> Option<WebSocketConfig> {
             .max_message_size(Some(WS_MAX_MESSAGE_SIZE))
             .max_frame_size(Some(WS_MAX_FRAME_SIZE)),
     )
+}
+
+/// Build the WebSocket handshake header callback shared by the plain
+/// (`start_websocket_only`) and TLS (`start_websocket_only_tls`) listeners.
+///
+/// The callback captures the request's URI query string into the returned
+/// `Arc<Mutex<..>>` (read back by the caller after the handshake completes),
+/// then enforces two handshake-time checks in order:
+/// 1. Origin allowlist (SEC-005: CSRF-via-WebSocket defense) via
+///    [`check_ws_origin`].
+/// 2. API-key / HTTP Basic auth (if configured) via
+///    [`validate_ws_handshake_auth`].
+///
+/// Both listeners MUST use this single factory so a future auth/origin fix
+/// only needs to change one place instead of two.
+///
+/// The tungstenite `Callback` trait fixes `ErrorResponse` as
+/// `HttpResponse<Option<String>>` — we cannot box or shrink it without
+/// violating the external API contract.
+#[allow(clippy::type_complexity, clippy::result_large_err)]
+fn build_ws_header_callback(
+    api_key: Option<String>,
+    basic_auth: Option<HttpBasicAuthConfig>,
+    allowed_origins: Option<Vec<String>>,
+    allow_api_key_in_query: bool,
+) -> (
+    impl FnOnce(
+        &WsHandshakeRequest,
+        WsHandshakeResponse,
+    ) -> std::result::Result<WsHandshakeResponse, WsHandshakeErrorResponse>,
+    Arc<Mutex<Option<String>>>,
+) {
+    let uri_query = Arc::new(Mutex::new(None::<String>));
+    let uri_query_clone = Arc::clone(&uri_query);
+
+    let callback = move |req: &WsHandshakeRequest,
+                         resp: WsHandshakeResponse|
+          -> std::result::Result<WsHandshakeResponse, WsHandshakeErrorResponse> {
+        if let Some(q) = req.uri().query() {
+            *uri_query_clone.lock() = Some(q.to_string());
+        }
+
+        // Validate Origin header (SEC-005: CSRF-via-WebSocket defense)
+        let origin = req.headers().get("origin").and_then(|v| v.to_str().ok());
+        if !check_ws_origin(origin, allowed_origins.as_deref()) {
+            let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(403)
+                .body(Some("Origin not allowed".to_string()))
+                .expect("static rejection response body is always valid");
+            return Err(reject);
+        }
+
+        // Validate auth if configured
+        if (api_key.is_some() || basic_auth.is_some())
+            && !validate_ws_handshake_auth(
+                req,
+                api_key.as_deref(),
+                basic_auth.as_ref(),
+                allow_api_key_in_query,
+            )
+        {
+            let reject = tokio_tungstenite::tungstenite::http::Response::builder()
+                .status(401)
+                .body(Some("Unauthorized".to_string()))
+                .expect("static rejection response body is always valid");
+            return Err(reject);
+        }
+
+        Ok(resp)
+    };
+
+    (callback, uri_query)
 }
 #[derive(Debug)]
 pub struct TlsConfig {
@@ -1675,53 +1753,26 @@ impl StreamingServer {
                     let server = self.clone();
                     tokio::spawn(async move {
                         // Accept WebSocket with header callback to capture URI query and validate auth
-                        let uri_query = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-                        let uri_query_clone = std::sync::Arc::clone(&uri_query);
-                        let ws_api_key = server.config.api_key.clone();
-                        let ws_basic_auth = server.config.http_basic_auth.clone();
-                        let ws_allow_query = server.config.allow_api_key_in_query;
-                        let ws_allowed_origins = server.config.allowed_origins.clone();
+                        let (header_callback, uri_query) = build_ws_header_callback(
+                            server.config.api_key.clone(),
+                            server.config.http_basic_auth.clone(),
+                            server.config.allowed_origins.clone(),
+                            server.config.allow_api_key_in_query,
+                        );
 
                         // The tungstenite `Callback` trait fixes `ErrorResponse` as
                         // `HttpResponse<Option<String>>` — we cannot box or shrink it
                         // without violating the external API contract.
-                        #[allow(clippy::result_large_err)]
-                        let ws_result = accept_hdr_async_with_config(stream, move |req: &tokio_tungstenite::tungstenite::http::Request<()>, resp: tokio_tungstenite::tungstenite::http::Response<()>| {
-                            if let Some(q) = req.uri().query() {
-                                if let Ok(mut guard) = uri_query_clone.lock() {
-                                    *guard = Some(q.to_string());
-                                }
-                            }
-
-                            // Validate Origin header (SEC-005: CSRF-via-WebSocket defense)
-                            let origin = req
-                                .headers()
-                                .get("origin")
-                                .and_then(|v| v.to_str().ok());
-                            if !check_ws_origin(origin, ws_allowed_origins.as_deref()) {
-                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
-                                    .status(403)
-                                    .body(Some("Origin not allowed".to_string()))
-                                    .unwrap();
-                                return Err(reject);
-                            }
-
-                            // Validate auth if configured
-                            if (ws_api_key.is_some() || ws_basic_auth.is_some())
-                                && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref(), ws_allow_query) {
-                                    let reject = tokio_tungstenite::tungstenite::http::Response::builder()
-                                        .status(401)
-                                        .body(Some("Unauthorized".to_string()))
-                                        .unwrap();
-                                    return Err(reject);
-                                }
-
-                            Ok(resp)
-                        }, ws_accept_config()).await;
+                        let ws_result = accept_hdr_async_with_config(
+                            stream,
+                            header_callback,
+                            ws_accept_config(),
+                        )
+                        .await;
 
                         match ws_result {
                             Ok(ws_stream) => {
-                                let query_str = uri_query.lock().ok().and_then(|mut g| g.take());
+                                let query_str = uri_query.lock().take();
                                 let params = ConnectionParams::from_uri_query(query_str.as_deref());
                                 if let Err(e) =
                                     server.handle_connection_ws(ws_stream, &params).await
@@ -1798,64 +1849,25 @@ impl StreamingServer {
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
                                 // Accept WebSocket with header callback to capture URI query and validate auth
-                                let uri_query =
-                                    std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
-                                let uri_query_clone = std::sync::Arc::clone(&uri_query);
-                                let ws_api_key = server.config.api_key.clone();
-                                let ws_basic_auth = server.config.http_basic_auth.clone();
-                                let ws_allow_query = server.config.allow_api_key_in_query;
-                                let ws_allowed_origins = server.config.allowed_origins.clone();
+                                let (header_callback, uri_query) = build_ws_header_callback(
+                                    server.config.api_key.clone(),
+                                    server.config.http_basic_auth.clone(),
+                                    server.config.allowed_origins.clone(),
+                                    server.config.allow_api_key_in_query,
+                                );
 
                                 // Same as above: ErrorResponse type is fixed by the
                                 // tungstenite Callback trait and cannot be reduced.
-                                #[allow(clippy::result_large_err)]
                                 let ws_result = accept_hdr_async_with_config(
                                     tls_stream,
-                                    move |req: &tokio_tungstenite::tungstenite::http::Request<
-                                        (),
-                                    >,
-                                          resp: tokio_tungstenite::tungstenite::http::Response<
-                                        (),
-                                    >| {
-                                        if let Some(q) = req.uri().query() {
-                                            if let Ok(mut guard) = uri_query_clone.lock() {
-                                                *guard = Some(q.to_string());
-                                            }
-                                        }
-
-                                        // Validate Origin header (SEC-005: CSRF-via-WebSocket defense)
-                            let origin = req
-                                .headers()
-                                .get("origin")
-                                .and_then(|v| v.to_str().ok());
-                            if !check_ws_origin(origin, ws_allowed_origins.as_deref()) {
-                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
-                                    .status(403)
-                                    .body(Some("Origin not allowed".to_string()))
-                                    .unwrap();
-                                return Err(reject);
-                            }
-
-                            // Validate auth if configured
-                                        if (ws_api_key.is_some() || ws_basic_auth.is_some())
-                                            && !validate_ws_handshake_auth(req, ws_api_key.as_deref(), ws_basic_auth.as_ref(), ws_allow_query) {
-                                                let reject = tokio_tungstenite::tungstenite::http::Response::builder()
-                                                    .status(401)
-                                                    .body(Some("Unauthorized".to_string()))
-                                                    .unwrap();
-                                                return Err(reject);
-                                            }
-
-                                        Ok(resp)
-                                    },
+                                    header_callback,
                                     ws_accept_config(),
                                 )
                                 .await;
 
                                 match ws_result {
                                     Ok(ws_stream) => {
-                                        let query_str =
-                                            uri_query.lock().ok().and_then(|mut g| g.take());
+                                        let query_str = uri_query.lock().take();
                                         let params =
                                             ConnectionParams::from_uri_query(query_str.as_deref());
                                         if let Err(e) = server

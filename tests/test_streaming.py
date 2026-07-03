@@ -483,8 +483,10 @@ def test_server_bind_error_duplicate_port(pty_terminal, streaming_port):
         # (some implementations may handle this gracefully)
 
         server2.stop()
-    except Exception:
-        # Expected to fail
+    except RuntimeError:
+        # Expected to fail: PyStreamingServer's PyO3 bindings raise
+        # RuntimeError (PyRuntimeError) for all construction/lifecycle
+        # failures (see src/python_bindings/streaming.rs).
         pass
     finally:
         server1.stop()

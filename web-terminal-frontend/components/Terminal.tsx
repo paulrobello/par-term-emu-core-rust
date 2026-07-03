@@ -69,6 +69,15 @@ const getResponsiveFontSize = (): number => {
   return 14;                      // Desktop
 };
 
+// Debug-only logger - gated on NODE_ENV so verbose connection/lifecycle
+// logs don't ship to production consoles. console.error/console.warn calls
+// are left ungated since they surface real diagnostics.
+const debugLog = (...args: unknown[]): void => {
+  if (process.env.NODE_ENV !== 'production') {
+    debugLog(...args);
+  }
+};
+
 // Shared TextDecoder instance - reuse instead of creating per message
 const sharedDecoder = new TextDecoder();
 
@@ -190,7 +199,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     onRetryingChange?.(true);
 
     const delay = retryDelayRef.current;
-    console.log(`Scheduling reconnect in ${delay}ms`);
+    debugLog(`Scheduling reconnect in ${delay}ms`);
 
     retryTimeoutRef.current = setTimeout(() => {
       if (!retryCancelledRef.current) {
@@ -235,7 +244,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       // Send ping
       try {
         ws.send(encodeClientMessage(createPingMessage()));
-        console.log('Heartbeat ping sent');
+        debugLog('Heartbeat ping sent');
       } catch (err) {
         console.error('Failed to send heartbeat ping:', err);
         stopHeartbeat();
@@ -248,7 +257,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const applyTheme = (theme: { name: string; background?: { r: number; g: number; b: number }; foreground?: { r: number; g: number; b: number }; normal: { r: number; g: number; b: number }[]; bright: { r: number; g: number; b: number }[] }) => {
     if (!xtermRef.current) return;
 
-    console.log('Applying theme:', theme.name);
+    debugLog('Applying theme:', theme.name);
 
     const xtermTheme = themeToXtermOptions(theme as import('@/lib/protocol').ThemeInfo);
 
@@ -278,7 +287,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     // Handle React StrictMode double-invocation:
     // StrictMode: mount -> cleanup -> remount. Restore preserved terminal on remount.
     if (preservedTerminal && preservedFitAddon) {
-      console.log('Restoring preserved terminal (StrictMode remount)');
+      debugLog('Restoring preserved terminal (StrictMode remount)');
       term = preservedTerminal;
       fitAddon = preservedFitAddon;
 
@@ -289,7 +298,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       // Fresh initialization
       const mobile = isMobile();
       const initialFontSize = fontSize ?? getResponsiveFontSize();
-      console.log(`Terminal init: width=${window.innerWidth}, mobile=${mobile}, fontSize=${initialFontSize}`);
+      debugLog(`Terminal init: width=${window.innerWidth}, mobile=${mobile}, fontSize=${initialFontSize}`);
 
       // Initialize xterm.js
       term = new XTerm({
@@ -349,7 +358,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           try {
             const webglAddon = new WebglAddon();
             term.loadAddon(webglAddon);
-            console.log('WebGL renderer enabled');
+            debugLog('WebGL renderer enabled');
           } catch (e) {
             console.warn('WebGL renderer failed, using default DOM renderer:', e);
           }
@@ -367,7 +376,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           term.parser.registerCsiHandler({ final: 'n' }, () => true);
           // DECRQM (Request Mode) - CSI ? Ps $ p
           term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true);
-          console.log('Suppressed xterm.js DA/DSR responses (handled by backend terminal)');
+          debugLog('Suppressed xterm.js DA/DSR responses (handled by backend terminal)');
 
           fitAddon.fit();
         });
@@ -395,8 +404,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         setTimeout(() => {
           // Use explicit fontSize prop if set, otherwise use responsive sizing
           const newFontSize = fontSizeRef.current ?? getResponsiveFontSize();
-          console.log(`Refit: current fontSize=${term.options.fontSize}, new=${newFontSize}`);
-          console.log(`Refit: before fit - cols=${term.cols}, rows=${term.rows}`);
+          debugLog(`Refit: current fontSize=${term.options.fontSize}, new=${newFontSize}`);
+          debugLog(`Refit: before fit - cols=${term.cols}, rows=${term.rows}`);
 
           if (term.options.fontSize !== newFontSize) {
             term.options.fontSize = newFontSize;
@@ -404,20 +413,20 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
           const container = terminalRef.current;
           if (container) {
-            console.log(`Refit: container size - ${container.clientWidth}x${container.clientHeight}`);
+            debugLog(`Refit: container size - ${container.clientWidth}x${container.clientHeight}`);
           }
 
           fitAddon.fit();
           const newCols = term.cols;
           const newRows = term.rows;
-          console.log(`Refit: after fit - cols=${newCols}, rows=${newRows}`);
+          debugLog(`Refit: after fit - cols=${newCols}, rows=${newRows}`);
 
           term.resize(newCols, newRows);
           term.refresh(0, newRows - 1);
-          console.log(`Refit: after explicit resize - cols=${term.cols}, rows=${term.rows}`);
+          debugLog(`Refit: after explicit resize - cols=${term.cols}, rows=${term.rows}`);
 
           if (wsRef.current?.readyState === WebSocket.OPEN) {
-            console.log(`Refit: sending resize ${newCols}x${newRows}`);
+            debugLog(`Refit: sending resize ${newCols}x${newRows}`);
             wsRef.current.send(encodeClientMessage(createResizeMessage(newCols, newRows)));
           }
         }, 50);
@@ -498,7 +507,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     // Handle terminal resize - use wsRef so it works across reconnects
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        console.log(`Client resized to: ${cols}x${rows}`);
+        debugLog(`Client resized to: ${cols}x${rows}`);
         wsRef.current.send(encodeClientMessage(createResizeMessage(cols, rows)));
       }
     });
@@ -621,7 +630,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       setTimeout(() => {
         if (preservedTerminal === term) {
           // Not restored - this is a real unmount, dispose everything
-          console.log('Real unmount - disposing terminal');
+          debugLog('Real unmount - disposing terminal');
           term.dispose();
           wsRef.current?.close();
           preservedTerminal = null;
@@ -639,7 +648,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // If already connected, close existing socket first
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      console.log('Closing existing connection before reconnecting');
+      debugLog('Closing existing connection before reconnecting');
       wsRef.current.close();
       wsRef.current = null;
     }
@@ -665,7 +674,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     wsRef.current = ws;
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
+      debugLog('WebSocket connected');
       updateStatus('connected');
       // Reset retry delay on successful connection
       retryDelayRef.current = 500;
@@ -701,9 +710,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'connected': {
             const connected = msg.message.value;
             const initialScreenLength = connected.initialScreen?.length || 0;
-            console.log(`Session ID: ${connected.sessionId}`);
-            console.log(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
-            console.log(`Initial screen provided: ${!!connected.initialScreen}, length: ${initialScreenLength}`);
+            debugLog(`Session ID: ${connected.sessionId}`);
+            debugLog(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
+            debugLog(`Initial screen provided: ${!!connected.initialScreen}, length: ${initialScreenLength}`);
 
             // Guard against oversized initial screens
             if (initialScreenLength > MAX_SNAPSHOT_SIZE) {
@@ -733,10 +742,10 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             if (ws.readyState === WebSocket.OPEN) {
               const cols = term.cols;
               const rows = term.rows;
-              console.log(`Sending resize after connect: ${cols}x${rows}`);
+              debugLog(`Sending resize after connect: ${cols}x${rows}`);
               ws.send(encodeClientMessage(createResizeMessage(cols, rows)));
               // Request fresh snapshot
-              console.log('Requesting refresh after connect');
+              debugLog('Requesting refresh after connect');
               ws.send(encodeClientMessage(createRefreshMessage()));
             }
             term.focus();
@@ -746,9 +755,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'resize': {
             const resize = msg.message.value;
             term.resize(resize.cols, resize.rows);
-            console.log(`Terminal resized: ${resize.cols}x${resize.rows}`);
+            debugLog(`Terminal resized: ${resize.cols}x${resize.rows}`);
             if (ws.readyState === WebSocket.OPEN) {
-              console.log('Requesting screen refresh after resize');
+              debugLog('Requesting screen refresh after resize');
               ws.send(encodeClientMessage(createRefreshMessage()));
             }
             break;
@@ -757,12 +766,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'refresh': {
             const refresh = msg.message.value;
             const snapshotLength = refresh.screenContent?.length || 0;
-            console.log(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
-            console.log('=== CLIENT REFRESH DEBUG ===');
-            console.log(`Client terminal size: ${term.cols}x${term.rows}`);
-            console.log(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
-            console.log(`Snapshot length: ${snapshotLength} bytes`);
-            console.log('============================');
+            debugLog(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
+            debugLog('=== CLIENT REFRESH DEBUG ===');
+            debugLog(`Client terminal size: ${term.cols}x${term.rows}`);
+            debugLog(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
+            debugLog(`Snapshot length: ${snapshotLength} bytes`);
+            debugLog('============================');
 
             // Guard against oversized snapshots that could freeze the UI
             if (snapshotLength > MAX_SNAPSHOT_SIZE) {
@@ -788,12 +797,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'title': {
             const title = msg.message.value;
             document.title = title.title + ' - Terminal Streaming';
-            console.log(`Title changed: ${title.title}`);
+            debugLog(`Title changed: ${title.title}`);
             break;
           }
 
           case 'bell':
-            console.log('Bell received');
+            debugLog('Bell received');
             break;
 
           case 'error': {
@@ -806,7 +815,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'shutdown': {
             const shutdown = msg.message.value;
             const reason = (shutdown.reason || '').toLowerCase();
-            console.log('Server shutdown:', shutdown.reason);
+            debugLog('Server shutdown:', shutdown.reason);
 
             if (reason.includes('shell exited') || reason.includes('dead session')) {
               term.write(`\r\n\x1b[1;31mSession ended: ${shutdown.reason}\x1b[0m\r\n`);
@@ -823,7 +832,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
           case 'modeChanged': {
             const mc = msg.message.value;
-            console.log(`Mode changed: ${mc.mode} = ${mc.enabled}`);
+            debugLog(`Mode changed: ${mc.mode} = ${mc.enabled}`);
             // Track mode state for mouse/focus/paste handling
             if (mc.mode === 'mouse_tracking') {
               mouseTrackingRef.current = mc.enabled;
@@ -838,7 +847,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           case 'pong':
             // Pong received - update last pong time for heartbeat tracking
             lastPongRef.current = Date.now();
-            console.log('Heartbeat pong received');
+            debugLog('Heartbeat pong received');
             break;
 
           case 'hyperlinkAdded': {
@@ -923,7 +932,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     };
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected');
+      debugLog('WebSocket disconnected');
       stopHeartbeat();
       updateStatus('disconnected');
       wsRef.current = null;
@@ -961,7 +970,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   // Reconnect when wsUrl changes
   useEffect(() => {
     if (prevWsUrlRef.current !== wsUrl) {
-      console.log(`WebSocket URL changed: ${prevWsUrlRef.current} -> ${wsUrl}`);
+      debugLog(`WebSocket URL changed: ${prevWsUrlRef.current} -> ${wsUrl}`);
       prevWsUrlRef.current = wsUrl;
       // Disconnect and reconnect with new URL
       disconnect();
@@ -976,7 +985,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     const term = xtermRef.current;
     const fitAddon = fitAddonRef.current;
     if (term && fitAddon && fontSize !== undefined) {
-      console.log(`Font size changed to ${fontSize}px`);
+      debugLog(`Font size changed to ${fontSize}px`);
       term.options.fontSize = fontSize;
       fitAddon.fit();
       // Send resize to server
