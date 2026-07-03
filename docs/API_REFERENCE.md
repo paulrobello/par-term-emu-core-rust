@@ -169,6 +169,10 @@ Create a new terminal with specified dimensions.
 - `reset()`: Reset terminal to default state
 - `title() -> str`: Get terminal title
 - `set_title(title: str)`: Set terminal title programmatically
+- `window_position() -> tuple[int, int]`: Get the host-supplied window position in pixels `(x, y)`; defaults to `(0, 0)` if never set
+- `set_window_position(x: int, y: int)`: Set the host-supplied window position (GUI hosts call this on window move) so `CSI 13 t` / `CSI 13 ; 2 t` XTWINOPS queries report the real on-screen position instead of the origin default; `x`/`y` may be negative on multi-monitor setups, but negative values are clamped to 0 in the `CSI 13 t` reply since CSI parameters are unsigned
+- `window_iconified() -> bool`: Get the host-supplied iconified/minimized state; defaults to `False` if never set
+- `set_window_iconified(iconified: bool)`: Set the host-supplied iconified/minimized state (GUI hosts call this on minimize/restore) so `CSI 11 t` XTWINOPS queries report the real state instead of always reporting non-iconified
 
 #### Badge Format (OSC 1337 SetBadgeFormat)
 - `badge_format() -> str | None`: Get current badge format template

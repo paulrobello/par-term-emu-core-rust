@@ -199,15 +199,33 @@ impl Terminal {
                         // window to act on).
                     }
                     11 => {
-                        // Report window state: always non-iconified (no real window)
-                        self.push_response(b"\x1b[1t");
+                        // Report window state: iconified/non-iconified. The
+                        // core is headless, so this reflects whatever the
+                        // host last supplied via `Terminal::set_window_iconified`
+                        // (defaults to non-iconified when never set).
+                        if self.window_iconified {
+                            self.push_response(b"\x1b[2t");
+                        } else {
+                            self.push_response(b"\x1b[1t");
+                        }
                     }
                     13 => {
                         // Report window position in pixels. Also covers the
                         // text-area-position sub-form `CSI 13 ; 2 t` (n is still
-                        // 13, the second param is ignored). Headless core has no
-                        // on-screen position, so both forms report the origin.
-                        self.push_response(b"\x1b[3;0;0t");
+                        // 13, the second param is ignored). The core is
+                        // headless, so this reflects whatever the host last
+                        // supplied via `Terminal::set_window_position`
+                        // (defaults to the origin when never set). CSI
+                        // parameters are unsigned, so a negative host-supplied
+                        // coordinate (possible on multi-monitor setups where
+                        // the window sits left of/above the primary display)
+                        // is clamped to 0 for the reply -- xterm's own reply
+                        // grammar has no way to encode a negative parameter
+                        // either.
+                        let x = self.window_position_x.max(0);
+                        let y = self.window_position_y.max(0);
+                        let response = format!("\x1b[3;{};{}t", x, y);
+                        self.push_response(response.as_bytes());
                     }
                     14 => {
                         // Report text area size in pixels. Also covers the
@@ -358,6 +376,78 @@ mod tests {
         term.process(b"\x1b[18t");
         let response = term.drain_responses();
         assert_eq!(response, b"\x1b[8;24;80t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_state_iconified() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_iconified(true);
+        term.process(b"\x1b[11t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[2t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_state_toggle_back_to_non_iconified() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_iconified(true);
+        term.set_window_iconified(false);
+        term.process(b"\x1b[11t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[1t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_position_host_supplied() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_position(100, 50);
+        term.process(b"\x1b[13t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[3;100;50t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_position_text_area_subform_uses_host_value() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_position(200, 75);
+        // CSI 13 ; 2 t - text-area-position sub-form; the second param is
+        // ignored and the reply is identical to the plain CSI 13 t form.
+        term.process(b"\x1b[13;2t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[3;200;75t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_position_negative_clamped_to_zero() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_position(-10, -20);
+        term.process(b"\x1b[13t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[3;0;0t");
+    }
+
+    #[test]
+    fn test_xtwinops_window_position_and_iconified_getters_default() {
+        let term = Terminal::new(80, 24);
+
+        assert_eq!(term.window_position(), (0, 0));
+        assert!(!term.window_iconified());
+    }
+
+    #[test]
+    fn test_xtwinops_window_position_and_iconified_getters_reflect_host_values() {
+        let mut term = Terminal::new(80, 24);
+
+        term.set_window_position(30, 40);
+        term.set_window_iconified(true);
+
+        assert_eq!(term.window_position(), (30, 40));
+        assert!(term.window_iconified());
     }
 
     #[test]

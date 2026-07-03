@@ -821,6 +821,15 @@ pub struct Terminal {
     pub(crate) pixel_width: usize,
     /// Pixel height of the text area (XTWINOPS 14)
     pub(crate) pixel_height: usize,
+    /// Host-supplied window X position in pixels, for XTWINOPS 13 (`CSI 13 t`).
+    /// Defaults to 0 for a headless core with no window of its own.
+    pub(crate) window_position_x: i32,
+    /// Host-supplied window Y position in pixels, for XTWINOPS 13 (`CSI 13 t`).
+    /// Defaults to 0 for a headless core with no window of its own.
+    pub(crate) window_position_y: i32,
+    /// Host-supplied iconified/minimized state, for XTWINOPS 11 (`CSI 11 t`).
+    /// Defaults to `false` (non-iconified) for a headless core.
+    pub(crate) window_iconified: bool,
     /// Security flags: OSC 7 acceptance + insecure-sequence disable (ARC-001 sub-struct)
     pub(crate) security_state: SecurityFlagsState,
     /// Terminal conformance level (VT100/VT220/VT320/VT420/VT520)
@@ -1045,6 +1054,9 @@ impl Terminal {
             // This ensures CSI 14 t queries return valid pixel dimensions after resize
             pixel_width: cols * 10,
             pixel_height: rows * 20,
+            window_position_x: 0,
+            window_position_y: 0,
+            window_iconified: false,
             security_state: SecurityFlagsState {
                 accept_osc7: true,
                 disable_insecure_sequences: false,
@@ -1270,6 +1282,42 @@ impl Terminal {
     pub fn set_pixel_size(&mut self, width_px: usize, height_px: usize) {
         self.pixel_width = width_px;
         self.pixel_height = height_px;
+    }
+
+    /// Set the host-supplied window position for XTWINOPS reporting
+    /// (`CSI 13 t` / `CSI 13 ; 2 t`).
+    ///
+    /// The terminal core is headless and has no window of its own; GUI
+    /// hosts (e.g. par-term) should call this whenever the real OS window
+    /// moves so that `CSI 13 t` queries reflect the actual on-screen
+    /// position instead of defaulting to the origin. Coordinates may be
+    /// negative (e.g. a window positioned on a monitor left of/above the
+    /// primary display in a multi-monitor setup).
+    pub fn set_window_position(&mut self, x: i32, y: i32) {
+        self.window_position_x = x;
+        self.window_position_y = y;
+    }
+
+    /// Get the host-supplied window position in pixels as `(x, y)`,
+    /// defaulting to `(0, 0)` if never set via [`Terminal::set_window_position`].
+    pub fn window_position(&self) -> (i32, i32) {
+        (self.window_position_x, self.window_position_y)
+    }
+
+    /// Set the host-supplied iconified/minimized state for XTWINOPS
+    /// reporting (`CSI 11 t`).
+    ///
+    /// GUI hosts should call this whenever the real OS window is
+    /// minimized/restored so that `CSI 11 t` queries report the correct
+    /// state instead of always reporting non-iconified.
+    pub fn set_window_iconified(&mut self, iconified: bool) {
+        self.window_iconified = iconified;
+    }
+
+    /// Get the host-supplied iconified/minimized state, defaulting to
+    /// `false` if never set via [`Terminal::set_window_iconified`].
+    pub fn window_iconified(&self) -> bool {
+        self.window_iconified
     }
 
     /// Resize the terminal

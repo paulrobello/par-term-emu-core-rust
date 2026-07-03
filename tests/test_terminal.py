@@ -1978,6 +1978,47 @@ def test_xtwinops_title_stack():
     assert term.title() == "Title1"
 
 
+def test_xtwinops_host_supplied_window_state():
+    """Test host-supplied window position/iconified state for XTWINOPS 11/13"""
+    term = Terminal(80, 24)
+
+    # Defaults: non-iconified, origin position
+    assert term.window_iconified() is False
+    assert term.window_position() == (0, 0)
+
+    term.process(b"\x1b[11t")
+    assert term.drain_responses() == b"\x1b[1t"
+
+    term.process(b"\x1b[13t")
+    assert term.drain_responses() == b"\x1b[3;0;0t"
+
+    # Host supplies real window state
+    term.set_window_iconified(True)
+    term.set_window_position(100, 50)
+    assert term.window_iconified() is True
+    assert term.window_position() == (100, 50)
+
+    term.process(b"\x1b[11t")
+    assert term.drain_responses() == b"\x1b[2t"
+
+    term.process(b"\x1b[13t")
+    assert term.drain_responses() == b"\x1b[3;100;50t"
+
+    # Text-area-position sub-form reports the same host-supplied position
+    term.process(b"\x1b[13;2t")
+    assert term.drain_responses() == b"\x1b[3;100;50t"
+
+    # Toggling back to non-iconified is reflected immediately
+    term.set_window_iconified(False)
+    term.process(b"\x1b[11t")
+    assert term.drain_responses() == b"\x1b[1t"
+
+    # Negative coordinates are clamped to 0 in the reply (CSI params are unsigned)
+    term.set_window_position(-10, -20)
+    term.process(b"\x1b[13t")
+    assert term.drain_responses() == b"\x1b[3;0;0t"
+
+
 def test_insert_mode_with_wide_chars():
     """Test insert mode with wide characters (emoji)"""
     term = Terminal(80, 24)

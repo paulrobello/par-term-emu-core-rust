@@ -273,6 +273,26 @@ macro_rules! impl_terminal_query_getters {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.count_non_whitespace_lines())
             }
+
+            /// Get the host-supplied window position in pixels
+            ///
+            /// Returns:
+            ///     Tuple of (x, y) in pixels; defaults to (0, 0) if never set
+            ///     via `set_window_position()`
+            fn window_position(&self) -> pyo3::PyResult<(i32, i32)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.window_position())
+            }
+
+            /// Get the host-supplied window iconified/minimized state
+            ///
+            /// Returns:
+            ///     True if the window is iconified/minimized; defaults to
+            ///     False if never set via `set_window_iconified()`
+            fn window_iconified(&self) -> pyo3::PyResult<bool> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.window_iconified())
+            }
         }
     };
 }
@@ -603,6 +623,42 @@ macro_rules! impl_terminal_state_setters {
             fn set_accept_osc7(&mut self, accept: bool) -> pyo3::PyResult<()> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 t.set_accept_osc7(accept);
+                Ok(())
+            }
+
+            /// Set the host-supplied window position for XTWINOPS reports (`CSI 13 t`)
+            ///
+            /// The terminal core is headless and has no window of its own; GUI
+            /// hosts should call this whenever the real OS window moves so that
+            /// `CSI 13 t` queries report the terminal's actual on-screen position
+            /// instead of the origin default.
+            ///
+            /// Args:
+            ///     x: Window X position in pixels (may be negative on multi-monitor setups)
+            ///     y: Window Y position in pixels (may be negative on multi-monitor setups)
+            ///
+            /// Example:
+            ///     >>> term.set_window_position(100, 50)
+            fn set_window_position(&mut self, x: i32, y: i32) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_window_position(x, y);
+                Ok(())
+            }
+
+            /// Set the host-supplied iconified/minimized state for XTWINOPS reports (`CSI 11 t`)
+            ///
+            /// GUI hosts should call this whenever the real OS window is
+            /// minimized/restored so that `CSI 11 t` queries report the correct
+            /// state instead of always reporting non-iconified.
+            ///
+            /// Args:
+            ///     iconified: True if the window is iconified/minimized
+            ///
+            /// Example:
+            ///     >>> term.set_window_iconified(True)
+            fn set_window_iconified(&mut self, iconified: bool) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_window_iconified(iconified);
                 Ok(())
             }
         }
