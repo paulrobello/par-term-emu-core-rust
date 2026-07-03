@@ -7,7 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No public changes yet._
+### Security
+- **Kitty PNG + iTerm2 image-decode size caps (decompression-bomb DoS).** Kitty PNG graphics were decoded via `image::load_from_memory` with no dimension bound (unlike the sibling raw `Rgba`/`Rgb` branches and the iTerm2 path), so a small, highly-compressible PNG could decode to tens of GiB of RGBA and OOM the host — reachable from any bytes written to the terminal. Both `src/graphics/kitty.rs` (`decode_pixels`) and `src/graphics/iterm.rs` (`decode_image`) now decode through a size-limited `image::ImageReader` and enforce a shared `MAX_IMAGE_PIXELS` product cap (new constants in `src/graphics/mod.rs`); iTerm2 previously bounded each axis individually but not the product (a ~1 GiB single image previously passed).
+- **CLI secrets no longer printed by `--help`.** Added `hide_env_values` to the `api_key`, `http_password`, and `http_password_hash` streaming-server CLI args, so `--help` no longer echoes the live secret when the backing environment variable is set.
+
+### Added
+- **OSC 99 Kitty desktop notifications** (`src/terminal/sequences/osc/notify.rs`, `handle_osc99`). Format `OSC 99 ; <metadata> ; <payload> ST`, where `<metadata>` is zero or more colon-separated `key=value` pairs: `i` (id, groups/updates chunks), `d` (done: `0` = more chunks, `1` = last, default `1`), `p` (payload type: `title` default or `body`), `e` (`0` raw default, `1` base64), `u` (urgency: `0` low, `1` normal default, `2` critical), `a` (comma-separated actions, e.g. `focus,report,close`). Unknown keys are ignored for forward compatibility; multi-chunk payloads sharing an `i=` id accumulate until `d=1`. Complements the existing OSC 9/777 notifications.
+- **XTGETTCAP** (`DCS + q`, `src/terminal/sequences/dcs/query.rs`). Replies per requested hex-encoded capability name: `DCS 1 + r <hexname>=<hexvalue> ST` if known, `DCS 0 + r <hexname> ST` if unknown. Supports `TN`/`name` (`xterm-256color`), `Co`/`colors` (`256`), `RGB` (`8`, bits per channel), and `Tc` (truecolor flag).
+- **DECRQSS** (`DCS $ q`, same file). Replies `DCS 1 $ r <current-setting><final> ST` for a recognized mnemonic or `DCS 0 $ r ST` otherwise. Supports `m` (SGR attributes), ` q` (DECSCUSR cursor style), and `r` (DECSTBM scroll margins).
+- **XTWINOPS report ops 11/13/19** (`src/terminal/sequences/csi/window.rs`). `CSI 11 t` reports window state (always non-iconified — a headless/library core has no window), `CSI 13 t` / `CSI 13 ; 2 t` reports window position (`CSI 3 ; 0 ; 0 t`), and `CSI 19 t` reports screen size in characters (`CSI 9 ; rows ; cols t`). The window-manipulation ops (1/2/3/4/5/6/9/10 — deiconify/iconify/move/resize/raise/lower/maximize/fullscreen) and `Ps >= 24` resize remain explicit no-ops for the same reason.
+- **Python `take_notifications_detailed()` + `Notification` class.** New method on both `Terminal` and `PtyTerminal` returns `Notification` objects exposing the OSC 99 `id`, `urgency` (`"low"`/`"normal"`/`"critical"`), and `actions` metadata. `take_notifications()`/`drain_notifications()` are unchanged and still return `(title, message)` tuples — this is a non-breaking addition.
+
+### Fixed
+- **`DCS +q`/`DCS $q` were misrouted to the Sixel parser.** DCS routing keyed only on the final `q` byte, so XTGETTCAP (`+q`) and DECRQSS (`$q`) queries were dispatched into the Sixel graphics handler instead of their own handlers. Routing now also considers the intermediate byte (`+` vs `$` vs none), sending each to the correct handler.
+
+### Performance
+- **Observer/trigger dispatch and PTY device-query replies moved outside the terminal write lock.** The PTY reader thread previously held `Terminal`'s exclusive write guard for the whole `process()` call, including observer/trigger callback dispatch (which can re-enter Python under the GIL) and the blocking write of device-query responses back to the PTY master — both stalled every concurrent reader (streaming clients, Python queries, screenshot rendering), nullifying the earlier `Mutex` → `RwLock` migration. `process_deferred()` now returns an owned `ObserverDispatchBatch` delivered after the write guard drops (preserving event ordering and existing panic isolation), and device-query response bytes are drained inside the guard but written to the PTY only after it is released.
+- **Screenshot glyph bitmaps shared via `Arc<[u8]>` instead of deep-copied.** `CachedGlyph.bitmap` was a `Vec<u8>` cloned on every rendered character to release the font-cache borrow, so an 80x24 screenshot triggered ~1,920 heap copies per call; it's now `Arc<[u8]>`, so the clone is a refcount bump.
+- **Removed per-row `String` allocation in screenshot flag-emoji detection.** `render_grid` built and discarded a full-row `String` every frame just to detect regional-indicator flag emoji; it now calls `row_has_regional_indicators`, which scans grid cells directly with no allocation.
+
+### Documentation
+- **Fixed ARCHITECTURE.md/API_REFERENCE.md drift from the 0.43.0 refactor.** Docs still showed `Arc<Mutex<Terminal>>` (now `RwLock`), a flat `Terminal` struct (now ~30 sub-structs), and wrong signatures for `regex_search`/`search_scrollback`/`record_mouse_event` plus incorrect mouse enum values; a full scan of all pyo3 signature blocks fixed those and other drift (e.g. `export_scrollback` documented values that actually raise `ValueError`). Documented the `ScreenshotConfig` and `StreamingConfig.allowed_origins` APIs, and backfilled Google-style Args/Returns/Example docstrings across the color, mouse, and clipboard binding modules.
+
+### Changed
+- **Deduplicated WS/WSS handshake header-callback logic.** The plain and TLS WebSocket listeners each duplicated ~100 lines of handshake logic (origin validation, auth validation, query capture), so a fix to the origin check could silently miss one transport; both now share a single `build_ws_header_callback` factory. Also gated the web frontend's debug `console.log` calls behind a `NODE_ENV`-checked helper (`console.error`/`console.warn` remain real diagnostics).
 
 ## [0.43.1] - 2026-06-17
 

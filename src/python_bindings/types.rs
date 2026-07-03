@@ -624,6 +624,58 @@ impl PyTmuxNotification {
     }
 }
 
+/// Desktop notification from an OSC 9, OSC 777, or Kitty OSC 99 sequence.
+///
+/// The `id`, `urgency`, and `actions` fields carry Kitty OSC 99 metadata; for
+/// OSC 9/777 notifications `id` is None, `urgency` is "normal", and `actions`
+/// is empty.
+#[par_term_emu_derive::pyo3_get_all]
+#[pyclass(name = "Notification", from_py_object)]
+#[derive(Clone)]
+pub struct PyNotification {
+    /// Notification title (empty for OSC 9)
+    pub title: String,
+
+    /// Notification message/body
+    pub message: String,
+
+    /// Kitty OSC 99 identifier used to group/update notifications; None otherwise
+    pub id: Option<String>,
+
+    /// Urgency: one of "low", "normal", "critical"
+    pub urgency: String,
+
+    /// Requested Kitty OSC 99 actions (e.g. "focus", "report", "close")
+    pub actions: Vec<String>,
+}
+
+#[pymethods]
+impl PyNotification {
+    fn __repr__(&self) -> PyResult<String> {
+        Ok(format!(
+            "Notification(title={:?}, message={:?}, urgency={:?})",
+            self.title, self.message, self.urgency
+        ))
+    }
+}
+
+impl From<&crate::terminal::Notification> for PyNotification {
+    fn from(n: &crate::terminal::Notification) -> Self {
+        let urgency = match n.urgency {
+            crate::terminal::Urgency::Low => "low",
+            crate::terminal::Urgency::Normal => "normal",
+            crate::terminal::Urgency::Critical => "critical",
+        };
+        PyNotification {
+            title: n.title.clone(),
+            message: n.message.clone(),
+            id: n.id.clone(),
+            urgency: urgency.to_string(),
+            actions: n.actions.clone(),
+        }
+    }
+}
+
 impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
     fn from(notif: &crate::tmux_control::TmuxNotification) -> Self {
         use crate::tmux_control::TmuxNotification;

@@ -445,3 +445,152 @@ fn test_dcs_non_sixel_action_ignored() {
     term.dcs_unhook();
     assert!(!term.dcs_state.dcs_active);
 }
+
+// ========== DCS routing by intermediate byte (regression for the 'q' mix-up) ==========
+
+#[test]
+fn test_dcs_hook_routes_by_intermediate() {
+    let mut term = create_test_terminal();
+    let params = create_empty_params();
+
+    // No intermediate -> Sixel (unchanged existing behavior)
+    term.dcs_hook(&params, &[], false, 'q');
+    assert_eq!(term.dcs_state.dcs_kind, DcsKind::Sixel);
+    assert!(term.dcs_state.sixel_parser.is_some());
+    term.dcs_unhook();
+
+    // '+' intermediate -> XTGETTCAP, must NOT create a sixel parser
+    term.dcs_hook(&params, b"+", false, 'q');
+    assert_eq!(term.dcs_state.dcs_kind, DcsKind::XtGetTcap);
+    assert!(term.dcs_state.sixel_parser.is_none());
+    term.dcs_unhook();
+
+    // '$' intermediate -> DECRQSS, must NOT create a sixel parser
+    term.dcs_hook(&params, b"$", false, 'q');
+    assert_eq!(term.dcs_state.dcs_kind, DcsKind::Decrqss);
+    assert!(term.dcs_state.sixel_parser.is_none());
+    term.dcs_unhook();
+}
+
+#[test]
+fn test_dcs_put_xtgettcap_buffers_raw_bytes_not_sixel_parser() {
+    let mut term = create_test_terminal();
+    let params = create_empty_params();
+
+    term.dcs_hook(&params, b"+", false, 'q');
+    for &byte in b"544e" {
+        term.dcs_put(byte);
+    }
+
+    // Bytes go straight to the buffer; no sixel parser is ever created for XTGETTCAP.
+    assert_eq!(term.dcs_state.dcs_buffer, b"544e");
+    assert!(term.dcs_state.sixel_parser.is_none());
+}
+
+/// Minimal hex encoder mirroring `query::encode_hex`, kept local to the test
+/// module since `query` is a private submodule.
+fn hex_encode(s: &str) -> String {
+    s.bytes().map(|b| format!("{:02x}", b)).collect()
+}
+
+// ========== XTGETTCAP (DCS + q) ==========
+
+#[test]
+fn test_xtgettcap_known_capability_term_name() {
+    let mut term = create_test_terminal();
+
+    // "TN" hex-encoded is "544e"
+    term.process(b"\x1bP+q544e\x1b\\");
+
+    assert!(term.has_pending_responses());
+    let response = term.drain_responses();
+    let expected = format!("\x1bP1+r544e={}\x1b\\", hex_encode("xterm-256color"));
+    assert_eq!(response, expected.as_bytes());
+}
+
+#[test]
+fn test_xtgettcap_known_capability_colors() {
+    let mut term = create_test_terminal();
+
+    // "Co" hex-encoded is "436f"
+    term.process(b"\x1bP+q436f\x1b\\");
+
+    let response = term.drain_responses();
+    let expected = format!("\x1bP1+r436f={}\x1b\\", hex_encode("256"));
+    assert_eq!(response, expected.as_bytes());
+}
+
+#[test]
+fn test_xtgettcap_unknown_capability() {
+    let mut term = create_test_terminal();
+
+    // "ZZ" hex-encoded is "5a5a" - not in the curated capability table
+    term.process(b"\x1bP+q5a5a\x1b\\");
+
+    let response = term.drain_responses();
+    assert_eq!(response, b"\x1bP0+r5a5a\x1b\\");
+}
+
+#[test]
+fn test_xtgettcap_multiple_names_semicolon_separated() {
+    let mut term = create_test_terminal();
+
+    // "TN" (544e) known, "ZZ" (5a5a) unknown
+    term.process(b"\x1bP+q544e;5a5a\x1b\\");
+
+    let response = term.drain_responses();
+    let mut expected = format!("\x1bP1+r544e={}\x1b\\", hex_encode("xterm-256color")).into_bytes();
+    expected.extend_from_slice(b"\x1bP0+r5a5a\x1b\\");
+    assert_eq!(response, expected);
+}
+
+// ========== DECRQSS (DCS $ q) ==========
+
+#[test]
+fn test_decrqss_sgr_default() {
+    let mut term = create_test_terminal();
+
+    term.process(b"\x1bP$qm\x1b\\");
+
+    let response = term.drain_responses();
+    let text = String::from_utf8(response).expect("response should be valid utf8");
+    assert!(text.starts_with("\x1bP1$r"), "got: {text:?}");
+    assert!(text.ends_with("m\x1b\\"), "got: {text:?}");
+}
+
+#[test]
+fn test_decrqss_cursor_style() {
+    let mut term = create_test_terminal();
+
+    // Note the leading space: DECSCUSR's mnemonic is " q" (space + q)
+    term.process(b"\x1bP$q q\x1b\\");
+
+    let response = term.drain_responses();
+    let text = String::from_utf8(response).expect("response should be valid utf8");
+    assert!(text.starts_with("\x1bP1$r"), "got: {text:?}");
+    assert!(text.ends_with(" q\x1b\\"), "got: {text:?}");
+}
+
+#[test]
+fn test_decrqss_scroll_region() {
+    let mut term = create_test_terminal();
+
+    // DECSTBM: set scroll region to rows 5..10 (1-indexed)
+    term.process(b"\x1b[5;10r");
+    term.drain_responses(); // discard anything unrelated
+
+    term.process(b"\x1bP$qr\x1b\\");
+
+    let response = term.drain_responses();
+    assert_eq!(response, b"\x1bP1$r5;10r\x1b\\");
+}
+
+#[test]
+fn test_decrqss_unknown_mnemonic() {
+    let mut term = create_test_terminal();
+
+    term.process(b"\x1bP$qZZ\x1b\\");
+
+    let response = term.drain_responses();
+    assert_eq!(response, b"\x1bP0$r\x1b\\");
+}

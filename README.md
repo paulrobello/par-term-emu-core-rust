@@ -977,7 +977,9 @@ See [CHANGELOG.md](CHANGELOG.md) for complete version history.
 - **Focus Tracking** - Focus in/out events
 - **OSC 8 Hyperlinks** - Clickable URLs in terminal (full TUI support)
 - **OSC 52 Clipboard** - Copy/paste over SSH without X11
-- **OSC 9/777 Notifications** - Desktop-style alerts and notifications
+- **OSC 9/777/99 Notifications** - Desktop-style alerts and notifications, including Kitty's OSC 99 protocol (chunked payloads, urgency levels, actions) via `take_notifications_detailed()`
+- **Terminal Capability Queries** - XTGETTCAP (`DCS + q`) capability lookup and DECRQSS (`DCS $ q`) SGR/cursor-style/scroll-margin introspection
+- **Expanded XTWINOPS Reporting** - `CSI 11/13/19 t` report window state, position, and screen size in characters
 - **Shell Integration** - OSC 133 (iTerm2/VSCode compatible), OSC 1337 RemoteHost for remote host detection
 - **Semantic Buffer Zones** - OSC 133 FinalTerm markers partition scrollback into prompt, command, and output zones
 - **Command Output Capture** - Extract text from specific command execution blocks via `get_command_output()` and `get_command_outputs()`

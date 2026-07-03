@@ -270,11 +270,16 @@ VT100/VT220 device information requests.
 - `CSI > q` - XTVERSION - Response: DCS with version info
 - `CSI ? mode $ p` - DEC Private Mode Request (DECRQM) - Response: `CSI ? mode ; state $ y`
 - `CSI 0 x` / `CSI 1 x` - Terminal Parameters (DECREQTPARM) - Response: `CSI sol ; 1 ; 1 ; 120 ; 120 ; 1 ; 0 x`
+- `CSI 11 t` - Report window state (XTWINOPS) - Response: `CSI 1 t` (always non-iconified)
+- `CSI 13 t` / `CSI 13 ; 2 t` - Report window position (XTWINOPS) - Response: `CSI 3 ; 0 ; 0 t`
 - `CSI 14 t` - Report pixel size - Response: `CSI 4 ; height ; width t`
 - `CSI 16 t` - Report cell size in pixels - Response: `CSI 6 ; height ; width t`
 - `CSI 18 t` - Report text size - Response: `CSI 8 ; rows ; cols t`
+- `CSI 19 t` - Report screen size in characters (XTWINOPS) - Response: `CSI 9 ; rows ; cols t`
 - `CSI 22 t` - Save window title to stack
 - `CSI 23 t` - Restore window title from stack
+- `CSI 1/2/3/4/5/6/9/10 t` - Window manipulation (deiconify/iconify/move/resize/raise/lower/maximize/fullscreen) - no-op; a headless/library terminal core has no window to act on
+- `CSI Ps t` (Ps >= 24) - DECSLPP resize to Ps lines - no-op
 
 ### Cursor Style (DECSCUSR)
 
@@ -335,6 +340,21 @@ iTerm2/VSCode compatible shell integration markers:
 
 - `OSC 9;message ST` - Simple notification (iTerm2/ConEmu style)
 - `OSC 777;notify;title;message ST` - Structured notification (urxvt style)
+- `OSC 99;metadata;payload ST` - Kitty desktop notification (see below)
+
+### Kitty Desktop Notifications (OSC 99)
+
+`OSC 99 ; <metadata> ; <payload> ST`
+
+`<metadata>` is zero or more colon-separated `key=value` pairs:
+- `i=ID` - notification id; shared ids group/update chunks
+- `d=0/1` - done: `0` = more chunks follow, `1` = last chunk (default `1`)
+- `p=title/body` - payload type (default `title`)
+- `e=0/1` - encoding: `0` raw (default), `1` base64
+- `u=0/1/2` - urgency: `0` low, `1` normal (default), `2` critical
+- `a=action,action` - comma-separated actions (e.g. `focus,report,close`)
+
+Unknown keys are ignored for forward compatibility. Multi-chunk payloads sharing an `i=` id accumulate until a chunk with `d=1` completes them. Complements the `OSC 9`/`OSC 777` notifications above.
 
 ### Progress Bar (OSC 9;4)
 
@@ -399,6 +419,28 @@ Full VT340 Sixel graphics support for inline images with configurable limits.
 **Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 16384x16384 pixels.
 
 > See [VT_TECHNICAL_REFERENCE.md#sixel-graphics](VT_TECHNICAL_REFERENCE.md#sixel-graphics) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
+
+### XTGETTCAP (Terminal Capability Query)
+
+`DCS + q <hex-name>[;<hex-name>...] ST`
+
+Each requested capability name is hex-encoded. For each name, emits a separate reply:
+- Known: `DCS 1 + r <hexname>=<hexvalue> ST`
+- Unknown: `DCS 0 + r <hexname> ST`
+
+Supported capabilities: `TN`/`name` -> `xterm-256color`, `Co`/`colors` -> `256`, `RGB` -> `8` (bits per channel), `Tc` -> truecolor flag (present, empty value).
+
+### DECRQSS (Request Selection or Setting)
+
+`DCS $ q <mnemonic> ST`
+
+- Valid: `DCS 1 $ r <current-setting><mnemonic> ST`
+- Invalid: `DCS 0 $ r ST`
+
+Supported mnemonics:
+- `m` - SGR attributes, e.g. `DCS 1 $ r 0;1;4m ST` for bold+underline
+- ` q` (space + `q`) - DECSCUSR cursor style, e.g. `DCS 1 $ r 2 q ST` for steady block
+- `r` - DECSTBM scroll margins, e.g. `DCS 1 $ r 1;24r ST`
 
 ## APC Sequences
 

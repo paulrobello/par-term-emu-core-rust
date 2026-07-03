@@ -49,6 +49,7 @@ pub use metrics::{
 pub use multiplexing::{LayoutDirection, PaneState, SessionState, WindowLayout};
 pub use notification::{
     Notification, NotificationAlert, NotificationConfig, NotificationEvent, NotificationTrigger,
+    Urgency,
 };
 pub use progress::{
     NamedProgressBar, ProgressBar, ProgressBarAction, ProgressBarCommand, ProgressState,
@@ -84,6 +85,7 @@ use crate::mouse::{MouseEncoding, MouseEvent, MouseEventRecord, MouseMode, Mouse
 use crate::shell_integration::ShellIntegration;
 use crate::sixel;
 use crate::terminal::apc_filter::ApcFilterState;
+use crate::terminal::sequences::dcs::DcsKind;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 
@@ -341,6 +343,9 @@ pub(crate) struct NotificationState {
     pub(crate) max_notifications: usize,
     /// Custom notification triggers (ID -> message)
     pub(crate) custom_triggers: HashMap<u32, String>,
+    /// In-progress Kitty OSC 99 notifications awaiting a `d=1` (done) chunk,
+    /// keyed by `i=` id (empty string key for id-less notifications).
+    pub(crate) osc99_pending: HashMap<String, notification::PartialNotification>,
 }
 
 /// Terminal replay/recording state (Feature 24).
@@ -475,8 +480,11 @@ pub(crate) struct DcsState {
     pub(crate) dcs_buffer: Vec<u8>,
     /// DCS active flag
     pub(crate) dcs_active: bool,
-    /// DCS action character ('q' for Sixel)
+    /// DCS action character ('q' for Sixel/XTGETTCAP/DECRQSS)
     pub(crate) dcs_action: Option<char>,
+    /// Which DCS sub-protocol is active (disambiguates Sixel/XTGETTCAP/DECRQSS,
+    /// which all share action 'q' but differ by intermediate bytes)
+    pub(crate) dcs_kind: DcsKind,
 }
 
 /// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
@@ -992,6 +1000,7 @@ impl Terminal {
                 dcs_buffer: Vec::new(),
                 dcs_active: false,
                 dcs_action: None,
+                dcs_kind: DcsKind::Other,
             },
             clipboard_state: ClipboardState {
                 clipboard_content: None,
@@ -1125,6 +1134,7 @@ impl Terminal {
                 last_silence_check: now,
                 max_notifications: DEFAULT_MAX_NOTIFICATIONS,
                 custom_triggers: HashMap::new(),
+                osc99_pending: HashMap::new(),
             },
             // Replay/Recording
             recording_state: RecordingState {

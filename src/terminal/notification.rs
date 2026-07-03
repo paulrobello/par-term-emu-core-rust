@@ -1,19 +1,85 @@
-//! Notification support for OSC 9 and OSC 777 sequences
+//! Notification support for OSC 9, OSC 777, and OSC 99 (Kitty) sequences
 
-/// Notification data from OSC 9 or OSC 777 sequences
+/// Notification data from OSC 9, OSC 777, or OSC 99 sequences
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notification {
     /// Notification title (may be empty for OSC 9)
     pub title: String,
     /// Notification message/body
     pub message: String,
+    /// Notification identifier from Kitty OSC 99 `i=` key, used to group/update
+    /// notifications. `None` for OSC 9/777 or an id-less OSC 99 notification.
+    pub id: Option<String>,
+    /// Urgency level from Kitty OSC 99 `u=` key
+    pub urgency: Urgency,
+    /// Requested actions from Kitty OSC 99 `a=` key (e.g. "focus", "report", "close")
+    pub actions: Vec<String>,
 }
 
 impl Notification {
-    /// Create a new notification
+    /// Create a new notification (OSC 9 / OSC 777 style)
     pub fn new(title: String, message: String) -> Self {
-        Self { title, message }
+        Self {
+            title,
+            message,
+            id: None,
+            urgency: Urgency::default(),
+            actions: Vec::new(),
+        }
     }
+
+    /// Create a notification carrying Kitty OSC 99 metadata
+    pub fn with_metadata(
+        title: String,
+        message: String,
+        id: Option<String>,
+        urgency: Urgency,
+        actions: Vec<String>,
+    ) -> Self {
+        Self {
+            title,
+            message,
+            id,
+            urgency,
+            actions,
+        }
+    }
+}
+
+/// Notification urgency level (Kitty OSC 99 `u=` key)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Urgency {
+    /// Low urgency (`u=0`)
+    Low,
+    /// Normal urgency (`u=1`, the default)
+    #[default]
+    Normal,
+    /// Critical urgency (`u=2`)
+    Critical,
+}
+
+impl Urgency {
+    /// Parse a Kitty OSC 99 `u=` parameter value, defaulting to `Normal` for
+    /// anything other than "0" or "2".
+    pub(crate) fn from_param(value: &str) -> Self {
+        match value {
+            "0" => Urgency::Low,
+            "2" => Urgency::Critical,
+            _ => Urgency::Normal,
+        }
+    }
+}
+
+/// Accumulator for an in-progress Kitty OSC 99 notification. Chunks arrive as
+/// separate OSC 99 escapes sharing the same `i=` id (or the empty-string key
+/// when no id is given) until a chunk with `d=1` (the default) completes it.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PartialNotification {
+    pub(crate) id: Option<String>,
+    pub(crate) title: String,
+    pub(crate) body: String,
+    pub(crate) urgency: Urgency,
+    pub(crate) actions: Vec<String>,
 }
 
 /// Notification trigger type
@@ -328,5 +394,40 @@ mod tests {
         );
         assert!(notif.title.contains('"'));
         assert!(notif.message.contains('<'));
+    }
+
+    #[test]
+    fn test_notification_new_defaults_metadata() {
+        let notif = Notification::new("Title".to_string(), "Message".to_string());
+        assert_eq!(notif.id, None);
+        assert_eq!(notif.urgency, Urgency::Normal);
+        assert!(notif.actions.is_empty());
+    }
+
+    #[test]
+    fn test_notification_with_metadata() {
+        let notif = Notification::with_metadata(
+            "Title".to_string(),
+            "Message".to_string(),
+            Some("id1".to_string()),
+            Urgency::Critical,
+            vec!["focus".to_string()],
+        );
+        assert_eq!(notif.id.as_deref(), Some("id1"));
+        assert_eq!(notif.urgency, Urgency::Critical);
+        assert_eq!(notif.actions, vec!["focus".to_string()]);
+    }
+
+    #[test]
+    fn test_urgency_from_param() {
+        assert_eq!(Urgency::from_param("0"), Urgency::Low);
+        assert_eq!(Urgency::from_param("1"), Urgency::Normal);
+        assert_eq!(Urgency::from_param("2"), Urgency::Critical);
+        assert_eq!(Urgency::from_param("bogus"), Urgency::Normal);
+    }
+
+    #[test]
+    fn test_urgency_default() {
+        assert_eq!(Urgency::default(), Urgency::Normal);
     }
 }

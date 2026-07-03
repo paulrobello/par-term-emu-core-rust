@@ -192,11 +192,28 @@ impl Terminal {
                 }
 
                 match n {
-                    0..=8 => {
-                        // Already handled above, but kept for match exhaustiveness/structure
+                    1 | 2 | 3 | 4 | 5 | 6 | 9 | 10 => {
+                        // Window manipulation: deiconify(1)/iconify(2)/move(3)/
+                        // resize-pixels(4)/raise(5)/lower(6)/maximize-restore(9)/
+                        // fullscreen(10). No-op for a headless terminal core (no
+                        // window to act on).
+                    }
+                    11 => {
+                        // Report window state: always non-iconified (no real window)
+                        self.push_response(b"\x1b[1t");
+                    }
+                    13 => {
+                        // Report window position in pixels. Also covers the
+                        // text-area-position sub-form `CSI 13 ; 2 t` (n is still
+                        // 13, the second param is ignored). Headless core has no
+                        // on-screen position, so both forms report the origin.
+                        self.push_response(b"\x1b[3;0;0t");
                     }
                     14 => {
-                        // Report text area size in pixels
+                        // Report text area size in pixels. Also covers the
+                        // window-size-vs-text-area sub-form `CSI 14 ; 2 t` (n is
+                        // still 14); no separate window frame exists here, so the
+                        // reply is the same for both.
                         let response =
                             format!("\x1b[4;{};{}t", self.pixel_height, self.pixel_width);
                         self.push_response(response.as_bytes());
@@ -227,6 +244,13 @@ impl Terminal {
                         let response = format!("\x1b[8;{};{}t", rows, cols);
                         self.push_response(response.as_bytes());
                     }
+                    19 => {
+                        // Report screen size in characters. No distinct "root
+                        // window" exists in a library core, so report the
+                        // terminal's own size.
+                        let response = format!("\x1b[9;{};{}t", rows, cols);
+                        self.push_response(response.as_bytes());
+                    }
                     22 => {
                         // Push icon name and window title to stack
                         self.title_state.title_stack.push(self.title_state.title.clone());
@@ -237,7 +261,14 @@ impl Terminal {
                             self.title_state.title = title;
                         }
                     }
-                    _ => {}
+                    0..=8 => {
+                        // Remaining values (0, 7, 8) already handled above, but
+                        // kept for match exhaustiveness/structure
+                    }
+                    _ => {
+                        // Ps >= 24: "resize to Ps lines" (DECSLPP) - no-op; a
+                        // library core does not self-resize.
+                    }
                 }
             }
             'r' => {
@@ -280,5 +311,63 @@ impl Terminal {
                 }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::terminal::Terminal;
+
+    // ========== XTWINOPS Report Tests (window.rs-local) ==========
+
+    #[test]
+    fn test_xtwinops_report_window_state() {
+        let mut term = Terminal::new(80, 24);
+
+        // Report window state (CSI 11 t) -> non-iconified
+        term.process(b"\x1b[11t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[1t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_window_position() {
+        let mut term = Terminal::new(80, 24);
+
+        // Report window position in pixels (CSI 13 t)
+        term.process(b"\x1b[13t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[3;0;0t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_screen_size_chars() {
+        let mut term = Terminal::new(80, 24);
+
+        // Report screen size in characters (CSI 19 t)
+        term.process(b"\x1b[19t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[9;24;80t");
+    }
+
+    #[test]
+    fn test_xtwinops_report_text_area_size_chars_still_works() {
+        let mut term = Terminal::new(80, 24);
+
+        // Report text area size in characters (CSI 18 t) - pre-existing behavior
+        term.process(b"\x1b[18t");
+        let response = term.drain_responses();
+        assert_eq!(response, b"\x1b[8;24;80t");
+    }
+
+    #[test]
+    fn test_xtwinops_manipulation_ops_are_noop() {
+        let mut term = Terminal::new(80, 24);
+
+        // Raise window to front (CSI 5 t) - no window to act on, no response
+        term.process(b"\x1b[5t");
+        assert!(!term.has_pending_responses());
+        let response = term.drain_responses();
+        assert!(response.is_empty());
     }
 }

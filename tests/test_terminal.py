@@ -1785,6 +1785,50 @@ def test_notification_osc777():
     assert message == "Alert Message"
 
 
+def test_notification_osc99_simple():
+    """OSC 99 with no metadata behaves like OSC 9 (body-only)."""
+    term = Terminal(80, 24)
+
+    term.process(b"\x1b]99;;Hello\x1b\\")
+
+    # Plain tuple API still works and stays backward compatible
+    notifs = term.take_notifications()
+    assert notifs == [("", "Hello")]
+
+
+def test_notification_osc99_metadata():
+    """OSC 99 metadata (id, urgency, actions) is exposed via the detailed API."""
+    term = Terminal(80, 24)
+
+    # Multi-chunk: title chunk (d=0) then body chunk (d=1) assemble into one
+    term.process(b"\x1b]99;i=deploy:d=0:p=title:u=2:a=focus,report;Deploy\x1b\\")
+    # Not complete yet
+    assert not term.has_notifications()
+    term.process(b"\x1b]99;i=deploy:d=1:p=body;Finished\x1b\\")
+
+    detailed = term.take_notifications_detailed()
+    assert len(detailed) == 1
+    n = detailed[0]
+    assert n.title == "Deploy"
+    assert n.message == "Finished"
+    assert n.id == "deploy"
+    assert n.urgency == "critical"
+    assert n.actions == ["focus", "report"]
+
+
+def test_notification_osc99_base64():
+    """OSC 99 base64-encoded payload (e=1) is decoded."""
+    term = Terminal(80, 24)
+
+    # base64("Hi") == "SGk="
+    term.process(b"\x1b]99;e=1;SGk=\x1b\\")
+
+    detailed = term.take_notifications_detailed()
+    assert len(detailed) == 1
+    assert detailed[0].message == "Hi"
+    assert detailed[0].urgency == "normal"  # default when u= not given
+
+
 def test_notification_multiple():
     """Test multiple notifications"""
     term = Terminal(80, 24)

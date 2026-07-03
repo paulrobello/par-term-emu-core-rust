@@ -107,13 +107,14 @@ pub use python_bindings::{
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
     PyImageDimension, PyImageFormat, PyImagePlacement, PyImageProtocol, PyInlineImage,
     PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEncoding, PyMouseEvent,
-    PyMousePosition, PyNormalizationForm, PyNotificationConfig, PyNotificationEvent, PyPaneState,
-    PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState, PyPtyTerminal,
-    PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint, PyScreenSnapshot,
-    PyScreenshotConfig, PyScrollbackStats, PySearchMatch, PySelection, PySelectionMode,
-    PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff, PyStreamingConfig,
-    PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch,
-    PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig, PyWindowLayout,
+    PyMousePosition, PyNormalizationForm, PyNotification, PyNotificationConfig,
+    PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar,
+    PyProgressState, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
+    PyRenderingHint, PyScreenSnapshot, PyScreenshotConfig, PyScrollbackStats, PySearchMatch,
+    PySelection, PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats,
+    PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification,
+    PyTrigger, PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
+    PyWindowLayout,
 };
 
 /// Convert PtyError to PyErr (QA-009: centralized error mapping)
@@ -193,6 +194,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyImagePlacement>()?;
     m.add_class::<PyImageDimension>()?;
     m.add_class::<PyTmuxNotification>()?;
+    m.add_class::<PyNotification>()?;
     m.add_class::<PyCursorStyle>()?;
     m.add_class::<PyUnderlineStyle>()?;
     m.add_class::<PyMouseEncoding>()?;

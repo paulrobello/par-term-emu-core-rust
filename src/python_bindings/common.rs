@@ -1024,6 +1024,30 @@ macro_rules! impl_terminal_progress_notifications {
                 self.take_notifications()
             }
 
+            /// Get all pending notifications with full Kitty OSC 99 metadata.
+            ///
+            /// Unlike `take_notifications` (which returns only (title, message)
+            /// tuples), this returns `Notification` objects exposing the `id`,
+            /// `urgency`, and `actions` fields carried by OSC 99 sequences.
+            /// Clears the notification queue after retrieval.
+            ///
+            /// Returns:
+            ///     List of Notification objects
+            ///
+            /// Example:
+            ///     >>> for n in term.take_notifications_detailed():
+            ///     ...     print(n.title, n.urgency, n.actions)
+            fn take_notifications_detailed(
+                &mut self,
+            ) -> pyo3::PyResult<Vec<$crate::python_bindings::types::PyNotification>> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                let notifications = t.take_notifications();
+                Ok(notifications
+                    .iter()
+                    .map($crate::python_bindings::types::PyNotification::from)
+                    .collect())
+            }
+
             /// Get the current progress bar state
             ///
             /// Returns the progress bar state set via OSC 9;4 sequences.

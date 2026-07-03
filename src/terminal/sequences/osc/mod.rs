@@ -18,7 +18,7 @@ impl Terminal {
             return false;
         }
 
-        matches!(command, "52" | "8" | "9" | "777")
+        matches!(command, "52" | "8" | "9" | "777" | "99")
     }
 
     /// VTE OSC dispatch - handle OSC sequences
@@ -64,7 +64,7 @@ impl Terminal {
                 "0" | "2" | "21" | "22" | "23" => self.handle_osc_title(command, params),
                 "7" | "133" => self.handle_osc_shell(command, params),
                 "8" => self.handle_osc_hyperlink(params),
-                "9" | "777" | "934" => self.handle_osc_notify(command, params),
+                "9" | "777" | "934" | "99" => self.handle_osc_notify(command, params),
                 "52" => self.handle_osc_clipboard(command, params),
                 "4" | "104" | "10" | "11" | "12" | "110" | "111" | "112" => {
                     self.handle_osc_color(command, params)

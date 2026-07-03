@@ -1,5 +1,6 @@
 //! DCS (Device Control String) sequence handling dispatcher
 
+mod query;
 mod sixel;
 
 use crate::debug;
@@ -7,16 +8,49 @@ use crate::graphics::{next_graphic_id, GraphicProtocol, TerminalGraphic};
 use crate::terminal::Terminal;
 use vte::Params;
 
+/// Which DCS sub-protocol is currently active.
+///
+/// `action` alone is not enough to route a DCS sequence: Sixel (`DCS q`),
+/// XTGETTCAP (`DCS + q`), and DECRQSS (`DCS $ q`) all share the final byte
+/// `q` and are distinguished only by their intermediate byte(s) (none, `+`,
+/// `$` respectively).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DcsKind {
+    /// `DCS q ... ST` - Sixel graphics
+    Sixel,
+    /// `DCS + q ... ST` - XTGETTCAP (termcap/terminfo capability query)
+    XtGetTcap,
+    /// `DCS $ q ... ST` - DECRQSS (request selection or setting)
+    Decrqss,
+    /// Any other/unhandled DCS sequence
+    Other,
+}
+
+/// Classify a DCS sequence by its final action character and intermediates.
+fn classify_dcs(action: char, intermediates: &[u8]) -> DcsKind {
+    if action != 'q' {
+        return DcsKind::Other;
+    }
+    match intermediates {
+        [] => DcsKind::Sixel,
+        [b'+'] => DcsKind::XtGetTcap,
+        [b'$'] => DcsKind::Decrqss,
+        _ => DcsKind::Other,
+    }
+}
+
 impl Terminal {
     /// VTE hook - start of DCS sequence
     pub(in crate::terminal) fn dcs_hook(
         &mut self,
         params: &Params,
-        _intermediates: &[u8],
+        intermediates: &[u8],
         _ignore: bool,
         action: char,
     ) {
-        if action == 'q' && self.security_state.disable_insecure_sequences {
+        let kind = classify_dcs(action, intermediates);
+
+        if kind == DcsKind::Sixel && self.security_state.disable_insecure_sequences {
             debug::log(
                 debug::DebugLevel::Debug,
                 "SECURITY",
@@ -27,9 +61,10 @@ impl Terminal {
 
         self.dcs_state.dcs_active = true;
         self.dcs_state.dcs_action = Some(action);
+        self.dcs_state.dcs_kind = kind;
         self.dcs_state.dcs_buffer.clear();
 
-        if action == 'q' {
+        if kind == DcsKind::Sixel {
             self.handle_sixel_hook(params);
         }
     }
@@ -40,7 +75,7 @@ impl Terminal {
             return;
         }
 
-        if self.dcs_state.dcs_action == Some('q') {
+        if self.dcs_state.dcs_kind == DcsKind::Sixel {
             let is_sixel_data = (63..=126).contains(&byte);
 
             if is_sixel_data {
@@ -102,7 +137,11 @@ impl Terminal {
             return;
         }
 
-        if self.dcs_state.dcs_action == Some('q') {
+        if self.dcs_state.dcs_kind == DcsKind::XtGetTcap {
+            self.handle_xtgettcap_reply();
+        } else if self.dcs_state.dcs_kind == DcsKind::Decrqss {
+            self.handle_decrqss_reply();
+        } else if self.dcs_state.dcs_kind == DcsKind::Sixel {
             self.process_sixel_command();
             if let Some(parser) = self.dcs_state.sixel_parser.take() {
                 let position = (self.cursor.col, self.cursor.row);
@@ -153,6 +192,7 @@ impl Terminal {
 
         self.dcs_state.dcs_active = false;
         self.dcs_state.dcs_action = None;
+        self.dcs_state.dcs_kind = DcsKind::Other;
         self.dcs_state.dcs_buffer.clear();
     }
 }

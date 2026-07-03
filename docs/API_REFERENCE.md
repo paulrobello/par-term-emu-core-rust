@@ -73,6 +73,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [ImagePlacement](#imageplacement)
   - [ImageDimension](#imagedimension)
   - [ScreenSnapshot](#screensnapshot)
+  - [Notification](#notification)
   - [NotificationConfig](#notificationconfig)
   - [NotificationEvent](#notificationevent)
   - [RecordingSession](#recordingsession)
@@ -371,6 +372,7 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 #### Notifications (OSC 9/777)
 - `drain_notifications() -> list[tuple[str, str]]`: Drain notifications (title, message)
 - `take_notifications() -> list[tuple[str, str]]`: Take notifications without removing
+- `take_notifications_detailed() -> list[Notification]`: Take pending notifications as `Notification` objects, exposing the Kitty OSC 99 `id`, `urgency`, and `actions` metadata. Non-breaking companion to `take_notifications()`/`drain_notifications()`, which are unchanged and still return `(title, message)` tuples. For OSC 9/777 notifications, `id` is `None`, `urgency` is `"normal"`, and `actions` is empty. Available on both `Terminal` and `PtyTerminal`.
 - `has_notifications() -> bool`: Check if notifications are pending
 - `set_max_notifications(max: int)`: Limit OSC 9/777 notification backlog
 - `get_max_notifications() -> int`: Get notification buffer limit
@@ -1277,6 +1279,17 @@ Immutable snapshot of screen state.
 
 **Methods:**
 - `get_line(row: int) -> list`: Get a single line's cell data (filtered for control characters)
+
+### Notification
+
+Notification data returned by `take_notifications_detailed()`, covering OSC 9, OSC 777, and Kitty OSC 99 notifications.
+
+**Properties:**
+- `title: str`: Notification title (empty for OSC 9)
+- `message: str`: Notification message/body
+- `id: str | None`: Kitty OSC 99 `i=` identifier used to group/update notifications; `None` for OSC 9/777 or an id-less OSC 99 notification
+- `urgency: str`: Urgency level: `"low"`, `"normal"`, or `"critical"` (`"normal"` for OSC 9/777)
+- `actions: list[str]`: Kitty OSC 99 `a=` requested actions (e.g. `"focus"`, `"report"`, `"close"`); empty for OSC 9/777
 
 ### NotificationConfig
 
