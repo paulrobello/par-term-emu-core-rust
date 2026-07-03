@@ -1719,6 +1719,13 @@ par-term-streamer --enable-http --http-user admin --http-password-file /etc/par-
 # Combined: API key + HTTP Basic Auth (either satisfies auth)
 par-term-streamer --enable-http --http-user admin --http-password secret --api-key ws-token
 
+# Restrict which browser Origins may open a WebSocket connection (CSRF defense, SEC-005)
+par-term-streamer --enable-http --allowed-origins https://app.example.com
+
+# Multiple allowed origins: repeat the flag, use a comma-separated value, or set
+# PAR_TERM_ALLOWED_ORIGINS (comma-separated)
+par-term-streamer --enable-http --allowed-origins https://app.example.com,https://staging.example.com
+
 # Clients can authenticate API key via:
 #   Header: Authorization: Bearer secret-token-here
 #   Header: X-API-Key: secret-token-here

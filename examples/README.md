@@ -18,7 +18,7 @@ Comprehensive collection of example scripts demonstrating the features and capab
 
 ## Overview
 
-This directory contains 32 example scripts organized by functionality. Each example demonstrates specific features of the terminal emulator, from basic text rendering to advanced features like Sixel graphics, PTY sessions, and protocol implementations.
+This directory contains 39 example scripts organized by functionality. Each example demonstrates specific features of the terminal emulator, from basic text rendering to advanced features like Sixel graphics, PTY sessions, and protocol implementations.
 
 **Purpose:** Provide practical, runnable examples for developers integrating par-term-emu into their applications
 
@@ -31,7 +31,7 @@ This directory contains 32 example scripts organized by functionality. Each exam
 
 **Required:**
 ```bash
-# Python 3.13+ with uv package manager
+# Python 3.12+ with uv package manager
 uv --version
 
 # Build the library (from project root)

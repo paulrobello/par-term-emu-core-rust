@@ -714,6 +714,10 @@ logger = logging.getLogger(__name__)
 - Add audit logging for all file loading attempts
 - Consider sandboxing or chroot for file operations
 
+### Integer Overflow Protection (Kitty Pixel Decoding, 0.43.1)
+
+`decode_pixels()` in `src/graphics/kitty.rs` decodes the Kitty graphics protocol's raw `Rgba`/`Rgb` pixel formats, where `width`/`height` are attacker-controlled `u32` values taken directly from the escape sequence. Computing the expected buffer size as `width * height * (3 or 4)` can wrap `usize` on overflow, which would bypass the size check that follows it and could yield a `TerminalGraphic` claiming huge dimensions over a tiny backing buffer (out-of-bounds read / panic DoS on later access). The fix uses `checked_mul` for every multiplication in that size calculation and returns a `GraphicsError::KittyError` on overflow instead of silently wrapping. The Kitty PNG decode path is separately guarded by a `MAX_IMAGE_PIXELS` product cap on the decoded width × height.
+
 ### Best Practices for Graphics Protocol
 
 1. ✅ **Run as non-root** - Limits file access to user's own files
@@ -930,6 +934,16 @@ connected client can execute arbitrary commands as the user running the server.
   are allowed; remote browser origins are rejected (HTTP 403).
 - A `tower-http` `CorsLayer` mirrors the policy on HTTP routes.
 
+**Example:**
+```bash
+# Only allow a specific remote browser origin to open a WebSocket connection
+par-term-streamer --enable-http --allowed-origins https://app.example.com
+
+# Multiple origins: repeat the flag, use a comma-separated value, or set
+# PAR_TERM_ALLOWED_ORIGINS (comma-separated)
+par-term-streamer --enable-http --allowed-origins https://app.example.com,https://staging.example.com
+```
+
 ### Input Safety
 
 - Client input is rate-limited (`--input-rate-limit`, default 0 = unlimited).
@@ -939,6 +953,11 @@ connected client can execute arbitrary commands as the user running the server.
 - OSC data is capped (`MAX_OSC_DATA_LENGTH`, configurable via
   `Terminal::set_max_osc_data_length` — QA-012).
 - zlib decompression is capped at 1 MiB (SEC-001).
+- Inbound WebSocket frames/messages are capped at 16 MiB each
+  (`max_message_size` / `max_frame_size` on the `WebSocketConfig`,
+  `src/streaming/server.rs`, 0.43.1). This bounds worst-case per-connection
+  memory from a single oversized frame independently of the protobuf-level
+  caps above.
 
 ### See Also
 

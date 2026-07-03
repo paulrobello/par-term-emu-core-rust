@@ -11,7 +11,37 @@ use super::PyTerminal;
 impl PyTerminal {
     // === Feature 17: Advanced Mouse Support ===
 
-    /// Record a mouse event
+    /// Record a mouse event in the terminal's mouse history
+    ///
+    /// The event is appended to both the event history (`get_mouse_events()`)
+    /// and the position history (`get_mouse_positions()`), each trimmed to
+    /// `get_max_mouse_history()` entries. The event's stored timestamp is
+    /// generated internally (microseconds since epoch) rather than taken from
+    /// the `timestamp` argument.
+    ///
+    /// Args:
+    ///     event_type: One of "press", "release", "move", "drag", "scrollup",
+    ///         "scrolldown" (case-insensitive)
+    ///     button: One of "left", "middle", "right", "none" (case-insensitive)
+    ///     col: Column position, 0-indexed
+    ///     row: Row position, 0-indexed
+    ///     pixel_x: Optional pixel X position; accepted for API compatibility
+    ///         but currently not stored (reserved for future SGR 1016 support)
+    ///     pixel_y: Optional pixel Y position; accepted for API compatibility
+    ///         but currently not stored (reserved for future SGR 1016 support)
+    ///     modifiers: Modifier key bitmask (shift/alt/ctrl)
+    ///     timestamp: Accepted for API compatibility but currently ignored;
+    ///         the recorded event always uses the current time
+    ///
+    /// Raises:
+    ///     ValueError: If `event_type` or `button` is not one of the supported
+    ///         values above
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+    ///     ```
     #[allow(clippy::too_many_arguments, unused_variables)]
     fn record_mouse_event(
         &mut self,
@@ -49,7 +79,22 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get mouse events
+    /// Get recorded mouse events, most recent last
+    ///
+    /// Args:
+    ///     count: If given, return only the last `count` events; if None,
+    ///         return the full history (default: None)
+    ///
+    /// Returns:
+    ///     list[MouseEvent]: Each event has `event_type`, `button`, `col`,
+    ///     `row`, `pixel_x`, `pixel_y`, `modifiers`, `timestamp` (microseconds)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
+    ///     events = term.get_mouse_events(count=10)
+    ///     ```
     #[pyo3(signature = (count=None))]
     fn get_mouse_events(
         &self,
@@ -66,7 +111,22 @@ impl PyTerminal {
             .collect())
     }
 
-    /// Get mouse positions
+    /// Get recorded mouse cursor positions, most recent last
+    ///
+    /// Args:
+    ///     count: If given, return only the last `count` positions; if None,
+    ///         return the full history (default: None)
+    ///
+    /// Returns:
+    ///     list[MousePosition]: Each position has `col`, `row`, and
+    ///     `timestamp` (microseconds since epoch)
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_mouse_event("move", "none", 10, 5, None, None, 0, 0)
+    ///     positions = term.get_mouse_positions(count=5)
+    ///     ```
     #[pyo3(signature = (count=None))]
     fn get_mouse_positions(
         &self,
@@ -83,7 +143,20 @@ impl PyTerminal {
             .collect())
     }
 
-    /// Get last mouse position
+    /// Get the most recently recorded mouse position
+    ///
+    /// Returns:
+    ///     MousePosition | None: The last position recorded via
+    ///     `record_mouse_event()`, or None if no events have been recorded
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_mouse_event("move", "none", 10, 5, None, None, 0, 0)
+    ///     pos = term.get_last_mouse_position()
+    ///     if pos:
+    ///         print(pos.col, pos.row)
+    ///     ```
     fn get_last_mouse_position(
         &self,
     ) -> PyResult<Option<crate::python_bindings::types::PyMousePosition>> {

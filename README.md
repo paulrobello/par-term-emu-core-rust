@@ -1106,10 +1106,10 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.42", default-features = false }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.42", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.42"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.42", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.43", default-features = false }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.43", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.43"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.43", features = ["full"] }` | All features |
 
 **Download pre-built streaming server (recommended):**
 

@@ -2,6 +2,8 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
+> **Last verified against v0.43.1.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -163,6 +165,7 @@ pub struct Grid {
 The main terminal emulator that ties everything together, organized into submodules:
 
 **Core Submodules:**
+- `action.rs` - Trigger/macro action execution
 - `apc_filter.rs` - Kitty TGP APC pre-filter (strips Kitty `ESC _ G ... ST` sequences before `vte` parsing)
 - `clipboard.rs` - Clipboard management (OSC 52)
 - `colors.rs` - Color configuration and palette
@@ -178,14 +181,14 @@ The main terminal emulator that ties everything together, organized into submodu
 - `perform.rs` - VTE Perform trait implementation
 - `progress.rs` - OSC 9;4 progress bar support
 - `recording.rs` - Session recording
-- `replay.rs` - Recording playback
+- `replay.rs` - Recording playback (Instant Replay)
+- `replay_snapshot.rs` - Snapshot capture used by replay
 - `screen.rs` - Screen buffer management
 - `search.rs` - Text search functionality
-- `sequences/` - VTE sequence handlers (CSI, OSC, ESC, DCS)
+- `semantic_snapshot.rs` - Semantic (prompt/command/output) snapshot capture
+- `sequences/` - VTE sequence handlers, split into `csi/`, `osc/`, `dcs/` directories plus `esc.rs`
 - `shell_integration.rs` - OSC 133 markers
-- `snapshot.rs` - State snapshots
 - `snapshot_manager.rs` - Snapshot lifecycle
-- `terminal_snapshot.rs` - Full terminal state capture
 - `trigger.rs` - Regex pattern matching
 - `write.rs` - Character writing logic
 
@@ -206,6 +209,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `kitty.rs` - Kitty graphics protocol implementation
   - `iterm.rs` - iTerm2 inline images implementation
   - `placeholder.rs` - Placeholder character management
+  - `serialization.rs` - Graphics state serialization (snapshots/replay)
 - **Features**: Image reuse, scrolling, animation, composition modes
 
 **Mouse Handling** (`src/mouse.rs`)
@@ -252,6 +256,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `protocol.rs` - Streaming protocol definitions (app-level): 33 server message types, 10 client message types, 24 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
+  - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
   - `error.rs` - Streaming-specific errors
 - **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
 - **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
@@ -300,13 +305,15 @@ The main terminal emulator that ties everything together, organized into submodu
 
 `PtySession` owns:
 
-- A `parking_lot::Mutex` (wrapped in `Arc<Mutex<Terminal>>`) for all terminal state. `parking_lot` is used for performance and to eliminate Mutex poisoning risk.
+- A `parking_lot::RwLock` (wrapped in `Arc<RwLock<Terminal>>`) for all terminal state (migrated from `Mutex` in ARC-009 to let concurrent readers — e.g. Python API queries — proceed without blocking each other). `parking_lot` is used for performance and to eliminate lock poisoning risk. Writers (the PTY reader thread calling `term.process(..)`, resize, etc.) still take the lock exclusively via `.write()`; readers use `.read()`.
 - A `portable_pty::PtyPair` and child process handle.
 - A background reader thread that:
   - Reads from the PTY master.
-  - Feeds bytes into the `Terminal` via `term.process(..)` while holding the terminal mutex.
+  - Feeds bytes into the `Terminal` via `term.process(..)` while holding the terminal's write lock.
   - Writes device-query responses (DA/DSR/DECRQM/etc.) back to the child via the shared writer.
 - An `Arc<AtomicBool>` `running` flag that reflects the session’s view of whether the child is still alive.
+
+Separately, `PtySession` also holds a `parking_lot::Mutex` around the PTY writer, the output callback, and the coprocess manager — those remain plain mutexes since they don't benefit from read/write splitting.
 
 `running` is deliberately a **best-effort** indicator:
 
@@ -318,197 +325,76 @@ The main terminal emulator that ties everything together, organized into submodu
   - `kill()` is called.
 - There may be a short window where the OS still considers the process live even though `running == false`, or vice versa (between a process exit and the reader thread seeing EOF). Callers that need precise exit status should use `try_wait()`/`wait()` instead of relying solely on `is_running()`.
 
+**As of ARC-001, `Terminal` is no longer one flat ~150-field struct.** It is decomposed into ~30 `pub(crate)` cohesive sub-structs, each grouping the fields for one feature area. `Terminal` itself holds a handful of "hot path" fields directly (grid, cursor, colors, the VTE parser) plus one field per sub-struct:
+
 ```rust
 pub struct Terminal {
-    // Screen management
+    // Hot-path fields kept directly on Terminal (accessed on every write)
     grid: Grid,
     alt_grid: Grid,
     alt_screen_active: bool,
-
-    // Cursor state
     cursor: Cursor,
     alt_cursor: Cursor,
-    saved_cursor: Option<Cursor>,
-
-    // Text attributes and saved state
     fg: Color,
     bg: Color,
     underline_color: Option<Color>,
     flags: CellFlags,
-    saved_fg: Color,
-    saved_bg: Color,
-    saved_underline_color: Option<Color>,
-    saved_flags: CellFlags,
-
-    // Terminal title and modes
-    title: String,
-    mouse_mode: MouseMode,
-    mouse_encoding: MouseEncoding,
-    focus_tracking: bool,
-    bracketed_paste: bool,
-    synchronized_updates: bool,
-    update_buffer: Vec<u8>,
-    auto_wrap: bool,
-    origin_mode: bool,
-    application_cursor: bool,
-    insert_mode: bool,
-    line_feed_new_line_mode: bool,
-    char_protected: bool,
-    reverse_video: bool,
-
-    // Margins and regions
-    scroll_region_top: usize,
-    scroll_region_bottom: usize,
-    left_margin: usize,
-    right_margin: usize,
-    use_lr_margins: bool,
-
-    // Tab stops
     tab_stops: Vec<bool>,
-
-    // Advanced features
-    shell_integration: ShellIntegration,
-    hyperlinks: HashMap<u32, String>,
-    current_hyperlink_id: Option<u32>,
-    next_hyperlink_id: u32,
-
-    // Unified graphics system
-    graphics_store: GraphicsStore,
-    sixel_limits: sixel::SixelLimits,
-    cell_dimensions: (u32, u32),
-    sixel_parser: Option<sixel::SixelParser>,
-    dcs_buffer: Vec<u8>,
-    dcs_active: bool,
-    dcs_action: Option<char>,
-    iterm_multipart_buffer: Option<ITermMultipartState>,
-
-    // Kitty keyboard protocol
-    keyboard_flags: u16,
-    keyboard_stack: Vec<u16>,
-    keyboard_stack_alt: Vec<u16>,
-
-    // Device query responses
     response_buffer: Vec<u8>,
-
-    // Clipboard management
-    clipboard_content: Option<String>,
-    allow_clipboard_read: bool,
-    clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
-    max_clipboard_history: usize,
-    clipboard_sync_events: Vec<ClipboardSyncEvent>,
-    clipboard_sync_history: HashMap<ClipboardTarget, Vec<ClipboardHistoryEntry>>,
-    max_clipboard_sync_history: usize,
-    max_clipboard_sync_events: usize,
-    max_clipboard_event_bytes: usize,
-    remote_session_id: Option<String>,
-
-    // Color management
-    default_fg: Color,
-    default_bg: Color,
-    cursor_color: Color,
-    ansi_palette: [Color; 16],
-    color_stack: Vec<(Color, Color, Option<Color>)>,
-    link_color: Color,
-    bold_color: Color,
-    cursor_guide_color: Color,
-    badge_color: Color,
-    match_color: Color,
-    selection_bg_color: Color,
-    selection_fg_color: Color,
-    use_bold_color: bool,
-    use_underline_color: bool,
-    use_cursor_guide: bool,
-    use_selected_text_color: bool,
-    smart_cursor_color: bool,
-    bold_brightening: bool,
-
-    // Notifications and events
-    notifications: Vec<Notification>,
-    progress_bar: ProgressBar,
-    bell_count: u64,
-    bell_events: Vec<BellEvent>,
-    terminal_events: Vec<TerminalEvent>,
-    dirty_rows: HashSet<usize>,
-    max_notifications: usize,
-    notification_config: NotificationConfig,
-    notification_events: Vec<NotificationEvent>,
-    last_activity_time: u64,
-    last_silence_check: u64,
-    custom_triggers: HashMap<u32, String>,
-
-    // VTE parser and state
     parser: vte::Parser,
     pending_wrap: bool,
-
-    // Window/pixel dimensions
     pixel_width: usize,
     pixel_height: usize,
-
-    // Window title stack
-    title_stack: Vec<String>,
-
-    // Security and features
-    accept_osc7: bool,
-    disable_insecure_sequences: bool,
-
-    // VT conformance
-    attribute_change_extent: u8,
     conformance_level: ConformanceLevel,
     warning_bell_volume: u8,
     margin_bell_volume: u8,
-
-    // Tmux control protocol
-    tmux_parser: TmuxControlParser,
-    tmux_notifications: Vec<TmuxNotification>,
-
-    // Selection and bookmarks
+    dirty_rows: HashSet<usize>,
     selection: Option<Selection>,
-    bookmarks: Vec<Bookmark>,
-    next_bookmark_id: usize,
-
-    // Performance tracking
-    perf_metrics: PerformanceMetrics,
-    frame_timings: Vec<FrameTiming>,
-    max_frame_timings: usize,
-
-    // Mouse tracking
-    mouse_events: Vec<MouseEventRecord>,
-    mouse_positions: Vec<MousePosition>,
-    max_mouse_history: usize,
-
-    // Rendering hints and damage tracking
-    rendering_hints: Vec<RenderingHint>,
-    damage_regions: Vec<DamageRegion>,
-
-    // Profiling data
-    profiling_data: Option<ProfilingData>,
-    profiling_enabled: bool,
-
-    // Search and regex
-    regex_matches: Vec<RegexMatch>,
-    current_regex_pattern: Option<String>,
-
-    // Multiplexing and images
     pane_state: Option<PaneState>,
-    inline_images: Vec<InlineImage>,
-    max_inline_images: usize,
+    event_subscription: Option<HashSet<TerminalEventKind>>,
 
-    // Shell integration extended features
-    command_history: Vec<CommandExecution>,
-    current_command: Option<CommandExecution>,
-    cwd_changes: Vec<CwdChange>,
-    max_command_history: usize,
-    max_cwd_history: usize,
+    // One field per feature sub-struct (ARC-001)
+    saved_state: SavedCursorState,       // DECSC/DECRC saved cursor + SGR colors/flags
+    title_state: TitleState,             // Title, title stack, answerback string
+    sync_state: SyncState,               // Synchronized updates (DEC 2026)
+    shell_state: ShellState,             // Shell integration, host/user, depth
+    margins: MarginState,                // DECSTBM/DECSLRM scroll + margins
+    modes: TerminalModes,                // DECSET/DECRST-style mode flags
+    keyboard_state: KeyboardState,       // Kitty keyboard protocol flags/stacks
+    hyperlink_state: HyperlinkState,     // OSC 8 hyperlinks map + IDs
+    graphics: GraphicsState,             // Unified graphics store + Sixel/iTerm2/Kitty state
+    dcs_state: DcsState,                 // Sixel parser + DCS buffer
+    clipboard_state: ClipboardState,     // OSC 52 clipboard content + history
+    theme: ColorThemeState,              // OSC-queryable colors + rendering prefs
+    notifications_state: NotificationState, // OSC 9/777 notifications + config
+    progress_state: ProgressBellState,   // OSC 9;4 progress bar + bell counter
+    security_state: SecurityFlagsState,  // OSC 7 acceptance + insecure-sequence disable
+    tmux: TmuxState,                     // Tmux control-protocol parser
+    events: EventBrokerState,            // Event buffer + observer registry
+    bookmarks_state: BookmarksState,     // Bookmarks + next ID
+    profiling: ProfilingState,           // Performance metrics + profiling
+    mouse_history: MouseHistoryState,    // Mouse event/position history
+    rendering: RenderingState,           // Rendering hints + damage regions
+    search: SearchState,                 // Regex search matches
+    inline_image_state: InlineImageState, // Inline image storage
+    clipboard_sync: ClipboardSyncState,  // OSC 52 clipboard-sync events/history
+    command_history_state: CommandHistoryState, // Command/CWD execution history
+    recording_state: RecordingState,     // Session recording
+    macros: MacroState,                  // Macro library + playback
+    unicode_state: UnicodeConfigState,   // Width config + normalization form
+    badge_state: BadgeState,             // OSC 1337 badge format + session vars
+    triggers: TriggerState,              // Trigger registry + highlights
+    charset_state: CharsetState,         // G0/G1 charset designations
 
-    // Recording and macros
-    recording_session: Option<RecordingSession>,
-    is_recording: bool,
-    recording_start_time: u64,
-    macro_library: HashMap<String, Macro>,
-    macro_playback: Option<MacroPlayback>,
-    macro_screenshot_triggers: Vec<String>,
+    // Kitty APC pre-filter (vte 0.15 doesn't expose APC payloads to `Perform`)
+    apc_filter_state: ApcFilterState,
+    apc_buffer: Vec<u8>,
+    apc_passthrough: Vec<u8>,
+    kitty_parser: KittyParser,
 }
 ```
+
+Each sub-struct type is defined in `src/terminal/mod.rs` immediately above the `Terminal` struct itself, with a doc comment explaining what it groups and why (search for `pub(crate) struct` in that file for the full, current list). This decomposition is a pure reorganization — field access from within `src/terminal/` goes through the sub-struct (e.g. `self.margins.scroll_region_top`), but it does not change the Python-facing API.
 
 ## ANSI Sequence Processing
 
@@ -574,11 +460,36 @@ graph TD
 
 ## Python Bindings
 
-The Python bindings are organized in `src/python_bindings/` with multiple submodules:
-- `terminal.rs` - PyTerminal struct and its implementation
-- `pty.rs` - PyPtyTerminal struct and its implementation (PTY support)
+The Python bindings live in `src/python_bindings/`. **As of ARC-002, `terminal.rs` is no longer a single file** — it is a directory, `src/python_bindings/terminal/`, containing `mod.rs` (the `PyTerminal` struct, constructor, and any methods not yet split out) plus 17 themed `*_api.rs` files, each a separate `#[pymethods] impl PyTerminal` block covering one feature area:
+
+- `badge_api.rs` - OSC 1337 badge format + semantic snapshots
+- `bookmark_api.rs` - Bookmarks
+- `clipboard_api.rs` - OSC 52 clipboard + clipboard history/slots
+- `color_api.rs` - Color/appearance getters-setters, rendering hints
+- `file_transfer_api.rs` - Kitty/iTerm2 file transfer tracking
+- `image_api.rs` - Inline image queries
+- `metrics_api.rs` - Performance metrics, frame timings
+- `mouse_api.rs` - Mouse event recording and history
+- `multiplexing_api.rs` - Pane state capture/restore
+- `notification_api.rs` - OSC 9/777 notifications
+- `recording_api.rs` - Session recording export (asciicast/JSON)
+- `scrollback_api.rs` - Scrollback export and stats
+- `search_api.rs` - Text/regex search, content detection
+- `selection_api.rs` - Selection management
+- `shell_integration_api.rs` - OSC 133 shell integration extended features
+- `text_api.rs` - Text extraction utilities
+- `trigger_api.rs` - Trigger registration and matching
+
+This split (ARC-002) is a pure relocation out of a single monolithic `#[pymethods]` block — no Python API or behavior change; all methods still resolve on the same `Terminal` Python class because Rust allows multiple `impl` blocks for one type.
+
+Other submodules:
+- `pty.rs` - `PyPtyTerminal` struct and its implementation (PTY support). Holds the `Terminal` behind `PtySession`'s `Arc<RwLock<Terminal>>` rather than owning it directly.
+- `common.rs` - Shared Terminal-access macros (ARC-003/QA-001): `impl_terminal_query_getters!` and `impl_terminal_state_setters!` generate identical getter/setter methods for both `PyTerminal` and `PyPtyTerminal` from one macro body, via the `TerminalAccess` trait that abstracts over "owns a `Terminal` directly" vs. "reaches it through an `Arc<RwLock<Terminal>>`". This is why most methods appear on both classes without duplicated code.
+- `screenshot_config.rs` - `PyScreenshotConfig` (`ScreenshotConfig`), a reusable options object for `screenshot_config()`/`screenshot_to_file_config()` so callers don't repeat 16+ keyword args per call (QA-005, added 0.43.0)
 - `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more)
-- `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode)
+- `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode, PyWidthConfig, and more)
+- `observer.rs` - `PyCallbackObserver`/`PyQueueObserver`, bridging the Rust `TerminalObserver` trait to Python callables/`asyncio.Queue`
+- `streaming.rs` - `StreamingServer`/`StreamingConfig` Python bindings (requires the `streaming` feature)
 - `conversions.rs` - Type conversions and parsing utilities
 - `color_utils.rs` - Python bindings for color manipulation utilities:
   - Perceived brightness and luminance calculations
@@ -591,7 +502,12 @@ The Python bindings are organized in `src/python_bindings/` with multiple submod
   - Hex color conversion
   - ANSI 256-color conversion
 
-The main Python module is defined in `src/lib.rs`, which exports the `_native` module containing 67 classes and 27 functions (22 color/unicode utility functions + 5 binary protocol functions for streaming).
+The main Python module is defined in `src/lib.rs`, which exports the `_native` module. Class/function counts drift with every feature addition — get the current numbers with:
+
+```bash
+grep -c 'm.add_class::<' src/lib.rs      # registered classes
+grep -c 'm.add_function' src/lib.rs      # registered free functions
+```
 
 ```rust
 #[pyclass(name = "Terminal")]

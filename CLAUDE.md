@@ -96,13 +96,13 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 
 ### Key Source Layout
 
-- `src/terminal/mod.rs` - Main `Terminal` struct with all state
-- `src/terminal/sequences/{csi,osc,esc,dcs}.rs` - VTE escape sequence handlers
+- `src/terminal/mod.rs` - Main `Terminal` struct, decomposed into ~30 `pub(crate)` sub-structs by feature area
+- `src/terminal/sequences/` - VTE escape sequence handlers, split into `csi/`, `osc/`, `dcs/` directories (each with `mod.rs` + per-topic files) plus a single `esc.rs`
 - `src/terminal/write.rs` - Character writing logic
 - `src/terminal/trigger.rs` - Regex-based output pattern matching
-- `src/grid.rs` - 2D terminal buffer with scrollback (flat Vec, row-major)
+- `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `zone.rs`
 - `src/pty_session.rs` - PTY session with background reader thread
-- `src/python_bindings/` - PyO3 wrappers (`terminal.rs`, `pty.rs`, `streaming.rs`, `types.rs`, `enums.rs`)
+- `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + 17 themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types.rs`, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
 - `src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
 - `src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
@@ -128,7 +128,7 @@ Also update:
 ## Development Workflows
 
 ### Adding ANSI Sequences
-1. Add handler in `src/terminal/sequences/{csi,osc,esc,dcs}.rs`
+1. Add handler in `src/terminal/sequences/{csi,osc,dcs}/` or `esc.rs`
 2. Implement grid/cursor changes if needed
 3. Add tests (Rust + Python)
 4. VT parameter 0 or missing defaults to 1

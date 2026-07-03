@@ -78,7 +78,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.39", default-features = false }
+par-term-emu-core-rust = { version = "0.43", default-features = false }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -86,7 +86,7 @@ par-term-emu-core-rust = { version = "0.39", default-features = false }
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.39", default-features = false, features = ["streaming"] }
+par-term-emu-core-rust = { version = "0.43", default-features = false, features = ["streaming"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -94,9 +94,9 @@ par-term-emu-core-rust = { version = "0.39", default-features = false, features 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.39" }
+par-term-emu-core-rust = { version = "0.43" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.39", features = ["python"] }
+par-term-emu-core-rust = { version = "0.43", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -104,9 +104,9 @@ par-term-emu-core-rust = { version = "0.39", features = ["python"] }
 #### Python with Streaming
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.39", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.43", features = ["python", "streaming"] }
 # Or use the convenience feature:
-par-term-emu-core-rust = { version = "0.39", features = ["full"] }
+par-term-emu-core-rust = { version = "0.43", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access

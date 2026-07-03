@@ -101,6 +101,7 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [MouseEvent](#mouseevent)
   - [MousePosition](#mouseposition)
   - [PaneState](#panestate)
+  - [ScreenshotConfig](#screenshotconfig)
   - [PerformanceMetrics](#performancemetrics)
   - [ProfilingData](#profilingdata)
   - [RegexMatch](#regexmatch)
@@ -247,7 +248,7 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 - `get_latest_clipboard(slot: str) -> ClipboardEntry | None`: Get most recent clipboard entry for slot
 - `clear_clipboard_history(slot: str)`: Clear history for specific slot
 - `clear_all_clipboard_history()`: Clear all clipboard history
-- `search_clipboard_history(pattern: str, slot: str | None = None, case_sensitive: bool = True) -> list[ClipboardEntry]`: Search clipboard history
+- `search_clipboard_history(query: str, slot: str | None = None) -> list[ClipboardEntry]`: Search clipboard history for entries containing `query` (case-sensitive substring match; searches all slots if `slot` is None)
 
 #### Scrollback Buffer
 - `scrollback() -> list[str]`: Get scrollback buffer as list of strings
@@ -269,7 +270,9 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 #### Terminal Modes
 - `is_alt_screen_active() -> bool`: Check if alternate screen buffer is active
 - `bracketed_paste() -> bool`: Check if bracketed paste mode is enabled
+- `set_bracketed_paste(enabled: bool)`: Enable/disable bracketed paste mode (wraps pasted content with ESC[200~/ESC[201~)
 - `focus_tracking() -> bool`: Check if focus tracking mode is enabled
+- `set_focus_tracking(enabled: bool)`: Enable/disable focus tracking mode (reports ESC[I / ESC[O focus events)
 - `mouse_mode() -> str`: Get current mouse tracking mode
 - `insert_mode() -> bool`: Check if insert mode is enabled
 - `line_feed_new_line_mode() -> bool`: Check if line feed/new line mode is enabled
@@ -387,7 +390,7 @@ all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "al
 #### Graphics
 Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), and Kitty Graphics Protocol (APC G).
 
-- `resize_pixels(width_px: int, height_px: int)`: Resize terminal by pixel dimensions
+- `resize_pixels(cols: int, rows: int, pixel_width: int, pixel_height: int)`: Resize terminal (cols/rows) and set the pixel dimensions of the text area in one call
 - `graphics_count() -> int`: Get count of graphics currently displayed
 - `graphics_at_row(row: int) -> list[Graphic]`: Get graphics at specific row
 - `clear_graphics()`: Clear all graphics
@@ -419,13 +422,24 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `export_text() -> str`: Export entire buffer as plain text without styling
 - `export_styled() -> str`: Export entire buffer with ANSI styling
 - `export_html(include_styles: bool = True) -> str`: Export as HTML (full document or content only)
-- `export_scrollback(format: str = "text", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "text" or "json". If max_lines is None, exports all scrollback.
+- `export_scrollback(format: str = "plain", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "plain", "html", or "ansi". Raises `ValueError` for any other format. If max_lines is None, exports all scrollback.
 
 #### Screenshots
 - `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast) -> bytes`: Take screenshot and return image bytes
 - `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast)`: Take screenshot and save to file
+- `screenshot_config(config: ScreenshotConfig, scrollback_offset: int = 0) -> bytes`: Take a screenshot using a reusable `ScreenshotConfig` instead of repeating 16+ keyword args on every call (QA-005). Available on both `Terminal` and `PtyTerminal`.
+- `screenshot_to_file_config(path: str, config: ScreenshotConfig, scrollback_offset: int = 0)`: Take a screenshot to a file using a reusable `ScreenshotConfig`. Available on both `Terminal` and `PtyTerminal`.
 
 **Supported Formats:** PNG, JPEG, BMP, SVG (vector), HTML
+
+**Example:**
+```python
+cfg = ScreenshotConfig(format="png", font_size=16.0, render_cursor=True)
+data = term.screenshot_config(cfg, scrollback_offset=0)
+term.screenshot_to_file_config("out.png", cfg)
+```
+
+See [ScreenshotConfig](#screenshotconfig) for the full list of constructor fields.
 
 #### Session Recording
 - `start_recording(title: str | None = None)`: Start recording session
@@ -441,7 +455,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 
 ### Advanced Search and Regex
 
-- `regex_search(pattern: str, case_sensitive: bool = True) -> list[RegexMatch]`: Search terminal content using regex pattern
+- `regex_search(pattern: str, case_insensitive: bool = False, multiline: bool = True, include_scrollback: bool = True, max_matches: int = 0, reverse: bool = False) -> list[RegexMatch]`: Search terminal content using regex pattern. `max_matches=0` means unlimited. Raises `ValueError` for an invalid regex pattern.
 - `get_regex_matches() -> list[RegexMatch]`: Get current regex matches
 - `clear_regex_matches()`: Clear regex match highlighting
 - `next_regex_match()`: Move to next regex match
@@ -457,7 +471,8 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `get_last_mouse_position() -> MousePosition | None`: Get most recent mouse position
 - `clear_mouse_history()`: Clear mouse event history
 - `set_max_mouse_history(max: int)`: Set maximum mouse events to track
-- `record_mouse_event(event: MouseEvent)`: Record a mouse event
+- `record_mouse_event(event_type: str, button: str, col: int, row: int, pixel_x: int | None, pixel_y: int | None, modifiers: int, timestamp: int)`: Record a mouse event. `event_type` must be one of `"press"`, `"release"`, `"move"`, `"drag"`, `"scrollup"`, `"scrolldown"`; `button` must be one of `"left"`, `"middle"`, `"right"`, `"none"`. Raises `ValueError` for an invalid `event_type` or `button` string.
+- `get_max_mouse_history() -> int`: Get the maximum number of mouse events/positions retained
 
 ### Bookmarks
 
@@ -763,7 +778,7 @@ For optimized rendering in frontends:
 - `mark_row_dirty(row: int)`: Mark specific row as dirty
 - `mark_clean()`: Mark all content as clean
 - `add_rendering_hint(hint: RenderingHint)`: Add rendering optimization hint
-- `get_rendering_hints() -> list[RenderingHint]`: Get rendering hints
+- `get_rendering_hints(sort_by_priority: bool = False) -> list[RenderingHint]`: Get rendering hints, optionally sorted by priority (high to low)
 - `clear_rendering_hints()`: Clear rendering hints
 
 ### Performance and Benchmarking
@@ -781,7 +796,7 @@ Performance measurement and optimization tools:
 - `reset_profiling_data()`: Reset profiling counters
 - `get_performance_metrics() -> PerformanceMetrics`: Get performance metrics
 - `reset_performance_metrics()`: Reset performance metrics
-- `get_frame_timings() -> list[FrameTiming]`: Get frame timing history
+- `get_frame_timings(count: int | None = None) -> list[FrameTiming]`: Get frame timing history (most recent `count` entries, or all if None)
 - `get_fps() -> float`: Get current FPS
 - `get_average_frame_time() -> float`: Get average frame time in milliseconds
 - `record_frame_timing(render_time_ms: float)`: Record frame timing
@@ -811,7 +826,7 @@ Save and restore terminal state:
 - `serialize_session() -> bytes`: Serialize terminal state to bytes
 - `deserialize_session(data: bytes)`: Restore terminal state from bytes
 - `create_session_state() -> SessionState`: Create session state snapshot
-- `capture_pane_state() -> PaneState`: Capture pane state for window management
+- `capture_pane_state(id: str, cwd: str | None = None) -> PaneState`: Capture pane state for window management
 - `restore_pane_state(state: PaneState)`: Restore pane state
 - `get_pane_state() -> PaneState | None`: Get current pane state
 - `set_pane_state(state: PaneState)`: Set pane state
@@ -846,6 +861,25 @@ VT compliance testing:
 - `NormalizationForm.NFKC` - Compatibility Composition: NFC + replaces compatibility characters
 - `NormalizationForm.NFKD` - Compatibility Decomposition: NFD + replaces compatibility characters
 - `NormalizationForm.Disabled` - No normalization, store text as received from PTY
+
+### Character Width Configuration
+
+Controls how character widths are calculated, particularly for East Asian Ambiguous characters and Unicode version-specific width tables. See [WidthConfig](#widthconfig), [UnicodeVersion](#unicodeversion), and [AmbiguousWidth](#ambiguouswidth).
+
+- `width_config() -> WidthConfig`: Get the current width configuration
+- `set_width_config(config: WidthConfig)`: Set the full width configuration (Unicode version + ambiguous-width treatment)
+- `set_ambiguous_width(width: AmbiguousWidth)`: Convenience method to set just the ambiguous-width treatment without changing the Unicode version
+- `set_unicode_version(version: UnicodeVersion)`: Convenience method to set just the Unicode version without changing the ambiguous-width treatment
+- `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells)
+
+### Progress Bar (OSC 9;4)
+
+Single active progress bar state, separate from the multiple concurrent [Named Progress Bars (OSC 934)](#named-progress-bars-osc-934).
+
+- `progress_state() -> ProgressState`: Get the current progress bar state
+- `progress_value() -> int`: Get the current progress percentage (0-100); only meaningful when state is Normal, Warning, or Error
+- `set_progress(state: ProgressState, progress: int)`: Manually set the progress bar state and percentage (0-100, clamped if out of range), without receiving an OSC 9;4 sequence
+- `clear_progress()`: Clear/hide the progress bar (equivalent to OSC 9;4;0)
 
 ### Utility Methods
 
@@ -891,6 +925,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `get_line_unwrapped(row: int) -> str | None`: Get full logical line following wrapping
 - `find_matching_bracket(col: int, row: int) -> tuple[int, int] | None`: Find matching bracket/parenthesis (supports (), [], {}, <>)
 - `select_semantic_region(col: int, row: int, delimiters: str) -> str | None`: Extract content between delimiters
+- `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries at a position for smart selection. Returns `((start_col, start_row), (end_col, end_row))`, or `None` if not on a word. Distinct from `select_word_at()`, which sets the active selection instead of just returning boundaries.
 
 #### Selection Management
 - `set_selection(start: tuple[int, int], end: tuple[int, int], mode: str = "character")`: Set text selection. `start`/`end` are `(col, row)` tuples. Mode: "character", "line", or "block"
@@ -907,10 +942,10 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 
 ### Content Search
 
-- `search(pattern: str, case_sensitive: bool = False) -> list[SearchMatch]`: Search terminal content. **Note:** `search()` defaults to case-**insensitive** (`case_sensitive=False`), unlike `find_text()` which defaults to case-**sensitive** (`case_sensitive=True`).
+- `search(query: str, case_sensitive: bool = False) -> list[SearchMatch]`: Search terminal content. **Note:** `search()` defaults to case-**insensitive** (`case_sensitive=False`), unlike `find_text()` which defaults to case-**sensitive** (`case_sensitive=True`).
 - `find_text(pattern: str, case_sensitive: bool = True) -> list[tuple[int, int]]`: Find all occurrences in visible screen
 - `find_next(pattern: str, from_col: int, from_row: int, case_sensitive: bool = True) -> tuple[int, int] | None`: Find next occurrence from position
-- `search_scrollback(pattern: str, case_sensitive: bool = True, max_results: int | None = None) -> list[tuple[int, int]]`: Search scrollback buffer
+- `search_scrollback(query: str, case_sensitive: bool = False, max_lines: int | None = None) -> list[SearchMatch]`: Search the scrollback buffer. Returns `SearchMatch` objects with negative `row` indices for scrollback lines.
 
 ### Buffer Statistics
 
@@ -1037,7 +1072,7 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 ### PTY-Specific Methods
 
 #### Process Management
-- `spawn(cmd: str, args: list[str] = [], env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
+- `spawn(command: str, args: list[str] | None = None, env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a command with arguments
 - `spawn_shell(env: dict[str, str] | None = None, cwd: str | None = None)`: Spawn a shell (auto-detected from environment; defaults to /bin/bash on Unix, cmd.exe on Windows)
 - `child_pid() -> int | None`: Return the PID of the spawned child process, or `None` if not yet spawned
 - `is_running() -> bool`: Check if the child process is still running
@@ -1045,6 +1080,9 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 - `try_wait() -> int | None`: Non-blocking check if child has exited
 - `kill()`: Forcefully terminate the child process
 - `get_default_shell() -> str`: Get the default shell path
+
+#### Keyboard Protocol (PTY-Specific)
+- `force_set_keyboard_flags(flags: int)`: Directly set the Kitty keyboard protocol flags on the underlying terminal (bypasses the CSI sequences that `set_keyboard_flags()` sends to the application). Useful for resetting a stuck keyboard protocol when an application fails to disable it on exit, e.g. `pty.force_set_keyboard_flags(0)`.
 
 #### I/O Operations
 - `write(data: bytes)`: Write bytes to the PTY
@@ -1533,8 +1571,8 @@ Mouse encoding mode enumeration.
 Mouse event record.
 
 **Properties:**
-- `event_type: str`: Event type ("press", "release", "motion")
-- `button: str`: Mouse button ("left", "middle", "right", "wheel_up", "wheel_down")
+- `event_type: str`: Event type ("press", "release", "move", "drag", "scrollup", "scrolldown")
+- `button: str`: Mouse button ("left", "middle", "right", "none")
 - `col: int`: Column position
 - `row: int`: Row position
 - `pixel_x: int | None`: Pixel X coordinate (if reported)
@@ -1567,6 +1605,52 @@ Terminal pane state for window management.
 - `scroll_offset: int`: Scroll offset
 - `created_at: int`: Creation timestamp
 - `last_activity: int`: Last activity timestamp
+
+### ScreenshotConfig
+
+Reusable screenshot rendering options (QA-005, added 0.43.0), so callers don't have to repeat 16+ keyword arguments on every `screenshot()` / `screenshot_to_file()` call. Pass an instance to `screenshot_config()` / `screenshot_to_file_config()` on `Terminal` or `PtyTerminal`.
+
+**Constructor:**
+```python
+ScreenshotConfig(
+    format: str = "png",
+    font_path: str | None = None,
+    font_size: float = 14.0,
+    include_scrollback: bool = False,
+    padding: int = 10,
+    quality: int = 90,
+    render_cursor: bool = False,
+    cursor_color: tuple[int, int, int] | None = None,
+    sixel_mode: str = "halfblocks",
+    link_color: tuple[int, int, int] | None = None,
+    bold_color: tuple[int, int, int] | None = None,
+    use_bold_color: bool = False,
+    bold_brightening: bool = False,
+    background_color: tuple[int, int, int] | None = None,
+    faint_text_alpha: float = 0.5,
+    minimum_contrast: float = 0.5,
+)
+```
+
+All arguments are optional keyword arguments; only set the ones you need.
+
+**Properties (all get/set):**
+- `format: str`: Output image format — `"png"` | `"jpeg"` | `"svg"` | `"bmp"`. Raises `ValueError` for any other value when the config is used.
+- `font_path: str | None`: Path to a `.ttf`/`.otf` font; `None` uses the embedded JetBrains Mono
+- `font_size: float`: Font size in pixels
+- `include_scrollback: bool`: Include the scrollback buffer
+- `padding: int`: Padding around the content in pixels
+- `quality: int`: JPEG quality (1-100)
+- `render_cursor: bool`: Render the cursor
+- `cursor_color: tuple[int, int, int] | None`: Cursor color (`None` = white)
+- `sixel_mode: str`: Sixel graphics mode — `"disabled"` | `"pixels"` | `"halfblocks"`
+- `link_color: tuple[int, int, int] | None`: Hyperlink color (`None` = foreground)
+- `bold_color: tuple[int, int, int] | None`: Bold text color (`None` = foreground)
+- `use_bold_color: bool`: Whether `bold_color` overrides the cell color
+- `bold_brightening: bool`: Bold brightening (ANSI 0-7 → bright 8-15 when bold)
+- `background_color: tuple[int, int, int] | None`: Background color override (`None` = terminal background)
+- `faint_text_alpha: float`: Faint/dim text alpha (0.0-1.0)
+- `minimum_contrast: float`: Minimum contrast adjustment (0.0-1.0)
 
 ### PerformanceMetrics
 
@@ -1754,7 +1838,7 @@ Character width configuration combining Unicode version and ambiguous-width trea
 
 Configuration for starting a coprocess.
 
-**Constructor:** `CoprocessConfig(command, args=[], cwd=None, env={}, copy_terminal_output=True, restart_policy="never", restart_delay_ms=0)`
+**Constructor:** `CoprocessConfig(command, args=None, cwd=None, env=None, copy_terminal_output=True, restart_policy="never", restart_delay_ms=0)`
 
 **Properties:**
 - `command: str`: Command to run
@@ -1977,16 +2061,17 @@ StreamingConfig(
     send_initial_screen: bool = True,
     keepalive_interval: int = 30,
     default_read_only: bool = False,
-    enable_http: bool = False,
-    web_root: str = "./web_term",
     initial_cols: int = 0,
     initial_rows: int = 0,
+    enable_http: bool = False,
+    web_root: str = "./web_term",
     max_clients_per_session: int = 0,
     input_rate_limit_bytes_per_sec: int = 0,
     enable_system_stats: bool = False,
     system_stats_interval_secs: int = 5,
     api_key: str | None = None,
     allow_api_key_in_query: bool = False,
+    allowed_origins: list[str] | None = None,
 )
 ```
 
@@ -2006,6 +2091,7 @@ StreamingConfig(
 - `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
 - `allow_api_key_in_query: bool` - Allow API key authentication via query parameter (disabled by default for security)
+- `allowed_origins: list[str] | None` - Allowed browser `Origin` values for WebSocket/CORS requests (CSRF defense, SEC-005); `None` uses the default policy (loopback + non-browser clients allowed, remote browser origins rejected)
 - `enable_system_stats: bool` - Enable system resource statistics collection
 - `system_stats_interval_secs: int` - System stats collection interval in seconds
 - `tls_enabled: bool` - Check if TLS is configured (read-only)

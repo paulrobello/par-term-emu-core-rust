@@ -12,7 +12,26 @@ use super::PyTerminal;
 impl PyTerminal {
     // === Feature 10: Clipboard Integration ===
 
-    /// Add content to clipboard history
+    /// Add content to the clipboard history for a slot
+    ///
+    /// Content larger than 10 MB is truncated to prevent excessive memory
+    /// usage. History for each slot is capped; the oldest entry is dropped
+    /// once the cap is exceeded.
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive)
+    ///     content: Text content to store
+    ///     label: Optional description for this entry (default: None)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello", label="greeting")
+    ///     ```
     #[pyo3(signature = (slot, content, label=None))]
     fn add_to_clipboard_history(
         &mut self,
@@ -27,6 +46,25 @@ impl PyTerminal {
     }
 
     /// Get clipboard history for a slot
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive)
+    ///
+    /// Returns:
+    ///     list[ClipboardEntry]: Entries oldest-first, each with `content`,
+    ///     `timestamp` (microseconds), and `label`. Empty list if the slot
+    ///     has never had content added.
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello")
+    ///     history = term.get_clipboard_history("clipboard")
+    ///     ```
     fn get_clipboard_history(
         &self,
         slot: &str,
@@ -43,7 +81,25 @@ impl PyTerminal {
             .collect())
     }
 
-    /// Get the most recent clipboard entry
+    /// Get the most recent clipboard entry for a slot
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive)
+    ///
+    /// Returns:
+    ///     ClipboardEntry | None: The newest entry for the slot, or None if
+    ///     the slot has no history
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello")
+    ///     entry = term.get_latest_clipboard("clipboard")
+    ///     ```
     fn get_latest_clipboard(
         &self,
         slot: &str,
@@ -61,6 +117,13 @@ impl PyTerminal {
     }
 
     /// Clear clipboard history for a slot
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is not a recognized slot name
     fn clear_clipboard_history(&mut self, slot: &str) -> PyResult<()> {
         let clipboard_slot = super::parse_clipboard_slot(slot)?;
         self.inner.clear_clipboard_history(clipboard_slot);
@@ -73,7 +136,22 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Set clipboard content with slot
+    /// Set clipboard content for a slot, recording it in that slot's history
+    ///
+    /// Args:
+    ///     content: Text content to store
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive);
+    ///         defaults to "clipboard" if not given (default: None)
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_clipboard_with_slot("hello", slot="primary")
+    ///     ```
     #[pyo3(signature = (content, slot=None))]
     fn set_clipboard_with_slot(&mut self, content: String, slot: Option<String>) -> PyResult<()> {
         let clipboard_slot = slot
@@ -85,7 +163,26 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get clipboard content from slot
+    /// Get the most recent clipboard content for a slot
+    ///
+    /// Args:
+    ///     slot: Clipboard slot name — one of "primary", "clipboard",
+    ///         "selection", or "custom0".."custom9" (case-insensitive);
+    ///         defaults to "clipboard" if not given (default: None)
+    ///
+    /// Returns:
+    ///     str | None: The latest content stored in the slot, or None if the
+    ///     slot has no history
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.set_clipboard_with_slot("hello", slot="primary")
+    ///     content = term.get_clipboard_from_slot(slot="primary")
+    ///     ```
     #[pyo3(signature = (slot=None))]
     fn get_clipboard_from_slot(&self, slot: Option<String>) -> PyResult<Option<String>> {
         let clipboard_slot = slot
@@ -96,7 +193,27 @@ impl PyTerminal {
         Ok(self.inner.get_clipboard_from_slot(clipboard_slot))
     }
 
-    /// Search clipboard history
+    /// Search clipboard history for entries containing a substring
+    ///
+    /// Args:
+    ///     query: Substring to search for (case-sensitive, plain substring match)
+    ///     slot: Clipboard slot name to restrict the search to — one of
+    ///         "primary", "clipboard", "selection", or "custom0".."custom9"
+    ///         (case-insensitive); if None, searches all slots (default: None)
+    ///
+    /// Returns:
+    ///     list[ClipboardEntry]: Matching entries across the searched slot(s),
+    ///     each with `content`, `timestamp` (microseconds), and `label`
+    ///
+    /// Raises:
+    ///     ValueError: If `slot` is given but not a recognized slot name
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.add_to_clipboard_history("clipboard", "hello world")
+    ///     matches = term.search_clipboard_history("world")
+    ///     ```
     #[pyo3(signature = (query, slot=None))]
     fn search_clipboard_history(
         &self,
@@ -120,13 +237,34 @@ impl PyTerminal {
 
     // === Feature 30: OSC 52 Clipboard Sync ===
 
-    /// Record a clipboard sync event
+    /// Record an OSC 52 clipboard sync event for diagnostics/history
+    ///
+    /// The event is content-sanitized and truncated to
+    /// `get_max_clipboard_event_bytes()` before storage, appended to the
+    /// event log (`get_clipboard_sync_events()`), and — for "set" operations
+    /// with content — also appended to that target's history
+    /// (`get_clipboard_sync_history()`).
     ///
     /// Args:
-    ///     target: Clipboard target ("clipboard", "primary", "secondary", "cutbuffer0")
-    ///     operation: Operation type ("set", "query", "clear")
-    ///     content: Optional content (for set operations)
-    ///     is_remote: Whether this is from a remote session
+    ///     target: Clipboard target — one of "clipboard", "primary",
+    ///         "secondary", "cutbuffer0" (case-insensitive)
+    ///     operation: Operation type — one of "set", "query", "clear"
+    ///         (case-insensitive)
+    ///     content: Content associated with the event (typically only present
+    ///         for "set" operations)
+    ///     is_remote: Whether this event originated from a remote session
+    ///         (e.g. over SSH); when true, `content` is attributed to the
+    ///         session ID set via `set_remote_session_id()`
+    ///
+    /// Raises:
+    ///     ValueError: If `target` or `operation` is not one of the supported
+    ///         values above
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_clipboard_sync("clipboard", "set", "hello", False)
+    ///     ```
     fn record_clipboard_sync(
         &mut self,
         target: &str,
@@ -156,10 +294,20 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Get clipboard sync events
+    /// Get all recorded OSC 52 clipboard sync events
     ///
     /// Returns:
-    ///     List of PyClipboardSyncEvent
+    ///     list[ClipboardSyncEvent]: Events oldest-first (capped at
+    ///     `get_max_clipboard_sync_events()`), each with `target`,
+    ///     `operation`, `content`, `is_write`, `timestamp` (milliseconds),
+    ///     and `is_remote`
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_clipboard_sync("clipboard", "set", "hello", False)
+    ///     events = term.get_clipboard_sync_events()
+    ///     ```
     fn get_clipboard_sync_events(
         &self,
     ) -> PyResult<Vec<crate::python_bindings::types::PyClipboardSyncEvent>> {
@@ -171,13 +319,29 @@ impl PyTerminal {
             .collect())
     }
 
-    /// Get clipboard sync history for a target
+    /// Get clipboard sync history (content set via OSC 52) for a target
     ///
     /// Args:
-    ///     target: Clipboard target ("clipboard", "primary", "secondary", "cutbuffer0")
+    ///     target: Clipboard target — one of "clipboard", "primary",
+    ///         "secondary", "cutbuffer0" (case-insensitive)
     ///
     /// Returns:
-    ///     List of PyClipboardHistoryEntry or None
+    ///     list[ClipboardHistoryEntry]: Entries oldest-first (capped at
+    ///     `set_max_clipboard_sync_history()`), each with `target`, `content`,
+    ///     `timestamp` (milliseconds), and `source` (remote session ID, if
+    ///     any). Always wrapped in an `Optional` for API compatibility, but
+    ///     currently never returns None — an empty list is returned if the
+    ///     target has no history.
+    ///
+    /// Raises:
+    ///     ValueError: If `target` is not one of the supported values above
+    ///
+    /// Example:
+    ///     ```python
+    ///     term = Terminal(80, 24)
+    ///     term.record_clipboard_sync("clipboard", "set", "hello", False)
+    ///     history = term.get_clipboard_sync_history("clipboard")
+    ///     ```
     fn get_clipboard_sync_history(
         &self,
         target: &str,
