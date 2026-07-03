@@ -10,11 +10,8 @@ use std::collections::HashMap;
 use crate::debug;
 use crate::graphics::{
     next_graphic_id, GraphicProtocol, GraphicsError, ImageDimension, ImageDisplayMode,
-    ImagePlacement, TerminalGraphic,
+    ImagePlacement, TerminalGraphic, MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS,
 };
-
-/// Maximum allowed image dimension (width or height) in pixels
-const MAX_IMAGE_DIMENSION: usize = 16384;
 
 /// Maximum allowed base64-encoded image data size in bytes (100 MB)
 const MAX_IMAGE_DATA_SIZE: usize = 100 * 1024 * 1024;
@@ -111,8 +108,17 @@ impl ITermParser {
             base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &self.data)
                 .map_err(|e| GraphicsError::Base64Error(e.to_string()))?;
 
-        // Decode image using image crate
-        let img = image::load_from_memory(&decoded)
+        // Decode image using a size-limited reader so the decoder refuses to
+        // allocate before hitting MAX_IMAGE_DIMENSION (decompression-bomb guard).
+        let mut reader = image::ImageReader::new(std::io::Cursor::new(&decoded))
+            .with_guessed_format()
+            .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+        let mut limits = image::Limits::default();
+        limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
+        limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
+        reader.limits(limits);
+        let img = reader
+            .decode()
             .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
 
         let rgba = img.to_rgba8();
@@ -133,6 +139,24 @@ impl ITermParser {
                 width.max(height),
                 MAX_IMAGE_DIMENSION,
             ));
+        }
+
+        // Also cap the total pixel product: two dimensions can each pass
+        // MAX_IMAGE_DIMENSION individually yet still multiply out to a huge
+        // RGBA buffer (e.g. 16384x16384 ≈ 1 GiB).
+        let pixel_count = width.checked_mul(height).ok_or_else(|| {
+            GraphicsError::ITermError("Image dimensions overflow usize".to_string())
+        })?;
+        if pixel_count > MAX_IMAGE_PIXELS {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "ITERM",
+                &format!(
+                    "iTerm2 image pixel count too large: {} (max {}), rejecting",
+                    pixel_count, MAX_IMAGE_PIXELS
+                ),
+            );
+            return Err(GraphicsError::ImageTooLarge(pixel_count, MAX_IMAGE_PIXELS));
         }
 
         let pixels = rgba.into_raw();

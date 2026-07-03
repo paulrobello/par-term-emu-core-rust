@@ -15,6 +15,7 @@ use flate2::read::ZlibDecoder;
 use crate::graphics::{
     next_graphic_id, AnimationControl, AnimationFrame, CompositionMode, GraphicProtocol,
     GraphicsError, GraphicsStore, ImageDimension, ImagePlacement, TerminalGraphic,
+    MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS,
 };
 
 /// Kitty graphics transmission action
@@ -866,12 +867,31 @@ impl KittyParser {
     fn decode_pixels(&self, data: &[u8]) -> Result<(usize, usize, Vec<u8>), GraphicsError> {
         match self.format {
             KittyFormat::Png => {
-                // Decode PNG
-                let img = image::load_from_memory(data)
+                // Decode PNG via a size-limited reader so the decoder refuses
+                // to allocate before hitting MAX_IMAGE_DIMENSION, guarding
+                // against decompression-bomb PNGs (small input, huge output).
+                let mut reader = image::ImageReader::new(std::io::Cursor::new(data))
+                    .with_guessed_format()
+                    .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
+                let mut limits = image::Limits::default();
+                limits.max_image_width = Some(MAX_IMAGE_DIMENSION as u32);
+                limits.max_image_height = Some(MAX_IMAGE_DIMENSION as u32);
+                reader.limits(limits);
+                let img = reader
+                    .decode()
                     .map_err(|e| GraphicsError::ImageError(e.to_string()))?;
                 let rgba = img.to_rgba8();
                 let width = rgba.width() as usize;
                 let height = rgba.height() as usize;
+                // Also cap the total pixel product: two dimensions can each
+                // pass MAX_IMAGE_DIMENSION individually yet still multiply
+                // out to a huge RGBA buffer.
+                let pixels = width.checked_mul(height).ok_or_else(|| {
+                    GraphicsError::KittyError("Image dimensions overflow usize".to_string())
+                })?;
+                if pixels > MAX_IMAGE_PIXELS {
+                    return Err(GraphicsError::ImageTooLarge(pixels, MAX_IMAGE_PIXELS));
+                }
                 Ok((width, height, rgba.into_raw()))
             }
 
@@ -2355,6 +2375,44 @@ mod tests {
         assert_eq!(w, 2);
         assert_eq!(h, 1);
         assert_eq!(px, vec![1, 2, 3, 4, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_decode_pixels_png_rejects_oversized_dimensions() {
+        // Encode a tiny valid PNG, then patch its IHDR width/height so the
+        // implied RGBA buffer would exceed MAX_IMAGE_DIMENSION and the image
+        // crate's default max_alloc (512 MiB). This exercises the
+        // `ImageReader::limits()` guard (SEC-001) without needing to
+        // actually construct a real oversized image.
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 0]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        // PNG layout: 8-byte signature, 4-byte length, 4-byte "IHDR" type,
+        // 13-byte IHDR data (width, height, ...), 4-byte CRC32 of type+data.
+        let oversized: u32 = 100_000; // exceeds MAX_IMAGE_DIMENSION (16384)
+        png[16..20].copy_from_slice(&oversized.to_be_bytes()); // width
+        png[20..24].copy_from_slice(&oversized.to_be_bytes()); // height
+
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc: u32 = 0xFFFF_FFFF;
+            for &b in bytes {
+                crc ^= b as u32;
+                for _ in 0..8 {
+                    let mask = (crc & 1).wrapping_neg();
+                    crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+                }
+            }
+            !crc
+        }
+        let crc = crc32(&png[12..29]);
+        png[29..33].copy_from_slice(&crc.to_be_bytes());
+
+        let mut parser = KittyParser::new();
+        parser.format = KittyFormat::Png;
+        let result = parser.decode_pixels(&png);
+        assert!(result.is_err(), "oversized PNG dimensions must be rejected");
     }
 
     // --- build_graphic: Frame action ---

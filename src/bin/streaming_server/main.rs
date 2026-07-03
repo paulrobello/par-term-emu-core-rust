@@ -217,7 +217,7 @@ struct Args {
 
     /// API key for WebSocket authentication (optional)
     /// Clients must provide this via Authorization header or X-API-Key header
-    #[arg(long, env = "PAR_TERM_API_KEY")]
+    #[arg(long, env = "PAR_TERM_API_KEY", hide_env_values = true)]
     api_key: Option<String>,
 
     /// Allow API key authentication via query parameter (?api_key=...).
@@ -309,7 +309,8 @@ struct Args {
     #[arg(
         long,
         env = "PAR_TERM_HTTP_PASSWORD",
-        conflicts_with = "http_password_hash"
+        conflicts_with = "http_password_hash",
+        hide_env_values = true
     )]
     http_password: Option<String>,
 
@@ -319,7 +320,8 @@ struct Args {
     #[arg(
         long,
         env = "PAR_TERM_HTTP_PASSWORD_HASH",
-        conflicts_with = "http_password"
+        conflicts_with = "http_password",
+        hide_env_values = true
     )]
     http_password_hash: Option<String>,
 

@@ -30,6 +30,18 @@ pub use placeholder::{
 };
 pub use serialization::{GraphicsSnapshot, ImageDataRef, SerializableGraphic};
 
+/// Maximum allowed image dimension (width or height) in pixels.
+///
+/// Shared by all image-decoding graphics protocols (Kitty, iTerm2) so a
+/// single crafted image cannot force an unbounded decode allocation.
+pub const MAX_IMAGE_DIMENSION: usize = 16384;
+
+/// Maximum allowed total pixel count (width * height) for a decoded image.
+///
+/// Bounds worst-case RGBA allocation to `MAX_IMAGE_PIXELS * 4` bytes (256
+/// MiB) even when width and height individually pass `MAX_IMAGE_DIMENSION`.
+pub const MAX_IMAGE_PIXELS: usize = 64 * 1024 * 1024;
+
 /// Image display mode for rendering
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ImageDisplayMode {
