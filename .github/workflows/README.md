@@ -1,271 +1,138 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for building, testing, and publishing the `par-term-emu-core-rust` package.
+This directory contains the GitHub Actions workflows that build, test, and publish `par-term-emu-core-rust` to PyPI, crates.io, and GitHub Releases.
 
-## Workflows
+## Workflows at a glance
 
-### publish-testpypi.yml - Publish to TestPyPI
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| **Build and Deploy** | `deployment.yml` | Manual (`workflow_dispatch`) | Full release: streaming binaries + Python wheels + sdist + web frontend → GitHub Release (Sigstore) → PyPI + crates.io |
+| **Release and Publish** | `release.yml` | Manual (`workflow_dispatch`) | Thin wrapper that dispatches `deployment.yml` on `main` |
+| **CI** | `ci.yml` | Manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
+| **Publish 🐍 📦 to TestPyPI** | `publish-testpypi.yml` | Manual (`workflow_dispatch`) | Build + publish to TestPyPI + verify install |
+| **Publish to crates.io** | `publish-crates.yml` | Manual (`workflow_dispatch`) | Standalone crates.io publish (idempotent; for republishing without a full release) |
 
-**Trigger**:
-- Manual (`workflow_dispatch`)
-- Pull requests to main (build only, no publish)
+All workflows are **manual-dispatch only** — none run on push or PR. The everyday quality gate is the local pre-commit setup (`make pre-commit-run`, also enforced on commit); these workflows are run on demand.
 
-**Purpose**: Builds and publishes to TestPyPI for testing before production release.
+## The release process (`deployment.yml`)
 
-**Jobs**:
-1. **build-test-wheels**: Builds wheels for all platforms (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64) - Python 3.13 only
-2. **build-test-sdist**: Builds source distribution
-3. **publish-to-testpypi**: Publishes to TestPyPI (manual trigger only)
-4. **test-testpypi-install**: Verifies package can be installed from TestPyPI
+`deployment.yml` is the canonical release workflow. It is what `make deploy` triggers (and what `release.yml` dispatches). It runs the whole pipeline end-to-end:
 
-**Features**:
-- Automatic build verification on PRs
-- TestPyPI publishing on manual trigger
-- Installation testing after publish
-- Discord notifications on success
-- Skip existing packages
-
-**Required Secrets**:
-- `DISCORD_WEBHOOK`: Discord webhook URL for notifications
-
-**TestPyPI Setup**:
-- Environment: `testpypi`
-- Package URL: https://test.pypi.org/p/par-term-emu-core-rust
-- Uses TestPyPI trusted publishing
-
-### deployment.yml - Build and Deploy
-
-**Trigger**: Manual (`workflow_dispatch`)
-
-**Purpose**: Builds Python wheels for multiple platforms and publishes to PyPI.
-
-**Jobs**:
-1. **linux**: Builds wheels for Linux x86_64 and ARM64 (Python 3.11, 3.12, 3.13)
-2. **macos**: Builds wheels for macOS x86_64 and universal2 (Python 3.11, 3.12, 3.13)
-3. **windows**: Builds wheels for Windows x86_64 (Python 3.11, 3.12, 3.13)
-4. **sdist**: Builds source distribution
-5. **publish**: Publishes to PyPI and sends Discord notification
-
-**Platform Coverage**:
-| Platform | Architecture | Python Versions | Testing |
-|----------|--------------|-----------------|---------|
-| Linux | x86_64 | 3.11, 3.12, 3.13 | ✅ Full |
-| Linux | ARM64 (aarch64) | 3.11, 3.12, 3.13 | ⚠️ Build only* |
-| macOS | x86_64 | 3.11, 3.12, 3.13 | ✅ Full |
-| macOS | universal2 (Intel + Apple Silicon) | 3.11, 3.12, 3.13 | ⚠️ Partial† |
-| Windows | x86_64 | 3.11, 3.12, 3.13 | ✅ PTY tests skipped |
-
-*ARM64 wheels built via QEMU cross-compilation, not tested on CI
-†Universal2 tested on x86_64 runner only
-
-**Features**:
-- Cross-platform wheel building using maturin
-- Automated testing on x86_64 platforms
-- QEMU-based ARM64 cross-compilation
-- PyPI trusted publishing (OIDC)
-- Discord notifications on successful publish
-- Skip existing packages on PyPI
-
-**Required Secrets**:
-- `DISCORD_WEBHOOK`: Discord webhook URL for notifications
-
-**PyPI Setup**:
-- Environment: `pypi`
-- Package URL: https://pypi.org/p/par-term-emu-core-rust
-- Uses PyPI trusted publishing (no token needed)
-
-### release.yml - Create GitHub Release
-
-**Trigger**: Manual (`workflow_dispatch`)
-
-**Purpose**: Creates a GitHub release with signed artifacts and triggers PyPI publishing.
-
-**Jobs**:
-1. **build-wheels**: Builds wheels for all platforms (Linux x86_64/ARM64, macOS x86_64/universal2, Windows x86_64) with all Python versions (3.11, 3.12, 3.13)
-2. **build-sdist**: Builds source distribution
-3. **github-release**: Creates GitHub release with Sigstore signatures
-4. **trigger-pypi-publish**: Triggers the deployment workflow for PyPI publishing
-
-**Features**:
-- Sigstore signing for all distribution artifacts
-- Auto-generated release notes
-- Automatic version extraction from `__version__`
-- Discord notifications on release creation
-- Automatic PyPI publishing trigger
-
-**Required Secrets**:
-- `DISCORD_WEBHOOK`: Discord webhook URL for notifications
-
-**Release Process**:
-1. Update version in `python/par_term_emu_core_rust/__init__.py` and `Cargo.toml`
-2. Commit changes
-3. Manually trigger the "Release 🐍 distribution" workflow
-4. Workflow creates GitHub release with signed artifacts
-5. Workflow automatically triggers PyPI publishing
-6. Discord notifications sent for both release and PyPI publish
-
-## Configuration
-
-### Discord Webhook Setup
-
-1. Create a Discord webhook in your server settings
-2. Add the webhook URL as a repository secret named `DISCORD_WEBHOOK`:
-   ```bash
-   gh secret set DISCORD_WEBHOOK
-   ```
-3. Paste your webhook URL when prompted
-
-### PyPI Trusted Publishing Setup
-
-#### Production PyPI
-1. Go to https://pypi.org/manage/account/publishing/
-2. Add a new publisher:
-   - **PyPI Project Name**: `par-term-emu-core-rust`
-   - **Owner**: `{your-github-username-or-org}`
-   - **Repository name**: `par-term-emu-core-rust`
-   - **Workflow name**: `deployment.yml`
-   - **Environment name**: `pypi`
-
-#### TestPyPI (for testing)
-1. Go to https://test.pypi.org/manage/account/publishing/
-2. Add a new publisher:
-   - **PyPI Project Name**: `par-term-emu-core-rust`
-   - **Owner**: `{your-github-username-or-org}`
-   - **Repository name**: `par-term-emu-core-rust`
-   - **Workflow name**: `publish-testpypi.yml`
-   - **Environment name**: `testpypi`
-
-## Manual Workflow Triggers
-
-### Test with TestPyPI (recommended first)
-```bash
-gh workflow run publish-testpypi.yml
+```
+version-check ──┬─► build-streaming-binaries  (5 targets)
+                ├─► linux    (x86_64 + aarch64 × py 3.12/3.13/3.14)
+                ├─► macos    (x86_64 + universal2 × py 3.12/3.13/3.14)
+                ├─► windows  (x86_64 × py 3.12/3.13/3.14)
+                ├─► sdist
+                └─► package-web-frontend
+                              │
+                              ▼
+                       github-release  ──► publish        (PyPI)
+                              │        └─► publish-crates (crates.io)
+                              ▼
+                  GitHub Release v$VERSION
 ```
 
-After successful TestPyPI publish, test installation:
-```bash
-uv venv .venv
-source .venv/bin/activate
-uv pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ par-term-emu-core-rust
-python -c "from par_term_emu_core_rust import Terminal; print('Success!')"
-```
+**Jobs (8):**
 
-### Deploy to PyPI Only
+1. **Verify Version Consistency** — asserts `Cargo.toml`, `pyproject.toml`, and `__init__.py` agree on the version; exports it for downstream jobs.
+2. **Build streaming binary** (matrix, 5 targets) — builds the standalone `par-term-streamer` server binary for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64 (`--no-default-features --features streaming-bin`). Linux ARM64 cross-compiles with `gcc-aarch64-linux-gnu`; Unix binaries are stripped.
+3. **linux / macos / windows** (matrix × Python 3.12/3.13/3.14) — builds wheels via `PyO3/maturin-action`. Linux ARM64 uses QEMU. x86_64 runners also install the wheel and run `pytest` (PTY/ioctl tests are ignored; Windows uses `-k "not pty"`). macOS builds both x86_64 and universal2 wheels.
+4. **Build source distribution** — `maturin sdist`.
+5. **Package web terminal frontend** — archives the committed `web_term/` directory into `par-term-web-frontend-v$VERSION.tar.gz` and `.zip`.
+6. **Create GitHub Release** — Sigstore-signs the wheels + sdist, creates release `v$VERSION` (`--generate-notes --latest`), and uploads the wheels, streaming binaries, and web-frontend archives.
+7. **Publish to PyPI** — trusted publishing (OIDC), `skip-existing`, environment `pypi`.
+8. **Publish to crates.io** — publishes the `par-term-emu-derive` sub-crate **first** (crates.io strips `path` deps, so the sub-crate must exist on the registry before the main crate can resolve it), then the main crate with `--no-verify` (the PyO3 cdylib can't link libpython standalone at publish time; it is verified via `make dev` + the test suite). Uses `CARGO_REGISTRY_TOKEN`.
+
+**Workflow permissions:** `contents: write` (create release + upload assets), `id-token: write` (PyPI trusted publishing + Sigstore signing).
+
+### Platform & Python coverage
+
+| Platform | Architecture | Python | Built | Tested |
+|----------|--------------|--------|-------|--------|
+| Linux | x86_64 | 3.12, 3.13, 3.14 | ✅ | ✅ pytest (PTY/ioctl tests ignored) |
+| Linux | aarch64 | 3.12, 3.13, 3.14 | ✅ (QEMU cross-compile) | ⚠️ build only |
+| macOS | x86_64 | 3.12, 3.13, 3.14 | ✅ | ✅ pytest (PTY/ioctl tests ignored) |
+| macOS | universal2 (Intel + Apple Silicon) | 3.12, 3.13, 3.14 | ✅ | ✅ (on x86_64 runner) |
+| Windows | x86_64 | 3.12, 3.13, 3.14 | ✅ | ✅ pytest (`-k "not pty"`) |
+| Streaming binary | linux x86_64/aarch64, macos x86_64/aarch64, windows x86_64 | — | ✅ | ⚠️ build only |
+
+## Triggering & verifying a release
+
+Trigger the release workflow (any of these are equivalent — `release.yml` just dispatches `deployment.yml`):
+
 ```bash
+make deploy            # runs: gh workflow run deployment.yml
 gh workflow run deployment.yml
-```
-
-### Create Release and Deploy (full release process)
-```bash
-# 1. Update version in both files
-# 2. Commit changes
-# 3. Trigger release
 gh workflow run release.yml
 ```
 
-## Version Management
+Watch the run to green, then confirm each registry actually shows the new version (a green workflow is not the same as a published artifact):
 
-The package version is managed in two places and must be kept in sync:
-- `Cargo.toml`: Line 3 - `version = "0.2.0"`
-- `python/par_term_emu_core_rust/__init__.py`: Line 31 - `__version__ = "0.2.0"`
+```bash
+gh run watch <run-id> --exit-status
+curl -s https://pypi.org/pypi/par-term-emu-core-rust/json | jq -r .info.version
+curl -s -H "User-Agent: release-check/1.0" https://crates.io/api/v1/crates/par-term-emu-core-rust | jq -r .crate.max_stable_version
+gh release view v$VERSION --repo paulrobello/par-term-emu-core-rust
+```
 
-Before creating a release:
-1. Update both version strings to the new version
-2. Commit the changes
-3. Trigger the release workflow
+> **crates.io API gotcha:** anonymous `curl` to `crates.io/api/v1/...` is rejected with a data-access-policy error and returns empty/null. Always pass a `User-Agent` header when querying it.
 
-## Workflow Permissions
+## Other workflows
 
-### deployment.yml
-- `id-token: write` - Required for PyPI trusted publishing
-- `contents: read` - Default repository access
+### `ci.yml` — CI (manual gate)
+Manual-only. Runs the same version-consistency check, then a **test** matrix (ubuntu/macos/windows × Python 3.12/3.13/3.14), a **lint** job (`cargo fmt --check`, `cargo clippy --all-targets --features python,streaming`, `ruff format --check`, `ruff check`, `pyright`), and a **build** job (maturin wheel on each OS). No publishing. Use it for an on-demand full multi-OS gate independent of local pre-commit.
 
-### release.yml
-- `contents: write` - Create GitHub releases
-- `id-token: write` - Sign artifacts with Sigstore
-- `actions: write` - Trigger deployment workflow
+### `publish-testpypi.yml` — TestPyPI
+Manual-only. Builds wheels for 5 platforms (Linux x86_64/aarch64, macOS x86_64/universal2, Windows) on **Python 3.14 only**, plus an sdist, publishes to TestPyPI via trusted publishing (environment `testpypi`), then verifies installation by importing `Terminal`/`PtyTerminal` and checking `__version__`.
+
+### `publish-crates.yml` — standalone crates.io publish
+Manual-only, with a `skip_tests` input. Checks whether the version already exists on crates.io (`cargo search`); if not, runs tests, dry-runs, then publishes with `CARGO_REGISTRY_TOKEN`. Idempotent — use it to republish or repair a crates.io release without rebuilding the Python wheels or cutting a new GitHub release.
+
+## Required secrets
+
+| Secret | Used by | Purpose |
+|--------|---------|---------|
+| `DISCORD_WEBHOOK` | all publishing jobs | Success notifications (`continue-on-error: true`, so a bad webhook never fails a release) |
+| `CARGO_REGISTRY_TOKEN` | `publish-crates` job in `deployment.yml`, and `publish-crates.yml` | crates.io publish |
+
+PyPI and TestPyPI use **trusted publishing (OIDC)** — no API-token secret is required, but the trusted publisher must be registered on each registry (see below).
+
+## Trusted-publishing setup
+
+Register an OpenID Connect publisher on **PyPI** (https://pypi.org/manage/account/publishing/) and **TestPyPI** (https://test.pypi.org/manage/account/publishing/):
+
+| Field | PyPI | TestPyPI |
+|-------|------|----------|
+| PyPI project name | `par-term-emu-core-rust` | `par-term-emu-core-rust` |
+| Owner | `paulrobello` | `paulrobello` |
+| Repository name | `par-term-emu-core-rust` | `par-term-emu-core-rust` |
+| Workflow name | `deployment.yml` | `publish-testpypi.yml` |
+| Environment name | `pypi` | `testpypi` |
+
+crates.io uses a token (`CARGO_REGISTRY_TOKEN`) rather than OIDC.
+
+## Workflow permissions
+
+| Workflow | Permissions | Why |
+|----------|-------------|-----|
+| `deployment.yml` | `contents: write`, `id-token: write` | Create release + upload assets; PyPI trusted publish + Sigstore signing |
+| `release.yml` | `actions: write` | Dispatch `deployment.yml` |
+| `ci.yml` | `contents: read` | Checkout only |
+| `publish-testpypi.yml` | `contents: read` (publish job adds `id-token: write`) | Checkout; TestPyPI trusted publish |
+| `publish-crates.yml` | `contents: read` | Checkout only |
 
 ## Troubleshooting
 
-### Discord Notifications Not Sent
-- Verify `DISCORD_WEBHOOK` secret is set correctly
-- Check webhook URL is valid in Discord
-- Notifications have `continue-on-error: true` so they won't fail the workflow
-
-### PyPI Publishing Fails
-- Verify trusted publisher is configured on PyPI
-- Check environment name matches (`pypi`)
-- Ensure package version doesn't already exist on PyPI
-- Review PyPI publish logs in GitHub Actions
-
-### Version Extraction Fails
-- Ensure `__version__` is defined in `python/par_term_emu_core_rust/__init__.py`
-- Verify Python syntax is valid in `__init__.py`
-- Check Python version (3.13) is available in workflow
-
-## Best Practices
-
-1. **Always test locally before release**:
-   ```bash
-   make checkall
-   cargo test
-   make test-python
-   ```
-
-2. **Test on TestPyPI first**:
-   - Publish to TestPyPI before production PyPI
-   - Verify installation from TestPyPI works
-   - Test in a clean environment
-
-3. **Use semantic versioning**: MAJOR.MINOR.PATCH (e.g., 0.2.0)
-
-4. **Create releases from main branch**: Ensure all changes are merged to main
-
-5. **Review artifacts before publishing**: Check the wheels in the Actions artifacts
-
-6. **Monitor Discord notifications**: Verify successful publishing via Discord
-
-## Recommended Release Workflow
-
-1. **Update version numbers**:
-   ```bash
-   # Update both files to new version (e.g., 0.3.0)
-   # - Cargo.toml: version = "0.3.0"
-   # - python/par_term_emu_core_rust/__init__.py: __version__ = "0.3.0"
-   ```
-
-2. **Test locally**:
-   ```bash
-   make checkall
-   cargo test
-   make test-python
-   ```
-
-3. **Commit and push**:
-   ```bash
-   git add Cargo.toml python/par_term_emu_core_rust/__init__.py
-   git commit -m "chore: bump version to 0.3.0"
-   git push
-   ```
-
-4. **Test on TestPyPI**:
-   ```bash
-   gh workflow run publish-testpypi.yml
-   # Wait for completion, then test installation
-   ```
-
-5. **Create production release**:
-   ```bash
-   gh workflow run release.yml
-   # This will:
-   # - Create GitHub release with signed artifacts
-   # - Automatically trigger PyPI publishing
-   # - Send Discord notifications
-   ```
+- **Discord notification not sent** — verify the `DISCORD_WEBHOOK` secret. Notifications use `continue-on-error: true`, so they never fail the workflow.
+- **PyPI publish fails** — confirm the trusted publisher is configured (workflow filename and environment name must match exactly), the version doesn't already exist on PyPI, and the `publish` job has `id-token: write`.
+- **crates.io publish fails** — confirm `CARGO_REGISTRY_TOKEN` is set and valid. The `par-term-emu-derive` sub-crate must publish first; both publish steps use `continue-on-error`, so check the job logs to confirm each actually published.
+- **Version check fails** — `Cargo.toml`, `pyproject.toml`, and `__init__.py` must agree. (The two `derive/Cargo.toml` entries are not checked by the job — keep them in sync manually.)
+- **`macos-latest` deprecation annotation** — informational only (the label migrates to macOS 26); it does not fail the run.
 
 ## Resources
 
 - [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/)
 - [Sigstore](https://www.sigstore.dev/)
 - [Maturin Action](https://github.com/PyO3/maturin-action)
-- [Discord Webhooks](https://discord.com/developers/docs/resources/webhook)
+- [crates.io data-access policy](https://crates.io/data-access) (User-Agent requirement)
