@@ -112,7 +112,7 @@ build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.43.1"
+version = "0.44.0"
 requires-python = ">=3.12"
 
 [tool.maturin]
@@ -136,7 +136,7 @@ dev = ["maturin>=1.13.3", ...]
 ```toml
 [package]
 rust-version = "1.88"
-version = "0.43.1"
+version = "0.44.0"
 edition = "2021"
 
 [lib]
@@ -514,7 +514,7 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2026-07-03 (Version 0.43.1)
+**Last Updated**: 2026-07-03 (Version 0.44.0)
 
 | Category | Score | Notes |
 |----------|-------|-------|

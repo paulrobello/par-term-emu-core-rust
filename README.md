@@ -19,7 +19,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 > The entries below cover recent highlights; older entries may be archived
 > to CHANGELOG.md in future releases to keep this section concise (DOC-016).
 
-Version 0.43.1 is a **patch release** with security and correctness fixes. **Security:** closed a Kitty graphics integer-overflow DoS in `decode_pixels` (attacker-controlled image dimensions could wrap the size check → OOB/panic on malicious output), and resolved all open web-frontend npm advisories (`@babel/core` CVE-2026-49356, `postcss` CVE-2026-41305, `brace-expansion`) — `npm audit` now clean. **Fixed:** the Kitty `V=` relative-offset parsing asymmetry, and incomplete `parse_delete_target` (`d=i`/`p`/`x`/`y` now handled instead of silently ignored). **Heads-up for Rust consumers:** 0.43.1 is a pure bug/security patch, but it inherits the **0.43.0 Rust-API breaking changes** (`.lock()` → `.read()`/`.write()` on the `RwLock`, private `Cell`/`Grid` fields) — if you're upgrading a Rust crate from 0.42.x, see [What's New in 0.43.0](#whats-new-in-0430) below. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.44.0 is a **minor release** adding new VT reporting sequences and Kitty desktop notifications, plus security hardening and concurrency/performance work — non-breaking for both Python and Rust consumers. **Added:** OSC 99 Kitty desktop notifications (with a new Python `take_notifications_detailed()` / `Notification` API), XTGETTCAP (`DCS + q`), DECRQSS (`DCS $ q`), and XTWINOPS report ops 11/13/19. **Security:** capped Kitty PNG / iTerm2 image-decode sizes against decompression-bomb DoS, and hid streaming-server CLI secrets from `--help`. **Performance:** observer/trigger dispatch and PTY device-query replies now run outside the terminal write lock, and screenshot glyph bitmaps are shared via `Arc`. See [What's New in 0.44.0](#whats-new-in-0440) below, and [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.44.0
+
+Version 0.44.0 is a **minor release** focused on terminal-reporting completeness, security hardening, and concurrency. **Added:** OSC 99 Kitty desktop notifications (`OSC 99 ; <metadata> ; <payload> ST`) with multi-chunk accumulation, urgency, and actions — exposed to Python via the new `take_notifications_detailed()` method and `Notification` class (the existing `take_notifications()`/`drain_notifications()` tuple API is unchanged); XTGETTCAP (`DCS + q`) replying terminal capabilities (`TN`/`Co`/`RGB`/`Tc`); DECRQSS (`DCS $ q`) replying current SGR / cursor-style / scroll-margin settings; and XTWINOPS report ops `CSI 11 t` / `13 t` / `19 t` (window state / position / size-in-characters). **Fixed:** a DCS routing bug where `DCS +q` (XTGETTCAP) and `DCS $q` (DECRQSS) were misrouted into the Sixel parser because routing keyed only on the final `q` byte. **Security:** Kitty PNG and iTerm2 image decoding now enforce a shared `MAX_IMAGE_PIXELS` product cap (closing a decompression-bomb DoS reachable from any terminal/SSH bytes), and the streaming-server CLI hides `api_key` / `http_password` / `http_password_hash` values from `--help`. **Performance:** observer/trigger callback dispatch and PTY device-query reply writes moved outside the `Terminal` write lock (the reader thread previously held the exclusive guard across blocking PTY writes and Python re-entry, stalling every concurrent reader), screenshot glyph bitmaps are shared via `Arc<[u8]>` instead of per-character deep copies, and the per-row `String` allocation in flag-emoji detection is gone. **Refactored** (internal, no API change): the 4,004-line `python_bindings/types.rs` god-file was split into 12 cohesive submodules behind an unchanged facade, and the duplicated WS/WSS handshake logic was consolidated into a single shared callback factory. Non-breaking for Python and Rust consumers. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.43.0
 
@@ -1123,8 +1127,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.1.tar.gz
-tar -xzf par-term-web-frontend-v0.43.1.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.44.0.tar.gz
+tar -xzf par-term-web-frontend-v0.44.0.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -1433,8 +1437,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.43.1.tar.gz
-tar -xzf par-term-web-frontend-v0.43.1.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.44.0.tar.gz
+tar -xzf par-term-web-frontend-v0.44.0.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term

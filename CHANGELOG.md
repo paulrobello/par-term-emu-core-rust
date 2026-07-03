@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-07-03
+
 ### Security
 - **Kitty PNG + iTerm2 image-decode size caps (decompression-bomb DoS).** Kitty PNG graphics were decoded via `image::load_from_memory` with no dimension bound (unlike the sibling raw `Rgba`/`Rgb` branches and the iTerm2 path), so a small, highly-compressible PNG could decode to tens of GiB of RGBA and OOM the host — reachable from any bytes written to the terminal. Both `src/graphics/kitty.rs` (`decode_pixels`) and `src/graphics/iterm.rs` (`decode_image`) now decode through a size-limited `image::ImageReader` and enforce a shared `MAX_IMAGE_PIXELS` product cap (new constants in `src/graphics/mod.rs`); iTerm2 previously bounded each axis individually but not the product (a ~1 GiB single image previously passed).
 - **CLI secrets no longer printed by `--help`.** Added `hide_env_values` to the `api_key`, `http_password`, and `http_password_hash` streaming-server CLI args, so `--help` no longer echoes the live secret when the backing environment variable is set.
