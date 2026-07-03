@@ -253,7 +253,7 @@ The main terminal emulator that ties everything together, organized into submodu
   - `mod.rs` - Core streaming types
   - `server.rs` - Axum-based WebSocket server with TLS support, per-client subscription filtering
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions (app-level): 33 server message types, 10 client message types, 24 event types
+  - `protocol.rs` - Streaming protocol definitions (app-level): 35 server message types, 11 client message types, 26 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
   - `broadcaster.rs` - Multi-client broadcast support
   - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
@@ -435,7 +435,7 @@ graph TD
     C[Terminal::process<br/>src/terminal/mod.rs]
     D[VTE Parser]
     E[Perform Trait Methods<br/>src/terminal/sequences/]
-    F[Grid/Cursor Updates<br/>src/grid.rs, src/cursor.rs]
+    F[Grid/Cursor Updates<br/>src/grid/mod.rs, src/cursor.rs]
     G[State Changes]
     H[Python API queries<br/>src/python_bindings/]
 
@@ -486,7 +486,7 @@ Other submodules:
 - `pty.rs` - `PyPtyTerminal` struct and its implementation (PTY support). Holds the `Terminal` behind `PtySession`'s `Arc<RwLock<Terminal>>` rather than owning it directly.
 - `common.rs` - Shared Terminal-access macros (ARC-003/QA-001): `impl_terminal_query_getters!` and `impl_terminal_state_setters!` generate identical getter/setter methods for both `PyTerminal` and `PyPtyTerminal` from one macro body, via the `TerminalAccess` trait that abstracts over "owns a `Terminal` directly" vs. "reaches it through an `Arc<RwLock<Terminal>>`". This is why most methods appear on both classes without duplicated code.
 - `screenshot_config.rs` - `PyScreenshotConfig` (`ScreenshotConfig`), a reusable options object for `screenshot_config()`/`screenshot_to_file_config()` so callers don't repeat 16+ keyword args per call (QA-005, added 0.43.0)
-- `types.rs` - Data types (PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more)
+- `types/` - Data types directory (formerly a single ~4,000-line `types.rs`, now split by domain: `clipboard.rs`, `color.rs`, `graphics.rs`, `metrics.rs`, `mouse.rs`, `notification.rs`, `recording.rs`, `screen.rs`, `selection.rs`, `session.rs`, `shell.rs`, `trigger.rs`, with `mod.rs` re-exporting every `Py*` type so `python_bindings::types::PyX` and the crate-level re-exports are unchanged). Holds PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more.
 - `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode, PyWidthConfig, and more)
 - `observer.rs` - `PyCallbackObserver`/`PyQueueObserver`, bridging the Rust `TerminalObserver` trait to Python callables/`asyncio.Queue`
 - `streaming.rs` - `StreamingServer`/`StreamingConfig` Python bindings (requires the `streaming` feature)
@@ -553,10 +553,10 @@ All public methods are wrapped with `#[pymethods]` and provide:
 ### Adding New ANSI Sequences
 
 1. Add handler in the appropriate sequence module:
-   - CSI sequences: `src/terminal/sequences/csi.rs`
-   - OSC sequences: `src/terminal/sequences/osc.rs`
+   - CSI sequences: `src/terminal/sequences/csi/` (directory: `mod.rs` plus per-topic files `cursor.rs`, `edit.rs`, `erase.rs`, `keyboard.rs`, `mode.rs`, `report.rs`, `scroll.rs`, `style.rs`, `window.rs`)
+   - OSC sequences: `src/terminal/sequences/osc/` (directory: `mod.rs` plus per-topic files `clipboard.rs`, `color.rs`, `image.rs`, `iterm.rs`, `notify.rs`, `shell.rs`, `title.rs`)
    - ESC sequences: `src/terminal/sequences/esc.rs`
-   - DCS sequences: `src/terminal/sequences/dcs.rs`
+   - DCS sequences: `src/terminal/sequences/dcs/` (directory: `mod.rs` plus `query.rs`, `sixel.rs`)
 2. Update grid/cursor state as needed
 3. Add tests
 
@@ -564,12 +564,12 @@ All public methods are wrapped with `#[pymethods]` and provide:
 
 1. Add variant to `Color` enum in `src/color.rs`
 2. Implement `to_rgb()` conversion
-3. Update color handling in `src/terminal/sequences/csi.rs`
+3. Update color handling in `src/terminal/sequences/csi/style.rs`
 
 ### Additional Cell Attributes
 
 1. Add flag to `CellFlags` in `src/cell.rs`
-2. Update SGR handling in `src/terminal/sequences/csi.rs`
+2. Update SGR handling in `src/terminal/sequences/csi/style.rs`
 3. Expose in Python API if needed (in `src/python_bindings/`)
 
 ## Testing Strategy
@@ -849,62 +849,68 @@ graph TD
 ### Rust
 
 **Core dependencies:**
-- `pyo3` (0.27.2) - Python bindings (optional, feature-gated)
+- `pyo3` (0.29) - Python bindings (optional, feature-gated; uses `multiple-pymethods` to allow the split `*_api.rs` impl blocks)
+- `par-term-emu-derive` (path `derive/`) - Local proc-macro crate for derived impls
 - `vte` (0.15.0) - ANSI parser
 - `unicode-width` (0.2.2) - Character width calculation
 - `portable-pty` (0.9.0) - PTY support
 - `base64` (0.22.1) - Base64 encoding/decoding
-- `bitflags` (2.10.0) - Bit flag management
-- `regex` (1.12.2) - Regular expression support
-- `serde` (1.0.228) + `serde_json` (1.0.145) + `serde_yaml` (0.9.34) - Serialization support
+- `bitflags` (2.13.0) - Bit flag management
+- `regex` (1.12.3) - Regular expression support
+- `serde` (1.0.228) + `serde_json` (1.0.150) + `serde_yaml` (0.9.34) - Serialization support
 
 **Screenshot/rendering support:**
-- `image` (0.25.9) - Image encoding/decoding (PNG, JPEG, BMP)
-- `swash` (0.2.6) - Pure Rust font rendering and text shaping with color emoji support
+- `image` (0.25.10) - Image encoding/decoding (PNG, JPEG, BMP)
+- `swash` (0.2.7) - Pure Rust font rendering and text shaping with color emoji support
 
 **Streaming server dependencies (optional, feature-gated):**
-- `tokio` (1.48) - Async runtime with full features
-- `tokio-tungstenite` (0.28) - WebSocket support
-- `axum` (0.8.7) - Web framework with WebSocket support
-- `tower-http` (0.6.7) - HTTP middleware (fs, trace)
-- `futures-util` (0.3.31) - Future utilities
-- `uuid` (1.19) - UUID generation with v4 and serde support
-- `clap` (4.5.53) - CLI parsing with derive feature
-- `anyhow` (1.0.100) - Error handling
-- `tracing` (0.1.43) + `tracing-subscriber` (0.3.22) - Logging
-- `reqwest` (0.12.24) - HTTP client with rustls-tls (for frontend downloads)
-- `flate2` (1.1.5) + `tar` (0.4.44) - Archive extraction
-- `prost` (0.14.1) + `prost-build` (0.14.1) - Protocol Buffers
-- `rustls` (0.23.35) + `tokio-rustls` (0.26.4) + `rustls-pemfile` (2.2.0) - TLS support
-- `axum-server` (0.7.3) - TLS server support
+- `tokio` (1.52.3) - Async runtime with full features
+- `tokio-tungstenite` (0.29) - WebSocket support
+- `axum` (0.8.9) - Web framework with WebSocket support
+- `tower-http` (0.6.11) - HTTP middleware (fs, trace, cors)
+- `futures-util` (0.3.32) - Future utilities
+- `uuid` (1.23.2) - UUID generation with v4 and serde support
+- `clap` (4.6.1) - CLI parsing with derive feature (binary-only, via `streaming-bin`)
+- `anyhow` (1.0.102) - Error handling (binary-only, via `streaming-bin`)
+- `tracing` (0.1.44) + `tracing-subscriber` (0.3.23) - Logging (binary-only, via `streaming-bin`)
+- `reqwest` (0.13.4) - HTTP client with rustls-tls, for frontend downloads (binary-only, via `streaming-bin`)
+- `flate2` (1.1.9) + `tar` (0.4.46) - Archive extraction (tar is binary-only, via `streaming-bin`)
+- `prost` (0.14.3) + `prost-build` (0.14.3) - Protocol Buffers (`prost-build` only via `regenerate-proto`)
+- `rustls` (0.23.40) + `tokio-rustls` (0.26.4) - TLS support
+- `axum-server` (0.8.0) - TLS server support
+- `bcrypt` (0.19.1) + `md-5` (0.11.0) + `sha1` (0.11.0) - HTTP Basic Auth hash verification (SEC-003; replaced the unmaintained `rustls-pemfile` per RUSTSEC-2025-0134)
+- `headers` (0.4.1) - HTTP header types for auth
+- `sysinfo` (0.39.3) - System resource statistics for `SystemStats` events
 
 **Development dependencies:**
-- `pyo3` (0.27.2, features: auto-initialize) - Python test support
-- `proptest` (1.9.0) - Property-based testing framework
-- `tempfile` (3.23) - Temporary file management for tests
+- `pyo3` (0.29, features: auto-initialize) - Python test support
+- `proptest` (1.11.0) - Property-based testing framework
+- `tempfile` (3.27) - Temporary file management for tests
 
 **Platform-specific:**
-- `libc` (0.2.178) - Unix system calls (Unix only)
+- `libc` (0.2.186) - Unix system calls (Unix only)
 
 > **📝 Note:** See `Cargo.toml` for current version requirements
 
 ### Python
 
 **Build and development tools:**
-- `maturin` (>=1.9,<2.0) - Build system for PyO3 bindings
+- `maturin` (>=1.13.3,<2.0) - Build system for PyO3 bindings
 - `uv` - Fast Python package installer and resolver (recommended)
 
 **Runtime dependencies:**
-- `pillow` (>=12.0.0) - Image processing for sixel examples and screenshot features
+- `pillow` (>=12.2.0) - Image processing for sixel examples and screenshot features
 
 **Testing:**
-- `pytest` (>=9.0.1) - Testing framework
+- `pytest` (>=9.0.3) - Testing framework
 - `pytest-timeout` (>=2.4.0) - Test timeout protection (5-second default)
+- `pytest-asyncio` (>=1.4.0) - Async test support
+- `pytest-cov` (>=5.0.0) - Coverage reporting
 
 **Code quality:**
-- `ruff` (>=0.14.5) - Linting and formatting
-- `pyright` (>=1.1.407) - Static type checking
-- `pre-commit` (>=4.4.0) - Git hook management
+- `ruff` (>=0.15.16) - Linting and formatting
+- `pyright` (>=1.1.410) - Static type checking
+- `pre-commit` (>=4.6.0) - Git hook management
 
 **Python version requirements:** 3.12, 3.13, 3.14
 
@@ -921,27 +927,34 @@ The project uses conditional PyO3 feature compilation to support both production
 **Cargo.toml features:**
 ```toml
 [dependencies]
-pyo3 = { version = "0.27.2", optional = true }
+pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
+par-term-emu-derive = { path = "derive", version = "0.43.1", optional = true }
 
 [dev-dependencies]
-pyo3 = { version = "0.27.2", features = ["auto-initialize"] }
+pyo3 = { version = "0.29", features = ["auto-initialize"] }
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
+# Library streaming: WebSocket/protobuf server for embedders. Excludes the
+# binary-only CLI/logging/download deps (see `streaming-bin`).
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
-             "uuid", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest",
-             "flate2", "tar", "prost", "prost-build", "rustls", "tokio-rustls",
-             "rustls-pemfile", "axum-server"]
+             "prost", "rustls", "tokio-rustls", "axum-server",
+             "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
+# Standalone par-term-streamer binary only (ARC-015): CLI/logging/download deps
+# the library streaming module never uses. Depends on `streaming`.
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar"]
+jemalloc = ["tikv-jemallocator"]              # Better server performance (non-Windows)
+regenerate-proto = ["prost-build"]            # Rebuild protobuf from proto/terminal.proto
 rust-only = []
-full = ["python", "streaming"]
+full = ["python", "streaming", "streaming-bin"]
 ```
 
 **Build commands:**
 - **Development build:** `maturin develop --release` (uses `extension-module` feature)
 - **Running Rust tests:** `cargo test --lib --no-default-features --features pyo3/auto-initialize`
 - **Production wheels:** `maturin build --release` (uses default features with `extension-module`)
-- **Streaming server binary:** `cargo build --release --bin par-term-streamer --features streaming`
+- **Streaming server binary:** `cargo build --release --bin par-term-streamer --no-default-features --features streaming-bin`
 
 > **⚠️ Important:** Never run `cargo build` directly for PyO3 modules. Always use `maturin develop` or the `make dev` target to ensure proper Python integration.
 
@@ -980,7 +993,12 @@ graph TD
 
 ### CI/CD Pipeline
 
-The project uses GitHub Actions (`.github/workflows/ci.yml`) with three parallel jobs:
+The project uses GitHub Actions (`.github/workflows/ci.yml`) with four jobs. The Test, Lint, and Build jobs depend on Version Check, which runs first:
+
+#### Version Check Job
+- **Platform:** Ubuntu only
+- **Timeout:** 5 minutes
+- **Purpose:** Verifies the version string is consistent across `Cargo.toml`, `pyproject.toml`, and `python/par_term_emu_core_rust/__init__.py` before any build work runs.
 
 #### Test Job
 - **Platforms:** Ubuntu, macOS, Windows
@@ -1001,7 +1019,7 @@ The project uses GitHub Actions (`.github/workflows/ci.yml`) with three parallel
 - **Timeout:** 15 minutes
 - **Checks:**
   - Rust formatting: `cargo fmt -- --check`
-  - Rust clippy: `cargo clippy --all-targets --all-features -- -D warnings`
+  - Rust clippy: `cargo clippy --all-targets --features python,streaming -- -D warnings`
   - Python formatting: `ruff format --check`
   - Python linting: `ruff check`
   - Python type checking: `pyright`

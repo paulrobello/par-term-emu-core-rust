@@ -1134,12 +1134,12 @@ Available binaries: Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows
 
 **Or install from crates.io:**
 ```bash
-cargo install par-term-emu-core-rust --features streaming
+cargo install par-term-emu-core-rust --features streaming-bin
 ```
 
 **Or build from source:**
 ```bash
-cargo build --bin par-term-streamer --no-default-features --features streaming --release
+cargo build --bin par-term-streamer --no-default-features --features streaming-bin --release
 ./target/release/par-term-streamer --help
 ```
 
@@ -1409,7 +1409,7 @@ make streamer-run
 make streamer-run-auth
 
 # Or use cargo directly
-cargo build --bin par-term-streamer --no-default-features --features streaming --release
+cargo build --bin par-term-streamer --no-default-features --features streaming-bin --release
 ./target/release/par-term-streamer --port 8099 --theme dracula
 
 # With authentication

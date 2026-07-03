@@ -168,11 +168,6 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 39 m` - Default foreground color
 - `CSI 49 m` - Default background color
 
-### Color Stack Operations (xterm)
-
-- `CSI # P` - Push current colors to stack (XTPUSHCOLORS)
-- `CSI # Q` - Pop colors from stack (XTPOPCOLORS)
-
 ## Tab Stops
 
 VT100 tab stop management.
@@ -196,14 +191,10 @@ DEC Private Mode sequences.
 ### Common Modes
 
 - `?1` - Application cursor keys (DECCKM)
-- `?5` - Reverse video (DECSCNM)
 - `?6` - Origin mode (DECOM)
 - `?7` - Auto wrap mode (DECAWM)
 - `?25` - Show/hide cursor (DECTCEM)
-- `?47` - Alternate screen buffer
 - `?69` - Enable left/right margins (DECLRMM)
-- `?1047` - Alternate screen buffer (alternate)
-- `?1048` - Save/restore cursor
 - `?1049` - Save cursor and use alternate screen
 
 ### Standard Modes
@@ -243,7 +234,7 @@ Modern terminal features and VT520 extensions.
 
 **Character protection:**
 - `ESC V` / `ESC W` - Start/End Protected Area (SPA/EPA)
-- `CSI ? Ps " q` - Select Character Protection Attribute (DECSCA, Ps: 0/2=unprotected, 1=protected)
+- `CSI Ps " q` - Select Character Protection Attribute (DECSCA, Ps: 0/2=unprotected, 1=protected)
 
 > See [VT_TECHNICAL_REFERENCE.md#modern-extensions](VT_TECHNICAL_REFERENCE.md#modern-extensions) for detailed behavior and VT520 conformance level effects.
 
@@ -251,7 +242,7 @@ Modern terminal features and VT520 extensions.
 
 Progressive enhancement for keyboard handling with flags for disambiguation and event reporting.
 
-- `CSI = flags ; mode u` - Set keyboard protocol (mode: 0=disable, 1=set, 2=lock, 3=report)
+- `CSI = flags ; mode u` - Set keyboard protocol (mode: 1=set/replace, 2=add/OR, 3=report)
   - Flags (bitmask): 1=disambiguate, 2=report events, 4=alt keys, 8=all keys, 16=text
 - `CSI ? u` - Query current flags - Response: `CSI ? flags u`
 - `CSI > flags u` - Push current flags and set new
@@ -477,8 +468,6 @@ Kitty graphics protocol support for modern terminal graphics with animation, com
 - Virtual placements and relative positioning
 - Zlib compression (`o=z`)
 - Z-index layering
-
-**Note:** Kitty graphics can also be sent via DCS sequences using `DCS G key=value;data ST` format.
 
 > See [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) for complete specification.
 

@@ -418,7 +418,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `flush_synchronized_updates()`: Flush synchronized updates buffer (DEC 2026)
 
 #### Testing
-- `simulate_mouse_event(...)`: Simulate mouse event for testing
+- `simulate_mouse_event(button: int, col: int, row: int, pressed: bool) -> bytes`: Simulate a mouse event and return the generated escape sequence bytes. `button` is a numeric code (0=left, 1=middle, 2=right).
 
 #### Export Functions
 - `export_text() -> str`: Export entire buffer as plain text without styling
@@ -467,7 +467,7 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 ### Mouse Tracking and Events
 
 - `mouse_encoding() -> MouseEncoding`: Get current mouse encoding mode
-- `set_mouse_encoding(encoding: MouseEncoding)`: Set mouse encoding (Default, UTF8, SGR, URXVT)
+- `set_mouse_encoding(encoding: MouseEncoding)`: Set mouse encoding (Default, Utf8, Sgr, Urxvt)
 - `get_mouse_events() -> list[MouseEvent]`: Get recorded mouse events
 - `get_mouse_positions() -> list[MousePosition]`: Get mouse position history
 - `get_last_mouse_position() -> MousePosition | None`: Get most recent mouse position
@@ -843,7 +843,7 @@ Extended text manipulation beyond basic extraction:
 - `get_logical_lines() -> list[str]`: Get all logical lines (respecting wrapping, each string is a joined logical line)
 - `join_wrapped_lines(start_row: int) -> JoinedLines | None`: Join wrapped lines from start position (returns None if row is out of bounds)
 - `is_line_start(row: int) -> bool`: Check if row is start of logical line
-- `get_line_context(row: int, before: int, after: int) -> list[str]`: Get lines with context
+- `get_line_context(row: int, context_before: int, context_after: int) -> list[str]`: Get lines with context
 
 ### Testing and Compliance
 
@@ -930,7 +930,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `select_word(col: int, row: int, word_chars: str | None = None) -> tuple[tuple[int, int], tuple[int, int]] | None`: Get word boundaries at a position for smart selection. Returns `((start_col, start_row), (end_col, end_row))`, or `None` if not on a word. Distinct from `select_word_at()`, which sets the active selection instead of just returning boundaries.
 
 #### Selection Management
-- `set_selection(start: tuple[int, int], end: tuple[int, int], mode: str = "character")`: Set text selection. `start`/`end` are `(col, row)` tuples. Mode: "character", "line", or "block"
+- `set_selection(start: tuple[int, int], end: tuple[int, int], mode: str)`: Set text selection. `start`/`end` are `(col, row)` tuples. Mode: "character", "line", or "block" (required — no default)
 - `get_selection() -> Selection | None`: Get current selection
 - `get_selected_text() -> str | None`: Get text content of current selection
 - `clear_selection()`: Clear current selection
@@ -989,7 +989,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 **Supported event types:**
 
-`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`
+`bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`, `progress_bar_changed`, `badge_changed`, `shell_integration`, `zone_opened`, `zone_closed`, `zone_scrolled_out`, `environment_changed`, `remote_host_transition`, `sub_shell_detected`, `file_transfer_started`, `file_transfer_progress`, `file_transfer_completed`, `file_transfer_failed`, `upload_requested`, `screen_cleared`
 
 #### Examples
 
@@ -1121,7 +1121,7 @@ Automate terminal interactions with recorded macros:
 - `recording_to_macro(session: RecordingSession, name: str) -> Macro`: Convert recording session to macro
 - `get_macro(name: str) -> Macro | None`: Get macro by name
 - `list_macros() -> list[str]`: List all available macros
-- `load_macro(yaml_str: str) -> Macro`: Load macro from YAML string
+- `load_macro(name: str, macro: Macro)`: Load a `Macro` object into the macro library under the given name (does not parse YAML; use `Macro.from_yaml()` / `Macro.load_yaml()` for that)
 - `remove_macro(name: str)`: Remove macro by name
 
 #### Coprocess Management
@@ -1533,19 +1533,22 @@ Image format enumeration.
 - `ImageFormat.JPEG`: JPEG format
 - `ImageFormat.GIF`: GIF format
 - `ImageFormat.BMP`: BMP format
+- `ImageFormat.RGBA`: Raw RGBA pixel data
+- `ImageFormat.RGB`: Raw RGB pixel data
 
 ### InlineImage
 
 Inline image metadata.
 
 **Properties:**
-- `id: int`: Image identifier
-- `protocol: ImageProtocol`: Graphics protocol used
-- `format: ImageFormat`: Image format
+- `id: str | None`: Image identifier (string when provided by the source, else `None`)
+- `protocol: str`: Graphics protocol name used (`"sixel"`, `"iterm2"`, or `"kitty"`)
+- `format: str`: Image format name (e.g. `"png"`, `"jpeg"`)
 - `width: int`: Width in pixels
 - `height: int`: Height in pixels
-- `row: int`: Display row
-- `col: int`: Display column
+- `position: tuple[int, int]`: Display position `(col, row)`
+- `display_cols: int`: Display width in terminal columns
+- `display_rows: int`: Display height in terminal rows
 - `data: bytes`: Image data
 
 ### JoinedLines
@@ -1574,10 +1577,10 @@ Difference between two lines.
 Mouse encoding mode enumeration.
 
 **Values:**
-- `MouseEncoding.Default`: Default encoding (single byte)
-- `MouseEncoding.UTF8`: UTF-8 encoding
-- `MouseEncoding.SGR`: SGR 1006 encoding
-- `MouseEncoding.URXVT`: URXVT encoding
+- `MouseEncoding.Default`: Default X11 encoding (single byte)
+- `MouseEncoding.Utf8`: UTF-8 encoding
+- `MouseEncoding.Sgr`: SGR 1006 encoding
+- `MouseEncoding.Urxvt`: URXVT 1015 encoding
 
 ### MouseEvent
 
@@ -1766,6 +1769,8 @@ Tmux control mode notification.
 - `value: str | None`: Subscription value
 - `window_layout: str | None`: Window layout string
 - `window_visible_layout: str | None`: Visible window layout
+- `window_raw_flags: str | None`: Raw window flags string
+- `raw_line: str | None`: Raw notification line
 
 ### Trigger
 
@@ -1780,7 +1785,7 @@ A registered trigger pattern.
 
 ### TriggerAction
 
-Trigger action configuration. Constructed from Python with `TriggerAction(action_type, params)`.
+Trigger action configuration. Constructed from Python with `TriggerAction(action_type, params=None)` (`params` is optional and defaults to an empty mapping).
 
 **Properties:**
 - `action_type: str`: Action type (e.g., "highlight", "notify", "mark_line", "set_variable", "run_command", "play_sound", "send_text", "split_pane", "stop")
@@ -1825,7 +1830,10 @@ Unicode standard version for character width tables.
 - `UnicodeVersion.Unicode12`: Unicode 12.0
 - `UnicodeVersion.Unicode13`: Unicode 13.0
 - `UnicodeVersion.Unicode14`: Unicode 14.0
-- `UnicodeVersion.Unicode15`: Unicode 15.0 (latest, default)
+- `UnicodeVersion.Unicode15`: Unicode 15.0
+- `UnicodeVersion.Unicode15_1`: Unicode 15.1
+- `UnicodeVersion.Unicode16`: Unicode 16.0 (latest pinned)
+- `UnicodeVersion.Auto`: Use the latest available Unicode version (default)
 
 ### AmbiguousWidth
 
@@ -1840,12 +1848,12 @@ Treatment of East Asian Ambiguous-width characters.
 Character width configuration combining Unicode version and ambiguous-width treatment.
 
 **Properties:**
-- `unicode_version: UnicodeVersion`: Unicode version for width tables (default: Unicode15)
+- `unicode_version: UnicodeVersion`: Unicode version for width tables (default: `Auto`, resolves to the latest available)
 - `ambiguous_width: AmbiguousWidth`: Treatment of ambiguous characters (default: Narrow)
 
-**Methods:**
-- `char_width(c: str) -> int`: Get display width of a character (1 or 2)
-- `str_width(s: str) -> int`: Get total display width of a string
+**Static constructors:**
+- `WidthConfig.cjk() -> WidthConfig`: CJK defaults (wide ambiguous)
+- `WidthConfig.western() -> WidthConfig`: Western defaults (narrow ambiguous)
 
 ### CoprocessConfig
 
@@ -1879,8 +1887,6 @@ HSL color representation.
 - `h: float`: Hue (0-360)
 - `s: float`: Saturation (0-1)
 - `l: float`: Lightness (0-1)
-- `s: int`: Saturation (0-100)
-- `l: int`: Lightness (0-100)
 
 ### ColorHSV
 
@@ -1890,8 +1896,6 @@ HSV color representation.
 - `h: float`: Hue (0-360)
 - `s: float`: Saturation (0-1)
 - `v: float`: Value (0-1)
-- `s: int`: Saturation (0-100)
-- `v: int`: Value (0-100)
 
 ### ColorPalette
 
@@ -1963,7 +1967,7 @@ Cursor display styles (DECSCUSR).
 Text underline styles.
 
 **Values:**
-- `UnderlineStyle.None_`: No underline
+- `UnderlineStyle.None` (attribute name is the Python keyword `None`; access via `getattr(UnderlineStyle, "None")` or integer value `0`): No underline
 - `UnderlineStyle.Straight`: Straight underline (default)
 - `UnderlineStyle.Double`: Double underline
 - `UnderlineStyle.Curly`: Curly underline (for spell check)
@@ -2098,8 +2102,8 @@ StreamingConfig(
 - `web_root: str` - Web root directory for static files
 - `initial_cols: int` - Initial terminal columns (0=use terminal's current size)
 - `initial_rows: int` - Initial terminal rows (0=use terminal's current size)
-- `max_sessions: int` - Maximum concurrent terminal sessions (read-only, fixed at 10)
-- `session_idle_timeout: int` - Idle session timeout in seconds (read-only, fixed at 900)
+- `max_sessions: int` - Maximum concurrent terminal sessions (default 10; settable via `set_max_sessions()`)
+- `session_idle_timeout: int` - Idle session timeout in seconds (default 900; settable via `set_session_idle_timeout()`)
 - `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
 - `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
@@ -2149,11 +2153,17 @@ Encode a server message into binary protobuf format.
 | `"badge_changed"` | `badge` | Badge change event |
 | `"selection_changed"` | `start_col`, `start_row`, `end_col`, `end_row`, `text`, `mode`, `cleared` | Selection change event |
 | `"clipboard_sync"` | `operation`, `content`, `target` | Clipboard sync event |
-| `"shell_integration"` | `event_type`, `command`, `exit_code`, `timestamp` | Shell integration event |
+| `"shell_integration"` | `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line` | Shell integration event |
 | `"cwd_changed"` | `new_cwd`, `old_cwd`, `hostname`, `username`, `timestamp` | Working directory changed |
 | `"trigger_matched"` | `trigger_id`, `row`, `col`, `end_col`, `text`, `captures`, `timestamp` | Trigger pattern matched |
 | `"user_var_changed"` | `name`, `value`, `old_value` | User variable changed (OSC 1337 SetUserVar) |
 | `"progress_bar_changed"` | `action`, `id`, `state`, `percent`, `label` | Progress bar state changed (OSC 9;4 / OSC 934) |
+| `"file_transfer_started"` | `id`, `direction`, `filename`, `total_bytes` | A file download or upload has begun |
+| `"file_transfer_progress"` | `id`, `bytes_transferred`, `total_bytes` | Progress update during multipart transfer |
+| `"file_transfer_completed"` | `id`, `filename`, `size` | Transfer finished successfully |
+| `"file_transfer_failed"` | `id`, `reason` | Transfer failed (decode error, size exceeded, cancelled) |
+| `"upload_requested"` | `format` | Host requested a file upload (e.g., `"tgz"`) |
+| `"screen_cleared"` | `include_scrollback` | Screen cleared (`True` if scrollback was also cleared via ED 3J) |
 | `"system_stats"` | *(none — server-generated)* | System resource statistics (CPU, memory, disk, network) |
 
 **Example:**
@@ -2200,7 +2210,7 @@ Cell-level terminal snapshots with input-stream delta recording and timeline nav
 
 #### TerminalSnapshot
 
-Complete capture of terminal state at a point in time. Defined in `src/terminal/terminal_snapshot.rs`.
+Complete capture of terminal state at a point in time. Defined in `src/terminal/replay_snapshot.rs`.
 
 **Fields:**
 - `timestamp` (`u64`): Unix timestamp in milliseconds when the snapshot was captured
@@ -2223,7 +2233,7 @@ Complete capture of terminal state at a point in time. Defined in `src/terminal/
 
 #### GridSnapshot
 
-Snapshot of a single grid (primary or alternate screen). Defined in `src/terminal/terminal_snapshot.rs`.
+Snapshot of a single grid (primary or alternate screen). Defined in `src/terminal/replay_snapshot.rs`.
 
 **Fields:**
 - `cells` (`Vec<Cell>`): Visible screen cells (row-major, cols * rows)
@@ -2346,10 +2356,8 @@ A frozen cell value with text, colors, and attributes.
 | `text_len` | `u8` | Number of valid bytes in `text` |
 | `fg_r`, `fg_g`, `fg_b` | `u8` | Foreground color (resolved to RGB) |
 | `bg_r`, `bg_g`, `bg_b` | `u8` | Background color (resolved to RGB) |
-| `bold` | `bool` | Bold attribute |
-| `italic` | `bool` | Italic attribute |
-| `underline` | `bool` | Underline attribute |
-| `strikethrough` | `bool` | Strikethrough attribute |
+| `attrs` | `u16` | Packed cell attribute bitfield (bold, italic, underline, etc.) |
+| `width` | `u8` | Display width of the character (typically 1 or 2) |
 
 ### SharedState
 
@@ -2361,8 +2369,13 @@ A frozen snapshot of the full terminal state, allocated on the heap.
 | `rows` | `u32` | Number of rows |
 | `cursor_col` | `u32` | Cursor column (0-indexed) |
 | `cursor_row` | `u32` | Cursor row (0-indexed) |
+| `cursor_visible` | `bool` | Whether the cursor is visible |
+| `alt_screen_active` | `bool` | Whether the alternate screen buffer is active |
+| `mouse_mode` | `u8` | Mouse tracking mode (0=Off, 1=X10, 2=Normal, 3=ButtonEvent, 4=AnyEvent) |
 | `title` | `*mut c_char` | Null-terminated title string (owned) |
-| `cwd` | `*mut c_char` | Null-terminated CWD string (owned) |
+| `title_len` | `u32` | Length of the title string in bytes (excluding NUL) |
+| `cwd` | `*mut c_char` | Null-terminated CWD string (owned), or null |
+| `cwd_len` | `u32` | Length of the CWD string in bytes (excluding NUL; 0 if cwd is null) |
 | `cells` | `*mut SharedCell` | Row-major cell array of `cols * rows` entries (owned) |
 | `cell_count` | `u32` | Number of cells in the array |
 
@@ -2397,6 +2410,8 @@ typedef struct {
     void (*on_environment_event)(void* user_data, const char* event_json); // optional
     // Called for screen-related events (bell, resize, graphics, file transfers, etc.)
     void (*on_screen_event)(void* user_data, const char* event_json);   // optional
+    // Called for ALL events (catch-all, fires in addition to the specific callbacks above)
+    void (*on_event)(void* user_data, const char* event_json);          // optional
     // Opaque user data passed to every callback
     void* user_data;
 } TerminalObserverVtable;

@@ -659,9 +659,9 @@ The OSC 9;4 sequence enables applications to display progress indicators that ca
 **Supported Progress States:**
 - `Hidden` (0): No progress indicator visible
 - `Normal` (1): Regular progress bar (0-100%)
-- `Indeterminate` (2): Unknown progress (spinner/animation)
-- `Warning` (3): Progress with warning state (yellow/amber)
-- `Error` (4): Progress with error state (red)
+- `Error` (2): Progress with error state (red)
+- `Indeterminate` (3): Unknown progress (spinner/animation)
+- `Warning` (4): Progress with warning state (yellow/amber)
 
 ### Usage
 
@@ -678,14 +678,14 @@ progress = term.progress_bar()
 print(f"State: {progress.state}")  # "Normal"
 print(f"Progress: {progress.progress}%")  # 50
 
+# Error state at 100%
+term.process_str("\x1b]9;4;2;100\x07")
+
 # Indeterminate progress (unknown duration)
-term.process_str("\x1b]9;4;2\x07")
+term.process_str("\x1b]9;4;3\x07")
 
 # Warning state at 75%
-term.process_str("\x1b]9;4;3;75\x07")
-
-# Error state
-term.process_str("\x1b]9;4;4;100\x07")
+term.process_str("\x1b]9;4;4;75\x07")
 
 # Hide progress bar
 term.process_str("\x1b]9;4;0\x07")
@@ -723,17 +723,17 @@ ESC ] 9 ; 4 ; state [ ; progress ] ST
 - `state`: Progress state (0-4)
   - `0` = Hidden
   - `1` = Normal
-  - `2` = Indeterminate
-  - `3` = Warning
-  - `4` = Error
-- `progress`: Progress value (0-100), optional for state 0 and 2
+  - `2` = Error
+  - `3` = Indeterminate
+  - `4` = Warning
+- `progress`: Progress value (0-100), optional for state 0 and 3
 
 **Examples:**
 - `\x1b]9;4;0\x07` - Hide progress
 - `\x1b]9;4;1;25\x07` - Normal progress at 25%
-- `\x1b]9;4;2\x07` - Indeterminate progress
-- `\x1b]9;4;3;80\x07` - Warning at 80%
-- `\x1b]9;4;4;100\x07` - Error at 100%
+- `\x1b]9;4;2;100\x07` - Error state at 100%
+- `\x1b]9;4;3\x07` - Indeterminate progress
+- `\x1b]9;4;4;80\x07` - Warning at 80%
 
 ### Use Cases
 
@@ -2561,7 +2561,7 @@ server.start()
 **Rust Standalone Server:**
 ```bash
 # Build with streaming support
-cargo build --release --bin par-term-streamer --features streaming
+cargo build --release --bin par-term-streamer --features streaming-bin
 
 # Run server
 par-term-streamer --host 127.0.0.1 --port 8099 --theme dracula
@@ -2605,20 +2605,22 @@ The protocol uses binary Protocol Buffers over WebSocket:
 [N bytes: protobuf ServerMessage/ClientMessage]
 ```
 
-For bandwidth optimization, payloads larger than 1KB are automatically zlib-compressed with a compression header:
+For bandwidth optimization, payloads larger than 256 bytes are automatically zlib-compressed. Every message is prefixed with a 1-byte flag:
 
 ```
-[1 byte: 0x01 compression flag][N bytes: zlib-compressed protobuf]
+[1 byte: flag][N bytes: protobuf payload]
 ```
 
-Uncompressed messages have no compression header for minimal latency.
+Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed payloads sent inline for minimal latency.
 
 **Message Types:**
 
 **Server → Client:**
-- `Connected`: Initial connection with terminal size, session ID, theme, badge, faint_text_alpha, cwd, modify_other_keys, client_id, readonly
+- `Connected`: Initial connection with terminal size, session ID, theme, badge, faint_text_alpha, cwd, modify_other_keys, client_id, readonly, initial_screen
 - `Output`: Terminal output data (text/ANSI sequences)
 - `Resize`: Terminal dimension change
+- `CursorPosition`: Cursor position update
+- `Refresh`: Full-screen refresh response
 - `Title`: Terminal title update
 - `Bell`: Bell/alert event
 - `CwdChanged`: Working directory change (OSC 7)
@@ -2637,6 +2639,8 @@ Uncompressed messages have no compression header for minimal latency.
 - `SystemStats`: System resource statistics (CPU, memory, disk, network)
 - `ZoneOpened`: Semantic zone opened (prompt, command, output)
 - `ZoneClosed`: Semantic zone closed
+- `ZoneScrolledOut`: Semantic zone evicted from scrollback
+- `ScreenCleared`: Screen cleared (ED 2J / ED 3J)
 - `EnvironmentChanged`: Environment variable changed
 - `RemoteHostTransition`: Remote host transition detected
 - `SubShellDetected`: Sub-shell detected
@@ -2765,7 +2769,7 @@ par-term-streamer \
 # Connect from browser using wss://
 ```
 
-**Note:** API key authentication is available through the StreamingConfig API but not currently exposed as a CLI flag in the standalone server.
+**Note:** API key authentication is available through the StreamingConfig API and via the `--api-key <secret>` CLI flag in the standalone server (also settable via the `PAR_TERM_API_KEY` environment variable, with `--allow-api-key-in-query` to additionally permit `?api_key=...` in the URL).
 
 **Certificate Requirements:**
 - Use trusted CA certificates for production
@@ -2783,16 +2787,16 @@ par-term-streamer \
 
 **Frontend:**
 - Next.js 16 with React 19
-- TypeScript 5.9
+- TypeScript 6.0
 - xterm.js 6.0 with WebGL renderer (@xterm/xterm)
-- Tailwind CSS 4.1
-- Protocol Buffers: @bufbuild/protobuf 2.11
+- Tailwind CSS 4.3
+- Protocol Buffers: @bufbuild/protobuf 2.12
 - Compression: pako (zlib)
 
 **Protocol:**
 - Definition: `proto/terminal.proto` (Protocol Buffers schema)
-- Wire format: Binary protobuf (uncompressed for low latency) or with zlib compression header for large payloads (>1KB)
-- Compression: Optional zlib for large payloads (>1KB)
+- Wire format: Binary protobuf (uncompressed for low latency) or with zlib compression header for large payloads (>256 bytes)
+- Compression: Optional zlib for large payloads (>256 bytes)
 - Generation: `prost-build` (Rust), `@bufbuild/buf` (TypeScript)
 
 > **📝 Note:** For complete streaming documentation including protocol specification, frontend setup, performance tuning, and troubleshooting, see [STREAMING.md](STREAMING.md)

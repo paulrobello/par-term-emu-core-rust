@@ -215,7 +215,7 @@ typedef struct TerminalObserverVtable {
 | `on_screen_event` | Called for screen content events (resize, clear) |
 | `on_event` | Catch-all callback for ALL terminal events |
 
-**Event Format:** Observer callbacks receive events as JSON-formatted debug strings (`format!("{:?}", event)`). Parse these strings to extract event data.
+**Event Format:** Observer callbacks receive events as Rust Debug-formatted strings produced by `format!("{:?}", event)`. The output is the `Debug` representation of `TerminalEvent` (not valid JSON), intended primarily for diagnostics; parse it accordingly or match on prefixes to filter event kinds.
 
 ## Memory Management Contract
 

@@ -80,8 +80,8 @@ These settings can be queried or modified after terminal creation.
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `pixel_width` | `usize` | 0 | Pixel width for XTWINOPS 14 reporting |
-| `pixel_height` | `usize` | 0 | Pixel height for XTWINOPS 14 reporting |
+| `pixel_width` | `usize` | `cols * 10` | Pixel width for XTWINOPS 14 reporting |
+| `pixel_height` | `usize` | `rows * 20` | Pixel height for XTWINOPS 14 reporting |
 | `title` | `String` | `""` | Window/icon title (set via OSC 0/2) |
 
 **Usage:**
@@ -402,14 +402,14 @@ Control whether custom colors are used instead of defaults:
 | `use_cursor_guide` | `bool` | `false` | Not exposed | Show cursor guide (column/row highlight) |
 | `use_selected_text_color` | `bool` | `false` | Not exposed | Use custom selection text color |
 | `smart_cursor_color` | `bool` | `false` | Not exposed | Auto-adjust cursor color based on background |
-| `bold_brightening` | `bool` | `true` | Not exposed in Python | Bold ANSI colors 0-7 brighten to 8-15 |
+| `bold_brightening` | `bool` | `true` | `set_bold_brightening(bool)` | Bold ANSI colors 0-7 brighten to 8-15 |
 
 **Notes:**
 - These settings provide feature parity with iTerm2's color configuration
 - Colors can be queried via OSC sequences (10, 11, 12, etc.)
 - Custom colors only apply when corresponding `use_*` flags are enabled
 - Bold brightening defaults to `true` in Terminal core (iTerm2 compatibility) but `false` in ScreenshotConfig
-- Some flags (`use_cursor_guide`, `use_selected_text_color`, `smart_cursor_color`, `bold_brightening`) are currently only accessible via Rust API (not exposed in Python bindings for runtime terminal configuration)
+- Some flags (`use_cursor_guide`, `use_selected_text_color`, `smart_cursor_color`) are currently only accessible via Rust API (not exposed in Python bindings for runtime terminal configuration)
 
 ---
 

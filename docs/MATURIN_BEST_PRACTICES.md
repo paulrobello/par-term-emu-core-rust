@@ -33,7 +33,7 @@ par-term-emu-core-rust/
     ├── lib.rs
     ├── grapheme.rs
     ├── bin/
-    │   └── streaming_server.rs
+    │   └── streaming_server/main.rs
     ├── streaming/
     │   ├── proto.rs                # Generated protobuf code
     │   └── (other streaming modules)
@@ -107,12 +107,12 @@ graph TB
 #### 2. **pyproject.toml Configuration**
 ```toml
 [build-system]
-requires = ["maturin>=1.10.2,<2.0"]
+requires = ["maturin>=1.13.3,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "par-term-emu-core-rust"
-version = "0.39.1"
+version = "0.43.1"
 requires-python = ">=3.12"
 
 [tool.maturin]
@@ -121,12 +121,12 @@ python-source = "python"
 module-name = "par_term_emu_core_rust._native"
 
 [dependency-groups]
-dev = ["maturin>=1.12.0", ...]
+dev = ["maturin>=1.13.3", ...]
 ```
 
 **Status**: **Compliant**
 - Proper PEP 517/518 build system configuration
-- Maturin version: `>=1.10.2,<2.0` (build), `>=1.12.0` (dev)
+- Maturin version: `>=1.13.3,<2.0` (build), `>=1.13.3` (dev)
 - Maturin as build backend
 - Python 3.12+ requirement (aligned with modern Python)
 - Correct feature flags for PyO3
@@ -136,7 +136,7 @@ dev = ["maturin>=1.12.0", ...]
 ```toml
 [package]
 rust-version = "1.88"
-version = "0.39.1"
+version = "0.43.1"
 edition = "2021"
 
 [lib]
@@ -145,20 +145,22 @@ crate-type = ["cdylib", "rlib"]
 
 [[bin]]
 name = "par-term-streamer"
-path = "src/bin/streaming_server.rs"
-required-features = ["streaming"]
+path = "src/bin/streaming_server/main.rs"
+required-features = ["streaming-bin"]
 
 [dependencies]
-pyo3 = { version = "0.28.1", optional = true }
+pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
+# Library streaming (WebSocket/protobuf server for embedders; no CLI deps)
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http",
-             "futures-util", "clap", "anyhow", "tracing",
-             "tracing-subscriber", "reqwest", "tar", "prost",
-             "rustls", "tokio-rustls", "rustls-pemfile", "axum-server",
-             "htpasswd-verify", "headers", "sysinfo"]
+             "futures-util", "prost", "rustls", "tokio-rustls",
+             "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
+# Binary-only deps (CLI/logging/download) for the par-term-streamer binary
+streaming-bin = ["streaming", "clap", "anyhow", "tracing",
+                 "tracing-subscriber", "reqwest", "tar"]
 
 [profile.release]
 opt-level = 3
@@ -169,11 +171,11 @@ strip = true
 
 **Status**: **Compliant**
 - Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
-- PyO3 version: 0.28.1 (latest stable, made optional for flexibility)
+- PyO3 version: 0.29 (latest stable, made optional for flexibility)
 - Minimum Rust version: 1.88
 - Rust edition: 2021
 - Proper PyO3 extension-module feature in `python` feature
-- Feature-based architecture (python, streaming, rust-only, full, jemalloc)
+- Feature-based architecture (python, streaming, streaming-bin, rust-only, full, jemalloc)
 - Aggressive release optimizations (LTO, strip, single codegen-unit)
 - Supports both Python bindings and standalone Rust binaries
 
@@ -229,7 +231,7 @@ All previously recommended improvements have been **fully implemented** and rema
 # QEMU setup for ARM64 cross-compilation
 - name: Set up QEMU
   if: matrix.target == 'aarch64'
-  uses: docker/setup-qemu-action@v3
+  uses: docker/setup-qemu-action@v4
   with:
     platforms: arm64
 
@@ -277,8 +279,8 @@ windows:
     matrix:
       python-version: ["3.12", "3.13", "3.14"]
   steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - uses: actions/checkout@v6
+    - uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
     - name: Install uv
@@ -512,12 +514,12 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2026-02-20 (Version 0.39.1)
+**Last Updated**: 2026-07-03 (Version 0.43.1)
 
 | Category | Score | Notes |
 |----------|-------|-------|
 | Project Structure | 10/10 | Perfect structure with `python-source` pattern + Protocol Buffers |
-| Build Configuration | 10/10 | Maturin 1.10.2+, PyO3 0.28.1, optimal settings |
+| Build Configuration | 10/10 | Maturin 1.13.3+, PyO3 0.29, optimal settings |
 | Cross-Platform (macOS) | 10/10 | x86_64 + universal2 (Intel + Apple Silicon) |
 | Cross-Platform (Linux) | 10/10 | x86_64 + ARM64/aarch64 with QEMU |
 | Cross-Platform (Windows) | 10/10 | x86_64 with smart PTY test exclusion |

@@ -289,9 +289,9 @@ if let Some(session) = terminal.stop_recording() {
     // RecordingSession contains raw terminal events
     println!("Recorded {} events in {}ms", session.events.len(), session.duration);
 
-    // To create a playable macro, build it manually:
-    let mut macro_data = Macro::new(session.title.unwrap_or("Recording".to_string()));
-    // Add macro events based on recording session data
+    // `session.title` is a `String` (never None). Convert to a playable macro
+    // with the `recording_to_macro` helper, or build one manually:
+    let macro_data = terminal.recording_to_macro(&session, session.title.clone());
     macro_data.save_yaml("recording.yaml")?;
 }
 ```
@@ -643,14 +643,14 @@ The `MacroPlayback` class is currently only available in Rust. Python users shou
 
 ## Terminal Macro Library
 
-The `Terminal` struct maintains a macro library for storing and playing macros by name.
+The `Terminal` struct maintains a macro library for storing and playing macros by name. In Python, the library and playback methods are exposed on `PtyTerminal` (not `Terminal`); `tick_macro()` must be called regularly to drive playback forward.
 
 **Python API:**
 ```python
 import par_term_emu_core_rust as terminal_core
 
-# Create terminal
-term = terminal_core.Terminal(80, 24)
+# Macro library methods are on PtyTerminal in Python
+term = terminal_core.PtyTerminal(80, 24)
 
 # Load a macro into the library
 macro = terminal_core.Macro.load_yaml("demo.yaml")
@@ -663,20 +663,25 @@ print(f"Available macros: {macros}")
 # Play a macro by name
 term.play_macro("demo")
 
-# Check playback state
-if term.is_macro_playing():
+# Drive playback: tick_macro() sends key bytes to the PTY and returns
+# True while an event was processed. Call it regularly (e.g. every 10ms).
+while term.tick_macro():
     progress = term.get_macro_progress()
     name = term.get_current_macro_name()
     print(f"Playing {name}: {progress[0]}/{progress[1]} events")
 
-    # Pause/resume control
-    term.pause_macro()
-    if term.is_macro_paused():
-        print("Macro is paused")
-    term.resume_macro()
+    # Screenshot triggers that fired during this tick
+    for label in term.get_macro_screenshot_triggers():
+        print(f"Screenshot trigger: {label}")
 
-    # Change speed during playback
-    term.set_macro_speed(2.0)
+# Pause/resume control (call between ticks)
+term.pause_macro()
+if term.is_macro_paused():
+    print("Macro is paused")
+term.resume_macro()
+
+# Change speed during playback
+term.set_macro_speed(2.0)
 
 # Stop playback
 term.stop_macro()

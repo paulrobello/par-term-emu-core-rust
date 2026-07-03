@@ -104,8 +104,10 @@ par-term-emu-core-rust = { version = "0.43", features = ["python"] }
 #### Python with Streaming
 ```toml
 [dependencies]
+# Streaming server library only:
 par-term-emu-core-rust = { version = "0.43", features = ["python", "streaming"] }
-# Or use the convenience feature:
+# Or the convenience feature, which also pulls in the CLI deps used by the
+# standalone `par-term-streamer` binary (clap, tracing, reqwest, tar, ...):
 par-term-emu-core-rust = { version = "0.43", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
@@ -332,6 +334,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         system_stats_interval_secs: 5,
         api_key: None,
         allow_api_key_in_query: false,
+        allowed_origins: None,
     };
 
     let server = StreamingServer::with_config(
@@ -414,19 +417,20 @@ let config = StreamingConfig {
 
 | Feature | Description | Includes |
 |---------|-------------|----------|
-| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module` |
-| `streaming` | WebSocket streaming server with binary protocol | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `uuid`, `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `flate2`, `tar`, `prost`, `rustls`, `tokio-rustls`, `rustls-pemfile`, `axum-server`, `htpasswd-verify`, `headers`, `sysinfo` |
+| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive` |
+| `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo` |
+| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming`) | `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar` |
 | `rust-only` | Pure Rust, no Python | (none) |
-| `full` | All features | `python`, `streaming` |
+| `full` | All features | `python`, `streaming`, `streaming-bin` |
 | `jemalloc` | Better server performance (non-Windows) | `tikv-jemallocator` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` | `prost-build` |
 | `default` | Default features | `python` |
 
 ## Building
 
-**Pure Rust binary (no Python):**
+**Pure Rust binary (par-term-streamer, no Python):**
 ```bash
-cargo build --no-default-features --features streaming
+cargo build --no-default-features --features streaming-bin
 ```
 
 **Rust library only:**
@@ -451,20 +455,20 @@ The repository includes example binaries:
 - **`par-term-streamer`** - Full-featured WebSocket streaming server with TLS support and binary protocol
   ```bash
   # View all options
-  cargo run --bin par-term-streamer --no-default-features --features streaming -- --help
+  cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- --help
 
   # Run with HTTP server
-  cargo run --bin par-term-streamer --no-default-features --features streaming -- --enable-http
+  cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- --enable-http
 
   # Run with TLS/SSL
-  cargo run --bin par-term-streamer --no-default-features --features streaming -- \
+  cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- \
     --enable-http --tls-cert cert.pem --tls-key key.pem
 
   # Download web frontend (no Node.js required)
-  cargo run --bin par-term-streamer --no-default-features --features streaming -- --download-frontend
+  cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- --download-frontend
 
   # With HTTP Basic Auth
-  cargo run --bin par-term-streamer --no-default-features --features streaming -- \
+  cargo run --bin par-term-streamer --no-default-features --features streaming-bin -- \
     --enable-http --auth-user admin --auth-pass secret
   ```
 

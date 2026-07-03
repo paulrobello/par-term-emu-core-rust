@@ -431,4 +431,4 @@ Planned features:
 
 - [API Reference](API_REFERENCE.md) - Complete API documentation for the terminal emulator
 - [Architecture](ARCHITECTURE.md) - Detailed internal architecture with diagrams
-- [Semantic Snapshots](#) - Text-focused snapshot API for command/output extraction
+- [Semantic Snapshots](API_REFERENCE.md#semantic-snapshot) - Text-focused snapshot API for command/output extraction

@@ -140,7 +140,6 @@ The screenshot module in `src/screenshot/` uses pure Rust implementations for ma
 "C:\\Windows\\Fonts\\arial.ttf",     // Arial (basic coverage)
 "C:\\Windows\\Fonts\\msgothic.ttc",  // MS Gothic (Japanese)
 "C:\\Windows\\Fonts\\msyh.ttc",      // Microsoft YaHei (Chinese)
-"C:\\Windows\\Fonts\\malgun.ttf",    // Malgun Gothic (Korean)
 ```
 
 **Image Encoding:**
@@ -374,7 +373,7 @@ fn try_load_cjk_font(&mut self) { /* loads ALL available CJK fonts in priority o
 4. CJK detection (`is_cjk()`) triggers lazy loading of ALL available system CJK fonts in priority order
 5. CJK font fallback: tries each loaded font until glyph is found
 6. Font choices cached per character (`cjk_font_cache: HashMap<char, usize>`) for performance
-7. Glyph cache: `HashMap<(char, u32, bool, bool), CachedGlyph>` for rendered glyphs
+7. Glyph cache: `LruCache<(char, u32, bool, bool), CachedGlyph>` for rendered glyphs (LRU-bounded via the `lru` crate)
 
 ### Potential Enhancement: Optional Color Emoji Embedding
 
@@ -545,14 +544,14 @@ fn test_windows_conpty() {
 - Use VMs or WSL for testing other platforms locally
 
 **CI/CD Testing:**
-- All PRs automatically run on Linux, macOS, and Windows via GitHub Actions
+- CI runs on Linux, macOS, and Windows via GitHub Actions (manually triggered via `workflow_dispatch`)
 - Check CI results before merging
 - Fix any platform-specific failures
 
 **Test Matrix:**
 - Tests run on Python 3.12, 3.13, and 3.14
 - Tests run on all three major platforms
-- Total: 9 test combinations per PR
+- Total: 9 test combinations per CI run
 
 ### 5. Document Platform-Specific Behavior
 
@@ -604,8 +603,8 @@ This creates **9 test combinations** (3 platforms × 3 Python versions).
 **2. Lint Job**
 - Runs on Ubuntu only (linting is platform-independent)
 - Checks:
-  - Rust formatting: `cargo fmt --check`
-  - Rust linting: `cargo clippy --all-targets --all-features`
+  - Rust formatting: `cargo fmt -- --check`
+  - Rust linting: `cargo clippy --all-targets --features python,streaming -- -D warnings`
   - Python formatting: `ruff format --check`
   - Python linting: `ruff check`
   - Python type checking: `pyright`

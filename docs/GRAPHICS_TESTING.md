@@ -366,7 +366,7 @@ For implementation details, see:
 
 **Sixel Support:**
 - `src/sixel.rs` - Sixel parser implementation
-- `src/terminal/sequences/dcs.rs` - DCS (Device Control String) sequence handling
+- `src/terminal/sequences/dcs/mod.rs` - DCS (Device Control String) sequence handling (dispatches to `sixel.rs`, `query.rs`)
 
 **Terminal Integration:**
 - `src/terminal/graphics.rs` - Graphics storage, scrolling, and position management

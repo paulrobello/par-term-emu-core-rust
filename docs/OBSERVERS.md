@@ -22,7 +22,7 @@ The observer pattern allows your application to receive terminal events immediat
 ### Key Concepts
 
 - **Push-based delivery**: Events are delivered via callbacks, not polling
-- **Deferred dispatch**: Callbacks are invoked after `process()` returns, ensuring no internal mutexes are held
+- **Snapshot dispatch**: Callbacks receive an owned snapshot of pending events, so no `Terminal` state is borrowed while they run
 - **Subscription filtering**: Observers can subscribe to specific event types
 - **Thread-safe**: Observers must implement `Send + Sync` since they may be called from different threads
 - **Dual delivery**: Both observers and `poll_events()` work simultaneously
@@ -73,6 +73,7 @@ Screen content and metadata changes:
 | `GraphicsAdded` | Graphics image added |
 | `HyperlinkAdded` | Hyperlink detected |
 | `DirtyRegion` | Screen region needs redraw |
+| `ScreenCleared` | Screen cleared via ED (ESC[2J or ESC[3J) |
 | `UserVarChanged` | User variable set via OSC 1337 |
 | `ProgressBarChanged` | Progress bar updated via OSC 934 |
 | `BadgeChanged` | Badge text changed via OSC 1337 |
@@ -329,6 +330,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 | `graphics_added` | `GraphicsAdded` | Screen |
 | `hyperlink_added` | `HyperlinkAdded` | Screen |
 | `dirty_region` | `DirtyRegion` | Screen |
+| `screen_cleared` | `ScreenCleared` | Screen |
 | `cwd_changed` | `CwdChanged` | Environment |
 | `trigger_matched` | `TriggerMatched` | Screen |
 | `user_var_changed` | `UserVarChanged` | Screen |
@@ -568,6 +570,12 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "graphics_added",
     "row": "10"
 }
+
+# Screen Cleared
+{
+    "type": "screen_cleared",
+    "include_scrollback": "false"  # "true" when ED 3J also cleared scrollback
+}
 ```
 
 ## Event Lifecycle
@@ -576,7 +584,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 
 The terminal supports two event delivery mechanisms:
 
-1. **Observers (push)**: Events are delivered via callbacks immediately after `process()` returns
+1. **Observers (push)**: Events are delivered via callbacks during `process()`, or via `process_deferred()` after the caller releases an exclusive lock
 2. **Polling (pull)**: Events are queued in a buffer and retrieved via `poll_events()`
 
 Both mechanisms work simultaneously:
@@ -588,7 +596,7 @@ Both mechanisms work simultaneously:
 When `process()` emits events:
 
 1. Events are added to the internal queue
-2. After `process()` returns, observers are notified in order:
+2. Before `process()` returns (or in the explicit `deliver()` step for `process_deferred()`), observers are notified in order using an owned snapshot of the queue:
    - Category-specific method (`on_zone_event`, `on_command_event`, etc.)
    - Catch-all `on_event` (always called)
 3. Application calls `poll_events()` to retrieve queued events (optional)
@@ -611,9 +619,11 @@ print(f"Polled {len(events)} events")
 
 ## Thread Safety
 
-Observers are invoked **after** `process()` returns, ensuring no internal mutexes are held during callbacks. This prevents deadlocks when observers call back into the terminal.
+Observers receive an owned snapshot of the pending events during `process()`, so no `Terminal` state is borrowed while callbacks run. This bounds — but does not eliminate — reentrancy risk: a callback that re-enters the terminal still contends with the in-flight `process()` call. Python observers drop reentrant events to avoid deadlocking on the terminal mutex (ARC-016).
 
-However, observers must be `Send + Sync` since they may be called from different threads (e.g., in a PTY background reader thread).
+For full lock-free delivery, use `process_deferred()` and call `deliver()` on the returned batch after dropping the terminal lock.
+
+Observers must be `Send + Sync` since they may be called from different threads (e.g., in a PTY background reader thread).
 
 ## Best Practices
 

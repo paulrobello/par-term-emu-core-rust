@@ -72,11 +72,12 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 The library supports several optional features that can be enabled during the build:
 
 - **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`)
-- **`streaming`** - WebSocket streaming server with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
-- **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only, automatically included with streaming)
+- **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
+- **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar)
+- **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
 - **`regenerate-proto`** - Regenerate Protocol Buffers code from `proto/terminal.proto` (requires `protoc` installed)
 - **`rust-only`** - Build without Python bindings (for pure Rust usage)
-- **`full`** - Enable all features (`python` + `streaming`)
+- **`full`** - Enable all features (`python` + `streaming` + `streaming-bin`)
 
 > **📝 Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.
 
@@ -95,14 +96,14 @@ make dev
 ```
 
 The `setup-venv` target creates a `.venv` directory and syncs all development dependencies from `pyproject.toml`, including:
-- **maturin** (≥1.12.0) - Build tool for PyO3 projects
-- **pytest** (≥9.0.2) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
-- **ruff** (≥0.15.1, <0.16) - Fast Python linter and formatter
-- **pyright** (≥1.1.408) - Static type checker
-- **pre-commit** (≥4.5.1) - Git hook framework
-- **rich** (≥14.3.2) - Rich text formatting for examples
-- **websockets** (≥15.0) - WebSocket client for streaming examples
-- **pillow** (≥12.1.0) - Image processing for graphics features (required dependency)
+- **maturin** (≥1.13.3) - Build tool for PyO3 projects
+- **pytest** (≥9.0.3) and **pytest-timeout** (≥2.4.0) - Testing framework with 5-second default timeout
+- **ruff** (≥0.15.16) - Fast Python linter and formatter
+- **pyright** (≥1.1.410) - Static type checker
+- **pre-commit** (≥4.6.0) - Git hook framework
+- **rich** (≥15.0.0) - Rich text formatting for examples
+- **websockets** (≥16.0) - WebSocket client for streaming examples
+- **pillow** (≥12.2.0) - Image processing for graphics features (required dependency)
 
 ### Development Build
 
@@ -183,9 +184,8 @@ This enables:
 - Web frontend integration
 - HTTP Basic Authentication support (via `--http-user`, `--http-password`, `--http-password-hash`, `--http-password-file`)
 - Environment variable support for all CLI options (prefix: `PAR_TERM_`)
-- jemalloc memory allocator on non-Windows platforms (5-15% performance improvement)
 
-> **📝 Note:** The `streaming` feature includes `jemalloc` by default on non-Windows platforms for improved server performance. jemalloc is not available on Windows (MSVC target).
+> **📝 Note:** jemalloc is a separate optional feature for improved server performance on non-Windows platforms. Enable it explicitly with `--features streaming,jemalloc` (e.g. `uv run maturin develop --release --features streaming,jemalloc`). It is not enabled automatically by `streaming` and is unavailable on the Windows MSVC target.
 
 See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
 
@@ -249,9 +249,10 @@ make lint-python      # Lint and type-check Python code (ruff format + ruff chec
 
 > **📝 Note:** The `make checkall` target runs checks in this order:
 > 1. Rust tests (`test-rust`)
-> 2. Rust linting with auto-fix (`lint` - runs clippy + fmt)
-> 3. Python linting with auto-fix (`lint-python` - runs ruff format + ruff check + pyright)
-> 4. Python tests (`test-python` - rebuilds package with `make dev` first)
+> 2. Rust streaming tests (`test-rust-streaming`)
+> 3. Rust linting with auto-fix (`lint` - runs clippy + fmt)
+> 4. Python linting with auto-fix (`lint-python` - runs ruff format + ruff check + pyright)
+> 5. Python tests (`test-python` - rebuilds package with `make dev` first)
 >
 > This ensures all code quality issues are caught before committing.
 
@@ -347,7 +348,7 @@ The generated Rust code is placed in the build output directory and included via
 make proto-typescript
 
 # Or manually
-cd web-terminal-frontend && npm run proto:generate
+cd web-terminal-frontend && bun run proto:generate
 ```
 
 ### Manual Generation

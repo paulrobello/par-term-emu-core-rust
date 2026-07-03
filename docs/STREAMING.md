@@ -165,14 +165,14 @@ The streaming protocol uses binary Protocol Buffers messages with optional compr
 
 Flags byte:
   0x00 = uncompressed protobuf
-  0x01 = zlib-compressed protobuf (automatically applied for payloads > 1KB)
+  0x01 = zlib-compressed protobuf (automatically applied for payloads > 256 bytes)
 ```
 
 **Protocol Definition:** See `proto/terminal.proto` for the complete schema.
 
 **Compression Behavior:**
-- Small messages (≤ 1KB): Sent uncompressed (flag = 0x00)
-- Large messages (> 1KB): Automatically compressed with zlib (flag = 0x01)
+- Small messages (≤ 256 bytes): Sent uncompressed (flag = 0x00)
+- Large messages (> 256 bytes): Automatically compressed with zlib (flag = 0x01)
 - Both client and server automatically handle compression/decompression based on the flag
 
 **Connection Lifecycle:**
@@ -186,7 +186,7 @@ Flags byte:
 
 ### Rust Standalone Server
 
-The `par-term-streamer` binary (defined in `src/bin/streaming_server.rs`) provides a standalone streaming server:
+The `par-term-streamer` binary (defined in `src/bin/streaming_server/main.rs`) provides a standalone streaming server:
 
 **Build:**
 ```bash
@@ -194,7 +194,7 @@ The `par-term-streamer` binary (defined in `src/bin/streaming_server.rs`) provid
 make streamer-build-release
 
 # Or directly with cargo
-cargo build --release --bin par-term-streamer --features streaming
+cargo build --release --bin par-term-streamer --no-default-features --features streaming-bin
 ```
 
 **Run:**
@@ -539,7 +539,7 @@ let server = StreamingServer::with_config(terminal, addr, config);
 **Protocol Buffers:**
 - **@bufbuild/protobuf** 2.10+ - Protocol Buffers runtime for binary message encoding/decoding
 - **@bufbuild/buf** 1.61+ - Buf CLI for proto code generation
-- **pako** 2.1+ - Zlib compression/decompression for large messages (> 1KB)
+- **pako** 2.1+ - Zlib compression/decompression for large messages (> 256 bytes)
 
 **Terminal Components:**
 - **@xterm/xterm** 5.5+ - Terminal emulator core with VT sequences support
@@ -796,6 +796,7 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `error` | `message: string`, `code?: string` | Error occurred |
 | `shutdown` | `reason: string` | Server shutting down |
 | `pong` | (none) | Keepalive response |
+| `screen_cleared` | `include_scrollback: bool` | Screen cleared (ED 2J or ED 3J) |
 
 ### Client Messages (ClientMessage oneof)
 
@@ -908,6 +909,7 @@ Clients can subscribe to specific event types to filter server messages and redu
 | `SNAPSHOT` | 23 | Semantic snapshot events |
 | `FILE_TRANSFER` | 24 | File transfer events (started, progress, completed, failed) |
 | `UPLOAD_REQUEST` | 25 | Upload request events |
+| `SCREEN_CLEARED` | 26 | Screen cleared events (ED 2J / ED 3J) |
 
 **Example (TypeScript):**
 ```typescript
@@ -1197,8 +1199,8 @@ function decodeServerMessage(data: ArrayBuffer): ServerMessage {
 function encodeClientMessage(msg: ClientMessage): ArrayBuffer {
   const payload = toBinary(ClientMessageSchema, msg);
 
-  // Compress if payload > 1KB (matches server behavior)
-  if (payload.length > 1024) {
+  // Compress if payload > 256 bytes (matches server behavior)
+  if (payload.length > 256) {
     const compressed = pako.deflate(payload);
     // Only use compression if it actually reduces size
     if (compressed.length < payload.length) {

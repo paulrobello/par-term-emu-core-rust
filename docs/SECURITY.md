@@ -257,7 +257,8 @@ term = PtyTerminal(80, 24)
 term.spawn("/bin/sh", env=safe_overrides)
 
 # Environment merge order (see spawn() in src/pty_session.rs):
-# 1. Inherit all parent env vars (except COLUMNS/LINES - automatically filtered)
+# 1. Inherit all parent env vars (except COLUMNS/LINES/TMUX/TMUX_PANE/STY/WINDOW
+#    - the DROP_VARS set, automatically filtered)
 # 2. Set terminal-specific environment variables:
 #    - TERM=xterm-256color
 #    - COLORTERM=truecolor
@@ -315,7 +316,7 @@ term.spawn(
 ```
 
 **Important**: The `env` parameter in `spawn()` **merges with and overrides specific keys** in the inherited environment. The process is:
-1. All parent environment variables are inherited (except `COLUMNS` and `LINES` which are automatically filtered out)
+1. All parent environment variables are inherited (except `COLUMNS`, `LINES`, `TMUX`, `TMUX_PANE`, `STY`, and `WINDOW` which are automatically filtered out as the `DROP_VARS` set)
 2. `TERM=xterm-256color`, `COLORTERM=truecolor`, `TERM_PROGRAM=kitty`, `KITTY_WINDOW_ID=1`, and `KITTY_PID=<process_id>` are set automatically for Kitty graphics protocol support
 3. Variables specified in `env` override all previous values (including TERM/COLORTERM/TERM_PROGRAM if specified)
 4. The merged environment is passed to the spawned process
@@ -916,15 +917,16 @@ connected client can execute arbitrary commands as the user running the server.
   the key in proxy/browser history).
 - **HTTP Basic Auth** (`--http-user` / `--http-password[-hash|-file]`):
   htpasswd-format hashes verified via maintained RustCrypto crates (bcrypt,
-  `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See SEC-003.
+  `$apr1$`, `$1$` MD5-crypt, `{SHA}`). See `src/streaming/auth_hash.rs`.
 - **Default**: auth is **disabled**. The binary binds to `127.0.0.1` by
   default and warns loudly if binding a public interface without auth (SEC-002).
 
 ### Transport Security (TLS)
 
 - TLS via `--tls-cert` / `--tls-key` (or `--tls-pem`). Uses `rustls` with
-  `rustls-pki-types` for PEM loading (SEC-006 replaced unmaintained
-  `rustls-pemfile`). Certificate verification is never disabled.
+  `rustls-pki-types` for PEM loading (replacing the unmaintained
+  `rustls-pemfile` crate, RUSTSEC-2025-0134). Certificate verification is
+  never disabled.
 - Private key files are checked for `0o600` permissions on Unix.
 
 ### WebSocket Origin Validation (CSRF Defense, SEC-005)
@@ -950,9 +952,9 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - Read-only clients are enforced before PTY writes.
 - Terminal-size updates are validated server-side.
 - File transfers are capped at 50 MiB in memory; no path-traversal writes.
-- OSC data is capped (`MAX_OSC_DATA_LENGTH`, configurable via
+- OSC data is capped (`DEFAULT_MAX_OSC_DATA_LENGTH`, configurable via
   `Terminal::set_max_osc_data_length` — QA-012).
-- zlib decompression is capped at 1 MiB (SEC-001).
+- zlib decompression is capped at 1 MiB.
 - Inbound WebSocket frames/messages are capped at 16 MiB each
   (`max_message_size` / `max_frame_size` on the `WebSocketConfig`,
   `src/streaming/server.rs`, 0.43.1). This bounds worst-case per-connection
