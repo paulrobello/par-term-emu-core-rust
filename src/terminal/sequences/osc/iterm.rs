@@ -92,16 +92,11 @@ impl Terminal {
         };
 
         // Filter out localhost and empty values to match OSC 7 behavior
-        let hostname = hostname.and_then(|h| {
-            if h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1"
-            {
-                None
-            } else {
-                Some(h)
-            }
+        let hostname = hostname.filter(|h| {
+            !(h.is_empty() || h.eq_ignore_ascii_case("localhost") || h == "127.0.0.1" || h == "::1")
         });
 
-        let username = username.and_then(|u| if u.is_empty() { None } else { Some(u) });
+        let username = username.filter(|u| !u.is_empty());
 
         let current_cwd = self
             .shell_state

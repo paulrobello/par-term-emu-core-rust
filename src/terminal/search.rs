@@ -583,10 +583,9 @@ impl Terminal {
         let pairs = [('(', ')'), ('[', ']'), ('{', '}'), ('<', '>')];
         let (open, close, forward) = if let Some(pair) = pairs.iter().find(|p| p.0 == c) {
             (pair.0, pair.1, true)
-        } else if let Some(pair) = pairs.iter().find(|p| p.1 == c) {
-            (pair.1, pair.0, false)
         } else {
-            return None;
+            let pair = pairs.iter().find(|p| p.1 == c)?;
+            (pair.1, pair.0, false)
         };
 
         let mut depth = 0;

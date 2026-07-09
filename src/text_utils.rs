@@ -276,10 +276,9 @@ pub fn find_matching_bracket(grid: &Grid, col: usize, row: usize) -> Option<(usi
 
     let (is_opening, bracket_idx) = if let Some(idx) = open_brackets.iter().position(|&b| b == ch) {
         (true, idx)
-    } else if let Some(idx) = close_brackets.iter().position(|&b| b == ch) {
-        (false, idx)
     } else {
-        return None; // Not a bracket
+        let idx = close_brackets.iter().position(|&b| b == ch)?;
+        (false, idx)
     };
 
     let opening = open_brackets[bracket_idx];

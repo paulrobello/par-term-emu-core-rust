@@ -299,13 +299,10 @@ impl Terminal {
                     } else {
                         Some(percent_decode_str(username).decode_utf8_lossy().to_string())
                     };
-                    let hostname = url.host_str().map(|h| h.to_string()).and_then(|h| {
-                        if h.is_empty() || h.eq_ignore_ascii_case("localhost") {
-                            None
-                        } else {
-                            Some(h)
-                        }
-                    });
+                    let hostname = url
+                        .host_str()
+                        .map(|h| h.to_string())
+                        .filter(|h| !(h.is_empty() || h.eq_ignore_ascii_case("localhost")));
                     if path.starts_with('/') {
                         return Some((path, hostname, username));
                     }

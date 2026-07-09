@@ -281,10 +281,9 @@ impl Terminal {
         let mut current_row = start_row;
 
         // Collect the first line
-        if let Some(line) = grid.row(current_row) {
+        {
+            let line = grid.row(current_row)?;
             lines.push(crate::terminal::cells_to_text(line));
-        } else {
-            return None;
         }
 
         // Follow wrapped lines
