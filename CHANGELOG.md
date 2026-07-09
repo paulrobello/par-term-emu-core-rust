@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Generation counter could lead the grid content, freezing partial regions in TUI apps** (`src/pty_session.rs`). The PTY reader bumps the update-generation counter immediately on a successful read, *before* the grid is written (issue #60 liveness — the counter must advance even if processing panics, e.g. Windows ConPTY after Ctrl+C). But that left a window: a renderer acquiring the terminal lock between the bump and the grid write reads the not-yet-updated grid yet stamps its cell cache with the already-advanced generation. When it was the last read of an output burst, the counter never advanced again, so the stale content was served until the next PTY read — full-screen editors and pagers that repaint via partial line edits (joe, vim: DL/IL/EL) showed "some regions don't update" after scrolling or paging, clearing only on the next keypress/resize. A second generation bump now runs after the grid write (still inside the write guard), guaranteeing the counter always moves past any value a renderer could have observed mid-write, so the next frame regenerates instead of freezing. The pre-processing bump is retained, so issue #60's liveness guarantee is unaffected.
+
 ## [0.44.0] - 2026-07-03
 
 ### Security

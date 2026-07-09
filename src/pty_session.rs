@@ -662,7 +662,19 @@ impl PtySession {
                         // before any processing. This guarantees the counter always
                         // advances when PTY data arrives, even if processing encounters
                         // a panic or unexpected code path (e.g., Windows ConPTY after
-                        // Ctrl+C where subsequent sequences may cause issues).
+                        // Ctrl+C where subsequent sequences may cause issues) — issue #60.
+                        //
+                        // This pre-processing bump alone is NOT sufficient: it advances
+                        // the counter BEFORE the grid is written below, so a concurrent
+                        // renderer that acquires the terminal lock in the window between
+                        // here and the `terminal.write()` below reads the not-yet-updated
+                        // grid but stamps its cell cache with this already-advanced
+                        // generation. If this is the last read of a burst, the counter
+                        // never advances again and that stale content is served until the
+                        // next PTY read — the "some regions don't update" freeze in TUI
+                        // apps (joe, vim) that repaint via partial line edits. A second
+                        // bump after the grid write (see end of the write-guard block)
+                        // closes that window.
                         let old_gen = update_generation.fetch_add(1, Ordering::SeqCst);
                         debug::log_generation_change(old_gen, old_gen + 1, "PTY read");
 
@@ -797,6 +809,25 @@ impl PtySession {
                                     }
                                 }
                             }
+
+                            // Second generation bump, now that the grid reflects
+                            // this read's bytes (still inside the write guard, so any
+                            // reader observing this new value either cannot yet take
+                            // the terminal lock — and falls back to its cell cache —
+                            // or takes it after the guard drops and sees the applied
+                            // content). This guarantees the counter always moves PAST
+                            // any value a renderer could have stamped with stale
+                            // content during the pre-processing window above, so the
+                            // next frame regenerates and catches up instead of
+                            // freezing. Skipped only if processing panics — in which
+                            // case the pre-processing bump above already preserved the
+                            // issue #60 liveness guarantee.
+                            let applied_gen = update_generation.fetch_add(1, Ordering::SeqCst);
+                            debug::log_generation_change(
+                                applied_gen,
+                                applied_gen + 1,
+                                "content applied",
+                            );
 
                             batch
                         }; // write guard (`term`) dropped here
@@ -1853,6 +1884,60 @@ mod tests {
         assert!(
             session.has_updates_since(gen_before),
             "has_updates_since() should return true after PTY output"
+        );
+    }
+
+    /// Regression test for the "some regions don't update" freeze in TUI apps
+    /// (joe, vim, etc.) that repaint via partial line edits (DL/IL/EL).
+    ///
+    /// The issue #60 pre-processing bump advances the generation BEFORE the grid
+    /// is written. A renderer that acquires the terminal lock in the window
+    /// between that bump and the write reads the not-yet-updated grid but stamps
+    /// its cell cache with the already-advanced generation; if this is the last
+    /// read of an output burst, the counter never advances again and that stale
+    /// content is served until the next PTY read. The second bump after the grid
+    /// write must move the counter PAST any value observed in that window so the
+    /// next frame regenerates instead of freezing.
+    ///
+    /// The output callback runs in the reader thread after the pre-processing
+    /// bump but before the grid write, so it observes the exact "poisonable"
+    /// generation a racing renderer could stamp. We assert the final generation
+    /// has advanced beyond it.
+    #[test]
+    fn test_generation_advances_after_content_applied() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        // Mirror the session's internal generation counter into the callback.
+        // The `tests` module can reach the private field directly.
+        let gen_counter = Arc::clone(&session.update_generation);
+        let observed_in_window = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let observed_cb = Arc::clone(&observed_in_window);
+        session.set_output_callback(Arc::new(move |_bytes: &[u8]| {
+            // Runs after the pre-processing fetch_add, before the grid write.
+            observed_cb.store(gen_counter.load(Ordering::SeqCst), Ordering::SeqCst);
+        }));
+
+        #[cfg(unix)]
+        let result = session.spawn("/bin/echo", &["hello"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo hello"]);
+        assert!(result.is_ok());
+
+        // Wait for the command to run, produce output, and be fully processed.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        let observed = observed_in_window.load(Ordering::SeqCst);
+        let final_gen = session.update_generation();
+
+        assert!(
+            observed > 0,
+            "output callback should have run and observed the pre-processing bump"
+        );
+        assert!(
+            final_gen > observed,
+            "generation must advance after content is applied so a renderer that \
+             stamped its cache with the pre-write generation ({observed}) is forced \
+             to regenerate; final generation was {final_gen}"
         );
     }
 
