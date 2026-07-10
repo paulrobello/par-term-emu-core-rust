@@ -260,7 +260,7 @@ par-term-emu-core-rust is built entirely in Rust with no C dependencies required
 - Consistent behavior everywhere
 
 **Required Tools:**
-- **Rust**: Version 1.88 or later (minimum specified in `Cargo.toml: rust-version = "1.88"`)
+- **Rust**: Version 1.90 or later (minimum specified in `Cargo.toml: rust-version = "1.90"`)
 - **Cargo**: Comes with Rust
 - **Python**: 3.12+ for Python bindings (if building with `python` feature)
 - **uv**: Python package manager for dependency management (recommended)

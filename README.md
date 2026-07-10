@@ -1087,7 +1087,7 @@ pip install par-term-emu-core-rust
 
 ### From Source
 
-Requires Rust 1.88+ and Python 3.12+:
+Requires Rust 1.90+ and Python 3.12+:
 
 ```bash
 # Install maturin (build tool)
@@ -1490,7 +1490,7 @@ A full-featured TUI (Text User Interface) application is available in the sister
 
 ## Technology
 
-- **Rust** (1.88+) - Core library implementation
+- **Rust** (1.90+) - Core library implementation
 - **Python** (3.12+) - Python bindings
 - **PyO3** - Zero-cost Python/Rust bindings
 - **VTE** - ANSI sequence parsing
