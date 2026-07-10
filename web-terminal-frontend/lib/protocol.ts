@@ -28,7 +28,7 @@ import {
   SubscribeSchema,
   type ThemeInfo,
 } from './proto/terminal_pb';
-import pako from 'pako';
+import * as pako from 'pako';
 
 /** Compression threshold in bytes (1KB) */
 const COMPRESSION_THRESHOLD = 1024;
