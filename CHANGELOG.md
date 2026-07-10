@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+_No notable changes yet._
+
+## [0.45.0] - 2026-07-09
+
 ### Added
 - **Host-supplied window state for XTWINOPS reports 11/13** (`src/terminal/mod.rs`, `src/terminal/sequences/csi/window.rs`). The core is headless and previously hardcoded `CSI 11 t` to always report non-iconified and `CSI 13 t` / `CSI 13 ; 2 t` to always report position `(0, 0)`. GUI hosts (e.g. par-term) can now call `Terminal::set_window_iconified(bool)` and `Terminal::set_window_position(x: i32, y: i32)` (with `window_iconified()` / `window_position()` getters) so these reports reflect the real on-screen window state; defaults are unchanged when the host never calls the setters. CSI reply parameters are unsigned, so a negative host-supplied coordinate (possible on multi-monitor setups) is clamped to 0 in the `CSI 13 t` reply. Exposed on both Python `Terminal` and `PtyTerminal` as `set_window_position()`/`window_position()` and `set_window_iconified()`/`window_iconified()`.
 
@@ -15,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Generation counter could lead the grid content, freezing partial regions in TUI apps** (`src/pty_session.rs`). The PTY reader bumps the update-generation counter immediately on a successful read, *before* the grid is written (issue #60 liveness — the counter must advance even if processing panics, e.g. Windows ConPTY after Ctrl+C). But that left a window: a renderer acquiring the terminal lock between the bump and the grid write reads the not-yet-updated grid yet stamps its cell cache with the already-advanced generation. When it was the last read of an output burst, the counter never advanced again, so the stale content was served until the next PTY read — full-screen editors and pagers that repaint via partial line edits (joe, vim: DL/IL/EL) showed "some regions don't update" after scrolling or paging, clearing only on the next keypress/resize. A second generation bump now runs after the grid write (still inside the write guard), guaranteeing the counter always moves past any value a renderer could have observed mid-write, so the next frame regenerates instead of freezing. The pre-processing bump is retained, so issue #60's liveness guarantee is unaffected.
+
+### Dependencies
+- **Rust, Python, and web-frontend dependency refresh.** Rust `cargo update` brought 5 minor + 39 patch bumps with no major-version changes; Python (`uv lock --upgrade`) bumped pillow, maturin, pyright, pytest, and ruff (and synced the `>=` floors in `pyproject.toml`); the web frontend (`ncu`) took patch bumps for next/buf/tailwind/postcss plus **pako 2 → 3**, whose default-export removal required a one-line import fix in `lib/protocol.ts` (the now-redundant `@types/pako` was dropped, since pako 3 ships its own types). TypeScript is held at 6.0.3 (7.0 breaks the `@typescript-eslint` toolchain and the Next.js build worker). The committed `web_term/` static output was rebuilt.
 
 ## [0.44.0] - 2026-07-03
 

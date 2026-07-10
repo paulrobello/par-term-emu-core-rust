@@ -19,7 +19,11 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 > The entries below cover recent highlights; older entries may be archived
 > to CHANGELOG.md in future releases to keep this section concise (DOC-016).
 
-Version 0.44.0 is a **minor release** adding new VT reporting sequences and Kitty desktop notifications, plus security hardening and concurrency/performance work — non-breaking for both Python and Rust consumers. **Added:** OSC 99 Kitty desktop notifications (with a new Python `take_notifications_detailed()` / `Notification` API), XTGETTCAP (`DCS + q`), DECRQSS (`DCS $ q`), and XTWINOPS report ops 11/13/19. **Security:** capped Kitty PNG / iTerm2 image-decode sizes against decompression-bomb DoS, and hid streaming-server CLI secrets from `--help`. **Performance:** observer/trigger dispatch and PTY device-query replies now run outside the terminal write lock, and screenshot glyph bitmaps are shared via `Arc`. See [What's New in 0.44.0](#whats-new-in-0440) below, and [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+Version 0.45.0 is a **minor release** letting GUI hosts feed real window state into XTWINOPS reports, plus a fix for partial-region freezes in full-screen TUI apps and a dependency refresh — non-breaking for Python consumers. **Added:** host-supplied window iconified/position state (`set_window_iconified()` / `set_window_position()` + getters on `Terminal` and `PtyTerminal`) so `CSI 11 t` / `CSI 13 t` reflect the real on-screen window instead of hardcoded defaults. **Changed:** MSRV raised 1.88 → 1.90 (breaking for direct Rust `rlib` consumers only; PyPI wheel users are unaffected). **Fixed:** a generation-counter race that froze partial regions in editors/pagers (joe, vim) after scrolling or paging until the next keypress. See [What's New in 0.45.0](#whats-new-in-0450) below, and [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
+## What's New in 0.45.0
+
+Version 0.45.0 is a **minor release** focused on host-integrated window reporting, a TUI rendering fix, and a broad dependency refresh. **Added:** host-supplied window state for XTWINOPS reports — the headless core previously hardcoded `CSI 11 t` to always report non-iconified and `CSI 13 t` / `CSI 13 ; 2 t` to report position `(0, 0)`; GUI hosts (e.g. par-term) can now call `set_window_iconified(bool)` / `set_window_position(x, y)` (with `window_iconified()` / `window_position()` getters) so these reports reflect the real on-screen window. Defaults are unchanged when the host never calls the setters, and a negative host-supplied coordinate is clamped to 0 in the `CSI 13 t` reply (CSI parameters are unsigned). Exposed on both Python `Terminal` and `PtyTerminal`. **Changed:** MSRV raised 1.88 → 1.90 — **breaking for direct Rust `rlib` consumers only** (no dependency requires it; set to a recent stable for broader compatibility); PyPI (Python wheel) users are unaffected, and the Linux glibc floor stays at 2.17 (manylinux2014). **Fixed:** a generation-counter race in `PtySession` where the counter could advance *before* the grid was written, letting a renderer stamp its cell cache with the already-advanced generation over not-yet-updated grid content — when that read was the last of an output burst, the counter never advanced again and partial regions froze until the next keypress/resize (visible in full-screen editors/pagers that repaint via partial line edits: joe, vim `DL`/`IL`/`EL`). A second generation bump now runs after the grid write, while the pre-processing bump is retained to preserve the issue #60 liveness guarantee. **Dependencies:** Rust `cargo update` (5 minor + 39 patch, no majors), Python (`uv lock --upgrade`: pillow, maturin, pyright, pytest, ruff), and web frontend (`ncu`: patch bumps + **pako 2 → 3**, with a one-line import fix in `lib/protocol.ts`); TypeScript held at 6.0.3. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.44.0
 
@@ -1127,8 +1131,8 @@ wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/downl
 chmod +x par-term-streamer-linux-x86_64
 
 # Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.44.0.tar.gz
-tar -xzf par-term-web-frontend-v0.44.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.45.0.tar.gz
+tar -xzf par-term-web-frontend-v0.45.0.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -1437,8 +1441,8 @@ Download the pre-built static web frontend from [GitHub Releases](https://github
 
 ```bash
 # Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.44.0.tar.gz
-tar -xzf par-term-web-frontend-v0.44.0.tar.gz -C ./web_term
+wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.45.0.tar.gz
+tar -xzf par-term-web-frontend-v0.45.0.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term

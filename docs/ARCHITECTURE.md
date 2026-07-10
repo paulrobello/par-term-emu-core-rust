@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.44.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.45.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -928,7 +928,7 @@ The project uses conditional PyO3 feature compilation to support both production
 ```toml
 [dependencies]
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
-par-term-emu-derive = { path = "derive", version = "0.44.0", optional = true }
+par-term-emu-derive = { path = "derive", version = "0.45.0", optional = true }
 
 [dev-dependencies]
 pyo3 = { version = "0.29", features = ["auto-initialize"] }
