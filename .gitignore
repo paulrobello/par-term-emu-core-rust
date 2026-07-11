@@ -37,7 +37,6 @@ logs/
 test_fallback.png
 test_font_fallback.py
 claude_scratch/
-.gitnexus
 *.dSYM/
 
 # Coverage artifacts (make coverage / coverage-python)
