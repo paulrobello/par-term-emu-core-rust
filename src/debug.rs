@@ -8,8 +8,8 @@ use parking_lot::Mutex;
 /// - 3: Debug level (VT sequences, buffer changes)
 /// - 4: Trace level (every operation, buffer snapshots)
 ///
-/// All output goes to /tmp/par_term_emu_core_rust_debug_rust.log on Unix/macOS,
-/// or %TEMP%\par_term_emu_core_rust_debug_rust.log on Windows.
+/// All output goes to `par_term_emu_core_rust_debug_rust.log` in the system temp
+/// directory (std::env::temp_dir(): /tmp on Linux, per-user temp on macOS, %TEMP% on Windows).
 /// This avoids breaking TUI apps by keeping debug output separate from stdout/stderr.
 use std::fmt;
 use std::fs::OpenOptions;
@@ -54,12 +54,9 @@ impl DebugLogger {
         let level = DebugLevel::from_env();
 
         let file = if level != DebugLevel::Off {
-            // Rust uses separate log file from Python
-            // Use /tmp on Unix/macOS for consistency with documentation
-            // Use %TEMP% on Windows
-            #[cfg(unix)]
-            let log_path = std::path::PathBuf::from("/tmp/par_term_emu_core_rust_debug_rust.log");
-            #[cfg(windows)]
+            // Rust uses a separate log file from Python, written to the system temp
+            // dir (std::env::temp_dir(): /tmp on Linux, per-user temp on macOS, %TEMP% on Windows)
+            // so the Rust and Python logs land in the same place.
             let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log");
 
             match OpenOptions::new()
