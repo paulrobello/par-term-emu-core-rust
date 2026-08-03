@@ -52,7 +52,7 @@ pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 par-term-emu-derive = { path = "derive", version = "0.45.0", optional = true }
 vte = "0.15.0"
 unicode-width = "0.2.2"
-portable-pty = "0.9.0"
+portable-pty = { version = "0.9.0", optional = true }
 base64 = "0.22.1"
 smallvec = "1.13.0"
 bitflags = "2.13.0"
@@ -125,7 +125,7 @@ lru = "0.18.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.186"
-nix = { version = "0.31.3", features = ["process", "term", "signal"] }
+nix = { version = "0.31.3", features = ["process", "term", "signal"], optional = true }
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Only available on non-Windows platforms
@@ -144,14 +144,20 @@ tempfile = "3.27"
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session"]
+
+# Real PTY backend (PtySession/PtyTerminal): portable-pty + Unix signal deps.
+# Enabled by `python` (PyPtyTerminal binding) and `streaming-bin` (the server
+# binary spawns real shells). Headless `sim` consumers omit it to stay
+# PTY-free — they vendor the Terminal as a pure screen model with no process.
+pty_session = ["portable-pty", "nix"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
 
 # Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
 # deps the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar"]
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms
@@ -162,6 +168,13 @@ regenerate-proto = ["prost-build"]
 
 # Convenience feature combinations
 rust-only = []
+# Headless simulation profile: grid + terminal + screenshot only. Excludes the
+# real-PTY backend, Python bindings, and streaming server, so a pure-Rust
+# embedder (e.g. par-hack's server-side screen model) can vendor the crate with
+# `default-features = false, features = ["sim"]` and pull in neither portable-pty
+# nor the PyO3/streaming dep trees. graphics/sixel stay compiled because the
+# Terminal and the screenshot renderer depend on them intrinsically.
+sim = []
 full = ["python", "streaming", "streaming-bin"]
 
 [profile.release]

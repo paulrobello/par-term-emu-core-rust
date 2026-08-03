@@ -53,6 +53,7 @@ pub mod macros;
 pub mod mouse;
 pub mod observer;
 pub mod pty_error;
+#[cfg(feature = "pty_session")]
 pub mod pty_session;
 #[cfg(feature = "python")]
 pub mod python_bindings;

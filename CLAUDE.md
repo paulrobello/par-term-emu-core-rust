@@ -80,9 +80,11 @@ The crate produces three artifacts:
 
 | Feature | Purpose |
 |---------|---------|
-| `python` (default) | PyO3 bindings with `extension-module` |
+| `python` (default) | PyO3 bindings with `extension-module`; also enables `pty_session` |
+| `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python` and `streaming-bin` |
 | `streaming` | WebSocket server, protobuf, TLS, HTTP, CLI deps |
 | `rust-only` | No Python bindings |
+| `sim` | Headless profile: grid + terminal + screenshot only (no PTY/python/streaming). For pure-Rust embedders, e.g. a server-side screen model |
 | `full` | `python` + `streaming` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` |
 | `jemalloc` | Better server performance (non-Windows) |

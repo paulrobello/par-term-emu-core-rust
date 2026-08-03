@@ -71,12 +71,14 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 The library supports several optional features that can be enabled during the build:
 
-- **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`)
+- **`python`** (default) - Python bindings via PyO3 (`pyo3/extension-module`); also enables `pty_session`
+- **`pty_session`** - Real PTY backend (`PtySession`/`PtyTerminal`): pulls in `portable-pty` and the Unix signal deps. Auto-enabled by `python` (so the `PyPtyTerminal` binding compiles) and by `streaming-bin` (the server binary spawns real shells). Omit it for a PTY-free build.
 - **`streaming`** - WebSocket streaming server library with all related dependencies (tokio, axum, Protocol Buffers, TLS, HTTP auth, etc.)
 - **`streaming-bin`** - Standalone `par-term-streamer` binary: CLI/logging/web-frontend-download deps layered on `streaming` (clap, anyhow, tracing, reqwest, tar)
 - **`jemalloc`** - jemalloc memory allocator for improved performance (non-Windows only; must be enabled explicitly — not auto-included by `streaming`)
 - **`regenerate-proto`** - Regenerate Protocol Buffers code from `proto/terminal.proto` (requires `protoc` installed)
 - **`rust-only`** - Build without Python bindings (for pure Rust usage)
+- **`sim`** - Headless simulation profile: grid + terminal + screenshot only. Excludes the real-PTY backend, Python bindings, and streaming server, so a pure-Rust embedder can vendor the crate as a server-side screen model without pulling in `portable-pty` or the PyO3/streaming dep trees. Build with `cargo build --no-default-features --features sim`. (`graphics`/`sixel` remain compiled because the `Terminal` and screenshot renderer depend on them intrinsically.)
 - **`full`** - Enable all features (`python` + `streaming` + `streaming-bin`)
 
 > **📝 Note:** When building the Python package with maturin, the `python` feature is automatically enabled via `pyproject.toml`. For standalone Rust binaries (like `par-term-streamer`), you need to explicitly specify features.

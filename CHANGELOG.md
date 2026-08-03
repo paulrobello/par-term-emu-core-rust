@@ -7,7 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-_No notable changes yet._
+### Added
+- **`sim` cargo feature: a headless terminal profile** (`Cargo.toml`, `src/lib.rs`, `CLAUDE.md`, `docs/BUILDING.md`). New `sim = []` feature compiles grid + terminal + screenshot only, for pure-Rust embedders that vendor the crate as a server-side screen model (e.g. par-hack's char-mode simulation) without spawning real processes. The real-PTY backend is now gated behind a new `pty_session` feature that makes `portable-pty` and `nix` optional; `python` (the `PyPtyTerminal` binding) and `streaming-bin` (the server binary) auto-enable `pty_session`, so the default build, the PyPI wheel, and `par-term-streamer` are behaviorally unchanged. `graphics`/`sixel` remain compiled under `sim` because the `Terminal` and the screenshot renderer depend on them intrinsically (a headless VT terminal must still parse inline sixel/iTerm2/Kitty graphics). Consume with `cargo build --no-default-features --features sim` — the resulting dep tree contains neither `portable-pty` nor `nix`.
 
 ## [0.45.0] - 2026-07-09
 
