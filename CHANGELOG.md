@@ -7,8 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-08-03
+
 ### Added
 - **`sim` cargo feature: a headless terminal profile** (`Cargo.toml`, `src/lib.rs`, `CLAUDE.md`, `docs/BUILDING.md`). New `sim = []` feature compiles grid + terminal + screenshot only, for pure-Rust embedders that vendor the crate as a server-side screen model (e.g. par-hack's char-mode simulation) without spawning real processes. The real-PTY backend is now gated behind a new `pty_session` feature that makes `portable-pty` and `nix` optional; `python` (the `PyPtyTerminal` binding) and `streaming-bin` (the server binary) auto-enable `pty_session`, so the default build, the PyPI wheel, and `par-term-streamer` are behaviorally unchanged. `graphics`/`sixel` remain compiled under `sim` because the `Terminal` and the screenshot renderer depend on them intrinsically (a headless VT terminal must still parse inline sixel/iTerm2/Kitty graphics). Consume with `cargo build --no-default-features --features sim` — the resulting dep tree contains neither `portable-pty` nor `nix`.
+
+### Fixed
+- **Rust debug log now writes to the system temp dir instead of a hardcoded `/tmp`** (`src/debug.rs`). The Unix branch hardcoded `/tmp/par_term_emu_core_rust_debug_rust.log` while only the Windows branch used `std::env::temp_dir()`, so on macOS the Rust log landed in `/tmp` while the Python TUI's log went to the per-user temp dir (`tempfile.gettempdir()`), diverging from the documented `$TEMP` behavior. Both branches now use `std::env::temp_dir().join(...)`; Linux is unchanged (`temp_dir() == /tmp`), and on macOS the Rust log joins the Python log in the per-user temp dir.
+
+### Changed
+- **Removed dev-tooling integrations and stopped committing generated artifacts.** The gitnexus and graphify knowledge-graph integrations were removed (sections dropped from `CLAUDE.md`/`AGENTS.md`, config and `.gitignore` entries cleaned up), and the generated `web_term/` static frontend output is no longer committed (regenerated on demand via `make web-build-static`). No library API or runtime behavior changes.
 
 ## [0.45.0] - 2026-07-09
 
