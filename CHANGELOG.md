@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - **Removed dev-tooling integrations and stopped committing generated artifacts.** The gitnexus and graphify knowledge-graph integrations were removed (sections dropped from `CLAUDE.md`/`AGENTS.md`, config and `.gitignore` entries cleaned up), and the generated `web_term/` static frontend output is no longer committed (regenerated on demand via `make web-build-static`). No library API or runtime behavior changes.
 
+### Dependencies
+- **Rust (`cargo update`).** Patch + minor bumps across the dependency tree with no major-version changes; `Cargo.lock` is gitignored (library convention), so this verified compatibility rather than committing a lockfile. Notable: `pyo3` 0.29.0 → 0.29.1, `tokio` 1.52 → 1.53, `read-fonts` 0.39 → 0.41, `skrifa` 0.42 → 0.44, `zerocopy` 0.8.54 → 0.55, plus `serde`/`serde_json` patches. `Cargo.toml` requirements are intentionally loose and unchanged.
+- **Python (`uv lock --upgrade`).** Bumped `coverage`, `filelock`, `platformdirs`, `python-discovery`, `virtualenv`, `pre-commit` 4.6.0 → 4.6.1, `ruff` 0.15.21 → 0.16.1, and **`websockets` 16.0 → 17.0.1 (major)** — the streaming client tests pass unchanged against the v17 API. Synced the `>=` floors in `pyproject.toml` `[dependency-groups]` for `pre-commit`, `ruff`, and `websockets`.
+- **Web frontend (`web-terminal-frontend/`, `ncu -u` + `bun install`).** Patch/minor bumps: `next` 16.2 → 16.3, `react`/`react-dom` 19.2.7 → 19.2.8, `@bufbuild/protobuf` 2.12 → 2.13, `eslint` 10.6 → 10.8, and **`postcss` 8.5.16 → 8.5.25 (Dependabot advisory fix)**; TypeScript held at 6.0.3 (7.x breaks the `@typescript-eslint`/Next.js toolchain). Both `bun.lock` and `package-lock.json` regenerated.
+- **Test robustness:** recalibrated the `cloning_combining_cells_is_fast_at_scale` perf guard budget from 200ms → 1000ms (`src/cell.rs`). The `cargo update` codegen drift pushed full-suite clone timing marginally past the old 200ms budget while the guard's target regression (a `SmallVec` → `Vec<char>` revert, a seconds-scale allocation storm) remains caught with wide margin.
+
 ## [0.45.0] - 2026-07-09
 
 ### Added

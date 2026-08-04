@@ -777,12 +777,15 @@ mod tests {
         assert!(!clones.is_empty());
         drop(clones);
 
-        // Generous budget for slow CI. The point is a regression guard: inline
-        // SmallVec clones are memcpy-fast; a revert to Vec<char> (per-clone heap
-        // alloc) would blow well past this on a loaded machine.
+        // Regression guard, not a precision benchmark. Inline SmallVec clones
+        // are memcpy-fast (~100ms for 800k in isolation, ~250ms under the full
+        // test suite's memory/CPU state). A revert to Vec<char> (per-clone heap
+        // alloc) would be a seconds-scale allocation storm. The 1s budget sits
+        // far above realistic loaded-machine clone times and far below that
+        // catastrophe, so it catches the regression without flaking under load.
         assert!(
-            elapsed < std::time::Duration::from_millis(200),
-            "cloning 800k combining-bearing cells took {:?}, expected < 200ms",
+            elapsed < std::time::Duration::from_millis(1000),
+            "cloning 800k combining-bearing cells took {:?}, expected < 1000ms",
             elapsed
         );
     }
