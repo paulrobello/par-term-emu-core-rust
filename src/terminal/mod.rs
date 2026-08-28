@@ -738,7 +738,7 @@ impl ObserverDispatchBatch {
                 }))
                 .is_err();
                 if panicked {
-                    eprintln!(
+                    log::error!(
                         "par-term-emu: terminal observer panicked during dispatch; \
                          isolating to keep Terminal state consistent (ARC-007)"
                     );

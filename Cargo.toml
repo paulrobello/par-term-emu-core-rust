@@ -47,6 +47,7 @@ path = "src/bin/streaming_server/main.rs"
 required-features = ["streaming-bin"]
 
 [dependencies]
+log = "0.4"
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
 # Proc-macro helpers (#[pyo3_get_all]) for the Python data classes (ARC-014).
 par-term-emu-derive = { path = "derive", version = "0.45.0", optional = true }

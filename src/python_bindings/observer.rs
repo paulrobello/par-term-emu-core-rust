@@ -350,7 +350,7 @@ impl TerminalObserver for PyCallbackObserver {
         let _ = with_py_callback_reentrancy_guard(|| {
             Python::attach(|py| {
                 if let Err(e) = self.callback.call1(py, (dict,)) {
-                    eprintln!("Observer callback error: {e}");
+                    log::error!("Observer callback error: {e}");
                 }
             });
         });
@@ -388,7 +388,7 @@ impl TerminalObserver for PyQueueObserver {
         let _ = with_py_callback_reentrancy_guard(|| {
             Python::attach(|py| {
                 if let Err(e) = self.queue.call_method1(py, "put_nowait", (dict,)) {
-                    eprintln!("Observer queue.put_nowait error: {e}");
+                    log::error!("Observer queue.put_nowait error: {e}");
                 }
             });
         });
