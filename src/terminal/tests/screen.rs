@@ -202,6 +202,70 @@ fn test_rgb_hsl_full_roundtrip() {
     );
 }
 
+// ─── HSL canonical delegation (QA-009) ─────────────────────────────────────
+
+#[test]
+fn test_rgb_to_hsl_adapter_matches_color_utils_scale() {
+    // rgb_to_hsl is a 0-1 rescale of color_utils::Color::to_hsl (0-100);
+    // the two must agree across a color sweep, including achromatic colors.
+    for r in (0..=255u8).step_by(15) {
+        for g in (0..=255u8).step_by(15) {
+            for b in (0..=255u8).step_by(15) {
+                let hsl = rgb_to_hsl(r, g, b);
+                let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+                let dh = (hsl.h - h).abs().min(360.0 - (hsl.h - h).abs());
+                assert!(
+                    dh < 1e-3,
+                    "hue mismatch for ({r},{g},{b}): {} vs {h}",
+                    hsl.h
+                );
+                assert!(
+                    (hsl.s - s / 100.0).abs() < 1e-5,
+                    "saturation mismatch for ({r},{g},{b})"
+                );
+                assert!(
+                    (hsl.l - l / 100.0).abs() < 1e-5,
+                    "lightness mismatch for ({r},{g},{b})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_hsl_round_trip_property() {
+    // from_hsl(to_hsl(c)) must reproduce c within one step per channel.
+    for r in (0..=255u8).step_by(17) {
+        for g in (0..=255u8).step_by(17) {
+            for b in (0..=255u8).step_by(17) {
+                let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+                let (r2, g2, b2) = crate::color::Color::from_hsl(h, s, l).to_rgb();
+                assert!(
+                    (r as i32 - r2 as i32).abs() <= 1,
+                    "r round-trip ({r},{g},{b}) -> {r2}"
+                );
+                assert!(
+                    (g as i32 - g2 as i32).abs() <= 1,
+                    "g round-trip ({r},{g},{b}) -> {g2}"
+                );
+                assert!(
+                    (b as i32 - b2 as i32).abs() <= 1,
+                    "b round-trip ({r},{g},{b}) -> {b2}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_rgb_to_hsl_achromatic_lightness_scale() {
+    // Achromatic colors must report lightness on the full 0-1 scale
+    // (the canonical path previously returned 0-1-as-percent for these).
+    assert!((rgb_to_hsl(255, 255, 255).l - 1.0).abs() < 1e-6);
+    assert!((rgb_to_hsl(0, 0, 0).l - 0.0).abs() < 1e-6);
+    assert!((rgb_to_hsl(128, 128, 128).l - 128.0 / 255.0).abs() < 1e-2);
+}
+
 // ─── Selection API ─────────────────────────────────────────────────────────
 
 use crate::terminal::screen::SelectionMode;
@@ -466,6 +530,98 @@ fn test_get_word_at_out_of_bounds_returns_none() {
     term.process(b"hi");
     let word = term.get_word_at(1000, 0, None);
     assert!(word.is_none());
+}
+
+#[test]
+fn test_get_word_at_wide_char_columns() {
+    // 日本語 occupies display columns 0..6 (three 2-column chars), then
+    // " word" at columns 6..11.
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    for col in [0usize, 2, 4] {
+        assert_eq!(
+            term.get_word_at(col, 0, None),
+            Some("日本語".to_string()),
+            "leading column {col} of a wide char"
+        );
+    }
+}
+
+#[test]
+fn test_get_word_at_wide_char_spacer_column_resolves_to_char() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    // Columns 1/3/5 are the trailing spacer halves of 本 etc.; they must
+    // resolve to the wide character they belong to, not to the next word.
+    for col in [1usize, 3, 5] {
+        assert_eq!(
+            term.get_word_at(col, 0, None),
+            Some("日本語".to_string()),
+            "spacer column {col}"
+        );
+    }
+}
+
+#[test]
+fn test_get_word_at_beyond_wide_char_run() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    assert_eq!(term.get_word_at(7, 0, None), Some("word".to_string()));
+    // The space between is not a word character.
+    assert_eq!(term.get_word_at(6, 0, None), None);
+    // Past the text (all blank cells) is not a word either.
+    assert_eq!(term.get_word_at(30, 0, None), None);
+}
+
+#[test]
+fn test_get_word_at_emoji_zwj_line() {
+    // 👨‍💻 is a single multi-char cell (technologist) covering columns 0..2.
+    let mut term = Terminal::new(80, 24);
+    term.process("👨‍💻 hi".as_bytes());
+
+    // The word after the emoji must resolve without the column walk
+    // counting the ZWJ sequence's string length instead of its cell width.
+    assert_eq!(term.get_word_at(3, 0, None), Some("hi".to_string()));
+    assert_eq!(term.get_word_at(4, 0, None), Some("hi".to_string()));
+    // Emoji are not word characters (same as before the fix).
+    assert_eq!(term.get_word_at(0, 0, None), None);
+    assert_eq!(term.get_word_at(1, 0, None), None);
+}
+
+#[test]
+fn test_get_word_at_combining_mark_stays_in_word() {
+    // é is one cell: base 'e' + combining acute.
+    let mut term = Terminal::new(80, 24);
+    term.process("cafe\u{0301} au".as_bytes());
+
+    assert_eq!(term.get_word_at(3, 0, None), Some("café".to_string()));
+}
+
+#[test]
+fn test_get_word_at_iterm2_default_word_chars() {
+    // Default set is iTerm2's "/-+\~_.": hyphenated words stay one word.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"foo-bar baz");
+
+    assert_eq!(term.get_word_at(0, 0, None), Some("foo-bar".to_string()));
+    // A custom set narrows the boundary back down.
+    assert_eq!(term.get_word_at(0, 0, Some("_")), Some("foo".to_string()));
+}
+
+#[test]
+fn test_select_word_wide_char_bounds_are_display_columns() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    let bounds = term.select_word(2, 0, None).expect("word at col 2");
+    assert_eq!(bounds, ((0, 0), (6, 0)));
+
+    let sel = term.get_selection().expect("selection set");
+    assert_eq!(sel.start, (0, 0));
+    assert_eq!(sel.end, (6, 0));
 }
 
 #[test]

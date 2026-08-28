@@ -353,13 +353,6 @@ impl GraphicsStore {
             .map_err(|e| GraphicsSerializationError::SerdeError(e.to_string()))
     }
 
-    /// Serialize the graphics snapshot to pretty-printed JSON
-    pub fn export_json_pretty(&self) -> Result<String, GraphicsSerializationError> {
-        let snapshot = self.export_snapshot();
-        serde_json::to_string_pretty(&snapshot)
-            .map_err(|e| GraphicsSerializationError::SerdeError(e.to_string()))
-    }
-
     /// Import graphics state from JSON
     pub fn import_json(&mut self, json: &str) -> Result<usize, GraphicsSerializationError> {
         let snapshot: GraphicsSnapshot = serde_json::from_str(json)

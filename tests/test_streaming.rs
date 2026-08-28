@@ -73,7 +73,7 @@ mod streaming_tests {
 
         #[test]
         fn test_server_message_connected() {
-            let msg = ServerMessage::connected(80, 24, "session-abc".to_string());
+            let msg = ServerMessage::connected_builder(80, 24, "session-abc".to_string()).build();
             match msg {
                 ServerMessage::Connected {
                     cols,
@@ -95,12 +95,9 @@ mod streaming_tests {
 
         #[test]
         fn test_server_message_connected_with_screen() {
-            let msg = ServerMessage::connected_with_screen(
-                80,
-                24,
-                "initial content".to_string(),
-                "session-xyz".to_string(),
-            );
+            let msg = ServerMessage::connected_builder(80, 24, "session-xyz".to_string())
+                .initial_screen(Some("initial content".to_string()))
+                .build();
             match msg {
                 ServerMessage::Connected {
                     cols,
@@ -304,8 +301,9 @@ mod streaming_tests {
         #[test]
         fn test_connected_message_with_theme() {
             let theme = create_test_theme();
-            let msg =
-                ServerMessage::connected_with_theme(80, 24, "session-theme".to_string(), theme);
+            let msg = ServerMessage::connected_builder(80, 24, "session-theme".to_string())
+                .theme(Some(theme))
+                .build();
 
             match msg {
                 ServerMessage::Connected {
@@ -331,13 +329,10 @@ mod streaming_tests {
         #[test]
         fn test_connected_message_with_screen_and_theme() {
             let theme = create_test_theme();
-            let msg = ServerMessage::connected_with_screen_and_theme(
-                80,
-                24,
-                "screen data".to_string(),
-                "session-both".to_string(),
-                theme,
-            );
+            let msg = ServerMessage::connected_builder(80, 24, "session-both".to_string())
+                .initial_screen(Some("screen data".to_string()))
+                .theme(Some(theme))
+                .build();
 
             match msg {
                 ServerMessage::Connected {
@@ -686,7 +681,7 @@ mod streaming_tests {
             }
 
             // Connected
-            let msg = ServerMessage::connected(80, 24, "sess-123".to_string());
+            let msg = ServerMessage::connected_builder(80, 24, "sess-123".to_string()).build();
             let encoded = encode_server_message(&msg).unwrap();
             let decoded = decode_server_message(&encoded).unwrap();
             match decoded {
@@ -993,7 +988,7 @@ mod streaming_tests {
                 (ServerMessage::title("title".to_string()), "title"),
                 (ServerMessage::bell(), "bell"),
                 (
-                    ServerMessage::connected(80, 24, "sess".to_string()),
+                    ServerMessage::connected_builder(80, 24, "sess".to_string()).build(),
                     "connected",
                 ),
                 (ServerMessage::error("err".to_string()), "error"),
@@ -1086,7 +1081,7 @@ mod streaming_tests {
         #[test]
         fn test_optional_fields_omitted() {
             // Test that optional fields with None are omitted from JSON
-            let msg = ServerMessage::connected(80, 24, "sess".to_string());
+            let msg = ServerMessage::connected_builder(80, 24, "sess".to_string()).build();
             let json = serde_json::to_string(&msg).unwrap();
 
             // initial_screen should not be present when None

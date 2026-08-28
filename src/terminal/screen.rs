@@ -209,58 +209,23 @@ pub fn hsv_to_rgb(hsv: ColorHSV) -> (u8, u8, u8) {
 }
 
 /// Convert RGB to HSL
+///
+/// Thin adapter over the canonical `color_utils::Color::to_hsl` (QA-009):
+/// rescales its 0-100 saturation/lightness to this type's 0-1 convention.
 pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> ColorHSL {
-    let r = r as f32 / 255.0;
-    let g = g as f32 / 255.0;
-    let b = b as f32 / 255.0;
-
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let delta = max - min;
-
-    let l = (max + min) / 2.0;
-
-    let s = if delta == 0.0 {
-        0.0
-    } else {
-        delta / (1.0 - (2.0 * l - 1.0).abs())
-    };
-
-    let h = if delta == 0.0 {
-        0.0
-    } else if (max - r).abs() < f32::EPSILON {
-        60.0 * (((g - b) / delta) % 6.0)
-    } else if (max - g).abs() < f32::EPSILON {
-        60.0 * (((b - r) / delta) + 2.0)
-    } else {
-        60.0 * (((r - g) / delta) + 4.0)
-    };
-
-    let h = if h < 0.0 { h + 360.0 } else { h };
-
-    ColorHSL { h, s, l }
+    let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+    ColorHSL {
+        h,
+        s: s / 100.0,
+        l: l / 100.0,
+    }
 }
 
 /// Convert HSL to RGB
+///
+/// Thin adapter over the canonical `color_utils::Color::from_hsl` (QA-009).
 pub fn hsl_to_rgb(hsl: ColorHSL) -> (u8, u8, u8) {
-    let c = (1.0 - (2.0 * hsl.l - 1.0).abs()) * hsl.s;
-    let x = c * (1.0 - ((hsl.h / 60.0) % 2.0 - 1.0).abs());
-    let m = hsl.l - c / 2.0;
-
-    let (r, g, b) = match hsl.h as u32 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-
-    (
-        ((r + m) * 255.0).round() as u8,
-        ((g + m) * 255.0).round() as u8,
-        ((b + m) * 255.0).round() as u8,
-    )
+    crate::color::Color::from_hsl(hsl.h, hsl.s * 100.0, hsl.l * 100.0).to_rgb()
 }
 
 use crate::terminal::Terminal;
@@ -347,39 +312,13 @@ impl Terminal {
     }
 
     /// Get the word at the given position
+    ///
+    /// `col` is a display column. A column covered by a wide character —
+    /// including its trailing spacer column — resolves to that character;
+    /// multi-char grapheme clusters (emoji + ZWJ, combining marks) are kept
+    /// whole. Defaults to the iTerm2 word set (`DEFAULT_WORD_CHARS`).
     pub fn get_word_at(&self, col: usize, row: usize, word_chars: Option<&str>) -> Option<String> {
-        let grid = self.active_grid();
-        let line = grid.row(row)?;
-        let line_text = crate::terminal::cells_to_text(line);
-
-        if col >= line_text.len() {
-            return None;
-        }
-
-        let is_word_char = |c: char| {
-            if let Some(chars) = word_chars {
-                chars.contains(c)
-            } else {
-                c.is_alphanumeric() || c == '_'
-            }
-        };
-
-        let chars: Vec<char> = line_text.chars().collect();
-        let mut start = col;
-        while start > 0 && is_word_char(chars[start - 1]) {
-            start -= 1;
-        }
-
-        let mut end = col;
-        while end < chars.len() && is_word_char(chars[end]) {
-            end += 1;
-        }
-
-        if start < end {
-            Some(chars[start..end].iter().collect())
-        } else {
-            None
-        }
+        crate::text_utils::get_word_at(self.active_grid(), col, row, word_chars)
     }
 
     // === Feature 19: Custom Rendering Hints ===
@@ -541,47 +480,35 @@ impl Terminal {
 
     /// Select the word at the given position
     pub fn select_word_at(&mut self, col: usize, row: usize) {
-        if let Some(word) = self.get_word_at(col, row, None) {
-            // Find word boundaries
-            let grid = self.active_grid();
-            if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
-                if let Some(word_start) = line_text.find(word.as_str()) {
-                    let word_end = word_start + word.len();
-                    self.selection = Some(Selection {
-                        start: (word_start, row),
-                        end: (word_end, row),
-                        mode: SelectionMode::Character,
-                    });
-                }
-            }
+        if let Some((start, end)) =
+            crate::text_utils::select_word(self.active_grid(), col, row, None)
+        {
+            self.selection = Some(Selection {
+                start,
+                end,
+                mode: SelectionMode::Character,
+            });
         }
     }
 
     /// Select the word at the given position
+    ///
+    /// Returns the selection bounds as display columns
+    /// `((start_col, start_row), (end_col, end_row))`, with `end_col`
+    /// exclusive.
     pub fn select_word(
         &mut self,
         col: usize,
         row: usize,
         word_chars: Option<&str>,
     ) -> Option<((usize, usize), (usize, usize))> {
-        if let Some(word) = self.get_word_at(col, row, word_chars) {
-            // Find word boundaries in the line
-            let grid = self.active_grid();
-            if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
-                if let Some(word_start) = line_text.find(word.as_str()) {
-                    let word_end = word_start + word.len();
-                    self.selection = Some(Selection {
-                        start: (word_start, row),
-                        end: (word_end, row),
-                        mode: SelectionMode::Character,
-                    });
-                    return Some(((word_start, row), (word_end, row)));
-                }
-            }
-        }
-        None
+        let bounds = crate::text_utils::select_word(self.active_grid(), col, row, word_chars)?;
+        self.selection = Some(Selection {
+            start: bounds.0,
+            end: bounds.1,
+            mode: SelectionMode::Character,
+        });
+        Some(bounds)
     }
 
     /// Select the entire line at the given row
@@ -617,18 +544,15 @@ impl Terminal {
         }
         // Fallback to word selection when no delimiters provided
         if let Some(word) = self.get_word_at(col, row, delimiters) {
-            let grid = self.active_grid();
-            if let Some(line) = grid.row(row) {
-                let line_text = crate::terminal::cells_to_text(line);
-                if let Some(word_start) = line_text.find(word.as_str()) {
-                    let word_end = word_start + word.len();
-                    self.selection = Some(Selection {
-                        start: (word_start, row),
-                        end: (word_end, row),
-                        mode: SelectionMode::Character,
-                    });
-                    return Some(word);
-                }
+            if let Some((start, end)) =
+                crate::text_utils::select_word(self.active_grid(), col, row, delimiters)
+            {
+                self.selection = Some(Selection {
+                    start,
+                    end,
+                    mode: SelectionMode::Character,
+                });
+                return Some(word);
             }
         }
         None

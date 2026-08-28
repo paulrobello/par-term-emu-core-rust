@@ -121,7 +121,7 @@ When modifying the streaming protocol, changes flow through 3 layers:
 Also update:
 - `src/python_bindings/streaming.rs` - Dict conversion + event type matching
 - `tests/test_streaming.rs` - Integration tests (use `..` in destructuring for forward compat)
-- `src/streaming/server.rs` - `build_connect_message()` helper when extending `Connected`
+- `src/streaming/session.rs` - `build_connect_message()` (`SessionRegistry`) when extending `Connected`
 
 ### PTY Architecture
 
@@ -140,7 +140,7 @@ Also update:
 2. Update `src/streaming/proto.rs` (both conversion directions)
 3. Update `src/python_bindings/streaming.rs` (dict conversion + event type match)
 4. Update `tests/test_streaming.rs`
-5. If extending `Connected`: update all existing constructors, add `connected_full()`, update `build_connect_message()` in `server.rs`
+5. If extending `Connected`: add one method on `ConnectedBuilder` (+ the field in `Connected`/builder/build()) — the single edit site — and update `build_connect_message()` in `session.rs`; do NOT add new partial constructors
 
 ### Adding PTY Features
 1. Modify `PtySession` in `src/pty_session.rs`

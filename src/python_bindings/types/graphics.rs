@@ -135,17 +135,7 @@ impl PyGraphic {
     /// Returns:
     ///     Tuple of (r, g, b, a) values, or None if out of bounds
     fn get_pixel(&self, x: usize, y: usize) -> Option<(u8, u8, u8, u8)> {
-        if x < self.width && y < self.height {
-            let idx = (y * self.width + x) * 4;
-            Some((
-                self.pixels[idx],
-                self.pixels[idx + 1],
-                self.pixels[idx + 2],
-                self.pixels[idx + 3],
-            ))
-        } else {
-            None
-        }
+        crate::graphics::pixel_at_in(&self.pixels, self.width, self.height, x, y)
     }
 
     /// Get raw pixel data as bytes (RGBA format)
@@ -158,9 +148,7 @@ impl PyGraphic {
 
     /// Get size in terminal cells
     fn cell_size(&self, cell_width: u32, cell_height: u32) -> (usize, usize) {
-        let cols = self.width.div_ceil(cell_width as usize);
-        let rows = self.height.div_ceil(cell_height as usize);
-        (cols, rows)
+        crate::graphics::cell_size_for(self.width, self.height, cell_width, cell_height)
     }
 
     /// Sample for half-block rendering at cell (col, row)
@@ -172,22 +160,16 @@ impl PyGraphic {
         cell_width: u32,
         cell_height: u32,
     ) -> Option<HalfBlockColors> {
-        // Calculate pixel coordinates relative to graphic position
-        let rel_col = cell_col.checked_sub(self.position.0)?;
-        let rel_row = cell_row.checked_sub(self.position.1)?;
-
-        let px_x = rel_col * cell_width as usize;
-        let px_y = rel_row * cell_height as usize;
-
-        // Sample center of top and bottom halves
-        let top_y = px_y + cell_height as usize / 4;
-        let bottom_y = px_y + (cell_height as usize * 3) / 4;
-        let center_x = px_x + cell_width as usize / 2;
-
-        let top = self.get_pixel(center_x, top_y)?;
-        let bottom = self.get_pixel(center_x, bottom_y)?;
-
-        Some((top, bottom))
+        crate::graphics::sample_half_block_in(
+            &self.pixels,
+            self.width,
+            self.height,
+            self.position,
+            cell_col,
+            cell_row,
+            cell_width,
+            cell_height,
+        )
     }
 
     fn __repr__(&self) -> PyResult<String> {

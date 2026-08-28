@@ -181,19 +181,16 @@ impl StreamSessionState {
         let cwd = terminal.current_directory().map(|s| s.to_string());
         let mok_mode = Some(terminal.modify_other_keys_mode() as u32);
 
-        ServerMessage::connected_full(
-            cols as u16,
-            rows as u16,
-            initial_screen,
-            self.id.clone(),
-            self.theme.clone(),
-            badge,
-            faint_alpha,
-            cwd,
-            mok_mode,
-            Some(client_id.to_string()),
-            Some(readonly),
-        )
+        ServerMessage::connected_builder(cols as u16, rows as u16, self.id.clone())
+            .initial_screen(initial_screen)
+            .theme(self.theme.clone())
+            .badge(badge)
+            .faint_text_alpha(faint_alpha)
+            .cwd(cwd)
+            .modify_other_keys(mok_mode)
+            .client_id(Some(client_id.to_string()))
+            .readonly(Some(readonly))
+            .build()
     }
 
     /// Build ModeChanged messages for all active (non-default) terminal modes.

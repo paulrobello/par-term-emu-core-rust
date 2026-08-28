@@ -1200,7 +1200,9 @@ mod tests {
             ],
         };
 
-        let msg = AppServerMessage::connected_with_theme(80, 24, "session-123".to_string(), theme);
+        let msg = AppServerMessage::connected_builder(80, 24, "session-123".to_string())
+            .theme(Some(theme))
+            .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
@@ -1655,19 +1657,15 @@ mod tests {
 
     #[test]
     fn test_encode_decode_connected_with_new_fields() {
-        let msg = AppServerMessage::connected_full(
-            80,
-            24,
-            Some("initial content".to_string()),
-            "sess-full".to_string(),
-            None,
-            Some("my badge".to_string()),
-            Some(0.5),
-            Some("/home/user".to_string()),
-            Some(2),
-            Some("client-42".to_string()),
-            Some(true),
-        );
+        let msg = AppServerMessage::connected_builder(80, 24, "sess-full".to_string())
+            .initial_screen(Some("initial content".to_string()))
+            .badge(Some("my badge".to_string()))
+            .faint_text_alpha(Some(0.5))
+            .cwd(Some("/home/user".to_string()))
+            .modify_other_keys(Some(2))
+            .client_id(Some("client-42".to_string()))
+            .readonly(Some(true))
+            .build();
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
         let AppServerMessage::Connected {

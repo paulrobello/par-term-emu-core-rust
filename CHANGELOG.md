@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **Kitty placement APCs now store decoded graphics** (`src/terminal/mod.rs`). Regular Kitty placement commands returned a decoded `KittyGraphicResult::Graphic`, but the terminal integration discarded it after the image upload, leaving placements with no active pixel-backed graphic for downstream renderers. The result is now inserted into `GraphicsStore`; a transmit followed by placement renders with its stored pixels. Regression coverage added in `src/terminal/tests/kitty_apc.rs`.
 
+### Removed
+- **Dead code on the `rlib` surface** (verified unreferenced in this repo, its tests/examples, and the sibling consumers `par-term` and `par-term-emu-tui-rust`). **Breaking for Rust consumers** who called these directly; Python users are unaffected (none were exposed to Python): `Cell::new_with_config`, `Cell::with_colors_and_config`, `Cell::from_grapheme_with_config`, `Cell::from_grapheme_normalized`, `Cell::recalculate_width` (`src/cell.rs`); `GraphicsStore::remove_virtual_placement`, `GraphicsStore::get_placeholder_graphic` (`src/graphics/mod.rs`); `GraphicsStore::export_json_pretty` (`src/graphics/serialization.rs`); `text_utils::get_url_at`, `text_utils::get_line_unwrapped`, `text_utils::find_matching_bracket` (`src/text_utils.rs`) — the live implementations are `Terminal::get_url_at`/`Terminal::find_matching_bracket` (`src/terminal/search.rs`) and `Terminal::get_line_unwrapped` (`src/terminal/screen.rs`). Kept despite audit flags: `Grid::export_visible_screen_styled` (called by `Terminal::export_visible_screen_styled` and the streaming session), `sample_half_block`/`cell_size` (canonical implementations for the bindings delegation), `python/par_term_emu_core_rust/debug.py` (imported by `par-term-emu-tui-rust`), and `MouseMode::X10` (to be wired by ENH-006).
+
 ## [0.46.0] - 2026-08-03
 
 ### Added

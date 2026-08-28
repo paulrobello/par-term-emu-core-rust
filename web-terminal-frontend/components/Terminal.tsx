@@ -8,17 +8,15 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import type { ConnectionStatus } from '@/types/terminal';
 import {
-  decodeServerMessage,
-  encodeClientMessage,
   createInputMessage,
   createResizeMessage,
   createRefreshMessage,
-  createPingMessage,
   createMouseMessage,
   createFocusMessage,
   createPasteMessage,
   themeToXtermOptions,
 } from '@/lib/protocol';
+import { TerminalConnection } from '@/lib/terminal-connection';
 
 interface TerminalProps {
   wsUrl: string;
@@ -88,7 +86,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const terminalRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const connectionRef = useRef<TerminalConnection | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
 
@@ -104,17 +102,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const pendingEchoRef = useRef<string[]>([]);
   const localEchoEnabledRef = useRef<boolean>(true);
 
-  // Auto-reconnect state
-  const retryTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const retryDelayRef = useRef(500); // Start at 500ms
-  const isRetryingRef = useRef(false);
-  const retryCancelledRef = useRef(false);
-
-  // Heartbeat/ping state for stale connection detection
-  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastPongRef = useRef<number>(0);
-  const HEARTBEAT_INTERVAL_MS = 25000; // Send ping every 25 seconds
-  const HEARTBEAT_TIMEOUT_MS = 10000; // Consider stale if no pong within 10 seconds
+  // Reconnect/backoff and heartbeat/stale-pong state live inside
+  // TerminalConnection (QA-008).
 
   // Terminal mode tracking (from server modeChanged messages)
   const mouseTrackingRef = useRef<boolean>(false);
@@ -131,11 +120,6 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
   // Track fontSize prop for use in handlers
   const fontSizeRef = useRef<number | undefined>(fontSize);
-
-  // Forward-reference to `connect` so `scheduleRetry` (declared earlier) can
-  // invoke it without a TDZ/no-use-before-declare violation. The ref is
-  // populated once the real `connect` useCallback runs below.
-  const connectRef = useRef<(() => void) | null>(null);
 
   const updateStatus = (newStatus: ConnectionStatus) => {
     setStatus(newStatus);
@@ -180,78 +164,6 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       }
     }
   }, [flushWrites]);
-
-  const cancelRetry = useCallback(() => {
-    if (retryTimeoutRef.current) {
-      clearTimeout(retryTimeoutRef.current);
-      retryTimeoutRef.current = null;
-    }
-    isRetryingRef.current = false;
-    retryCancelledRef.current = true;
-    retryDelayRef.current = 500; // Reset delay
-    onRetryingChange?.(false);
-  }, [onRetryingChange]);
-
-  const scheduleRetry = useCallback(() => {
-    if (retryCancelledRef.current) return;
-
-    isRetryingRef.current = true;
-    onRetryingChange?.(true);
-
-    const delay = retryDelayRef.current;
-    debugLog(`Scheduling reconnect in ${delay}ms`);
-
-    retryTimeoutRef.current = setTimeout(() => {
-      if (!retryCancelledRef.current) {
-        // Increase delay for next retry (max 5 seconds)
-        retryDelayRef.current = Math.min(retryDelayRef.current * 2, 5000);
-        connectRef.current?.();
-      }
-    }, delay);
-  }, [onRetryingChange]);
-
-  // Stop heartbeat timer
-  const stopHeartbeat = useCallback(() => {
-    if (heartbeatIntervalRef.current) {
-      clearInterval(heartbeatIntervalRef.current);
-      heartbeatIntervalRef.current = null;
-    }
-  }, []);
-
-  // Start heartbeat timer - sends pings and detects stale connections
-  const startHeartbeat = useCallback(() => {
-    stopHeartbeat(); // Clear any existing heartbeat
-    lastPongRef.current = Date.now(); // Initialize last pong time
-
-    heartbeatIntervalRef.current = setInterval(() => {
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) {
-        stopHeartbeat();
-        return;
-      }
-
-      const now = Date.now();
-      const timeSinceLastPong = now - lastPongRef.current;
-
-      // Check if connection is stale (no pong received within timeout)
-      if (timeSinceLastPong > HEARTBEAT_INTERVAL_MS + HEARTBEAT_TIMEOUT_MS) {
-        console.warn(`Connection stale: no pong in ${timeSinceLastPong}ms, closing`);
-        stopHeartbeat();
-        ws.close();
-        return;
-      }
-
-      // Send ping
-      try {
-        ws.send(encodeClientMessage(createPingMessage()));
-        debugLog('Heartbeat ping sent');
-      } catch (err) {
-        console.error('Failed to send heartbeat ping:', err);
-        stopHeartbeat();
-        ws.close();
-      }
-    }, HEARTBEAT_INTERVAL_MS);
-  }, [stopHeartbeat]);
 
   // Apply theme to terminal (using protobuf ThemeInfo)
   const applyTheme = (theme: { name: string; background?: { r: number; g: number; b: number }; foreground?: { r: number; g: number; b: number }; normal: { r: number; g: number; b: number }[]; bright: { r: number; g: number; b: number }[] }) => {
@@ -425,9 +337,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           term.refresh(0, newRows - 1);
           debugLog(`Refit: after explicit resize - cols=${term.cols}, rows=${term.rows}`);
 
-          if (wsRef.current?.readyState === WebSocket.OPEN) {
+          if (connectionRef.current?.isOpen()) {
             debugLog(`Refit: sending resize ${newCols}x${newRows}`);
-            wsRef.current.send(encodeClientMessage(createResizeMessage(newCols, newRows)));
+            connectionRef.current.send(createResizeMessage(newCols, newRows));
           }
         }, 50);
       });
@@ -443,9 +355,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     // Expose sendInput function to parent for onscreen keyboard
     if (onSendInput) {
       onSendInput((data: string) => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(encodeClientMessage(createInputMessage(data)));
-        }
+        connectionRef.current?.send(createInputMessage(data));
       });
     }
 
@@ -483,7 +393,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     window.addEventListener('orientationchange', handleOrientationChange);
 
-    // Handle terminal input - use wsRef so it works across reconnects
+    // Handle terminal input - goes through connectionRef so it works across reconnects
     // Implements local echo for printable characters to reduce perceived latency
     const onDataDisposable = term.onData((data) => {
       // Local echo for single printable ASCII characters
@@ -499,16 +409,14 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       }
 
       // Always send to server
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(encodeClientMessage(createInputMessage(data)));
-      }
+      connectionRef.current?.send(createInputMessage(data));
     });
 
-    // Handle terminal resize - use wsRef so it works across reconnects
+    // Handle terminal resize - goes through connectionRef so it works across reconnects
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
+      if (connectionRef.current?.isOpen()) {
         debugLog(`Client resized to: ${cols}x${rows}`);
-        wsRef.current.send(encodeClientMessage(createResizeMessage(cols, rows)));
+        connectionRef.current.send(createResizeMessage(cols, rows));
       }
     });
 
@@ -529,37 +437,37 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     };
 
     const handleMouseDown = (e: MouseEvent) => {
-      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (!mouseTrackingRef.current || !connectionRef.current?.isOpen()) return;
       const coords = getCellCoords(e);
       if (!coords) return;
-      wsRef.current.send(encodeClientMessage(createMouseMessage(
+      connectionRef.current.send(createMouseMessage(
         coords.col, coords.row, e.button, 'press', e.shiftKey, e.ctrlKey, e.altKey,
-      )));
+      ));
     };
     const handleMouseUp = (e: MouseEvent) => {
-      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (!mouseTrackingRef.current || !connectionRef.current?.isOpen()) return;
       const coords = getCellCoords(e);
       if (!coords) return;
-      wsRef.current.send(encodeClientMessage(createMouseMessage(
+      connectionRef.current.send(createMouseMessage(
         coords.col, coords.row, 3, 'release', e.shiftKey, e.ctrlKey, e.altKey,
-      )));
+      ));
     };
     const handleMouseMove = (e: MouseEvent) => {
-      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (!mouseTrackingRef.current || !connectionRef.current?.isOpen()) return;
       const coords = getCellCoords(e);
       if (!coords) return;
-      wsRef.current.send(encodeClientMessage(createMouseMessage(
+      connectionRef.current.send(createMouseMessage(
         coords.col, coords.row, 0, 'move', e.shiftKey, e.ctrlKey, e.altKey,
-      )));
+      ));
     };
     const handleWheel = (e: WheelEvent) => {
-      if (!mouseTrackingRef.current || wsRef.current?.readyState !== WebSocket.OPEN) return;
+      if (!mouseTrackingRef.current || !connectionRef.current?.isOpen()) return;
       const coords = getCellCoords(e);
       if (!coords) return;
       const button = e.deltaY < 0 ? 4 : 5; // 4=scroll_up, 5=scroll_down
-      wsRef.current.send(encodeClientMessage(createMouseMessage(
+      connectionRef.current.send(createMouseMessage(
         coords.col, coords.row, button, 'scroll', e.shiftKey, e.ctrlKey, e.altKey,
-      )));
+      ));
     };
     termElement?.addEventListener('mousedown', handleMouseDown);
     termElement?.addEventListener('mouseup', handleMouseUp);
@@ -568,13 +476,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Handle focus/blur events - send FocusChange when focus tracking is active
     const handleFocusIn = () => {
-      if (focusTrackingRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(encodeClientMessage(createFocusMessage(true)));
+      if (focusTrackingRef.current && connectionRef.current?.isOpen()) {
+        connectionRef.current.send(createFocusMessage(true));
       }
     };
     const handleFocusOut = () => {
-      if (focusTrackingRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(encodeClientMessage(createFocusMessage(false)));
+      if (focusTrackingRef.current && connectionRef.current?.isOpen()) {
+        connectionRef.current.send(createFocusMessage(false));
       }
     };
     window.addEventListener('focus', handleFocusIn);
@@ -582,11 +490,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Handle paste events - send PasteInput when bracketed paste mode is active
     const handlePaste = (e: ClipboardEvent) => {
-      if (bracketedPasteRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+      if (bracketedPasteRef.current && connectionRef.current?.isOpen()) {
         const text = e.clipboardData?.getData('text');
         if (text) {
           e.preventDefault();
-          wsRef.current.send(encodeClientMessage(createPasteMessage(text)));
+          connectionRef.current.send(createPasteMessage(text));
         }
       }
       // When not in bracketed paste mode, let xterm.js handle it normally
@@ -632,7 +540,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           // Not restored - this is a real unmount, dispose everything
           debugLog('Real unmount - disposing terminal');
           term.dispose();
-          wsRef.current?.close();
+          connectionRef.current?.dispose();
+          connectionRef.current = null;
           preservedTerminal = null;
           preservedFitAddon = null;
         }
@@ -646,326 +555,228 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const connect = useCallback(() => {
     if (!xtermRef.current) return;
 
-    // If already connected, close existing socket first
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      debugLog('Closing existing connection before reconnecting');
-      wsRef.current.close();
-      wsRef.current = null;
+    // Replace the live connection when the URL changed; otherwise reuse it.
+    if (connectionRef.current && connectionRef.current.getUrl() !== wsUrl) {
+      connectionRef.current.dispose();
+      connectionRef.current = null;
     }
 
-    // Reset cancelled flag when manually connecting
-    retryCancelledRef.current = false;
-    updateStatus('connecting');
+    if (!connectionRef.current) {
+      connectionRef.current = new TerminalConnection(wsUrl, {
+        onStatus: updateStatus,
+        onRetryingChange,
+        onConnectionClosed: () => {
+          xtermRef.current?.write('\r\n\x1b[1;33mDisconnected from server\x1b[0m\r\n');
+        },
+        onConnectionError: () => {
+          xtermRef.current?.write('\r\n\x1b[1;31mConnection error\x1b[0m\r\n');
+        },
+        onInvalidUrl: (url) => {
+          xtermRef.current?.write(`\r\n\x1b[1;31mInvalid WebSocket URL: ${url}\x1b[0m\r\n`);
+        },
+        onOpen: () => {
+          // Fit terminal to container
+          fitAddonRef.current?.fit();
+          // Note: resize and refresh are sent after receiving 'connected' message
+        },
+        onOutput: (data) => {
+          if (!xtermRef.current) return;
+          // Use RAF-batched write for better performance
+          bufferWrite(data);
+        },
+        onConnected: (connected) => {
+          const term = xtermRef.current;
+          if (!term) return;
 
-    // Validate URL and create WebSocket with error handling
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(wsUrl);
-    } catch (err) {
-      console.error('Invalid WebSocket URL:', err);
-      updateStatus('error');
-      if (xtermRef.current) {
-        xtermRef.current.write(`\r\n\x1b[1;31mInvalid WebSocket URL: ${wsUrl}\x1b[0m\r\n`);
-      }
-      return;
-    }
+          const initialScreenLength = connected.initialScreen?.length || 0;
+          debugLog(`Session ID: ${connected.sessionId}`);
+          debugLog(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
+          debugLog(`Initial screen provided: ${!!connected.initialScreen}, length: ${initialScreenLength}`);
 
-    ws.binaryType = 'arraybuffer'; // Use binary protocol
-    wsRef.current = ws;
-
-    ws.onopen = () => {
-      debugLog('WebSocket connected');
-      updateStatus('connected');
-      // Reset retry delay on successful connection
-      retryDelayRef.current = 500;
-      isRetryingRef.current = false;
-      onRetryingChange?.(false);
-
-      // Start heartbeat for stale connection detection
-      startHeartbeat();
-
-      // Fit terminal to container
-      if (fitAddonRef.current) {
-        fitAddonRef.current.fit();
-      }
-      // Note: resize and refresh are sent after receiving 'connected' message
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = decodeServerMessage(event.data);
-        const term = xtermRef.current;
-        if (!term) return;
-
-        // Handle oneof message type
-        switch (msg.message.case) {
-          case 'output': {
-            const output = msg.message.value;
-            const data = sharedDecoder.decode(output.data);
-            // Use RAF-batched write for better performance
-            bufferWrite(data);
-            break;
+          // Guard against oversized initial screens
+          if (initialScreenLength > MAX_SNAPSHOT_SIZE) {
+            console.error(`Initial screen too large (${initialScreenLength} bytes), skipping`);
           }
 
-          case 'connected': {
-            const connected = msg.message.value;
-            const initialScreenLength = connected.initialScreen?.length || 0;
-            debugLog(`Session ID: ${connected.sessionId}`);
-            debugLog(`Server initial size: ${connected.cols}x${connected.rows}, Client size: ${term.cols}x${term.rows}`);
-            debugLog(`Initial screen provided: ${!!connected.initialScreen}, length: ${initialScreenLength}`);
+          // Apply theme if provided
+          if (connected.theme) {
+            applyTheme(connected.theme);
+          }
 
-            // Guard against oversized initial screens
-            if (initialScreenLength > MAX_SNAPSHOT_SIZE) {
-              console.error(`Initial screen too large (${initialScreenLength} bytes), skipping`);
-            }
+          // Reset and clear terminal on fresh connection
+          term.reset();
+          term.clear();
 
-            // Apply theme if provided
-            if (connected.theme) {
-              applyTheme(connected.theme);
-            }
+          // Clear any pending local echo from previous session
+          pendingEchoRef.current = [];
+          // Reset mode tracking for new session
+          mouseTrackingRef.current = false;
+          focusTrackingRef.current = false;
+          bracketedPasteRef.current = false;
+          // Clear tracked hyperlinks and user vars for new session
+          hyperlinksRef.current.clear();
+          userVarsRef.current.clear();
 
-            // Reset and clear terminal on fresh connection
-            term.reset();
-            term.clear();
+          // Send our size to server, then request a fresh snapshot
+          if (connectionRef.current?.isOpen()) {
+            const cols = term.cols;
+            const rows = term.rows;
+            debugLog(`Sending resize after connect: ${cols}x${rows}`);
+            connectionRef.current.send(createResizeMessage(cols, rows));
+            // Request fresh snapshot
+            debugLog('Requesting refresh after connect');
+            connectionRef.current.send(createRefreshMessage());
+          }
+          term.focus();
+        },
+        onServerResize: (resize) => {
+          const term = xtermRef.current;
+          if (!term) return;
+          term.resize(resize.cols, resize.rows);
+          debugLog(`Terminal resized: ${resize.cols}x${resize.rows}`);
+          if (connectionRef.current?.isOpen()) {
+            debugLog('Requesting screen refresh after resize');
+            connectionRef.current.send(createRefreshMessage());
+          }
+        },
+        onRefresh: (refresh) => {
+          const term = xtermRef.current;
+          if (!term) return;
 
-            // Clear any pending local echo from previous session
-            pendingEchoRef.current = [];
-            // Reset mode tracking for new session
-            mouseTrackingRef.current = false;
-            focusTrackingRef.current = false;
-            bracketedPasteRef.current = false;
-            // Clear tracked hyperlinks and user vars for new session
-            hyperlinksRef.current.clear();
-            userVarsRef.current.clear();
+          const snapshotLength = refresh.screenContent?.length || 0;
+          debugLog(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
+          debugLog('=== CLIENT REFRESH DEBUG ===');
+          debugLog(`Client terminal size: ${term.cols}x${term.rows}`);
+          debugLog(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
+          debugLog(`Snapshot length: ${snapshotLength} bytes`);
+          debugLog('============================');
 
-            // Send our size to server, then request a fresh snapshot
-            if (ws.readyState === WebSocket.OPEN) {
+          // Guard against oversized snapshots that could freeze the UI
+          if (snapshotLength > MAX_SNAPSHOT_SIZE) {
+            console.error(`Snapshot too large (${snapshotLength} bytes), rejecting to prevent UI freeze`);
+            term.write('\r\n\x1b[1;33mWarning: Screen snapshot too large, display may be incomplete\x1b[0m\r\n');
+            return;
+          }
+
+          // Fully reset terminal state and clear all buffers
+          term.reset();
+          term.clear();
+          // Write fresh content - the snapshot should include cursor positioning
+          if (refresh.screenContent && snapshotLength > 0) {
+            const content = sharedDecoder.decode(refresh.screenContent);
+            term.write(content);
+          }
+          // Scroll to bottom to ensure cursor is visible
+          term.scrollToBottom();
+          term.focus();
+        },
+        onTitle: (title) => {
+          if (!xtermRef.current) return;
+          document.title = title.title + ' - Terminal Streaming';
+          debugLog(`Title changed: ${title.title}`);
+        },
+        onServerError: (message) => {
+          const term = xtermRef.current;
+          if (!term) return;
+          console.error('Server error:', message);
+          term.write(`\r\n\x1b[1;31mError: ${message}\x1b[0m\r\n`);
+        },
+        onShutdown: (reason, kind) => {
+          const term = xtermRef.current;
+          if (!term) return;
+          if (kind === 'session-ended') {
+            term.write(`\r\n\x1b[1;31mSession ended: ${reason}\x1b[0m\r\n`);
+          } else if (kind === 'idle-timeout') {
+            term.write('\r\n\x1b[1;33mSession timed out due to inactivity\x1b[0m\r\n');
+          } else {
+            term.write(`\r\n\x1b[1;33mServer: ${reason}\x1b[0m\r\n`);
+          }
+        },
+        onModeChanged: (mode, enabled) => {
+          if (!xtermRef.current) return;
+          debugLog(`Mode changed: ${mode} = ${enabled}`);
+          // Track mode state for mouse/focus/paste handling
+          if (mode === 'mouse_tracking') {
+            mouseTrackingRef.current = enabled;
+          } else if (mode === 'focus_tracking') {
+            focusTrackingRef.current = enabled;
+          } else if (mode === 'bracketed_paste') {
+            bracketedPasteRef.current = enabled;
+          }
+        },
+        onHyperlinkAdded: (link) => {
+          if (!xtermRef.current) return;
+          const entry = { url: link.url, col: link.col, id: link.id };
+          const rowLinks = hyperlinksRef.current.get(link.row) || [];
+          rowLinks.push(entry);
+          hyperlinksRef.current.set(link.row, rowLinks);
+          onHyperlinkAdded?.(link.url, link.row, link.col, link.id);
+        },
+        onUserVarChanged: (uv) => {
+          if (!xtermRef.current) return;
+          if (uv.value === '') {
+            userVarsRef.current.delete(uv.name);
+          } else {
+            userVarsRef.current.set(uv.name, uv.value);
+          }
+          onUserVarChanged?.(uv.name, uv.value, uv.oldValue);
+        },
+        onSelectionChanged: (sel) => {
+          const term = xtermRef.current;
+          if (!term) return;
+
+          if (sel.cleared) {
+            term.clearSelection();
+          } else if (
+            sel.startCol !== undefined &&
+            sel.startRow !== undefined &&
+            sel.endCol !== undefined &&
+            sel.endRow !== undefined
+          ) {
+            if (sel.mode === 'line') {
+              term.selectLines(sel.startRow, sel.endRow);
+            } else {
+              // Compute character-span length for select()
               const cols = term.cols;
-              const rows = term.rows;
-              debugLog(`Sending resize after connect: ${cols}x${rows}`);
-              ws.send(encodeClientMessage(createResizeMessage(cols, rows)));
-              // Request fresh snapshot
-              debugLog('Requesting refresh after connect');
-              ws.send(encodeClientMessage(createRefreshMessage()));
-            }
-            term.focus();
-            break;
-          }
-
-          case 'resize': {
-            const resize = msg.message.value;
-            term.resize(resize.cols, resize.rows);
-            debugLog(`Terminal resized: ${resize.cols}x${resize.rows}`);
-            if (ws.readyState === WebSocket.OPEN) {
-              debugLog('Requesting screen refresh after resize');
-              ws.send(encodeClientMessage(createRefreshMessage()));
-            }
-            break;
-          }
-
-          case 'refresh': {
-            const refresh = msg.message.value;
-            const snapshotLength = refresh.screenContent?.length || 0;
-            debugLog(`Refresh response received: ${refresh.cols}x${refresh.rows}`);
-            debugLog('=== CLIENT REFRESH DEBUG ===');
-            debugLog(`Client terminal size: ${term.cols}x${term.rows}`);
-            debugLog(`Server snapshot size: ${refresh.cols}x${refresh.rows}`);
-            debugLog(`Snapshot length: ${snapshotLength} bytes`);
-            debugLog('============================');
-
-            // Guard against oversized snapshots that could freeze the UI
-            if (snapshotLength > MAX_SNAPSHOT_SIZE) {
-              console.error(`Snapshot too large (${snapshotLength} bytes), rejecting to prevent UI freeze`);
-              term.write('\r\n\x1b[1;33mWarning: Screen snapshot too large, display may be incomplete\x1b[0m\r\n');
-              break;
-            }
-
-            // Fully reset terminal state and clear all buffers
-            term.reset();
-            term.clear();
-            // Write fresh content - the snapshot should include cursor positioning
-            if (refresh.screenContent && snapshotLength > 0) {
-              const content = sharedDecoder.decode(refresh.screenContent);
-              term.write(content);
-            }
-            // Scroll to bottom to ensure cursor is visible
-            term.scrollToBottom();
-            term.focus();
-            break;
-          }
-
-          case 'title': {
-            const title = msg.message.value;
-            document.title = title.title + ' - Terminal Streaming';
-            debugLog(`Title changed: ${title.title}`);
-            break;
-          }
-
-          case 'bell':
-            debugLog('Bell received');
-            break;
-
-          case 'error': {
-            const error = msg.message.value;
-            console.error('Server error:', error.message);
-            term.write(`\r\n\x1b[1;31mError: ${error.message}\x1b[0m\r\n`);
-            break;
-          }
-
-          case 'shutdown': {
-            const shutdown = msg.message.value;
-            const reason = (shutdown.reason || '').toLowerCase();
-            debugLog('Server shutdown:', shutdown.reason);
-
-            if (reason.includes('shell exited') || reason.includes('dead session')) {
-              term.write(`\r\n\x1b[1;31mSession ended: ${shutdown.reason}\x1b[0m\r\n`);
-              retryCancelledRef.current = true; // Don't auto-reconnect
-            } else if (reason.includes('idle timeout')) {
-              term.write(`\r\n\x1b[1;33mSession timed out due to inactivity\x1b[0m\r\n`);
-              // Allow reconnect — will create new session
-            } else {
-              term.write(`\r\n\x1b[1;33mServer: ${shutdown.reason}\x1b[0m\r\n`);
-              // Allow reconnect for server restarts
-            }
-            break;
-          }
-
-          case 'modeChanged': {
-            const mc = msg.message.value;
-            debugLog(`Mode changed: ${mc.mode} = ${mc.enabled}`);
-            // Track mode state for mouse/focus/paste handling
-            if (mc.mode === 'mouse_tracking') {
-              mouseTrackingRef.current = mc.enabled;
-            } else if (mc.mode === 'focus_tracking') {
-              focusTrackingRef.current = mc.enabled;
-            } else if (mc.mode === 'bracketed_paste') {
-              bracketedPasteRef.current = mc.enabled;
-            }
-            break;
-          }
-
-          case 'pong':
-            // Pong received - update last pong time for heartbeat tracking
-            lastPongRef.current = Date.now();
-            debugLog('Heartbeat pong received');
-            break;
-
-          case 'hyperlinkAdded': {
-            const link = msg.message.value;
-            const entry = { url: link.url, col: link.col, id: link.id };
-            const rowLinks = hyperlinksRef.current.get(link.row) || [];
-            rowLinks.push(entry);
-            hyperlinksRef.current.set(link.row, rowLinks);
-            onHyperlinkAdded?.(link.url, link.row, link.col, link.id);
-            break;
-          }
-
-          case 'userVarChanged': {
-            const uv = msg.message.value;
-            if (uv.value === '') {
-              userVarsRef.current.delete(uv.name);
-            } else {
-              userVarsRef.current.set(uv.name, uv.value);
-            }
-            onUserVarChanged?.(uv.name, uv.value, uv.oldValue);
-            break;
-          }
-
-          case 'selectionChanged': {
-            const sel = msg.message.value;
-            if (!term) break;
-
-            if (sel.cleared) {
-              term.clearSelection();
-            } else if (
-              sel.startCol !== undefined &&
-              sel.startRow !== undefined &&
-              sel.endCol !== undefined &&
-              sel.endRow !== undefined
-            ) {
-              if (sel.mode === 'line') {
-                term.selectLines(sel.startRow, sel.endRow);
+              let length: number;
+              if (sel.startRow === sel.endRow) {
+                length = sel.endCol - sel.startCol;
               } else {
-                // Compute character-span length for select()
-                const cols = term.cols;
-                let length: number;
-                if (sel.startRow === sel.endRow) {
-                  length = sel.endCol - sel.startCol;
-                } else {
-                  length = (cols - sel.startCol)
-                    + (sel.endRow - sel.startRow - 1) * cols
-                    + sel.endCol;
-                }
-                if (length > 0) {
-                  term.select(sel.startCol, sel.startRow, length);
-                }
+                length = (cols - sel.startCol)
+                  + (sel.endRow - sel.startRow - 1) * cols
+                  + sel.endCol;
               }
-
-              // Copy to clipboard if text is provided
-              if (sel.text) {
-                navigator.clipboard.writeText(sel.text).catch(() => {
-                  // Clipboard write may fail without user gesture — silent fallback
-                });
+              if (length > 0) {
+                term.select(sel.startCol, sel.startRow, length);
               }
             }
 
-            onSelectionChanged?.(sel.text, sel.cleared);
-            break;
+            // Copy to clipboard if text is provided
+            if (sel.text) {
+              navigator.clipboard.writeText(sel.text).catch(() => {
+                // Clipboard write may fail without user gesture — silent fallback
+              });
+            }
           }
 
-          default:
-            // Silently ignore other message types (cwdChanged, triggerMatched, etc.)
-            break;
-        }
-      } catch (err) {
-        console.error('Failed to decode message:', err);
-      }
-    };
+          onSelectionChanged?.(sel.text, sel.cleared);
+        },
+      });
+    }
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      stopHeartbeat();
-      updateStatus('error');
-      if (xtermRef.current) {
-        xtermRef.current.write('\r\n\x1b[1;31mConnection error\x1b[0m\r\n');
-      }
-    };
-
-    ws.onclose = () => {
-      debugLog('WebSocket disconnected');
-      stopHeartbeat();
-      updateStatus('disconnected');
-      wsRef.current = null;
-      if (xtermRef.current) {
-        xtermRef.current.write('\r\n\x1b[1;33mDisconnected from server\x1b[0m\r\n');
-      }
-      // Auto-reconnect unless cancelled
-      if (!retryCancelledRef.current) {
-        scheduleRetry();
-      }
-    };
-  }, [wsUrl, onRetryingChange, scheduleRetry, bufferWrite, startHeartbeat, stopHeartbeat]);
+    connectionRef.current.connect();
+  }, [wsUrl, onRetryingChange, bufferWrite]);
 
   const disconnect = useCallback(() => {
-    cancelRetry();
-    stopHeartbeat();
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-  }, [cancelRetry, stopHeartbeat]);
-
-  // Keep `connectRef` (used by the earlier `scheduleRetry` useCallback) in
-  // sync with the latest `connect` identity so scheduled reconnects always
-  // invoke the current closure.
-  useEffect(() => {
-    connectRef.current = connect;
-  }, [connect]);
+    connectionRef.current?.dispose();
+    connectionRef.current = null;
+  }, []);
 
   // Expose control functions to parent
   useEffect(() => {
+    const cancelRetry = () => connectionRef.current?.cancelRetry();
     onConnectControl?.({ connect, disconnect, cancelRetry });
-  }, [connect, disconnect, cancelRetry, onConnectControl]);
+  }, [connect, disconnect, onConnectControl]);
 
   // Reconnect when wsUrl changes
   useEffect(() => {
@@ -989,9 +800,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       term.options.fontSize = fontSize;
       fitAddon.fit();
       // Send resize to server
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(encodeClientMessage(createResizeMessage(term.cols, term.rows)));
-      }
+      connectionRef.current?.send(createResizeMessage(term.cols, term.rows));
     }
   }, [fontSize]);
 
@@ -1000,10 +809,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     const timer = setTimeout(connect, 500);
     return () => {
       clearTimeout(timer);
-      cancelRetry();
-      stopHeartbeat();
+      // Stop reconnecting and quiet the heartbeat, but leave any open
+      // socket alive: StrictMode remounts restore it (the connection is
+      // disposed with the terminal on real unmount instead).
+      connectionRef.current?.cancelRetry();
+      connectionRef.current?.stopHeartbeat();
     };
-  }, [connect, cancelRetry, stopHeartbeat]);
+  }, [connect]);
 
   // Handle click/touch to focus terminal (needed for mobile keyboard)
   const handleTerminalClick = () => {

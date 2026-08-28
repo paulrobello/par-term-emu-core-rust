@@ -1,7 +1,7 @@
 //! Text extraction and manipulation utilities
 
+use crate::cell::Cell;
 use crate::grid::Grid;
-use crate::unicode_width_config::{char_width, WidthConfig};
 
 /// Default word characters for word boundary detection (iTerm2-compatible)
 /// Matches iTerm2's default: slash, hyphen, plus, backslash, tilde, underscore, dot
@@ -12,7 +12,87 @@ pub fn is_word_char(c: char, word_chars: Option<&str>) -> bool {
     c.is_alphanumeric() || word_chars.unwrap_or(DEFAULT_WORD_CHARS).contains(c)
 }
 
+/// Classify a grid cell for word membership.
+///
+/// A multi-char cell holds one grapheme cluster (base char + combining
+/// marks), so the base character decides for the whole cluster.
+fn cell_is_word(cell: &Cell, word_chars: Option<&str>) -> bool {
+    is_word_char(cell.c(), word_chars)
+}
+
+/// Display columns a cell occupies (spacer cells occupy none of their own).
+fn cell_display_width(cell: &Cell) -> usize {
+    if cell.flags().wide_char_spacer() {
+        0
+    } else {
+        cell.width().max(1)
+    }
+}
+
+/// Resolve a display column to the index of the cell whose columns contain it.
+///
+/// A wide character's trailing spacer column resolves to the wide character.
+/// Columns past the row's cells resolve to `None`.
+fn cell_index_at_col(cells: &[Cell], col: usize) -> Option<usize> {
+    let mut display_col = 0usize;
+    for (i, cell) in cells.iter().enumerate() {
+        let w = cell_display_width(cell);
+        if col < display_col + w {
+            return Some(i);
+        }
+        display_col += w;
+    }
+    None
+}
+
+/// Display column at which the cell at `idx` starts.
+fn display_col_of(cells: &[Cell], idx: usize) -> usize {
+    cells[..idx].iter().map(cell_display_width).sum()
+}
+
+/// Inclusive cell-index span `[start, end]` of the word containing cell `idx`.
+///
+/// Returns `None` when the cell at `idx` is not a word cell. Spacers belong
+/// to the wide character that precedes them and never bound a word.
+fn word_cell_span(cells: &[Cell], idx: usize, word_chars: Option<&str>) -> Option<(usize, usize)> {
+    if !cell_is_word(&cells[idx], word_chars) {
+        return None;
+    }
+
+    let mut start = idx;
+    while start > 0 {
+        let prev = start - 1;
+        let prev = if cells[prev].flags().wide_char_spacer() {
+            prev.checked_sub(1)?
+        } else {
+            prev
+        };
+        if !cell_is_word(&cells[prev], word_chars) {
+            break;
+        }
+        start = prev;
+    }
+
+    let mut end = idx;
+    loop {
+        let mut next = end + 1;
+        if next < cells.len() && cells[next].flags().wide_char_spacer() {
+            next += 1;
+        }
+        if next >= cells.len() || !cell_is_word(&cells[next], word_chars) {
+            break;
+        }
+        end = next;
+    }
+
+    Some((start, end))
+}
+
 /// Extract word at the given position
+///
+/// `col` is a display column; cells are walked directly so wide characters
+/// and multi-char grapheme clusters (emoji + ZWJ, combining marks) map
+/// columns correctly.
 pub fn get_word_at(
     grid: &Grid,
     col: usize,
@@ -22,163 +102,25 @@ pub fn get_word_at(
     if row >= grid.rows() || col >= grid.cols() {
         return None;
     }
+    let cells = grid.row(row)?;
 
-    let line = grid.row_text(row);
-    if line.is_empty() {
-        return None;
-    }
-
-    // Convert col to character index
-    let mut char_col = 0;
-    let mut byte_pos = 0;
-    for (i, c) in line.char_indices() {
-        if char_col == col {
-            byte_pos = i;
-            break;
-        }
-        char_col += char_width(c, &WidthConfig::default());
-        if char_col > col {
-            return None; // Inside a wide character
-        }
-    }
-
-    let chars: Vec<char> = line.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-
-    let char_idx = line[..byte_pos].chars().count();
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    let c = chars[char_idx];
-    if !is_word_char(c, word_chars) {
-        return None;
-    }
-
-    // Find start of word
-    let mut start = char_idx;
-    while start > 0 && is_word_char(chars[start - 1], word_chars) {
-        start -= 1;
-    }
-
-    // Find end of word
-    let mut end = char_idx + 1;
-    while end < chars.len() && is_word_char(chars[end], word_chars) {
-        end += 1;
-    }
-
-    Some(chars[start..end].iter().collect())
-}
-
-/// Check if a character is valid in a URL
-fn is_url_char(c: char) -> bool {
-    c.is_alphanumeric() || "-._~:/?#[]@!$&'()*+,;=%".contains(c)
-}
-
-/// Extract URL at the given position
-pub fn get_url_at(grid: &Grid, col: usize, row: usize) -> Option<String> {
-    if row >= grid.rows() || col >= grid.cols() {
-        return None;
-    }
-
-    let line = grid.row_text(row);
-    if line.is_empty() {
-        return None;
-    }
-
-    // Find URL schemes
-    let schemes = [
-        "http://", "https://", "ftp://", "file://", "mailto:", "ssh://",
-    ];
-
-    // Convert col to byte position
-    let mut char_col = 0;
-    let mut byte_pos = 0;
-    for (i, c) in line.char_indices() {
-        if char_col == col {
-            byte_pos = i;
-            break;
-        }
-        char_col += char_width(c, &WidthConfig::default());
-        if char_col > col {
-            return None;
-        }
-    }
-
-    // Search backwards and forwards for URL boundaries
-    let chars: Vec<char> = line.chars().collect();
-    let char_idx = line[..byte_pos].chars().count();
-
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    // Find potential URL start
-    let mut start = char_idx;
-    while start > 0 && is_url_char(chars[start - 1]) {
-        start -= 1;
-    }
-
-    // Find potential URL end
-    let mut end = char_idx + 1;
-    while end < chars.len() && is_url_char(chars[end]) {
-        end += 1;
-    }
-
-    let potential_url: String = chars[start..end].iter().collect();
-
-    // Check if it contains a scheme
-    for scheme in &schemes {
-        if potential_url.contains(scheme) {
-            // Find the actual start of the scheme
-            if let Some(scheme_pos) = potential_url.find(scheme) {
-                let url = &potential_url[scheme_pos..];
-                return Some(url.to_string());
-            }
-        }
-    }
-
-    None
-}
-
-/// Get the full logical line following wrapping
-pub fn get_line_unwrapped(grid: &Grid, row: usize) -> Option<String> {
-    if row >= grid.rows() {
-        return None;
-    }
+    let idx = cell_index_at_col(cells, col)?;
+    let (start, end) = word_cell_span(cells, idx, word_chars)?;
 
     let mut result = String::new();
-    let mut current_row = row;
-
-    // Go back to find the start of the logical line.
-    // A row N is a continuation of the previous row if row N-1 is marked
-    // as wrapped (meaning row N-1 continues into N).
-    while current_row > 0 && grid.is_line_wrapped(current_row - 1) {
-        current_row -= 1;
-    }
-
-    // Now collect forward, including all rows that are marked as wrapping
-    // into the next row.
-    loop {
-        let line = grid.row_text(current_row);
-        result.push_str(&line);
-
-        if current_row + 1 >= grid.rows() || !grid.is_line_wrapped(current_row) {
-            break;
+    for cell in &cells[start..=end] {
+        if !cell.flags().wide_char_spacer() {
+            cell.push_grapheme(&mut result);
         }
-        current_row += 1;
     }
-
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
+    Some(result)
 }
 
 /// Find word boundaries at position
+///
+/// `col` is a display column; the returned bounds are display columns
+/// `(start_col, end_col)` where `end_col` is exclusive (the column just
+/// past the last cell of the word).
 pub fn select_word(
     grid: &Grid,
     col: usize,
@@ -188,176 +130,14 @@ pub fn select_word(
     if row >= grid.rows() || col >= grid.cols() {
         return None;
     }
+    let cells = grid.row(row)?;
 
-    let line = grid.row_text(row);
-    if line.is_empty() {
-        return None;
-    }
+    let idx = cell_index_at_col(cells, col)?;
+    let (start, end) = word_cell_span(cells, idx, word_chars)?;
 
-    // Convert col to character index
-    let mut char_col = 0;
-    let mut byte_pos = 0;
-    for (i, c) in line.char_indices() {
-        if char_col == col {
-            byte_pos = i;
-            break;
-        }
-        char_col += char_width(c, &WidthConfig::default());
-        if char_col > col {
-            return None;
-        }
-    }
-
-    let chars: Vec<char> = line.chars().collect();
-    let char_idx = line[..byte_pos].chars().count();
-
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    let c = chars[char_idx];
-    if !is_word_char(c, word_chars) {
-        return None;
-    }
-
-    // Find start
-    let mut start_idx = char_idx;
-    while start_idx > 0 && is_word_char(chars[start_idx - 1], word_chars) {
-        start_idx -= 1;
-    }
-
-    // Find end
-    let mut end_idx = char_idx + 1;
-    while end_idx < chars.len() && is_word_char(chars[end_idx], word_chars) {
-        end_idx += 1;
-    }
-
-    // Convert character indices to column positions
-    let start_col = chars[..start_idx]
-        .iter()
-        .map(|c| char_width(*c, &WidthConfig::default()))
-        .sum();
-    let end_col = chars[..end_idx]
-        .iter()
-        .map(|c| char_width(*c, &WidthConfig::default()))
-        .sum();
-
+    let start_col = display_col_of(cells, start);
+    let end_col = display_col_of(cells, end) + cell_display_width(&cells[end]);
     Some(((start_col, row), (end_col, row)))
-}
-
-/// Find matching bracket/parenthesis at position
-///
-/// Returns the position of the matching bracket, or None if:
-/// - Not on a bracket character
-/// - No matching bracket found
-/// - Position is invalid
-pub fn find_matching_bracket(grid: &Grid, col: usize, row: usize) -> Option<(usize, usize)> {
-    if row >= grid.rows() || col >= grid.cols() {
-        return None;
-    }
-
-    let line = grid.row_text(row);
-    if line.is_empty() || col >= line.len() {
-        return None;
-    }
-
-    // Get character at position
-    let chars: Vec<char> = line.chars().collect();
-    let char_idx = line[..col.min(line.len())].chars().count();
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    let ch = chars[char_idx];
-
-    // Define bracket pairs
-    let open_brackets = ['(', '[', '{', '<'];
-    let close_brackets = [')', ']', '}', '>'];
-
-    let (is_opening, bracket_idx) = if let Some(idx) = open_brackets.iter().position(|&b| b == ch) {
-        (true, idx)
-    } else {
-        let idx = close_brackets.iter().position(|&b| b == ch)?;
-        (false, idx)
-    };
-
-    let opening = open_brackets[bracket_idx];
-    let closing = close_brackets[bracket_idx];
-
-    if is_opening {
-        // Search forward for closing bracket
-        let mut depth = 1;
-        let mut search_row = row;
-
-        loop {
-            let search_line = grid.row_text(search_row);
-            let search_chars: Vec<char> = search_line.chars().collect();
-
-            for (idx, &c) in search_chars.iter().enumerate().skip(if search_row == row {
-                char_idx + 1
-            } else {
-                0
-            }) {
-                if c == opening {
-                    depth += 1;
-                } else if c == closing {
-                    depth -= 1;
-                    if depth == 0 {
-                        // Found matching bracket - convert char index to column
-                        let match_col = search_chars[..idx]
-                            .iter()
-                            .map(|c| char_width(*c, &WidthConfig::default()))
-                            .sum();
-                        return Some((match_col, search_row));
-                    }
-                }
-            }
-
-            search_row += 1;
-            if search_row >= grid.rows() {
-                break;
-            }
-        }
-    } else {
-        // Search backward for opening bracket
-        let mut depth = 1;
-        let mut search_row = row;
-
-        loop {
-            let search_line = grid.row_text(search_row);
-            let search_chars: Vec<char> = search_line.chars().collect();
-
-            let end_idx = if search_row == row {
-                char_idx
-            } else {
-                search_chars.len()
-            };
-
-            for idx in (0..end_idx).rev() {
-                let c = search_chars[idx];
-                if c == closing {
-                    depth += 1;
-                } else if c == opening {
-                    depth -= 1;
-                    if depth == 0 {
-                        // Found matching bracket - convert char index to column
-                        let match_col = search_chars[..idx]
-                            .iter()
-                            .map(|c| char_width(*c, &WidthConfig::default()))
-                            .sum();
-                        return Some((match_col, search_row));
-                    }
-                }
-            }
-
-            if search_row == 0 {
-                break;
-            }
-            search_row -= 1;
-        }
-    }
-
-    None // No matching bracket found
 }
 
 /// Select text within semantic delimiters (quotes, brackets, etc.)
@@ -497,20 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_url_at() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-        let url = "https://example.com/path";
-        for (i, c) in url.chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = get_url_at(&grid, 10, 0);
-        assert!(result.is_some());
-        assert!(result.unwrap().starts_with("https://"));
-    }
-
-    #[test]
     fn test_is_word_char_defaults() {
         assert!(is_word_char('a', None));
         assert!(is_word_char('Z', None));
@@ -528,46 +294,6 @@ mod tests {
         assert!(is_word_char('@', Some(custom)));
         assert!(is_word_char('#', Some(custom)));
         assert!(!is_word_char('.', Some(custom)));
-    }
-
-    #[test]
-    fn test_get_line_unwrapped_no_wrapping() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(10, 5, 0);
-
-        for (i, c) in "hello".chars().enumerate() {
-            grid.set(i, 2, Cell::new(c));
-        }
-
-        let result = get_line_unwrapped(&grid, 2);
-        assert_eq!(
-            result.map(|s| s.trim_end().to_string()),
-            Some("hello".to_string())
-        );
-    }
-
-    #[test]
-    fn test_get_line_unwrapped_with_wrapping() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(10, 5, 0);
-
-        // Set first line and mark as wrapped into the next line
-        for (i, c) in "abcdefghij".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-        grid.set_line_wrapped(0, true);
-
-        // Set second line (continuation)
-        for (i, c) in "klmnop".chars().enumerate() {
-            grid.set(i, 1, Cell::new(c));
-        }
-
-        // Calling from the second physical row should return the full logical line
-        let result = get_line_unwrapped(&grid, 1);
-        assert_eq!(
-            result.map(|s| s.trim_end().to_string()),
-            Some("abcdefghijklmnop".to_string())
-        );
     }
 
     #[test]
@@ -599,109 +325,6 @@ mod tests {
 
         // Click on space
         let result = select_word(&grid, 5, 0, None);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_matching_bracket_parentheses() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "(hello)".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        // Click on opening paren
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert_eq!(result, Some((6, 0)));
-
-        // Click on closing paren
-        let result = find_matching_bracket(&grid, 6, 0);
-        assert_eq!(result, Some((0, 0)));
-    }
-
-    #[test]
-    fn test_find_matching_bracket_nested() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "((a))".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        // Click on outer opening paren
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert_eq!(result, Some((4, 0)));
-
-        // Click on inner opening paren
-        let result = find_matching_bracket(&grid, 1, 0);
-        assert_eq!(result, Some((3, 0)));
-    }
-
-    #[test]
-    fn test_find_matching_bracket_square() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "[test]".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert_eq!(result, Some((5, 0)));
-    }
-
-    #[test]
-    fn test_find_matching_bracket_curly() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "{code}".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert_eq!(result, Some((5, 0)));
-    }
-
-    #[test]
-    fn test_find_matching_bracket_angle() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "<tag>".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert_eq!(result, Some((4, 0)));
-    }
-
-    #[test]
-    fn test_find_matching_bracket_not_found() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "(hello".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        // No matching closing paren
-        let result = find_matching_bracket(&grid, 0, 0);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_matching_bracket_non_bracket() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-
-        for (i, c) in "hello".chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        // Click on regular letter
-        let result = find_matching_bracket(&grid, 0, 0);
         assert!(result.is_none());
     }
 
@@ -784,61 +407,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_url_at_http() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-        let text = "check http://test.com here";
-        for (i, c) in text.chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = get_url_at(&grid, 10, 0);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("http://test.com"));
-    }
-
-    #[test]
-    fn test_get_url_at_ftp() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-        let text = "ftp://server.com/file.txt";
-        for (i, c) in text.chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = get_url_at(&grid, 5, 0);
-        assert!(result.is_some());
-        assert!(result.unwrap().starts_with("ftp://"));
-    }
-
-    #[test]
-    fn test_get_url_at_mailto() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-        let text = "email mailto:test@example.com here";
-        for (i, c) in text.chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = get_url_at(&grid, 15, 0);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("mailto:"));
-    }
-
-    #[test]
-    fn test_get_url_at_no_url() {
-        use crate::cell::Cell;
-        let mut grid = Grid::new(80, 24, 0);
-        let text = "just plain text";
-        for (i, c) in text.chars().enumerate() {
-            grid.set(i, 0, Cell::new(c));
-        }
-
-        let result = get_url_at(&grid, 5, 0);
-        assert!(result.is_none());
-    }
-
-    #[test]
     fn test_get_word_at_invalid_position() {
         let grid = Grid::new(80, 24, 0);
         assert!(get_word_at(&grid, 100, 0, None).is_none());
@@ -850,19 +418,6 @@ mod tests {
         let grid = Grid::new(80, 24, 0);
         assert!(select_word(&grid, 100, 0, None).is_none());
         assert!(select_word(&grid, 0, 100, None).is_none());
-    }
-
-    #[test]
-    fn test_find_matching_bracket_invalid_position() {
-        let grid = Grid::new(80, 24, 0);
-        assert!(find_matching_bracket(&grid, 100, 0).is_none());
-        assert!(find_matching_bracket(&grid, 0, 100).is_none());
-    }
-
-    #[test]
-    fn test_get_line_unwrapped_invalid_row() {
-        let grid = Grid::new(80, 24, 0);
-        assert!(get_line_unwrapped(&grid, 100).is_none());
     }
 
     #[test]

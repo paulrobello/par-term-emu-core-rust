@@ -32,263 +32,15 @@ impl Terminal {
         // Handle regional indicator pairs (flag emoji like 🇺🇸)
         // When the second regional indicator arrives, combine it with the first
         if grapheme::is_regional_indicator(c) {
-            // Check if previous cell is also a regional indicator (first half of a flag)
-            let (prev_col, prev_row) = if self.cursor.col > 0 {
-                (self.cursor.col - 1, self.cursor.row)
-            } else if self.cursor.row > 0 {
-                (cols - 1, self.cursor.row - 1)
-            } else {
-                // At position (0, 0), this is the first regional indicator
-                // Continue to write it as a normal character below
-                return self.write_regional_indicator_first(c, cols);
-            };
-
-            // Check if previous cell is a regional indicator without a pair yet
-            let should_combine = if let Some(prev_cell) = self.active_grid().get(prev_col, prev_row)
-            {
-                grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining.is_empty()
-            } else {
-                false
-            };
-
-            if should_combine {
-                // Extract cursor position before mutable borrow
-                let cursor_col = self.cursor.col;
-                let cursor_row = self.cursor.row;
-
-                // Extract spacer cell properties from target cell first
-                let spacer = if cursor_col < cols {
-                    if let Some(target_cell) = self.active_grid().get(prev_col, prev_row) {
-                        let mut spacer_flags = target_cell.flags;
-                        spacer_flags.set_wide_char(false);
-                        spacer_flags.set_wide_char_spacer(true);
-                        Some(Cell {
-                            c: ' ',
-                            combining: SmallVec::new(),
-                            fg: target_cell.fg,
-                            bg: target_cell.bg,
-                            underline_color: target_cell.underline_color,
-                            flags: spacer_flags,
-                            width: 1,
-                        })
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // Previous cell is a lone regional indicator - combine them
-                if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
-                    target_cell.combining.push(c);
-                    target_cell.width = 2;
-                    target_cell.flags.set_wide_char(true);
-                }
-
-                // Create spacer cell at current position
-                if let Some(spacer) = spacer {
-                    self.active_grid_mut().set(cursor_col, cursor_row, spacer);
-                }
-
-                // Advance cursor past the spacer
-                self.cursor.col += 1;
-                if self.cursor.col >= cols {
-                    if self.modes.auto_wrap {
-                        self.cursor.col = cols - 1;
-                        self.pending_wrap = true;
-                    } else {
-                        self.cursor.col = cols - 1;
-                    }
-                }
-
-                self.mark_row_dirty(prev_row);
-                if cursor_row != prev_row {
-                    self.mark_row_dirty(cursor_row);
-                }
-                return;
-            }
-            // Previous cell is not a lone regional indicator
-            // Continue to write this as the first of a new pair
-            return self.write_regional_indicator_first(c, cols);
-        }
-
-        // Handle combining characters (variation selectors, ZWJ, skin tone modifiers)
-        // These should be added to the previous cell instead of creating a new cell
-        if grapheme::is_variation_selector(c)
-            || grapheme::is_zwj(c)
-            || grapheme::is_skin_tone_modifier(c)
-            || grapheme::is_combining_mark(c)
-        {
-            // Find the previous actual character cell (skip over wide char spacers)
-            let (prev_col, prev_row) = if self.cursor.col > 0 {
-                (self.cursor.col - 1, self.cursor.row)
-            } else if self.cursor.row > 0 {
-                (cols - 1, self.cursor.row - 1)
-            } else {
-                // At position (0, 0), nowhere to add combining char
-                return;
-            };
-
-            // Check if the previous cell is a wide char spacer
-            // If so, the actual wide char is one more cell to the left
-            let (target_col, target_row) =
-                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
-                    if cell.flags.wide_char_spacer() {
-                        // Previous cell is a spacer, go back one more cell for the wide char
-                        if prev_col > 0 {
-                            (prev_col - 1, prev_row)
-                        } else if prev_row > 0 {
-                            (cols - 1, prev_row - 1)
-                        } else {
-                            // Spacer at start of grid, nowhere to go
-                            return;
-                        }
-                    } else {
-                        (prev_col, prev_row)
-                    }
-                } else {
-                    return;
-                };
-
-            // Copy normalization form before mutable borrow
-            let norm_form = self.unicode_state.normalization_form;
-
-            // Add combining character to the target cell
-            if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
-                target_cell.combining.push(c);
-
-                // Fast path: Kitty TGP placeholder cells (base char U+10EEEE)
-                // encode an image ID via combining marks, not real text. Skip
-                // NFC/NFKC normalization and grapheme width recalc — both
-                // would allocate strings per combining mark and dominate the
-                // cost of rendering an N×M placeholder rectangle (e.g., 40×20
-                // = 800 cells × 3 diacritics = 2400 normalize calls).
-                if target_cell.c == crate::graphics::placeholder::PLACEHOLDER_CHAR {
-                    self.mark_row_dirty(target_row);
-                    return;
-                }
-
-                // Apply Unicode normalization if NFC or NFKC (composition forms)
-                // This composes base + combining into precomposed form when possible
-                if matches!(
-                    norm_form,
-                    crate::unicode_normalization_config::NormalizationForm::NFC
-                        | crate::unicode_normalization_config::NormalizationForm::NFKC
-                ) {
-                    let grapheme = target_cell.get_grapheme();
-                    let normalized = norm_form.normalize(&grapheme);
-                    let mut chars = normalized.chars();
-                    if let Some(base) = chars.next() {
-                        target_cell.c = base;
-                        target_cell.combining = chars.collect();
-                    }
-                }
-
-                // Recalculate width if needed (e.g., emoji with variation selector)
-                let grapheme = target_cell.get_grapheme();
-                let new_width = grapheme::is_wide_grapheme(&grapheme);
-                if new_width && target_cell.width() == 1 {
-                    target_cell.width = 2;
-                    target_cell.flags.set_wide_char(true);
-
-                    if target_col + 1 < cols {
-                        let mut spacer_flags = target_cell.flags;
-                        spacer_flags.set_wide_char(false);
-                        spacer_flags.set_wide_char_spacer(true);
-
-                        let spacer = Cell {
-                            c: ' ',
-                            combining: SmallVec::new(),
-                            fg: target_cell.fg,
-                            bg: target_cell.bg,
-                            underline_color: target_cell.underline_color,
-                            flags: spacer_flags,
-                            width: 1,
-                        };
-                        self.active_grid_mut()
-                            .set(target_col + 1, target_row, spacer);
-                    }
-                }
-
-                self.mark_row_dirty(target_row);
-            }
+            self.try_combine_regional_indicator(c, cols);
             return;
         }
 
-        // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
-        // and should be added as combining character (e.g., 👨 + ZWJ + 💻 = 👨‍💻)
-        // OPTIMIZATION: Only check for emoji characters (most text won't trigger this)
-        let char_code = c as u32;
-        let is_potential_emoji = matches!(char_code,
-            0x2600..=0x27BF  // Misc Symbols (❤️, ☀️, etc.)
-            | 0x1F000..=0x1FFFF // Emoji blocks
-        );
-
-        if is_potential_emoji && (self.cursor.col > 0 || self.cursor.row > 0) {
-            let (prev_col, prev_row) = if self.cursor.col > 0 {
-                (self.cursor.col - 1, self.cursor.row)
-            } else {
-                (cols - 1, self.cursor.row - 1)
-            };
-
-            // Skip spacers to find actual wide char
-            let (target_col, target_row) =
-                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
-                    if cell.flags.wide_char_spacer() {
-                        if prev_col > 0 {
-                            (prev_col - 1, prev_row)
-                        } else if prev_row > 0 {
-                            (cols - 1, prev_row - 1)
-                        } else {
-                            (prev_col, prev_row) // Fallback
-                        }
-                    } else {
-                        (prev_col, prev_row)
-                    }
-                } else {
-                    (prev_col, prev_row)
-                };
-
-            // Check if target cell has ZWJ in combining chars
-            if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
-                if target_cell.combining.contains(&'\u{200D}') {
-                    // Previous cell has ZWJ, add current char as combining
-                    if let Some(target_cell_mut) =
-                        self.active_grid_mut().get_mut(target_col, target_row)
-                    {
-                        target_cell_mut.combining.push(c);
-
-                        // Recalculate width if needed
-                        let grapheme = target_cell_mut.get_grapheme();
-                        let new_width = grapheme::is_wide_grapheme(&grapheme);
-                        if new_width && target_cell_mut.width() == 1 {
-                            target_cell_mut.width = 2;
-                            target_cell_mut.flags.set_wide_char(true);
-
-                            if target_col + 1 < cols {
-                                let mut spacer_flags = target_cell_mut.flags;
-                                spacer_flags.set_wide_char(false);
-                                spacer_flags.set_wide_char_spacer(true);
-
-                                let spacer = Cell {
-                                    c: ' ',
-                                    combining: SmallVec::new(),
-                                    fg: target_cell_mut.fg,
-                                    bg: target_cell_mut.bg,
-                                    underline_color: target_cell_mut.underline_color,
-                                    flags: spacer_flags,
-                                    width: 1,
-                                };
-                                self.active_grid_mut()
-                                    .set(target_col + 1, target_row, spacer);
-                            }
-                        }
-
-                        self.mark_row_dirty(target_row);
-                    }
-                    return;
-                }
-            }
+        // Handle combining characters (variation selectors, ZWJ, skin tone
+        // modifiers) and ZWJ-sequence continuations: these attach to the
+        // previous cell instead of creating a new cell.
+        if self.try_apply_combining_mark(c, cols) {
+            return;
         }
 
         // Handle special characters
@@ -384,6 +136,15 @@ impl Terminal {
             _ => {}
         }
 
+        self.write_normal_cell(c, cols);
+    }
+
+    /// Write a normal (printable, non-combining) character cell.
+    ///
+    /// Handles pending-wrap resolution, wide-character wrapping, insert
+    /// mode, the cell write itself (with wide-char spacer), and the
+    /// delayed auto-wrap clamp at the right margin.
+    fn write_normal_cell(&mut self, c: char, cols: usize) {
         // Handle wide characters (emoji, CJK, etc.)
         let char_width =
             crate::unicode_width_config::char_width(c, &self.unicode_state.width_config);
@@ -525,6 +286,278 @@ impl Terminal {
             // Fallback: if auto-wrap is disabled or some edge case, clamp to last column
             self.cursor.col = cols - 1;
         }
+    }
+
+    /// Attach a combining character (variation selector, ZWJ, skin tone
+    /// modifier, combining mark) or a ZWJ-sequence continuation to the
+    /// previous cell instead of creating a new one.
+    ///
+    /// Returns `true` when the character was consumed here.
+    fn try_apply_combining_mark(&mut self, c: char, cols: usize) -> bool {
+        if grapheme::is_variation_selector(c)
+            || grapheme::is_zwj(c)
+            || grapheme::is_skin_tone_modifier(c)
+            || grapheme::is_combining_mark(c)
+        {
+            // Find the previous actual character cell (skip over wide char spacers)
+            let (prev_col, prev_row) = if self.cursor.col > 0 {
+                (self.cursor.col - 1, self.cursor.row)
+            } else if self.cursor.row > 0 {
+                (cols - 1, self.cursor.row - 1)
+            } else {
+                // At position (0, 0), nowhere to add combining char
+                return true;
+            };
+
+            // Check if the previous cell is a wide char spacer
+            // If so, the actual wide char is one more cell to the left
+            let (target_col, target_row) =
+                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
+                    if cell.flags.wide_char_spacer() {
+                        // Previous cell is a spacer, go back one more cell for the wide char
+                        if prev_col > 0 {
+                            (prev_col - 1, prev_row)
+                        } else if prev_row > 0 {
+                            (cols - 1, prev_row - 1)
+                        } else {
+                            // Spacer at start of grid, nowhere to go
+                            return true;
+                        }
+                    } else {
+                        (prev_col, prev_row)
+                    }
+                } else {
+                    return true;
+                };
+
+            // Copy normalization form before mutable borrow
+            let norm_form = self.unicode_state.normalization_form;
+
+            // Add combining character to the target cell
+            if let Some(target_cell) = self.active_grid_mut().get_mut(target_col, target_row) {
+                target_cell.combining.push(c);
+
+                // Fast path: Kitty TGP placeholder cells (base char U+10EEEE)
+                // encode an image ID via combining marks, not real text. Skip
+                // NFC/NFKC normalization and grapheme width recalc — both
+                // would allocate strings per combining mark and dominate the
+                // cost of rendering an N×M placeholder rectangle (e.g., 40×20
+                // = 800 cells × 3 diacritics = 2400 normalize calls).
+                if target_cell.c == crate::graphics::placeholder::PLACEHOLDER_CHAR {
+                    self.mark_row_dirty(target_row);
+                    return true;
+                }
+
+                // Apply Unicode normalization if NFC or NFKC (composition forms)
+                // This composes base + combining into precomposed form when possible
+                if matches!(
+                    norm_form,
+                    crate::unicode_normalization_config::NormalizationForm::NFC
+                        | crate::unicode_normalization_config::NormalizationForm::NFKC
+                ) {
+                    let grapheme = target_cell.get_grapheme();
+                    let normalized = norm_form.normalize(&grapheme);
+                    let mut chars = normalized.chars();
+                    if let Some(base) = chars.next() {
+                        target_cell.c = base;
+                        target_cell.combining = chars.collect();
+                    }
+                }
+
+                // Recalculate width if needed (e.g., emoji with variation selector)
+                let grapheme = target_cell.get_grapheme();
+                let new_width = grapheme::is_wide_grapheme(&grapheme);
+                if new_width && target_cell.width() == 1 {
+                    target_cell.width = 2;
+                    target_cell.flags.set_wide_char(true);
+
+                    if target_col + 1 < cols {
+                        let mut spacer_flags = target_cell.flags;
+                        spacer_flags.set_wide_char(false);
+                        spacer_flags.set_wide_char_spacer(true);
+
+                        let spacer = Cell {
+                            c: ' ',
+                            combining: SmallVec::new(),
+                            fg: target_cell.fg,
+                            bg: target_cell.bg,
+                            underline_color: target_cell.underline_color,
+                            flags: spacer_flags,
+                            width: 1,
+                        };
+                        self.active_grid_mut()
+                            .set(target_col + 1, target_row, spacer);
+                    }
+                }
+
+                self.mark_row_dirty(target_row);
+            }
+            return true;
+        }
+
+        // Check if previous cell has ZWJ - if so, this char is part of ZWJ sequence
+        // and should be added as combining character (e.g., 👨 + ZWJ + 💻 = 👨‍💻)
+        // OPTIMIZATION: Only check for emoji characters (most text won't trigger this)
+        let char_code = c as u32;
+        let is_potential_emoji = matches!(char_code,
+            0x2600..=0x27BF  // Misc Symbols (❤️, ☀️, etc.)
+            | 0x1F000..=0x1FFFF // Emoji blocks
+        );
+
+        if is_potential_emoji && (self.cursor.col > 0 || self.cursor.row > 0) {
+            let (prev_col, prev_row) = if self.cursor.col > 0 {
+                (self.cursor.col - 1, self.cursor.row)
+            } else {
+                (cols - 1, self.cursor.row - 1)
+            };
+
+            // Skip spacers to find actual wide char
+            let (target_col, target_row) =
+                if let Some(cell) = self.active_grid().get(prev_col, prev_row) {
+                    if cell.flags.wide_char_spacer() {
+                        if prev_col > 0 {
+                            (prev_col - 1, prev_row)
+                        } else if prev_row > 0 {
+                            (cols - 1, prev_row - 1)
+                        } else {
+                            (prev_col, prev_row) // Fallback
+                        }
+                    } else {
+                        (prev_col, prev_row)
+                    }
+                } else {
+                    (prev_col, prev_row)
+                };
+
+            // Check if target cell has ZWJ in combining chars
+            if let Some(target_cell) = self.active_grid().get(target_col, target_row) {
+                if target_cell.combining.contains(&'\u{200D}') {
+                    // Previous cell has ZWJ, add current char as combining
+                    if let Some(target_cell_mut) =
+                        self.active_grid_mut().get_mut(target_col, target_row)
+                    {
+                        target_cell_mut.combining.push(c);
+
+                        // Recalculate width if needed
+                        let grapheme = target_cell_mut.get_grapheme();
+                        let new_width = grapheme::is_wide_grapheme(&grapheme);
+                        if new_width && target_cell_mut.width() == 1 {
+                            target_cell_mut.width = 2;
+                            target_cell_mut.flags.set_wide_char(true);
+
+                            if target_col + 1 < cols {
+                                let mut spacer_flags = target_cell_mut.flags;
+                                spacer_flags.set_wide_char(false);
+                                spacer_flags.set_wide_char_spacer(true);
+
+                                let spacer = Cell {
+                                    c: ' ',
+                                    combining: SmallVec::new(),
+                                    fg: target_cell_mut.fg,
+                                    bg: target_cell_mut.bg,
+                                    underline_color: target_cell_mut.underline_color,
+                                    flags: spacer_flags,
+                                    width: 1,
+                                };
+                                self.active_grid_mut()
+                                    .set(target_col + 1, target_row, spacer);
+                            }
+                        }
+
+                        self.mark_row_dirty(target_row);
+                    }
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Handle a regional indicator character (flag emoji pairing).
+    ///
+    /// When the previous cell holds a lone regional indicator, `c` completes
+    /// the pair: it is appended as a combining mark, the cell grows to width
+    /// 2, and a spacer is written at the current position. Otherwise `c`
+    /// starts a new potential pair via [`Self::write_regional_indicator_first`].
+    /// Always consumes the character.
+    fn try_combine_regional_indicator(&mut self, c: char, cols: usize) {
+        // Check if previous cell is also a regional indicator (first half of a flag)
+        let (prev_col, prev_row) = if self.cursor.col > 0 {
+            (self.cursor.col - 1, self.cursor.row)
+        } else if self.cursor.row > 0 {
+            (cols - 1, self.cursor.row - 1)
+        } else {
+            // At position (0, 0), this is the first regional indicator
+            return self.write_regional_indicator_first(c, cols);
+        };
+
+        // Check if previous cell is a regional indicator without a pair yet
+        let should_combine = if let Some(prev_cell) = self.active_grid().get(prev_col, prev_row) {
+            grapheme::is_regional_indicator(prev_cell.c) && prev_cell.combining.is_empty()
+        } else {
+            false
+        };
+
+        if should_combine {
+            // Extract cursor position before mutable borrow
+            let cursor_col = self.cursor.col;
+            let cursor_row = self.cursor.row;
+
+            // Extract spacer cell properties from target cell first
+            let spacer = if cursor_col < cols {
+                if let Some(target_cell) = self.active_grid().get(prev_col, prev_row) {
+                    let mut spacer_flags = target_cell.flags;
+                    spacer_flags.set_wide_char(false);
+                    spacer_flags.set_wide_char_spacer(true);
+                    Some(Cell {
+                        c: ' ',
+                        combining: SmallVec::new(),
+                        fg: target_cell.fg,
+                        bg: target_cell.bg,
+                        underline_color: target_cell.underline_color,
+                        flags: spacer_flags,
+                        width: 1,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Previous cell is a lone regional indicator - combine them
+            if let Some(target_cell) = self.active_grid_mut().get_mut(prev_col, prev_row) {
+                target_cell.combining.push(c);
+                target_cell.width = 2;
+                target_cell.flags.set_wide_char(true);
+            }
+
+            // Create spacer cell at current position
+            if let Some(spacer) = spacer {
+                self.active_grid_mut().set(cursor_col, cursor_row, spacer);
+            }
+
+            // Advance cursor past the spacer
+            self.cursor.col += 1;
+            if self.cursor.col >= cols {
+                if self.modes.auto_wrap {
+                    self.cursor.col = cols - 1;
+                    self.pending_wrap = true;
+                } else {
+                    self.cursor.col = cols - 1;
+                }
+            }
+
+            self.mark_row_dirty(prev_row);
+            if cursor_row != prev_row {
+                self.mark_row_dirty(cursor_row);
+            }
+            return;
+        }
+        // Previous cell is not a lone regional indicator
+        // Continue to write this as the first of a new pair
+        self.write_regional_indicator_first(c, cols);
     }
 
     /// Write the first regional indicator of a potential flag pair.

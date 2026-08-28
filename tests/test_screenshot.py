@@ -614,3 +614,35 @@ class TestScreenshotThemeSettings:
         finally:
             if os.path.exists(filename):
                 os.remove(filename)
+
+
+class TestScreenshotSignatureParity:
+    """Both wrapper classes share the screenshot surface via one macro (QA-004)."""
+
+    def test_screenshot_signatures_equal(self):
+        import inspect
+
+        term_sig = str(inspect.signature(Terminal.screenshot))
+        pty_sig = str(inspect.signature(PtyTerminal.screenshot))
+        assert term_sig == pty_sig
+
+    def test_screenshot_to_file_signatures_equal(self):
+        import inspect
+
+        term_sig = str(inspect.signature(Terminal.screenshot_to_file))
+        pty_sig = str(inspect.signature(PtyTerminal.screenshot_to_file))
+        assert term_sig == pty_sig
+
+    def test_screenshot_signature_defaults_unchanged(self):
+        """The 17-parameter default list must stay stable (docstring contract)."""
+        import inspect
+
+        sig = inspect.signature(Terminal.screenshot)
+        assert sig.parameters["format"].default == "png"
+        assert sig.parameters["font_size"].default == 14.0
+        assert sig.parameters["padding"].default == 10
+        assert sig.parameters["quality"].default == 90
+        assert sig.parameters["sixel_mode"].default == "halfblocks"
+        assert sig.parameters["scrollback_offset"].default == 0
+        assert sig.parameters["faint_text_alpha"].default == 0.5
+        assert sig.parameters["minimum_contrast"].default == 0.5
