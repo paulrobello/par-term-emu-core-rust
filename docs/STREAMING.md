@@ -817,6 +817,23 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `clipboard` | `operation: string`, `content?: string`, `target?: string` | Clipboard get/set request |
 | `snapshot_request` | `scope: string`, `max_commands?: uint32` | Request a semantic snapshot (scope: "visible", "recent", "full") |
 
+> **Note: protobuf names vs serde-JSON tags.** The tables above use the
+> protobuf field/message names. The Rust types in `src/streaming/protocol.rs`
+> also derive serde `Serialize`/`Deserialize`, and their JSON `"type"` tags do
+> **not** always match: variants without an explicit `#[serde(rename)]` use
+> plain lowercase, dropping the underscores. JSON consumers must use the serde
+> tags, not the protobuf names:
+>
+> | Protobuf name | serde-JSON `"type"` tag |
+> |---|---|
+> | `cwd_changed` | `cwdchanged` |
+> | `trigger_matched` | `triggermatched` |
+> | `user_var_changed` | `user_var_changed` (explicit rename) |
+>
+> Single-word names (`output`, `resize`, `bell`, `pong`) are identical in both
+> forms. The WebSocket wire protocol itself is protobuf — this divergence only
+> affects code that serde-serializes `ServerMessage`/`ClientMessage` to JSON.
+
 ### ThemeInfo Structure
 
 The theme information is sent from server to client during the `connected` message handshake:

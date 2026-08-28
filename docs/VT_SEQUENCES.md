@@ -201,9 +201,9 @@ VT100/VT220 character set designation and shifting (SCS). Two slots (G0, G1); th
 **DEC Special Graphics / ACS:** when the active charset is DEC Line Drawing, printable ASCII characters map to line-drawing glyphs (e.g. `q` → `─`, `x` → `│`, `j` → `┘`, `l` → `┌`, `k` → `┐`, `m` → `└`, `t` → `├`, `u` → `┤`, `n` → `┼`, `v` → `┴`, `w` → `┬`, `` ` `` → `◆`, `a` → `▒`). Control characters pass through unchanged. The translation is applied in `src/terminal/write.rs`; designation is handled in `src/terminal/sequences/esc.rs` and SO/SI in `src/terminal/perform.rs`.
 
 ```python
-term.process_str("\x1b(0")   # G0 = DEC Line Drawing
-term.process_str("lqk\n")    # renders ┌─┐
-term.process_str("\x1b(B")   # G0 = ASCII again
+term.process_str("\x1b(0")  # G0 = DEC Line Drawing
+term.process_str("lqk\n")  # renders ┌─┐
+term.process_str("\x1b(B")  # G0 = ASCII again
 ```
 
 ## Terminal Modes

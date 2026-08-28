@@ -196,11 +196,11 @@ A C-compatible vtable for terminal event observation.
 
 ```c
 typedef struct TerminalObserverVtable {
-    void (*on_zone_event)(void* user_data, const char* event_json);
-    void (*on_command_event)(void* user_data, const char* event_json);
-    void (*on_environment_event)(void* user_data, const char* event_json);
-    void (*on_screen_event)(void* user_data, const char* event_json);
-    void (*on_event)(void* user_data, const char* event_json);
+    void (*on_zone_event)(void* user_data, const char* event_text);
+    void (*on_command_event)(void* user_data, const char* event_text);
+    void (*on_environment_event)(void* user_data, const char* event_text);
+    void (*on_screen_event)(void* user_data, const char* event_text);
+    void (*on_event)(void* user_data, const char* event_text);
     void* user_data;
 } TerminalObserverVtable;
 ```
@@ -406,11 +406,11 @@ void print_terminal_state(const Terminal* term) {
 typedef struct Terminal Terminal;
 
 typedef struct TerminalObserverVtable {
-    void (*on_zone_event)(void* user_data, const char* event_json);
-    void (*on_command_event)(void* user_data, const char* event_json);
-    void (*on_environment_event)(void* user_data, const char* event_json);
-    void (*on_screen_event)(void* user_data, const char* event_json);
-    void (*on_event)(void* user_data, const char* event_json);
+    void (*on_zone_event)(void* user_data, const char* event_text);
+    void (*on_command_event)(void* user_data, const char* event_text);
+    void (*on_environment_event)(void* user_data, const char* event_text);
+    void (*on_screen_event)(void* user_data, const char* event_text);
+    void (*on_event)(void* user_data, const char* event_text);
     void* user_data;
 } TerminalObserverVtable;
 

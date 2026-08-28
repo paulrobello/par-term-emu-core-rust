@@ -265,27 +265,27 @@ impl Drop for SharedState {
 
 /// A C-compatible vtable for terminal event observation.
 ///
-/// Each function pointer receives the `user_data` pointer and a JSON-encoded
-/// event description as a NUL-terminated C string. The callee must NOT free
-/// the event string — it is owned by the caller and valid only for the
-/// duration of the callback.
+/// Each function pointer receives the `user_data` pointer and a
+/// Debug-formatted (`{:?}`) event description as a NUL-terminated C string.
+/// The callee must NOT free the event string — it is owned by the caller and
+/// valid only for the duration of the callback.
 #[repr(C)]
 pub struct TerminalObserverVtable {
     /// Called for zone lifecycle events
     pub on_zone_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_json: *const c_char)>,
+        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
     /// Called for command/shell integration events
     pub on_command_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_json: *const c_char)>,
+        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
     /// Called for environment change events
     pub on_environment_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_json: *const c_char)>,
+        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
     /// Called for screen content events
     pub on_screen_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_json: *const c_char)>,
+        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
     /// Called for ALL events (catch-all)
     pub on_event:
-        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_json: *const c_char)>,
+        Option<unsafe extern "C" fn(user_data: *mut std::ffi::c_void, event_text: *const c_char)>,
     /// Opaque pointer passed to every callback
     pub user_data: *mut std::ffi::c_void,
 }
@@ -310,8 +310,8 @@ impl FfiObserver {
         Self { vtable }
     }
 
-    /// Format a terminal event as a simple JSON-ish debug string and call an
-    /// FFI callback with it.
+    /// Format a terminal event as a Debug-formatted (`{:?}`) string and call
+    /// an FFI callback with it.
     fn call_callback(
         &self,
         cb: Option<unsafe extern "C" fn(*mut std::ffi::c_void, *const c_char)>,
