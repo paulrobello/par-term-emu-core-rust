@@ -23,6 +23,7 @@ the same enum fields as the covered variants.
 from __future__ import annotations
 
 import re
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -42,6 +43,23 @@ try:
 except (ImportError, RuntimeError, TypeError):
     HAS_STREAMING = False
     pytestmark = pytest.mark.skip(reason="Streaming feature not built")
+    if TYPE_CHECKING:
+        # Type-checking stubs to keep the names bound (mirrors
+        # tests/test_streaming.py).
+        from par_term_emu_core_rust import (  # type: ignore[assignment]
+            StreamingConfig,
+            decode_client_message,
+            decode_server_message,
+            encode_client_message,
+            encode_server_message,
+        )
+    else:
+        # Runtime placeholders; the skip above makes them unreachable.
+        StreamingConfig = Any  # type: ignore[misc, assignment]
+        decode_client_message = Any  # type: ignore[misc, assignment]
+        decode_server_message = Any  # type: ignore[misc, assignment]
+        encode_client_message = Any  # type: ignore[misc, assignment]
+        encode_server_message = Any  # type: ignore[misc, assignment]
 
 SERVER_VALID_TYPES = (
     "output, resize, title, bell, pong, connected, error, shutdown, cursor, "
