@@ -1688,7 +1688,7 @@ When TLS is enabled, clients must use secure URLs:
    - Consider VPN or SSH tunneling
 
 2. **Authentication & Encryption:**
-   - **API Key** for API routes (`/ws`, `/sessions`, `/stats`): `--api-key` — clients authenticate via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. Static files (web frontend) remain unprotected so the browser can load the page, then authenticate the WebSocket.
+   - **API Key** for API routes (`/ws`, `/sessions`, `/stats`): `--api-key` — clients authenticate via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. The query form is honored only when the server is started with `--allow-api-key-in-query` (default off) — query strings are recorded in proxy and server access logs and saved in browser history, so header-based authentication is preferred. The bundled web frontend forwards a `?api_key=` page parameter into the WebSocket URL whenever present (browsers cannot set headers on a WebSocket), so that flow works only with the flag enabled. Static files (web frontend) remain unprotected so the browser can load the page, then authenticate the WebSocket.
    - **HTTP Basic Auth** for API routes: `--http-user` with `--http-password`, `--http-password-hash`, or `--http-password-file`
    - When both API key and Basic Auth are configured, **either one satisfies authentication**
    - **Enable TLS for production** using `--tls-cert`/`--tls-key` or `--tls-pem` (see [TLS Configuration](#tlsssl-configuration))
@@ -1738,9 +1738,12 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 #   Header: Authorization: Bearer secret-token-here
 #   Header: X-API-Key: secret-token-here
 #   Query:  ws://localhost:8099/ws?api_key=secret-token-here
+#           (only honored when the server runs --allow-api-key-in-query)
 #
 # Web frontend auto-passes api_key when loaded with:
 #   http://localhost:8099/?api_key=secret-token-here
+#   (the key rides in the URL, so it lands in access logs and browser
+#    history — enable --allow-api-key-in-query only for trusted local use)
 ```
 
 ## Performance
