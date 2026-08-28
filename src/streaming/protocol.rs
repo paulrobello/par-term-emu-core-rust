@@ -929,6 +929,122 @@ pub enum EventType {
     ScreenCleared,
 }
 
+/// Builder for [`ServerMessage::Connected`] (QA-003).
+///
+/// The next optional field is one method here, not another constructor.
+/// Start from [`ServerMessage::connected_builder`] and chain the fields
+/// you have; unset fields stay `None` on the wire.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectedBuilder {
+    /// Terminal width in columns
+    pub cols: u16,
+    /// Terminal height in rows
+    pub rows: u16,
+    /// Session identifier
+    pub session_id: String,
+    /// Optional initial screen content (ANSI-styled)
+    pub initial_screen: Option<String>,
+    /// Optional theme information
+    pub theme: Option<ThemeInfo>,
+    /// Optional badge text
+    pub badge: Option<String>,
+    /// Optional faint-text alpha override
+    pub faint_text_alpha: Option<f32>,
+    /// Optional current working directory
+    pub cwd: Option<String>,
+    /// Optional modifyOtherKeys level
+    pub modify_other_keys: Option<u32>,
+    /// Optional assigned client id
+    pub client_id: Option<String>,
+    /// Optional read-only flag
+    pub readonly: Option<bool>,
+}
+
+impl ConnectedBuilder {
+    /// Set terminal width in columns
+    pub fn cols(mut self, cols: u16) -> Self {
+        self.cols = cols;
+        self
+    }
+
+    /// Set terminal height in rows
+    pub fn rows(mut self, rows: u16) -> Self {
+        self.rows = rows;
+        self
+    }
+
+    /// Set session identifier
+    pub fn session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = session_id.into();
+        self
+    }
+
+    /// Set initial screen content (ANSI-styled)
+    pub fn initial_screen(mut self, screen: Option<String>) -> Self {
+        self.initial_screen = screen;
+        self
+    }
+
+    /// Set theme information
+    pub fn theme(mut self, theme: Option<ThemeInfo>) -> Self {
+        self.theme = theme;
+        self
+    }
+
+    /// Set badge text
+    pub fn badge(mut self, badge: Option<String>) -> Self {
+        self.badge = badge;
+        self
+    }
+
+    /// Set faint-text alpha override
+    pub fn faint_text_alpha(mut self, alpha: Option<f32>) -> Self {
+        self.faint_text_alpha = alpha;
+        self
+    }
+
+    /// Set current working directory
+    pub fn cwd(mut self, cwd: Option<String>) -> Self {
+        self.cwd = cwd;
+        self
+    }
+
+    /// Set modifyOtherKeys level
+    pub fn modify_other_keys(mut self, mode: Option<u32>) -> Self {
+        self.modify_other_keys = mode;
+        self
+    }
+
+    /// Set assigned client id
+    pub fn client_id(mut self, client_id: Option<String>) -> Self {
+        self.client_id = client_id;
+        self
+    }
+
+    /// Set read-only flag
+    pub fn readonly(mut self, readonly: Option<bool>) -> Self {
+        self.readonly = readonly;
+        self
+    }
+
+    /// Finish and produce the `Connected` message
+    pub fn build(self) -> ServerMessage {
+        ServerMessage::Connected {
+            cols: self.cols,
+            rows: self.rows,
+            initial_screen: self.initial_screen,
+            session_id: self.session_id,
+            theme: self.theme,
+            badge: self.badge,
+            faint_text_alpha: self.faint_text_alpha,
+            cwd: self.cwd,
+            modify_other_keys: self.modify_other_keys,
+            client_id: self.client_id,
+            readonly: self.readonly,
+        }
+    }
+}
+
 impl ServerMessage {
     /// Create a new output message
     pub fn output(data: String) -> Self {
@@ -956,68 +1072,53 @@ impl ServerMessage {
         Self::Title { title }
     }
 
-    /// Create a new connected message
-    pub fn connected(cols: u16, rows: u16, session_id: String) -> Self {
-        Self::Connected {
+    /// Start building a `Connected` message (QA-003)
+    ///
+    /// The next optional field on `Connected` is one method on the
+    /// returned [`ConnectedBuilder`], not another constructor.
+    pub fn connected_builder(cols: u16, rows: u16, session_id: String) -> ConnectedBuilder {
+        ConnectedBuilder {
             cols,
             rows,
-            initial_screen: None,
             session_id,
-            theme: None,
-            badge: None,
-            faint_text_alpha: None,
-            cwd: None,
-            modify_other_keys: None,
-            client_id: None,
-            readonly: None,
+            ..Default::default()
         }
     }
 
+    /// Create a new connected message
+    #[deprecated(note = "use connected_builder()")]
+    pub fn connected(cols: u16, rows: u16, session_id: String) -> Self {
+        Self::connected_builder(cols, rows, session_id).build()
+    }
+
     /// Create a new connected message with initial screen
+    #[deprecated(note = "use connected_builder()")]
     pub fn connected_with_screen(
         cols: u16,
         rows: u16,
         initial_screen: String,
         session_id: String,
     ) -> Self {
-        Self::Connected {
-            cols,
-            rows,
-            initial_screen: Some(initial_screen),
-            session_id,
-            theme: None,
-            badge: None,
-            faint_text_alpha: None,
-            cwd: None,
-            modify_other_keys: None,
-            client_id: None,
-            readonly: None,
-        }
+        Self::connected_builder(cols, rows, session_id)
+            .initial_screen(Some(initial_screen))
+            .build()
     }
 
     /// Create a new connected message with theme
+    #[deprecated(note = "use connected_builder()")]
     pub fn connected_with_theme(
         cols: u16,
         rows: u16,
         session_id: String,
         theme: ThemeInfo,
     ) -> Self {
-        Self::Connected {
-            cols,
-            rows,
-            initial_screen: None,
-            session_id,
-            theme: Some(theme),
-            badge: None,
-            faint_text_alpha: None,
-            cwd: None,
-            modify_other_keys: None,
-            client_id: None,
-            readonly: None,
-        }
+        Self::connected_builder(cols, rows, session_id)
+            .theme(Some(theme))
+            .build()
     }
 
     /// Create a new connected message with initial screen and theme
+    #[deprecated(note = "use connected_builder()")]
     pub fn connected_with_screen_and_theme(
         cols: u16,
         rows: u16,
@@ -1025,19 +1126,10 @@ impl ServerMessage {
         session_id: String,
         theme: ThemeInfo,
     ) -> Self {
-        Self::Connected {
-            cols,
-            rows,
-            initial_screen: Some(initial_screen),
-            session_id,
-            theme: Some(theme),
-            badge: None,
-            faint_text_alpha: None,
-            cwd: None,
-            modify_other_keys: None,
-            client_id: None,
-            readonly: None,
-        }
+        Self::connected_builder(cols, rows, session_id)
+            .initial_screen(Some(initial_screen))
+            .theme(Some(theme))
+            .build()
     }
 
     /// Create a fully-specified connected message with all terminal state
@@ -1055,19 +1147,16 @@ impl ServerMessage {
         client_id: Option<String>,
         readonly: Option<bool>,
     ) -> Self {
-        Self::Connected {
-            cols,
-            rows,
-            initial_screen,
-            session_id,
-            theme,
-            badge,
-            faint_text_alpha,
-            cwd,
-            modify_other_keys,
-            client_id,
-            readonly,
-        }
+        Self::connected_builder(cols, rows, session_id)
+            .initial_screen(initial_screen)
+            .theme(theme)
+            .badge(badge)
+            .faint_text_alpha(faint_text_alpha)
+            .cwd(cwd)
+            .modify_other_keys(modify_other_keys)
+            .client_id(client_id)
+            .readonly(readonly)
+            .build()
     }
 
     /// Create a new refresh message with screen content

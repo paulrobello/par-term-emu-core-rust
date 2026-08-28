@@ -73,7 +73,7 @@ pub mod py_convert;
 
 // Re-export main types
 pub use error::{Result, StreamingError};
-pub use protocol::{ClientMessage, EventType, ServerMessage};
+pub use protocol::{ClientMessage, ConnectedBuilder, EventType, ServerMessage};
 
 #[cfg(feature = "streaming")]
 pub use broadcaster::Broadcaster;
