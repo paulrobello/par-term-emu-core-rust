@@ -179,6 +179,8 @@ Also update:
 - `pyproject.toml` (line 9: `version = "X.Y.Z"`)
 - `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
 
+**Derive crate exception**: `derive/Cargo.toml` versions independently — bump it only when the derive code changes, and keep the main crate's `par-term-emu-derive` dependency spec (`Cargo.toml` ~line 52) matching that version. The publish workflows publish the sub-crate before the main crate so the registry version exists when crates.io resolves the (path-stripped) dependency.
+
 **Python Binding Sync**: When adding/modifying Rust methods on `Terminal` or `PtySession`:
 1. **Add Python binding** in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`
 2. **Add docstrings** with Args, Returns, and Example sections (Google style)
