@@ -164,9 +164,8 @@ impl Macro {
     /// Load a macro from a YAML file
     pub fn load_yaml<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let contents = fs::read_to_string(path)?;
-        serde_yaml_ng::from_str(&contents).map_err(|e| {
-            io::Error::new(io::ErrorKind::InvalidData, e)
-        })
+        serde_yaml_ng::from_str(&contents)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Convert to YAML string
