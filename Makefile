@@ -4,7 +4,8 @@
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open \
-        streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install
+        streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install \
+        stubs stub-check
 
 help:
 	@echo "==================================================================="
@@ -42,6 +43,8 @@ help:
 	@echo "  check           - Check Rust code without building"
 	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
+	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
+	@echo "  stub-check      - Verify the module imports and the stub parses under pyright"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
 	@echo ""
 	@echo "Pre-commit Hooks:"
@@ -258,7 +261,29 @@ clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
 	cargo clippy --all-targets --all-features -- -D warnings
 
-checkall: test-rust test-rust-streaming lint lint-python test-python
+# Regenerate the _native.pyi stub from the built module (ARC-002).
+# Build with streaming first so streaming-only methods are captured:
+#   make dev-streaming && make stubs
+stubs:
+	@echo "Regenerating python/par_term_emu_core_rust/_native.pyi..."
+	@if [ ! -d ".venv" ]; then \
+		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
+		exit 1; \
+	fi
+	uv run python scripts/generate_stubs.py
+	uv run ruff format python/par_term_emu_core_rust/_native.pyi
+
+# Verify the package imports and the shipped stub parses cleanly (ARC-002).
+stub-check:
+	@echo "Checking Python stub..."
+	@if [ ! -d ".venv" ]; then \
+		echo "Warning: .venv not found. Run 'make setup-venv' first."; \
+		exit 1; \
+	fi
+	uv run python -c "import par_term_emu_core_rust"
+	uv run pyright python/par_term_emu_core_rust/_native.pyi
+
+checkall: test-rust test-rust-streaming lint lint-python stub-check test-python
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -272,6 +297,7 @@ checkall: test-rust test-rust-streaming lint lint-python test-python
 	@echo "  ✓ Python format (auto-fixed)"
 	@echo "  ✓ Python lint (ruff auto-fixed)"
 	@echo "  ✓ Python type check (pyright)"
+	@echo "  ✓ Python stub check (pyright)"
 	@echo "  ✓ Python tests"
 	@echo ""
 

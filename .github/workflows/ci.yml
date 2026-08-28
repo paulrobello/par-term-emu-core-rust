@@ -82,6 +82,11 @@ jobs:
     - name: Build Python package
       run: uv run maturin develop --release
 
+    - name: Check Python stub ships and parses (ARC-002)
+      run: |
+        uv run python -c "import par_term_emu_core_rust"
+        uv run pyright python/par_term_emu_core_rust/_native.pyi
+
     - name: Run Rust tests
       run: cargo test --lib --no-default-features --features pyo3/auto-initialize
 

@@ -83,7 +83,7 @@ async def streaming_server(pty_terminal, streaming_port):
 
     # Cleanup
     try:
-        server.stop()
+        server.shutdown("test shutdown")
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -203,15 +203,15 @@ def test_server_start_stop(pty_terminal, streaming_port):
     server.start()
     time.sleep(0.1)
 
-    # Server should be running
-    assert server.is_running()
+    # Server should be running (bound address is set once started)
+    assert server.addr != ""
 
     # Stop server
-    server.stop()
+    server.shutdown("test shutdown")
     time.sleep(0.1)
 
-    # Server should be stopped
-    assert not server.is_running()
+    # Server should be stopped (no clients remain)
+    assert server.client_count() == 0
 
 
 def test_server_client_count_no_clients(pty_terminal, streaming_port):
@@ -222,7 +222,7 @@ def test_server_client_count_no_clients(pty_terminal, streaming_port):
 
     assert server.client_count() == 0
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -231,7 +231,7 @@ async def test_server_address(pty_terminal, streaming_port):
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
 
     # Address should be set
-    addr = server.address()
+    addr = server.addr
     assert "127.0.0.1" in addr
     assert str(streaming_port) in addr
 
@@ -373,7 +373,7 @@ async def test_broadcast_to_all_clients(pty_terminal, streaming_port):
     finally:
         await client1.close()
         await client2.close()
-        server.stop()
+        server.shutdown("test shutdown")
 
 
 # Configuration and Limits Tests
@@ -388,7 +388,7 @@ def test_max_clients_limit(pty_terminal, streaming_port):
     # Configuration should be set
     time.sleep(0.1)
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -410,7 +410,7 @@ async def test_send_initial_screen_enabled(pty_terminal, streaming_port):
         except TimeoutError:
             pytest.skip("Initial screen not received within timeout")
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -429,7 +429,7 @@ async def test_send_initial_screen_disabled(pty_terminal, streaming_port):
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(websocket.recv(), timeout=0.3)
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 # Terminal Resizing Tests
@@ -458,7 +458,7 @@ async def test_terminal_resize_notification(pty_terminal, streaming_port):
         except TimeoutError:
             pass  # Resize notifications may not be implemented
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 # Error Handling Tests
@@ -482,14 +482,14 @@ def test_server_bind_error_duplicate_port(pty_terminal, streaming_port):
         # If we got here, check if both are actually running
         # (some implementations may handle this gracefully)
 
-        server2.stop()
+        server2.shutdown("test shutdown")
     except RuntimeError:
         # Expected to fail: PyStreamingServer's PyO3 bindings raise
         # RuntimeError (PyRuntimeError) for all construction/lifecycle
         # failures (see src/python_bindings/streaming.rs).
         pass
     finally:
-        server1.stop()
+        server1.shutdown("test shutdown")
 
 
 def test_server_operations_after_stop(pty_terminal, streaming_port):
@@ -498,11 +498,11 @@ def test_server_operations_after_stop(pty_terminal, streaming_port):
     server.start()
     time.sleep(0.1)
 
-    server.stop()
+    server.shutdown("test shutdown")
     time.sleep(0.1)
 
-    # Should report as not running
-    assert not server.is_running()
+    # Should report no clients after shutdown
+    assert server.client_count() == 0
 
     # Client count should be 0
     assert server.client_count() == 0
@@ -541,7 +541,7 @@ async def test_high_throughput_output(pty_terminal, streaming_port):
         # Should have received at least some messages
         assert messages_received > 0
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -568,7 +568,7 @@ async def test_many_clients_sequential(pty_terminal, streaming_port):
         await client.close()
         await asyncio.sleep(0.05)
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 # Integration Tests
@@ -607,7 +607,7 @@ async def test_full_session_workflow(pty_terminal, streaming_port):
             # Should have received some output
             assert len(output_chunks) > 0
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -645,7 +645,7 @@ async def test_concurrent_read_write(pty_terminal, streaming_port):
         # Should have received multiple messages
         assert len(messages) > 0
 
-    server.stop()
+    server.shutdown("test shutdown")
 
 
 if __name__ == "__main__":
