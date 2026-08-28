@@ -9,11 +9,17 @@ use pyo3::prelude::*;
 #[pyclass(name = "Trigger", from_py_object)]
 #[derive(Clone)]
 pub struct PyTrigger {
+    /// Unique trigger identifier
     pub id: u64,
+    /// Human-readable trigger name
     pub name: String,
+    /// Regex pattern the trigger matches against output lines
     pub pattern: String,
+    /// Whether the trigger is currently active
     pub enabled: bool,
+    /// Whether the trigger fires at most once per line
     pub fire_once_per_line: bool,
+    /// Number of times this trigger has matched
     pub match_count: usize,
 }
 
@@ -45,12 +51,19 @@ impl From<&crate::terminal::trigger::Trigger> for PyTrigger {
 #[pyclass(name = "TriggerMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyTriggerMatch {
+    /// ID of the trigger that matched
     pub trigger_id: u64,
+    /// Row where the match starts (0-indexed)
     pub row: usize,
+    /// Column where the match starts (0-indexed)
     pub col: usize,
+    /// Column just past the end of the match
     pub end_col: usize,
+    /// The matched text
     pub text: String,
+    /// Regex capture groups (empty string for non-participating groups)
     pub captures: Vec<String>,
+    /// Unix epoch milliseconds when the match occurred
     pub timestamp: u64,
 }
 

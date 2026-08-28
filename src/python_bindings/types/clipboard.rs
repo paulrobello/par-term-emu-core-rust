@@ -9,8 +9,11 @@ use pyo3::prelude::*;
 #[pyclass(name = "ClipboardEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardEntry {
+    /// Clipboard text content
     pub content: String,
+    /// Unix epoch milliseconds when captured
     pub timestamp: u64,
+    /// Optional source label
     pub label: Option<String>,
 }
 
@@ -30,11 +33,17 @@ impl PyClipboardEntry {
 #[pyclass(name = "ClipboardSyncEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardSyncEvent {
+    /// Clipboard target (e.g. "system", "terminal")
     pub target: String,
+    /// Sync operation kind (e.g. "set", "request")
     pub operation: String,
+    /// Clipboard content (None for clears/requests)
     pub content: Option<String>,
+    /// True for writes, False for reads
     pub is_write: bool,
+    /// Unix epoch milliseconds when the event occurred
     pub timestamp: u64,
+    /// True if the sync originated from a remote host
     pub is_remote: bool,
 }
 
@@ -83,9 +92,13 @@ impl From<&crate::terminal::ClipboardSyncEvent> for PyClipboardSyncEvent {
 #[pyclass(name = "ClipboardHistoryEntry", from_py_object)]
 #[derive(Clone)]
 pub struct PyClipboardHistoryEntry {
+    /// Clipboard target this entry came from
     pub target: String,
+    /// Clipboard text content
     pub content: String,
+    /// Unix epoch milliseconds when captured
     pub timestamp: u64,
+    /// Optional origin description
     pub source: Option<String>,
 }
 

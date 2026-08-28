@@ -49,15 +49,19 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [Advanced Text Operations](#advanced-text-operations)
   - [Testing and Compliance](#testing-and-compliance)
   - [Unicode Normalization](#unicode-normalization)
+  - [Character Width Configuration](#character-width-configuration)
+  - [Progress Bar (OSC 9;4)](#progress-bar-osc-94)
   - [Utility Methods](#utility-methods)
   - [Debug and Snapshot Methods](#debug-and-snapshot-methods)
   - [Text Extraction and Selection](#text-extraction-and-selection)
   - [Content Search](#content-search)
   - [Buffer Statistics](#buffer-statistics)
   - [Static Utility Methods](#static-utility-methods)
+  - [Color Conversion Methods](#color-conversion-methods)
   - [Observer API](#observer-api)
 - [Observer Convenience Functions](#observer-convenience-functions)
 - [PtyTerminal Class](#ptyterminal-class)
+  - [PTY-Specific Methods](#pty-specific-methods)
   - [Process Management](#process-management)
   - [I/O Operations](#io-operations)
   - [Update Tracking](#update-tracking)
@@ -115,6 +119,10 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [TriggerAction](#triggeraction)
   - [TriggerMatch](#triggermatch)
   - [NormalizationForm](#normalizationform)
+  - [UnicodeVersion](#unicodeversion)
+  - [AmbiguousWidth](#ambiguouswidth)
+  - [WidthConfig](#widthconfig)
+  - [ProgressBar](#progressbar)
   - [CoprocessConfig](#coprocessconfig)
   - [WindowLayout](#windowlayout)
   - [ColorHSL](#colorhsl)
@@ -128,16 +136,22 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [CursorStyle](#cursorstyle)
   - [UnderlineStyle](#underlinestyle)
   - [ProgressState](#progressstate)
+  - [SelectionMode](#selectionmode)
+  - [Named Progress Bars (OSC 934)](#named-progress-bars-osc-934)
 - [StreamingServer Class](#streamingserver-class)
 - [StreamingConfig Class](#streamingconfig-class)
 - [Streaming Functions](#streaming-functions)
   - [encode_server_message](#encode_server_message)
   - [decode_server_message](#decode_server_message)
+  - [encode_client_message](#encode_client_message)
+  - [decode_client_message](#decode_client_message)
 - [Instant Replay](#instant-replay)
   - [Snapshot Capture (Rust)](#snapshot-capture-rust)
   - [SnapshotManager](#snapshotmanager)
   - [ReplaySession](#replaysession)
   - [Python Binding](#instant-replay-python-binding)
+- [C-Compatible FFI](#c-compatible-ffi)
+- [See Also](#see-also)
 
 ## Terminal Class
 
@@ -885,6 +899,13 @@ Controls how character widths are calculated, particularly for East Asian Ambigu
 - `set_unicode_version(version: UnicodeVersion)`: Convenience method to set just the Unicode version without changing the ambiguous-width treatment
 - `char_width(c: str) -> int`: Get the display width of a single character (0, 1, or 2 cells)
 
+**Module-level width functions** (call on the package, not a Terminal instance):
+
+- `char_width_cjk(c: str) -> int`: Display width of a single character using CJK rules (East Asian Ambiguous characters count as 2 cells)
+- `str_width(s: str, config: WidthConfig | None = None) -> int`: Display width of a string; pass a `WidthConfig` to override the default width rules
+- `str_width_cjk(s: str) -> int`: Display width of a string using CJK rules
+- `is_east_asian_ambiguous(c: str) -> bool`: Whether a character is East Asian Ambiguous (width depends on locale/context)
+
 ### Progress Bar (OSC 9;4)
 
 Single active progress bar state, separate from the multiple concurrent [Named Progress Bars (OSC 934)](#named-progress-bars-osc-934).
@@ -893,6 +914,8 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 - `progress_value() -> int`: Get the current progress percentage (0-100); only meaningful when state is Normal, Warning, or Error
 - `set_progress(state: ProgressState, progress: int)`: Manually set the progress bar state and percentage (0-100, clamped if out of range), without receiving an OSC 9;4 sequence
 - `clear_progress()`: Clear/hide the progress bar (equivalent to OSC 9;4;0)
+- `progress_bar() -> ProgressBar`: Get the current progress bar as a `ProgressBar` object (with `state` and `progress` fields)
+- `has_progress() -> bool`: Whether the progress bar is currently active (any state other than Hidden)
 
 ### Utility Methods
 
@@ -927,8 +950,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `debug_snapshot_grid() -> str`: Get debug snapshot of grid state
 - `debug_snapshot_primary() -> str`: Get debug snapshot of primary screen
 - `debug_snapshot_alt() -> str`: Get debug snapshot of alternate screen
-- `debug_log_snapshot()`: Log debug snapshot to console
-- `diff_snapshots(snapshot1: ScreenSnapshot, snapshot2: ScreenSnapshot) -> SnapshotDiff`: Compare two snapshots
+- `debug_log_snapshot(label: str)`: Log a debug snapshot to console. `label` is a required positional tag identifying the snapshot in the log output.
 
 ### Text Extraction and Selection
 
@@ -974,10 +996,21 @@ Call these on the class itself (e.g., `Terminal.strip_ansi(text)`):
 - `Terminal.strip_ansi(text: str) -> str`: Remove all ANSI escape sequences from text
 - `Terminal.measure_text_width(text: str) -> int`: Measure display width accounting for wide characters and ANSI codes
 - `Terminal.parse_color(color_string: str) -> tuple[int, int, int] | None`: Parse color from hex (#RRGGBB), rgb(r,g,b), or name
-- `Terminal.rgb_to_hsl_color(rgb: tuple[int, int, int]) -> ColorHSL`: Convert RGB to HSL color representation
-- `Terminal.rgb_to_hsv_color(rgb: tuple[int, int, int]) -> ColorHSV`: Convert RGB to HSV color representation
-- `Terminal.hsl_to_rgb_color(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
-- `Terminal.hsv_to_rgb_color(h: int, s: int, v: int) -> tuple[int, int, int]`: Convert HSV to RGB
+
+### Color Conversion Methods
+
+These are **instance methods** (call them on a `Terminal` object, not the class):
+
+- `rgb_to_hsl_color(r: int, g: int, b: int) -> ColorHSL`: Convert RGB to HSL. Channels are 0-255. The returned `ColorHSL` has `h` (degrees 0.0-360.0), `s` and `l` (0.0-1.0).
+- `rgb_to_hsv_color(r: int, g: int, b: int) -> ColorHSV`: Convert RGB to HSV. Channels are 0-255. The returned `ColorHSV` has `h` (degrees 0.0-360.0), `s` and `v` (0.0-1.0).
+- `hsl_to_rgb_color(h: float, s: float, l: float) -> tuple[int, int, int]`: Convert HSL to RGB. `h` is degrees (0.0-360.0); `s` and `l` are 0.0-1.0. Returns `(r, g, b)` with each channel 0-255.
+- `hsv_to_rgb_color(h: float, s: float, v: float) -> tuple[int, int, int]`: Convert HSV to RGB. `h` is degrees (0.0-360.0); `s` and `v` are 0.0-1.0. Returns `(r, g, b)` with each channel 0-255.
+
+```python
+term = Terminal(80, 24)
+hsl = term.rgb_to_hsl_color(255, 0, 0)  # h=0.0, s=1.0, l=0.5
+r, g, b = term.hsv_to_rgb_color(0.0, 1.0, 1.0)  # (255, 0, 0)
+```
 
 ### Observer API
 
@@ -1705,6 +1738,28 @@ Performance profiling data.
 - `bytes_allocated: int`: Total bytes allocated
 - `peak_memory: int`: Peak memory usage in bytes
 
+### ProgressBar
+
+OSC 9;4 progress bar state (ConEmu/Windows Terminal style). Also the return type of `Terminal.progress_bar()`.
+
+**Constructor:**
+- `ProgressBar(state: ProgressState = ProgressState.Hidden, progress: int = 0)`
+
+**Properties:**
+- `state: ProgressState`: Current progress state (assignable)
+- `progress: int`: Progress percentage 0-100 (assignable; clamped to 100)
+
+**Methods:**
+- `is_active() -> bool`: Whether the progress bar is currently visible (any state other than Hidden)
+- `to_escape_sequence() -> str`: The OSC 9;4 escape sequence this bar represents
+
+```python
+from par_term_emu_core_rust import ProgressBar, ProgressState
+
+bar = ProgressBar(ProgressState.Normal, 42)
+term.process_str(bar.to_escape_sequence())
+```
+
 ### RegexMatch
 
 Regular expression match result.
@@ -1998,6 +2053,15 @@ Progress bar state (OSC 9;4).
 - `ProgressState.Indeterminate`: Progress bar shows indeterminate/spinner state (state 3)
 - `ProgressState.Warning`: Progress bar shows warning/paused state (state 4)
 
+### SelectionMode
+
+Text selection mode, used by `set_selection()`.
+
+**Values:**
+- `SelectionMode.Character`: Character-wise selection
+- `SelectionMode.Line`: Whole-line selection
+- `SelectionMode.Block`: Rectangular column selection
+
 ### Named Progress Bars (OSC 934)
 
 The terminal supports multiple concurrent named progress bars via OSC 934 sequences.
@@ -2115,8 +2179,8 @@ StreamingConfig(
 - `web_root: str` - Web root directory for static files
 - `initial_cols: int` - Initial terminal columns (0=use terminal's current size)
 - `initial_rows: int` - Initial terminal rows (0=use terminal's current size)
-- `max_sessions: int` - Maximum concurrent terminal sessions (default 10; settable via `set_max_sessions()`)
-- `session_idle_timeout: int` - Idle session timeout in seconds (default 900; settable via `set_session_idle_timeout()`)
+- `max_sessions: int` - Maximum concurrent terminal sessions (default 10; assign directly: `config.max_sessions = 10`)
+- `session_idle_timeout: int` - Idle session timeout in seconds (default 900; assign directly: `config.session_idle_timeout = 900`)
 - `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
 - `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)
@@ -2230,6 +2294,39 @@ When `type` is `"system_stats"`, the dict contains:
 | `kernel_version` | `str \| None` | Kernel version string |
 | `uptime_secs` | `int \| None` | System uptime in seconds |
 | `timestamp` | `int \| None` | Unix epoch milliseconds |
+
+### encode_client_message
+
+```python
+encode_client_message(message_type: str, **kwargs) -> bytes
+```
+
+Encode a client message to the binary protobuf wire format the server accepts on the WebSocket.
+
+**Args:**
+- `message_type`: Client message type string (e.g. `"input"`, `"resize"`, `"subscribe"`). Unknown types raise `RuntimeError` listing the valid types.
+- `**kwargs`: Message-specific fields (e.g. `data="ls\r"` for input, `cols=80, rows=24` for resize).
+
+**Returns:** The protobuf-encoded bytes.
+
+**Raises:**
+- `RuntimeError`: If the type is unknown, encoding fails, or the streaming feature is not enabled.
+
+```python
+data = encode_client_message("input", data="ls\r")
+data = encode_client_message("resize", cols=120, rows=40)
+```
+
+### decode_client_message
+
+```python
+decode_client_message(data: bytes) -> dict
+```
+
+Decode a binary protobuf client message into a Python dict with a `"type"` key and message-specific fields (the inverse of `encode_client_message`).
+
+**Raises:**
+- `RuntimeError`: If decoding fails or the streaming feature is not enabled.
 
 ## Instant Replay
 

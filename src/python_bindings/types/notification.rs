@@ -700,10 +700,15 @@ impl From<crate::tmux_control::TmuxNotification> for PyTmuxNotification {
 #[pyclass(name = "NotificationEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyNotificationEvent {
+    /// What triggered the notification (e.g. "bell", "activity", "silence")
     pub trigger: String,
+    /// Alert kind (e.g. "desktop", "sound", "visual")
     pub alert: String,
+    /// Human-readable notification text, when present
     pub message: Option<String>,
+    /// Unix epoch milliseconds when the event occurred
     pub timestamp: u64,
+    /// Whether the notification was delivered to the host
     pub delivered: bool,
 }
 
@@ -746,18 +751,25 @@ impl From<&crate::terminal::NotificationEvent> for PyNotificationEvent {
 #[pyclass(name = "NotificationConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyNotificationConfig {
+    /// Whether BEL triggers a desktop notification
     #[pyo3(get, set)]
     pub bell_desktop: bool,
+    /// BEL sound (0 = disabled, 1-100 = volume)
     #[pyo3(get, set)]
     pub bell_sound: u8,
+    /// Whether BEL triggers a visual bell flash
     #[pyo3(get, set)]
     pub bell_visual: bool,
+    /// Whether activity notifications are enabled
     #[pyo3(get, set)]
     pub activity_enabled: bool,
+    /// Seconds of inactivity before an activity notification fires
     #[pyo3(get, set)]
     pub activity_threshold: u64,
+    /// Whether silence notifications are enabled
     #[pyo3(get, set)]
     pub silence_enabled: bool,
+    /// Seconds of silence before a silence notification fires
     #[pyo3(get, set)]
     pub silence_threshold: u64,
 }

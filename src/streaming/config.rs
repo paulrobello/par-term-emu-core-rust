@@ -286,7 +286,7 @@ pub struct StreamingConfig {
     pub http_basic_auth: Option<HttpBasicAuthConfig>,
     /// Maximum number of concurrent sessions (default: 10)
     pub max_sessions: usize,
-    /// Idle session timeout in seconds (0 = never timeout, default: 300)
+    /// Idle session timeout in seconds (0 = never timeout, default: 900)
     pub session_idle_timeout: u64,
     /// Shell presets: name → shell command
     pub presets: HashMap<String, String>,

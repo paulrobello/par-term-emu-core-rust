@@ -64,7 +64,7 @@ Also update `CHANGELOG.md` and note breaking changes in both `CHANGELOG.md` and 
 
 When you add or modify a Rust method on `Terminal` or `PtySession`, keep the layers in sync:
 
-1. Add the Python binding in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`.
+1. Add the Python binding in `src/python_bindings/terminal/` (in the themed `*_api.rs` file matching the feature area, or `mod.rs`; shared getter/setter pairs can go through the `common.rs` macro layer) or `src/python_bindings/pty.rs`.
 2. Add docstrings with `Args`, `Returns`, and `Example` sections (Google style).
 3. Update `docs/API_REFERENCE.md`.
 4. Update `README.md` if the change is user-facing.
@@ -72,7 +72,7 @@ When you add or modify a Rust method on `Terminal` or `PtySession`, keep the lay
 
 Files that must stay in lockstep:
 
-- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal.rs`)
+- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
 - Rust impl (`src/pty_session.rs`) ↔ Python binding (`src/python_bindings/pty.rs`)
 - Python binding ↔ API reference (`docs/API_REFERENCE.md`)
 

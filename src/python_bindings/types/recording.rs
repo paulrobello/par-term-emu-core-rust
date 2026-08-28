@@ -8,14 +8,19 @@ use pyo3::prelude::*;
 #[pyclass(name = "CoprocessConfig", from_py_object)]
 #[derive(Clone)]
 pub struct PyCoprocessConfig {
+    /// Command to execute
     #[pyo3(get, set)]
     pub command: String,
+    /// Command arguments
     #[pyo3(get, set)]
     pub args: Vec<String>,
+    /// Working directory (None = inherit)
     #[pyo3(get, set)]
     pub cwd: Option<String>,
+    /// Environment variables for the coprocess
     #[pyo3(get, set)]
     pub env: std::collections::HashMap<String, String>,
+    /// Whether terminal output is piped to the coprocess stdin
     #[pyo3(get, set)]
     pub copy_terminal_output: bool,
     /// Restart policy: "never" (default), "always", or "on_failure"
@@ -101,9 +106,13 @@ impl From<&PyCoprocessConfig> for crate::coprocess::CoprocessConfig {
 #[pyclass(name = "RecordingEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyRecordingEvent {
+    /// Milliseconds since recording start
     pub timestamp: u64,
+    /// Event kind: "Input", "Output", "Resize", "Metadata", or "Marker"
     pub event_type: String,
+    /// Raw event payload bytes
     pub data: Vec<u8>,
+    /// Event-specific metadata, e.g. (cols, rows) for resize events
     pub metadata: Option<(usize, usize)>,
 }
 
@@ -171,26 +180,31 @@ impl PyRecordingSession {
         self.inner.duration as f64 / 1000.0
     }
 
+    /// Unix epoch milliseconds when recording started
     #[getter]
     fn created_at(&self) -> u64 {
         self.inner.created_at
     }
 
+    /// Terminal size when recording started, as (cols, rows)
     #[getter]
     fn initial_size(&self) -> (usize, usize) {
         self.inner.initial_size
     }
 
+    /// Recording duration in milliseconds
     #[getter]
     fn duration(&self) -> u64 {
         self.inner.duration
     }
 
+    /// Recording title
     #[getter]
     fn title(&self) -> Option<String> {
         Some(self.inner.title.clone())
     }
 
+    /// Number of events in the recording
     #[getter]
     fn event_count(&self) -> usize {
         self.inner.events.len()
@@ -232,10 +246,15 @@ impl From<crate::terminal::RecordingSession> for PyRecordingSession {
 #[pyclass(name = "MacroEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMacroEvent {
+    /// Event kind: "KeyPress", "Delay", or "Screenshot"
     pub event_type: String,
+    /// Milliseconds since macro start
     pub timestamp: u64,
+    /// Key name for KeyPress events (e.g. "enter", "ctrl+c")
     pub key: Option<String>,
+    /// Delay duration in milliseconds for Delay events
     pub duration: Option<u64>,
+    /// Label for Screenshot events
     pub label: Option<String>,
 }
 

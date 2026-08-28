@@ -9,13 +9,21 @@ use pyo3::prelude::*;
 #[pyclass(name = "ShellIntegration", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegration {
+    /// Whether the cursor is currently in a shell prompt (OSC 133;A)
     pub in_prompt: bool,
+    /// Whether the cursor is in the command-input line (OSC 133;B)
     pub in_command_input: bool,
+    /// Whether the cursor is in command output (OSC 133;C)
     pub in_command_output: bool,
+    /// The command being executed or most recently finished
     pub current_command: Option<String>,
+    /// Exit code of the last finished command
     pub last_exit_code: Option<i32>,
+    /// Working directory reported by OSC 7 / OSC 1337;CurrentDir
     pub cwd: Option<String>,
+    /// Remote hostname when tracking a remote session
     pub hostname: Option<String>,
+    /// Username on the host
     pub username: Option<String>,
 }
 
@@ -136,14 +144,23 @@ impl From<&crate::terminal::ProgressBar> for PyProgressBar {
 #[pyclass(name = "CommandExecution", from_py_object)]
 #[derive(Clone)]
 pub struct PyCommandExecution {
+    /// The command line that was executed
     pub command: String,
+    /// Working directory the command ran in, if known
     pub cwd: Option<String>,
+    /// Unix epoch milliseconds when the command started
     pub start_time: u64,
+    /// Unix epoch milliseconds when the command finished (None while running)
     pub end_time: Option<u64>,
+    /// Exit code (None while running)
     pub exit_code: Option<i32>,
+    /// Wall-clock duration in milliseconds (None while running)
     pub duration_ms: Option<u64>,
+    /// Whether the command succeeded (exit code 0; None while running)
     pub success: Option<bool>,
+    /// First row of the command's output, if any
     pub output_start_row: Option<usize>,
+    /// Last row of the command's output, if any
     pub output_end_row: Option<usize>,
 }
 
@@ -178,10 +195,15 @@ impl From<&crate::terminal::CommandExecution> for PyCommandExecution {
 #[pyclass(name = "ShellIntegrationStats", from_py_object)]
 #[derive(Clone)]
 pub struct PyShellIntegrationStats {
+    /// Total number of tracked commands
     pub total_commands: usize,
+    /// Number of commands that exited 0
     pub successful_commands: usize,
+    /// Number of commands that exited non-zero
     pub failed_commands: usize,
+    /// Average command duration in milliseconds
     pub avg_duration_ms: f64,
+    /// Total command time in milliseconds
     pub total_duration_ms: u64,
 }
 
@@ -215,10 +237,15 @@ impl From<&crate::terminal::ShellIntegrationStats> for PyShellIntegrationStats {
 #[pyclass(name = "CwdChange", from_py_object)]
 #[derive(Clone)]
 pub struct PyCwdChange {
+    /// Previous working directory (None for the first report)
     pub old_cwd: Option<String>,
+    /// New working directory
     pub new_cwd: String,
+    /// Host the directory change occurred on, if reported
     pub hostname: Option<String>,
+    /// User who changed directory, if reported
     pub username: Option<String>,
+    /// Unix epoch milliseconds when the change was observed
     pub timestamp: u64,
 }
 

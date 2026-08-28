@@ -18,8 +18,9 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Mobile Support](#mobile-support)
   - [Theme System](#theme-system)
 - [Protocol Specification](#protocol-specification)
-  - [Server Messages](#server-messages)
-  - [Client Messages](#client-messages)
+  - [Server Messages](#server-messages-servermessage-oneof)
+  - [Client Messages](#client-messages-clientmessage-oneof)
+  - [ThemeInfo Structure](#themeinfo-structure)
   - [Connection Flow](#connection-flow)
   - [Event Subscription](#event-subscription)
   - [Mouse, Focus, and Paste](#mouse-focus-and-paste)
@@ -32,14 +33,14 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Sessions Endpoint](#sessions-endpoint-sessions)
   - [System Stats WebSocket](#system-stats-websocket-stats)
 - [Advanced Features](#advanced-features)
+  - [Multi-Session Management](#multi-session-management)
   - [Multiple Viewers](#multiple-viewers)
   - [Read-Only Mode](#read-only-mode)
   - [Macro Playback](#macro-playback)
-  - [HTTP Static File Serving](#http-static-file-serving)
+  - [File Transfer Events](#file-transfer-events)
   - [Zone Events](#zone-events)
   - [Semantic Snapshots](#semantic-snapshots)
   - [Environment and Remote Host Tracking](#environment-and-remote-host-tracking)
-  - [File Transfer Events](#file-transfer-events)
 - [TLS/SSL Configuration](#tlsssl-configuration)
 - [Security Considerations](#security-considerations)
 - [Performance](#performance)
@@ -299,7 +300,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_COMMAND` | `--command` | Command to run instead of a shell |
 | `PAR_TERM_VERBOSE` | `--verbose` / `-v` | Enable verbose logging |
 | `PAR_TERM_KEEPALIVE` | `--keepalive` | WebSocket keepalive interval (seconds) |
-| `PAR_TERM_MAX_CLIENTS` | `--max-clients` | Maximum total clients (0=unlimited) |
+| `PAR_TERM_MAX_CLIENTS` | `--max-clients` | Maximum total clients (0 rejects all connections; unlike `--max-clients-per-session`, there is no unlimited zero-case) |
 | `PAR_TERM_USE_TTY_SIZE` | `--use-tty-size` | Use the current TTY size for the terminal |
 | `PAR_TERM_NO_RESTART_SHELL` | `--no-restart-shell` | Don't restart the shell on exit |
 | `PAR_TERM_DOWNLOAD_FRONTEND` | `--download-frontend` | Download the web frontend on startup |
@@ -308,6 +309,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_MACRO_SPEED` | `--macro-speed` | Macro playback speed multiplier |
 | `PAR_TERM_MACRO_LOOP` | `--macro-loop` | Loop macro playback |
 | `PAR_TERM_ALLOWED_ORIGINS` | `--allowed-origins` | Allowed browser origins (CORS/WS, SEC-005) |
+| *(none)* | `--preset` | Shell preset in `name=command` form (repeatable, e.g. `--preset python=python3`). Clients connect with `?preset=name` to get a session running that command |
 
 **Download Web Frontend:**
 
@@ -482,6 +484,7 @@ server.start()
 | `system_stats_interval_secs` | u64 | 5 | System stats collection interval in seconds |
 | `api_key` | Option\<String\> | None | API key for authenticating API routes (`/ws`, `/sessions`, `/stats`). Accepted via `Authorization: Bearer <key>`, `X-API-Key: <key>` header, or `?api_key=<key>` query param. When both API key and Basic Auth are configured, either satisfies auth. Static files remain unprotected so the web frontend loads without auth. |
 | `allow_api_key_in_query` | bool | false | Allow API key authentication via query parameter (?api_key=...). Disabled by default because query params are logged by proxies/firewalls, saved in browser history, and leaked via Referer headers. |
+| `allowed_origins` | Option\<Vec\<String\>\> | None | Allowed browser `Origin` values for WebSocket/CORS requests (CSRF defense, SEC-005). `None` applies the default policy: loopback and non-browser clients allowed, remote browser origins rejected. |
 
 **Python Example:**
 ```python
@@ -813,6 +816,23 @@ The protocol is defined in `proto/terminal.proto`. Messages use Protocol Buffers
 | `selection` | `start_col: uint32`, `start_row: uint32`, `end_col: uint32`, `end_row: uint32`, `mode: string` | Selection request (chars/line/block/word/clear) |
 | `clipboard` | `operation: string`, `content?: string`, `target?: string` | Clipboard get/set request |
 | `snapshot_request` | `scope: string`, `max_commands?: uint32` | Request a semantic snapshot (scope: "visible", "recent", "full") |
+
+> **Note: protobuf names vs serde-JSON tags.** The tables above use the
+> protobuf field/message names. The Rust types in `src/streaming/protocol.rs`
+> also derive serde `Serialize`/`Deserialize`, and their JSON `"type"` tags do
+> **not** always match: variants without an explicit `#[serde(rename)]` use
+> plain lowercase, dropping the underscores. JSON consumers must use the serde
+> tags, not the protobuf names:
+>
+> | Protobuf name | serde-JSON `"type"` tag |
+> |---|---|
+> | `cwd_changed` | `cwdchanged` |
+> | `trigger_matched` | `triggermatched` |
+> | `user_var_changed` | `user_var_changed` (explicit rename) |
+>
+> Single-word names (`output`, `resize`, `bell`, `pong`) are identical in both
+> forms. The WebSocket wire protocol itself is protobuf — this divergence only
+> affects code that serde-serializes `ServerMessage`/`ClientMessage` to JSON.
 
 ### ThemeInfo Structure
 

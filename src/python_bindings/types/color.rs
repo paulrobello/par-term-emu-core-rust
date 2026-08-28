@@ -9,8 +9,11 @@ use pyo3::prelude::*;
 #[pyclass(name = "ColorHSV", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSV {
+    /// Hue in degrees (0.0-360.0)
     pub h: f32,
+    /// Saturation (0.0-1.0)
     pub s: f32,
+    /// Value/brightness (0.0-1.0)
     pub v: f32,
 }
 
@@ -34,8 +37,11 @@ impl PyColorHSV {
 #[pyclass(name = "ColorHSL", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorHSL {
+    /// Hue in degrees (0.0-360.0)
     pub h: f32,
+    /// Saturation (0.0-1.0)
     pub s: f32,
+    /// Lightness (0.0-1.0)
     pub l: f32,
 }
 
@@ -59,8 +65,11 @@ impl PyColorHSL {
 #[pyclass(name = "ColorPalette", from_py_object)]
 #[derive(Clone)]
 pub struct PyColorPalette {
+    /// Base color the palette was generated from (r, g, b)
     pub base: (u8, u8, u8),
+    /// Generated palette colors as (r, g, b) tuples
     pub colors: Vec<(u8, u8, u8)>,
+    /// Palette generation mode
     pub mode: String,
 }
 

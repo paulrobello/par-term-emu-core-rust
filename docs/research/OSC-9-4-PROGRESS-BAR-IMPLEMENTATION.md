@@ -5,7 +5,7 @@
 **Project**: par-term-emu-core-rust
 **Purpose**: Parser implementation reference
 
-**Related Research**: `/Users/probello/Repos/research/terminal-emulators/osc-9-4-progress-bars-2026-02-09.md`
+**Related Research**: original external research note (`osc-9-4-progress-bars-2026-02-09.md`, no longer available at its original location); the authoritative references are linked in the References section below
 
 ## Critical Note: OSC 9;4 vs OSC 934
 
@@ -330,7 +330,7 @@ pub fn clear_progress() -> io::Result<()> {
 
 ### Recommended Approach
 
-The OSC 9;4 sequence should be parsed in the existing OSC handler, likely in `src/terminal/sequences/osc.rs`:
+The OSC 9;4 sequence should be parsed in the existing OSC handler, in `src/terminal/sequences/osc/` (a directory of per-topic handlers since the split; the progress-bar handling lives alongside the other ConEmu-style OSC handling):
 
 ```rust
 pub fn handle_osc(&mut self, params: &[&str]) -> Result<(), Error> {
@@ -587,11 +587,10 @@ def test_progress_bar_sequences():
 
 ## References
 
-- **Full Research Document**: `/Users/probello/Repos/research/terminal-emulators/osc-9-4-progress-bars-2026-02-09.md`
 - **ConEmu Specification**: https://conemu.github.io/en/AnsiEscapeCodes.html#ConEmu_specific_OSC
 - **iTerm2 Documentation**: https://iterm2.com/documentation-escape-codes.html
 - **rockorager.dev Spec**: https://rockorager.dev/misc/osc-9-4-progress-bars/
-- **par-term Feature Matrix**: `/Users/probello/Repos/par-term/MATRIX.md` (section 39)
+- **par-term Feature Matrix**: the sister project `par-term` (see CLAUDE.md for the path) tracks OSC 9;4 in section 39 of its `MATRIX.md`
 
 ## Implementation Checklist
 
