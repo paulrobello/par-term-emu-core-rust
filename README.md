@@ -1149,10 +1149,12 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.43", default-features = false }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.43", default-features = false, features = ["streaming"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.43"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.43", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["pty_session"] }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.46"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.46", features = ["full"] }` | All features |
+
+> **Note:** Since v0.46.0 the `pty_session` module (real PTY backend) is a separate feature. Omit it only for headless use without `PtySession`. See [docs/RUST_USAGE.md](docs/RUST_USAGE.md) for details.
 
 **Download pre-built streaming server (recommended):**
 
@@ -1163,9 +1165,10 @@ Pre-built binaries and web frontend packages are available from [GitHub Releases
 wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-streamer-linux-x86_64
 chmod +x par-term-streamer-linux-x86_64
 
-# Download web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.45.0.tar.gz
-tar -xzf par-term-web-frontend-v0.45.0.tar.gz -C ./web_term
+# Download web frontend (asset named par-term-web-frontend-v<version>.tar.gz from
+# https://github.com/paulrobello/par-term-emu-core-rust/releases/latest)
+mkdir -p ./web_term
+tar -xzf par-term-web-frontend-v*.tar.gz -C ./web_term
 
 # Run
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
@@ -1477,16 +1480,17 @@ par-term-streamer --help
 Download the pre-built static web frontend from [GitHub Releases](https://github.com/paulrobello/par-term-emu-core-rust/releases):
 
 ```bash
-# Download and extract
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.45.0.tar.gz
-tar -xzf par-term-web-frontend-v0.45.0.tar.gz -C ./web_term
+# Download and extract (asset named par-term-web-frontend-v<version>.tar.gz from
+# https://github.com/paulrobello/par-term-emu-core-rust/releases/latest)
+mkdir -p ./web_term
+tar -xzf par-term-web-frontend-v*.tar.gz -C ./web_term
 
 # Run streamer with web frontend
 par-term-streamer --web-root ./web_term
 # Open browser to http://localhost:8099
 ```
 
-See [web_term/README.md](web_term/README.md) for detailed usage instructions.
+See [web-terminal-frontend/README.md](web-terminal-frontend/README.md) for detailed usage instructions.
 
 **Building from Source:**
 

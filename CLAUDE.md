@@ -104,7 +104,7 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 - `src/terminal/trigger.rs` - Regex-based output pattern matching
 - `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `zone.rs`
 - `src/pty_session.rs` - PTY session with background reader thread
-- `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + 17 themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types.rs`, `enums.rs`, `common.rs`)
+- `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + 17 themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
 - `src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)
 - `src/graphics/` - Unified Sixel/iTerm2/Kitty graphics (all normalized to `TerminalGraphic` with RGBA)
@@ -182,14 +182,14 @@ Also update:
 **Derive crate exception**: `derive/Cargo.toml` versions independently — bump it only when the derive code changes, and keep the main crate's `par-term-emu-derive` dependency spec (`Cargo.toml` ~line 52) matching that version. The publish workflows publish the sub-crate before the main crate so the registry version exists when crates.io resolves the (path-stripped) dependency.
 
 **Python Binding Sync**: When adding/modifying Rust methods on `Terminal` or `PtySession`:
-1. **Add Python binding** in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`
+1. **Add Python binding** in `src/python_bindings/terminal/` (themed `*_api.rs` file or the `common.rs` macro layer) or `src/python_bindings/pty.rs`
 2. **Add docstrings** with Args, Returns, and Example sections (Google style)
 3. **Update API docs** in `docs/API_REFERENCE.md`
 4. **Update README.md** if it's a user-facing feature
 5. **Add Python tests** in `tests/` if the feature is testable from Python
 
 Files that must stay in sync:
-- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal.rs`)
+- Rust impl (`src/terminal/mod.rs`) ↔ Python binding (`src/python_bindings/terminal/`)
 - Rust impl (`src/pty_session.rs`) ↔ Python binding (`src/python_bindings/pty.rs`)
 - Python binding ↔ API Reference (`docs/API_REFERENCE.md`)
 
