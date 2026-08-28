@@ -125,7 +125,7 @@ Also update:
 
 ### PTY Architecture
 
-`PtySession` wraps `Arc<Mutex<Terminal>>` (using `parking_lot::Mutex` for performance/no poisoning). A background reader thread reads from the PTY master and calls `term.process(..)` while holding the lock. The `running` flag (`Arc<AtomicBool>`) is best-effort; use `try_wait()`/`wait()` for precise exit status.
+`PtySession` wraps `Arc<RwLock<Terminal>>` (using `parking_lot::RwLock` — no poisoning). The background reader thread takes the write lock to `process()` PTY output; queries take read locks. The `running` flag (`Arc<AtomicBool>`) is best-effort; use `try_wait()`/`wait()` for precise exit status.
 
 ## Development Workflows
 

@@ -2,9 +2,10 @@
 //!
 //! `PtySession` owns a shell process running under a pseudoterminal and feeds
 //! its output into a [`Terminal`]. All terminal state lives behind an
-//! `Arc<RwLock<Terminal>>` (using `parking_lot::Mutex` for performance and to
-//! avoid mutex poisoning), shared between the public API and a background
-//! reader thread.
+//! `Arc<RwLock<Terminal>>` (using `parking_lot::RwLock` for performance and to
+//! avoid lock poisoning), shared between the public API and a background
+//! reader thread: the reader thread takes the write lock to `process()` PTY
+//! output, while API queries take read locks.
 //!
 //! ## Reader thread
 //!
