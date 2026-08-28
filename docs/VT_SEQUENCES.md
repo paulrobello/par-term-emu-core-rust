@@ -174,6 +174,16 @@ VT100/ECMA-48 text styling sequences.
 - `CSI 39 m` - Default foreground color
 - `CSI 49 m` - Default background color
 
+### Color Palette Stack (xterm extension)
+
+XTPUSHCOLORS/XTPOPCOLORS save and restore the dynamic colors (OSC 10/11/12) plus the ANSI palette (OSC 4) on a 10-deep stack.
+
+- `CSI # P` - XTPUSHCOLORS - Push current colors onto the stack (ignored when the stack is full)
+- `CSI # Q` - XTPOPCOLORS - Pop the top entry and restore its colors (no-op when empty)
+- `CSI # R` - XTREPORTCOLORS - Report stack state - Response: `CSI ? <used> ; <last> # Q` (`used` = current depth, `last` = high-water mark)
+
+Parameterized forms (`CSI Pi # P`/`CSI Pi # Q`, which store/restore a specific stack slot without pushing/popping) are not implemented; parameters are ignored and the no-parameter form applies. RIS and DECSTR clear the stack.
+
 ## Tab Stops
 
 VT100 tab stop management.

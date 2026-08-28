@@ -501,6 +501,18 @@ pub(crate) struct MarginState {
     pub(crate) right_margin: usize,
 }
 
+/// Saved dynamic- and ANSI-palette colors for one XTPUSHCOLORS stack entry (ENH-003)
+pub(crate) struct ColorPaletteSnapshot {
+    /// Default foreground (OSC 10 target)
+    pub(crate) default_fg: Color,
+    /// Default background (OSC 11 target)
+    pub(crate) default_bg: Color,
+    /// Cursor color (OSC 12 target)
+    pub(crate) cursor_color: Color,
+    /// ANSI palette entries 0-15 (OSC 4 target)
+    pub(crate) ansi_palette: [Color; 16],
+}
+
 /// Color theme: OSC-queryable colors + iTerm2-style rendering color prefs (ARC-001 sub-struct)
 pub(crate) struct ColorThemeState {
     /// Default foreground color (for OSC 10 queries)
@@ -513,6 +525,11 @@ pub(crate) struct ColorThemeState {
     pub(crate) ansi_palette: [Color; 16],
     /// Color stack for XTPUSHCOLORS/XTPOPCOLORS (fg, bg, underline)
     pub(crate) color_stack: Vec<(Color, Color, Option<Color>)>,
+    /// Palette stack for XTPUSHCOLORS/XTPOPCOLORS (dynamic + ANSI palette snapshots)
+    pub(crate) palette_stack: Vec<ColorPaletteSnapshot>,
+    /// High-water mark of palette_stack depth; XTREPORTCOLORS reports it after the
+    /// current depth, matching xterm's s->last
+    pub(crate) palette_stack_last: usize,
     /// Link/hyperlink color (iTerm2 default: blue #0645ad)
     pub(crate) link_color: Color,
     /// Bold text custom color (iTerm2 default: white #ffffff)
@@ -1039,6 +1056,8 @@ impl Terminal {
                 cursor_color: Color::Named(NamedColor::White),
                 ansi_palette: Self::default_ansi_palette(),
                 color_stack: Vec::new(),
+                palette_stack: Vec::new(),
+                palette_stack_last: 0,
                 // iTerm2 default colors (matching Python implementation)
                 link_color: Color::Rgb(0x06, 0x45, 0xad), // RGB(0.023, 0.270, 0.678)
                 bold_color: Color::Rgb(0xff, 0xff, 0xff), // RGB(1.0, 1.0, 1.0)

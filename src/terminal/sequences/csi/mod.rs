@@ -1,5 +1,6 @@
 //! CSI (Control Sequence Introducer) sequence handling dispatcher
 
+mod color_stack;
 mod cursor;
 mod edit;
 mod erase;
@@ -103,8 +104,41 @@ impl Terminal {
                     self.handle_decsera(params);
                 }
             }
-            'L' | 'M' | '@' | 'P' => {
+            'L' | 'M' | '@' => {
                 self.handle_csi_edit(action, params, intermediates);
+            }
+            'P' => {
+                // P with # is XTPUSHCOLORS; bare P is DCH (delete chars)
+                if intermediates.contains(&b'#') {
+                    self.handle_xtpushcolors();
+                } else {
+                    self.handle_csi_edit(action, params, intermediates);
+                }
+            }
+            'Q' => {
+                // Q with # is XTPOPCOLORS; bare Q is unused
+                if intermediates.contains(&b'#') {
+                    self.handle_xtpopcolors();
+                } else {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "CSI",
+                        &format!("Unsupported CSI action: {}", action),
+                    );
+                }
+            }
+            'R' => {
+                // R with # is XTREPORTCOLORS; bare R is the CPR reply an
+                // application would echo, not something we act on
+                if intermediates.contains(&b'#') {
+                    self.handle_xtreportcolors();
+                } else {
+                    debug::log(
+                        debug::DebugLevel::Debug,
+                        "CSI",
+                        &format!("Unsupported CSI action: {}", action),
+                    );
+                }
             }
             'p' => {
                 // p can be DECSCL (with "), DECSTR (with !), or DECRQM (with $)

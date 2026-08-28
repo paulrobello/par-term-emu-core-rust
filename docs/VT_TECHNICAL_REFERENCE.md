@@ -924,6 +924,18 @@ terminal.clear_progress()
 - `rgb:RR/GG/BB` (hex values, case-insensitive)
 - `#RRGGBB` (hex format)
 
+#### Color Palette Stack
+
+XTPUSHCOLORS/XTPOPCOLORS (xterm extension): save/restore the dynamic colors (OSC 10/11/12 targets) plus the ANSI palette (OSC 4 target) on a 10-deep stack.
+
+| Sequence | Operation | Notes |
+|----------|-----------|-------|
+| `CSI # P` | XTPUSHCOLORS — push current colors | Silently ignored when the stack is full (depth 10) |
+| `CSI # Q` | XTPOPCOLORS — pop and restore top entry | No-op on an empty stack |
+| `CSI # R` | XTREPORTCOLORS — report stack state | Response: `CSI ? used ; last # Q` |
+
+Implementation: `src/terminal/sequences/csi/color_stack.rs`. The report reply matches xterm byte-for-byte (`used` = current depth, `last` = high-water mark, private-marker `?`, intermediate `#`, final `Q`). Parameterized forms (`CSI Pi # P`/`CSI Pi # Q`, which store/restore a specific stack slot without pushing/popping) are not implemented; parameters are ignored. RIS and DECSTR clear the stack.
+
 ### Shell Integration (OSC 133)
 
 `OSC 133 ; marker ; ... ST`
