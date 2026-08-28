@@ -3,7 +3,7 @@
         typecheck clippy fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
-        web-install web-dev web-build web-build-static web-start web-clean web-open \
+        web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
         streamer-build streamer-build-release streamer-run streamer-run-auth streamer-run-http streamer-run-macro streamer-install \
         stubs stub-check
 
@@ -34,6 +34,7 @@ help:
 	@echo "  test-rust       - Run Rust tests only"
 	@echo "  test-rust-streaming - Run Rust streaming tests only"
 	@echo "  test-python     - Run Python tests only"
+	@echo "  test-web        - Run web frontend tests (vitest)"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt             - Format Rust code"
@@ -283,7 +284,7 @@ stub-check:
 	uv run python -c "import par_term_emu_core_rust"
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 
-checkall: test-rust test-rust-streaming lint lint-python stub-check test-python
+checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"
@@ -299,6 +300,7 @@ checkall: test-rust test-rust-streaming lint lint-python stub-check test-python
 	@echo "  ✓ Python type check (pyright)"
 	@echo "  ✓ Python stub check (pyright)"
 	@echo "  ✓ Python tests"
+	@echo "  ✓ Web frontend tests (vitest)"
 	@echo ""
 
 # ============================================================================
@@ -682,6 +684,19 @@ web-open:
 	@(command -v xdg-open > /dev/null && xdg-open http://localhost:3000 || \
 	  command -v open > /dev/null && open http://localhost:3000 || \
 	  echo "Please open http://localhost:3000 in your browser")
+
+# Frontend unit tests for the extracted connection/protocol modules (QA-005).
+test-web:
+	@echo "==================================================================="
+	@echo "  Running Web Frontend Tests (vitest)"
+	@echo "==================================================================="
+	@echo ""
+	@if [ ! -d "web-terminal-frontend" ]; then \
+		echo "Error: web-terminal-frontend directory not found!"; \
+		exit 1; \
+	fi
+	cd web-terminal-frontend && bun run test
+	@echo ""
 
 web-clean:
 	@echo "Cleaning web frontend build artifacts..."

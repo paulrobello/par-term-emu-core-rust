@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0",
     "lint": "eslint .",
+    "test": "VITE_CONFIG_NATIVE_IGNORE_WARNING=true vitest run",
     "proto:generate": "buf generate"
   },
   "dependencies": {
@@ -31,9 +32,11 @@
     "autoprefixer": "^10.5.4",
     "eslint": "^10.9.1",
     "eslint-config-next": "^16.3.3",
+    "happy-dom": "^20.11.12",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
-    "typescript": "6.0.3"
+    "typescript": "6.0.3",
+    "vitest": "^4.1.11"
   },
   "overrides": {
     "postcss": "$postcss"
