@@ -926,6 +926,11 @@ impl PyStreamingConfig {
 /// Raises:
 ///     RuntimeError: If the type is unknown, encoding fails, or the
 ///         streaming feature is not enabled
+///
+/// Example:
+///     ```python
+///     data = encode_server_message("output", data="hello", row=0, col=0)
+///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
 #[pyo3(signature = (message_type, **kwargs))]
@@ -960,6 +965,13 @@ pub fn encode_server_message<'py>(
 ///
 /// Raises:
 ///     RuntimeError: If decoding fails or streaming feature not enabled
+///
+/// Example:
+///     ```python
+///     msg = decode_server_message(data)
+///     if msg["type"] == "output":
+///         print(msg["data"])
+///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
 pub fn decode_server_message<'py>(
@@ -986,6 +998,12 @@ pub fn decode_server_message<'py>(
 /// Raises:
 ///     RuntimeError: If the type is unknown, encoding fails, or the
 ///         streaming feature is not enabled
+///
+/// Example:
+///     ```python
+///     data = encode_client_message("input", data="ls\r")
+///     ws.send(data)
+///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
 #[pyo3(signature = (message_type, **kwargs))]
@@ -1020,6 +1038,13 @@ pub fn encode_client_message<'py>(
 ///
 /// Raises:
 ///     RuntimeError: If decoding fails or streaming feature not enabled
+///
+/// Example:
+///     ```python
+///     msg = decode_client_message(data)
+///     if msg["type"] == "input":
+///         pty.write(msg["data"])
+///     ```
 #[cfg(feature = "streaming")]
 #[pyfunction]
 pub fn decode_client_message<'py>(

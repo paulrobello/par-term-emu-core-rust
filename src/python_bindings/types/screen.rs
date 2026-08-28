@@ -12,17 +12,29 @@ use crate::python_bindings::enums::{PyCursorStyle, PyUnderlineStyle};
 #[pyclass(name = "Attributes", from_py_object)]
 #[derive(Clone)]
 pub struct PyAttributes {
+    /// Bold attribute (SGR 1)
     pub bold: bool,
+    /// Dim/faint attribute (SGR 2)
     pub dim: bool,
+    /// Italic attribute (SGR 3)
     pub italic: bool,
+    /// Underline attribute (SGR 4)
     pub underline: bool,
+    /// Blink attribute (SGR 5)
     pub blink: bool,
+    /// Reverse video attribute (SGR 7)
     pub reverse: bool,
+    /// Hidden/concealed attribute (SGR 8)
     pub hidden: bool,
+    /// Strikethrough attribute (SGR 9)
     pub strikethrough: bool,
+    /// Underline style (curl, dotted, dashed, ...)
     pub underline_style: PyUnderlineStyle,
+    /// Whether the cell holds the first half of a double-width character
     pub wide_char: bool,
+    /// Whether the cell is the spacer following a double-width character
     pub wide_char_spacer: bool,
+    /// Hyperlink ID for OSC 8 links, if the cell is a link
     pub hyperlink_id: Option<u32>,
 }
 
@@ -237,9 +249,13 @@ impl PyBookmark {
 #[pyclass(name = "JoinedLines", from_py_object)]
 #[derive(Clone)]
 pub struct PyJoinedLines {
+    /// The joined text of the wrapped lines
     pub text: String,
+    /// First row of the logical line
     pub start_row: usize,
+    /// Last row of the logical line
     pub end_row: usize,
+    /// Number of physical rows joined
     pub lines_joined: usize,
 }
 
@@ -261,9 +277,13 @@ impl PyJoinedLines {
 #[pyclass(name = "DamageRegion", from_py_object)]
 #[derive(Clone)]
 pub struct PyDamageRegion {
+    /// Left column of the damaged region (inclusive)
     pub left: usize,
+    /// Top row of the damaged region (inclusive)
     pub top: usize,
+    /// Right column of the damaged region (exclusive)
     pub right: usize,
+    /// Bottom row of the damaged region (exclusive)
     pub bottom: usize,
 }
 
@@ -293,9 +313,13 @@ impl From<&crate::terminal::DamageRegion> for PyDamageRegion {
 #[pyclass(name = "RenderingHint", from_py_object)]
 #[derive(Clone)]
 pub struct PyRenderingHint {
+    /// The dirty region that needs redrawing
     pub damage: PyDamageRegion,
+    /// Z-layer the content should be drawn on (e.g. "base", "overlay")
     pub layer: String,
+    /// Animation hint for the renderer (e.g. "none", "blink")
     pub animation: String,
+    /// Update priority (0-255, higher redraws sooner)
     pub priority: u8,
 }
 
@@ -343,10 +367,15 @@ impl From<&crate::terminal::RenderingHint> for PyRenderingHint {
 #[pyclass(name = "LineDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PyLineDiff {
+    /// Change kind: "added", "removed", or "modified"
     pub change_type: String,
+    /// Row the line had in the old snapshot (None for added lines)
     pub old_row: Option<usize>,
+    /// Row the line has in the new snapshot (None for removed lines)
     pub new_row: Option<usize>,
+    /// Previous line content (None for added lines)
     pub old_content: Option<String>,
+    /// Current line content (None for removed lines)
     pub new_content: Option<String>,
 }
 
@@ -387,10 +416,15 @@ impl From<&crate::terminal::LineDiff> for PyLineDiff {
 #[pyclass(name = "SnapshotDiff", from_py_object)]
 #[derive(Clone)]
 pub struct PySnapshotDiff {
+    /// Per-line differences
     pub diffs: Vec<PyLineDiff>,
+    /// Number of added lines
     pub added: usize,
+    /// Number of removed lines
     pub removed: usize,
+    /// Number of modified lines
     pub modified: usize,
+    /// Number of unchanged lines
     pub unchanged: usize,
 }
 

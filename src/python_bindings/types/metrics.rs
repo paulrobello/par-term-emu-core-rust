@@ -9,13 +9,21 @@ use pyo3::prelude::*;
 #[pyclass(name = "PerformanceMetrics", from_py_object)]
 #[derive(Clone)]
 pub struct PyPerformanceMetrics {
+    /// Number of frames (process() batches) rendered
     pub frames_rendered: u64,
+    /// Total number of cells updated
     pub cells_updated: u64,
+    /// Total input bytes processed
     pub bytes_processed: u64,
+    /// Total time spent processing, in microseconds
     pub total_processing_us: u64,
+    /// Slowest single frame, in microseconds
     pub peak_frame_us: u64,
+    /// Number of scroll operations performed
     pub scroll_count: u64,
+    /// Number of line wraps performed
     pub wrap_count: u64,
+    /// Number of escape sequences processed
     pub escape_sequences: u64,
 }
 
@@ -40,9 +48,13 @@ impl PyPerformanceMetrics {
 #[pyclass(name = "FrameTiming", from_py_object)]
 #[derive(Clone)]
 pub struct PyFrameTiming {
+    /// Sequential frame index
     pub frame_number: u64,
+    /// Time to process this frame, in microseconds
     pub processing_us: u64,
+    /// Number of cells updated in this frame
     pub cells_updated: usize,
+    /// Number of bytes processed in this frame
     pub bytes_processed: usize,
 }
 
@@ -61,9 +73,13 @@ impl PyFrameTiming {
 #[pyclass(name = "EscapeSequenceProfile", from_py_object)]
 #[derive(Clone)]
 pub struct PyEscapeSequenceProfile {
+    /// Number of sequences of this category processed
     pub count: u64,
+    /// Total processing time, in microseconds
     pub total_time_us: u64,
+    /// Slowest single sequence, in microseconds
     pub peak_time_us: u64,
+    /// Average processing time, in microseconds
     pub avg_time_us: u64,
 }
 
@@ -93,9 +109,13 @@ impl From<&crate::terminal::EscapeSequenceProfile> for PyEscapeSequenceProfile {
 #[pyclass(name = "ProfilingData", from_py_object)]
 #[derive(Clone)]
 pub struct PyProfilingData {
+    /// Per-category escape sequence profiles
     pub categories: std::collections::HashMap<String, PyEscapeSequenceProfile>,
+    /// Total number of allocations
     pub allocations: u64,
+    /// Total bytes allocated
     pub bytes_allocated: u64,
+    /// Peak memory usage in bytes
     pub peak_memory: usize,
 }
 
@@ -143,14 +163,23 @@ impl From<&crate::terminal::ProfilingData> for PyProfilingData {
 #[pyclass(name = "BenchmarkResult", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkResult {
+    /// Benchmark category (e.g. "parsing", "rendering")
     pub category: String,
+    /// Benchmark name
     pub name: String,
+    /// Number of iterations run
     pub iterations: u64,
+    /// Total benchmark time, in microseconds
     pub total_time_us: u64,
+    /// Average iteration time, in microseconds
     pub avg_time_us: u64,
+    /// Fastest iteration time, in microseconds
     pub min_time_us: u64,
+    /// Slowest iteration time, in microseconds
     pub max_time_us: u64,
+    /// Throughput in operations per second
     pub ops_per_sec: f64,
+    /// Peak memory used during the benchmark, in bytes (if measured)
     pub memory_bytes: Option<usize>,
 }
 
@@ -197,8 +226,11 @@ impl From<&crate::terminal::BenchmarkResult> for PyBenchmarkResult {
 #[pyclass(name = "BenchmarkSuite", from_py_object)]
 #[derive(Clone)]
 pub struct PyBenchmarkSuite {
+    /// Individual benchmark results
     pub results: Vec<PyBenchmarkResult>,
+    /// Total suite wall time, in milliseconds
     pub total_time_ms: u64,
+    /// Suite name
     pub suite_name: String,
 }
 
@@ -229,11 +261,17 @@ impl From<&crate::terminal::BenchmarkSuite> for PyBenchmarkSuite {
 #[pyclass(name = "ComplianceTest", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceTest {
+    /// Test name
     pub name: String,
+    /// Test category
     pub category: String,
+    /// Whether the test passed
     pub passed: bool,
+    /// Expected value (rendered as string)
     pub expected: String,
+    /// Actual value (rendered as string)
     pub actual: String,
+    /// Additional notes about the test
     pub notes: Option<String>,
 }
 
@@ -265,11 +303,17 @@ impl From<&crate::terminal::ComplianceTest> for PyComplianceTest {
 #[pyclass(name = "ComplianceReport", from_py_object)]
 #[derive(Clone)]
 pub struct PyComplianceReport {
+    /// Description of the terminal under test
     pub terminal_info: String,
+    /// VT conformance level tested against
     pub level: String,
+    /// Individual test results
     pub tests: Vec<PyComplianceTest>,
+    /// Number of tests passed
     pub passed: usize,
+    /// Number of tests failed
     pub failed: usize,
+    /// Percentage of tests passed (0.0-100.0)
     pub compliance_percent: f64,
 }
 

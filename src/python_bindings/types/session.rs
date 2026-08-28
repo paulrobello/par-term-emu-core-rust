@@ -9,16 +9,27 @@ use pyo3::prelude::*;
 #[pyclass(name = "PaneState", from_py_object)]
 #[derive(Clone)]
 pub struct PyPaneState {
+    /// Pane identifier
     pub id: String,
+    /// Pane title
     pub title: String,
+    /// Pane size as (cols, rows)
     pub size: (usize, usize),
+    /// Pane position as (x, y)
     pub position: (usize, usize),
+    /// Working directory reported by the pane, if known
     pub cwd: Option<String>,
+    /// Visible pane content, one string per row
     pub content: Vec<String>,
+    /// Cursor position as (col, row)
     pub cursor: (usize, usize),
+    /// Whether the pane is showing the alternate screen
     pub alt_screen: bool,
+    /// Scroll offset into the pane's scrollback (0 = bottom)
     pub scroll_offset: usize,
+    /// Unix epoch milliseconds when the pane was created
     pub created_at: u64,
+    /// Unix epoch milliseconds of the last activity
     pub last_activity: u64,
 }
 
@@ -55,11 +66,17 @@ impl From<&crate::terminal::PaneState> for PyPaneState {
 #[pyclass(name = "WindowLayout", from_py_object)]
 #[derive(Clone)]
 pub struct PyWindowLayout {
+    /// Layout identifier
     pub id: String,
+    /// Layout name
     pub name: String,
+    /// Split direction ("horizontal" or "vertical")
     pub direction: String,
+    /// Pane IDs participating in this layout
     pub panes: Vec<String>,
+    /// Relative pane sizes (percentages)
     pub sizes: Vec<u8>,
+    /// Index of the active pane
     pub active_pane: usize,
 }
 
@@ -101,12 +118,19 @@ impl From<&crate::terminal::WindowLayout> for PyWindowLayout {
 #[pyclass(name = "SessionState", from_py_object)]
 #[derive(Clone)]
 pub struct PySessionState {
+    /// Session identifier
     pub id: String,
+    /// Session name
     pub name: String,
+    /// Panes belonging to this session
     pub panes: Vec<PyPaneState>,
+    /// Window layouts of this session
     pub layouts: Vec<PyWindowLayout>,
+    /// Index of the active layout
     pub active_layout: usize,
+    /// Unix epoch milliseconds when the session was created
     pub created_at: u64,
+    /// Unix epoch milliseconds when the session was last saved
     pub last_saved: u64,
 }
 

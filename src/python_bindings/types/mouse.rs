@@ -9,13 +9,21 @@ use pyo3::prelude::*;
 #[pyclass(name = "MouseEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMouseEvent {
+    /// Event kind: "press", "release", or "motion"
     pub event_type: String,
+    /// Button name (e.g. "left", "right", "middle", "wheel_up", "none")
     pub button: String,
+    /// Column (0-indexed)
     pub col: usize,
+    /// Row (0-indexed)
     pub row: usize,
+    /// X pixel coordinate, when the terminal reports one
     pub pixel_x: Option<u16>,
+    /// Y pixel coordinate, when the terminal reports one
     pub pixel_y: Option<u16>,
+    /// Modifier bitflags (shift=1, alt=2, ctrl=4, etc.)
     pub modifiers: u8,
+    /// Unix epoch milliseconds when the event occurred
     pub timestamp: u64,
 }
 
@@ -69,8 +77,11 @@ impl From<&crate::mouse::MouseEventRecord> for PyMouseEvent {
 #[pyclass(name = "MousePosition", from_py_object)]
 #[derive(Clone)]
 pub struct PyMousePosition {
+    /// Column (0-indexed)
     pub col: usize,
+    /// Row (0-indexed)
     pub row: usize,
+    /// Unix epoch milliseconds when the position was recorded
     pub timestamp: u64,
 }
 

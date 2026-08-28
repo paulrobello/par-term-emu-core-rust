@@ -104,11 +104,17 @@ impl PySelection {
 #[pyclass(name = "RegexMatch", from_py_object)]
 #[derive(Clone)]
 pub struct PyRegexMatch {
+    /// Row where the match starts (0-indexed)
     pub row: usize,
+    /// Column where the match starts (0-indexed)
     pub col: usize,
+    /// Row where the match ends (0-indexed)
     pub end_row: usize,
+    /// Column just past the end of the match
     pub end_col: usize,
+    /// The matched text
     pub text: String,
+    /// Regex capture groups
     pub captures: Vec<String>,
 }
 

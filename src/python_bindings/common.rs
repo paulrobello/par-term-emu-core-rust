@@ -1609,6 +1609,31 @@ macro_rules! impl_terminal_content_misc {
                 t.set_disable_insecure_sequences(disable);
                 Ok(())
             }
+
+            /// Get the maximum total OSC data length in bytes (QA-012)
+            ///
+            /// Sequences exceeding this cap are rejected as a memory-exhaustion
+            /// guard. Defaults to 128 MiB so inline images fit.
+            ///
+            /// Returns:
+            ///     int: Current cap in bytes
+            fn max_osc_data_length(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.max_osc_data_length())
+            }
+
+            /// Set the maximum total OSC data length in bytes (QA-012)
+            ///
+            /// Sequences exceeding this are rejected as a memory-exhaustion guard.
+            /// Must stay large enough for inline images (iTerm2/Kitty base64) if used.
+            ///
+            /// Args:
+            ///     max: New cap in bytes (e.g. 16 * 1024 * 1024 for 16 MiB)
+            fn set_max_osc_data_length(&mut self, max: usize) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_max_osc_data_length(max);
+                Ok(())
+            }
         }
     };
 }

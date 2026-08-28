@@ -99,26 +99,37 @@ impl From<&crate::graphics::ImagePlacement> for PyImagePlacement {
 #[pyclass(name = "Graphic", from_py_object)]
 #[derive(Clone)]
 pub struct PyGraphic {
+    /// Unique graphic identifier
     #[pyo3(get)]
     pub id: u64,
+    /// Source protocol: "sixel", "iterm2", or "kitty"
     #[pyo3(get)]
     pub protocol: String,
+    /// Anchor position as (col, row)
     #[pyo3(get)]
     pub position: (usize, usize),
+    /// Displayed width in pixels (after scaling)
     #[pyo3(get)]
     pub width: usize,
+    /// Displayed height in pixels (after scaling)
     #[pyo3(get)]
     pub height: usize,
+    /// Original image width in pixels
     #[pyo3(get)]
     pub original_width: usize,
+    /// Original image height in pixels
     #[pyo3(get)]
     pub original_height: usize,
+    /// Rows the graphic has scrolled up out of view
     #[pyo3(get)]
     pub scroll_offset_rows: usize,
+    /// Cell size (width, height) in pixels when the graphic was placed
     #[pyo3(get)]
     pub cell_dimensions: Option<(u32, u32)>,
+    /// Whether the pixel data was stored compressed
     #[pyo3(get)]
     pub was_compressed: bool,
+    /// Placement metadata (sizing, offsets, z-index)
     #[pyo3(get)]
     pub placement: PyImagePlacement,
     pixels: Vec<u8>,
@@ -251,14 +262,23 @@ pub enum PyImageFormat {
 #[pyclass(name = "InlineImage", from_py_object)]
 #[derive(Clone)]
 pub struct PyInlineImage {
+    /// Image identifier (iTerm2 name / Kitty id), when present
     pub id: Option<String>,
+    /// Source protocol: "iterm2" or "kitty"
     pub protocol: String,
+    /// Image format: "png", "jpeg", or "gif"
     pub format: String,
+    /// Raw encoded image bytes
     pub data: Vec<u8>,
+    /// Image width in pixels
     pub width: u32,
+    /// Image height in pixels
     pub height: u32,
+    /// Anchor position as (col, row)
     pub position: (usize, usize),
+    /// Display width in terminal columns
     pub display_cols: usize,
+    /// Display height in terminal rows
     pub display_rows: usize,
 }
 
