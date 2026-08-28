@@ -173,3 +173,40 @@ jobs:
       with:
         name: wheels-${{ matrix.os }}
         path: target/wheels/
+
+  # ARC-001: the committed web_term/ static export must match a fresh build
+  # of web-terminal-frontend/. Release packaging (deployment.yml) ships the
+  # committed tree, so a stale export silently ships outdated frontend code.
+  # Determinism precondition: next.config.js pins generateBuildId (random
+  # default build IDs made rebuilds of identical source differ).
+  web-term-drift:
+    name: web_term/ drift gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [version-check]
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up bun
+      uses: oven-sh/setup-bun@v2
+
+    - name: Install frontend dependencies
+      working-directory: web-terminal-frontend
+      run: bun install --frozen-lockfile
+
+    - name: Rebuild static export
+      run: make web-build-static
+      env:
+        NEXT_TELEMETRY_DISABLED: 1
+
+    - name: Fail if web_term/ is stale
+      run: |
+        git add -A web_term/
+        if ! git diff --cached --exit-code -- web_term/; then
+          echo ""
+          echo "ERROR: committed web_term/ does not match a fresh build of web-terminal-frontend/."
+          echo "The static export is stale or was built from different frontend sources."
+          echo "Fix: run 'make web-build-static' from the repo root and commit the updated web_term/."
+          exit 1
+        fi
+        echo "web_term/ is in sync with the frontend sources."
