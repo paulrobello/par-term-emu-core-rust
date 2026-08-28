@@ -129,15 +129,14 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 
 | Sequence | Name | Notes |
 |----------|------|-------|
-| `CSI # P` | XTPUSHCOLORS | Push fg, bg, underline colors to stack |
-| `CSI # Q` | XTPOPCOLORS | Pop colors from stack |
+| `CSI # P` | XTPUSHCOLORS | ❌ Not implemented |
+| `CSI # Q` | XTPOPCOLORS | ❌ Not implemented |
 
 **Notes:**
-- Stack stores foreground, background, and underline colors as a tuple
-- Stack grows dynamically as needed
-- Pop with empty stack leaves colors unchanged
+- There is no `#`-intermediate dispatch arm in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`). `CSI # P` falls through to the DCH handler (the intermediate is ignored), and `CSI # Q` is silently dropped (no `'Q'` action arm).
+- Support is planned under ENH-003; do not send these sequences until then.
 
-**Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs` (actions 'P' and 'Q' with '#' intermediate)
+**Note:** `CSI P` without the `#` intermediate is DCH (Delete Characters) — see Line and Character Editing below.
 
 ### Line and Character Editing (VT220)
 
@@ -148,7 +147,7 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 | `CSI n @` | ICH (Insert Characters) | VT220 | Param 0→1, shifts line right |
 | `CSI n P` | DCH (Delete Characters) | VT220 | Param 0→1, shifts line left (see note) |
 
-**Note:** `CSI P` without '#' intermediate is DCH. With '#' intermediate (`CSI # P`), it's XTPUSHCOLORS (see Color Stack Operations above).
+**Note:** `CSI P` without '#' intermediate is DCH. `CSI # P` (XTPUSHCOLORS) is not implemented — see Color Stack Operations above.
 
 **Line Editing Behavior:**
 - IL/DL only affect rows within scroll region
@@ -311,10 +310,10 @@ CSI 49 m    - Default background
 
 | Mode | Name | Default | Description |
 |------|------|---------|-------------|
-| 47 | Alt Screen | Primary | Use alternate screen buffer |
-| 1047 | Alt Screen | Primary | Use alternate screen (xterm) |
-| 1048 | Save Cursor | - | Save/restore cursor position |
-| 1049 | Save + Alt | Primary | Save cursor + alternate screen |
+| 47 | Alt Screen | Primary | ❌ Not implemented (falls through to primary-screen handling) |
+| 1047 | Alt Screen | Primary | ❌ Not implemented (falls through to primary-screen handling) |
+| 1048 | Save Cursor | - | ❌ Not implemented |
+| 1049 | Save + Alt | Primary | ✅ Save cursor + alternate screen |
 
 **Alternate Screen Notes:**
 - No scrollback buffer in alternate screen
@@ -325,7 +324,7 @@ CSI 49 m    - Default background
 
 | Mode | Name | Default | Description |
 |------|------|---------|-------------|
-| 9 | X10 Mouse | Off | X10 compatibility (deprecated) |
+| 9 | X10 Mouse | Off | ❌ Not implemented (the `MouseMode::X10` variant exists but no mode arm ever sets it) |
 | 1000 | VT200 Mouse | Off | Normal tracking (press + release) |
 | 1002 | Button Event | Off | Press + release + drag |
 | 1003 | Any Event | Off | All mouse motion |
@@ -355,17 +354,11 @@ CSI 49 m    - Default background
 
 `CSI Ps * x` - DECSACE (Select Attribute Change Extent)
 
-**Parameters:**
+**Status:** Parsed and ignored (no-op). The `*`-intermediate arm in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`) consumes the sequence without reply and without changing the attribute-change extent, so DECCARA/DECRARA always use rectangle mode.
+
+**Parameters (for reference):**
 - `Ps = 0` or `1`: Stream mode (wraps at line boundaries)
 - `Ps = 2`: Rectangle mode (exact rectangular boundaries, default)
-
-**Notes:**
-- Affects how DECCARA and DECRARA apply attributes
-- Stream mode follows text flow and wraps at margins
-- Rectangle mode strictly respects rectangular boundaries
-- Default is rectangle mode (2)
-
-**Implementation:** DECSACE handler in `src/terminal/sequences/csi/mod.rs`
 
 ### Character Protection (VT420)
 
@@ -1358,7 +1351,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | Scrolling | ✅ Full | IND, RI, NEL, DECSTBM |
 | Tabs | ✅ Full | HT, HTS, TBC |
 | SGR basic | ✅ Full | Bold, reverse, underline, etc. |
-| Character sets | ❌ Not implemented | G0/G1 switching (not needed for UTF-8) |
+| Character sets | ✅ Full | G0/G1 designation (`ESC ( C` / `ESC ) C`), SO/SI shifting, DEC Special Graphics/ACS translation (`src/terminal/sequences/esc.rs`, `src/terminal/perform.rs`, `src/terminal/write.rs`) |
 | Keypad modes | ⚠️ Partial | Mode switching only (key translation in host) |
 
 ### VT220 Compatibility
@@ -1376,7 +1369,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 |------------------|---------|-------|
 | Rectangle operations | ✅ Full | DECFRA, DECCRA, DECERA, DECSERA, DECCARA, DECRARA |
 | Rectangle checksum | ✅ Full | DECRQCRA (request checksum) |
-| Attribute change extent | ✅ Full | DECSACE (stream/rectangle mode) |
+| Attribute change extent | ⚠️ Parsed, no-op | DECSACE consumed without reply; rectangle mode always used |
 | Left/Right margins | ✅ Full | DECLRMM, DECSLRM |
 | Character protection | ✅ Full | DECSCA (CSI ? Ps " q), SPA/EPA (ESC V/W), selective erase |
 
@@ -1394,11 +1387,11 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 |------------------|---------|-------|
 | 256-color | ✅ Full | SGR 38;5;n and 48;5;n |
 | True color (24-bit) | ✅ Full | SGR 38;2;r;g;b and 48;2;r;g;b |
-| Mouse tracking | ✅ Full | X10, Normal, Button, Any modes |
+| Mouse tracking | ⚠️ Partial | Normal, Button, Any modes (mode 9 X10 not wired) |
 | Mouse encoding | ✅ Full | Default, UTF-8, SGR, URXVT |
 | Focus tracking | ✅ Full | Mode 1004 |
 | Bracketed paste | ✅ Full | Mode 2004 |
-| Alternate screen | ✅ Full | Modes 47, 1047, 1049 |
+| Alternate screen | ⚠️ Partial | Mode 1049 only (47 and 1047 not implemented) |
 | Window ops | ⚠️ Partial | Size reporting and title stack only |
 | Sixel graphics | ✅ Full | Full DCS Sixel with half-block fallback |
 
@@ -1453,26 +1446,35 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 
 ### Not Implemented
 
-1. **Character Set Switching (G0/G1)**
-   - VT100/VT220 character set selection
-   - DEC Special Graphics
-   - **Reason:** UTF-8 support makes this obsolete
-   - **Impact:** Minimal (old applications only)
-
-2. **Soft Fonts (DECDLD)**
+1. **Soft Fonts (DECDLD)**
    - Downloadable character sets
    - **Reason:** Complex, rarely used
    - **Impact:** Very low (almost never used)
 
-4. **Most XTWINOPS Operations**
+2. **X10 Mouse Tracking (DEC Mode 9)**
+   - The `MouseMode::X10` enum variant exists but no mode-set arm wires it
+   - **Reason:** Deprecated protocol; Normal/Button/Any modes cover modern use
+   - **Impact:** Minimal
+
+3. **Most XTWINOPS Operations**
    - Window resize, minimize, raise, etc.
    - **Reason:** Headless library core has no window to act on
    - **Implemented:** Report queries (11, 13, 14, 16, 18, 19) and title stack (22, 23); manipulation ops accepted as no-ops
    - **Impact:** Low (a library core has no window anyway)
 
-5. **CSI q without SP**
-   - Different from DECSCUSR (`CSI SP q`)
-   - **Impact:** Unknown (undocumented sequence)
+4. **Color Stack (XTPUSHCOLORS/XTPOPCOLORS)**
+   - `CSI # P` / `CSI # Q`
+   - **Reason:** Not yet wired (planned as ENH-003)
+   - **Impact:** Low
+
+### Implementation Notes: `CSI q` Forms
+
+`CSI q` is overloaded by intermediate bytes (`src/terminal/sequences/csi/report.rs`):
+
+- `CSI Ps SP q` — DECSCUSR (cursor style)
+- `CSI Ps " q` — DECSCA (character protection)
+- `CSI > q` / `CSI ? > 0 q` — XTVERSION; replies `DCS > | par-term(version) ST`
+- Bare `CSI q` (no intermediate, not private) — consumed with no reply
 
 ### Implementation Notes
 
@@ -1510,9 +1512,9 @@ Origin mode (DECOM) affects:
 - **Separate cursor:** Cursor position independent from primary screen
 - **Clear on switch:** Alternate screen cleared when activated
 - **Mode variants:**
-  - Mode 47: Basic alternate screen
-  - Mode 1047: xterm alternate screen (identical behavior)
-  - Mode 1049: Alternate screen + cursor save/restore
+  - Mode 47: ❌ Not implemented
+  - Mode 1047: ❌ Not implemented
+  - Mode 1049: ✅ Alternate screen + cursor save/restore
 
 ---
 

@@ -78,15 +78,17 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.43", default-features = false }
+par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["pty_session"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
 
+> **Note:** Since v0.46.0 the `pty_session` module is gated behind the `pty_session` feature. Omit it only if you do not need `PtySession` (see the headless `sim` profile in the [Feature Flags](#feature-flags) table).
+
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.43", default-features = false, features = ["streaming"] }
+par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -94,9 +96,9 @@ par-term-emu-core-rust = { version = "0.43", default-features = false, features 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.43" }
+par-term-emu-core-rust = { version = "0.46" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.43", features = ["python"] }
+par-term-emu-core-rust = { version = "0.46", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -105,24 +107,29 @@ par-term-emu-core-rust = { version = "0.43", features = ["python"] }
 ```toml
 [dependencies]
 # Streaming server library only:
-par-term-emu-core-rust = { version = "0.43", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.46", features = ["python", "streaming"] }
 # Or the convenience feature, which also pulls in the CLI deps used by the
 # standalone `par-term-streamer` binary (clap, tracing, reqwest, tar, ...):
-par-term-emu-core-rust = { version = "0.43", features = ["full"] }
+par-term-emu-core-rust = { version = "0.46", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
 
 ### Build Commands
 
-**Rust only:**
+**Rust only (terminal + PTY + macros):**
 ```bash
-cargo build --no-default-features
+cargo build --no-default-features --features pty_session
+```
+
+**Headless, no PTY (grid + terminal + screenshot only):**
+```bash
+cargo build --no-default-features --features sim
 ```
 
 **Rust with streaming:**
 ```bash
-cargo build --no-default-features --features streaming
+cargo build --no-default-features --features streaming,pty_session
 ```
 
 **Python only:**
@@ -180,10 +187,11 @@ The `PtySession` manages an interactive shell process with bidirectional I/O.
 
 ```rust
 use par_term_emu_core_rust::pty_session::PtySession;
+use par_term_emu_core_rust::pty_error::PtyError;
 use std::sync::Arc;
 use std::io::Write;
 
-fn main() -> std::io::Result<()> {
+fn main() -> Result<(), PtyError> {
     // Create PTY session: 80 cols, 24 rows, 10000 lines scrollback
     let mut pty = PtySession::new(80, 24, 10000);
 
@@ -238,14 +246,15 @@ The macro system allows recording and playback of keyboard events with YAML seri
 
 ```rust
 use par_term_emu_core_rust::macros::{Macro, MacroEvent, KeyParser};
-use std::time::Duration;
 
 fn main() -> std::io::Result<()> {
-    // Create a macro
-    let mut macro_seq = Macro::new("Demo Macro");
-    macro_seq
+    // Create a macro. The with_* builders consume and return self;
+    // the add_* mutators borrow and return &mut self, so chain them
+    // on the bound value.
+    let mut macro_seq = Macro::new("Demo Macro")
         .with_description("A simple demo")
-        .with_terminal_size(80, 24)
+        .with_terminal_size(80, 24);
+    macro_seq
         .add_key("e")
         .add_key("c")
         .add_key("h")
@@ -298,13 +307,23 @@ fn main() -> std::io::Result<()> {
 
 ### Basic Streaming Server
 
+```toml
+[dependencies]
+par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# The crate uses parking_lot internally; PtySession::get_writer() and
+# terminal() return parking_lot locks, so reuse it for your own wrappers.
+parking_lot = "0.12"
+```
+
 ```rust
 use par_term_emu_core_rust::{
     terminal::Terminal,
     pty_session::PtySession,
     streaming::{StreamingConfig, StreamingServer},
 };
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -354,7 +373,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let mut session = pty_session.lock();
         session.set_output_callback(Arc::new(move |data| {
-            let _ = output_sender.send(String::from_utf8_lossy(data).to_string());
+            // try_send: the callback is sync, so it cannot await a tokio channel
+            let _ = output_sender.try_send(String::from_utf8_lossy(data).to_string());
         }));
     }
 
@@ -417,10 +437,12 @@ let config = StreamingConfig {
 
 | Feature | Description | Includes |
 |---------|-------------|----------|
-| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive` |
+| `python` | Python bindings via PyO3 | `pyo3`, `pyo3/extension-module`, `par-term-emu-derive`, `pty_session` |
+| `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signal deps. Auto-enabled by `python` and `streaming-bin` | `portable-pty`, `nix` |
 | `streaming` | WebSocket streaming server with binary protocol (library) | `tokio`, `tokio-tungstenite`, `axum`, `tower-http`, `futures-util`, `prost`, `rustls`, `tokio-rustls`, `axum-server`, `bcrypt`, `md-5`, `sha1`, `headers`, `sysinfo` |
-| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming`) | `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar` |
-| `rust-only` | Pure Rust, no Python | (none) |
+| `streaming-bin` | CLI/logging/download deps for the standalone `par-term-streamer` binary (depends on `streaming` and `pty_session`) | `clap`, `anyhow`, `tracing`, `tracing-subscriber`, `reqwest`, `tar` |
+| `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |
+| `sim` | Headless profile: grid + terminal + screenshot only — no PTY, Python, or streaming. Cannot be combined with `python` | (none — names the profile only) |
 | `full` | All features | `python`, `streaming`, `streaming-bin` |
 | `jemalloc` | Better server performance (non-Windows) | `tikv-jemallocator` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` | `prost-build` |
