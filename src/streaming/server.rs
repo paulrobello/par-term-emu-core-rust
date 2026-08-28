@@ -1829,6 +1829,24 @@ impl StreamingServer {
             self.client_count() - 1
         );
 
+        // Complete the closing handshake: reply with a Close frame before the
+        // sink drops, or the TCP connection ends with a bare FIN and clients
+        // observe abnormal closure (1006). When the client initiated the close,
+        // tungstenite already queued our reply when ws_rx read their Close
+        // frame and a further send is rejected — flush() writes the queued
+        // reply instead. Best-effort: the connection may already be dead on
+        // the error break paths.
+        if ws_tx.send(AxumMessage::Close(None)).await.is_err() {
+            if let Err(e) = ws_tx.flush().await {
+                crate::debug_error!(
+                    "STREAMING",
+                    "Failed to send close reply to Axum client {}: {}",
+                    client_id,
+                    e
+                );
+            }
+        }
+
         Ok(())
     }
 }

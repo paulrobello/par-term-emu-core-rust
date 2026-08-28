@@ -306,6 +306,40 @@ async def test_websocket_close_handshake(streaming_server):
 
 
 @pytest.mark.asyncio
+async def test_websocket_close_handshake_http(pty_terminal, streaming_port):
+    """The axum HTTP path (/ws) also completes the closing handshake.
+
+    enable_http=True swaps the raw tungstenite listener for the axum server
+    serving web_term/; its session handler (handle_axum_websocket) must reply
+    with a Close frame instead of dropping the sink — the same regression as
+    the tungstenite path (see test_websocket_close_handshake).
+    """
+    config = StreamingConfig(enable_http=True)
+    server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
+    server.start()
+    await asyncio.sleep(0.1)
+
+    try:
+        uri = f"ws://127.0.0.1:{streaming_port}/ws"
+
+        websocket = await websockets.connect(uri, close_timeout=1)
+        while True:
+            try:
+                await asyncio.wait_for(websocket.recv(), timeout=0.2)
+            except TimeoutError:
+                break  # queue drained, shell idle
+        await websocket.close()
+        assert websocket.close_code == 1000, (
+            f"expected proper close handshake (1000), got {websocket.close_code}"
+        )
+    finally:
+        try:
+            server.shutdown("test shutdown")
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+
+@pytest.mark.asyncio
 async def test_websocket_receive_output(streaming_server):
     """Test receiving terminal output via WebSocket."""
     _server, port = streaming_server
