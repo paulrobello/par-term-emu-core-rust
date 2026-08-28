@@ -193,9 +193,6 @@ def test_yaml_load_invalid_yaml() -> None:
         Macro.from_yaml("invalid: yaml: content: [[[")
 
 
-
-
-
 # Key Parser Tests
 
 

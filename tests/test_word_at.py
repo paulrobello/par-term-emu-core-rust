@@ -6,8 +6,6 @@ resolves to the character, and multi-char grapheme clusters (emoji + ZWJ,
 combining marks) are kept whole.
 """
 
-import pytest
-
 from par_term_emu_core_rust import Terminal
 
 

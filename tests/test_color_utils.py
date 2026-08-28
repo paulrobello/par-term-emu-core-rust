@@ -7,7 +7,6 @@ round-trip property, including the previously broken achromatic case.
 """
 
 import pytest
-
 from par_term_emu_core_rust import hsl_to_rgb, rgb_to_hsl
 
 
