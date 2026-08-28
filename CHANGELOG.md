@@ -546,6 +546,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `was_compressed` metadata flag on `TerminalGraphic` for diagnostics/logging
   - Python `Graphic.was_compressed` property exposed for frontend diagnostics
   - 8 new Rust tests covering compression parsing, decompression, chunked transfers, and error handling
+- **Python API**: `shell_integration_state()` accessor returns the live `ShellIntegration` state; remote-host changes surface to Python observers as `cwd_changed` events
 
 ### Changed
 - **Dependencies**: Migrated to PyO3 0.28 from 0.23, updating all Python binding patterns to the latest API
@@ -615,6 +616,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New `EVENT_TYPE_ACTION` subscription type
   - New server methods: `send_action_notify()`, `send_action_mark_line()`
 - **Python Bindings**: Updated `CoprocessConfig` with `restart_policy` and `restart_delay_ms` parameters; added `read_coprocess_errors()` to `PtyTerminal`; added `send_action_notify()` and `send_action_mark_line()` to `StreamingServer`
+- **Python API**: coprocess entry points `start_coprocess(config)` and `read_from_coprocess(cid)`; restart policies are set as strings `"never"` (default), `"always"`, `"on_failure"` (non-zero exit only)
 
 ### Changed
 - **Breaking**: `CoprocessManager.feed_output()` now takes `&mut self` instead of `&self` (manages restart lifecycle)
@@ -670,6 +672,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New classes: `Trigger`, `TriggerAction`, `TriggerMatch`, `CoprocessConfig`
   - Trigger methods on `Terminal` class
   - Coprocess methods on `PtyTerminal` class
+- **Python API**: trigger actions `run_command`, `send_text`, `play_sound`, `set_variable`, and `mark_line`; `CoprocessConfig` gains `copy_terminal_output`; `last_status` exposes the coprocess's last exit status
 
 ## [0.30.0] - 2026-02-04
 
@@ -687,6 +690,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Values clamped to 0.0-1.0 range
   - Propagated to screenshot renderer for consistent rendering
   - Python bindings for both Terminal and PtyTerminal classes
+- **Python API**: `drain_responses()` returns queued device-query replies (DA/DSR/DECRQM) as bytes
 
 ## [0.29.0] - 2026-02-04
 
@@ -737,6 +741,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Data before `%begin` is returned as `TerminalOutput` notification, allowing normal terminal display
   - Python bindings for `Terminal` class (PtyTerminal accesses via `terminal()` method)
   - Comprehensive Rust tests for auto-detection scenarios
+- **Python API**: `is_tmux_control_mode()` reports whether tmux control mode is active
 
 ### Changed
 - `set_tmux_control_mode(true)` now also enables auto-detection for better race condition handling
@@ -766,6 +771,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `record_resize(cols, rows)` - Record terminal resize event
   - `record_marker(label)` - Add marker/bookmark to recording
   - `get_recording_session()` - Get current active recording session
+- **Python API**: `start_recording(title)` begins a session recording and `stop_recording()` returns the `RecordingSession`
 
 ### Changed
 - **GitHub Workflows**: Added version consistency check that runs before all build jobs
@@ -900,6 +906,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `StreamingServer.create_theme_info()` - Static method to create theme dictionaries for protocol functions
   - `encode_server_message("pong")` - Added missing pong message type support
   - `encode_server_message("connected", theme=...)` - Added theme support with name, background, foreground, normal (8 colors), bright (8 colors)
+- Streaming sessions are identified by `session_id` in the Python API
 
 ### Changed
 - `StreamingConfig` constructor now accepts `enable_http` and `web_root` parameters (with backwards-compatible defaults)
@@ -1225,6 +1232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Bold brightening: `bold_brightening()`, `set_bold_brightening()` for legacy terminal behavior
   - Color getters: `link_color()`, `bold_color()`, `cursor_guide_color()`, `badge_color()`, `match_color()`, `selection_bg_color()`, `selection_fg_color()`
   - Color flag getters: `use_bold_color()`, `use_underline_color()`
+- **Python API**: `set_faint_text_alpha(alpha)` / `faint_text_alpha` control dim-text opacity (0.0-1.0)
 
 ### Changed
 - `StreamingConfig` now includes `initial_cols` and `initial_rows` fields (default: 0, meaning use terminal's current size)
