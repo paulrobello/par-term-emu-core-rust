@@ -15,6 +15,7 @@ This is a concise lookup table of supported sequences. For detailed behavior, im
 - [Scrolling](#scrolling)
 - [Colors and Attributes](#colors-and-attributes)
 - [Tab Stops](#tab-stops)
+- [Character Sets](#character-sets)
 - [Terminal Modes](#terminal-modes)
 - [Mouse Support](#mouse-support)
 - [Advanced Features](#advanced-features)
@@ -178,6 +179,32 @@ VT100 tab stop management.
   - `n=3` - Clear all tabs
 - `CSI <n> I` - Cursor forward tabulation (CHT)
 - `CSI <n> Z` - Cursor backward tabulation (CBT)
+
+## Character Sets
+
+VT100/VT220 character set designation and shifting (SCS). Two slots (G0, G1); the active slot's charset is applied when writing printable characters.
+
+**Designation (SCS):**
+
+- `ESC ( 0` - Designate G0 = DEC Special Graphics (Line Drawing)
+- `ESC ( B` - Designate G0 = US ASCII (default)
+- `ESC ) 0` - Designate G1 = DEC Special Graphics (Line Drawing)
+- `ESC ) B` - Designate G1 = US ASCII (default)
+
+**Shifting:**
+
+- `SO` (0x0E) - Make G1 the active charset
+- `SI` (0x0F) - Make G0 the active charset
+
+**Supported charsets:** US ASCII and DEC Special Graphics (Line Drawing) only. Other VT220 national character sets are not implemented.
+
+**DEC Special Graphics / ACS:** when the active charset is DEC Line Drawing, printable ASCII characters map to line-drawing glyphs (e.g. `q` → `─`, `x` → `│`, `j` → `┘`, `l` → `┌`, `k` → `┐`, `m` → `└`, `t` → `├`, `u` → `┤`, `n` → `┼`, `v` → `┴`, `w` → `┬`, `` ` `` → `◆`, `a` → `▒`). Control characters pass through unchanged. The translation is applied in `src/terminal/write.rs`; designation is handled in `src/terminal/sequences/esc.rs` and SO/SI in `src/terminal/perform.rs`.
+
+```python
+term.process_str("\x1b(0")   # G0 = DEC Line Drawing
+term.process_str("lqk\n")    # renders ┌─┐
+term.process_str("\x1b(B")   # G0 = ASCII again
+```
 
 ## Terminal Modes
 
@@ -381,7 +408,7 @@ Parameters for `set`:
 - `OSC 1337;SetUserVar=<name>=<base64_value> ST` - Set user variable
 - `OSC 1337;RemoteHost=<user>@<host> ST` - Report remote host identity
 - `OSC 1337;SetBadgeFormat=<base64_fmt> ST` - Set badge format string
-- `OSC 1337;CurrentDir=<path> ST` - Report current directory (alternative to OSC 7)
+- `OSC 1337;CurrentDir=<path> ST` - ❌ Not supported (use OSC 7 for directory tracking; support is planned under ENH-002)
 
 Shell integration scripts use these to report session information. Variables are decoded and stored on the terminal.
 
@@ -480,6 +507,8 @@ ASCII control characters.
 - `HT` (0x09) - Horizontal tab
 - `LF` (0x0A) - Line feed
 - `CR` (0x0D) - Carriage return
+- `SO` (0x0E) - Shift Out: make the G1 charset active (see [Character Sets](#character-sets))
+- `SI` (0x0F) - Shift In: make the G0 charset active (see [Character Sets](#character-sets))
 - `ENQ` (0x05) - Enquiry; when configured, terminal replies with the answerback string via response buffer
 - `ESC` (0x1B) - Escape (starts escape sequences)
 
