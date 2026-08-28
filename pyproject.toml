@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "maturin>=1.13.3,<2.0",
+    "maturin>=1.15.0,<2.0",
 ]
 build-backend = "maturin"
 
@@ -102,16 +102,16 @@ typeCheckingMode = "basic"
 
 [dependency-groups]
 dev = [
-    "maturin>=1.14.1",
-    "pre-commit>=4.6.1",
+    "maturin>=1.15.0",
+    "pre-commit>=4.6.2",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "rich>=15.0.0",
-    "ruff>=0.16.1",
-    "websockets>=17.0.1",
+    "ruff>=0.16.5",
+    "websockets>=17.1",
 ]
 
 [tool.coverage.run]

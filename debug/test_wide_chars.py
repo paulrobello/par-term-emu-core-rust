@@ -20,7 +20,7 @@ def test_basic_rendering():
     print("Test 1: CJK Characters")
     term.process_str("Hello 中文 World")
     content = term.content()
-    print(f"Content: {repr(content[:30])}")
+    print(f"Content: {content[:30]!r}")
 
     # Check cursor position
     col, row = term.cursor_position()
@@ -56,7 +56,7 @@ def test_basic_rendering():
     term.reset()
     term.process_str("Hello 🎉😀🚀 World")
     col, row = term.cursor_position()
-    print(f"Content: {repr(term.content()[:30])}")
+    print(f"Content: {term.content()[:30]!r}")
     print(f"Cursor position: col={col}, row={row}")
     # Hello(5) + space(1) + 🎉(2) + 😀(2) + 🚀(2) + space(1) + World(5) = 18
     print("Expected: col=18")
@@ -69,7 +69,7 @@ def test_basic_rendering():
     term.reset()
     term.process_str("A中B文C")
     col, row = term.cursor_position()
-    print(f"Content: {repr(term.content()[:20])}")
+    print(f"Content: {term.content()[:20]!r}")
     print(f"Cursor position: col={col}, row={row}")
     # A(1) + 中(2) + B(1) + 文(2) + C(1) = 7
     print("Expected: col=7")

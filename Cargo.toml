@@ -2,7 +2,7 @@
 name = "par-term-emu-core-rust"
 version = "0.46.0"
 edition = "2021"
-rust-version = "1.90"
+rust-version = "1.98"
 authors = ["Paul Robello <probello@gmail.com>"]
 description = "Comprehensive terminal emulator library in Rust with Python bindings - VT100/VT220/VT320/VT420/VT520 support, PTY, Sixel/iTerm2/Kitty graphics"
 readme = "README.md"

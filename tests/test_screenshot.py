@@ -1,9 +1,10 @@
 """Tests for screenshot functionality"""
 
-import pytest
-from par_term_emu_core_rust import Terminal, PtyTerminal
 import os
 import tempfile
+
+import pytest
+from par_term_emu_core_rust import PtyTerminal, Terminal
 
 
 class TestScreenshotFormats:
@@ -344,8 +345,9 @@ class TestEmojiRendering:
     def test_emoji_color_rendering(self):
         """Test that emoji render in color (not grayscale)"""
         try:
-            from PIL import Image  # type: ignore[import-not-found]
             import io
+
+            from PIL import Image  # type: ignore[import-not-found]
         except ImportError:
             pytest.skip("PIL not available for color verification")
 

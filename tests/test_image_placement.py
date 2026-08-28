@@ -1,6 +1,6 @@
 """Tests for image placement metadata parsing and exposure."""
 
-from par_term_emu_core_rust import Terminal, ImagePlacement, ImageDimension
+from par_term_emu_core_rust import ImageDimension, ImagePlacement, Terminal
 
 
 def test_sixel_graphics_have_default_placement():

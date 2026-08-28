@@ -16,11 +16,11 @@ import os
 import sys
 import tempfile
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import IntEnum
 from pathlib import Path
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 DEBUG_FILE = Path(tempfile.gettempdir()) / "par_term_emu_debug_python.log"
 
@@ -57,9 +57,9 @@ class DebugLogger:
         if self.level != DebugLevel.OFF:
             try:
                 # Open in write mode to truncate (separate log from Rust)
-                self.file_handle = open(DEBUG_FILE, "w", buffering=1)
+                self.file_handle = open(DEBUG_FILE, "w", buffering=1)  # noqa: SIM115
                 self._write_header()
-            except Exception as e:
+            except OSError as e:
                 print(f"Failed to open debug log file: {e}", file=sys.stderr)
                 self.level = DebugLevel.OFF
 
@@ -76,7 +76,7 @@ class DebugLogger:
         """Write session header"""
         if self.file_handle:
             separator = "=" * 80
-            timestamp = datetime.now().isoformat()
+            timestamp = datetime.now(UTC).isoformat()
             self.file_handle.write(
                 f"\n{separator}\n"
                 f"par-term-emu Python debug session started at {timestamp} (level={self.level.name})\n"
@@ -106,7 +106,7 @@ class DebugLogger:
         if self.file_handle:
             try:
                 self.file_handle.close()
-            except Exception:  # noqa: S110
+            except Exception:  # noqa: BLE001, S110
                 pass
 
 
@@ -195,7 +195,7 @@ def log_snapshot(label: str, content: str):
         _logger.file_handle.flush()
 
 
-def log_terminal_state(widget_id: str, state: Dict[str, Any]):
+def log_terminal_state(widget_id: str, state: dict[str, Any]):
     """Log terminal state information"""
     if is_enabled(DebugLevel.DEBUG):
         state_str = ", ".join(f"{k}={v}" for k, v in state.items())

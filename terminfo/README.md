@@ -68,10 +68,7 @@ Or when spawning a PTY session:
 from par_term_emu_core_rust import PtyTerminal
 
 term = PtyTerminal(80, 24)
-term.spawn(
-    "/bin/bash",
-    env={"TERM": "par-term", "COLORTERM": "truecolor"}
-)
+term.spawn("/bin/bash", env={"TERM": "par-term", "COLORTERM": "truecolor"})
 ```
 
 ## Verification

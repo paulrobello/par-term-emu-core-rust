@@ -6,7 +6,7 @@ in realistic usage scenarios.
 """
 
 import pytest
-from par_term_emu_core_rust import Terminal, CursorStyle
+from par_term_emu_core_rust import CursorStyle, Terminal
 
 
 class TestFeatureIntegration:

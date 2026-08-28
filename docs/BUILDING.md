@@ -37,7 +37,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
 
 ### Rust
 
-You need Rust 1.90 or later (as specified in `Cargo.toml` with `rust-version = "1.90"`). Install Rust from [rustup.rs](https://rustup.rs):
+You need Rust 1.98 or later (as specified in `Cargo.toml` with `rust-version = "1.98"`). Install Rust from [rustup.rs](https://rustup.rs):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh

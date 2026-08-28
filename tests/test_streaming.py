@@ -16,8 +16,8 @@ import pytest
 pytest.importorskip("websockets")
 
 try:
-    from par_term_emu_core_rust import PtyTerminal, StreamingConfig, StreamingServer
     import websockets  # type: ignore[import-not-found]
+    from par_term_emu_core_rust import PtyTerminal, StreamingConfig, StreamingServer
 
     # Verify streaming feature is actually compiled (classes exist but raise
     # RuntimeError at construction if the feature wasn't enabled at build time)
@@ -28,12 +28,12 @@ except (ImportError, RuntimeError, TypeError):
     pytestmark = pytest.mark.skip(reason="Streaming feature not built")
     # Type checking stubs to avoid unbound errors
     if TYPE_CHECKING:
+        import websockets  # type: ignore[assignment, import-not-found]
         from par_term_emu_core_rust import (  # type: ignore[assignment]
             PtyTerminal,
             StreamingConfig,
             StreamingServer,
         )
-        import websockets  # type: ignore[assignment, import-not-found]
     else:
         # Dummy classes to satisfy runtime when imports fail
         PtyTerminal = Any  # type: ignore[misc, assignment]
@@ -66,7 +66,7 @@ def pty_terminal():
     # Cleanup
     try:
         term.write_str("exit\n")
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -84,7 +84,7 @@ async def streaming_server(pty_terminal, streaming_port):
     # Cleanup
     try:
         server.stop()
-    except Exception:
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -242,7 +242,7 @@ async def test_server_address(pty_terminal, streaming_port):
 @pytest.mark.asyncio
 async def test_websocket_connection(streaming_server):
     """Test basic WebSocket connection."""
-    server, port = streaming_server
+    _server, port = streaming_server
 
     uri = f"ws://127.0.0.1:{port}"
 
@@ -254,7 +254,7 @@ async def test_websocket_connection(streaming_server):
         try:
             message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
             assert message is not None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # OK if no initial screen
 
 
@@ -274,14 +274,14 @@ async def test_websocket_receive_output(streaming_server):
             message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
             # Should receive something
             assert isinstance(message, str)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.skip("No output received within timeout")
 
 
 @pytest.mark.asyncio
 async def test_websocket_multiple_clients(streaming_server):
     """Test multiple WebSocket clients connecting simultaneously."""
-    server, port = streaming_server
+    _server, port = streaming_server
 
     uri = f"ws://127.0.0.1:{port}"
 
@@ -311,7 +311,7 @@ async def test_websocket_multiple_clients(streaming_server):
 @pytest.mark.asyncio
 async def test_websocket_client_disconnect(streaming_server):
     """Test client disconnect and reconnect."""
-    server, port = streaming_server
+    _server, port = streaming_server
 
     uri = f"ws://127.0.0.1:{port}"
 
@@ -358,13 +358,13 @@ async def test_broadcast_to_all_clients(pty_terminal, streaming_port):
         try:
             msg1 = await asyncio.wait_for(client1.recv(), timeout=1.0)
             received.append(msg1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         try:
             msg2 = await asyncio.wait_for(client2.recv(), timeout=1.0)
             received.append(msg2)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         # At least one client should have received something
@@ -407,7 +407,7 @@ async def test_send_initial_screen_enabled(pty_terminal, streaming_port):
             message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
             assert message is not None
             assert len(message) > 0
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.skip("Initial screen not received within timeout")
 
     server.stop()
@@ -455,7 +455,7 @@ async def test_terminal_resize_notification(pty_terminal, streaming_port):
             message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
             # If we received something, validate it
             assert message is not None
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass  # Resize notifications may not be implemented
 
     server.stop()
@@ -535,7 +535,7 @@ async def test_high_throughput_output(pty_terminal, streaming_port):
             while messages_received < 10:
                 await asyncio.wait_for(websocket.recv(), timeout=0.1)
                 messages_received += 1
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         # Should have received at least some messages
@@ -562,7 +562,7 @@ async def test_many_clients_sequential(pty_terminal, streaming_port):
         # Receive any initial data
         try:
             await asyncio.wait_for(client.recv(), timeout=0.1)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
 
         await client.close()
@@ -601,7 +601,7 @@ async def test_full_session_workflow(pty_terminal, streaming_port):
                 for _ in range(3):
                     chunk = await asyncio.wait_for(websocket.recv(), timeout=0.2)
                     output_chunks.append(chunk)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
 
             # Should have received some output
@@ -632,7 +632,7 @@ async def test_concurrent_read_write(pty_terminal, streaming_port):
             for _ in range(15):
                 msg = await asyncio.wait_for(websocket.recv(), timeout=0.2)
                 messages.append(msg)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pass
         return messages
 

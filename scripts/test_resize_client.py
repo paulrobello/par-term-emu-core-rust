@@ -5,6 +5,7 @@ Test client for terminal resize functionality
 
 import asyncio
 import json
+
 import websockets  # type: ignore
 
 
@@ -45,8 +46,8 @@ async def test_resize():
                     data = json.loads(msg)
                     if data.get("type") == "output":
                         output = data.get("data", "")
-                        print(f"[Output] {repr(output)}")
-                except asyncio.TimeoutError:
+                        print(f"[Output] {output!r}")
+                except TimeoutError:
                     continue
 
             # Send another resize to 80x24
@@ -58,7 +59,7 @@ async def test_resize():
 
             print("\n[Test complete]")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error: {e}")
         import traceback
 

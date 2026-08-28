@@ -28,8 +28,9 @@ def create_solid_png(
         PNG image bytes
     """
     try:
-        from PIL import Image
         import io
+
+        from PIL import Image
 
         img = Image.new("RGB", (width, height), color_rgb)
         buf = io.BytesIO()
@@ -245,7 +246,7 @@ def main() -> None:
 
     except KeyboardInterrupt:
         print("\n\nTest interrupted by user.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"\nError during test: {e}", file=sys.stderr)
         import traceback
 

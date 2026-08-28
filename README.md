@@ -72,8 +72,8 @@ Parse `OSC 1337 ; RemoteHost=user@hostname ST` sequences for remote host detecti
 # The shell sends: printf '\e]1337;RemoteHost=%s@%s\a' "$USER" "$HOSTNAME"
 
 state = terminal.shell_integration_state()
-print(f"Host: {state.hostname}")    # "remote-server.example.com"
-print(f"User: {state.username}")    # "alice"
+print(f"Host: {state.hostname}")  # "remote-server.example.com"
+print(f"User: {state.username}")  # "alice"
 ```
 
 ### 🔤 Unicode Normalization (NFC/NFD/NFKC/NFKD)
@@ -111,8 +111,8 @@ Shell integration scripts can now send user variables via `OSC 1337 SetUserVar=<
 
 ```python
 # After shell sends: printf '\e]1337;SetUserVar=%s=%s\a' "hostname" "$(printf 'server1' | base64)"
-host = terminal.get_user_var("hostname")     # "server1"
-all_vars = terminal.get_user_vars()           # {"hostname": "server1", ...}
+host = terminal.get_user_var("hostname")  # "server1"
+all_vars = terminal.get_user_vars()  # {"hostname": "server1", ...}
 
 # Event-driven: poll for changes
 for event in terminal.poll_events():
@@ -485,8 +485,13 @@ Full control over character width calculations for proper terminal alignment in 
 
 ```python
 from par_term_emu_core_rust import (
-    Terminal, WidthConfig, UnicodeVersion, AmbiguousWidth,
-    char_width, str_width, is_east_asian_ambiguous
+    Terminal,
+    WidthConfig,
+    UnicodeVersion,
+    AmbiguousWidth,
+    char_width,
+    str_width,
+    is_east_asian_ambiguous,
 )
 
 # Configure terminal for CJK environment (Greek/Cyrillic = 2 cells)
@@ -612,7 +617,11 @@ The web frontend UI chrome can now be customized **after static build** without 
   - `encode_server_message("connected", theme=...)` - Theme support in connected messages
 
 ```python
-from par_term_emu_core_rust import StreamingConfig, StreamingServer, encode_server_message
+from par_term_emu_core_rust import (
+    StreamingConfig,
+    StreamingServer,
+    encode_server_message,
+)
 
 # Configure HTTP serving
 config = StreamingConfig(enable_http=True, web_root="/var/www/terminal")
@@ -622,13 +631,33 @@ theme = StreamingServer.create_theme_info(
     name="my-theme",
     background=(0, 0, 0),
     foreground=(255, 255, 255),
-    normal=[(0,0,0), (255,0,0), (0,255,0), (255,255,0), (0,0,255), (255,0,255), (0,255,255), (200,200,200)],
-    bright=[(128,128,128), (255,128,128), (128,255,128), (255,255,128), (128,128,255), (255,128,255), (128,255,255), (255,255,255)]
+    normal=[
+        (0, 0, 0),
+        (255, 0, 0),
+        (0, 255, 0),
+        (255, 255, 0),
+        (0, 0, 255),
+        (255, 0, 255),
+        (0, 255, 255),
+        (200, 200, 200),
+    ],
+    bright=[
+        (128, 128, 128),
+        (255, 128, 128),
+        (128, 255, 128),
+        (255, 255, 128),
+        (128, 128, 255),
+        (255, 128, 255),
+        (128, 255, 255),
+        (255, 255, 255),
+    ],
 )
 
 # Encode messages
 pong = encode_server_message("pong")
-connected = encode_server_message("connected", cols=80, rows=24, session_id="abc", theme=theme)
+connected = encode_server_message(
+    "connected", cols=80, rows=24, session_id="abc", theme=theme
+)
 ```
 
 ## What's New in 0.19.2
@@ -1095,7 +1124,7 @@ pip install par-term-emu-core-rust
 
 ### From Source
 
-Requires Rust 1.90+ and Python 3.12+:
+Requires Rust 1.98+ and Python 3.12+:
 
 ```bash
 # Install maturin (build tool)
@@ -1279,7 +1308,7 @@ term.screenshot_to_file(
     font_size=16.0,
     padding=20,
     include_scrollback=True,
-    minimum_contrast=0.5  # iTerm2-compatible contrast adjustment
+    minimum_contrast=0.5,  # iTerm2-compatible contrast adjustment
 )
 ```
 
@@ -1287,9 +1316,13 @@ term.screenshot_to_file(
 
 ```python
 from par_term_emu_core_rust import (
-    perceived_brightness_rgb, adjust_contrast_rgb,
-    contrast_ratio, meets_wcag_aa,
-    rgb_to_hex, hex_to_rgb, mix_colors
+    perceived_brightness_rgb,
+    adjust_contrast_rgb,
+    contrast_ratio,
+    meets_wcag_aa,
+    rgb_to_hex,
+    hex_to_rgb,
+    mix_colors,
 )
 
 # iTerm2-compatible contrast adjustment
@@ -1498,7 +1531,7 @@ A full-featured TUI (Text User Interface) application is available in the sister
 
 ## Technology
 
-- **Rust** (1.90+) - Core library implementation
+- **Rust** (1.98+) - Core library implementation
 - **Python** (3.12+) - Python bindings
 - **PyO3** - Zero-cost Python/Rust bindings
 - **VTE** - ANSI sequence parsing

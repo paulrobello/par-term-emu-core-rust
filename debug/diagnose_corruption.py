@@ -9,9 +9,10 @@ This script helps identify the source of corruption by:
 4. Logging detailed information about what's found
 """
 
-from par_term_emu_core_rust import PtyTerminal
-import time
 import sys
+import time
+
+from par_term_emu_core_rust import PtyTerminal
 
 
 def check_line_for_corruption(line_cells, line_num):
@@ -35,7 +36,7 @@ def check_line_for_corruption(line_cells, line_num):
         start = max(0, m_pos - 20)
         end = min(len(text), m_pos + 10)
         snippet = text[start:end]
-        issues.append(f"Possible SGR fragment: ...{repr(snippet)}...")
+        issues.append(f"Possible SGR fragment: ...{snippet!r}...")
 
     # Check for CSI patterns
     if "CSI" in text or "[?" in text:
@@ -91,7 +92,7 @@ def main():
             if issues:
                 corruption_found = True
                 print(f"⚠️  CORRUPTION DETECTED on line {y}:")
-                print(f"   Text: {repr(text[:80])}")
+                print(f"   Text: {text[:80]!r}")
                 for issue in issues:
                     print(f"   - {issue}")
 
@@ -100,7 +101,7 @@ def main():
                 print(f"   Hex:  {hex_chars}")
                 print()
             elif y < 3:  # Always show first 3 lines
-                print(f"Line {y}: {repr(text[:80])}")
+                print(f"Line {y}: {text[:80]!r}")
 
         print()
 

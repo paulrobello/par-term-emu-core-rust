@@ -2,8 +2,9 @@
 Integration tests for PTY functionality
 """
 
-import time
 import sys
+import time
+
 import pytest
 
 pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")

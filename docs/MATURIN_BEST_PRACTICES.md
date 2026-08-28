@@ -135,7 +135,7 @@ dev = ["maturin>=1.13.3", ...]
 #### 3. **Cargo.toml Configuration**
 ```toml
 [package]
-rust-version = "1.90"
+rust-version = "1.98"
 version = "0.45.0"
 edition = "2021"
 
@@ -172,7 +172,7 @@ strip = true
 **Status**: **Compliant**
 - Correct `crate-type` for Python extension modules (`cdylib` + `rlib`)
 - PyO3 version: 0.29 (latest stable, made optional for flexibility)
-- Minimum Rust version: 1.90
+- Minimum Rust version: 1.98
 - Rust edition: 2021
 - Proper PyO3 extension-module feature in `python` feature
 - Feature-based architecture (python, streaming, streaming-bin, rust-only, full, jemalloc)
@@ -191,7 +191,7 @@ strip = true
 - Builds for `x86_64` and `aarch64` (ARM64)
 - Uses `manylinux: auto` for maximum compatibility
 - Auto-selects appropriate manylinux version (manylinux2014+)
-- Rust 1.90+ requires glibc 2.17+ (manylinux2014 minimum)
+- Rust 1.98+ requires glibc 2.17+ (manylinux2014 minimum)
 - QEMU-based cross-compilation for ARM64
 - Python versions: 3.12, 3.13, 3.14
 
@@ -427,14 +427,14 @@ graph TB
 
 ### Current Approach
 - Using `manylinux: auto` which automatically selects the best compatibility level
-- With Rust 1.90+, minimum glibc is 2.17 (manylinux2014)
+- With Rust 1.98+, minimum glibc is 2.17 (manylinux2014)
 
 ### Compatibility Table
 
 | Manylinux | glibc | Python | Rust Support | Our Status |
 |-----------|-------|--------|--------------|------------|
 | 2010 | 2.12 | 3.5+ | Not supported (requires glibc 2.17+) | Not supported |
-| 2014 | 2.17 | 3.5+ | Minimum for Rust 1.90+ | **Auto-selected** |
+| 2014 | 2.17 | 3.5+ | Minimum for Rust 1.98+ | **Auto-selected** |
 | 2_28 | 2.28 | 3.7+ | Fully supported | Could upgrade |
 
 ### Recommendation

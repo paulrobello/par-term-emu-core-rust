@@ -77,7 +77,7 @@ def test_rgb_colors():
     # Get foreground color of first character
     fg_color = term.get_fg_color(0, 0)
     assert fg_color is not None
-    r, g, b = fg_color
+    r, _g, _b = fg_color
     assert r == 255
 
 
@@ -258,7 +258,7 @@ def test_scroll_region_basic():
     term.process_str("\x1b[5;10r")  # Set scroll region lines 5-10
 
     # Verify by testing cursor movement behavior
-    col, row = term.cursor_position()
+    _col, row = term.cursor_position()
     # After setting scroll region, cursor should move to home
     assert row == 0
 
@@ -311,7 +311,7 @@ def test_tab_default_behavior():
     term = Terminal(80, 24)
     term.process_str("A\t")  # Write A then tab
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 8  # Should tab to column 8
 
 
@@ -323,7 +323,7 @@ def test_set_tab_stop():
     term.process_str("\x1b[1G")  # Move to column 1
     term.process_str("\t")  # Tab
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 4 or col == 5  # Should tab to custom stop
 
 
@@ -335,7 +335,7 @@ def test_clear_tab_stop():
     term.process_str("\x1b[1G")  # Move to column 1
     term.process_str("\t")  # Tab
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     # Should skip the cleared tab stop
     assert col >= 15  # Should tab to next available stop
 
@@ -346,7 +346,7 @@ def test_clear_all_tab_stops():
     term.process_str("\x1b[3g")  # Clear all tab stops
     term.process_str("\t")  # Try to tab
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     # Without tab stops, should go to end of line
     assert col >= 79
 
@@ -356,7 +356,7 @@ def test_forward_tabulation():
     term = Terminal(80, 24)
     term.process_str("\x1b[2I")  # Forward 2 tab stops
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 16  # From 0 to 8, then to 16
 
 
@@ -366,7 +366,7 @@ def test_backward_tabulation():
     term.process_str("\x1b[20G")  # Move to column 20
     term.process_str("\x1b[1Z")  # Backward 1 tab stop
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 16  # Should be at tab stop 16
 
 
@@ -376,7 +376,7 @@ def test_wide_character():
     term = Terminal(80, 24)
     term.process_str("中")  # Chinese character (2 cells wide)
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 2  # Wide character should advance cursor by 2
 
 
@@ -394,7 +394,7 @@ def test_mixed_width_characters():
     term = Terminal(80, 24)
     term.process_str("A中B")  # ASCII, wide, ASCII
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 4  # A(1) + 中(2) + B(1) = 4
 
 
@@ -463,13 +463,13 @@ def test_snapshot_wide_character_flags():
     line = snapshot.get_line(0)
 
     # Check the '中' character at index 6
-    char, fg, bg, attrs = line[6]
+    char, _fg, _bg, attrs = line[6]
     assert char == "中"
     assert attrs.wide_char
     assert not attrs.wide_char_spacer
 
     # Check the spacer at index 7
-    char_spacer, fg_spacer, bg_spacer, attrs_spacer = line[7]
+    _char_spacer, _fg_spacer, _bg_spacer, attrs_spacer = line[7]
     assert not attrs_spacer.wide_char
     assert attrs_spacer.wide_char_spacer
 
@@ -527,7 +527,7 @@ def test_very_long_line():
     long_text = "A" * 100  # More than terminal width
     term.process_str(long_text)
 
-    col, row = term.cursor_position()
+    _col, row = term.cursor_position()
     assert row >= 2  # Should wrap to multiple lines
 
 
@@ -717,7 +717,7 @@ def test_cursor_horizontal_absolute():
     term = Terminal(80, 24)
     term.process_str("\x1b[42G")  # Move to column 42
 
-    col, row = term.cursor_position()
+    col, _row = term.cursor_position()
     assert col == 41  # 0-indexed
 
 
@@ -726,7 +726,7 @@ def test_vertical_position_absolute():
     term = Terminal(80, 24)
     term.process_str("\x1b[12d")  # Move to row 12
 
-    col, row = term.cursor_position()
+    _col, row = term.cursor_position()
     assert row == 11  # 0-indexed
 
 
@@ -2033,7 +2033,7 @@ def test_insert_mode_with_wide_chars():
     term.process(b"\x1b[4h")
 
     # Insert a wide character (emoji)
-    term.process("🦀".encode("utf-8"))
+    term.process("🦀".encode())
 
     # Should insert the wide char, shifting "ello" to the right by 2 columns
     # (wide chars take 2 cells), resulting in "H🦀 ello" with an extra space

@@ -152,10 +152,7 @@ term.spawn("/bin/sh", args=["-c", safe_command])
 
 # GOOD: With environment and working directory
 term.spawn(
-    command="/bin/ls",
-    args=["-la"],
-    env={"SAFE_VAR": "value"},
-    cwd="/safe/directory"
+    command="/bin/ls", args=["-la"], env={"SAFE_VAR": "value"}, cwd="/safe/directory"
 )
 ```
 
@@ -180,10 +177,11 @@ If you must use user input in commands, validate and sanitize it:
 from pathlib import Path
 from par_term_emu_core_rust import PtyTerminal
 
+
 def safe_spawn_with_file(term, filename):
     """Safely spawn a command with user-provided filename"""
     # Validate filename
-    if not filename or '..' in filename or filename.startswith('/'):
+    if not filename or ".." in filename or filename.startswith("/"):
         raise ValueError("Invalid filename")
 
     # Use pathlib for safer path operations
@@ -202,6 +200,7 @@ def safe_spawn_with_file(term, filename):
 
     # Use args array format - prevents shell injection
     term.spawn(command="/bin/cat", args=[str(requested_path)])
+
 
 # Example usage
 from par_term_emu_core_rust import PtyTerminal
@@ -279,9 +278,9 @@ term.spawn(
     args=None,
     env={
         "PATH": "/usr/local/bin:/usr/bin:/bin",  # Override specific vars
-        "AWS_SECRET_KEY": "",                     # Clear sensitive vars
+        "AWS_SECRET_KEY": "",  # Clear sensitive vars
         "DATABASE_PASSWORD": "",
-    }
+    },
 )
 ```
 
@@ -308,10 +307,10 @@ term = PtyTerminal(80, 24)
 term.spawn(
     "/usr/bin/app",
     env={
-        "AWS_SECRET_KEY": "",     # Override with empty value
+        "AWS_SECRET_KEY": "",  # Override with empty value
         "DATABASE_PASSWORD": "",
         "API_TOKEN": "",
-    }
+    },
 )
 ```
 
@@ -333,6 +332,7 @@ The `env` parameter does NOT replace the entire environment. To create a complet
 from pathlib import Path
 from par_term_emu_core_rust import PtyTerminal
 
+
 def safe_spawn_with_cwd(term, user_dir, command, args=None):
     """Safely spawn a process with validated working directory"""
     # Validate and resolve path
@@ -351,6 +351,7 @@ def safe_spawn_with_cwd(term, user_dir, command, args=None):
 
     # Spawn with validated working directory
     term.spawn(command=command, args=args, cwd=str(requested_path))
+
 
 # Example usage
 from par_term_emu_core_rust import PtyTerminal
@@ -384,6 +385,7 @@ from par_term_emu_core_rust import PtyTerminal
 # GOOD: Explicitly validate and specify the shell
 ALLOWED_SHELLS = ["/bin/bash", "/bin/sh", "/bin/zsh", "/usr/bin/fish"]
 
+
 def safe_spawn_shell(term):
     """Spawn a shell with validation"""
     # Get shell from environment (could be user-controlled!)
@@ -402,6 +404,7 @@ def safe_spawn_shell(term):
 
     # Spawn the validated shell
     term.spawn(command=shell)
+
 
 # Example usage
 from par_term_emu_core_rust import PtyTerminal
@@ -434,6 +437,7 @@ Prevent resource exhaustion:
 import time
 from par_term_emu_core_rust import PtyTerminal
 
+
 def spawn_with_timeout(term, command, args=None, env=None, cwd=None, timeout=30):
     """Spawn a process with timeout"""
     term.spawn(command=command, args=args, env=env, cwd=cwd)
@@ -447,6 +451,7 @@ def spawn_with_timeout(term, command, args=None, env=None, cwd=None, timeout=30)
         time.sleep(0.1)
 
     return term.try_wait()
+
 
 # Example usage
 from par_term_emu_core_rust import PtyTerminal
@@ -462,6 +467,7 @@ print(f"Process exited with code: {exit_code}")  # Will be killed after 5s
 from par_term_emu_core_rust import PtyTerminal
 
 MAX_SESSIONS = 10
+
 
 class SessionManager:
     def __init__(self):
@@ -531,6 +537,7 @@ term.spawn_shell()
 ```python
 from par_term_emu_core_rust import PtyTerminal
 
+
 def safe_send_input(term, user_input):
     """Safely send user input to terminal"""
 
@@ -541,10 +548,10 @@ def safe_send_input(term, user_input):
     # Check for dangerous control sequences
     dangerous_sequences = [
         b"\x1b[6n",  # Device Status Report (can leak info)
-        b"\x1b]",    # OSC sequences (can be misused)
+        b"\x1b]",  # OSC sequences (can be misused)
     ]
 
-    input_bytes = user_input.encode('utf-8')
+    input_bytes = user_input.encode("utf-8")
     for seq in dangerous_sequences:
         if seq in input_bytes:
             raise ValueError("Dangerous escape sequence detected")
@@ -687,12 +694,14 @@ fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
 import os
 import pwd
 
+
 def drop_privileges():
     """Run as restricted user"""
     if os.getuid() == 0:
         pwnam = pwd.getpwnam("appuser")
         os.setgid(pwnam.pw_gid)
         os.setuid(pwnam.pw_uid)
+
 
 drop_privileges()
 term = PtyTerminal(80, 24)
@@ -752,6 +761,7 @@ term.spawn_shell()
 ```python
 from par_term_emu_core_rust import PtyTerminal
 
+
 def safe_resize(term, cols, rows):
     """Safely resize terminal with validation"""
 
@@ -781,6 +791,7 @@ import os
 import pwd
 from par_term_emu_core_rust import PtyTerminal
 
+
 def drop_privileges(username="nobody"):
     """Drop privileges to specified user"""
     if os.getuid() != 0:
@@ -797,6 +808,7 @@ def drop_privileges(username="nobody"):
     # Verify we dropped privileges
     if os.getuid() == 0 or os.getgid() == 0:
         raise RuntimeError("Failed to drop privileges")
+
 
 # Drop privileges before creating PTY sessions
 drop_privileges("appuser")
@@ -816,6 +828,7 @@ from par_term_emu_core_rust import PtyTerminal
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 def secure_spawn(term, command, args=None, env=None, cwd=None, user_id=None):
     """Spawn with audit logging"""
 
@@ -830,11 +843,9 @@ def secure_spawn(term, command, args=None, env=None, cwd=None, user_id=None):
         term.spawn(command=command, args=args, env=env, cwd=cwd)
         logger.info(f"PTY spawn successful: user={user_id}, pid={term.is_running()}")
     except Exception as e:
-        logger.error(
-            f"PTY spawn failed: user={user_id}, "
-            f"error={e}"
-        )
+        logger.error(f"PTY spawn failed: user={user_id}, error={e}")
         raise
+
 
 # Example usage
 from par_term_emu_core_rust import PtyTerminal
@@ -845,7 +856,7 @@ secure_spawn(
     "/bin/bash",
     env={"SAFE_MODE": "true"},
     cwd="/home/user/workspace",
-    user_id="alice"
+    user_id="alice",
 )
 ```
 

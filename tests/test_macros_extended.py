@@ -9,7 +9,6 @@ import time
 import pytest
 from par_term_emu_core_rust import Macro, PtyTerminal
 
-
 # Edge Cases and Error Handling Tests
 
 
@@ -176,7 +175,7 @@ def test_yaml_round_trip_preserves_all_data() -> None:
 
 def test_yaml_load_nonexistent_file() -> None:
     """Test loading from nonexistent file."""
-    with pytest.raises(Exception):  # Should raise IOError or similar
+    with pytest.raises(Exception):  # Should raise IOError or similar  # noqa: B017
         Macro.load_yaml("/nonexistent/path/to/macro.yaml")
 
 
@@ -184,13 +183,13 @@ def test_yaml_save_invalid_path() -> None:
     """Test saving to invalid path."""
     macro = Macro("test")
 
-    with pytest.raises(Exception):  # Should raise IOError
+    with pytest.raises(Exception):  # Should raise IOError  # noqa: B017
         macro.save_yaml("/nonexistent/directory/macro.yaml")
 
 
 def test_yaml_load_invalid_yaml() -> None:
     """Test loading invalid YAML."""
-    with pytest.raises(Exception):  # Should raise parse error
+    with pytest.raises(Exception):  # Should raise parse error  # noqa: B017
         Macro.from_yaml("invalid: yaml: content: [[[")
 
 
@@ -304,7 +303,7 @@ def test_macro_playback_nonexistent_macro() -> None:
     """Test playing a macro that doesn't exist."""
     term = PtyTerminal(80, 24)
 
-    with pytest.raises(Exception):  # Should raise ValueError
+    with pytest.raises(Exception):  # Should raise ValueError  # noqa: B017
         term.play_macro("nonexistent", speed=1.0)
 
 

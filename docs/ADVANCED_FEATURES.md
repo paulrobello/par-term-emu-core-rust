@@ -213,7 +213,7 @@ term = Terminal(80, 24)
 
 # Add some low-contrast content
 term.process_str("\x1b[38;2;64;64;64m")  # Dark gray text
-term.process_str("\x1b[48;2;0;0;0m")      # Black background
+term.process_str("\x1b[48;2;0;0;0m")  # Black background
 term.process_str("This text has poor contrast\n")
 
 # Screenshot WITHOUT minimum contrast (explicitly disable)
@@ -222,7 +222,7 @@ term.screenshot_to_file("low_contrast.png", minimum_contrast=0.0)
 # Screenshot WITH minimum contrast adjustment (default is 0.5)
 term.screenshot_to_file(
     "readable.png",
-    minimum_contrast=0.5  # Recommended value for readability
+    minimum_contrast=0.5,  # Recommended value for readability
 )
 
 # The adjusted screenshot will automatically lighten the dark gray
@@ -243,8 +243,8 @@ from par_term_emu_core_rust import (
 brightness = perceived_brightness_rgb(128, 128, 128)  # Returns 0.502
 
 # Adjust colors for minimum contrast
-fg = (64, 64, 64)   # Dark gray
-bg = (0, 0, 0)       # Black
+fg = (64, 64, 64)  # Dark gray
+bg = (0, 0, 0)  # Black
 adjusted = adjust_contrast_rgb(fg, bg, 0.5)  # Returns (128, 128, 128)
 
 # Verify the contrast
@@ -260,20 +260,24 @@ The library provides comprehensive color manipulation functions:
 ```python
 from par_term_emu_core_rust import (
     # Brightness adjustments
-    lighten_rgb, darken_rgb,
-
+    lighten_rgb,
+    darken_rgb,
     # WCAG accessibility
-    color_luminance, contrast_ratio,
-    meets_wcag_aa, meets_wcag_aaa,
-
+    color_luminance,
+    contrast_ratio,
+    meets_wcag_aa,
+    meets_wcag_aaa,
     # Color space conversions
-    rgb_to_hsl, hsl_to_rgb,
-    rgb_to_hex, hex_to_rgb,
+    rgb_to_hsl,
+    hsl_to_rgb,
+    rgb_to_hex,
+    hex_to_rgb,
     rgb_to_ansi_256,
-
     # Color manipulation
-    mix_colors, complementary_color,
-    adjust_saturation, adjust_hue,
+    mix_colors,
+    complementary_color,
+    adjust_saturation,
+    adjust_hue,
 )
 
 # Example: Check WCAG compliance
@@ -371,10 +375,10 @@ print(f"Mouse mode: {term.mouse_mode()}")  # "normal"
 
 # Simulate a mouse click
 event_bytes = term.simulate_mouse_event(
-    button=0,    # 0=left, 1=middle, 2=right
-    col=10,      # Column (0-based)
-    row=5,       # Row (0-based)
-    pressed=True # True=press, False=release
+    button=0,  # 0=left, 1=middle, 2=right
+    col=10,  # Column (0-based)
+    row=5,  # Row (0-based)
+    pressed=True,  # True=press, False=release
 )
 
 print(f"Mouse event: {event_bytes}")  # b'\x1b[<0;11;6M'
@@ -411,7 +415,7 @@ if term.bracketed_paste():
 
     # Get the sequences (returned as bytes objects)
     start = term.get_paste_start()  # Returns: b'\x1b[200~'
-    end = term.get_paste_end()      # Returns: b'\x1b[201~'
+    end = term.get_paste_end()  # Returns: b'\x1b[201~'
 ```
 
 ### How It Works
@@ -458,8 +462,8 @@ term = Terminal(80, 24)
 term.process_str("\x1b[?1004h")
 
 # Get focus events (returned as bytes objects)
-focus_in = term.get_focus_in_event()   # Returns: b'\x1b[I'
-focus_out = term.get_focus_out_event() # Returns: b'\x1b[O'
+focus_in = term.get_focus_in_event()  # Returns: b'\x1b[I'
+focus_out = term.get_focus_out_event()  # Returns: b'\x1b[O'
 ```
 
 ### Use Cases
@@ -531,6 +535,7 @@ def on_transfer(event):
                 f.write(data)
             print(f"Downloaded {filename} ({len(data)} bytes)")
 
+
 term.add_observer(on_transfer, kinds=["file_transfer_completed"])
 
 # 2. Host sends file sequence (simulated here)
@@ -554,6 +559,7 @@ def on_upload_request(event):
             term.send_upload_data(data)
         except FileNotFoundError:
             term.cancel_upload()
+
 
 term.add_observer(on_upload_request, kinds=["upload_requested"])
 ```
@@ -752,11 +758,11 @@ term.clear_progress()
 ```python
 def download_with_progress(url, dest):
     response = requests.get(url, stream=True)
-    total = int(response.headers.get('content-length', 0))
+    total = int(response.headers.get("content-length", 0))
     downloaded = 0
 
     term.set_progress(ProgressState.Normal, 0)
-    with open(dest, 'wb') as f:
+    with open(dest, "wb") as f:
         for chunk in response.iter_content(chunk_size=8192):
             f.write(chunk)
             downloaded += len(chunk)
@@ -913,17 +919,27 @@ from par_term_emu_core_rust import Terminal, TriggerAction
 term = Terminal(80, 24)
 
 # Action 1: Highlight "ERROR:" in red
-highlight = TriggerAction("highlight", {
-    "bg_r": "255", "bg_g": "0", "bg_b": "0",
-    "fg_r": "255", "fg_g": "255", "fg_b": "255",
-    "duration_ms": "5000"  # Optional expiry
-})
+highlight = TriggerAction(
+    "highlight",
+    {
+        "bg_r": "255",
+        "bg_g": "0",
+        "bg_b": "0",
+        "fg_r": "255",
+        "fg_g": "255",
+        "fg_b": "255",
+        "duration_ms": "5000",  # Optional expiry
+    },
+)
 
 # Action 2: Send notification
-notify = TriggerAction("notify", {
-    "title": "Build Error",
-    "message": "Error detected: $1"  # $1 is replaced by capture group 1
-})
+notify = TriggerAction(
+    "notify",
+    {
+        "title": "Build Error",
+        "message": "Error detected: $1",  # $1 is replaced by capture group 1
+    },
+)
 
 # Register trigger
 term.add_trigger("error_detection", r"ERROR:\s+(.+)", [highlight, notify])
@@ -979,8 +995,8 @@ with PtyTerminal(80, 24) as term:
         command="tail",
         args=["-f", "/var/log/system.log"],
         copy_terminal_output=False,  # Don't pipe terminal output to this process
-        restart_policy="on_failure", # Restart if it crashes
-        restart_delay_ms=1000        # Wait 1s before restart
+        restart_policy="on_failure",  # Restart if it crashes
+        restart_delay_ms=1000,  # Wait 1s before restart
     )
 
     # Start the coprocess
@@ -1643,10 +1659,10 @@ term.process_str(code)
 
 # Highlight function definition (rows 2-4, bold yellow)
 term.process_str("\x1b[38;2;255;255;0m")  # Yellow foreground
-term.process_str("\x1b[2;1;4;25;1$r")     # Apply bold to function
+term.process_str("\x1b[2;1;4;25;1$r")  # Apply bold to function
 
 # Highlight variable name (row 6, reverse video)
-term.process_str("\x1b[6;1;6;25;7$r")     # Reverse video
+term.process_str("\x1b[6;1;6;25;7$r")  # Reverse video
 
 # Fill a margin indicator (column 80, rows 1-30)
 term.process_str("\x1b[124;1;80;30;80$x")  # Fill with '|' (ASCII 124)
@@ -1763,8 +1779,13 @@ Control how character widths are calculated for proper terminal alignment:
 
 ```python
 from par_term_emu_core_rust import (
-    Terminal, WidthConfig, UnicodeVersion, AmbiguousWidth,
-    char_width, str_width, is_east_asian_ambiguous
+    Terminal,
+    WidthConfig,
+    UnicodeVersion,
+    AmbiguousWidth,
+    char_width,
+    str_width,
+    is_east_asian_ambiguous,
 )
 
 term = Terminal(80, 24)
@@ -1786,15 +1807,16 @@ print(f"Version: {config.unicode_version}")
 print(f"Ambiguous: {config.ambiguous_width}")
 
 # Standalone width functions
-print(char_width("日"))                        # 2 - CJK
-print(char_width("α", WidthConfig.cjk()))     # 2 - Greek with CJK config
-print(str_width("Hello日本"))                  # 9 - mixed text
-print(is_east_asian_ambiguous("α"))            # True
+print(char_width("日"))  # 2 - CJK
+print(char_width("α", WidthConfig.cjk()))  # 2 - Greek with CJK config
+print(str_width("Hello日本"))  # 9 - mixed text
+print(is_east_asian_ambiguous("α"))  # True
 
 # Convenience functions for CJK
 from par_term_emu_core_rust import char_width_cjk, str_width_cjk
-print(char_width_cjk("α"))    # 2
-print(str_width_cjk("αβγ"))   # 6
+
+print(char_width_cjk("α"))  # 2
+print(str_width_cjk("αβγ"))  # 6
 ```
 
 **Width Configuration:**
@@ -2675,10 +2697,10 @@ Where `flag` is `0x01` for zlib-compressed payloads or `0x00` for uncompressed p
 from par_term_emu_core_rust import StreamingConfig, StreamingServer
 
 config = StreamingConfig(
-    max_clients=100,              # Maximum concurrent clients
-    send_initial_screen=True,     # Send screen snapshot on connect
-    keepalive_interval=30,        # Ping interval in seconds
-    default_read_only=False       # New clients read-only by default
+    max_clients=100,  # Maximum concurrent clients
+    send_initial_screen=True,  # Send screen snapshot on connect
+    keepalive_interval=30,  # Ping interval in seconds
+    default_read_only=False,  # New clients read-only by default
 )
 
 server = StreamingServer(pty_term, "0.0.0.0:8099", config)
@@ -2699,10 +2721,7 @@ pty_term.spawn_shell()
 config = StreamingConfig()
 
 # Option 1: Separate certificate and key files
-config.set_tls_from_files(
-    cert_path="/path/to/cert.pem",
-    key_path="/path/to/key.pem"
-)
+config.set_tls_from_files(cert_path="/path/to/cert.pem", key_path="/path/to/key.pem")
 
 # Option 2: Combined PEM file (cert + key)
 config.set_tls_from_pem("/path/to/combined.pem")
@@ -2812,14 +2831,14 @@ from par_term_emu_core_rust import Terminal
 term = Terminal(80, 30, scrollback=1000)
 
 # Enable all advanced features
-term.process_str("\x1b[?1049h")                    # Alternate screen buffer
-term.process_str("\x1b[?1000h")                    # Normal mouse tracking
-term.process_str("\x1b[?1006h")                    # SGR mouse encoding
-term.process_str("\x1b[?2004h")                    # Bracketed paste mode
-term.process_str("\x1b[?1004h")                    # Focus tracking
-term.process_str("\x1b[?2026h")                    # Synchronized updates
+term.process_str("\x1b[?1049h")  # Alternate screen buffer
+term.process_str("\x1b[?1000h")  # Normal mouse tracking
+term.process_str("\x1b[?1006h")  # SGR mouse encoding
+term.process_str("\x1b[?2004h")  # Bracketed paste mode
+term.process_str("\x1b[?1004h")  # Focus tracking
+term.process_str("\x1b[?2026h")  # Synchronized updates
 term.process_str("\x1b]7;file:///home/user\x07")  # Set current directory
-term.set_allow_clipboard_read(True)               # Enable clipboard operations
+term.set_allow_clipboard_read(True)  # Enable clipboard operations
 
 # Set keyboard protocol for advanced key handling
 term.set_keyboard_flags(1 | 2, mode=1)  # Disambiguate + report events
@@ -2838,12 +2857,22 @@ term.process_str("\x1b[0m\n\n")
 
 # Menu with different underline styles
 term.process_str("\x1b[38;2;100;200;255m╔══════════════════════╗\x1b[0m\n")
-term.process_str("\x1b[38;2;100;200;255m║\x1b[0m   \x1b[1mMenu Options\x1b[0m 📋   \x1b[38;2;100;200;255m║\x1b[0m\n")
+term.process_str(
+    "\x1b[38;2;100;200;255m║\x1b[0m   \x1b[1mMenu Options\x1b[0m 📋   \x1b[38;2;100;200;255m║\x1b[0m\n"
+)
 term.process_str("\x1b[38;2;100;200;255m╠══════════════════════╣\x1b[0m\n")
-term.process_str("\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:1m1. Basic Feature\x1b[0m  \x1b[38;2;100;200;255m║\x1b[0m\n")
-term.process_str("\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:2m2. Advanced Mode\x1b[0m \x1b[38;2;100;200;255m║\x1b[0m\n")
-term.process_str("\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:3m3. Beta Feature\x1b[0m  \x1b[38;2;100;200;255m║\x1b[0m\n")
-term.process_str("\x1b[38;2;100;200;255m║\x1b[0m \x1b[38;2;255;100;100m4. Exit ❌\x1b[0m       \x1b[38;2;100;200;255m║\x1b[0m\n")
+term.process_str(
+    "\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:1m1. Basic Feature\x1b[0m  \x1b[38;2;100;200;255m║\x1b[0m\n"
+)
+term.process_str(
+    "\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:2m2. Advanced Mode\x1b[0m \x1b[38;2;100;200;255m║\x1b[0m\n"
+)
+term.process_str(
+    "\x1b[38;2;100;200;255m║\x1b[0m \x1b[4:3m3. Beta Feature\x1b[0m  \x1b[38;2;100;200;255m║\x1b[0m\n"
+)
+term.process_str(
+    "\x1b[38;2;100;200;255m║\x1b[0m \x1b[38;2;255;100;100m4. Exit ❌\x1b[0m       \x1b[38;2;100;200;255m║\x1b[0m\n"
+)
 term.process_str("\x1b[38;2;100;200;255m╚══════════════════════╝\x1b[0m\n")
 
 # Flush synchronized updates for flicker-free rendering
@@ -2851,10 +2880,10 @@ term.flush_synchronized_updates()
 
 # Simulate mouse click at menu position
 mouse_event = term.simulate_mouse_event(
-    button=0,    # Left button
-    col=5,       # Column position
-    row=5,       # Row position
-    pressed=True # Button press
+    button=0,  # Left button
+    col=5,  # Column position
+    row=5,  # Row position
+    pressed=True,  # Button press
 )
 
 # Get clipboard content

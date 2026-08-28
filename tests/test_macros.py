@@ -1,7 +1,7 @@
 """Tests for macro recording and playback functionality."""
 
-import time
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -278,7 +278,7 @@ def test_macro_progress_tracking() -> None:
     # Check initial progress
     progress = term.get_macro_progress()
     assert progress is not None
-    current, total = progress
+    _current, total = progress
     assert total == 3
 
     # Get macro name

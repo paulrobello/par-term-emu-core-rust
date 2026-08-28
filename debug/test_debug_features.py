@@ -193,7 +193,7 @@ def test_generation_tracking() -> None:
 
         print("\n✅ Generation counter tracking working")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"⚠️  Could not test PtyTerminal: {e}")
         print("   This is expected if PTY is not available on this platform")
 

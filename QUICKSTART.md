@@ -233,6 +233,7 @@ def show_progress(term, percent):
     bar = "█" * filled + "░" * (bar_width - filled)
     term.process_str(f"\r[{bar}] {percent}%")
 
+
 term = Terminal(80, 24)
 for i in range(0, 101, 10):
     show_progress(term, i)
@@ -243,16 +244,21 @@ for i in range(0, 101, 10):
 ```python
 def print_colored(term, text, color):
     colors = {
-        'red': 31, 'green': 32, 'yellow': 33,
-        'blue': 34, 'magenta': 35, 'cyan': 36
+        "red": 31,
+        "green": 32,
+        "yellow": 33,
+        "blue": 34,
+        "magenta": 35,
+        "cyan": 36,
     }
     code = colors.get(color, 37)
     term.process_str(f"\x1b[{code}m{text}\x1b[0m\n")
 
+
 term = Terminal(80, 24)
-print_colored(term, "Success!", 'green')
-print_colored(term, "Warning!", 'yellow')
-print_colored(term, "Error!", 'red')
+print_colored(term, "Success!", "green")
+print_colored(term, "Warning!", "yellow")
+print_colored(term, "Error!", "red")
 ```
 
 ### Clear and Redraw
@@ -260,6 +266,7 @@ print_colored(term, "Error!", 'red')
 ```python
 def clear_screen(term):
     term.process_str("\x1b[2J\x1b[H")
+
 
 term = Terminal(80, 24)
 term.process_str("Old content\n")

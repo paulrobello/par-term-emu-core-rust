@@ -258,15 +258,18 @@ echo -e "\033]9;4\a"
 ```python
 import sys
 
+
 def show_progress(percent: int) -> None:
     """Show normal progress at given percentage (0-100)."""
     sys.stdout.write(f"\033]9;4;1;{percent}\007")
     sys.stdout.flush()
 
+
 def show_indeterminate() -> None:
     """Show indeterminate progress (duration unknown)."""
     sys.stdout.write("\033]9;4;3\007")
     sys.stdout.flush()
+
 
 def show_error(percent: int | None = None) -> None:
     """Show error state, optionally at specific percentage."""
@@ -276,10 +279,12 @@ def show_error(percent: int | None = None) -> None:
         sys.stdout.write("\033]9;4;2\007")
     sys.stdout.flush()
 
+
 def show_warning(percent: int) -> None:
     """Show warning/pause state at given percentage."""
     sys.stdout.write(f"\033]9;4;4;{percent}\007")
     sys.stdout.flush()
+
 
 def clear_progress() -> None:
     """Clear/remove the progress bar."""

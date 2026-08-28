@@ -3,11 +3,11 @@
 
 import pytest
 from par_term_emu_core_rust import (
+    CoprocessConfig,
     Terminal,
+    Trigger,
     TriggerAction,
     TriggerMatch,
-    Trigger,
-    CoprocessConfig,
 )
 
 
@@ -119,7 +119,7 @@ def test_trigger_highlights():
 
     highlights = term.get_trigger_highlights()
     assert len(highlights) == 1
-    row, col_start, col_end, fg, bg = highlights[0]
+    row, _col_start, _col_end, fg, bg = highlights[0]
     assert row == 0
     assert bg == (255, 0, 0)
     assert fg is None

@@ -388,7 +388,7 @@ config = terminal_core.StreamingConfig(
     web_root="./my_web_frontend",
     enable_system_stats=True,
     system_stats_interval_secs=5,
-    api_key="my-secret-key"  # Protect /ws, /sessions, /stats
+    api_key="my-secret-key",  # Protect /ws, /sessions, /stats
 )
 
 # Create server with custom config
@@ -491,7 +491,7 @@ config = terminal_core.StreamingConfig(
     keepalive_interval=30,
     default_read_only=False,
     initial_cols=120,
-    initial_rows=40
+    initial_rows=40,
 )
 
 server = terminal_core.StreamingServer(pty_terminal, addr, config)
@@ -1074,6 +1074,7 @@ import select
 import sys
 import par_term_emu_core_rust as terminal_core
 
+
 def main():
     # Create terminal
     pty_terminal = terminal_core.PtyTerminal(80, 24, 10000)
@@ -1084,8 +1085,8 @@ def main():
 
     # Set ANSI colors (0-15)
     colors = [
-        (0, 0, 0),        # black
-        (201, 27, 0),     # red
+        (0, 0, 0),  # black
+        (201, 27, 0),  # red
         # ... more colors
     ]
     for i, (r, g, b) in enumerate(colors):
@@ -1097,9 +1098,9 @@ def main():
     # Create streaming server (automatically sets up output callback and PTY writer)
     addr = "127.0.0.1:8080"
     config = terminal_core.StreamingConfig(
-        api_key="my-secret-key",           # Protect /ws, /sessions, /stats
-        enable_system_stats=True,          # Enable CPU/memory/disk/network stats
-        system_stats_interval_secs=5,      # Stats every 5 seconds
+        api_key="my-secret-key",  # Protect /ws, /sessions, /stats
+        enable_system_stats=True,  # Enable CPU/memory/disk/network stats
+        system_stats_interval_secs=5,  # Stats every 5 seconds
     )
     server = terminal_core.StreamingServer(pty_terminal, addr, config)
 
@@ -1128,22 +1129,26 @@ def main():
                     )
                 elif event.get("type") == "trigger_matched":
                     server.send_trigger_matched(
-                        event["trigger_id"], event["row"],
-                        event["col"], event["end_col"], event["text"],
+                        event["trigger_id"],
+                        event["row"],
+                        event["col"],
+                        event["end_col"],
+                        event["text"],
                     )
                 elif event.get("type") == "progress_bar_changed":
                     server.send_progress_bar_changed(
-                        event["action"], event["id"],
+                        event["action"],
+                        event["id"],
                         percent=event.get("percent"),
                         label=event.get("label"),
                     )
 
             # Check for user commands (Unix only)
-            if sys.platform != 'win32':
+            if sys.platform != "win32":
                 ready, _, _ = select.select([sys.stdin], [], [], 0)
                 if ready:
                     cmd = sys.stdin.readline().strip()
-                    if cmd == 's':
+                    if cmd == "s":
                         print(f"Clients: {server.client_count()}")
 
             time.sleep(0.1)
@@ -1155,7 +1160,8 @@ def main():
         server.shutdown("Server stopping")
         print("Goodbye!")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()
 ```
 
@@ -1418,12 +1424,12 @@ The streaming server supports hosting multiple independent terminal sessions sim
 **Configuration:**
 ```python
 config = StreamingConfig(
-    max_sessions=10,              # Max concurrent sessions
-    session_idle_timeout=900,     # Reap empty sessions after 15m
-    presets={                     # Define shell presets
+    max_sessions=10,  # Max concurrent sessions
+    session_idle_timeout=900,  # Reap empty sessions after 15m
+    presets={  # Define shell presets
         "python": "python3",
-        "top": "htop"
-    }
+        "top": "htop",
+    },
 )
 ```
 

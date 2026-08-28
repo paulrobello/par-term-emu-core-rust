@@ -176,10 +176,12 @@ from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24, scrollback=100)
 
+
 def my_callback(event: dict) -> None:
     print(f"Event: {event['type']}")
-    if event['type'] == 'title_changed':
+    if event["type"] == "title_changed":
         print(f"New title: {event['title']}")
+
 
 # Add observer (receives all events)
 observer_id = term.add_observer(my_callback)
@@ -205,6 +207,7 @@ For async applications, use `add_async_observer()` to receive events via a queue
 import asyncio
 from par_term_emu_core_rust import Terminal
 
+
 async def watch_events():
     term = Terminal(80, 24, scrollback=100)
     observer_id, queue = term.add_async_observer()
@@ -218,6 +221,7 @@ async def watch_events():
         print(f"Async event: {event['type']}")
 
     term.remove_observer(observer_id)
+
 
 asyncio.run(watch_events())
 ```
@@ -357,37 +361,26 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 {
     "type": "bell",
     "bell_type": "visual" | "warning" | "margin",
-    "volume": "5"  # Only for warning/margin bells (0-8)
+    "volume": "5",  # Only for warning/margin bells (0-8)
 }
 ```
 
 #### Title Changed
 
 ```python
-{
-    "type": "title_changed",
-    "title": "New Terminal Title"
-}
+{"type": "title_changed", "title": "New Terminal Title"}
 ```
 
 #### Size Changed
 
 ```python
-{
-    "type": "size_changed",
-    "cols": "120",
-    "rows": "40"
-}
+{"type": "size_changed", "cols": "120", "rows": "40"}
 ```
 
 #### Mode Changed
 
 ```python
-{
-    "type": "mode_changed",
-    "mode": "DECCKM",
-    "enabled": "true"
-}
+{"type": "mode_changed", "mode": "DECCKM", "enabled": "true"}
 ```
 
 #### CWD Changed
@@ -399,7 +392,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "old_cwd": "/home/user",  # Optional
     "hostname": "server.example.com",  # Optional
     "username": "user",  # Optional
-    "timestamp": "1708400000000"
+    "timestamp": "1708400000000",
 }
 ```
 
@@ -408,11 +401,14 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
 ```python
 {
     "type": "shell_integration",
-    "event_type": "prompt_start" | "command_start" | "command_executed" | "command_finished",
+    "event_type": "prompt_start"
+    | "command_start"
+    | "command_executed"
+    | "command_finished",
     "command": "ls -la",  # Optional
     "exit_code": "0",  # Optional
     "timestamp": "1708400000000",  # Optional
-    "cursor_line": "42"  # Optional
+    "cursor_line": "42",  # Optional
 }
 ```
 
@@ -424,7 +420,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "zone_opened",
     "zone_id": "1",
     "zone_type": "prompt" | "command" | "output",
-    "abs_row_start": "10"
+    "abs_row_start": "10",
 }
 
 # Zone Closed
@@ -434,15 +430,11 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "zone_type": "output",
     "abs_row_start": "10",
     "abs_row_end": "25",
-    "exit_code": "0"  # Optional
+    "exit_code": "0",  # Optional
 }
 
 # Zone Scrolled Out
-{
-    "type": "zone_scrolled_out",
-    "zone_id": "1",
-    "zone_type": "command"
-}
+{"type": "zone_scrolled_out", "zone_id": "1", "zone_type": "command"}
 ```
 
 #### File Transfer Events
@@ -454,7 +446,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "id": "123",
     "direction": "download" | "upload",
     "filename": "file.txt",  # Optional
-    "total_bytes": "1024"  # Optional
+    "total_bytes": "1024",  # Optional
 }
 
 # Transfer Progress
@@ -462,7 +454,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "file_transfer_progress",
     "id": "123",
     "bytes_transferred": "512",
-    "total_bytes": "1024"  # Optional
+    "total_bytes": "1024",  # Optional
 }
 
 # Transfer Completed
@@ -470,21 +462,14 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "file_transfer_completed",
     "id": "123",
     "filename": "file.txt",  # Optional
-    "size": "1024"
+    "size": "1024",
 }
 
 # Transfer Failed
-{
-    "type": "file_transfer_failed",
-    "id": "123",
-    "reason": "Network error"
-}
+{"type": "file_transfer_failed", "id": "123", "reason": "Network error"}
 
 # Upload Requested
-{
-    "type": "upload_requested",
-    "format": "base64"
-}
+{"type": "upload_requested", "format": "base64"}
 ```
 
 #### Other Events
@@ -498,7 +483,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "col": "0",
     "end_col": "15",
     "text": "error: something failed",
-    "timestamp": "1708400000000"
+    "timestamp": "1708400000000",
 }
 
 # Progress Bar Changed
@@ -508,13 +493,13 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "id": "download",
     "state": "normal",  # Optional, for "set" action
     "percent": "50",  # Optional, for "set" action
-    "label": "Downloading..."  # Optional
+    "label": "Downloading...",  # Optional
 }
 
 # Badge Changed
 {
     "type": "badge_changed",
-    "badge": "Important"  # Optional, None if cleared
+    "badge": "Important",  # Optional, None if cleared
 }
 
 # Hyperlink Added
@@ -523,7 +508,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "url": "https://example.com",
     "row": "5",
     "col": "10",
-    "id": "42"  # Optional
+    "id": "42",  # Optional
 }
 
 # User Var Changed
@@ -531,7 +516,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "user_var_changed",
     "name": "MY_VAR",
     "value": "new_value",
-    "old_value": "old_value"  # Optional
+    "old_value": "old_value",  # Optional
 }
 
 # Environment Changed
@@ -539,7 +524,7 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "type": "environment_changed",
     "key": "cwd",
     "value": "/new/path",
-    "old_value": "/old/path"  # Optional
+    "old_value": "/old/path",  # Optional
 }
 
 # Remote Host Transition
@@ -548,33 +533,26 @@ All observer events are delivered as Python dicts with a `"type"` key identifyin
     "hostname": "server.example.com",
     "username": "user",  # Optional
     "old_hostname": "localhost",  # Optional
-    "old_username": "localuser"  # Optional
+    "old_username": "localuser",  # Optional
 }
 
 # Sub Shell Detected
 {
     "type": "sub_shell_detected",
     "depth": "2",
-    "shell_type": "bash"  # Optional
+    "shell_type": "bash",  # Optional
 }
 
 # Dirty Region
-{
-    "type": "dirty_region",
-    "first_row": "0",
-    "last_row": "23"
-}
+{"type": "dirty_region", "first_row": "0", "last_row": "23"}
 
 # Graphics Added
-{
-    "type": "graphics_added",
-    "row": "10"
-}
+{"type": "graphics_added", "row": "10"}
 
 # Screen Cleared
 {
     "type": "screen_cleared",
-    "include_scrollback": "false"  # "true" when ED 3J also cleared scrollback
+    "include_scrollback": "false",  # "true" when ED 3J also cleared scrollback
 }
 ```
 

@@ -63,7 +63,7 @@ def test_nfc_composes_text():
 
     # With NFC, the cell at (0,0) should contain precomposed é
     char = term.get_char(0, 0)
-    assert char == "\u00e9", f"Expected precomposed é (U+00E9), got {repr(char)}"
+    assert char == "\u00e9", f"Expected precomposed é (U+00E9), got {char!r}"
 
 
 def test_nfd_decomposes_text():
@@ -81,7 +81,7 @@ def test_nfd_decomposes_text():
     # With NFD, the cell should contain decomposed form: e + combining acute
     # get_char returns full grapheme, so we get the decomposed representation
     char = term.get_char(0, 0)
-    assert char == "e\u0301", f"Expected decomposed e+acute, got {repr(char)}"
+    assert char == "e\u0301", f"Expected decomposed e+acute, got {char!r}"
     # Cursor should be at col 1 (one cell used)
     assert term.cursor_position() == (1, 0)
 
@@ -101,7 +101,7 @@ def test_disabled_passthrough():
     # With no normalization, the combining mark is added to 'e' cell
     # get_char returns full grapheme (base + combining)
     char = term.get_char(0, 0)
-    assert char == "e\u0301", f"Expected decomposed e+acute, got {repr(char)}"
+    assert char == "e\u0301", f"Expected decomposed e+acute, got {char!r}"
 
 
 def test_nfkc_compatibility_normalization():
@@ -115,8 +115,8 @@ def test_nfkc_compatibility_normalization():
     # NFKC should decompose ﬁ into f + i
     char0 = term.get_char(0, 0)
     char1 = term.get_char(1, 0)
-    assert char0 == "f", f"Expected 'f', got {repr(char0)}"
-    assert char1 == "i", f"Expected 'i', got {repr(char1)}"
+    assert char0 == "f", f"Expected 'f', got {char0!r}"
+    assert char1 == "i", f"Expected 'i', got {char1!r}"
 
 
 def test_ascii_unchanged_by_normalization():
@@ -160,9 +160,9 @@ def test_nfc_vs_disabled_composition():
     disabled_char = term_disabled.get_char(0, 0)
 
     # NFC should give precomposed é, Disabled should give decomposed e+acute
-    assert nfc_char == "\u00e9", f"NFC: expected precomposed, got {repr(nfc_char)}"
+    assert nfc_char == "\u00e9", f"NFC: expected precomposed, got {nfc_char!r}"
     assert disabled_char == "e\u0301", (
-        f"Disabled: expected decomposed, got {repr(disabled_char)}"
+        f"Disabled: expected decomposed, got {disabled_char!r}"
     )
     assert nfc_char != disabled_char
 
@@ -177,4 +177,4 @@ def test_nfc_hangul():
     term.process_str(hangul)
 
     char = term.get_char(0, 0)
-    assert char == hangul, f"Expected 한, got {repr(char)}"
+    assert char == hangul, f"Expected 한, got {char!r}"

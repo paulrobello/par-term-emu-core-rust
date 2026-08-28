@@ -140,7 +140,9 @@ from par_term_emu_core_rust import Terminal, PtyTerminal
 
 # Using Terminal directly
 terminal = Terminal(80, 24)
-changed_image_ids = terminal.update_animations()  # Returns list of image IDs with frame changes
+changed_image_ids = (
+    terminal.update_animations()
+)  # Returns list of image IDs with frame changes
 
 # Using PtyTerminal (terminal with PTY support)
 pty = PtyTerminal(80, 24)

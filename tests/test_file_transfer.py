@@ -16,7 +16,6 @@ import zlib
 
 from par_term_emu_core_rust import Terminal
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -100,13 +99,13 @@ class TestFileDownload:
         assert "file_transfer_completed" in event_types
 
         # Check started event details
-        started = [e for e in events if e["type"] == "file_transfer_started"][0]
+        started = next(e for e in events if e["type"] == "file_transfer_started")
         assert started["direction"] == "download"
         assert started["filename"] == "test.pdf"
         assert started["total_bytes"] == str(len(file_data))
 
         # Check completed event details
-        completed = [e for e in events if e["type"] == "file_transfer_completed"][0]
+        completed = next(e for e in events if e["type"] == "file_transfer_completed")
         assert completed["filename"] == "test.pdf"
         assert completed["size"] == str(len(file_data))
 

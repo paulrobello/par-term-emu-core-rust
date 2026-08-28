@@ -385,7 +385,7 @@ impl FontCache {
                 // swash documentation says BGRA, but testing shows we need to swap R<->B
                 // to get correct colors (R and B were swapped)
                 let mut rgba = Vec::with_capacity(image.data.len());
-                for chunk in image.data.chunks_exact(4) {
+                for chunk in image.data.as_chunks::<4>().0 {
                     rgba.push(chunk[0]); // R (actually at position 0, not 2)
                     rgba.push(chunk[1]); // G
                     rgba.push(chunk[2]); // B (actually at position 2, not 0)
@@ -395,7 +395,13 @@ impl FontCache {
             }
             Content::SubpixelMask => {
                 // Subpixel mask - treat as regular mask, use R channel
-                let grayscale: Vec<u8> = image.data.chunks_exact(3).map(|chunk| chunk[0]).collect();
+                let grayscale: Vec<u8> = image
+                    .data
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|chunk| chunk[0])
+                    .collect();
                 (grayscale, BitmapFormat::Grayscale)
             }
         };
@@ -672,7 +678,7 @@ impl FontCache {
             Content::Color => {
                 // Same as above - no BGRA conversion needed
                 let mut rgba = Vec::with_capacity(image.data.len());
-                for chunk in image.data.chunks_exact(4) {
+                for chunk in image.data.as_chunks::<4>().0 {
                     rgba.push(chunk[0]); // R
                     rgba.push(chunk[1]); // G
                     rgba.push(chunk[2]); // B
@@ -681,7 +687,13 @@ impl FontCache {
                 (rgba, BitmapFormat::Rgba)
             }
             Content::SubpixelMask => {
-                let grayscale: Vec<u8> = image.data.chunks_exact(3).map(|chunk| chunk[0]).collect();
+                let grayscale: Vec<u8> = image
+                    .data
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|chunk| chunk[0])
+                    .collect();
                 (grayscale, BitmapFormat::Grayscale)
             }
         };

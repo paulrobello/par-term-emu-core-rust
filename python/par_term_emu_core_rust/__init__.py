@@ -28,19 +28,19 @@ from ._native import (
     Macro,
     MacroEvent,
     MouseEncoding,
+    NormalizationForm,
     ProgressBar,
     ProgressState,
     PtyTerminal,
     RecordingEvent,
     RecordingSession,
-    ScreenSnapshot,
     ScreenshotConfig,
+    ScreenSnapshot,
     ShellIntegration,
     Terminal,
     Trigger,
     TriggerAction,
     TriggerMatch,
-    NormalizationForm,
     UnderlineStyle,
     UnicodeVersion,
     WidthConfig,
@@ -48,6 +48,9 @@ from ._native import (
     adjust_contrast_rgb,
     adjust_hue,
     adjust_saturation,
+    # Unicode width functions
+    char_width,
+    char_width_cjk,
     color_luminance,
     complementary_color,
     contrast_ratio,
@@ -55,6 +58,7 @@ from ._native import (
     hex_to_rgb,
     hsl_to_rgb,
     is_dark_color,
+    is_east_asian_ambiguous,
     lighten_rgb,
     meets_wcag_aa,
     meets_wcag_aaa,
@@ -63,12 +67,8 @@ from ._native import (
     rgb_to_ansi_256,
     rgb_to_hex,
     rgb_to_hsl,
-    # Unicode width functions
-    char_width,
-    char_width_cjk,
     str_width,
     str_width_cjk,
-    is_east_asian_ambiguous,
 )
 
 # Optional streaming support (available when built with --features streaming)
@@ -76,10 +76,10 @@ try:
     from ._native import (
         StreamingConfig,
         StreamingServer,
-        encode_server_message,
+        decode_client_message,
         decode_server_message,
         encode_client_message,
-        decode_client_message,
+        encode_server_message,
     )
 
     _has_streaming = True
@@ -112,6 +112,7 @@ __all__ = [
     "Macro",
     "MacroEvent",
     "MouseEncoding",
+    "NormalizationForm",
     "ProgressBar",
     "ProgressState",
     "PtyTerminal",
@@ -124,7 +125,6 @@ __all__ = [
     "Trigger",
     "TriggerAction",
     "TriggerMatch",
-    "NormalizationForm",
     "UnderlineStyle",
     "UnicodeVersion",
     "WidthConfig",
@@ -132,6 +132,9 @@ __all__ = [
     "adjust_contrast_rgb",
     "adjust_hue",
     "adjust_saturation",
+    # Unicode width functions
+    "char_width",
+    "char_width_cjk",
     "color_luminance",
     "complementary_color",
     "contrast_ratio",
@@ -139,26 +142,23 @@ __all__ = [
     "hex_to_rgb",
     "hsl_to_rgb",
     "is_dark_color",
+    "is_east_asian_ambiguous",
     "lighten_rgb",
     "meets_wcag_aa",
     "meets_wcag_aaa",
     "mix_colors",
-    "perceived_brightness_rgb",
-    "rgb_to_ansi_256",
-    "rgb_to_hex",
-    "rgb_to_hsl",
-    # Unicode width functions
-    "char_width",
-    "char_width_cjk",
-    "str_width",
-    "str_width_cjk",
-    "is_east_asian_ambiguous",
     # Observer convenience wrappers
     "on_bell",
     "on_command_complete",
     "on_cwd_change",
     "on_title_change",
     "on_zone_change",
+    "perceived_brightness_rgb",
+    "rgb_to_ansi_256",
+    "rgb_to_hex",
+    "rgb_to_hsl",
+    "str_width",
+    "str_width_cjk",
 ]
 
 # Add streaming classes and functions if available
@@ -167,9 +167,9 @@ if _has_streaming:
         [
             "StreamingConfig",
             "StreamingServer",
-            "encode_server_message",
+            "decode_client_message",
             "decode_server_message",
             "encode_client_message",
-            "decode_client_message",
+            "encode_server_message",
         ]
     )

@@ -125,13 +125,13 @@ from PIL import Image
 import io
 
 # Create a test image
-img = Image.new('RGB', (100, 100), (255, 0, 0))
+img = Image.new("RGB", (100, 100), (255, 0, 0))
 buf = io.BytesIO()
-img.save(buf, format='PNG')
+img.save(buf, format="PNG")
 data = base64.standard_b64encode(buf.getvalue()).decode()
 
 # Send to terminal
-print(f'\x1b_Ga=T,f=100,t=d;{data}\x1b\\')
+print(f"\x1b_Ga=T,f=100,t=d;{data}\x1b\\")
 ```
 
 ### Kitty Graphics Animation

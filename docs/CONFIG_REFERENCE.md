@@ -177,7 +177,7 @@ term.set_conformance_level(level=520, c1_mode=0)  # VT520, 7-bit C1 controls
 
 # Configure bell volumes
 term.set_warning_bell_volume(5)  # Medium volume
-term.set_margin_bell_volume(3)   # Low volume
+term.set_margin_bell_volume(3)  # Low volume
 ```
 
 **Notes:**
@@ -251,7 +251,7 @@ answerback = term.answerback_string()  # Returns None or string
 
 # Set the answerback string
 term.set_answerback_string("par-term")  # Enable with custom string
-term.set_answerback_string(None)         # Disable (default, recommended for security)
+term.set_answerback_string(None)  # Disable (default, recommended for security)
 ```
 
 ### Security Recommendations
@@ -524,11 +524,7 @@ png_bytes = term.screenshot()
 jpg_bytes = term.screenshot(format="jpeg", quality=85)
 
 # SVG with custom font
-svg_bytes = term.screenshot(
-    format="svg",
-    font_path="/path/to/font.ttf",
-    font_size=16.0
-)
+svg_bytes = term.screenshot(format="svg", font_path="/path/to/font.ttf", font_size=16.0)
 
 # Screenshot with theme settings
 # Note: bold_brightening and use_bold_color are Optional[bool], defaulting to False when not specified
@@ -539,14 +535,14 @@ png_bytes = term.screenshot(
     link_color=(100, 149, 237),
     bold_color=(255, 255, 255),
     minimum_contrast=0.7,
-    faint_text_alpha=0.6
+    faint_text_alpha=0.6,
 )
 
 # Capture scrollback content with offset
 # Note: include_scrollback enables scrollback capture, scrollback_offset scrolls viewport
 png_bytes = term.screenshot(
     include_scrollback=True,
-    scrollback_offset=50  # Scroll back 50 lines before capture
+    scrollback_offset=50,  # Scroll back 50 lines before capture
 )
 
 # Save directly to file (format is auto-detected from extension, or specify explicitly)
@@ -554,7 +550,7 @@ term.screenshot_to_file(
     path="/path/to/output.png",
     format=None,  # Optional, auto-detected from extension if None
     padding=20,
-    font_size=18.0
+    font_size=18.0,
 )
 
 # Sixel graphics rendering
@@ -790,12 +786,12 @@ accept_osc7: true                         # Directory tracking (OSC 7)
 
 ```python
 # Enable all interactive features
-term.process(b"\x1b[?1049h")     # Alt screen + save cursor
-term.process(b"\x1b[?25h")       # Show cursor
-term.process(b"\x1b[?1002h")     # Button event mouse
-term.process(b"\x1b[?1006h")     # SGR mouse encoding
-term.process(b"\x1b[?2004h")     # Bracketed paste
-term.process(b"\x1b[?2026h")     # Synchronized updates
+term.process(b"\x1b[?1049h")  # Alt screen + save cursor
+term.process(b"\x1b[?25h")  # Show cursor
+term.process(b"\x1b[?1002h")  # Button event mouse
+term.process(b"\x1b[?1006h")  # SGR mouse encoding
+term.process(b"\x1b[?2004h")  # Bracketed paste
+term.process(b"\x1b[?2026h")  # Synchronized updates
 ```
 
 ### Minimal Safe Terminal
@@ -811,10 +807,10 @@ term = Terminal(cols=80, rows=24, scrollback=0)
 
 ```python
 # Vim-like configuration
-term.process(b"\x1b[?1049h")     # Alt screen + save cursor
-term.process(b"\x1b[?25h")       # Show cursor
-term.process(b"\x1b[?1000h")     # Normal mouse tracking
-term.process(b"\x1b[?1006h")     # SGR mouse encoding
+term.process(b"\x1b[?1049h")  # Alt screen + save cursor
+term.process(b"\x1b[?25h")  # Show cursor
+term.process(b"\x1b[?1000h")  # Normal mouse tracking
+term.process(b"\x1b[?1006h")  # SGR mouse encoding
 ```
 
 ---

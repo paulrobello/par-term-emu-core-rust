@@ -202,9 +202,9 @@ User variables are set automatically when the terminal processes `OSC 1337 ; Set
 **Example:**
 ```python
 # After shell sends SetUserVar sequences:
-host = term.get_user_var("hostname")   # "server1"
-user = term.get_user_var("username")   # "alice"
-all_vars = term.get_user_vars()        # {"hostname": "server1", "username": "alice"}
+host = term.get_user_var("hostname")  # "server1"
+user = term.get_user_var("username")  # "alice"
+all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 ```
 
 #### Cursor Control
@@ -733,6 +733,7 @@ from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
 
+
 def on_transfer(event: dict) -> None:
     if event["type"] == "file_transfer_completed":
         transfer = term.take_completed_transfer(event["id"])
@@ -741,12 +742,16 @@ def on_transfer(event: dict) -> None:
                 f.write(transfer["data"])
             print(f"Saved {transfer['filename']} ({len(transfer['data'])} bytes)")
 
-obs_id = term.add_observer(on_transfer, kinds=[
-    "file_transfer_started",
-    "file_transfer_progress",
-    "file_transfer_completed",
-    "file_transfer_failed",
-])
+
+obs_id = term.add_observer(
+    on_transfer,
+    kinds=[
+        "file_transfer_started",
+        "file_transfer_progress",
+        "file_transfer_completed",
+        "file_transfer_failed",
+    ],
+)
 
 # Process incoming OSC 1337 File= data with inline=0
 # term.process(file_transfer_data)
@@ -761,12 +766,14 @@ from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
 
+
 def on_upload_request(event: dict) -> None:
     if event["type"] == "upload_requested":
         # Read file and send data
         with open("archive.tgz", "rb") as f:
             term.send_upload_data(f.read())
         # Or cancel: term.cancel_upload()
+
 
 obs_id = term.add_observer(on_upload_request, kinds=["upload_requested"])
 ```
@@ -1003,8 +1010,10 @@ from par_term_emu_core_rust import Terminal
 
 term = Terminal(80, 24)
 
+
 def on_event(event: dict) -> None:
     print(f"Event: {event['type']}")
+
 
 # Observe all events
 obs_id = term.add_observer(on_event)
@@ -1056,7 +1065,7 @@ term = Terminal(80, 24)
 bell_id = on_bell(term, lambda event: print("Bell!"))
 title_id = on_title_change(term, lambda event: print(f"Title: {event.get('title')}"))
 
-term.process(b"\x07")               # Prints: Bell!
+term.process(b"\x07")  # Prints: Bell!
 term.process(b"\x1b]0;My Title\x07")  # Prints: Title: My Title
 
 term.remove_observer(bell_id)
@@ -2176,8 +2185,24 @@ from par_term_emu_core_rust import encode_server_message
 
 msg = encode_server_message("output", data="Hello, world!")
 msg = encode_server_message("cwd_changed", new_cwd="/home/user", hostname="server1")
-msg = encode_server_message("trigger_matched", trigger_id=1, row=5, col=0, end_col=10, text="error", captures=["error"], timestamp=1234567890)
-msg = encode_server_message("progress_bar_changed", action="set", id="dl-1", state="normal", percent=50, label="Downloading")
+msg = encode_server_message(
+    "trigger_matched",
+    trigger_id=1,
+    row=5,
+    col=0,
+    end_col=10,
+    text="error",
+    captures=["error"],
+    timestamp=1234567890,
+)
+msg = encode_server_message(
+    "progress_bar_changed",
+    action="set",
+    id="dl-1",
+    state="normal",
+    percent=50,
+    label="Downloading",
+)
 ```
 
 ### decode_server_message

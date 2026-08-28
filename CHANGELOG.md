@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **MSRV raised 1.90 → 1.98** (`Cargo.toml`; docs synced in `README.md`, `docs/BUILDING.md`, `docs/CROSS_PLATFORM.md`, `docs/MATURIN_BEST_PRACTICES.md`). Aligned to the current stable toolchain (rustc 1.98.0). **Breaking for Rust consumers**: the `rlib` now requires Rust ≥ 1.98; PyPI (Python wheel) users are unaffected (CI builds wheels with the stable toolchain). Rust's Linux glibc floor is unchanged at 2.17 (manylinux2014).
+
 ### Fixed
 - **Kitty placement APCs now store decoded graphics** (`src/terminal/mod.rs`). Regular Kitty placement commands returned a decoded `KittyGraphicResult::Graphic`, but the terminal integration discarded it after the image upload, leaving placements with no active pixel-backed graphic for downstream renderers. The result is now inserted into `GraphicsStore`; a transmit followed by placement renders with its stored pixels. Regression coverage added in `src/terminal/tests/kitty_apc.rs`.
 

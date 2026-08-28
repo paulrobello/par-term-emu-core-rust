@@ -5,6 +5,7 @@ Simple WebSocket client to test bidirectional streaming
 
 import asyncio
 import json
+
 import websockets  # type: ignore
 
 
@@ -25,7 +26,7 @@ async def test_streaming():
                 print(f"  Client ID: {data.get('client_id')}")
                 if "screen" in data:
                     print(f"  Initial screen: {len(data['screen'])} chars")
-                    print(f"  Screen preview: {repr(data['screen'][:100])}")
+                    print(f"  Screen preview: {data['screen'][:100]!r}")
 
             # Send a simple command: "echo hello"
             print("\n[Sending] Input: 'echo hello\\n'")
@@ -43,17 +44,17 @@ async def test_streaming():
                         data = json.loads(msg)
                         if data.get("type") == "output":
                             output = data.get("data", "")
-                            print(f"[Output {output_count + 1}] {repr(output)}")
+                            print(f"[Output {output_count + 1}] {output!r}")
                             output_count += 1
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         # No message in this interval, continue waiting
                         continue
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 print(f"[Error receiving] {e}")
 
             print("\n[Test complete]")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error: {e}")
         import traceback
 

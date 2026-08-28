@@ -123,7 +123,7 @@ def test_snapshot_with_colors():
     line0 = snapshot.get_line(0)
 
     # First cell should be 'R' with red foreground
-    char, fg_rgb, bg_rgb, attrs = line0[0]
+    char, fg_rgb, _bg_rgb, _attrs = line0[0]
     assert char == "R"
     # Red color should be set (not default black)
     assert fg_rgb != (0, 0, 0)
@@ -139,7 +139,7 @@ def test_snapshot_with_attributes():
     line0 = snapshot.get_line(0)
 
     # First cell should have bold and underline
-    char, fg_rgb, bg_rgb, attrs = line0[0]
+    char, _fg_rgb, _bg_rgb, attrs = line0[0]
     assert char == "B"
     assert attrs.bold
     assert attrs.underline

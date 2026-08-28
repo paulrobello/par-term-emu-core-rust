@@ -5,6 +5,7 @@ Test UTF-8 character handling in streaming
 
 import asyncio
 import json
+
 import websockets  # type: ignore
 
 
@@ -48,12 +49,12 @@ async def test_utf8():
                         data = json.loads(msg)
                         if data.get("type") == "output":
                             outputs.append(data.get("data", ""))
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         break
 
                 # Print collected output
                 full_output = "".join(outputs)
-                print(f"[Output] {repr(full_output)}")
+                print(f"[Output] {full_output!r}")
 
                 # Check if our test string appears in output
                 test_str = cmd.split("'")[1] if "'" in cmd else cmd
@@ -64,7 +65,7 @@ async def test_utf8():
 
             print("\n[Test complete]")
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"Error: {e}")
         import traceback
 
