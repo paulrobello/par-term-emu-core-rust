@@ -19,7 +19,7 @@ Get up and running with par-term-emu in minutes!
 
 ## Installation
 
-**Requirements:** Rust 1.75+ and Python 3.12+
+**Requirements:** Rust 1.98+ and Python 3.12+
 
 ```bash
 # Install Rust if you haven't already
@@ -29,7 +29,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 uv tool install maturin
 
 # Clone and build
-git clone <repository-url>
+git clone https://github.com/paulrobello/par-term-emu-core-rust
 cd par-term-emu-core-rust
 maturin develop --release
 ```
@@ -120,14 +120,16 @@ Stream terminal sessions to web browsers using the standalone streaming server w
 wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-streamer-linux-x86_64
 chmod +x par-term-streamer-linux-x86_64
 
-# Download and extract web frontend
-wget https://github.com/paulrobello/par-term-emu-core-rust/releases/latest/download/par-term-web-frontend-v0.9.0.tar.gz
-tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
+# Download the par-term-web-frontend-v<version>.tar.gz asset from the
+# releases page (https://github.com/paulrobello/par-term-emu-core-rust/releases/latest),
+# then extract it — the archive contains the files at its root
+mkdir -p ./web_term
+tar -xzf par-term-web-frontend-v*.tar.gz -C ./web_term
 
 # Run the server
 ./par-term-streamer-linux-x86_64 --web-root ./web_term
 
-# Open browser to http://localhost:8080
+# Open browser to http://localhost:8099
 ```
 
 **Available platforms:**
@@ -139,17 +141,17 @@ tar -xzf par-term-web-frontend-v0.9.0.tar.gz -C ./web_term
 
 ```bash
 # Install the streaming server globally
-cargo install par-term-emu-core-rust --features streaming
+cargo install par-term-emu-core-rust --features streaming-bin
 
 # Run the server
-par-term-streamer --port 8080 --theme dracula
+par-term-streamer --port 8099 --theme dracula
 ```
 
 ### Build from Source
 
 ```bash
 # Build the Rust streaming server
-cargo build --bin par-term-streamer --no-default-features --features streaming --release
+cargo build --bin par-term-streamer --no-default-features --features streaming-bin --release
 ./target/release/par-term-streamer --help
 
 # Or use the Makefile
@@ -201,7 +203,7 @@ graph TB
 
 ## Explore Examples
 
-The project includes 33 example scripts demonstrating various features. Explore the `examples/` directory for code samples including PTY sessions, graphics, and advanced terminal features.
+The project includes 39 example scripts demonstrating various features. Explore the `examples/` directory for code samples including PTY sessions, graphics, and advanced terminal features.
 
 ```bash
 # Run all examples
@@ -216,8 +218,8 @@ uv run python examples/pty_shell.py
 
 ## Next Steps
 
-- Check out the [full API documentation](README.md) for complete method reference
-- Explore the [examples directory](examples/) for 33 code samples including PTY, graphics, and advanced features
+- Check out the [full API documentation](docs/API_REFERENCE.md) for complete method reference
+- Explore the [examples directory](examples/) for code samples including PTY, graphics, and advanced features
 - Review [Streaming Documentation](docs/STREAMING.md) for WebSocket protocol, advanced features, and troubleshooting
 - Review [CLAUDE.md](CLAUDE.md) for development and build instructions
 - Run example demonstrations: `make examples`
