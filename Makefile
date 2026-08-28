@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python checkall pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python checkall bench pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -47,6 +47,7 @@ help:
 	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
 	@echo "  stub-check      - Verify the module imports and the stub parses under pyright"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
+	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo ""
 	@echo "Pre-commit Hooks:"
 	@echo "  pre-commit-install   - Install pre-commit hooks"
@@ -285,6 +286,10 @@ stub-check:
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 
 checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web
+
+bench:
+	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
+	cargo bench --no-default-features --features rust-only
 	@echo ""
 	@echo "======================================================================"
 	@echo "  All code quality checks passed!"

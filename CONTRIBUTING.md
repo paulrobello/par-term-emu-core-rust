@@ -7,6 +7,7 @@ This guide covers the development workflow, sync rules, and review expectations 
 - [Development Setup](#development-setup)
 - [Build Rules](#build-rules)
 - [Verification](#verification)
+- [Benchmarks](#benchmarks)
 - [Version Sync](#version-sync)
 - [Rust to Python Binding Sync](#rust-to-python-binding-sync)
 - [Streaming Protocol Changes](#streaming-protocol-changes)
@@ -49,6 +50,24 @@ make lint-python  # Python ruff format + check + pyright
 ```
 
 Do not push until `make checkall` passes cleanly. When fixing a failing test, confirm you are fixing the actual bug and not papering over a real issue in the code.
+
+## Benchmarks
+
+Criterion benchmarks for the VTE processing hot path live in `benches/terminal_throughput.rs`. They drive the real `Terminal::process` pipeline (vte parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) and report throughput as MB/s.
+
+```bash
+make bench         # cargo bench --no-default-features --features rust-only
+```
+
+Benchmarks build without the Python feature, so no `make dev` / maturin step is needed. They are on-demand only and never run as part of `make checkall`. The committed baseline is `docs/fable/BENCH-BASELINE-2026-08.md` — compare your changes against it when touching the hot path:
+
+```bash
+cargo bench --no-default-features --features rust-only -- --save-baseline my-change
+# ... after further changes ...
+cargo bench --no-default-features --features rust-only -- --baseline my-change
+```
+
+A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only -- --test`.
 
 ## Version Sync
 

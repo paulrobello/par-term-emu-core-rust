@@ -149,6 +149,19 @@ tempfile = "3.27"
 # (.oneshot) for the in-process router tests in src/streaming/server.rs.
 tower = { version = "0.5", features = ["util"] }
 
+# Benchmark harness for the VTE processing hot path (ENH-007). Still compiles
+# (and is cached) as part of test builds, but the bench target below is skipped
+# unless `rust-only` is enabled, so checkall never runs benchmarks.
+criterion = { version = "0.7", features = ["html_reports"] }
+
+# VTE throughput benchmarks (ENH-007). `required-features` keeps the target out
+# of everyday `cargo test` runs; run via `make bench`
+# (cargo bench --no-default-features --features rust-only).
+[[bench]]
+name = "terminal_throughput"
+harness = false
+required-features = ["rust-only"]
+
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session"]
