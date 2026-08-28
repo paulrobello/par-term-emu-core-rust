@@ -8,7 +8,8 @@ use parking_lot::Mutex;
 /// - 3: Debug level (VT sequences, buffer changes)
 /// - 4: Trace level (every operation, buffer snapshots)
 ///
-/// All output goes to `par_term_emu_core_rust_debug_rust.log` in the system temp
+/// All output goes to `par_term_emu_core_rust_debug_rust_{pid}.log` (one file per
+/// process) in the system temp
 /// directory (std::env::temp_dir(): /tmp on Linux, per-user temp on macOS, %TEMP% on Windows).
 /// This avoids breaking TUI apps by keeping debug output separate from stdout/stderr.
 use std::fmt;
@@ -16,6 +17,9 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 /// Debug level configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -56,15 +60,25 @@ impl DebugLogger {
         let file = if level != DebugLevel::Off {
             // Rust uses a separate log file from Python, written to the system temp
             // dir (std::env::temp_dir(): /tmp on Linux, per-user temp on macOS, %TEMP% on Windows)
-            // so the Rust and Python logs land in the same place.
-            let log_path = std::env::temp_dir().join("par_term_emu_core_rust_debug_rust.log");
+            // so the Rust and Python logs land in the same place. The PID suffix
+            // keeps concurrent emulator processes from truncating each other's logs.
+            let log_path = std::env::temp_dir().join(format!(
+                "par_term_emu_core_rust_debug_rust_{}.log",
+                std::process::id()
+            ));
 
-            match OpenOptions::new()
-                .write(true)
-                .truncate(true)
-                .create(true)
-                .open(&log_path)
+            let mut options = OpenOptions::new();
+            options.write(true).truncate(true).create(true);
+            #[cfg(unix)]
             {
+                // The temp dir is shared and world-writable: create the log
+                // owner-only and refuse to follow a symlink planted at the path
+                // (open then fails and logging is silently disabled — fail closed).
+                options.mode(0o600);
+                options.custom_flags(libc::O_NOFOLLOW);
+            }
+
+            match options.open(&log_path) {
                 Ok(f) => {
                     // Write header
                     let mut logger = DebugLogger {
