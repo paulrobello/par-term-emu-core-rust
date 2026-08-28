@@ -16,14 +16,13 @@
 //! - Screenshot generation in multiple formats
 //! - Buffer statistics and content search capabilities
 
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::color::Color;
 use crate::pty_session;
 
-use super::conversions::parse_sixel_mode;
 use super::types::{PyAttributes, PyScreenSnapshot};
 
 /// Python wrapper for PtySession - a terminal with PTY support

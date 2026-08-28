@@ -2124,7 +2124,7 @@ macro_rules! impl_terminal_screenshot_methods {
                 faint_text_alpha: Option<f32>,
                 minimum_contrast: f64,
             ) -> pyo3::PyResult<Vec<u8>> {
-                use crate::screenshot::{ImageFormat, ScreenshotConfig};
+                use $crate::screenshot::{ImageFormat, ScreenshotConfig};
 
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
 

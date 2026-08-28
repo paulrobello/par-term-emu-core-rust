@@ -24,7 +24,7 @@ mod shell_integration_api;
 mod text_api;
 mod trigger_api;
 
-use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
