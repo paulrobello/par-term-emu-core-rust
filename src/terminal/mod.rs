@@ -64,8 +64,9 @@ pub use screen::{
 };
 pub use search::{DetectedItem, HyperlinkInfo, RegexMatch, RegexSearchOptions, SearchMatch};
 pub use semantic_snapshot::{
-    diff_screen_lines, Bookmark, CommandInfo, CwdChangeInfo, DiffChangeType, ExportFormat,
-    LineDiff, ScrollbackStats, SemanticSnapshot, SnapshotDiff, SnapshotScope, ZoneInfo,
+    diff_screen_lines, diff_snapshots, Bookmark, CommandInfo, CwdChangeInfo, DiffChangeType,
+    ExportFormat, LineDiff, ScrollbackStats, SemanticSnapshot, SnapshotDiff, SnapshotScope,
+    ZoneInfo,
 };
 pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
 pub use trigger::{

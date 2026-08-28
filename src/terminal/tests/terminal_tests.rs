@@ -3323,6 +3323,39 @@ fn test_snapshot_diff_no_changes() {
 }
 
 #[test]
+fn test_diff_snapshots_semantic() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"alpha\r\nbeta\r\ngamma");
+    let old = term.get_semantic_snapshot(SnapshotScope::Visible);
+    term.process(b"\x1b[2;1HBETA\x1b[4;1Hdelta");
+    let new = term.get_semantic_snapshot(SnapshotScope::Visible);
+
+    let diff = diff_snapshots(&old, &new);
+    // content() pads blank rows, so the empty row gaining "delta" is a
+    // modified row alongside the beta -> BETA overwrite
+    assert_eq!(diff.modified, 2);
+    let modified: Vec<&LineDiff> = diff
+        .diffs
+        .iter()
+        .filter(|d| d.change_type == DiffChangeType::Modified)
+        .collect();
+    assert_eq!(modified.len(), 2);
+    let beta_row = modified
+        .iter()
+        .find(|d| d.old_content.as_deref() == Some("beta"))
+        .expect("beta row diff present");
+    assert_eq!(beta_row.new_content.as_deref(), Some("BETA"));
+    assert_eq!(beta_row.old_row, Some(1));
+    assert_eq!(beta_row.new_row, Some(1));
+    let delta_row = modified
+        .iter()
+        .find(|d| d.new_content.as_deref() == Some("delta"))
+        .expect("delta row diff present");
+    assert_eq!(delta_row.old_content.as_deref(), Some(""));
+    assert_eq!(delta_row.new_row, Some(3));
+}
+
+#[test]
 fn test_add_bookmark() {
     let mut term = Terminal::with_scrollback(80, 24, 100);
     term.process(b"Some content\r\n");

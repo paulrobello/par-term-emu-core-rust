@@ -157,3 +157,56 @@ def test_snapshot_json_default_params():
     json_str = term.get_semantic_snapshot_json()
     parsed = json.loads(json_str)
     assert parsed["cols"] == 80
+
+
+def test_diff_snapshots():
+    """diff_snapshots compares the visible text of two snapshot dicts."""
+    term = Terminal(80, 24)
+    term.process(b"alpha\r\nbeta\r\ngamma")
+    old_snap = term.get_semantic_snapshot(scope="visible")
+
+    term.process(b"\x1b[2;1HBETA")  # overwrite row 2 in place
+    term.process(b"\x1b[4;1Hdelta")  # new content on row 4
+    new_snap = term.get_semantic_snapshot(scope="visible")
+
+    diff = term.diff_snapshots(old_snap, new_snap)
+    assert repr(diff).startswith("SnapshotDiff(")
+
+    # content() pads blank rows, so the empty row gaining "delta" is a
+    # modified row alongside the beta -> BETA overwrite
+    assert diff.modified == 2
+    modified = [d for d in diff.diffs if d.change_type == "modified"]
+    assert len(modified) == 2
+
+    beta_row = next(d for d in modified if d.old_content == "beta")
+    assert beta_row.new_content == "BETA"
+    assert beta_row.old_row == 1
+    assert beta_row.new_row == 1
+
+    delta_row = next(d for d in modified if d.new_content == "delta")
+    assert delta_row.old_content == ""
+    assert delta_row.new_row == 3
+
+
+def test_diff_snapshots_identical():
+    """Diffing a snapshot against itself reports only unchanged lines."""
+    term = Terminal(80, 24)
+    term.process(b"steady state")
+    snap = term.get_semantic_snapshot(scope="visible")
+
+    diff = term.diff_snapshots(snap, snap)
+    assert diff.added == 0
+    assert diff.removed == 0
+    assert diff.modified == 0
+    assert diff.unchanged == len(diff.diffs)
+    assert diff.diffs  # at least the written line
+    assert all(d.change_type == "unchanged" for d in diff.diffs)
+
+
+def test_diff_snapshots_missing_visible_text():
+    """A snapshot dict without a visible_text string raises ValueError."""
+    import pytest
+
+    term = Terminal(80, 24)
+    with pytest.raises(ValueError, match="visible_text"):
+        term.diff_snapshots({}, {})

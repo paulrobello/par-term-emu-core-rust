@@ -650,6 +650,16 @@ pub fn diff_screen_lines(old_lines: &[String], new_lines: &[String]) -> Snapshot
     }
 }
 
+/// Compare the visible text of two semantic snapshots
+///
+/// Splits each snapshot's `visible_text` into lines and diffs them with
+/// [`diff_screen_lines`].
+pub fn diff_snapshots(old: &SemanticSnapshot, new: &SemanticSnapshot) -> SnapshotDiff {
+    let old_lines: Vec<String> = old.visible_text.split('\n').map(str::to_string).collect();
+    let new_lines: Vec<String> = new.visible_text.split('\n').map(str::to_string).collect();
+    diff_screen_lines(&old_lines, &new_lines)
+}
+
 use crate::cell::Cell;
 use crate::terminal::Terminal;
 

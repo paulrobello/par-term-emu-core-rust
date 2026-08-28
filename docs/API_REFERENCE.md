@@ -951,6 +951,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `debug_snapshot_primary() -> str`: Get debug snapshot of primary screen
 - `debug_snapshot_alt() -> str`: Get debug snapshot of alternate screen
 - `debug_log_snapshot(label: str)`: Log a debug snapshot to console. `label` is a required positional tag identifying the snapshot in the log output.
+- `diff_snapshots(old_snapshot: dict, new_snapshot: dict) -> SnapshotDiff`: Compare the visible text of two `get_semantic_snapshot()` dicts, row by row. Blank padded rows that gain content count as modified. Raises `ValueError` if either dict lacks a `visible_text` string.
 
 ### Text Extraction and Selection
 
@@ -1808,7 +1809,7 @@ Shell integration statistics.
 
 ### SnapshotDiff
 
-Difference between two screen snapshots.
+Difference between two screen snapshots. Obtain one from `diff_snapshots(old_snapshot, new_snapshot)`.
 
 **Properties:**
 - `diffs: list[LineDiff]`: Per-line differences

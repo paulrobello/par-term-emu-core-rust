@@ -235,6 +235,41 @@ impl PyTerminal {
         Ok(self.inner.get_semantic_snapshot_json(snapshot_scope))
     }
 
+    /// Compare two semantic snapshots and return their differences.
+    ///
+    /// Args:
+    ///     old_snapshot: dict from get_semantic_snapshot() captured first
+    ///     new_snapshot: dict from get_semantic_snapshot() captured second
+    ///
+    /// Returns:
+    ///     SnapshotDiff with per-line differences (`diffs`, a list of
+    ///     LineDiff) and `added` / `removed` / `modified` / `unchanged`
+    ///     line counts
+    ///
+    /// Example:
+    ///     >>> term = Terminal(80, 24)
+    ///     >>> term.process(b"one\r\ntwo")
+    ///     >>> old = term.get_semantic_snapshot()
+    ///     >>> term.process(b"\x1b[2;1HTWO")
+    ///     >>> new = term.get_semantic_snapshot()
+    ///     >>> diff = term.diff_snapshots(old, new)
+    ///     >>> diff.modified
+    ///     1
+    fn diff_snapshots(
+        &self,
+        old_snapshot: &Bound<'_, pyo3::types::PyDict>,
+        new_snapshot: &Bound<'_, pyo3::types::PyDict>,
+    ) -> PyResult<crate::python_bindings::types::PySnapshotDiff> {
+        let old_text = extract_visible_text(old_snapshot)?;
+        let new_text = extract_visible_text(new_snapshot)?;
+
+        let old_lines: Vec<String> = old_text.split('\n').map(str::to_string).collect();
+        let new_lines: Vec<String> = new_text.split('\n').map(str::to_string).collect();
+
+        let diff = crate::terminal::diff_screen_lines(&old_lines, &new_lines);
+        Ok(crate::python_bindings::types::PySnapshotDiff::from(&diff))
+    }
+
     /// Capture a cell-level snapshot of the terminal state for Instant Replay.
     ///
     /// Unlike `get_semantic_snapshot()` which captures text only, this captures
@@ -264,4 +299,16 @@ impl PyTerminal {
             Ok(dict.into())
         })
     }
+}
+
+/// Extract the `visible_text` string from a get_semantic_snapshot() dict
+fn extract_visible_text(snapshot: &Bound<'_, pyo3::types::PyDict>) -> PyResult<String> {
+    snapshot
+        .get_item("visible_text")?
+        .and_then(|value| value.extract::<String>().ok())
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "snapshot must be a dict from get_semantic_snapshot() with a 'visible_text' string",
+            )
+        })
 }
