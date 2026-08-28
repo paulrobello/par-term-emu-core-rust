@@ -62,6 +62,9 @@ pub mod config;
 pub mod session;
 
 #[cfg(feature = "streaming")]
+pub mod rate_limit;
+
+#[cfg(feature = "streaming")]
 pub mod auth_hash;
 
 // Hand-written escape hatches for the PyDictConvert derive (ARC-003).
