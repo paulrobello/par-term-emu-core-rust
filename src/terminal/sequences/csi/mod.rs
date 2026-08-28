@@ -82,13 +82,11 @@ impl Terminal {
             }
             'x' => {
                 // x can be DECREQTPARM (no intermediates), rectangular area
-                // operations (with $), or DECSACE (with *). DECSACE is parsed
-                // but not implemented: consume it as a no-op so it does not
-                // fall through to DECREQTPARM and emit a spurious reply.
+                // operations (with $), or DECSACE (with *).
                 if intermediates.contains(&b'$') {
                     self.handle_csi_window(action, params, intermediates);
                 } else if intermediates.contains(&b'*') {
-                    // DECSACE (CSI Ps * x): no-op, no reply
+                    self.handle_decsace(params);
                 } else {
                     self.handle_csi_report(action, params, intermediates);
                 }

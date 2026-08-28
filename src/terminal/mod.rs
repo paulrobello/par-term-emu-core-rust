@@ -542,6 +542,19 @@ pub(crate) struct ColorThemeState {
 }
 
 /// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
+/// DECSACE attribute-change extent: whether DECCARA/DECRARA change the
+/// rectangle or the stream between the two corners (VT420).
+///
+/// The terminal starts in `Rectangle` to preserve the pre-DECSACE behavior;
+/// VT420 powers on in stream mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttributeChangeExtent {
+    /// Stream: everything in reading order from (top,left) to (bottom,right)
+    Stream,
+    /// Rectangle: strictly the addressed rectangle
+    Rectangle,
+}
+
 pub(crate) struct TerminalModes {
     /// Auto wrap mode (DECAWM)
     pub(crate) auto_wrap: bool,
@@ -567,6 +580,8 @@ pub(crate) struct TerminalModes {
     pub(crate) mouse_encoding: MouseEncoding,
     /// Focus tracking enabled
     pub(crate) focus_tracking: bool,
+    /// DECSACE extent for DECCARA/DECRARA attribute changes
+    pub(crate) attribute_change_extent: AttributeChangeExtent,
 }
 
 /// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
@@ -981,6 +996,7 @@ impl Terminal {
                 mouse_mode: MouseMode::Off,
                 mouse_encoding: MouseEncoding::Default,
                 focus_tracking: false,
+                attribute_change_extent: AttributeChangeExtent::Rectangle,
             },
             tab_stops,
             keyboard_state: KeyboardState {

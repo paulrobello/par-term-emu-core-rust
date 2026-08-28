@@ -90,7 +90,12 @@ VT420 advanced text editing operations that work on rectangular regions of the s
 - `CSI Pt ; Pl ; Pb ; Pr $ z` - DECERA: Unconditional erase (ignores protection)
 - `CSI Pt ; Pl ; Pb ; Pr ; Ps $ r` - DECCARA: Change attributes in rectangle
 - `CSI Pt ; Pl ; Pb ; Pr ; Ps $ t` - DECRARA: Reverse attributes in rectangle
+- `CSI Ps * x` - DECSACE: Select attribute change extent for DECCARA/DECRARA (`0`/`1` = stream, `2` = rectangle; see note)
 - `CSI Pi ; Pg ; Pt ; Pl ; Pb ; Pr * y` - DECRQCRA: Request rectangle checksum
+
+> DECSACE note: the terminal starts in rectangle extent (preserving the
+> pre-DECSACE behavior); VT420 powers on in stream mode. DECSTR/RIS restore
+> rectangle.
 
 > See [VT_TECHNICAL_REFERENCE.md#rectangle-operations](VT_TECHNICAL_REFERENCE.md#rectangle-operations-vt420) for detailed parameter descriptions and behavior.
 

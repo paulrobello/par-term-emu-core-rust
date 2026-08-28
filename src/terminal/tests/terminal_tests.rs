@@ -797,13 +797,111 @@ fn test_decreqtparm_unsolicited() {
 }
 
 #[test]
-fn test_decsace_intermediate_is_noop_no_reply() {
-    // CSI Ps * x (DECSACE) is parsed but not implemented; it must be
-    // consumed silently rather than falling through to DECREQTPARM and
-    // emitting a spurious reply (QA-010).
+fn test_decsace_selects_extent_and_never_replies() {
+    // DECSACE (CSI Ps * x) selects the DECCARA/DECRARA extent. It must never
+    // fall through to DECREQTPARM and emit a spurious reply (QA-010).
     let mut term = Terminal::new(80, 24);
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Rectangle
+    );
+
+    term.process(b"\x1b[1*x");
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Stream
+    );
+
     term.process(b"\x1b[2*x");
-    assert!(term.drain_responses().is_empty());
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Rectangle
+    );
+
+    assert!(
+        term.drain_responses().is_empty(),
+        "DECSACE must not emit a reply"
+    );
+
+    // 0 behaves as 1 (stream); invalid values are ignored
+    term.process(b"\x1b[0*x");
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Stream
+    );
+    term.process(b"\x1b[9*x");
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Stream
+    );
+}
+
+#[test]
+fn test_deccara_respects_decsace_extent() {
+    // Rectangle (default): only the addressed area changes
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[2;2;4;4;1$r"); // bold rows 2-4, cols 2-4 (1-based)
+    assert!(
+        term.active_grid().get(1, 1).unwrap().flags.bold(),
+        "inside rect"
+    );
+    assert!(
+        !term.active_grid().get(5, 1).unwrap().flags.bold(),
+        "same row, right of rect"
+    );
+    assert!(
+        !term.active_grid().get(0, 0).unwrap().flags.bold(),
+        "above rect"
+    );
+
+    // Stream: reading order from (2,2) to (4,4) — tail of row 2, all of
+    // row 3, head of row 4
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[1*x");
+    term.process(b"\x1b[2;2;4;4;1$r");
+    assert!(
+        term.active_grid().get(5, 1).unwrap().flags.bold(),
+        "row 2 tail is in the stream"
+    );
+    assert!(
+        term.active_grid().get(0, 2).unwrap().flags.bold(),
+        "row 3 is fully in the stream"
+    );
+    assert!(
+        term.active_grid().get(3, 3).unwrap().flags.bold(),
+        "bottom-right corner is in both extents"
+    );
+    assert!(
+        !term.active_grid().get(0, 0).unwrap().flags.bold(),
+        "before the stream start"
+    );
+    assert!(
+        !term.active_grid().get(4, 3).unwrap().flags.bold(),
+        "row 4 right of the stream end"
+    );
+}
+
+#[test]
+fn test_decrara_respects_decsace_extent() {
+    // Reverse in stream mode flips cells outside the rectangle too
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[1*x");
+    term.process(b"\x1b[2;2;4;4;1$t"); // reverse bold rows 2-4, cols 2-4
+    assert!(
+        term.active_grid().get(5, 1).unwrap().flags.bold(),
+        "row 2 tail reversed in stream mode"
+    );
+}
+
+#[test]
+fn test_decsace_decstr_restores_rectangle() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[1*x");
+    term.process(b"\x1b[!p"); // DECSTR
+    assert_eq!(
+        term.modes.attribute_change_extent,
+        crate::terminal::AttributeChangeExtent::Rectangle
+    );
 }
 
 #[test]

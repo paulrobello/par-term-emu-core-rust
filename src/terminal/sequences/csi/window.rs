@@ -1,6 +1,6 @@
 //! Window-related CSI sequence handling (XTWINOPS, etc.)
 
-use crate::terminal::Terminal;
+use crate::terminal::{AttributeChangeExtent, Terminal};
 use vte::Params;
 
 impl Terminal {
@@ -152,22 +152,45 @@ impl Terminal {
                         }
                     }
 
-                    if action == 'r' {
-                        self.active_grid_mut().change_attributes_in_rectangle(
-                            top,
-                            left,
-                            bottom,
-                            right,
-                            &attributes,
-                        );
-                    } else {
-                        self.active_grid_mut().reverse_attributes_in_rectangle(
-                            top,
-                            left,
-                            bottom,
-                            right,
-                            &attributes,
-                        );
+                    // DECSACE: stream extent covers everything in reading
+                    // order from (top,left) to (bottom,right); rectangle
+                    // extent is the addressed area only.
+                    let segments: Vec<(usize, usize, usize, usize)> =
+                        match self.modes.attribute_change_extent {
+                            AttributeChangeExtent::Rectangle => {
+                                vec![(top, left, bottom, right)]
+                            }
+                            AttributeChangeExtent::Stream if top == bottom => {
+                                vec![(top, left, bottom, right)]
+                            }
+                            AttributeChangeExtent::Stream => {
+                                let mut segs = vec![(top, left, top, cols - 1)];
+                                if bottom > top + 1 {
+                                    segs.push((top + 1, 0, bottom - 1, cols - 1));
+                                }
+                                segs.push((bottom, 0, bottom, right));
+                                segs
+                            }
+                        };
+
+                    for (t, l, b, r) in segments {
+                        if action == 'r' {
+                            self.active_grid_mut().change_attributes_in_rectangle(
+                                t,
+                                l,
+                                b,
+                                r,
+                                &attributes,
+                            );
+                        } else {
+                            self.active_grid_mut().reverse_attributes_in_rectangle(
+                                t,
+                                l,
+                                b,
+                                r,
+                                &attributes,
+                            );
+                        }
                     }
                 }
                 _ => {}
@@ -329,6 +352,27 @@ impl Terminal {
                 }
             _ => {}
         }
+    }
+}
+
+impl Terminal {
+    /// DECSACE - Select Attribute Change Extent: CSI Ps * x
+    ///
+    /// Ps = 0 or 1 selects stream extent, 2 selects rectangle; any other
+    /// value is ignored. Missing parameter defaults to 1.
+    pub(crate) fn handle_decsace(&mut self, params: &Params) {
+        let ps = params
+            .iter()
+            .next()
+            .and_then(|p| p.first())
+            .copied()
+            .unwrap_or(1);
+
+        self.modes.attribute_change_extent = match ps {
+            0 | 1 => AttributeChangeExtent::Stream,
+            2 => AttributeChangeExtent::Rectangle,
+            _ => return,
+        };
     }
 }
 

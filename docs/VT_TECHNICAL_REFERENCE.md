@@ -354,11 +354,13 @@ CSI 49 m    - Default background
 
 `CSI Ps * x` - DECSACE (Select Attribute Change Extent)
 
-**Status:** Parsed and ignored (no-op). The `*`-intermediate arm in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`) consumes the sequence without reply and without changing the attribute-change extent, so DECCARA/DECRARA always use rectangle mode.
+**Status:** Implemented. `handle_decsace()` (`src/terminal/sequences/csi/window.rs`) sets the extent that DECCARA/DECRARA apply with; the sequence never emits a reply.
 
-**Parameters (for reference):**
-- `Ps = 0` or `1`: Stream mode (wraps at line boundaries)
-- `Ps = 2`: Rectangle mode (exact rectangular boundaries, default)
+**Parameters:**
+- `Ps = 0` or `1`: Stream mode — attribute changes cover everything in reading order from the start corner to the end corner (tail of the first row, full intermediate rows, head of the last row)
+- `Ps = 2`: Rectangle mode — exact rectangular boundaries
+
+**Default:** Rectangle. The terminal starts in rectangle extent (preserving the pre-DECSACE behavior of this library; VT420 powers on in stream mode) and DECSTR/RIS restore it.
 
 ### Character Protection (VT420)
 
@@ -1369,7 +1371,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 |------------------|---------|-------|
 | Rectangle operations | ✅ Full | DECFRA, DECCRA, DECERA, DECSERA, DECCARA, DECRARA |
 | Rectangle checksum | ✅ Full | DECRQCRA (request checksum) |
-| Attribute change extent | ⚠️ Parsed, no-op | DECSACE consumed without reply; rectangle mode always used |
+| Attribute change extent | ✅ Full | DECSACE selects stream or rectangle extent; rectangle is the default (VT420 powers on in stream) |
 | Left/Right margins | ✅ Full | DECLRMM, DECSLRM |
 | Character protection | ✅ Full | DECSCA (CSI ? Ps " q), SPA/EPA (ESC V/W), selective erase |
 
