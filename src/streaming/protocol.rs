@@ -221,7 +221,10 @@ pub struct LoadAverage {
 
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(all(feature = "python", feature = "streaming"), derive(par_term_emu_derive::PyDictConvert))]
+#[cfg_attr(
+    all(feature = "python", feature = "streaming"),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
     /// Terminal output data (raw ANSI escape sequences)
@@ -266,7 +269,9 @@ pub enum ServerMessage {
         session_id: String,
         /// Optional theme information
         #[serde(skip_serializing_if = "Option::is_none")]
-        #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(
+        #[cfg_attr(
+            all(feature = "python", feature = "streaming"),
+            pydict(
                 to_with = "crate::streaming::py_convert::theme_to_py",
                 from_with = "crate::streaming::py_convert::theme_from_py"
             )
@@ -312,7 +317,10 @@ pub enum ServerMessage {
 
     /// Cursor position changed (optional optimization)
     #[serde(rename = "cursor")]
-    #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(type = "cursor"))]
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(type = "cursor")
+    )]
     CursorPosition {
         /// Column position (0-indexed)
         col: u16,
@@ -327,7 +335,9 @@ pub enum ServerMessage {
     Bell,
 
     /// Current working directory changed (OSC 7)
-    #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(from = "crate::streaming::py_convert::cwd_changed_from")
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(from = "crate::streaming::py_convert::cwd_changed_from")
     )]
     CwdChanged {
         /// Previous working directory
@@ -516,7 +526,10 @@ pub enum ServerMessage {
 
     /// Shell integration event (FinalTerm sequences)
     #[serde(rename = "shell_integration")]
-    #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(type = "shell_integration"))]
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(type = "shell_integration")
+    )]
     ShellIntegrationEvent {
         /// Event type: "prompt_start", "command_start", "command_executed", "command_finished"
         event_type: String,
@@ -536,7 +549,9 @@ pub enum ServerMessage {
 
     /// System resource statistics (CPU, memory, disk, network)
     #[serde(rename = "system_stats")]
-    #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(
             to = "crate::streaming::py_convert::system_stats_to_py_dict",
             from = "crate::streaming::py_convert::system_stats_from"
         )
@@ -726,7 +741,10 @@ pub enum ServerMessage {
 
 /// Messages sent from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(all(feature = "python", feature = "streaming"), derive(par_term_emu_derive::PyDictConvert))]
+#[cfg_attr(
+    all(feature = "python", feature = "streaming"),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
     /// User input (keyboard)
@@ -750,13 +768,18 @@ pub enum ClientMessage {
 
     /// Request full screen refresh
     #[serde(rename = "refresh")]
-    #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(type = "refresh"))]
+    #[cfg_attr(
+        all(feature = "python", feature = "streaming"),
+        pydict(type = "refresh")
+    )]
     RequestRefresh,
 
     /// Subscribe to specific events
     Subscribe {
         /// Event types to subscribe to
-        #[cfg_attr(all(feature = "python", feature = "streaming"), pydict(
+        #[cfg_attr(
+            all(feature = "python", feature = "streaming"),
+            pydict(
                 to_with = "crate::streaming::py_convert::events_to_py",
                 from_with = "crate::streaming::py_convert::events_from_py"
             )
@@ -837,7 +860,10 @@ pub enum ClientMessage {
 
 /// Event types that clients can subscribe to
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[cfg_attr(all(feature = "python", feature = "streaming"), derive(par_term_emu_derive::PyDictConvert))]
+#[cfg_attr(
+    all(feature = "python", feature = "streaming"),
+    derive(par_term_emu_derive::PyDictConvert)
+)]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
     /// Terminal output

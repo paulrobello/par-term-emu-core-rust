@@ -62,6 +62,38 @@ jobs:
         if: ${{ !inputs.skip_tests && steps.check_version.outputs.exists == 'false' }}
         run: cargo test --lib --no-default-features
 
+      - name: Publish derive sub-crate if needed (par-term-emu-derive)
+        # The main crate's `par-term-emu-derive = { path = "derive", version = "X" }`
+        # loses its `path` on publish and resolves from the registry, so version X
+        # must already exist on crates.io. The derive crate versions independently
+        # of the main crate (CLAUDE.md "Derive crate exception"): when a derive bump
+        # rides along, publish it first and wait for index propagation.
+        if: steps.check_version.outputs.exists == 'false'
+        run: |
+          DERIVE_VERSION=$(grep -m1 '^version = ' derive/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
+          echo "Derive crate version: $DERIVE_VERSION"
+
+          if cargo search par-term-emu-derive --limit 1 | grep -q 'par-term-emu-derive = "'"$DERIVE_VERSION"'"'; then
+            echo "::notice::par-term-emu-derive $DERIVE_VERSION already on crates.io"
+            exit 0
+          fi
+
+          echo "par-term-emu-derive $DERIVE_VERSION not on crates.io, publishing..."
+          cargo publish --manifest-path derive/Cargo.toml --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+          # Wait for index propagation so the main publish can resolve the dep
+          for i in $(seq 1 12); do
+            if cargo search par-term-emu-derive --limit 1 | grep -q 'par-term-emu-derive = "'"$DERIVE_VERSION"'"'; then
+              echo "Index propagation confirmed"
+              exit 0
+            fi
+            echo "Waiting for index propagation ($i/12)..."
+            sleep 5
+          done
+          echo "::warning::par-term-emu-derive $DERIVE_VERSION not visible in search after 60s; attempting main publish anyway"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
       - name: Dry run publish
         if: steps.check_version.outputs.exists == 'false'
         # --no-verify: PyO3 cdylib can't link libpython standalone; see

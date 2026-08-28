@@ -59,6 +59,13 @@
 //! # With password from file (auto-detects hash vs clear text)
 //! par-term-streamer --enable-http --http-user admin --http-password-file /path/to/password
 //! ```
+//!
+//! ## Module layout (ARC-005 split)
+//!
+//! - [`cli`] — clap argument surface, value parsers, TTY size detection
+//! - [`frontend_download`] — `--download-frontend` GitHub release fetcher
+//! - [`bootstrap`] — run-mode resolution, session factory, event loop, auth
+//! - [`theme`] — terminal color themes
 
 // Use jemalloc for better server performance (5-15% throughput improvement)
 // Only available on non-Windows platforms
@@ -71,1232 +78,26 @@ static GLOBAL: Jemalloc = Jemalloc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use flate2::read::GzDecoder;
 use par_term_emu_core_rust::{
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
-    pty_session::PtySession,
-    streaming::{
-        HttpBasicAuthConfig, SessionFactory, SessionFactoryResult, StreamSessionState,
-        StreamingConfig, StreamingServer, TlsConfig,
-    },
+    streaming::{SessionFactory, StreamingConfig, StreamingServer, TlsConfig},
 };
-use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::io::Write;
 use std::sync::Arc;
 use std::time::Duration;
-use tar::Archive;
 use tokio::signal;
-use tokio::sync::mpsc;
 use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-/// Get the current terminal size from the TTY
-#[cfg(unix)]
-fn get_tty_size() -> Option<(u16, u16)> {
-    use std::io::IsTerminal;
-    use std::os::unix::io::AsRawFd;
-
-    let stdout = std::io::stdout();
-    if !stdout.is_terminal() {
-        return None;
-    }
-
-    unsafe {
-        let mut ws: libc::winsize = std::mem::zeroed();
-        let fd = stdout.as_raw_fd();
-        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
-            Some((ws.ws_col, ws.ws_row))
-        } else {
-            None
-        }
-    }
-}
-
-/// Get the current terminal size from the TTY (Windows stub)
-#[cfg(not(unix))]
-fn get_tty_size() -> Option<(u16, u16)> {
-    // On Windows, we could use GetConsoleScreenBufferInfo, but for simplicity
-    // we return None and let the caller use defaults
-    None
-}
-
+mod bootstrap;
+mod cli;
+mod frontend_download;
 mod theme;
+
+use bootstrap::{run_macro_mode, BinarySessionFactory, RunMode};
+use cli::Args;
 use theme::Theme;
-
-/// Parse terminal size from "COLSxROWS" format (e.g., "120x40")
-fn parse_size(s: &str) -> Result<(u16, u16), String> {
-    let parts: Vec<&str> = s.split('x').collect();
-    if parts.len() != 2 {
-        return Err(format!(
-            "Invalid size format '{}'. Expected COLSxROWS (e.g., 120x40)",
-            s
-        ));
-    }
-    let cols = parts[0]
-        .parse::<u16>()
-        .map_err(|_| format!("Invalid columns value: {}", parts[0]))?;
-    let rows = parts[1]
-        .parse::<u16>()
-        .map_err(|_| format!("Invalid rows value: {}", parts[1]))?;
-    if cols == 0 || rows == 0 {
-        return Err("Columns and rows must be greater than 0".to_string());
-    }
-    Ok((cols, rows))
-}
-
-/// Parse a preset in "name=command" format
-fn parse_preset(s: &str) -> Result<(String, String), String> {
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("Invalid preset format '{}'. Expected name=command", s))?;
-    let name = s[..pos].to_string();
-    let command = s[pos + 1..].to_string();
-    if name.is_empty() {
-        return Err("Preset name cannot be empty".to_string());
-    }
-    if command.is_empty() {
-        return Err(format!("Preset '{}' command cannot be empty", name));
-    }
-    Ok((name, command))
-}
-
-/// Command line arguments
-#[derive(Parser, Debug)]
-#[command(name = "par-term-streamer")]
-#[command(version, about = "Terminal streaming server with WebSocket support")]
-struct Args {
-    /// Host address to bind to
-    #[arg(long, default_value = "127.0.0.1", env = "PAR_TERM_HOST")]
-    host: String,
-
-    /// Port to bind to
-    #[arg(long, short = 'p', default_value = "8099", env = "PAR_TERM_PORT")]
-    port: u16,
-
-    /// Terminal size in COLSxROWS format (e.g., 120x40)
-    /// Overrides --cols and --rows if specified
-    #[arg(long, short = 's', value_parser = parse_size, env = "PAR_TERM_SIZE")]
-    size: Option<(u16, u16)>,
-
-    /// Terminal columns (width)
-    #[arg(long, default_value = "80", env = "PAR_TERM_COLS")]
-    cols: u16,
-
-    /// Terminal rows (height)
-    #[arg(long, default_value = "24", env = "PAR_TERM_ROWS")]
-    rows: u16,
-
-    /// Use current terminal size (from TTY)
-    /// Overrides --size, --cols, and --rows if specified
-    #[arg(long, env = "PAR_TERM_USE_TTY_SIZE")]
-    use_tty_size: bool,
-
-    /// Scrollback buffer size (lines)
-    #[arg(long, default_value = "10000", env = "PAR_TERM_SCROLLBACK")]
-    scrollback: usize,
-
-    /// Shell command to run (auto-detect if not specified)
-    #[arg(long, env = "PAR_TERM_SHELL")]
-    shell: Option<String>,
-
-    /// Command to execute after shell starts (sent as input after 1 second delay)
-    #[arg(long, short = 'c', env = "PAR_TERM_COMMAND")]
-    command: Option<String>,
-
-    /// Color theme
-    #[arg(
-        long,
-        default_value = "iterm2-dark",
-        value_parser = clap::builder::PossibleValuesParser::new(Theme::available()),
-        env = "PAR_TERM_THEME"
-    )]
-    theme: String,
-
-    /// API key for WebSocket authentication (optional)
-    /// Clients must provide this via Authorization header or X-API-Key header
-    #[arg(long, env = "PAR_TERM_API_KEY", hide_env_values = true)]
-    api_key: Option<String>,
-
-    /// Allow API key authentication via query parameter (?api_key=...).
-    /// Disabled by default because query params are logged by proxies and saved in browser history.
-    #[arg(long, env = "PAR_TERM_ALLOW_API_KEY_IN_QUERY")]
-    allow_api_key_in_query: bool,
-
-    /// Allowed browser origins for WebSocket and CORS (SEC-005).
-    /// Repeatable, e.g. --allowed-origins https://app.example.com.
-    /// When omitted, only non-browser clients and local (loopback) browser
-    /// origins are accepted; set this to allow specific remote browser origins.
-    #[arg(
-        long,
-        value_name = "ORIGIN",
-        env = "PAR_TERM_ALLOWED_ORIGINS",
-        value_delimiter = ','
-    )]
-    allowed_origins: Option<Vec<String>>,
-
-    /// Maximum number of concurrent clients
-    #[arg(long, default_value = "100", env = "PAR_TERM_MAX_CLIENTS")]
-    max_clients: usize,
-
-    /// Keepalive ping interval in seconds (0 to disable)
-    #[arg(long, default_value = "30", env = "PAR_TERM_KEEPALIVE")]
-    keepalive: u64,
-
-    /// Enable verbose logging
-    #[arg(long, short = 'v', env = "PAR_TERM_VERBOSE")]
-    verbose: bool,
-
-    /// Enable HTTP static file serving
-    #[arg(long, env = "PAR_TERM_ENABLE_HTTP")]
-    enable_http: bool,
-
-    /// Web root directory for static files
-    #[arg(long, default_value = "./web_term", env = "PAR_TERM_WEB_ROOT")]
-    web_root: String,
-
-    /// Macro file to play back instead of running a shell
-    #[arg(long, env = "PAR_TERM_MACRO_FILE")]
-    macro_file: Option<String>,
-
-    /// Macro playback speed multiplier (1.0 = normal, 2.0 = 2x speed)
-    #[arg(long, default_value = "1.0", env = "PAR_TERM_MACRO_SPEED")]
-    macro_speed: f64,
-
-    /// Loop macro playback continuously
-    #[arg(long, env = "PAR_TERM_MACRO_LOOP")]
-    macro_loop: bool,
-
-    /// Disable automatic shell restart when it exits
-    /// By default, the shell is automatically restarted when it exits
-    #[arg(long, env = "PAR_TERM_NO_RESTART_SHELL")]
-    no_restart_shell: bool,
-
-    /// Download prebuilt web frontend from GitHub releases
-    /// When specified, downloads and extracts frontend to web-root, then exits
-    #[arg(long, env = "PAR_TERM_DOWNLOAD_FRONTEND")]
-    download_frontend: bool,
-
-    /// Version of web frontend to download (e.g., "0.14.0")
-    /// Defaults to "latest" which fetches the most recent release
-    #[arg(long, default_value = "latest", env = "PAR_TERM_FRONTEND_VERSION")]
-    frontend_version: String,
-
-    /// TLS certificate file (PEM format)
-    /// Use with --tls-key for separate cert/key files
-    #[arg(long, requires = "tls_key", env = "PAR_TERM_TLS_CERT")]
-    tls_cert: Option<String>,
-
-    /// TLS private key file (PEM format)
-    /// Use with --tls-cert for separate cert/key files
-    #[arg(long, requires = "tls_cert", env = "PAR_TERM_TLS_KEY")]
-    tls_key: Option<String>,
-
-    /// Combined TLS PEM file containing both certificate and private key
-    /// Alternative to using --tls-cert and --tls-key
-    #[arg(long, conflicts_with_all = ["tls_cert", "tls_key"], env = "PAR_TERM_TLS_PEM")]
-    tls_pem: Option<String>,
-
-    // HTTP Basic Auth options
-    /// Username for HTTP Basic Authentication
-    #[arg(long, env = "PAR_TERM_HTTP_USER")]
-    http_user: Option<String>,
-
-    /// Password for HTTP Basic Authentication (clear text)
-    /// Mutually exclusive with --http-password-hash
-    #[arg(
-        long,
-        env = "PAR_TERM_HTTP_PASSWORD",
-        conflicts_with = "http_password_hash",
-        hide_env_values = true
-    )]
-    http_password: Option<String>,
-
-    /// Password hash for HTTP Basic Authentication (htpasswd format)
-    /// Supports: bcrypt ($2y$), apr1 ($apr1$), SHA1 ({SHA}), MD5 crypt ($1$)
-    /// Mutually exclusive with --http-password
-    #[arg(
-        long,
-        env = "PAR_TERM_HTTP_PASSWORD_HASH",
-        conflicts_with = "http_password",
-        hide_env_values = true
-    )]
-    http_password_hash: Option<String>,
-
-    /// File containing password (reads first line)
-    /// If line starts with $ or {SHA}, treated as hash; otherwise as clear text
-    /// Overrides --http-password and --http-password-hash
-    #[arg(long, env = "PAR_TERM_HTTP_PASSWORD_FILE")]
-    http_password_file: Option<String>,
-
-    // Multi-session options
-    /// Maximum number of concurrent terminal sessions
-    #[arg(long, default_value = "10", env = "PAR_TERM_MAX_SESSIONS")]
-    max_sessions: usize,
-
-    /// Idle session timeout in seconds (0 = never timeout)
-    /// Sessions with no connected clients will be reaped after this duration
-    #[arg(long, default_value = "900", env = "PAR_TERM_SESSION_IDLE_TIMEOUT")]
-    session_idle_timeout: u64,
-
-    /// Shell presets (can specify multiple: --preset python=python3 --preset node=node)
-    /// Clients connect with ?preset=name to use a specific preset
-    #[arg(long, value_parser = parse_preset)]
-    preset: Vec<(String, String)>,
-
-    /// Maximum clients per session (0 = unlimited)
-    #[arg(long, default_value = "0", env = "PAR_TERM_MAX_CLIENTS_PER_SESSION")]
-    max_clients_per_session: usize,
-
-    /// Input rate limit in bytes per second (0 = unlimited)
-    #[arg(long, default_value = "0", env = "PAR_TERM_INPUT_RATE_LIMIT")]
-    input_rate_limit: usize,
-
-    /// Enable system resource statistics collection (CPU, memory, disk, network)
-    #[arg(long, env = "PAR_TERM_ENABLE_SYSTEM_STATS")]
-    enable_system_stats: bool,
-
-    /// System stats collection interval in seconds
-    #[arg(long, default_value = "5", env = "PAR_TERM_SYSTEM_STATS_INTERVAL")]
-    system_stats_interval: u64,
-}
-
-/// Main event loop state
-struct ServerState {
-    pty_session: Arc<Mutex<PtySession>>,
-    streaming_server: Arc<StreamingServer>,
-    resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
-    shell_command: Option<String>,
-    restart_shell: bool,
-}
-
-impl ServerState {
-    /// Create new server state
-    fn new(
-        pty_session: Arc<Mutex<PtySession>>,
-        streaming_server: Arc<StreamingServer>,
-        resize_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<(u16, u16)>>>,
-        shell_command: Option<String>,
-        restart_shell: bool,
-    ) -> Self {
-        Self {
-            pty_session,
-            streaming_server,
-            resize_rx,
-            shell_command,
-            restart_shell,
-        }
-    }
-
-    /// Handle resize requests from clients
-    async fn handle_resize_requests(&self) {
-        let mut rx = self.resize_rx.lock().await;
-
-        while let Some((cols, rows)) = rx.recv().await {
-            info!("Resizing terminal to {}x{}", cols, rows);
-
-            // Resize the PTY session (this also resizes the terminal)
-            {
-                let mut session = self.pty_session.lock();
-                if let Err(e) = session.resize(cols, rows) {
-                    error!("Failed to resize PTY: {}", e);
-                    continue;
-                }
-            }
-
-            // Broadcast resize to all clients
-            self.streaming_server.send_resize(cols, rows);
-        }
-    }
-
-    /// Monitor PTY status and restart shell if configured
-    async fn handle_pty_status(&self) {
-        info!(
-            "PTY status monitor started (restart_shell={})",
-            self.restart_shell
-        );
-
-        loop {
-            // Check if PTY is still running
-            let should_restart = {
-                let session = self.pty_session.lock();
-
-                if !session.is_running() {
-                    info!(
-                        "PTY session has exited (restart_shell={})",
-                        self.restart_shell
-                    );
-                    self.restart_shell
-                } else {
-                    false
-                }
-            };
-
-            if should_restart {
-                info!("Will restart shell in 500ms...");
-
-                // Small delay before restart
-                time::sleep(Duration::from_millis(500)).await;
-
-                info!("Attempting to restart shell...");
-
-                // Restart the shell
-                let restart_result = {
-                    let mut session = self.pty_session.lock();
-
-                    if let Some(ref shell) = self.shell_command {
-                        info!("Spawning custom shell: {}", shell);
-                        session.spawn(shell, &[])
-                    } else {
-                        info!("Spawning default shell");
-                        session.spawn_shell()
-                    }
-                };
-
-                match restart_result {
-                    Ok(_) => {
-                        info!("Shell restarted successfully");
-
-                        // Update the PTY writer in the streaming server
-                        let pty_writer = {
-                            let session = self.pty_session.lock();
-                            session.get_writer()
-                        };
-
-                        if let Some(writer) = pty_writer {
-                            info!("Updated PTY writer in streaming server");
-                            self.streaming_server.set_pty_writer(writer);
-                        } else {
-                            error!("Failed to get PTY writer after restart");
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to restart shell: {} - will retry in 5s", e);
-                        // Wait a bit before trying again
-                        time::sleep(Duration::from_secs(5)).await;
-                    }
-                }
-            } else if !self.restart_shell {
-                // If restart is disabled, check if shell exited and break
-                let session = self.pty_session.lock();
-
-                if !session.is_running() {
-                    info!("Shell exited and restart is disabled, stopping monitor");
-                    break;
-                }
-            }
-
-            // Check PTY status every 500ms
-            time::sleep(Duration::from_millis(500)).await;
-        }
-
-        info!("PTY status monitor exiting");
-    }
-
-    /// Poll terminal events and broadcast to clients
-    async fn poll_terminal_events(&self) {
-        let mut interval = tokio::time::interval(Duration::from_millis(50)); // 20Hz polling
-        loop {
-            interval.tick().await;
-
-            let events = {
-                let session = self.pty_session.lock();
-                let terminal = session.terminal();
-                let mut term = terminal.write();
-                term.poll_events()
-            };
-
-            for event in events {
-                if let Some(msg) =
-                    par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message(
-                        event,
-                    )
-                {
-                    self.streaming_server.broadcast(msg);
-                }
-            }
-        }
-    }
-
-    /// Run the main event loop
-    async fn run(&self) -> Result<()> {
-        let resize_handle = {
-            let state = self.clone();
-            tokio::spawn(async move {
-                state.handle_resize_requests().await;
-            })
-        };
-
-        let status_handle = {
-            let state = self.clone();
-            tokio::spawn(async move {
-                state.handle_pty_status().await;
-            })
-        };
-
-        let event_handle = {
-            let state = self.clone();
-            tokio::spawn(async move {
-                state.poll_terminal_events().await;
-            })
-        };
-
-        // Wait for either Ctrl+C or PTY exit (when restart is disabled)
-        tokio::select! {
-            _ = signal::ctrl_c() => {
-                info!("Received shutdown signal");
-            }
-            _ = status_handle => {
-                // PTY exited and restart is disabled
-                info!("Shell exited, shutting down server");
-            }
-        }
-
-        // Signal broadcaster to shut down (prevents hang on shell exit)
-        self.streaming_server
-            .shutdown("Server shutting down".to_string());
-
-        // Cancel background tasks
-        resize_handle.abort();
-        event_handle.abort();
-
-        Ok(())
-    }
-}
-
-impl Clone for ServerState {
-    fn clone(&self) -> Self {
-        Self {
-            pty_session: Arc::clone(&self.pty_session),
-            streaming_server: Arc::clone(&self.streaming_server),
-            resize_rx: Arc::clone(&self.resize_rx),
-            shell_command: self.shell_command.clone(),
-            restart_shell: self.restart_shell,
-        }
-    }
-}
-
-// =============================================================================
-// Binary Session Factory (Multi-Session Support)
-// =============================================================================
-
-/// Factory for creating PTY-backed terminal sessions in the binary server.
-///
-/// Each session gets its own PtySession with an independent shell process.
-struct BinarySessionFactory {
-    /// Default shell command (None = auto-detect)
-    default_shell: Option<String>,
-    /// Scrollback buffer size for new terminals
-    scrollback: usize,
-    /// Theme to apply to new terminals
-    theme: Option<Theme>,
-    /// Whether to restart shells on exit
-    restart_shell: bool,
-    /// Per-session PTY sessions (session_id → PtySession)
-    pty_sessions: Arc<parking_lot::RwLock<HashMap<String, Arc<Mutex<PtySession>>>>>,
-    /// Reference to the streaming server (set after creation)
-    streaming_server: Arc<parking_lot::RwLock<Option<Arc<StreamingServer>>>>,
-    /// Whether to collect system resource statistics
-    enable_system_stats: bool,
-    /// System stats collection interval in seconds
-    system_stats_interval_secs: u64,
-}
-
-impl BinarySessionFactory {
-    fn new(
-        default_shell: Option<String>,
-        scrollback: usize,
-        theme: Option<Theme>,
-        restart_shell: bool,
-        enable_system_stats: bool,
-        system_stats_interval_secs: u64,
-    ) -> Self {
-        Self {
-            default_shell,
-            scrollback,
-            theme,
-            restart_shell,
-            pty_sessions: Arc::new(parking_lot::RwLock::new(HashMap::new())),
-            streaming_server: Arc::new(parking_lot::RwLock::new(None)),
-            enable_system_stats,
-            system_stats_interval_secs,
-        }
-    }
-
-    /// Set the streaming server reference (called after server creation)
-    fn set_streaming_server(&self, server: Arc<StreamingServer>) {
-        *self.streaming_server.write() = Some(server);
-    }
-}
-
-impl SessionFactory for BinarySessionFactory {
-    fn create_session(
-        &self,
-        session_id: &str,
-        cols: u16,
-        rows: u16,
-        shell_command: Option<&str>,
-    ) -> std::result::Result<
-        SessionFactoryResult,
-        par_term_emu_core_rust::streaming::error::StreamingError,
-    > {
-        use par_term_emu_core_rust::streaming::error::StreamingError;
-
-        info!("Creating session '{}' ({}x{})", session_id, cols, rows);
-
-        // Create a new PtySession
-        let pty_session = PtySession::new(cols as usize, rows as usize, self.scrollback);
-
-        // Get the terminal and apply theme
-        let terminal = pty_session.terminal();
-        if let Some(ref theme) = self.theme {
-            let mut term = terminal.write();
-            theme.apply(&mut term);
-        }
-
-        let pty_session = Arc::new(Mutex::new(pty_session));
-
-        // Spawn the shell
-        {
-            let mut session = pty_session.lock();
-            let shell_cmd = shell_command.or(self.default_shell.as_deref());
-            if let Some(cmd) = shell_cmd {
-                session.spawn(cmd, &[]).map_err(|e| {
-                    StreamingError::ServerError(format!(
-                        "Failed to spawn shell '{}' for session '{}': {}",
-                        cmd, session_id, e
-                    ))
-                })?;
-            } else {
-                session.spawn_shell().map_err(|e| {
-                    StreamingError::ServerError(format!(
-                        "Failed to spawn default shell for session '{}': {}",
-                        session_id, e
-                    ))
-                })?;
-            }
-        }
-
-        // Get PTY writer
-        let pty_writer = {
-            let session = pty_session.lock();
-            session.get_writer()
-        };
-
-        // Store PTY session
-        self.pty_sessions
-            .write()
-            .insert(session_id.to_string(), Arc::clone(&pty_session));
-
-        Ok(SessionFactoryResult {
-            terminal,
-            pty_writer,
-        })
-    }
-
-    fn setup_session(
-        &self,
-        session_id: &str,
-        session: &Arc<StreamSessionState>,
-    ) -> std::result::Result<(), par_term_emu_core_rust::streaming::error::StreamingError> {
-        let pty_session = {
-            let sessions = self.pty_sessions.read();
-            sessions.get(session_id).cloned()
-        };
-
-        let pty_session = match pty_session {
-            Some(s) => s,
-            None => return Ok(()), // Already torn down
-        };
-
-        // Set up output callback
-        let output_sender = session.get_output_sender();
-        {
-            let mut ps = pty_session.lock();
-            ps.set_output_callback(Arc::new(move |data| {
-                let text = String::from_utf8_lossy(data).to_string();
-                let _ = output_sender.try_send(text);
-            }));
-        }
-
-        // Spawn resize handler for this session
-        let resize_rx = session.get_resize_receiver();
-        let pty_clone = Arc::clone(&pty_session);
-        let session_id_clone = session_id.to_string();
-        let server_ref = self.streaming_server.read().clone();
-        tokio::spawn(async move {
-            let mut rx = resize_rx.lock().await;
-            while let Some((cols, rows)) = rx.recv().await {
-                info!(
-                    "Resizing session '{}' to {}x{}",
-                    session_id_clone, cols, rows
-                );
-                let mut ps = pty_clone.lock();
-                if let Err(e) = ps.resize(cols, rows) {
-                    error!(
-                        "Failed to resize PTY for session '{}': {}",
-                        session_id_clone, e
-                    );
-                    continue;
-                }
-                // Broadcast resize to clients in this session
-                if let Some(ref server) = server_ref {
-                    server.send_to_session(
-                        &session_id_clone,
-                        par_term_emu_core_rust::streaming::protocol::ServerMessage::resize(
-                            cols, rows,
-                        ),
-                    );
-                }
-            }
-        });
-
-        // Spawn PTY status monitor (restart logic)
-        let pty_clone = Arc::clone(&pty_session);
-        let session_id_clone = session_id.to_string();
-        let restart_shell = self.restart_shell;
-        let default_shell = self.default_shell.clone();
-        let server_ref = self.streaming_server.read().clone();
-        tokio::spawn(async move {
-            loop {
-                let should_restart = {
-                    let ps = pty_clone.lock();
-                    if !ps.is_running() {
-                        info!(
-                            "Session '{}' shell exited (restart={})",
-                            session_id_clone, restart_shell
-                        );
-                        restart_shell
-                    } else {
-                        false
-                    }
-                };
-
-                if should_restart {
-                    time::sleep(Duration::from_millis(500)).await;
-                    info!("Restarting shell for session '{}'", session_id_clone);
-
-                    let restart_result = {
-                        let mut ps = pty_clone.lock();
-                        if let Some(ref shell) = default_shell {
-                            ps.spawn(shell, &[])
-                        } else {
-                            ps.spawn_shell()
-                        }
-                    };
-
-                    match restart_result {
-                        Ok(_) => {
-                            info!("Shell restarted for session '{}'", session_id_clone);
-                            // Update PTY writer
-                            let pty_writer = {
-                                let ps = pty_clone.lock();
-                                ps.get_writer()
-                            };
-                            if let Some(ref server) = server_ref {
-                                if let Some(session) = server.get_session(&session_id_clone) {
-                                    if let Some(writer) = pty_writer {
-                                        session.set_pty_writer(writer);
-                                    }
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            error!(
-                                "Failed to restart shell for session '{}': {} - retrying in 5s",
-                                session_id_clone, e
-                            );
-                            time::sleep(Duration::from_secs(5)).await;
-                        }
-                    }
-                } else if !restart_shell {
-                    let ps = pty_clone.lock();
-                    if !ps.is_running() {
-                        info!(
-                            "Session '{}' shell exited and restart disabled",
-                            session_id_clone
-                        );
-                        drop(ps); // Drop mutex guard before close_session to avoid deadlock
-                        if let Some(ref server) = server_ref {
-                            server.close_session(&session_id_clone, "Shell exited".to_string());
-                        }
-                        break;
-                    }
-                }
-
-                time::sleep(Duration::from_millis(500)).await;
-            }
-        });
-
-        // Spawn terminal event poller for this session
-        let pty_clone = Arc::clone(&pty_session);
-        let session_id_clone = session_id.to_string();
-        let server_ref = self.streaming_server.read().clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_millis(50));
-            loop {
-                interval.tick().await;
-
-                let events = {
-                    let ps = pty_clone.lock();
-                    let terminal = ps.terminal();
-                    let mut term = terminal.write();
-                    term.poll_events()
-                };
-
-                let server = match server_ref {
-                    Some(ref s) => s,
-                    None => continue,
-                };
-
-                for event in events {
-                    if let Some(msg) = par_term_emu_core_rust::streaming::protocol::terminal_event_to_server_message(event) {
-                        server.send_to_session(&session_id_clone, msg);
-                    }
-                }
-            }
-        });
-
-        // Spawn system stats collection task if enabled
-        if self.enable_system_stats {
-            let session_id_clone = session_id.to_string();
-            let server_ref = self.streaming_server.read().clone();
-            let interval_secs = self.system_stats_interval_secs;
-            tokio::spawn(async move {
-                use sysinfo::{CpuRefreshKind, Disks, MemoryRefreshKind, Networks, RefreshKind};
-
-                let refresh_kind = RefreshKind::nothing()
-                    .with_cpu(CpuRefreshKind::everything())
-                    .with_memory(MemoryRefreshKind::everything());
-                let mut sys = sysinfo::System::new_with_specifics(refresh_kind);
-                let mut disks = Disks::new_with_refreshed_list();
-                let mut networks = Networks::new_with_refreshed_list();
-
-                // Collect static info once
-                let hostname = sysinfo::System::host_name();
-                let os_name = sysinfo::System::name();
-                let os_version = sysinfo::System::os_version();
-                let kernel_version = sysinfo::System::kernel_version();
-
-                // Initial CPU refresh for baseline (first reading is always 0%)
-                sys.refresh_specifics(refresh_kind);
-
-                let mut interval = tokio::time::interval(Duration::from_secs(interval_secs.max(1)));
-                // Skip first tick (happens immediately, CPU would be 0%)
-                interval.tick().await;
-
-                loop {
-                    interval.tick().await;
-
-                    let server = match server_ref {
-                        Some(ref s) => s,
-                        None => continue,
-                    };
-
-                    // Refresh all metrics
-                    sys.refresh_specifics(refresh_kind);
-                    disks.refresh(true);
-                    networks.refresh(true);
-
-                    // Build CPU stats
-                    let cpu = {
-                        let global = sys.global_cpu_usage();
-                        let cores = sysinfo::System::physical_core_count().unwrap_or(0) as u32;
-                        let per_core: Vec<f64> =
-                            sys.cpus().iter().map(|c| c.cpu_usage() as f64).collect();
-                        let brand = sys.cpus().first().map(|c| c.brand().to_string());
-                        let freq = sys.cpus().first().map(|c| c.frequency());
-                        par_term_emu_core_rust::streaming::protocol::CpuStats {
-                            overall_usage_percent: global as f64,
-                            physical_core_count: cores,
-                            per_core_usage_percent: per_core,
-                            brand,
-                            frequency_mhz: freq,
-                        }
-                    };
-
-                    // Build memory stats
-                    let memory = par_term_emu_core_rust::streaming::protocol::MemoryStats {
-                        total_bytes: sys.total_memory(),
-                        used_bytes: sys.used_memory(),
-                        available_bytes: sys.available_memory(),
-                        swap_total_bytes: sys.total_swap(),
-                        swap_used_bytes: sys.used_swap(),
-                    };
-
-                    // Build disk stats
-                    let disk_stats: Vec<par_term_emu_core_rust::streaming::protocol::DiskStats> =
-                        disks
-                            .iter()
-                            .map(|d| par_term_emu_core_rust::streaming::protocol::DiskStats {
-                                name: d.name().to_string_lossy().to_string(),
-                                mount_point: d.mount_point().to_string_lossy().to_string(),
-                                total_bytes: d.total_space(),
-                                available_bytes: d.available_space(),
-                                kind: format!("{:?}", d.kind()),
-                                file_system: d.file_system().to_string_lossy().to_string(),
-                                is_removable: d.is_removable(),
-                            })
-                            .collect();
-
-                    // Build network stats
-                    let network_stats: Vec<
-                        par_term_emu_core_rust::streaming::protocol::NetworkInterfaceStats,
-                    > = networks
-                        .iter()
-                        .map(|(name, data)| {
-                            par_term_emu_core_rust::streaming::protocol::NetworkInterfaceStats {
-                                name: name.to_string(),
-                                received_bytes: data.received(),
-                                transmitted_bytes: data.transmitted(),
-                                total_received_bytes: data.total_received(),
-                                total_transmitted_bytes: data.total_transmitted(),
-                                packets_received: data.packets_received(),
-                                packets_transmitted: data.packets_transmitted(),
-                                errors_received: data.errors_on_received(),
-                                errors_transmitted: data.errors_on_transmitted(),
-                            }
-                        })
-                        .collect();
-
-                    // Build load average
-                    let load_avg = sysinfo::System::load_average();
-                    let load_average = par_term_emu_core_rust::streaming::protocol::LoadAverage {
-                        one_minute: load_avg.one,
-                        five_minutes: load_avg.five,
-                        fifteen_minutes: load_avg.fifteen,
-                    };
-
-                    let uptime = sysinfo::System::uptime();
-                    let timestamp = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as u64)
-                        .ok();
-
-                    let msg =
-                        par_term_emu_core_rust::streaming::protocol::ServerMessage::system_stats(
-                            Some(cpu),
-                            Some(memory),
-                            disk_stats,
-                            network_stats,
-                            Some(load_average),
-                            hostname.clone(),
-                            os_name.clone(),
-                            os_version.clone(),
-                            kernel_version.clone(),
-                            Some(uptime),
-                            timestamp,
-                        );
-
-                    server.send_to_session(&session_id_clone, msg);
-                }
-            });
-        }
-
-        Ok(())
-    }
-
-    fn is_session_alive(&self, session_id: &str) -> bool {
-        self.pty_sessions
-            .read()
-            .get(session_id)
-            .map(|ps| ps.lock().is_running())
-            .unwrap_or(false)
-    }
-
-    fn teardown_session(&self, session_id: &str) {
-        info!("Tearing down session '{}'", session_id);
-        if let Some(pty_session) = self.pty_sessions.write().remove(session_id) {
-            // Try to gracefully exit the shell
-            let ps = pty_session.lock();
-            if ps.is_running() {
-                if let Some(writer) = ps.get_writer() {
-                    let mut w = writer.lock();
-                    let _ = w.write_all(b"exit\n");
-                    let _ = w.flush();
-                }
-            }
-        }
-    }
-}
-
-/// GitHub API response for release information
-#[derive(serde::Deserialize, Debug)]
-struct GitHubRelease {
-    tag_name: String,
-    assets: Vec<GitHubAsset>,
-}
-
-/// GitHub API response for release asset
-#[derive(serde::Deserialize, Debug)]
-struct GitHubAsset {
-    name: String,
-    browser_download_url: String,
-}
-
-const GITHUB_REPO: &str = "paulrobello/par-term-emu-core-rust";
-const FRONTEND_ARCHIVE_PREFIX: &str = "par-term-web-frontend-v";
-
-/// Download and extract the web frontend from GitHub releases
-async fn download_frontend(version: &str, web_root: &str) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent("par-term-streamer")
-        .timeout(Duration::from_secs(60))
-        .build()
-        .context("Failed to create HTTP client")?;
-
-    // Get release info from GitHub API
-    let release_url = if version == "latest" {
-        format!(
-            "https://api.github.com/repos/{}/releases/latest",
-            GITHUB_REPO
-        )
-    } else {
-        format!(
-            "https://api.github.com/repos/{}/releases/tags/v{}",
-            GITHUB_REPO, version
-        )
-    };
-
-    println!("Fetching release info from GitHub...");
-    let response = client
-        .get(&release_url)
-        .send()
-        .await
-        .context("Failed to fetch release info from GitHub")?;
-
-    if !response.status().is_success() {
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            if version == "latest" {
-                anyhow::bail!("No releases found for this repository");
-            } else {
-                anyhow::bail!("Release version '{}' not found", version);
-            }
-        }
-        anyhow::bail!(
-            "GitHub API request failed with status: {}",
-            response.status()
-        );
-    }
-
-    let release: GitHubRelease = response
-        .json()
-        .await
-        .context("Failed to parse GitHub release info")?;
-
-    println!("Found release: {}", release.tag_name);
-
-    // Find the tar.gz frontend archive
-    let archive_asset = release
-        .assets
-        .iter()
-        .find(|asset| {
-            asset.name.starts_with(FRONTEND_ARCHIVE_PREFIX) && asset.name.ends_with(".tar.gz")
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Web frontend archive not found in release {}. Available assets: {}",
-                release.tag_name,
-                release
-                    .assets
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
-        })?;
-
-    println!("Downloading: {}", archive_asset.name);
-    println!("From: {}", archive_asset.browser_download_url);
-
-    // Download the archive
-    let response = client
-        .get(&archive_asset.browser_download_url)
-        .send()
-        .await
-        .context("Failed to download frontend archive")?;
-
-    if !response.status().is_success() {
-        anyhow::bail!("Failed to download archive: HTTP {}", response.status());
-    }
-
-    let content_length = response.content_length();
-    if let Some(len) = content_length {
-        println!("Download size: {} bytes", len);
-    }
-
-    let archive_bytes = response
-        .bytes()
-        .await
-        .context("Failed to read archive content")?;
-
-    println!("Downloaded {} bytes", archive_bytes.len());
-
-    // Create web root directory if it doesn't exist
-    let web_root_path = Path::new(web_root);
-    if web_root_path.exists() {
-        println!("Clearing existing web root: {}", web_root);
-        fs::remove_dir_all(web_root_path)
-            .context(format!("Failed to remove existing directory: {}", web_root))?;
-    }
-    fs::create_dir_all(web_root_path)
-        .context(format!("Failed to create web root directory: {}", web_root))?;
-
-    // Extract the tar.gz archive
-    println!("Extracting to: {}", web_root);
-    let tar_gz = GzDecoder::new(archive_bytes.as_ref());
-    let mut archive = Archive::new(tar_gz);
-
-    archive
-        .unpack(web_root_path)
-        .context("Failed to extract archive")?;
-
-    // Count extracted files
-    let file_count = count_files(web_root_path)?;
-    println!(
-        "Successfully extracted {} files to {}",
-        file_count, web_root
-    );
-
-    // Verify index.html exists
-    let index_path = web_root_path.join("index.html");
-    if !index_path.exists() {
-        println!("Warning: index.html not found in extracted content");
-    } else {
-        println!("Frontend ready at: {}/index.html", web_root);
-    }
-
-    Ok(())
-}
-
-/// Count files recursively in a directory
-fn count_files(path: &Path) -> Result<usize> {
-    let mut count = 0;
-    if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                count += count_files(&path)?;
-            } else {
-                count += 1;
-            }
-        }
-    }
-    Ok(count)
-}
-
-/// Determine if a password string looks like an htpasswd hash
-fn looks_like_hash(s: &str) -> bool {
-    // bcrypt: $2a$, $2b$, $2y$
-    // apr1: $apr1$
-    // MD5 crypt: $1$
-    // SHA1: {SHA}
-    s.starts_with("$2a$")
-        || s.starts_with("$2b$")
-        || s.starts_with("$2y$")
-        || s.starts_with("$apr1$")
-        || s.starts_with("$1$")
-        || s.starts_with("{SHA}")
-}
-
-/// True if `host` binds only to the loopback interface (not reachable from the network).
-fn is_loopback_host(host: &str) -> bool {
-    let h = host.trim().to_ascii_lowercase();
-    h == "127.0.0.1" || h == "::1" || h == "localhost" || h.starts_with("127.")
-}
-
-/// Resolve HTTP Basic Auth configuration from CLI arguments
-///
-/// Priority: password_file > password_hash > password
-fn resolve_http_basic_auth(args: &Args) -> Result<Option<HttpBasicAuthConfig>> {
-    // If no username is provided, no auth is configured
-    let username = match &args.http_user {
-        Some(u) => u.clone(),
-        None => {
-            // Check if any password options are provided without a username
-            if args.http_password.is_some()
-                || args.http_password_hash.is_some()
-                || args.http_password_file.is_some()
-            {
-                anyhow::bail!(
-                    "HTTP Basic Auth password options require --http-user to be specified"
-                );
-            }
-            return Ok(None);
-        }
-    };
-
-    // Priority: file > hash > clear text
-    if let Some(ref file_path) = args.http_password_file {
-        // Validate file permissions (should not be world/group readable)
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            if let Ok(metadata) = fs::metadata(file_path) {
-                let mode = metadata.mode();
-                if mode & 0o077 != 0 {
-                    warn!(
-                        "Password file {} has insecure permissions {:o}. \
-                         Consider restricting to owner-only (chmod 600).",
-                        file_path,
-                        mode & 0o777
-                    );
-                }
-            }
-        }
-
-        // Read password from file (first line)
-        let file = fs::File::open(file_path)
-            .context(format!("Failed to open password file: {}", file_path))?;
-        let reader = BufReader::new(file);
-        let first_line = reader
-            .lines()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Password file is empty: {}", file_path))?
-            .context("Failed to read password file")?;
-
-        let password_value = first_line.trim();
-        if password_value.is_empty() {
-            anyhow::bail!("Password file contains empty line: {}", file_path);
-        }
-
-        // Determine if it's a hash or clear text
-        if looks_like_hash(password_value) {
-            info!("Using password hash from file: {}", file_path);
-            return Ok(Some(HttpBasicAuthConfig::with_hash(
-                username,
-                password_value.to_string(),
-            )));
-        } else {
-            info!("Using clear text password from file: {}", file_path);
-            return Ok(Some(HttpBasicAuthConfig::with_password(
-                username,
-                password_value.to_string(),
-            )));
-        }
-    }
-
-    if let Some(ref hash) = args.http_password_hash {
-        info!("Using password hash from argument/environment");
-        return Ok(Some(HttpBasicAuthConfig::with_hash(username, hash.clone())));
-    }
-
-    if let Some(ref password) = args.http_password {
-        info!("Using clear text password from argument/environment");
-        return Ok(Some(HttpBasicAuthConfig::with_password(
-            username,
-            password.clone(),
-        )));
-    }
-
-    // Username provided but no password - this is an error
-    anyhow::bail!(
-        "--http-user requires one of: --http-password, --http-password-hash, or --http-password-file"
-    );
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1307,7 +108,7 @@ async fn main() -> Result<()> {
         println!("par-term-streamer v{}", env!("CARGO_PKG_VERSION"));
         println!("Downloading web frontend...\n");
 
-        download_frontend(&args.frontend_version, &args.web_root).await?;
+        frontend_download::download_frontend(&args.frontend_version, &args.web_root).await?;
 
         println!("\nTo run the server with the downloaded frontend:");
         println!(
@@ -1336,7 +137,7 @@ async fn main() -> Result<()> {
     // Determine terminal size
     // Priority: --use-tty-size > --size > --cols/--rows
     let (cols, rows) = if args.use_tty_size {
-        match get_tty_size() {
+        match cli::get_tty_size() {
             Some(size) => {
                 info!("Using TTY size: {}x{}", size.0, size.1);
                 size
@@ -1355,20 +156,9 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("Unknown theme: {}", args.theme))?;
     info!("Using theme: {}", theme.name);
 
-    // Create PTY session for macro mode only
-    // In shell mode, the BinarySessionFactory creates PTY sessions on demand
-    let pty_session: Option<Arc<Mutex<PtySession>>> = if args.macro_file.is_some() {
-        info!("Creating PTY session for macro mode ({}x{})", cols, rows);
-        let ps = PtySession::new(cols as usize, rows as usize, args.scrollback);
-        let terminal = ps.terminal();
-        {
-            let mut term = terminal.write();
-            theme.apply(&mut term);
-        }
-        Some(Arc::new(Mutex::new(ps)))
-    } else {
-        None
-    };
+    // Resolve run mode; macro mode creates its dedicated PTY session here,
+    // before any server wiring starts (replaces downstream `expect` panics)
+    let run_mode = bootstrap::resolve_run_mode(&args, cols, rows, &theme);
 
     // Load TLS configuration if provided
     let tls_config = if let Some(pem_path) = &args.tls_pem {
@@ -1387,7 +177,7 @@ async fn main() -> Result<()> {
     let use_tls = tls_config.is_some();
 
     // Resolve HTTP Basic Auth configuration
-    let http_basic_auth = resolve_http_basic_auth(&args)?;
+    let http_basic_auth = bootstrap::resolve_http_basic_auth(&args)?;
 
     // Build presets map from CLI args
     let presets: HashMap<String, String> = args.preset.iter().cloned().collect();
@@ -1429,7 +219,10 @@ async fn main() -> Result<()> {
     // SEC-002: Warn loudly when binding a non-loopback interface without any
     // authentication configured. A public bind with no auth exposes an
     // interactive shell (the PTY) to anyone who can reach the port.
-    if !is_loopback_host(&args.host) && args.api_key.is_none() && http_basic_auth.is_none() {
+    if !bootstrap::is_loopback_host(&args.host)
+        && args.api_key.is_none()
+        && http_basic_auth.is_none()
+    {
         eprintln!();
         eprintln!("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
         eprintln!(
@@ -1454,39 +247,37 @@ async fn main() -> Result<()> {
     }
 
     let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
-    let is_macro_mode = args.macro_file.is_some();
 
-    // Create session factory for shell mode (multi-session support)
-    let factory: Option<Arc<BinarySessionFactory>> = if !is_macro_mode {
-        Some(Arc::new(BinarySessionFactory::new(
-            args.shell.clone(),
-            args.scrollback,
-            Some(theme.clone()),
-            restart_shell,
-            args.enable_system_stats,
-            args.system_stats_interval,
-        )))
-    } else {
-        None
-    };
-
-    let mut streaming_server = if let Some(ref factory) = factory {
-        // Multi-session mode with factory
-        StreamingServer::with_factory(
-            addr.clone(),
-            config,
-            Arc::clone(factory) as Arc<dyn SessionFactory>,
-        )
-    } else {
-        // Macro mode - single-session backward compatible
-        let terminal = {
-            let ps = pty_session
-                .as_ref()
-                .expect("PTY session required for macro mode");
-            let ps = ps.lock();
-            ps.terminal()
-        };
-        StreamingServer::with_config(terminal, addr.clone(), config)
+    // Create the session factory (shell mode) and the streaming server
+    let (factory, mut streaming_server) = match &run_mode {
+        RunMode::Shell => {
+            // Multi-session mode with factory
+            let factory = Arc::new(BinarySessionFactory::new(
+                args.shell.clone(),
+                args.scrollback,
+                Some(theme.clone()),
+                restart_shell,
+                args.enable_system_stats,
+                args.system_stats_interval,
+            ));
+            let server = StreamingServer::with_factory(
+                addr.clone(),
+                config,
+                Arc::clone(&factory) as Arc<dyn SessionFactory>,
+            );
+            (Some(factory), server)
+        }
+        RunMode::Macro { pty_session, .. } => {
+            // Macro mode - single-session backward compatible
+            let terminal = {
+                let ps = pty_session.lock();
+                ps.terminal()
+            };
+            (
+                None,
+                StreamingServer::with_config(terminal, addr.clone(), config),
+            )
+        }
     };
 
     // Set theme on streaming server
@@ -1500,11 +291,11 @@ async fn main() -> Result<()> {
     }
 
     // Check if we should play back a macro or run a shell
-    if let Some(macro_file) = &args.macro_file {
-        let macro_pty = pty_session
-            .as_ref()
-            .expect("PTY session required for macro mode");
-
+    if let RunMode::Macro {
+        macro_file,
+        pty_session: macro_pty,
+    } = &run_mode
+    {
         // Get output sender for the callback
         let output_sender = streaming_server.get_output_sender();
 
@@ -1701,22 +492,18 @@ async fn main() -> Result<()> {
         })
     };
 
-    if is_macro_mode {
-        // Macro mode: use ServerState for resize handling and PTY monitoring
-        let macro_pty = pty_session
-            .as_ref()
-            .expect("PTY session required for macro mode");
-        let resize_rx = streaming_server.get_resize_receiver();
-        let state = ServerState::new(
+    if let RunMode::Macro {
+        pty_session: macro_pty,
+        ..
+    } = &run_mode
+    {
+        // Macro mode: run the event loop (resize handling, PTY monitoring)
+        run_macro_mode(
             Arc::clone(macro_pty),
             Arc::clone(&streaming_server),
-            resize_rx,
             args.shell.clone(),
-            false, // no restart in macro mode
-        );
-
-        // Run main event loop (this blocks until Ctrl+C)
-        state.run().await?;
+        )
+        .await?;
     } else {
         // Shell mode: factory handles per-session resize, PTY monitoring, and event polling.
         // Send initial command to default session if specified
@@ -1767,8 +554,8 @@ async fn main() -> Result<()> {
     }
 
     // Stop macro mode PTY
-    if let Some(ref macro_pty) = pty_session {
-        let session = macro_pty.lock();
+    if let RunMode::Macro { pty_session, .. } = &run_mode {
+        let session = pty_session.lock();
         if session.is_running() {
             if let Some(writer) = session.get_writer() {
                 let mut w = writer.lock();

@@ -857,7 +857,7 @@ graph TD
 - `base64` (0.22.1) - Base64 encoding/decoding
 - `bitflags` (2.13.0) - Bit flag management
 - `regex` (1.12.3) - Regular expression support
-- `serde` (1.0.228) + `serde_json` (1.0.150) + `serde_yaml` (0.9.34) - Serialization support
+- `serde` (1.0.228) + `serde_json` (1.0.150) + `serde_yaml_ng` (0.10.0) - Serialization support
 
 **Screenshot/rendering support:**
 - `image` (0.25.10) - Image encoding/decoding (PNG, JPEG, BMP)

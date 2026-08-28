@@ -42,6 +42,18 @@ pub mod color_utils;
 pub mod conformance_level;
 pub mod coprocess;
 pub mod cursor;
+
+// `sim` is an empty marker feature naming the headless profile; it is meant
+// to be used alone (`default-features = false, features = ["sim"]`). Combined
+// with the default `python` feature it selects nothing while still compiling
+// the full PyO3 surface, so make that misuse loud instead of silently
+// producing the full build.
+#[cfg(all(feature = "sim", feature = "python"))]
+compile_error!(
+    "`sim` is the headless profile and must be built with --no-default-features \
+     (e.g. `cargo build --no-default-features --features sim`); combining it with \
+     the `python` feature selects nothing"
+);
 #[macro_use]
 pub mod debug;
 pub mod ffi;

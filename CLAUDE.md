@@ -125,7 +125,7 @@ Also update:
 
 ### PTY Architecture
 
-`PtySession` wraps `Arc<Mutex<Terminal>>` (using `parking_lot::Mutex` for performance/no poisoning). A background reader thread reads from the PTY master and calls `term.process(..)` while holding the lock. The `running` flag (`Arc<AtomicBool>`) is best-effort; use `try_wait()`/`wait()` for precise exit status.
+`PtySession` wraps `Arc<RwLock<Terminal>>` (using `parking_lot::RwLock` — no poisoning). The background reader thread takes the write lock to `process()` PTY output; queries take read locks. The `running` flag (`Arc<AtomicBool>`) is best-effort; use `try_wait()`/`wait()` for precise exit status.
 
 ## Development Workflows
 
@@ -178,6 +178,8 @@ Also update:
 - `Cargo.toml` (line 3: `version = "X.Y.Z"`)
 - `pyproject.toml` (line 9: `version = "X.Y.Z"`)
 - `python/par_term_emu_core_rust/__init__.py` (`__version__ = "X.Y.Z"`)
+
+**Derive crate exception**: `derive/Cargo.toml` versions independently — bump it only when the derive code changes, and keep the main crate's `par-term-emu-derive` dependency spec (`Cargo.toml` ~line 52) matching that version. The publish workflows publish the sub-crate before the main crate so the registry version exists when crates.io resolves the (path-stripped) dependency.
 
 **Python Binding Sync**: When adding/modifying Rust methods on `Terminal` or `PtySession`:
 1. **Add Python binding** in `src/python_bindings/terminal.rs` or `src/python_bindings/pty.rs`

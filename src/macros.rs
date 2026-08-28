@@ -156,7 +156,7 @@ impl Macro {
 
     /// Save the macro to a YAML file
     pub fn save_yaml<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        let yaml = serde_yaml::to_string(self)
+        let yaml = serde_yaml_ng::to_string(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(path, yaml)
     }
@@ -164,17 +164,18 @@ impl Macro {
     /// Load a macro from a YAML file
     pub fn load_yaml<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let contents = fs::read_to_string(path)?;
-        serde_yaml::from_str(&contents).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        serde_yaml_ng::from_str(&contents)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     /// Convert to YAML string
-    pub fn to_yaml(&self) -> Result<String, serde_yaml::Error> {
-        serde_yaml::to_string(self)
+    pub fn to_yaml(&self) -> Result<String, serde_yaml_ng::Error> {
+        serde_yaml_ng::to_string(self)
     }
 
     /// Parse from YAML string
-    pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml::Error> {
-        serde_yaml::from_str(yaml)
+    pub fn from_yaml(yaml: &str) -> Result<Self, serde_yaml_ng::Error> {
+        serde_yaml_ng::from_str(yaml)
     }
 }
 
