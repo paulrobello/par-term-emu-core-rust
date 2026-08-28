@@ -567,7 +567,7 @@ The terminal emulator supports the Kitty graphics protocol, which includes file 
 
 **Security Measures Implemented**:
 
-1. **Directory Traversal Prevention**: File paths containing `..` are rejected to prevent access to parent directories
+1. **Directory Traversal Prevention**: File paths containing a `..` path *component* are rejected (a literal `..` inside a filename, e.g. `my..notes.png`, is not a component and is allowed)
 2. **File Type Validation**: Only existing regular files are loaded (directories and special files are rejected)
 3. **File Size Limits**: Maximum file size of 100MB to prevent memory exhaustion
 4. **Path Validation**: File paths must exist and be readable
@@ -590,8 +590,8 @@ The file loading security implementation is located in the `load_file_data()` me
    - Invalid encoding returns error: "Invalid UTF-8 in file path"
 
 2. **Directory Traversal Prevention**
-   - Any path containing `..` is rejected
-   - Prevents access to parent directories
+   - Paths with a `..` path *component* are rejected (checked via `Path::components()`, not a substring match — `my..notes.png` remains readable)
+   - Prevents explicit parent-directory traversal within a supplied path
    - Applied before any file system operations
    - Returns error: "Directory traversal not allowed"
 
@@ -622,8 +622,9 @@ fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
 
     let path = Path::new(&path_str);
 
-    // 2. Directory traversal check
-    if path_str.contains("..") {
+    // 2. Directory traversal check (component-wise: a literal ".." inside a
+    //    filename like my..notes.png is NOT a parent-dir component)
+    if path.components().any(|c| c == Component::ParentDir) {
         return Err(GraphicsError::KittyError(
             "Directory traversal not allowed".to_string(),
         ));
@@ -674,6 +675,7 @@ fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
 
 **File System Access Risks**:
 - Applications can request loading of **any readable file** on the system (within the user's permissions)
+- Absolute paths are readable **by design**: the requesting application already runs with the emulator user's privileges and could read those files directly, so restricting readable roots would not reduce its access
 - No sandboxing or chroot isolation is applied
 - Applications could potentially:
   - Probe for file existence by observing error messages
@@ -684,7 +686,7 @@ fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
 1. **User Permission Model**: File loading operates with the same permissions as the terminal emulator process. If running as a non-root user, sensitive system files are inaccessible.
 2. **Size Limits**: 100MB maximum file size prevents single-file memory exhaustion
 3. **No Execution**: Files are only read and decoded as images, never executed
-4. **Path Sanitization**: Directory traversal attempts are blocked
+4. **Path Check Is Not a Sandbox**: The `..` component check blocks explicit parent-directory traversal within a supplied path only. It is not a sandbox and does not restrict which absolute paths may be read — treat any file-load feature accordingly.
 
 **Recommendations**:
 

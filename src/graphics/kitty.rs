@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use flate2::read::ZlibDecoder;
 
@@ -816,8 +816,10 @@ impl KittyParser {
 
         // Security validations
 
-        // 1. Check for directory traversal attacks
-        if path_str.contains("..") {
+        // 1. Reject paths containing a real parent-directory component.
+        //    Component-wise, not substring: "my..notes.png" has no `..`
+        //    component and must stay readable, while "a/../b" must not.
+        if path.components().any(|c| c == Component::ParentDir) {
             return Err(GraphicsError::KittyError(
                 "Directory traversal not allowed".to_string(),
             ));
@@ -2650,6 +2652,41 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Directory traversal"));
+    }
+
+    #[test]
+    fn test_load_file_data_parent_dir_component_is_rejected() {
+        // A real `..` component is rejected even when the path also
+        // contains a benign ".."-inside-filename segment.
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+        let result = parser.load_file_data(b"a/../b.png");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Directory traversal"));
+    }
+
+    #[test]
+    fn test_load_file_data_double_dot_inside_filename_is_accepted() {
+        // "my..notes.png" contains ".." as a substring but has no
+        // parent-dir component — it must remain loadable.
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 4]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("my..notes.png");
+        std::fs::write(&path, &png).unwrap();
+
+        let mut parser = KittyParser::new();
+        parser.medium = KittyMedium::File;
+        let data = parser
+            .load_file_data(path.to_string_lossy().as_bytes())
+            .expect("a '..' substring inside a filename must be readable");
+        assert_eq!(data, png);
     }
 
     #[test]
