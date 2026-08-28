@@ -2671,9 +2671,21 @@ impl Terminal {
                     } else {
                         // Errors here are non-fatal.
                         let position = (self.cursor.col, self.cursor.row);
-                        let _ = self
+                        match self
                             .kitty_parser
-                            .build_graphic(position, &mut self.graphics.graphics_store);
+                            .build_graphic(position, &mut self.graphics.graphics_store)
+                        {
+                            Ok(crate::graphics::kitty::KittyGraphicResult::Graphic(graphic)) => {
+                                self.graphics.graphics_store.add_graphic(graphic);
+                            }
+                            Ok(
+                                crate::graphics::kitty::KittyGraphicResult::VirtualPlacement {
+                                    ..
+                                }
+                                | crate::graphics::kitty::KittyGraphicResult::None,
+                            )
+                            | Err(_) => {}
+                        }
                         self.kitty_parser.reset();
                     }
                 }

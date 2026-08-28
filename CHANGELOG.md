@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Kitty placement APCs now store decoded graphics** (`src/terminal/mod.rs`). Regular Kitty placement commands returned a decoded `KittyGraphicResult::Graphic`, but the terminal integration discarded it after the image upload, leaving placements with no active pixel-backed graphic for downstream renderers. The result is now inserted into `GraphicsStore`; a transmit followed by placement renders with its stored pixels. Regression coverage added in `src/terminal/tests/kitty_apc.rs`.
+
 ## [0.46.0] - 2026-08-03
 
 ### Added

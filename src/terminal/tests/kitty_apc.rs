@@ -41,6 +41,42 @@ fn ingests_virtual_placement_apc() {
 }
 
 #[test]
+fn ingests_transmit_then_regular_placement_apc() {
+    let mut term = Terminal::new(80, 24);
+
+    // Transmit a 2x2 RGB image under id 42 (16 base64 'A' chars decode to
+    // 12 zero bytes = 2*2*3). Transmit-only stores the shared image.
+    term.process(b"\x1b_Ga=t,f=24,i=42,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
+
+    // Regular (non-virtual) placement of the transmitted image.
+    // `KittyParser::build_graphic` returns `KittyGraphicResult::Graphic`
+    // WITHOUT storing it; the terminal layer must commit it via
+    // `GraphicsStore::add_graphic` or the graphic is silently dropped.
+    term.process(b"\x1b_Ga=p,i=42\x1b\\");
+
+    let graphics = term.graphics.graphics_store.all_graphics();
+    let placed: Vec<_> = graphics
+        .iter()
+        .filter(|g| g.kitty_image_id == Some(42))
+        .collect();
+    assert_eq!(
+        placed.len(),
+        1,
+        "placement APC must store exactly one graphic for image 42; got {}",
+        placed.len()
+    );
+    assert_eq!(
+        (placed[0].width, placed[0].height),
+        (2, 2),
+        "stored graphic must carry the transmitted pixel dimensions"
+    );
+    assert!(
+        !placed[0].pixels.is_empty(),
+        "stored graphic must carry the transmitted pixels"
+    );
+}
+
+#[test]
 fn handles_apc_split_across_process_calls() {
     let mut term = Terminal::new(80, 24);
 
