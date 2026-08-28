@@ -240,6 +240,7 @@ xterm mouse tracking modes and encodings.
 
 ### Tracking Modes
 
+- `CSI ? 9 h/l` - X10 mouse tracking (press-only: no release, motion, or modifier reports)
 - `CSI ? 1000 h/l` - Normal mouse tracking
 - `CSI ? 1002 h/l` - Button event mouse tracking
 - `CSI ? 1003 h/l` - Any event mouse tracking

@@ -1849,6 +1849,16 @@ impl Terminal {
         if self.modes.mouse_mode == MouseMode::Off {
             return Vec::new();
         }
+        if self.modes.mouse_mode == MouseMode::X10 {
+            // X10 reports button presses only — no release, no motion
+            // (button 3 = no button), and no modifier bits
+            if !event.pressed || event.button == 3 {
+                return Vec::new();
+            }
+            let mut press = event;
+            press.modifiers = 0;
+            return press.encode(self.modes.mouse_mode, self.modes.mouse_encoding);
+        }
         event.encode(self.modes.mouse_mode, self.modes.mouse_encoding)
     }
 

@@ -129,7 +129,7 @@ impl Terminal {
                                     2
                                 }
                             }
-                            1000 | 1002 | 1003 => {
+                            9 | 1000 | 1002 | 1003 => {
                                 if self.modes.mouse_mode != crate::mouse::MouseMode::Off {
                                     1
                                 } else {

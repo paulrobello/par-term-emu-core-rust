@@ -324,7 +324,7 @@ CSI 49 m    - Default background
 
 | Mode | Name | Default | Description |
 |------|------|---------|-------------|
-| 9 | X10 Mouse | Off | ❌ Not implemented (the `MouseMode::X10` variant exists but no mode arm ever sets it) |
+| 9 | X10 Mouse | Off | Press-only tracking (no release/motion/modifiers; legacy `CSI M` encoding unless 1006 is also set) |
 | 1000 | VT200 Mouse | Off | Normal tracking (press + release) |
 | 1002 | Button Event | Off | Press + release + drag |
 | 1003 | Any Event | Off | All mouse motion |
@@ -1389,7 +1389,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 |------------------|---------|-------|
 | 256-color | ✅ Full | SGR 38;5;n and 48;5;n |
 | True color (24-bit) | ✅ Full | SGR 38;2;r;g;b and 48;2;r;g;b |
-| Mouse tracking | ⚠️ Partial | Normal, Button, Any modes (mode 9 X10 not wired) |
+| Mouse tracking | ✅ Full | X10 (press-only), Normal, Button, Any modes |
 | Mouse encoding | ✅ Full | Default, UTF-8, SGR, URXVT |
 | Focus tracking | ✅ Full | Mode 1004 |
 | Bracketed paste | ✅ Full | Mode 2004 |
@@ -1453,18 +1453,13 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
    - **Reason:** Complex, rarely used
    - **Impact:** Very low (almost never used)
 
-2. **X10 Mouse Tracking (DEC Mode 9)**
-   - The `MouseMode::X10` enum variant exists but no mode-set arm wires it
-   - **Reason:** Deprecated protocol; Normal/Button/Any modes cover modern use
-   - **Impact:** Minimal
-
-3. **Most XTWINOPS Operations**
+2. **Most XTWINOPS Operations**
    - Window resize, minimize, raise, etc.
    - **Reason:** Headless library core has no window to act on
    - **Implemented:** Report queries (11, 13, 14, 16, 18, 19) and title stack (22, 23); manipulation ops accepted as no-ops
    - **Impact:** Low (a library core has no window anyway)
 
-4. **Color Stack (XTPUSHCOLORS/XTPOPCOLORS)**
+3. **Color Stack (XTPUSHCOLORS/XTPOPCOLORS)**
    - `CSI # P` / `CSI # Q`
    - **Reason:** Not yet wired (planned as ENH-003)
    - **Impact:** Low

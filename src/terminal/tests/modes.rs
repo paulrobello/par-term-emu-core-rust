@@ -158,3 +158,58 @@ fn test_mouse_event_encoding() {
 
     assert_eq!(encoded, b"\x1b[<0;11;6M");
 }
+
+#[test]
+fn test_x10_mouse_mode_reports_press_only() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?9h");
+    assert_eq!(term.mouse_mode(), MouseMode::X10);
+
+    // Press reports with the legacy CSI M encoding, modifiers stripped
+    let press = term.report_mouse(MouseEvent::new(0, 10, 5, true, 4));
+    assert_eq!(&press[0..3], b"\x1b[M");
+    assert_eq!(press[3] as i32 - 32, 0, "X10 encodes the raw button");
+
+    // Release and motion produce nothing
+    let release = term.report_mouse(MouseEvent::new(0, 10, 5, false, 0));
+    assert!(release.is_empty());
+    let motion = term.report_mouse(MouseEvent::new(3, 11, 6, true, 0));
+    assert!(motion.is_empty());
+
+    // DECRST 9 stops reporting entirely
+    term.process(b"\x1b[?9l");
+    assert_eq!(term.mouse_mode(), MouseMode::Off);
+    assert!(term
+        .report_mouse(MouseEvent::new(0, 10, 5, true, 0))
+        .is_empty());
+}
+
+#[test]
+fn test_x10_coexists_with_1000_series() {
+    let mut term = Terminal::new(80, 24);
+
+    // 1000 after 9: release is reported again
+    term.process(b"\x1b[?9h");
+    term.process(b"\x1b[?1000h");
+    assert_eq!(term.mouse_mode(), MouseMode::Normal);
+    let release = term.report_mouse(MouseEvent::new(0, 10, 5, false, 0));
+    assert!(!release.is_empty());
+
+    // 9 after 1000: the most recent set wins
+    term.process(b"\x1b[?9h");
+    assert_eq!(term.mouse_mode(), MouseMode::X10);
+    assert!(term
+        .report_mouse(MouseEvent::new(0, 10, 5, false, 0))
+        .is_empty());
+}
+
+#[test]
+fn test_decrqm_reports_mode_9() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[?9$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?9;2$y");
+
+    term.process(b"\x1b[?9h");
+    term.process(b"\x1b[?9$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?9;1$y");
+}
