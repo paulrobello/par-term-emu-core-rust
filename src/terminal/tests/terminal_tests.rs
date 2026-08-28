@@ -797,6 +797,23 @@ fn test_decreqtparm_unsolicited() {
 }
 
 #[test]
+fn test_decsace_intermediate_is_noop_no_reply() {
+    // CSI Ps * x (DECSACE) is parsed but not implemented; it must be
+    // consumed silently rather than falling through to DECREQTPARM and
+    // emitting a spurious reply (QA-010).
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[2*x");
+    assert!(term.drain_responses().is_empty());
+}
+
+#[test]
+fn test_decreqtparm_bare_x_still_replies() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b[x");
+    assert_eq!(term.drain_responses(), b"\x1b[2;1;1;120;120;1;0x");
+}
+
+#[test]
 fn test_decrqm_application_cursor() {
     let mut term = Terminal::new(80, 24);
 
