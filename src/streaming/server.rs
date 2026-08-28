@@ -1462,6 +1462,21 @@ impl StreamingServer {
             self.client_count() - 1
         );
 
+        // Complete the closing handshake: reply with a Close frame before the
+        // stream drops. Without it the TCP connection just FINs, and clients
+        // with a full receive queue (websockets stops reading once its queue
+        // backs up) never see the close and run out their full close timeout.
+        // Best-effort: the connection may already be dead on error break paths.
+        if let Err(e) = client.close().await {
+            crate::debug_error!(
+                "STREAMING",
+                "Failed to send close reply to {} {}: {}",
+                transport_label,
+                client_id,
+                e
+            );
+        }
+
         Ok(())
     }
 

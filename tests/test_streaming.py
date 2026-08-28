@@ -3,9 +3,12 @@
 Tests WebSocket-based terminal streaming with multiple clients, authentication,
 resizing, and concurrent operations.
 
-Clients connect with close_timeout=1: the server keeps flushing queued output
-before completing the close handshake, so the library default (10s) exceeds the
-suite's 5s per-test timeout on tests that leave unread messages.
+Clients connect with close_timeout=1: when a test closes while unread broadcast
+messages are still queued client-side, the websockets library's assembler hits
+its queue bounds and pauses its reader, so close() blocks for the full
+close_timeout regardless of server behavior (the server breaks its session loop
+and replies with a Close frame promptly). Keep close_timeout small so the
+suite's 5s per-test timeout is not exceeded.
 """
 
 from __future__ import annotations
@@ -271,6 +274,35 @@ async def test_websocket_connection(streaming_server):
             assert message is not None
         except TimeoutError:
             pass  # OK if no initial screen
+
+
+@pytest.mark.asyncio
+async def test_websocket_close_handshake(streaming_server):
+    """Server replies with a Close frame instead of dropping TCP (RFC 6455).
+
+    The server echoes the client's close code, so a normal close completes
+    with 1000. 1006 (abnormal closure, bare EOF) is what happens when the
+    server drops the stream without completing the closing handshake.
+
+    Pending output is drained first: the websockets library pauses its reader
+    once its recv queue exceeds its bounds, and close() then blocks for the
+    full close_timeout regardless of server behavior (verified against the
+    reference websockets.serve server — this is client-side backpressure, not
+    a server stall).
+    """
+    _server, port = streaming_server
+    uri = f"ws://127.0.0.1:{port}"
+
+    websocket = await websockets.connect(uri, close_timeout=1)
+    while True:
+        try:
+            await asyncio.wait_for(websocket.recv(), timeout=0.2)
+        except TimeoutError:
+            break  # queue drained, shell idle
+    await websocket.close()
+    assert websocket.close_code == 1000, (
+        f"expected proper close handshake (1000), got {websocket.close_code}"
+    )
 
 
 @pytest.mark.asyncio

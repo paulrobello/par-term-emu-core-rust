@@ -97,11 +97,27 @@ where
     }
 
     /// Close the connection to this client
+    ///
+    /// Two paths, because tokio-tungstenite's `close()` is just
+    /// `send(Message::Close)`:
+    ///
+    /// * Server-initiated (peer still active): the send queues our Close frame
+    ///   and flushes it — the normal closing handshake.
+    /// * Peer-initiated (we already read their Close frame): tungstenite
+    ///   auto-queued our reply when it decoded theirs, and any further send is
+    ///   rejected as a send-after-close. The reply reaches the wire only via
+    ///   `flush()`, which has no state check — so on send failure we flush.
+    ///
+    /// Without this, dropping the stream sends a bare TCP FIN and well-behaved
+    /// clients report abnormal closure (1006) instead of completing the
+    /// handshake (1005).
     pub async fn close(mut self) -> Result<()> {
-        self.ws
-            .send(Message::Close(None))
-            .await
-            .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        if self.ws.send(Message::Close(None)).await.is_err() {
+            self.ws
+                .flush()
+                .await
+                .map_err(|e| StreamingError::WebSocketError(e.to_string()))?;
+        }
         Ok(())
     }
 
