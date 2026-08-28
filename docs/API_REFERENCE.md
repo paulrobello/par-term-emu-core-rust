@@ -1008,7 +1008,7 @@ These are **instance methods** (call them on a `Terminal` object, not the class)
 
 ```python
 term = Terminal(80, 24)
-hsl = term.rgb_to_hsl_color(255, 0, 0)     # h=0.0, s=1.0, l=0.5
+hsl = term.rgb_to_hsl_color(255, 0, 0)  # h=0.0, s=1.0, l=0.5
 r, g, b = term.hsv_to_rgb_color(0.0, 1.0, 1.0)  # (255, 0, 0)
 ```
 
@@ -1755,6 +1755,7 @@ OSC 9;4 progress bar state (ConEmu/Windows Terminal style). Also the return type
 
 ```python
 from par_term_emu_core_rust import ProgressBar, ProgressState
+
 bar = ProgressBar(ProgressState.Normal, 42)
 term.process_str(bar.to_escape_sequence())
 ```
