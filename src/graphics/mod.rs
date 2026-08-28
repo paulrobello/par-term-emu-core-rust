@@ -277,6 +277,74 @@ pub struct TerminalGraphic {
     pub placement: ImagePlacement,
 }
 
+/// Pixel access shared by `TerminalGraphic` and the Python `Graphic`
+/// binding, which carries the same RGBA buffer outside this type (QA-009).
+pub(crate) fn pixel_at_in(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    x: usize,
+    y: usize,
+) -> Option<(u8, u8, u8, u8)> {
+    if x >= width || y >= height {
+        return None;
+    }
+    let offset = (y * width + x) * 4;
+    if offset + 3 >= pixels.len() {
+        return None;
+    }
+    Some((
+        pixels[offset],
+        pixels[offset + 1],
+        pixels[offset + 2],
+        pixels[offset + 3],
+    ))
+}
+
+/// Half-block sampling shared by `TerminalGraphic` and the Python
+/// `Graphic` binding (QA-009).
+#[allow(clippy::type_complexity)]
+pub(crate) fn sample_half_block_in(
+    pixels: &[u8],
+    width: usize,
+    height: usize,
+    position: (usize, usize),
+    cell_col: usize,
+    cell_row: usize,
+    cell_width: u32,
+    cell_height: u32,
+) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
+    let rel_col = cell_col.checked_sub(position.0)?;
+    let rel_row = cell_row.checked_sub(position.1)?;
+
+    let px_x = rel_col * cell_width as usize;
+    let px_y = rel_row * cell_height as usize;
+
+    // Sample center of top and bottom halves
+    let top_y = px_y + cell_height as usize / 4;
+    let bottom_y = px_y + (cell_height as usize * 3) / 4;
+    let center_x = px_x + cell_width as usize / 2;
+
+    let top = pixel_at_in(pixels, width, height, center_x, top_y)?;
+    let bottom = pixel_at_in(pixels, width, height, center_x, bottom_y)?;
+
+    Some((top, bottom))
+}
+
+/// Cell dimensions for a pixel buffer of `width` x `height`, shared by
+/// `TerminalGraphic` and the Python `Graphic` binding (QA-009).
+pub(crate) fn cell_size_for(
+    width: usize,
+    height: usize,
+    cell_width: u32,
+    cell_height: u32,
+) -> (usize, usize) {
+    (
+        width.div_ceil(cell_width as usize),
+        height.div_ceil(cell_height as usize),
+    )
+}
+
 impl TerminalGraphic {
     /// Create a new terminal graphic
     pub fn new(
@@ -361,19 +429,7 @@ impl TerminalGraphic {
 
     /// Get RGBA color at pixel coordinates
     pub fn pixel_at(&self, x: usize, y: usize) -> Option<(u8, u8, u8, u8)> {
-        if x >= self.width || y >= self.height {
-            return None;
-        }
-        let offset = (y * self.width + x) * 4;
-        if offset + 3 >= self.pixels.len() {
-            return None;
-        }
-        Some((
-            self.pixels[offset],
-            self.pixels[offset + 1],
-            self.pixels[offset + 2],
-            self.pixels[offset + 3],
-        ))
+        pixel_at_in(&self.pixels, self.width, self.height, x, y)
     }
 
     /// Alias for pixel_at (compatibility with SixelGraphic API)
@@ -391,29 +447,21 @@ impl TerminalGraphic {
         cell_width: u32,
         cell_height: u32,
     ) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
-        // Calculate pixel coordinates relative to graphic position
-        let rel_col = cell_col.checked_sub(self.position.0)?;
-        let rel_row = cell_row.checked_sub(self.position.1)?;
-
-        let px_x = rel_col * cell_width as usize;
-        let px_y = rel_row * cell_height as usize;
-
-        // Sample center of top and bottom halves
-        let top_y = px_y + cell_height as usize / 4;
-        let bottom_y = px_y + (cell_height as usize * 3) / 4;
-        let center_x = px_x + cell_width as usize / 2;
-
-        let top = self.pixel_at(center_x, top_y)?;
-        let bottom = self.pixel_at(center_x, bottom_y)?;
-
-        Some((top, bottom))
+        sample_half_block_in(
+            &self.pixels,
+            self.width,
+            self.height,
+            self.position,
+            cell_col,
+            cell_row,
+            cell_width,
+            cell_height,
+        )
     }
 
     /// Get dimensions in terminal cells
     pub fn cell_size(&self, cell_width: u32, cell_height: u32) -> (usize, usize) {
-        let cols = self.width.div_ceil(cell_width as usize);
-        let rows = self.height.div_ceil(cell_height as usize);
-        (cols, rows)
+        cell_size_for(self.width, self.height, cell_width, cell_height)
     }
 
     /// Calculate height in terminal rows

@@ -202,6 +202,70 @@ fn test_rgb_hsl_full_roundtrip() {
     );
 }
 
+// ─── HSL canonical delegation (QA-009) ─────────────────────────────────────
+
+#[test]
+fn test_rgb_to_hsl_adapter_matches_color_utils_scale() {
+    // rgb_to_hsl is a 0-1 rescale of color_utils::Color::to_hsl (0-100);
+    // the two must agree across a color sweep, including achromatic colors.
+    for r in (0..=255u8).step_by(15) {
+        for g in (0..=255u8).step_by(15) {
+            for b in (0..=255u8).step_by(15) {
+                let hsl = rgb_to_hsl(r, g, b);
+                let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+                let dh = (hsl.h - h).abs().min(360.0 - (hsl.h - h).abs());
+                assert!(
+                    dh < 1e-3,
+                    "hue mismatch for ({r},{g},{b}): {} vs {h}",
+                    hsl.h
+                );
+                assert!(
+                    (hsl.s - s / 100.0).abs() < 1e-5,
+                    "saturation mismatch for ({r},{g},{b})"
+                );
+                assert!(
+                    (hsl.l - l / 100.0).abs() < 1e-5,
+                    "lightness mismatch for ({r},{g},{b})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_hsl_round_trip_property() {
+    // from_hsl(to_hsl(c)) must reproduce c within one step per channel.
+    for r in (0..=255u8).step_by(17) {
+        for g in (0..=255u8).step_by(17) {
+            for b in (0..=255u8).step_by(17) {
+                let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+                let (r2, g2, b2) = crate::color::Color::from_hsl(h, s, l).to_rgb();
+                assert!(
+                    (r as i32 - r2 as i32).abs() <= 1,
+                    "r round-trip ({r},{g},{b}) -> {r2}"
+                );
+                assert!(
+                    (g as i32 - g2 as i32).abs() <= 1,
+                    "g round-trip ({r},{g},{b}) -> {g2}"
+                );
+                assert!(
+                    (b as i32 - b2 as i32).abs() <= 1,
+                    "b round-trip ({r},{g},{b}) -> {b2}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn test_rgb_to_hsl_achromatic_lightness_scale() {
+    // Achromatic colors must report lightness on the full 0-1 scale
+    // (the canonical path previously returned 0-1-as-percent for these).
+    assert!((rgb_to_hsl(255, 255, 255).l - 1.0).abs() < 1e-6);
+    assert!((rgb_to_hsl(0, 0, 0).l - 0.0).abs() < 1e-6);
+    assert!((rgb_to_hsl(128, 128, 128).l - 128.0 / 255.0).abs() < 1e-2);
+}
+
 // ─── Selection API ─────────────────────────────────────────────────────────
 
 use crate::terminal::screen::SelectionMode;

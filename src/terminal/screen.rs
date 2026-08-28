@@ -209,58 +209,23 @@ pub fn hsv_to_rgb(hsv: ColorHSV) -> (u8, u8, u8) {
 }
 
 /// Convert RGB to HSL
+///
+/// Thin adapter over the canonical `color_utils::Color::to_hsl` (QA-009):
+/// rescales its 0-100 saturation/lightness to this type's 0-1 convention.
 pub fn rgb_to_hsl(r: u8, g: u8, b: u8) -> ColorHSL {
-    let r = r as f32 / 255.0;
-    let g = g as f32 / 255.0;
-    let b = b as f32 / 255.0;
-
-    let max = r.max(g).max(b);
-    let min = r.min(g).min(b);
-    let delta = max - min;
-
-    let l = (max + min) / 2.0;
-
-    let s = if delta == 0.0 {
-        0.0
-    } else {
-        delta / (1.0 - (2.0 * l - 1.0).abs())
-    };
-
-    let h = if delta == 0.0 {
-        0.0
-    } else if (max - r).abs() < f32::EPSILON {
-        60.0 * (((g - b) / delta) % 6.0)
-    } else if (max - g).abs() < f32::EPSILON {
-        60.0 * (((b - r) / delta) + 2.0)
-    } else {
-        60.0 * (((r - g) / delta) + 4.0)
-    };
-
-    let h = if h < 0.0 { h + 360.0 } else { h };
-
-    ColorHSL { h, s, l }
+    let (h, s, l) = crate::color::Color::Rgb(r, g, b).to_hsl();
+    ColorHSL {
+        h,
+        s: s / 100.0,
+        l: l / 100.0,
+    }
 }
 
 /// Convert HSL to RGB
+///
+/// Thin adapter over the canonical `color_utils::Color::from_hsl` (QA-009).
 pub fn hsl_to_rgb(hsl: ColorHSL) -> (u8, u8, u8) {
-    let c = (1.0 - (2.0 * hsl.l - 1.0).abs()) * hsl.s;
-    let x = c * (1.0 - ((hsl.h / 60.0) % 2.0 - 1.0).abs());
-    let m = hsl.l - c / 2.0;
-
-    let (r, g, b) = match hsl.h as u32 {
-        0..=59 => (c, x, 0.0),
-        60..=119 => (x, c, 0.0),
-        120..=179 => (0.0, c, x),
-        180..=239 => (0.0, x, c),
-        240..=299 => (x, 0.0, c),
-        _ => (c, 0.0, x),
-    };
-
-    (
-        ((r + m) * 255.0).round() as u8,
-        ((g + m) * 255.0).round() as u8,
-        ((b + m) * 255.0).round() as u8,
-    )
+    crate::color::Color::from_hsl(hsl.h, hsl.s * 100.0, hsl.l * 100.0).to_rgb()
 }
 
 use crate::terminal::Terminal;

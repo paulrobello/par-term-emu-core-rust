@@ -323,7 +323,7 @@ impl Color {
         let l = (max + min) / 2.0;
 
         if delta == 0.0 {
-            return (0.0, 0.0, l);
+            return (0.0, 0.0, l * 100.0);
         }
 
         let s = if l < 0.5 {
