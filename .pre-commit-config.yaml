@@ -12,9 +12,10 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
-        exclude: ^(tests/.*\.expected|.*\.snap)$
+        # web_term/ is generated build output; CI verifies it byte-matches a fresh build
+        exclude: ^(tests/.*\.expected|.*\.snap|web_term/.*)$
       - id: end-of-file-fixer
-        exclude: ^(tests/.*\.expected|.*\.snap)$
+        exclude: ^(tests/.*\.expected|.*\.snap|web_term/.*)$
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files

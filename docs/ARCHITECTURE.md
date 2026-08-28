@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.46.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.47.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
