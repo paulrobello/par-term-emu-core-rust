@@ -927,8 +927,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and optionally `old
 - `debug_snapshot_grid() -> str`: Get debug snapshot of grid state
 - `debug_snapshot_primary() -> str`: Get debug snapshot of primary screen
 - `debug_snapshot_alt() -> str`: Get debug snapshot of alternate screen
-- `debug_log_snapshot()`: Log debug snapshot to console
-- `diff_snapshots(snapshot1: ScreenSnapshot, snapshot2: ScreenSnapshot) -> SnapshotDiff`: Compare two snapshots
+- `debug_log_snapshot(label: str)`: Log a debug snapshot to console. `label` is a required positional tag identifying the snapshot in the log output.
 
 ### Text Extraction and Selection
 
@@ -974,10 +973,21 @@ Call these on the class itself (e.g., `Terminal.strip_ansi(text)`):
 - `Terminal.strip_ansi(text: str) -> str`: Remove all ANSI escape sequences from text
 - `Terminal.measure_text_width(text: str) -> int`: Measure display width accounting for wide characters and ANSI codes
 - `Terminal.parse_color(color_string: str) -> tuple[int, int, int] | None`: Parse color from hex (#RRGGBB), rgb(r,g,b), or name
-- `Terminal.rgb_to_hsl_color(rgb: tuple[int, int, int]) -> ColorHSL`: Convert RGB to HSL color representation
-- `Terminal.rgb_to_hsv_color(rgb: tuple[int, int, int]) -> ColorHSV`: Convert RGB to HSV color representation
-- `Terminal.hsl_to_rgb_color(h: int, s: int, l: int) -> tuple[int, int, int]`: Convert HSL to RGB
-- `Terminal.hsv_to_rgb_color(h: int, s: int, v: int) -> tuple[int, int, int]`: Convert HSV to RGB
+
+### Color Conversion Methods
+
+These are **instance methods** (call them on a `Terminal` object, not the class):
+
+- `rgb_to_hsl_color(r: int, g: int, b: int) -> ColorHSL`: Convert RGB to HSL. Channels are 0-255. The returned `ColorHSL` has `h` (degrees 0.0-360.0), `s` and `l` (0.0-1.0).
+- `rgb_to_hsv_color(r: int, g: int, b: int) -> ColorHSV`: Convert RGB to HSV. Channels are 0-255. The returned `ColorHSV` has `h` (degrees 0.0-360.0), `s` and `v` (0.0-1.0).
+- `hsl_to_rgb_color(h: float, s: float, l: float) -> tuple[int, int, int]`: Convert HSL to RGB. `h` is degrees (0.0-360.0); `s` and `l` are 0.0-1.0. Returns `(r, g, b)` with each channel 0-255.
+- `hsv_to_rgb_color(h: float, s: float, v: float) -> tuple[int, int, int]`: Convert HSV to RGB. `h` is degrees (0.0-360.0); `s` and `v` are 0.0-1.0. Returns `(r, g, b)` with each channel 0-255.
+
+```python
+term = Terminal(80, 24)
+hsl = term.rgb_to_hsl_color(255, 0, 0)     # h=0.0, s=1.0, l=0.5
+r, g, b = term.hsv_to_rgb_color(0.0, 1.0, 1.0)  # (255, 0, 0)
+```
 
 ### Observer API
 
@@ -2115,8 +2125,8 @@ StreamingConfig(
 - `web_root: str` - Web root directory for static files
 - `initial_cols: int` - Initial terminal columns (0=use terminal's current size)
 - `initial_rows: int` - Initial terminal rows (0=use terminal's current size)
-- `max_sessions: int` - Maximum concurrent terminal sessions (default 10; settable via `set_max_sessions()`)
-- `session_idle_timeout: int` - Idle session timeout in seconds (default 900; settable via `set_session_idle_timeout()`)
+- `max_sessions: int` - Maximum concurrent terminal sessions (default 10; assign directly: `config.max_sessions = 10`)
+- `session_idle_timeout: int` - Idle session timeout in seconds (default 900; assign directly: `config.session_idle_timeout = 900`)
 - `max_clients_per_session: int` - Maximum clients per session (0=unlimited)
 - `input_rate_limit_bytes_per_sec: int` - Input rate limit (0=unlimited)
 - `api_key: str | None` - API key for authenticating API routes (masked in `__repr__`)

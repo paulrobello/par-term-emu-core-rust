@@ -2,7 +2,7 @@
 
 Comprehensive internal architecture documentation for par-term-emu-core-rust, a high-performance terminal emulator library written in Rust with Python bindings.
 
-> **Last verified against v0.45.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
+> **Last verified against v0.46.0.** Struct layouts, module lists, and file counts drift quickly; where a section could go stale, prefer the runnable commands given over hard-coded numbers.
 
 ## Table of Contents
 
@@ -252,17 +252,27 @@ The main terminal emulator that ties everything together, organized into submodu
 - **Submodules**:
   - `mod.rs` - Core streaming types
   - `server.rs` - Axum-based WebSocket server with TLS support, per-client subscription filtering
+  - `config.rs` - `StreamingConfig` and TLS/auth configuration (split out of `server.rs` by ARC-004)
+  - `session.rs` - Multi-session lifecycle management and idle-session reaping (ARC-004)
+  - `rate_limit.rs` - Per-session input rate limiting (ARC-004)
   - `client.rs` - Client connection management
-  - `protocol.rs` - Streaming protocol definitions (app-level): 35 server message types, 11 client message types, 26 event types
+  - `protocol.rs` - Streaming protocol definitions (app-level): 37 server message types, 11 client message types, 26 event types
   - `proto.rs` - Protocol Buffers wire format with optional zlib compression
+  - `terminal.pb.rs` - Generated protobuf types (from `proto/terminal.proto` via `build.rs`; do not edit by hand)
+  - `py_convert.rs` - Python dict conversion helpers shared by the streaming bindings
   - `broadcaster.rs` - Multi-client broadcast support
   - `auth_hash.rs` - htpasswd-format hash verification (bcrypt, apr1/MD5-crypt, `{SHA}`) for HTTP Basic Auth (SEC-003)
   - `error.rs` - Streaming-specific errors
 - **Features**: Real-time terminal sharing, multiplexing, binary protocol with compression, mouse/focus/paste forwarding, selection/clipboard sync, shell integration events (with cursor_line positioning), per-client event subscription filtering, badge change streaming, per-session client limits, input rate limiting, session metrics, terminal size validation, dead session reaping
 - **Protocol Buffers**: Generated from `proto/terminal.proto` via `build.rs`
+- **Standalone server binary** (`src/bin/streaming_server/`, requires `streaming-bin`): `main.rs` (entry point), `cli.rs` (arg parsing/env overrides), `frontend_download.rs` (release-asset download + extraction), `bootstrap.rs` (PTY/terminal wiring and session bootstrap), `theme.rs` (theme file loading)
 
 **Utility Modules**
 - `ansi_utils.rs` - ANSI sequence parsing and generation helpers
+- `ffi.rs` - C-compatible embedding API: `#[repr(C)]` types and `extern "C"` functions for creating, querying, and observing terminals from Swift, Kotlin/JNI, C/C++ (see [FFI_GUIDE.md](FFI_GUIDE.md))
+- `observer.rs` - Rust `TerminalObserver` trait for push-based event delivery; callbacks fire after each `process()` call with no internal locks held
+- `unicode_width_config.rs` - Configurable character width: Unicode version selection for width tables and East Asian Ambiguous width treatment
+- `unicode_normalization_config.rs` - Configurable Unicode normalization (NFC/NFD/NFKC/NFKD) applied to PTY text before cell storage, keeping search and cursor movement consistent
 - `grapheme.rs` - Grapheme cluster utilities for Unicode handling
   - Variation selector detection (U+FE0E text style, U+FE0F emoji style)
   - Zero Width Joiner (ZWJ) detection for emoji sequences
@@ -430,23 +440,31 @@ The `Terminal` struct implements the `Perform` trait with these methods:
 
 ```mermaid
 graph TD
-    A[Python Code]
+    A[Python Code / Rust embedder / C FFI caller]
     B[PyO3 Bindings<br/>src/python_bindings/]
     C[Terminal::process<br/>src/terminal/mod.rs]
+    K[Kitty APC Pre-filter<br/>src/terminal/apc_filter.rs]
     D[VTE Parser]
     E[Perform Trait Methods<br/>src/terminal/sequences/]
     F[Grid/Cursor Updates<br/>src/grid/mod.rs, src/cursor.rs]
     G[State Changes]
     H[Python API queries<br/>src/python_bindings/]
+    O[Observer callbacks<br/>src/observer.rs]
+    S[Streaming server<br/>src/streaming/]
+    X[C FFI consumers<br/>src/ffi.rs]
 
     A --> B
     B --> C
-    C --> D
+    C --> K
+    K --> D
     D --> E
     E --> F
     F --> G
     G --> H
     H --> A
+    G --> O
+    G --> S
+    G --> X
 
     style A fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
     style B fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
@@ -456,7 +474,13 @@ graph TD
     style F fill:#1b5e20,stroke:#4caf50,stroke-width:2px,color:#ffffff
     style G fill:#2e7d32,stroke:#66bb6a,stroke-width:2px,color:#ffffff
     style H fill:#0d47a1,stroke:#2196f3,stroke-width:2px,color:#ffffff
+    style K fill:#880e4f,stroke:#c2185b,stroke-width:2px,color:#ffffff
+    style O fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
+    style S fill:#4a148c,stroke:#9c27b0,stroke-width:2px,color:#ffffff
+    style X fill:#37474f,stroke:#78909c,stroke-width:2px,color:#ffffff
 ```
+
+The Kitty APC pre-filter runs before the `vte` parser because `vte` does not expose APC payloads to `Perform` (see ANSI Sequence Processing). Observer callbacks (`src/observer.rs`), the streaming server (`src/streaming/`), and the C FFI surface (`src/ffi.rs`) all consume terminal state changes in addition to the Python API queries.
 
 ## Python Bindings
 
@@ -935,15 +959,23 @@ pyo3 = { version = "0.29", features = ["auto-initialize"] }
 
 [features]
 default = ["python"]
-python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive"]
+python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session"]
+# Real PTY backend (PtySession/PtyTerminal): portable-pty + Unix signal deps.
+# Enabled by `python` (PyPtyTerminal binding) and `streaming-bin` (the server
+# binary spawns real shells).
+pty_session = ["portable-pty", "nix"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only CLI/logging/download deps (see `streaming-bin`).
 streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
              "prost", "rustls", "tokio-rustls", "axum-server",
              "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
 # Standalone par-term-streamer binary only (ARC-015): CLI/logging/download deps
-# the library streaming module never uses. Depends on `streaming`.
-streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar"]
+# the library streaming module never uses. Depends on `streaming` and `pty_session`.
+streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
+# Headless profile: grid + terminal + screenshot only — no PTY, Python, or
+# streaming. Enables nothing itself; it only names the profile (src/lib.rs
+# rejects combining it with `python`).
+sim = []
 jemalloc = ["tikv-jemallocator"]              # Better server performance (non-Windows)
 regenerate-proto = ["prost-build"]            # Rebuild protobuf from proto/terminal.proto
 rust-only = []
