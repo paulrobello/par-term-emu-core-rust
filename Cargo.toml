@@ -180,6 +180,8 @@ rust-only = []
 # `default-features = false, features = ["sim"]` and pull in neither portable-pty
 # nor the PyO3/streaming dep trees. graphics/sixel stay compiled because the
 # Terminal and the screenshot renderer depend on them intrinsically.
+# Intentionally an empty feature list: `sim` enables nothing itself — it only
+# names the profile, and src/lib.rs rejects combining it with `python`.
 sim = []
 full = ["python", "streaming", "streaming-bin"]
 
