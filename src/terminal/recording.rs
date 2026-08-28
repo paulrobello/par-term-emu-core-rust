@@ -34,7 +34,7 @@ pub enum RecordingEventType {
 /// A single event in a recording
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingEvent {
-    /// Timestamp relative to recording start (microseconds)
+    /// Timestamp relative to recording start (milliseconds)
     pub timestamp: u64,
     /// Type of event
     pub event_type: RecordingEventType,
@@ -57,7 +57,7 @@ pub struct RecordingSession {
     pub events: Vec<RecordingEvent>,
     /// Environment variables at start
     pub env: HashMap<String, String>,
-    /// Total duration in microseconds
+    /// Total duration in milliseconds
     pub duration: u64,
     /// Creation timestamp
     pub created_at: u64,
@@ -159,7 +159,7 @@ impl Terminal {
 
         // 2. Event lines
         for event in &session.events {
-            let timestamp = event.timestamp as f64 / 1_000_000.0; // microseconds to seconds
+            let timestamp = event.timestamp as f64 / 1_000.0; // milliseconds to seconds
 
             let event_json = match event.event_type {
                 RecordingEventType::Output => {
@@ -285,10 +285,10 @@ mod tests {
         let ts2 = session.events[1].timestamp;
         assert!(ts2 > ts1, "Second timestamp should be later than first");
 
-        // Timestamps should be in microseconds
+        // Timestamps are milliseconds since recording start
         let now = crate::terminal::unix_millis();
         assert!(
-            ts1 < (now - start_time) * 1000 + 1_000_000,
+            ts1 < (now - start_time) + 1_000,
             "Timestamp should be reasonable"
         );
     }
@@ -420,6 +420,36 @@ mod tests {
         assert_eq!(arr3[1], "r");
         assert_eq!(arr3[2], 100);
         assert_eq!(arr3[3], 30);
+    }
+
+    #[test]
+    fn test_export_asciicast_timestamp_scale() {
+        // Stored timestamps are milliseconds; exported ones must be seconds.
+        // Regression: export divided by 1_000_000, shrinking every delay 1000x.
+        let mut term = Terminal::new(80, 24);
+        term.start_recording(None);
+
+        term.record_input(b"first");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        term.record_output(b"second");
+
+        let session = term.stop_recording().unwrap();
+        let asciicast = term.export_asciicast(&session);
+        let lines: Vec<&str> = asciicast.lines().collect();
+
+        let first: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+        let second: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
+        let t1 = first[0].as_f64().unwrap();
+        let t2 = second[0].as_f64().unwrap();
+
+        // First event is ~0s after start; second is >= the 50ms delay.
+        // Upper bound is generous for slow CI, but must be seconds-scale,
+        // not the 0.00005 the old micros math produced.
+        assert!(t1 < 1.0, "first event should be near t=0, got {t1}");
+        assert!(
+            (0.045..5.0).contains(&t2),
+            "second event should be ~0.05s, got {t2}"
+        );
     }
 
     #[test]
