@@ -22,6 +22,8 @@ impl Terminal {
                 self.handle_remote_host(payload);
             } else if let Some(payload) = data.strip_prefix("RequestUpload=") {
                 self.handle_request_upload(payload);
+            } else if let Some(path) = data.strip_prefix("CurrentDir=") {
+                self.handle_current_dir(path);
             } else {
                 self.handle_iterm_image(&data);
             }
@@ -124,5 +126,27 @@ impl Terminal {
         self.events
             .terminal_events
             .push(crate::terminal::TerminalEvent::UploadRequested { format });
+    }
+
+    pub(crate) fn handle_current_dir(&mut self, path: &str) {
+        // iTerm2 CurrentDir is an alias for OSC 7's working-directory update,
+        // carrying a raw path; the OSC 7 security gate applies equally here.
+        // Unlike OSC 7 it carries no host info, so the previously recorded
+        // hostname/username are passed through unchanged.
+        if path.is_empty() || !self.security_state.accept_osc7 {
+            return;
+        }
+        let si = &self.shell_state.shell_integration;
+        let old_cwd = si.cwd().map(|s| s.to_string());
+        let hostname = si.hostname().map(|s| s.to_string());
+        let username = si.username().map(|s| s.to_string());
+
+        self.record_cwd_change(crate::terminal::event::CwdChange {
+            old_cwd,
+            new_cwd: path.to_string(),
+            hostname,
+            username,
+            timestamp: crate::terminal::unix_millis(),
+        });
     }
 }

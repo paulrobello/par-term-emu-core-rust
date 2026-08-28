@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Debug log temp-file hardening** (`src/debug.rs`). PID-suffixed filename, `0600` permissions and `O_NOFOLLOW` on Unix; a symlink at the path now fails closed.
 
 ### Added
+- **`OSC 1337;CurrentDir=<path>` is now supported** (`src/terminal/sequences/osc/iterm.rs`). iTerm2's working-directory report previously fell through to the inline-image handler and was rejected; it now performs the same state update as OSC 7 (tracked cwd, `CwdChanged` event, badge session variables). The path arrives raw (no `file://` URL), and because the sequence carries no host identity, the previously recorded hostname/username are preserved. The `accept_osc7` security gate applies to this alias just as it does to OSC 7.
 - **Python type stubs: `py.typed` + generated `_native.pyi`** (`python/par_term_emu_core_rust/`, `scripts/generate_stubs.py`). The package advertises `Typing :: Typed` honestly now: 69 classes, 1,335 methods, 342 properties (setters render as properties), 27 module functions. A `make stub-check` target is wired into `checkall` and CI.
 - **Web frontend test harness** (`web-terminal-frontend/`). vitest + happy-dom with 35 tests over `lib/protocol.ts` (encode/decode round-trips, framing, size guards) and the new `TerminalConnection` (reconnect backoff, heartbeat/stale-pong, shutdown classification, idempotent dispose); `make test-web` runs in `checkall`.
 

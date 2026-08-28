@@ -323,6 +323,52 @@ fn test_osc7_emits_cwd_changed_event() {
 }
 
 #[test]
+fn test_osc1337_current_dir() {
+    let mut term = Terminal::new(80, 24);
+
+    term.process(b"\x1b]1337;CurrentDir=/tmp/somewhere\x07");
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/tmp/somewhere")
+    );
+    let events = term.poll_events();
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            crate::terminal::TerminalEvent::CwdChanged(change)
+                if change.new_cwd == "/tmp/somewhere"
+        )),
+        "CurrentDir should emit CwdChanged like OSC 7"
+    );
+
+    // Empty path is ignored (no state change, no event)
+    term.process(b"\x1b]1337;CurrentDir=\x07");
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        Some("/tmp/somewhere")
+    );
+    assert!(term.poll_events().is_empty());
+}
+
+#[test]
+fn test_osc1337_current_dir_preserves_host_state() {
+    let mut term = Terminal::new(80, 24);
+
+    // Establish host identity via OSC 7, then change directory via 1337
+    term.process(b"\x1b]7;file://server1/home/user\x1b\\");
+    term.process(b"\x1b]1337;CurrentDir=/var/log\x07");
+    assert_eq!(term.shell_state.shell_integration.cwd(), Some("/var/log"));
+    assert_eq!(
+        term.shell_state.shell_integration.hostname(),
+        Some("server1")
+    );
+    assert_eq!(
+        term.session_variables().hostname,
+        Some("server1".to_string())
+    );
+}
+
+#[test]
 fn test_notifications_osc9() {
     let mut term = Terminal::new(80, 24);
 

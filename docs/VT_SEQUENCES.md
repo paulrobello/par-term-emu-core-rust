@@ -408,7 +408,7 @@ Parameters for `set`:
 - `OSC 1337;SetUserVar=<name>=<base64_value> ST` - Set user variable
 - `OSC 1337;RemoteHost=<user>@<host> ST` - Report remote host identity
 - `OSC 1337;SetBadgeFormat=<base64_fmt> ST` - Set badge format string
-- `OSC 1337;CurrentDir=<path> ST` - ❌ Not supported (use OSC 7 for directory tracking; support is planned under ENH-002)
+- `OSC 1337;CurrentDir=<path> ST` - ✅ Set current working directory (iTerm2 alias for OSC 7; the path is raw, not a `file://` URL, and previously recorded hostname/username are preserved. Gated by the same `accept_osc7` setting as OSC 7)
 
 Shell integration scripts use these to report session information. Variables are decoded and stored on the terminal.
 
