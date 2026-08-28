@@ -179,11 +179,29 @@ impl From<streaming::StreamingError> for PyErr {
 #[cfg(feature = "python")]
 #[pymodule(gil_used = true)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    register_constants(m)?;
+    register_classes(m)?;
+    register_color_utils(m)?;
+    register_unicode_width(m)?;
+    register_streaming_codec(m)?;
+
+    Ok(())
+}
+
+/// Sixel rendering mode constants and other module-level scalars.
+#[cfg(feature = "python")]
+fn register_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sixel rendering mode constants
     m.add("SIXEL_DISABLED", "disabled")?;
     m.add("SIXEL_PIXELS", "pixels")?;
     m.add("SIXEL_HALFBLOCKS", "halfblocks")?;
 
+    Ok(())
+}
+
+/// Python classes exposed by the module.
+#[cfg(feature = "python")]
+fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyTerminal>()?;
     m.add_class::<PyPtyTerminal>()?;
@@ -255,6 +273,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTriggerAction>()?;
     m.add_class::<PyCoprocessConfig>()?;
 
+    Ok(())
+}
+
+/// Color utility functions.
+#[cfg(feature = "python")]
+fn register_color_utils(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(py_adjust_contrast_rgb, m)?)?;
@@ -275,6 +299,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_hex_to_rgb, m)?)?;
     m.add_function(wrap_pyfunction!(py_rgb_to_ansi_256, m)?)?;
 
+    Ok(())
+}
+
+/// Unicode width functions.
+#[cfg(feature = "python")]
+fn register_unicode_width(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Unicode width functions
     m.add_function(wrap_pyfunction!(py_char_width, m)?)?;
     m.add_function(wrap_pyfunction!(py_char_width_cjk, m)?)?;
@@ -282,6 +312,12 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_str_width_cjk, m)?)?;
     m.add_function(wrap_pyfunction!(py_is_east_asian_ambiguous, m)?)?;
 
+    Ok(())
+}
+
+/// Binary protocol functions for streaming.
+#[cfg(feature = "python")]
+fn register_streaming_codec(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Binary protocol functions for streaming
     m.add_function(wrap_pyfunction!(encode_server_message, m)?)?;
     m.add_function(wrap_pyfunction!(decode_server_message, m)?)?;

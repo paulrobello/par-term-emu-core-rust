@@ -2085,24 +2085,24 @@ macro_rules! impl_terminal_screenshot_methods {
             ///     Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
             ///     System emoji/CJK fonts are automatically used as fallback when available.
             #[pyo3(signature = (
-                                        format = "png",
-                                        font_path = None,
-                                        font_size = 14.0,
-                                        include_scrollback = false,
-                                        padding = 10,
-                                        quality = 90,
-                                        render_cursor = false,
-                                        cursor_color = None,
-                                        sixel_mode = "halfblocks",
-                                        scrollback_offset = 0,
-                                        link_color = None,
-                                        bold_color = None,
-                                        use_bold_color = None,
-                                        bold_brightening = None,
-                                        background_color = None,
-                                        faint_text_alpha = 0.5,
-                                        minimum_contrast = 0.5
-                                    ))]
+                                                        format = "png",
+                                                        font_path = None,
+                                                        font_size = 14.0,
+                                                        include_scrollback = false,
+                                                        padding = 10,
+                                                        quality = 90,
+                                                        render_cursor = false,
+                                                        cursor_color = None,
+                                                        sixel_mode = "halfblocks",
+                                                        scrollback_offset = 0,
+                                                        link_color = None,
+                                                        bold_color = None,
+                                                        use_bold_color = None,
+                                                        bold_brightening = None,
+                                                        background_color = None,
+                                                        faint_text_alpha = 0.5,
+                                                        minimum_contrast = 0.5
+                                                    ))]
             #[allow(clippy::too_many_arguments)]
             fn screenshot(
                 &self,
@@ -2204,25 +2204,25 @@ macro_rules! impl_terminal_screenshot_methods {
             ///     Fonts: Embedded JetBrains Mono + Noto Emoji (monochrome) are used by default.
             ///     System emoji/CJK fonts are automatically used as fallback when available.
             #[pyo3(signature = (
-                                        path,
-                                        format = None,
-                                        font_path = None,
-                                        font_size = 14.0,
-                                        include_scrollback = false,
-                                        padding = 10,
-                                        quality = 90,
-                                        render_cursor = false,
-                                        cursor_color = None,
-                                        sixel_mode = "halfblocks",
-                                        scrollback_offset = 0,
-                                        link_color = None,
-                                        bold_color = None,
-                                        use_bold_color = None,
-                                        bold_brightening = None,
-                                        background_color = None,
-                                        faint_text_alpha = 0.5,
-                                        minimum_contrast = 0.5
-                                    ))]
+                                                        path,
+                                                        format = None,
+                                                        font_path = None,
+                                                        font_size = 14.0,
+                                                        include_scrollback = false,
+                                                        padding = 10,
+                                                        quality = 90,
+                                                        render_cursor = false,
+                                                        cursor_color = None,
+                                                        sixel_mode = "halfblocks",
+                                                        scrollback_offset = 0,
+                                                        link_color = None,
+                                                        bold_color = None,
+                                                        use_bold_color = None,
+                                                        bold_brightening = None,
+                                                        background_color = None,
+                                                        faint_text_alpha = 0.5,
+                                                        minimum_contrast = 0.5
+                                                    ))]
             #[allow(clippy::too_many_arguments)]
             fn screenshot_to_file(
                 &self,
