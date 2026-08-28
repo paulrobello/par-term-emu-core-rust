@@ -2,6 +2,10 @@
 
 Tests WebSocket-based terminal streaming with multiple clients, authentication,
 resizing, and concurrent operations.
+
+Clients connect with close_timeout=1: the server keeps flushing queued output
+before completing the close handshake, so the library default (10s) exceeds the
+suite's 5s per-test timeout on tests that leave unread messages.
 """
 
 from __future__ import annotations
@@ -11,13 +15,19 @@ import time
 from typing import TYPE_CHECKING, Any
 
 import pytest
+import pytest_asyncio
 
 # Streaming is optional, so skip all tests if not available
 pytest.importorskip("websockets")
 
 try:
     import websockets  # type: ignore[import-not-found]
-    from par_term_emu_core_rust import PtyTerminal, StreamingConfig, StreamingServer
+    from par_term_emu_core_rust import (
+        PtyTerminal,
+        StreamingConfig,
+        StreamingServer,
+        decode_server_message,
+    )
 
     # Verify streaming feature is actually compiled (classes exist but raise
     # RuntimeError at construction if the feature wasn't enabled at build time)
@@ -33,12 +43,14 @@ except (ImportError, RuntimeError, TypeError):
             PtyTerminal,
             StreamingConfig,
             StreamingServer,
+            decode_server_message,
         )
     else:
         # Dummy classes to satisfy runtime when imports fail
         PtyTerminal = Any  # type: ignore[misc, assignment]
         StreamingConfig = Any  # type: ignore[misc, assignment]
         StreamingServer = Any  # type: ignore[misc, assignment]
+        decode_server_message = Any  # type: ignore[misc, assignment]
         websockets = Any  # type: ignore[misc, assignment]
 
 
@@ -70,7 +82,10 @@ def pty_terminal():
         pass
 
 
-@pytest.fixture
+# Async fixtures need pytest_asyncio's decorator in strict mode (the default);
+# a plain @pytest.fixture async generator is left unhandled and every test
+# requesting it errors at setup.
+@pytest_asyncio.fixture
 async def streaming_server(pty_terminal, streaming_port):
     """Create and start a streaming server."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
@@ -246,7 +261,7 @@ async def test_websocket_connection(streaming_server):
 
     uri = f"ws://127.0.0.1:{port}"
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Should be connected
         assert websocket.state.name == "OPEN"
 
@@ -265,15 +280,17 @@ async def test_websocket_receive_output(streaming_server):
 
     uri = f"ws://127.0.0.1:{port}"
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Send command to terminal
         # Note: We can't directly access pty_terminal here, so this is a simplified test
 
         # Wait for any output
         try:
             message = await asyncio.wait_for(websocket.recv(), timeout=2.0)
-            # Should receive something
-            assert isinstance(message, str)
+            # Messages are binary frames: 1-byte compression flag + protobuf
+            assert isinstance(message, bytes)
+            decoded = decode_server_message(message)
+            assert decoded["type"]
         except TimeoutError:
             pytest.skip("No output received within timeout")
 
@@ -289,7 +306,7 @@ async def test_websocket_multiple_clients(streaming_server):
     clients = []
     try:
         for i in range(3):
-            client = await websockets.connect(uri)
+            client = await websockets.connect(uri, close_timeout=1)
             clients.append(client)
             await asyncio.sleep(0.05)
 
@@ -316,7 +333,7 @@ async def test_websocket_client_disconnect(streaming_server):
     uri = f"ws://127.0.0.1:{port}"
 
     # Connect
-    websocket = await websockets.connect(uri)
+    websocket = await websockets.connect(uri, close_timeout=1)
     assert websocket.state.name == "OPEN"
 
     # Disconnect
@@ -324,7 +341,7 @@ async def test_websocket_client_disconnect(streaming_server):
     assert websocket.state.name == "CLOSED"
 
     # Reconnect
-    websocket = await websockets.connect(uri)
+    websocket = await websockets.connect(uri, close_timeout=1)
     assert websocket.state.name == "OPEN"
     await websocket.close()
 
@@ -342,8 +359,8 @@ async def test_broadcast_to_all_clients(pty_terminal, streaming_port):
     uri = f"ws://127.0.0.1:{streaming_port}"
 
     # Connect two clients
-    client1 = await websockets.connect(uri)
-    client2 = await websockets.connect(uri)
+    client1 = await websockets.connect(uri, close_timeout=1)
+    client2 = await websockets.connect(uri, close_timeout=1)
     await asyncio.sleep(0.1)
 
     try:
@@ -401,14 +418,13 @@ async def test_send_initial_screen_enabled(pty_terminal, streaming_port):
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
-    async with websockets.connect(uri) as websocket:
-        # Should receive initial screen content
-        try:
-            message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-            assert message is not None
-            assert len(message) > 0
-        except TimeoutError:
-            pytest.skip("Initial screen not received within timeout")
+    async with websockets.connect(uri, close_timeout=1) as websocket:
+        # The first message is `connected`; with send_initial_screen enabled
+        # it carries the screen dump in its initial_screen field
+        message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+        decoded = decode_server_message(message)
+        assert decoded["type"] == "connected"
+        assert decoded.get("initial_screen")
 
     server.shutdown("test shutdown")
 
@@ -423,11 +439,13 @@ async def test_send_initial_screen_disabled(pty_terminal, streaming_port):
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
-    async with websockets.connect(uri) as websocket:
-        # Should not receive immediate content
-        # We'll wait a short time to ensure nothing is sent
-        with pytest.raises(asyncio.TimeoutError):
-            await asyncio.wait_for(websocket.recv(), timeout=0.3)
+    async with websockets.connect(uri, close_timeout=1) as websocket:
+        # A client always receives the `connected` message; with
+        # send_initial_screen disabled it must arrive without screen content
+        message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+        decoded = decode_server_message(message)
+        assert decoded["type"] == "connected"
+        assert not decoded.get("initial_screen")
 
     server.shutdown("test shutdown")
 
@@ -444,7 +462,7 @@ async def test_terminal_resize_notification(pty_terminal, streaming_port):
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Resize terminal
         pty_terminal.resize(100, 30)
         await asyncio.sleep(0.2)
@@ -521,7 +539,7 @@ async def test_high_throughput_output(pty_terminal, streaming_port):
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Generate lots of output
         for i in range(50):
             pty_terminal.write_str(f"Line {i}: " + "X" * 70 + "\n")
@@ -556,7 +574,7 @@ async def test_many_clients_sequential(pty_terminal, streaming_port):
 
     # Connect and disconnect many clients
     for i in range(20):
-        client = await websockets.connect(uri)
+        client = await websockets.connect(uri, close_timeout=1)
         assert client.state.name == "OPEN"
 
         # Receive any initial data
@@ -583,7 +601,7 @@ async def test_full_session_workflow(pty_terminal, streaming_port):
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Execute some commands
         commands = [
             "echo 'Hello from streaming test'",
@@ -636,7 +654,7 @@ async def test_concurrent_read_write(pty_terminal, streaming_port):
             pass
         return messages
 
-    async with websockets.connect(uri) as websocket:
+    async with websockets.connect(uri, close_timeout=1) as websocket:
         # Run concurrently
         write_task = asyncio.create_task(write_output())
         messages = await read_from_websocket(websocket)
