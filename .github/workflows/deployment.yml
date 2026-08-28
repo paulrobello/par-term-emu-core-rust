@@ -250,7 +250,7 @@ jobs:
         if: matrix.target == 'x86_64'
         run: |
           source .venv/bin/activate
-          uv pip install pytest pytest-timeout
+          uv pip install pytest pytest-timeout pytest-asyncio
 
       - name: Run tests (x86_64 only)
         if: matrix.target == 'x86_64'
@@ -275,6 +275,11 @@ jobs:
         python-version: ["3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v7
+      # maturin-action only runs `rustup target add` against the runner's
+      # preinstalled toolchain, which can be older than this crate's MSRV —
+      # install current stable explicitly so the MSRV check passes.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
@@ -301,7 +306,7 @@ jobs:
       - name: Install test dependencies
         run: |
           source .venv/bin/activate
-          uv pip install pytest pytest-timeout
+          uv pip install pytest pytest-timeout pytest-asyncio
       - name: Run tests
         run: |
           source .venv/bin/activate
@@ -348,7 +353,7 @@ jobs:
       - name: Install test dependencies
         run: |
           .venv\Scripts\activate
-          uv pip install pytest pytest-timeout
+          uv pip install pytest pytest-timeout pytest-asyncio
 
       - name: Run tests (skip PTY tests on Windows)
         run: |
