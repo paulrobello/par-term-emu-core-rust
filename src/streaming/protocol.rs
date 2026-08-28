@@ -1729,7 +1729,7 @@ mod tests {
 
     #[test]
     fn test_server_message_connected_serialization() {
-        let msg = ServerMessage::connected(80, 24, "session-123".to_string());
+        let msg = ServerMessage::connected_builder(80, 24, "session-123".to_string()).build();
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"connected"#));
         assert!(json.contains(r#""session_id":"session-123"#));
@@ -1812,7 +1812,9 @@ mod tests {
             ],
         };
 
-        let msg = ServerMessage::connected_with_theme(80, 24, "session-123".to_string(), theme);
+        let msg = ServerMessage::connected_builder(80, 24, "session-123".to_string())
+            .theme(Some(theme))
+            .build();
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains(r#""type":"connected"#));
         assert!(json.contains(r#""session_id":"session-123"#));

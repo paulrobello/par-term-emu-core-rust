@@ -303,7 +303,7 @@ pub(crate) fn pixel_at_in(
 
 /// Half-block sampling shared by `TerminalGraphic` and the Python
 /// `Graphic` binding (QA-009).
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(crate) fn sample_half_block_in(
     pixels: &[u8],
     width: usize,
