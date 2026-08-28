@@ -945,7 +945,10 @@ connected client can execute arbitrary commands as the user running the server.
 - `--allowed-origins` / `PAR_TERM_ALLOWED_ORIGINS` controls which browser
   origins can connect. By default, non-browser clients and loopback origins
   are allowed; remote browser origins are rejected (HTTP 403).
-- A `tower-http` `CorsLayer` mirrors the policy on HTTP routes.
+- A `tower-http` `CorsLayer` mirrors the policy on HTTP routes (without an
+  allowlist, only loopback origins get `Access-Control-Allow-Origin`).
+- The `/sessions` HTTP endpoint applies the same origin check and rejects
+  disallowed browser origins with HTTP 403.
 
 **Example:**
 ```bash

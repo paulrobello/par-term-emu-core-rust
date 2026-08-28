@@ -141,6 +141,9 @@ pyo3 = { version = "0.29", features = ["auto-initialize"] }
 tokio = { version = "1.52.3", features = ["full", "test-util"] }
 proptest = "1.11.0"
 tempfile = "3.27"
+# axum already depends on tower/util; as a dev-dep it only adds ServiceExt
+# (.oneshot) for the in-process router tests in src/streaming/server.rs.
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = ["python"]

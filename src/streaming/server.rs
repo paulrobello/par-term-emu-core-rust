@@ -2943,7 +2943,9 @@ fn host_of_authority(authority: &str) -> &str {
 
 /// Build a CORS layer for the HTTP server reflecting the `allowed_origins`
 /// policy (SEC-005). When an allowlist is configured, only those origins may
-/// make cross-origin browser requests; otherwise CORS is fully permissive.
+/// make cross-origin browser requests; otherwise only local (loopback)
+/// origins are allowed, mirroring the WebSocket default of `check_ws_origin`
+/// (SEC-001).
 fn build_cors_layer(allowed_origins: &Option<Vec<String>>) -> tower_http::cors::CorsLayer {
     use axum::http::HeaderValue;
     use tower_http::cors::{AllowOrigin, Any, CorsLayer};
@@ -2955,13 +2957,28 @@ fn build_cors_layer(allowed_origins: &Option<Vec<String>>) -> tower_http::cors::
                 .allow_methods(Any)
                 .allow_headers(Any)
         }
-        _ => CorsLayer::very_permissive(),
+        // SEC-001: without an allowlist, deny remote browser origins the
+        // ability to read HTTP responses cross-origin (no ACAO header),
+        // matching what the WebSocket handlers reject outright.
+        _ => CorsLayer::new()
+            .allow_origin(AllowOrigin::predicate(|origin, _| {
+                origin.to_str().map(is_local_origin).unwrap_or(false)
+            }))
+            .allow_methods(Any)
+            .allow_headers(Any),
     }
 }
 
 #[cfg(test)]
 mod origin_tests {
-    use super::{check_ws_origin, is_local_origin};
+    use super::{
+        build_cors_layer, check_ws_origin, is_local_origin, sessions_handler, StreamingConfig,
+        StreamingServer,
+    };
+    use crate::terminal::Terminal;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use tower::ServiceExt; // .oneshot for in-process router tests
 
     #[test]
     fn no_origin_is_allowed_non_browser() {
@@ -3011,6 +3028,173 @@ mod origin_tests {
         assert!(!is_local_origin("https://example.com"));
         // A look-alike host must not match.
         assert!(!is_local_origin("http://127.0.0.1.evil.com"));
+    }
+
+    fn origin_request(
+        method: &str,
+        uri: &str,
+        origin: Option<&str>,
+    ) -> axum::http::Request<axum::body::Body> {
+        let mut builder = axum::http::Request::builder().method(method).uri(uri);
+        if let Some(origin) = origin {
+            builder = builder.header("origin", origin);
+        }
+        builder.body(axum::body::Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn cors_without_allowlist_mirrors_ws_local_origin_default() {
+        use axum::{routing::get, Router};
+
+        let app = Router::new()
+            .route("/ok", get(|| async { "ok" }))
+            .layer(build_cors_layer(&None));
+
+        // Remote origin: no Access-Control-Allow-Origin header, so a browser
+        // blocks the cross-origin read.
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", "/ok", Some("https://evil.example")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert!(!res.headers().contains_key("access-control-allow-origin"));
+
+        // Local origin: allowed and echoed back.
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", "/ok", Some("http://127.0.0.1:8099")))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("http://127.0.0.1:8099")
+        );
+    }
+
+    #[tokio::test]
+    async fn cors_with_allowlist_passes_listed_origin_only() {
+        use axum::{routing::get, Router};
+
+        let allowed = Some(vec!["https://app.example.com".to_string()]);
+        let app = Router::new()
+            .route("/ok", get(|| async { "ok" }))
+            .layer(build_cors_layer(&allowed));
+
+        let res = app
+            .clone()
+            .oneshot(origin_request(
+                "GET",
+                "/ok",
+                Some("https://app.example.com"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("access-control-allow-origin")
+                .and_then(|v| v.to_str().ok()),
+            Some("https://app.example.com")
+        );
+
+        // A local origin is not in the explicit allowlist → no ACAO, same
+        // exact-match semantics as check_ws_origin.
+        let res = app
+            .oneshot(origin_request("GET", "/ok", Some("http://localhost:8099")))
+            .await
+            .unwrap();
+        assert!(!res.headers().contains_key("access-control-allow-origin"));
+    }
+
+    #[tokio::test]
+    async fn sessions_endpoint_rejects_disallowed_origin() {
+        use axum::{routing::get, Router};
+
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let server = Arc::new(StreamingServer::new(terminal, "127.0.0.1:0".to_string()));
+        let app = Router::new()
+            .route("/sessions", get(sessions_handler))
+            .with_state(server);
+
+        // Cross-origin browser request → 403.
+        let res = app
+            .clone()
+            .oneshot(origin_request(
+                "GET",
+                "/sessions",
+                Some("https://evil.example"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403);
+
+        // Local origin → 200 with the session list.
+        let res = app
+            .clone()
+            .oneshot(origin_request(
+                "GET",
+                "/sessions",
+                Some("http://localhost:8099"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        let body = axum::body::to_bytes(res.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("\"sessions\""));
+
+        // No Origin header (non-browser client such as curl) → 200.
+        let res = app
+            .oneshot(origin_request("GET", "/sessions", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+    }
+
+    #[tokio::test]
+    async fn sessions_endpoint_allows_configured_origin() {
+        use axum::{routing::get, Router};
+
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let config = StreamingConfig {
+            allowed_origins: Some(vec!["https://app.example.com".to_string()]),
+            ..StreamingConfig::default()
+        };
+        let server = Arc::new(StreamingServer::with_config(
+            terminal,
+            "127.0.0.1:0".to_string(),
+            config,
+        ));
+        let app = Router::new()
+            .route("/sessions", get(sessions_handler))
+            .with_state(server);
+
+        let res = app
+            .clone()
+            .oneshot(origin_request(
+                "GET",
+                "/sessions",
+                Some("https://app.example.com"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+
+        // An origin not on the allowlist is still rejected.
+        let res = app
+            .oneshot(origin_request(
+                "GET",
+                "/sessions",
+                Some("https://evil.example"),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403);
     }
 }
 
@@ -3119,8 +3303,19 @@ async fn ws_handler(
 /// Sessions list HTTP handler
 #[cfg(feature = "streaming")]
 async fn sessions_handler(
+    headers: axum::http::HeaderMap,
     axum::extract::State(server): axum::extract::State<Arc<StreamingServer>>,
 ) -> impl axum::response::IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    // SEC-002: reject browser requests whose Origin is not allowed; the
+    // session list exposes live session ids (same guard as the WS handlers).
+    let origin = headers.get("origin").and_then(|v| v.to_str().ok());
+    if !check_ws_origin(origin, server.config.allowed_origins.as_deref()) {
+        return (StatusCode::FORBIDDEN, "Origin not allowed").into_response();
+    }
+
     let sessions = server.sessions.list_sessions();
     let max = server.config.max_sessions;
     let available = max.saturating_sub(sessions.len());
@@ -3129,6 +3324,7 @@ async fn sessions_handler(
         "max_sessions": max,
         "available": available,
     }))
+    .into_response()
 }
 
 /// System stats WebSocket handler
