@@ -76,8 +76,8 @@ use par_term_emu_core_rust::{
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
     pty_session::PtySession,
     streaming::{
-        HttpBasicAuthConfig, SessionFactory, SessionFactoryResult, SessionState, StreamingConfig,
-        StreamingServer, TlsConfig,
+        HttpBasicAuthConfig, SessionFactory, SessionFactoryResult, StreamSessionState,
+        StreamingConfig, StreamingServer, TlsConfig,
     },
 };
 use parking_lot::Mutex;
@@ -699,7 +699,7 @@ impl SessionFactory for BinarySessionFactory {
     fn setup_session(
         &self,
         session_id: &str,
-        session: &Arc<SessionState>,
+        session: &Arc<StreamSessionState>,
     ) -> std::result::Result<(), par_term_emu_core_rust::streaming::error::StreamingError> {
         let pty_session = {
             let sessions = self.pty_sessions.read();

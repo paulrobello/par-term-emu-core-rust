@@ -59,6 +59,9 @@ pub mod server;
 pub mod config;
 
 #[cfg(feature = "streaming")]
+pub mod session;
+
+#[cfg(feature = "streaming")]
 pub mod auth_hash;
 
 // Hand-written escape hatches for the PyDictConvert derive (ARC-003).
@@ -79,10 +82,10 @@ pub use client::Client;
 pub use config::{ApiAuthConfig, HttpBasicAuthConfig, PasswordConfig, StreamingConfig, TlsConfig};
 
 #[cfg(feature = "streaming")]
-pub use server::{
-    ConnectionParams, SessionFactory, SessionFactoryResult, SessionInfo, SessionRegistry,
-    SessionState, StreamingServer,
-};
+pub use session::{SessionInfo, SessionRegistry, StreamSessionState};
+
+#[cfg(feature = "streaming")]
+pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, StreamingServer};
 
 #[cfg(feature = "streaming")]
 pub use proto::{

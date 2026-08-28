@@ -1162,13 +1162,13 @@ mod streaming_tests {
 
     mod mode_sync {
         use par_term_emu_core_rust::streaming::protocol::ServerMessage;
-        use par_term_emu_core_rust::streaming::SessionState;
+        use par_term_emu_core_rust::streaming::StreamSessionState;
         use par_term_emu_core_rust::terminal::Terminal;
         use parking_lot::RwLock;
         use std::sync::Arc;
 
-        fn create_session_with_terminal(term: Terminal) -> SessionState {
-            SessionState::new(
+        fn create_session_with_terminal(term: Terminal) -> StreamSessionState {
+            StreamSessionState::new(
                 "test-session".to_string(),
                 Arc::new(RwLock::new(term)),
                 None,
