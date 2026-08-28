@@ -617,46 +617,9 @@ impl GraphicsStore {
         self.virtual_placements.get(&(image_id, placement_id))
     }
 
-    /// Remove a virtual placement
-    pub fn remove_virtual_placement(
-        &mut self,
-        image_id: u32,
-        placement_id: u32,
-    ) -> Option<TerminalGraphic> {
-        self.virtual_placements.remove(&(image_id, placement_id))
-    }
-
     /// Get all virtual placements
     pub fn all_virtual_placements(&self) -> &HashMap<(u32, u32), TerminalGraphic> {
         &self.virtual_placements
-    }
-
-    /// Get a virtual placement for rendering a Unicode placeholder
-    ///
-    /// This looks up the virtual placement using the image_id and placement_id
-    /// from the placeholder info, and returns it for rendering.
-    pub fn get_placeholder_graphic(
-        &self,
-        placeholder_info: &PlaceholderInfo,
-    ) -> Option<&TerminalGraphic> {
-        let image_id = placeholder_info.full_image_id();
-        let placement_id = placeholder_info.placement_id;
-
-        // Try exact match first
-        if let Some(graphic) = self.virtual_placements.get(&(image_id, placement_id)) {
-            return Some(graphic);
-        }
-
-        // If placement_id is 0, try to find any virtual placement for this image
-        if placement_id == 0 {
-            for ((img_id, _pid), graphic) in &self.virtual_placements {
-                if *img_id == image_id {
-                    return Some(graphic);
-                }
-            }
-        }
-
-        None
     }
 
     // --- Animation management ---
