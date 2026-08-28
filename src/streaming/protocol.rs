@@ -221,6 +221,7 @@ pub struct LoadAverage {
 
 /// Messages sent from server to client
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", derive(par_term_emu_derive::PyDictConvert))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ServerMessage {
     /// Terminal output data (raw ANSI escape sequences)
@@ -229,14 +230,17 @@ pub enum ServerMessage {
         data: String,
         /// Optional timestamp (Unix epoch in milliseconds)
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         timestamp: Option<u64>,
     },
 
     /// Terminal size changed
     Resize {
         /// Number of columns
+        #[cfg_attr(feature = "python", pydict(default = 80))]
         cols: u16,
         /// Number of rows
+        #[cfg_attr(feature = "python", pydict(default = 24))]
         rows: u16,
     },
 
@@ -249,42 +253,60 @@ pub enum ServerMessage {
     /// Connection established successfully
     Connected {
         /// Current terminal width in columns
+        #[cfg_attr(feature = "python", pydict(default = 80))]
         cols: u16,
         /// Current terminal height in rows
+        #[cfg_attr(feature = "python", pydict(default = 24))]
         rows: u16,
         /// Optional initial screen content
         #[serde(skip_serializing_if = "Option::is_none")]
         initial_screen: Option<String>,
         /// Session ID for this connection
+        #[cfg_attr(feature = "python", pydict(default = uuid::Uuid::new_v4().to_string()))]
         session_id: String,
         /// Optional theme information
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(
+            feature = "python",
+            pydict(
+                to_with = "crate::streaming::py_convert::theme_to_py",
+                from_with = "crate::streaming::py_convert::theme_from_py"
+            )
+        )]
         theme: Option<ThemeInfo>,
         /// Current badge text (from OSC 1337)
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         badge: Option<String>,
         /// Faint text alpha for SGR 2 dim text (0.0-1.0)
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         faint_text_alpha: Option<f32>,
         /// Current working directory
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         cwd: Option<String>,
         /// modifyOtherKeys mode (0=disabled, 1=special keys, 2=all keys)
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         modify_other_keys: Option<u32>,
         /// Unique client identifier for this connection
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         client_id: Option<String>,
         /// Whether this connection is read-only
         #[serde(skip_serializing_if = "Option::is_none")]
+        #[cfg_attr(feature = "python", pydict(encode_skip))]
         readonly: Option<bool>,
     },
 
     /// Screen refresh response (full screen content)
     Refresh {
         /// Current terminal width in columns
+        #[cfg_attr(feature = "python", pydict(default = 80))]
         cols: u16,
         /// Current terminal height in rows
+        #[cfg_attr(feature = "python", pydict(default = 24))]
         rows: u16,
         /// Full screen content with ANSI styling
         screen_content: String,
@@ -292,12 +314,14 @@ pub enum ServerMessage {
 
     /// Cursor position changed (optional optimization)
     #[serde(rename = "cursor")]
+    #[cfg_attr(feature = "python", pydict(type = "cursor"))]
     CursorPosition {
         /// Column position (0-indexed)
         col: u16,
         /// Row position (0-indexed)
         row: u16,
         /// Whether cursor is visible
+        #[cfg_attr(feature = "python", pydict(default = true))]
         visible: bool,
     },
 
@@ -305,6 +329,10 @@ pub enum ServerMessage {
     Bell,
 
     /// Current working directory changed (OSC 7)
+    #[cfg_attr(
+        feature = "python",
+        pydict(from = "crate::streaming::py_convert::cwd_changed_from")
+    )]
     CwdChanged {
         /// Previous working directory
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,6 +395,7 @@ pub enum ServerMessage {
     /// Error occurred
     Error {
         /// Error message
+        #[cfg_attr(feature = "python", pydict(default = "Unknown error".to_string()))]
         message: String,
         /// Optional error code
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -376,6 +405,7 @@ pub enum ServerMessage {
     /// Server is shutting down
     Shutdown {
         /// Reason for shutdown
+        #[cfg_attr(feature = "python", pydict(default = "Server shutdown".to_string()))]
         reason: String,
     },
 
@@ -428,6 +458,7 @@ pub enum ServerMessage {
     #[serde(rename = "progress_bar_changed")]
     ProgressBarChanged {
         /// Action: "set", "remove", or "remove_all"
+        #[cfg_attr(feature = "python", pydict(default = "set".to_string()))]
         action: String,
         /// Progress bar identifier
         id: String,
@@ -469,6 +500,7 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
         /// Selection mode: "chars", "line", "block"
+        #[cfg_attr(feature = "python", pydict(default = "chars".to_string()))]
         mode: String,
         /// True if selection was cleared
         cleared: bool,
@@ -488,6 +520,7 @@ pub enum ServerMessage {
 
     /// Shell integration event (FinalTerm sequences)
     #[serde(rename = "shell_integration")]
+    #[cfg_attr(feature = "python", pydict(type = "shell_integration"))]
     ShellIntegrationEvent {
         /// Event type: "prompt_start", "command_start", "command_executed", "command_finished"
         event_type: String,
@@ -507,6 +540,13 @@ pub enum ServerMessage {
 
     /// System resource statistics (CPU, memory, disk, network)
     #[serde(rename = "system_stats")]
+    #[cfg_attr(
+        feature = "python",
+        pydict(
+            to = "crate::streaming::py_convert::system_stats_to_py_dict",
+            from = "crate::streaming::py_convert::system_stats_from"
+        )
+    )]
     SystemStats {
         /// CPU statistics
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -630,6 +670,7 @@ pub enum ServerMessage {
         /// Transfer ID
         id: u64,
         /// Direction: "download" or "upload"
+        #[cfg_attr(feature = "python", pydict(default = "download".to_string()))]
         direction: String,
         /// Filename if known
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -669,6 +710,7 @@ pub enum ServerMessage {
         /// Transfer ID
         id: u64,
         /// Failure reason
+        #[cfg_attr(feature = "python", pydict(default = "unknown".to_string()))]
         reason: String,
     },
 
@@ -676,6 +718,7 @@ pub enum ServerMessage {
     #[serde(rename = "upload_requested")]
     UploadRequested {
         /// Upload format
+        #[cfg_attr(feature = "python", pydict(default = "base64".to_string()))]
         format: String,
     },
 
@@ -689,6 +732,7 @@ pub enum ServerMessage {
 
 /// Messages sent from client to server
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "python", derive(par_term_emu_derive::PyDictConvert))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ClientMessage {
     /// User input (keyboard)
@@ -700,8 +744,10 @@ pub enum ClientMessage {
     /// Terminal resize request
     Resize {
         /// Requested number of columns
+        #[cfg_attr(feature = "python", pydict(default = 80))]
         cols: u16,
         /// Requested number of rows
+        #[cfg_attr(feature = "python", pydict(default = 24))]
         rows: u16,
     },
 
@@ -710,11 +756,19 @@ pub enum ClientMessage {
 
     /// Request full screen refresh
     #[serde(rename = "refresh")]
+    #[cfg_attr(feature = "python", pydict(type = "refresh"))]
     RequestRefresh,
 
     /// Subscribe to specific events
     Subscribe {
         /// Event types to subscribe to
+        #[cfg_attr(
+            feature = "python",
+            pydict(
+                to_with = "crate::streaming::py_convert::events_to_py",
+                from_with = "crate::streaming::py_convert::events_from_py"
+            )
+        )]
         events: Vec<EventType>,
     },
 
@@ -733,12 +787,14 @@ pub enum ClientMessage {
         /// Alt key held
         alt: bool,
         /// Event type: "press", "release", "move", "scroll"
+        #[cfg_attr(feature = "python", pydict(default = "press".to_string()))]
         event_type: String,
     },
 
     /// Focus change from client
     FocusChange {
         /// Whether the terminal is focused
+        #[cfg_attr(feature = "python", pydict(default = true))]
         focused: bool,
     },
 
@@ -759,6 +815,7 @@ pub enum ClientMessage {
         /// End row
         end_row: u16,
         /// Selection mode: "chars", "line", "block", "word", "clear"
+        #[cfg_attr(feature = "python", pydict(default = "chars".to_string()))]
         mode: String,
     },
 
@@ -778,6 +835,7 @@ pub enum ClientMessage {
     #[serde(rename = "snapshot_request")]
     SnapshotRequest {
         /// Scope: "visible", "recent", "full"
+        #[cfg_attr(feature = "python", pydict(default = "visible".to_string()))]
         scope: String,
         /// Max commands for "recent" scope
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -787,6 +845,7 @@ pub enum ClientMessage {
 
 /// Event types that clients can subscribe to
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "python", derive(par_term_emu_derive::PyDictConvert))]
 #[serde(rename_all = "lowercase")]
 pub enum EventType {
     /// Terminal output

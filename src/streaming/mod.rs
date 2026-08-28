@@ -58,6 +58,10 @@ pub mod server;
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 
+// Hand-written escape hatches for the PyDictConvert derive (ARC-003).
+#[cfg(all(feature = "streaming", feature = "python"))]
+pub mod py_convert;
+
 // Re-export main types
 pub use error::{Result, StreamingError};
 pub use protocol::{ClientMessage, EventType, ServerMessage};

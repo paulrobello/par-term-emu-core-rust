@@ -1087,13 +1087,11 @@ mod tests {
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
-        match decoded {
-            AppServerMessage::Output { data, timestamp } => {
-                assert_eq!(data, "Hello, World!");
-                assert_eq!(timestamp, None);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, timestamp } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, "Hello, World!");
+        assert_eq!(timestamp, None);
     }
 
     #[test]
@@ -1102,13 +1100,11 @@ mod tests {
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
-        match decoded {
-            AppServerMessage::Resize { cols, rows } => {
-                assert_eq!(cols, 80);
-                assert_eq!(rows, 24);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Resize { cols, rows } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 24);
     }
 
     #[test]
@@ -1117,12 +1113,10 @@ mod tests {
         let encoded = encode_client_message(&msg).unwrap();
         let decoded = decode_client_message(&encoded).unwrap();
 
-        match decoded {
-            AppClientMessage::Input { data } => {
-                assert_eq!(data, "ls\n");
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppClientMessage::Input { data } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, "ls\n");
     }
 
     #[test]
@@ -1137,12 +1131,10 @@ mod tests {
 
         // Verify it decodes correctly
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, .. } => {
-                assert_eq!(data, large_data);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, large_data);
     }
 
     #[test]
@@ -1174,12 +1166,10 @@ mod tests {
 
         // Verify it decodes correctly
         let decoded = decode_server_message(&encoded2).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, .. } => {
-                assert_eq!(data, above_data);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, above_data);
     }
 
     #[test]
@@ -1214,25 +1204,24 @@ mod tests {
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
 
-        match decoded {
-            AppServerMessage::Connected {
-                cols,
-                rows,
-                session_id,
-                theme,
-                ..
-            } => {
-                assert_eq!(cols, 80);
-                assert_eq!(rows, 24);
-                assert_eq!(session_id, "session-123");
-                assert!(theme.is_some());
-                let t = theme.unwrap();
-                assert_eq!(t.name, "test-theme");
-                assert_eq!(t.background, (0, 0, 0));
-                assert_eq!(t.foreground, (255, 255, 255));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Connected {
+            cols,
+            rows,
+            session_id,
+            theme,
+            ..
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 24);
+        assert_eq!(session_id, "session-123");
+        assert!(theme.is_some());
+        let t = theme.unwrap();
+        assert_eq!(t.name, "test-theme");
+        assert_eq!(t.background, (0, 0, 0));
+        assert_eq!(t.foreground, (255, 255, 255));
     }
 
     #[test]
@@ -1256,12 +1245,10 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Shutdown { reason } => {
-                assert_eq!(reason, "Server maintenance");
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Shutdown { reason } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(reason, "Server maintenance");
     }
 
     #[test]
@@ -1280,13 +1267,11 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Error { message, code } => {
-                assert_eq!(message, "Something went wrong");
-                assert_eq!(code, Some("E500".to_string()));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Error { message, code } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(message, "Something went wrong");
+        assert_eq!(code, Some("E500".to_string()));
     }
 
     #[test]
@@ -1297,13 +1282,11 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Error { message, code } => {
-                assert_eq!(message, "Error occurred");
-                assert_eq!(code, None);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Error { message, code } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(message, "Error occurred");
+        assert_eq!(code, None);
     }
 
     #[test]
@@ -1315,14 +1298,12 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::CursorPosition { col, row, visible } => {
-                assert_eq!(col, 42);
-                assert_eq!(row, 10);
-                assert!(visible);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::CursorPosition { col, row, visible } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(col, 42);
+        assert_eq!(row, 10);
+        assert!(visible);
     }
 
     #[test]
@@ -1334,14 +1315,12 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::CursorPosition { col, row, visible } => {
-                assert_eq!(col, 0);
-                assert_eq!(row, 0);
-                assert!(!visible);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::CursorPosition { col, row, visible } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(col, 0);
+        assert_eq!(row, 0);
+        assert!(!visible);
     }
 
     #[test]
@@ -1351,12 +1330,10 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Title { title } => {
-                assert_eq!(title, "My Terminal Window");
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Title { title } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(title, "My Terminal Window");
     }
 
     #[test]
@@ -1368,18 +1345,17 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Refresh {
-                cols,
-                rows,
-                screen_content,
-            } => {
-                assert_eq!(cols, 120);
-                assert_eq!(rows, 40);
-                assert_eq!(screen_content, "Full screen content here");
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Refresh {
+            cols,
+            rows,
+            screen_content,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(cols, 120);
+        assert_eq!(rows, 40);
+        assert_eq!(screen_content, "Full screen content here");
     }
 
     #[test]
@@ -1399,23 +1375,22 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Connected {
-                cols,
-                rows,
-                initial_screen,
-                session_id,
-                theme,
-                ..
-            } => {
-                assert_eq!(cols, 80);
-                assert_eq!(rows, 24);
-                assert_eq!(initial_screen, Some("initial content".to_string()));
-                assert_eq!(session_id, "sess-abc");
-                assert!(theme.is_none());
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Connected {
+            cols,
+            rows,
+            initial_screen,
+            session_id,
+            theme,
+            ..
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 24);
+        assert_eq!(initial_screen, Some("initial content".to_string()));
+        assert_eq!(session_id, "sess-abc");
+        assert!(theme.is_none());
     }
 
     #[test]
@@ -1447,17 +1422,15 @@ mod tests {
         };
         let encoded = encode_client_message(&msg).unwrap();
         let decoded = decode_client_message(&encoded).unwrap();
-        match decoded {
-            AppClientMessage::Subscribe { events } => {
-                assert_eq!(events.len(), 5);
-                assert!(events.contains(&AppEventType::Output));
-                assert!(events.contains(&AppEventType::Cursor));
-                assert!(events.contains(&AppEventType::Bell));
-                assert!(events.contains(&AppEventType::Title));
-                assert!(events.contains(&AppEventType::Resize));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppClientMessage::Subscribe { events } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(events.len(), 5);
+        assert!(events.contains(&AppEventType::Output));
+        assert!(events.contains(&AppEventType::Cursor));
+        assert!(events.contains(&AppEventType::Bell));
+        assert!(events.contains(&AppEventType::Title));
+        assert!(events.contains(&AppEventType::Resize));
     }
 
     #[test]
@@ -1469,12 +1442,10 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, .. } => {
-                assert_eq!(data, unicode_content);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, unicode_content);
     }
 
     #[test]
@@ -1486,14 +1457,12 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, .. } => {
-                assert_eq!(data, ansi_data);
-                assert!(data.contains("\x1b[31m"));
-                assert!(data.contains("\x1b[0m"));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, ansi_data);
+        assert!(data.contains("\x1b[31m"));
+        assert!(data.contains("\x1b[0m"));
     }
 
     #[test]
@@ -1504,13 +1473,11 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, timestamp } => {
-                assert_eq!(data, "test");
-                assert_eq!(timestamp, Some(1234567890123));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, timestamp } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(data, "test");
+        assert_eq!(timestamp, Some(1234567890123));
     }
 
     #[test]
@@ -1531,12 +1498,10 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Output { data, .. } => {
-                assert!(data.is_empty());
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Output { data, .. } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert!(data.is_empty());
     }
 
     #[test]
@@ -1606,22 +1571,21 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::CwdChanged {
-                old_cwd,
-                new_cwd,
-                hostname,
-                username,
-                timestamp,
-            } => {
-                assert_eq!(old_cwd, Some("/home/user".to_string()));
-                assert_eq!(new_cwd, "/home/user/project");
-                assert_eq!(hostname, Some("myhost".to_string()));
-                assert_eq!(username, Some("user".to_string()));
-                assert_eq!(timestamp, Some(1234567890));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::CwdChanged {
+            old_cwd,
+            new_cwd,
+            hostname,
+            username,
+            timestamp,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(old_cwd, Some("/home/user".to_string()));
+        assert_eq!(new_cwd, "/home/user/project");
+        assert_eq!(hostname, Some("myhost".to_string()));
+        assert_eq!(username, Some("user".to_string()));
+        assert_eq!(timestamp, Some(1234567890));
     }
 
     #[test]
@@ -1635,22 +1599,21 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::CwdChanged {
-                old_cwd,
-                new_cwd,
-                hostname,
-                username,
-                timestamp,
-            } => {
-                assert_eq!(old_cwd, None);
-                assert_eq!(new_cwd, "/tmp");
-                assert_eq!(hostname, None);
-                assert_eq!(username, None);
-                assert_eq!(timestamp, None);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::CwdChanged {
+            old_cwd,
+            new_cwd,
+            hostname,
+            username,
+            timestamp,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(old_cwd, None);
+        assert_eq!(new_cwd, "/tmp");
+        assert_eq!(hostname, None);
+        assert_eq!(username, None);
+        assert_eq!(timestamp, None);
     }
 
     #[test]
@@ -1666,29 +1629,28 @@ mod tests {
         };
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::TriggerMatched {
-                trigger_id,
-                row,
-                col,
-                end_col,
-                text,
-                captures,
-                timestamp,
-            } => {
-                assert_eq!(trigger_id, 42);
-                assert_eq!(row, 10);
-                assert_eq!(col, 5);
-                assert_eq!(end_col, 20);
-                assert_eq!(text, "error: something failed");
-                assert_eq!(
-                    captures,
-                    vec!["error".to_string(), "something failed".to_string()]
-                );
-                assert_eq!(timestamp, 9876543210);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::TriggerMatched {
+            trigger_id,
+            row,
+            col,
+            end_col,
+            text,
+            captures,
+            timestamp,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(trigger_id, 42);
+        assert_eq!(row, 10);
+        assert_eq!(col, 5);
+        assert_eq!(end_col, 20);
+        assert_eq!(text, "error: something failed");
+        assert_eq!(
+            captures,
+            vec!["error".to_string(), "something failed".to_string()]
+        );
+        assert_eq!(timestamp, 9876543210);
     }
 
     #[test]
@@ -1708,34 +1670,33 @@ mod tests {
         );
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::Connected {
-                cols,
-                rows,
-                initial_screen,
-                session_id,
-                theme,
-                badge,
-                faint_text_alpha,
-                cwd,
-                modify_other_keys,
-                client_id,
-                readonly,
-            } => {
-                assert_eq!(cols, 80);
-                assert_eq!(rows, 24);
-                assert_eq!(initial_screen, Some("initial content".to_string()));
-                assert_eq!(session_id, "sess-full");
-                assert!(theme.is_none());
-                assert_eq!(badge, Some("my badge".to_string()));
-                assert_eq!(faint_text_alpha, Some(0.5));
-                assert_eq!(cwd, Some("/home/user".to_string()));
-                assert_eq!(modify_other_keys, Some(2));
-                assert_eq!(client_id, Some("client-42".to_string()));
-                assert_eq!(readonly, Some(true));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::Connected {
+            cols,
+            rows,
+            initial_screen,
+            session_id,
+            theme,
+            badge,
+            faint_text_alpha,
+            cwd,
+            modify_other_keys,
+            client_id,
+            readonly,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(cols, 80);
+        assert_eq!(rows, 24);
+        assert_eq!(initial_screen, Some("initial content".to_string()));
+        assert_eq!(session_id, "sess-full");
+        assert!(theme.is_none());
+        assert_eq!(badge, Some("my badge".to_string()));
+        assert_eq!(faint_text_alpha, Some(0.5));
+        assert_eq!(cwd, Some("/home/user".to_string()));
+        assert_eq!(modify_other_keys, Some(2));
+        assert_eq!(client_id, Some("client-42".to_string()));
+        assert_eq!(readonly, Some(true));
     }
 
     #[test]
@@ -1751,18 +1712,17 @@ mod tests {
         let msg = AppServerMessage::user_var_changed("hostname".to_string(), "myhost".to_string());
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::UserVarChanged {
-                name,
-                value,
-                old_value,
-            } => {
-                assert_eq!(name, "hostname");
-                assert_eq!(value, "myhost");
-                assert_eq!(old_value, None);
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(name, "hostname");
+        assert_eq!(value, "myhost");
+        assert_eq!(old_value, None);
     }
 
     #[test]
@@ -1774,18 +1734,17 @@ mod tests {
         );
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::UserVarChanged {
-                name,
-                value,
-                old_value,
-            } => {
-                assert_eq!(name, "hostname");
-                assert_eq!(value, "newhost");
-                assert_eq!(old_value, Some("oldhost".to_string()));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::UserVarChanged {
+            name,
+            value,
+            old_value,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(name, "hostname");
+        assert_eq!(value, "newhost");
+        assert_eq!(old_value, Some("oldhost".to_string()));
     }
 
     #[test]
@@ -1799,12 +1758,10 @@ mod tests {
         let msg = AppServerMessage::semantic_snapshot("{\"cols\":80}".to_string());
         let encoded = encode_server_message(&msg).unwrap();
         let decoded = decode_server_message(&encoded).unwrap();
-        match decoded {
-            AppServerMessage::SemanticSnapshot { snapshot_json } => {
-                assert_eq!(snapshot_json, "{\"cols\":80}");
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppServerMessage::SemanticSnapshot { snapshot_json } = decoded else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(snapshot_json, "{\"cols\":80}");
     }
 
     #[test]
@@ -1812,15 +1769,14 @@ mod tests {
         let msg = AppClientMessage::snapshot_request("recent".to_string(), Some(10));
         let encoded = encode_client_message(&msg).unwrap();
         let decoded = decode_client_message(&encoded).unwrap();
-        match decoded {
-            AppClientMessage::SnapshotRequest {
-                scope,
-                max_commands,
-            } => {
-                assert_eq!(scope, "recent");
-                assert_eq!(max_commands, Some(10));
-            }
-            _ => panic!("Wrong message type"),
-        }
+        let AppClientMessage::SnapshotRequest {
+            scope,
+            max_commands,
+        } = decoded
+        else {
+            panic!("Wrong message type");
+        };
+        assert_eq!(scope, "recent");
+        assert_eq!(max_commands, Some(10));
     }
 }
