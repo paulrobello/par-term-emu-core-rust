@@ -305,8 +305,10 @@ impl KittyParser {
                         self.more_chunks = value == "1";
                     }
                     "d" => {
-                        // Delete specification
-                        self.parse_delete_target(value);
+                        // Delete specification — recorded in `params` above
+                        // and resolved after the full key=value list is
+                        // parsed, so `d=` may precede its identifying
+                        // params (see the post-loop resolution below).
                     }
                     "U" => {
                         // Virtual placement
@@ -359,6 +361,16 @@ impl KittyParser {
             }
         }
 
+        // Resolve delete criteria after the whole key=value list has been
+        // parsed: emitters disagree on key order (Herdr sends `d=` before
+        // `i=`/`p=`, e.g. `a=d,d=I,i=<id>`), so resolving while scanning
+        // would see `image_id`/`placement_id` still unset and silently
+        // no-op the delete. `params` accumulates across chunks, so a `d=`
+        // seen in an earlier chunk re-resolves once later params arrive.
+        if let Some(spec) = self.params.get("d").cloned() {
+            self.parse_delete_target(&spec);
+        }
+
         // Decode and accumulate base64 data
         if !data_str.is_empty() {
             // Try STANDARD first (with padding), then NO_PAD if that fails
@@ -379,17 +391,19 @@ impl KittyParser {
         Ok(self.more_chunks)
     }
 
-    /// Parse delete target specification
+    /// Resolve delete target specification after all parameters are parsed.
     fn parse_delete_target(&mut self, value: &str) {
-        // Kitty graphics `d=` delete targets. The by-id / by-placement / by-column /
-        // by-row variants need a previously-parsed identifying param (`i=`/`p=`/`x=`/
-        // `y=`); if it hasn't been supplied yet the delete is a no-op (None).
+        // Identifying parameters may follow `d=` (as in Herdr's
+        // `a=d,d=I,i=<id>` / `a=d,d=i,i=<id>,p=<pid>` ordering).
         if let Some(c) = value.chars().next() {
             self.delete_target = match c {
                 'a' | 'A' => Some(KittyDeleteTarget::All),
                 'c' | 'C' => Some(KittyDeleteTarget::AtCursor),
                 'z' | 'Z' => Some(KittyDeleteTarget::OnScreen),
-                'i' | 'I' => self.image_id.map(KittyDeleteTarget::ById),
+                'i' | 'I' => self.image_id.map(|iid| match self.placement_id {
+                    Some(pid) => KittyDeleteTarget::ByPlacement(iid, Some(pid)),
+                    None => KittyDeleteTarget::ById(iid),
+                }),
                 'p' | 'P' => self
                     .image_id
                     .map(|iid| KittyDeleteTarget::ByPlacement(iid, self.placement_id)),
@@ -1836,6 +1850,50 @@ mod tests {
         let mut p = KittyParser::new();
         let _ = p.parse_chunk("d=i;");
         assert_eq!(p.delete_target, None);
+    }
+
+    #[test]
+    fn herdr_delete_order_resolves_id_and_placement_targets() {
+        let mut by_id = KittyParser::new();
+        by_id.parse_chunk("a=d,d=I,i=42;").unwrap();
+        assert_eq!(by_id.delete_target, Some(KittyDeleteTarget::ById(42)));
+
+        let mut by_placement = KittyParser::new();
+        by_placement.parse_chunk("a=d,d=i,i=42,p=7;").unwrap();
+        assert_eq!(
+            by_placement.delete_target,
+            Some(KittyDeleteTarget::ByPlacement(42, Some(7)))
+        );
+    }
+
+    #[test]
+    fn herdr_by_placement_delete_preserves_sibling_placement() {
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 42, Some(1), (0, 0));
+        transmit_and_add(&mut store, 42, Some(2), (5, 0));
+        assert_eq!(store.placements.len(), 2);
+
+        let mut delete = KittyParser::new();
+        delete.parse_chunk("a=d,d=i,i=42,p=1;").unwrap();
+        delete.build_graphic((0, 0), &mut store).unwrap();
+
+        assert_eq!(store.placements.len(), 1);
+        assert_eq!(store.placements[0].kitty_image_id, Some(42));
+        assert_eq!(store.placements[0].kitty_placement_id, Some(2));
+    }
+
+    #[test]
+    fn herdr_by_id_delete_removes_all_image_placements() {
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 42, Some(1), (0, 0));
+        transmit_and_add(&mut store, 42, Some(2), (5, 0));
+        assert_eq!(store.placements.len(), 2);
+
+        let mut delete = KittyParser::new();
+        delete.parse_chunk("a=d,d=I,i=42;").unwrap();
+        delete.build_graphic((0, 0), &mut store).unwrap();
+
+        assert!(store.placements.is_empty());
     }
 
     // --- V= relative offset regression (was dropped unless P= preceded it) ---
