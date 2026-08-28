@@ -1,5 +1,6 @@
 //! Text extraction and manipulation utilities
 
+use crate::cell::Cell;
 use crate::grid::Grid;
 use crate::unicode_width_config::{char_width, WidthConfig};
 
@@ -12,7 +13,87 @@ pub fn is_word_char(c: char, word_chars: Option<&str>) -> bool {
     c.is_alphanumeric() || word_chars.unwrap_or(DEFAULT_WORD_CHARS).contains(c)
 }
 
+/// Classify a grid cell for word membership.
+///
+/// A multi-char cell holds one grapheme cluster (base char + combining
+/// marks), so the base character decides for the whole cluster.
+fn cell_is_word(cell: &Cell, word_chars: Option<&str>) -> bool {
+    is_word_char(cell.c(), word_chars)
+}
+
+/// Display columns a cell occupies (spacer cells occupy none of their own).
+fn cell_display_width(cell: &Cell) -> usize {
+    if cell.flags().wide_char_spacer() {
+        0
+    } else {
+        cell.width().max(1)
+    }
+}
+
+/// Resolve a display column to the index of the cell whose columns contain it.
+///
+/// A wide character's trailing spacer column resolves to the wide character.
+/// Columns past the row's cells resolve to `None`.
+fn cell_index_at_col(cells: &[Cell], col: usize) -> Option<usize> {
+    let mut display_col = 0usize;
+    for (i, cell) in cells.iter().enumerate() {
+        let w = cell_display_width(cell);
+        if col < display_col + w {
+            return Some(i);
+        }
+        display_col += w;
+    }
+    None
+}
+
+/// Display column at which the cell at `idx` starts.
+fn display_col_of(cells: &[Cell], idx: usize) -> usize {
+    cells[..idx].iter().map(cell_display_width).sum()
+}
+
+/// Inclusive cell-index span `[start, end]` of the word containing cell `idx`.
+///
+/// Returns `None` when the cell at `idx` is not a word cell. Spacers belong
+/// to the wide character that precedes them and never bound a word.
+fn word_cell_span(cells: &[Cell], idx: usize, word_chars: Option<&str>) -> Option<(usize, usize)> {
+    if !cell_is_word(&cells[idx], word_chars) {
+        return None;
+    }
+
+    let mut start = idx;
+    while start > 0 {
+        let prev = start - 1;
+        let prev = if cells[prev].flags().wide_char_spacer() {
+            prev.checked_sub(1)?
+        } else {
+            prev
+        };
+        if !cell_is_word(&cells[prev], word_chars) {
+            break;
+        }
+        start = prev;
+    }
+
+    let mut end = idx;
+    loop {
+        let mut next = end + 1;
+        if next < cells.len() && cells[next].flags().wide_char_spacer() {
+            next += 1;
+        }
+        if next >= cells.len() || !cell_is_word(&cells[next], word_chars) {
+            break;
+        }
+        end = next;
+    }
+
+    Some((start, end))
+}
+
 /// Extract word at the given position
+///
+/// `col` is a display column; cells are walked directly so wide characters
+/// and multi-char grapheme clusters (emoji + ZWJ, combining marks) map
+/// columns correctly.
 pub fn get_word_at(
     grid: &Grid,
     col: usize,
@@ -22,54 +103,18 @@ pub fn get_word_at(
     if row >= grid.rows() || col >= grid.cols() {
         return None;
     }
+    let cells = grid.row(row)?;
 
-    let line = grid.row_text(row);
-    if line.is_empty() {
-        return None;
-    }
+    let idx = cell_index_at_col(cells, col)?;
+    let (start, end) = word_cell_span(cells, idx, word_chars)?;
 
-    // Convert col to character index
-    let mut char_col = 0;
-    let mut byte_pos = 0;
-    for (i, c) in line.char_indices() {
-        if char_col == col {
-            byte_pos = i;
-            break;
-        }
-        char_col += char_width(c, &WidthConfig::default());
-        if char_col > col {
-            return None; // Inside a wide character
+    let mut result = String::new();
+    for cell in &cells[start..=end] {
+        if !cell.flags().wide_char_spacer() {
+            cell.push_grapheme(&mut result);
         }
     }
-
-    let chars: Vec<char> = line.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-
-    let char_idx = line[..byte_pos].chars().count();
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    let c = chars[char_idx];
-    if !is_word_char(c, word_chars) {
-        return None;
-    }
-
-    // Find start of word
-    let mut start = char_idx;
-    while start > 0 && is_word_char(chars[start - 1], word_chars) {
-        start -= 1;
-    }
-
-    // Find end of word
-    let mut end = char_idx + 1;
-    while end < chars.len() && is_word_char(chars[end], word_chars) {
-        end += 1;
-    }
-
-    Some(chars[start..end].iter().collect())
+    Some(result)
 }
 
 /// Check if a character is valid in a URL
@@ -179,6 +224,10 @@ pub fn get_line_unwrapped(grid: &Grid, row: usize) -> Option<String> {
 }
 
 /// Find word boundaries at position
+///
+/// `col` is a display column; the returned bounds are display columns
+/// `(start_col, end_col)` where `end_col` is exclusive (the column just
+/// past the last cell of the word).
 pub fn select_word(
     grid: &Grid,
     col: usize,
@@ -188,60 +237,13 @@ pub fn select_word(
     if row >= grid.rows() || col >= grid.cols() {
         return None;
     }
+    let cells = grid.row(row)?;
 
-    let line = grid.row_text(row);
-    if line.is_empty() {
-        return None;
-    }
+    let idx = cell_index_at_col(cells, col)?;
+    let (start, end) = word_cell_span(cells, idx, word_chars)?;
 
-    // Convert col to character index
-    let mut char_col = 0;
-    let mut byte_pos = 0;
-    for (i, c) in line.char_indices() {
-        if char_col == col {
-            byte_pos = i;
-            break;
-        }
-        char_col += char_width(c, &WidthConfig::default());
-        if char_col > col {
-            return None;
-        }
-    }
-
-    let chars: Vec<char> = line.chars().collect();
-    let char_idx = line[..byte_pos].chars().count();
-
-    if char_idx >= chars.len() {
-        return None;
-    }
-
-    let c = chars[char_idx];
-    if !is_word_char(c, word_chars) {
-        return None;
-    }
-
-    // Find start
-    let mut start_idx = char_idx;
-    while start_idx > 0 && is_word_char(chars[start_idx - 1], word_chars) {
-        start_idx -= 1;
-    }
-
-    // Find end
-    let mut end_idx = char_idx + 1;
-    while end_idx < chars.len() && is_word_char(chars[end_idx], word_chars) {
-        end_idx += 1;
-    }
-
-    // Convert character indices to column positions
-    let start_col = chars[..start_idx]
-        .iter()
-        .map(|c| char_width(*c, &WidthConfig::default()))
-        .sum();
-    let end_col = chars[..end_idx]
-        .iter()
-        .map(|c| char_width(*c, &WidthConfig::default()))
-        .sum();
-
+    let start_col = display_col_of(cells, start);
+    let end_col = display_col_of(cells, end) + cell_display_width(&cells[end]);
     Some(((start_col, row), (end_col, row)))
 }
 

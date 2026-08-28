@@ -1444,6 +1444,7 @@ macro_rules! impl_terminal_cell_line_queries {
             ///
             /// Returns:
             ///     Word at position or None if not on a word
+            #[pyo3(signature = (col, row, word_chars = None))]
             fn get_word_at(
                 &self,
                 col: usize,
@@ -1692,6 +1693,7 @@ macro_rules! impl_terminal_search_select {
             /// Returns:
             ///     ((start_col, start_row), (end_col, end_row)) or None if not on a word
             #[allow(clippy::type_complexity)]
+            #[pyo3(signature = (col, row, word_chars = None))]
             fn select_word(
                 &mut self,
                 col: usize,

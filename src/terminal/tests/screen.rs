@@ -469,6 +469,98 @@ fn test_get_word_at_out_of_bounds_returns_none() {
 }
 
 #[test]
+fn test_get_word_at_wide_char_columns() {
+    // 日本語 occupies display columns 0..6 (three 2-column chars), then
+    // " word" at columns 6..11.
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    for col in [0usize, 2, 4] {
+        assert_eq!(
+            term.get_word_at(col, 0, None),
+            Some("日本語".to_string()),
+            "leading column {col} of a wide char"
+        );
+    }
+}
+
+#[test]
+fn test_get_word_at_wide_char_spacer_column_resolves_to_char() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    // Columns 1/3/5 are the trailing spacer halves of 本 etc.; they must
+    // resolve to the wide character they belong to, not to the next word.
+    for col in [1usize, 3, 5] {
+        assert_eq!(
+            term.get_word_at(col, 0, None),
+            Some("日本語".to_string()),
+            "spacer column {col}"
+        );
+    }
+}
+
+#[test]
+fn test_get_word_at_beyond_wide_char_run() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    assert_eq!(term.get_word_at(7, 0, None), Some("word".to_string()));
+    // The space between is not a word character.
+    assert_eq!(term.get_word_at(6, 0, None), None);
+    // Past the text (all blank cells) is not a word either.
+    assert_eq!(term.get_word_at(30, 0, None), None);
+}
+
+#[test]
+fn test_get_word_at_emoji_zwj_line() {
+    // 👨‍💻 is a single multi-char cell (technologist) covering columns 0..2.
+    let mut term = Terminal::new(80, 24);
+    term.process("👨‍💻 hi".as_bytes());
+
+    // The word after the emoji must resolve without the column walk
+    // counting the ZWJ sequence's string length instead of its cell width.
+    assert_eq!(term.get_word_at(3, 0, None), Some("hi".to_string()));
+    assert_eq!(term.get_word_at(4, 0, None), Some("hi".to_string()));
+    // Emoji are not word characters (same as before the fix).
+    assert_eq!(term.get_word_at(0, 0, None), None);
+    assert_eq!(term.get_word_at(1, 0, None), None);
+}
+
+#[test]
+fn test_get_word_at_combining_mark_stays_in_word() {
+    // é is one cell: base 'e' + combining acute.
+    let mut term = Terminal::new(80, 24);
+    term.process("cafe\u{0301} au".as_bytes());
+
+    assert_eq!(term.get_word_at(3, 0, None), Some("café".to_string()));
+}
+
+#[test]
+fn test_get_word_at_iterm2_default_word_chars() {
+    // Default set is iTerm2's "/-+\~_.": hyphenated words stay one word.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"foo-bar baz");
+
+    assert_eq!(term.get_word_at(0, 0, None), Some("foo-bar".to_string()));
+    // A custom set narrows the boundary back down.
+    assert_eq!(term.get_word_at(0, 0, Some("_")), Some("foo".to_string()));
+}
+
+#[test]
+fn test_select_word_wide_char_bounds_are_display_columns() {
+    let mut term = Terminal::new(80, 24);
+    term.process("日本語 word".as_bytes());
+
+    let bounds = term.select_word(2, 0, None).expect("word at col 2");
+    assert_eq!(bounds, ((0, 0), (6, 0)));
+
+    let sel = term.get_selection().expect("selection set");
+    assert_eq!(sel.start, (0, 0));
+    assert_eq!(sel.end, (6, 0));
+}
+
+#[test]
 fn test_get_paragraph_at_single_paragraph() {
     let mut term = Terminal::new(80, 24);
     term.process(b"line one\r\nline two");
