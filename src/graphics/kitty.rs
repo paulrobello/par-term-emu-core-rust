@@ -415,6 +415,12 @@ impl KittyParser {
 
     /// Decompress zlib-compressed data
     fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+        // Empty input is not a valid zlib stream, but this API treats it as
+        // empty output; flate2 versions differ here and callers rely on
+        // zero-length payloads not being an error.
+        if data.is_empty() {
+            return Ok(Vec::new());
+        }
         let mut decoder = ZlibDecoder::new(data);
         let mut decompressed = Vec::new();
         decoder
