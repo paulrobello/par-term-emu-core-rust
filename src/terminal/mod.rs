@@ -1542,6 +1542,19 @@ impl Terminal {
 
     /// Switch to alternate screen
     pub fn use_alt_screen(&mut self) {
+        self.enter_alt_screen(true);
+    }
+
+    /// Switch to primary screen
+    pub fn use_primary_screen(&mut self) {
+        self.exit_alt_screen(false);
+    }
+
+    /// Enter the alternate screen buffer (DECSET 47/1047/1049).
+    /// `clear_alt` blanks the alternate grid on entry (1047/1049); mode 47
+    /// preserves the alternate screen's prior contents. No-op when already
+    /// on the alternate screen — xterm does not nest alt screens.
+    fn enter_alt_screen(&mut self, clear_alt: bool) {
         if !self.alt_screen_active {
             debug::log_screen_switch(true, "use_alt_screen");
             // Save current (primary) cursor position before switching
@@ -1551,8 +1564,10 @@ impl Terminal {
             self.cursor = self.alt_cursor;
             // Save primary cursor for when we switch back
             self.alt_cursor = primary_cursor;
-            // Clear the alternate screen buffer to ensure it starts blank
-            self.alt_grid.clear();
+            if clear_alt {
+                // Clear the alternate screen buffer to ensure it starts blank
+                self.alt_grid.clear();
+            }
             // Notify about alt screen entry
             self.events
                 .terminal_events
@@ -1563,10 +1578,15 @@ impl Terminal {
         }
     }
 
-    /// Switch to primary screen
-    pub fn use_primary_screen(&mut self) {
+    /// Leave the alternate screen buffer (DECRST 47/1047/1049).
+    /// `clear_alt` blanks the alternate grid before returning (1047); mode 47
+    /// leaves its contents intact. No-op when already on the primary screen.
+    fn exit_alt_screen(&mut self, clear_alt: bool) {
         if self.alt_screen_active {
             debug::log_screen_switch(false, "use_primary_screen");
+            if clear_alt {
+                self.alt_grid.clear();
+            }
             // Save current (alternate) cursor position before switching
             let alt_cursor = self.cursor;
             self.alt_screen_active = false;

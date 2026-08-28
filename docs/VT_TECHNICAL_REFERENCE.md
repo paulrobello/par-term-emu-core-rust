@@ -310,15 +310,17 @@ CSI 49 m    - Default background
 
 | Mode | Name | Default | Description |
 |------|------|---------|-------------|
-| 47 | Alt Screen | Primary | ❌ Not implemented (falls through to primary-screen handling) |
-| 1047 | Alt Screen | Primary | ❌ Not implemented (falls through to primary-screen handling) |
-| 1048 | Save Cursor | - | ❌ Not implemented |
+| 47 | Alt Screen | Primary | ✅ Alternate screen switch, contents preserved (no clear, no cursor save) |
+| 1047 | Alt Screen | Primary | ✅ Alternate screen switch, cleared on entry and exit |
+| 1048 | Save Cursor | - | ✅ Save/restore cursor (DECSC/DECRC equivalent), no screen switch |
 | 1049 | Save + Alt | Primary | ✅ Save cursor + alternate screen |
 
 **Alternate Screen Notes:**
 - No scrollback buffer in alternate screen
 - Commonly used by full-screen applications (vim, less, etc.)
 - Mode 1049 combines cursor save with screen switch
+- Alt screens do not nest: setting 47/1047/1049 while already on the
+  alternate screen is a no-op, and any of the three resets returns to primary
 
 ##### Mouse Tracking Modes
 
@@ -479,7 +481,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
 
 **Supported Modes:**
-- DEC private (`CSI ? mode $ p`): 1, 6, 7, 25, 1000, 1002, 1003, 1049, 2004, 2026
+- DEC private (`CSI ? mode $ p`): 1, 6, 7, 25, 47, 1000, 1002, 1003, 1047, 1048, 1049, 2004, 2026
 - ANSI (`CSI mode $ p`): 4, 20
 
 All other mode numbers return state `0` (not recognized).
@@ -1393,7 +1395,7 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
 | Mouse encoding | ✅ Full | Default, UTF-8, SGR, URXVT |
 | Focus tracking | ✅ Full | Mode 1004 |
 | Bracketed paste | ✅ Full | Mode 2004 |
-| Alternate screen | ⚠️ Partial | Mode 1049 only (47 and 1047 not implemented) |
+| Alternate screen | ✅ Full | Modes 47, 1047, 1048, 1049 |
 | Window ops | ⚠️ Partial | Size reporting and title stack only |
 | Sixel graphics | ✅ Full | Full DCS Sixel with half-block fallback |
 
@@ -1507,10 +1509,10 @@ Origin mode (DECOM) affects:
 
 - **No scrollback:** Scrollback buffer disabled in alternate screen
 - **Separate cursor:** Cursor position independent from primary screen
-- **Clear on switch:** Alternate screen cleared when activated
 - **Mode variants:**
-  - Mode 47: ❌ Not implemented
-  - Mode 1047: ❌ Not implemented
+  - Mode 47: ✅ Alternate screen, contents preserved on both switches
+  - Mode 1047: ✅ Alternate screen, cleared on entry and on exit
+  - Mode 1048: ✅ Cursor save/restore only (DECSC/DECRC), no screen switch
   - Mode 1049: ✅ Alternate screen + cursor save/restore
 
 ---

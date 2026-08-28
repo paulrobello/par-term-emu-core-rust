@@ -306,6 +306,98 @@ fn test_private_mode_alt_screen() {
 }
 
 #[test]
+fn test_private_mode_47_alt_screen() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"primary");
+
+    // Mode 47: switch to alt screen, no clear, no cursor save
+    term.process(b"\x1b[?47h");
+    assert!(term.alt_screen_active);
+    term.process(b"alt47");
+
+    // Switch back; primary content intact
+    term.process(b"\x1b[?47l");
+    assert!(!term.alt_screen_active);
+    assert_eq!(term.grid.row(0).unwrap()[0].c, 'p');
+    assert_eq!(term.grid.row(0).unwrap()[6].c, 'y');
+
+    // Re-enter via 47: no clear on entry or exit, alt content survives
+    term.process(b"\x1b[?47h");
+    assert!(term.alt_screen_active);
+    assert_eq!(term.alt_grid.row(0).unwrap()[0].c, 'a');
+    assert_eq!(term.alt_grid.row(0).unwrap()[4].c, '7');
+}
+
+#[test]
+fn test_private_mode_1047_clear_on_exit() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"primary");
+
+    term.process(b"\x1b[?1047h");
+    assert!(term.alt_screen_active);
+    term.process(b"alt1047");
+
+    // Leaving 1047 clears the alternate screen before switching back
+    term.process(b"\x1b[?1047l");
+    assert!(!term.alt_screen_active);
+    assert_eq!(term.grid.row(0).unwrap()[0].c, 'p');
+
+    // Re-enter via 47 (no clear on entry): alt screen must be blank
+    term.process(b"\x1b[?47h");
+    assert!(term.alt_screen_active);
+    assert_eq!(term.alt_grid.row(0).unwrap()[0].c, ' ');
+    assert_eq!(term.alt_grid.row(0).unwrap()[4].c, ' ');
+}
+
+#[test]
+fn test_private_mode_1047_clear_on_entry() {
+    let mut term = Terminal::new(80, 24);
+
+    // Leave content on the alt screen via 47 (which does not clear)
+    term.process(b"\x1b[?47h");
+    term.process(b"leftover");
+    term.process(b"\x1b[?47l");
+
+    // 1047 clears the alternate screen before entering
+    term.process(b"\x1b[?1047h");
+    assert!(term.alt_screen_active);
+    assert_eq!(term.alt_grid.row(0).unwrap()[0].c, ' ');
+}
+
+#[test]
+fn test_private_mode_1048_cursor_round_trip() {
+    let mut term = Terminal::new(80, 24);
+
+    // 1048 set saves the cursor (DECSC), no screen switch
+    term.process(b"\x1b[5;5H");
+    term.process(b"\x1b[?1048h");
+    assert!(!term.alt_screen_active);
+
+    term.process(b"\x1b[10;10H");
+    term.process(b"\x1b[?1048l");
+    assert_eq!((term.cursor.col, term.cursor.row), (4, 4));
+    assert!(!term.alt_screen_active);
+}
+
+#[test]
+fn test_mode_47_no_nesting_with_1049() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"primary");
+
+    // Enter alt via 1049, write, then 47h must be a no-op (already alt)
+    term.process(b"\x1b[?1049h");
+    term.process(b"alt");
+    term.process(b"\x1b[?47h");
+    assert!(term.alt_screen_active);
+    assert_eq!(term.alt_grid.row(0).unwrap()[0].c, 'a');
+
+    // 1049 reset restores the primary screen
+    term.process(b"\x1b[?1049l");
+    assert!(!term.alt_screen_active);
+    assert_eq!(term.grid.row(0).unwrap()[0].c, 'p');
+}
+
+#[test]
 fn test_private_mode_mouse() {
     let mut term = Terminal::new(80, 24);
 
@@ -867,6 +959,65 @@ fn test_decrqm_alt_screen_after_enable() {
     assert!(
         response_str.contains(";1"),
         "alt screen should be set after enable, got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_legacy_alt_screen_modes() {
+    let mut term = Terminal::new(80, 24);
+
+    // 47 reports set/reset from the alt screen state
+    term.process(b"\x1b[?47$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("\x1b[?47;2$y"),
+        "47 should report reset, got: {:?}",
+        response_str
+    );
+
+    term.process(b"\x1b[?47h");
+    term.process(b"\x1b[?1047$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("\x1b[?1047;1$y"),
+        "1047 should report set while alt active, got: {:?}",
+        response_str
+    );
+
+    term.process(b"\x1b[?47l");
+    term.process(b"\x1b[?47$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("\x1b[?47;2$y"),
+        "47 should report reset after leaving alt, got: {:?}",
+        response_str
+    );
+}
+
+#[test]
+fn test_decrqm_mode_1048_saved_cursor() {
+    let mut term = Terminal::new(80, 24);
+
+    term.process(b"\x1b[?1048$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("\x1b[?1048;2$y"),
+        "1048 should report reset with no saved cursor, got: {:?}",
+        response_str
+    );
+
+    term.process(b"\x1b[?1048h");
+    term.process(b"\x1b[?1048$p");
+    let response = term.drain_responses();
+    let response_str = std::str::from_utf8(&response).unwrap();
+    assert!(
+        response_str.contains("\x1b[?1048;1$y"),
+        "1048 should report set with a saved cursor, got: {:?}",
         response_str
     );
 }

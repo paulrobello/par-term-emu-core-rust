@@ -109,6 +109,7 @@ impl Terminal {
             69 => Some(format!("lr_margins:{}", self.margins.use_lr_margins)),
             9 | 1000 | 1002 | 1003 => Some(format!("mouse:{:?}", self.modes.mouse_mode)),
             1005 | 1006 | 1015 => Some(format!("mouse_enc:{:?}", self.modes.mouse_encoding)),
+            47 | 1047 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.modes.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.modes.bracketed_paste)),
@@ -135,6 +136,9 @@ impl Terminal {
             1005 => self.modes.mouse_encoding = MouseEncoding::Utf8,
             1006 => self.modes.mouse_encoding = MouseEncoding::Sgr,
             1015 => self.modes.mouse_encoding = MouseEncoding::Urxvt,
+            47 => self.enter_alt_screen(false),
+            1047 => self.enter_alt_screen(true),
+            1048 => self.save_cursor(),
             1049 => self.use_alt_screen(),
             1004 => self.modes.focus_tracking = true,
             2004 => self.modes.bracketed_paste = true,
@@ -156,6 +160,7 @@ impl Terminal {
             69 => Some(format!("lr_margins:{}", self.margins.use_lr_margins)),
             9 | 1000 | 1002 | 1003 => Some(format!("mouse:{:?}", self.modes.mouse_mode)),
             1005 | 1006 | 1015 => Some(format!("mouse_enc:{:?}", self.modes.mouse_encoding)),
+            47 | 1047 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.modes.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.modes.bracketed_paste)),
@@ -166,7 +171,8 @@ impl Terminal {
             _ => None,
         };
 
-        if old_mode != new_mode && param != 1049 {
+        // 47/1047/1049 emit their ModeChanged event from the screen-switch helpers
+        if old_mode != new_mode && !matches!(param, 47 | 1047 | 1049) {
             use crate::terminal::TerminalEvent;
             let mode_name = match param {
                 1 => "application_cursor",
@@ -204,6 +210,7 @@ impl Terminal {
             69 => Some(format!("lr_margins:{}", self.margins.use_lr_margins)),
             9 | 1000 | 1002 | 1003 => Some(format!("mouse:{:?}", self.modes.mouse_mode)),
             1005 | 1006 | 1015 => Some(format!("mouse_enc:{:?}", self.modes.mouse_encoding)),
+            47 | 1047 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.modes.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.modes.bracketed_paste)),
@@ -225,6 +232,9 @@ impl Terminal {
             69 => self.margins.use_lr_margins = false,
             9 | 1000 | 1002 | 1003 => self.modes.mouse_mode = MouseMode::Off,
             1005 | 1006 | 1015 => self.modes.mouse_encoding = MouseEncoding::Default,
+            47 => self.exit_alt_screen(false),
+            1047 => self.exit_alt_screen(true),
+            1048 => self.restore_cursor(),
             1049 => self.use_primary_screen(),
             1004 => self.modes.focus_tracking = false,
             2004 => self.modes.bracketed_paste = false,
@@ -250,6 +260,7 @@ impl Terminal {
             69 => Some(format!("lr_margins:{}", self.margins.use_lr_margins)),
             9 | 1000 | 1002 | 1003 => Some(format!("mouse:{:?}", self.modes.mouse_mode)),
             1005 | 1006 | 1015 => Some(format!("mouse_enc:{:?}", self.modes.mouse_encoding)),
+            47 | 1047 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1049 => Some(format!("alt_screen:{}", self.alt_screen_active)),
             1004 => Some(format!("focus_tracking:{}", self.modes.focus_tracking)),
             2004 => Some(format!("bracketed_paste:{}", self.modes.bracketed_paste)),
@@ -260,7 +271,8 @@ impl Terminal {
             _ => None,
         };
 
-        if old_mode != new_mode && param != 1049 {
+        // 47/1047/1049 emit their ModeChanged event from the screen-switch helpers
+        if old_mode != new_mode && !matches!(param, 47 | 1047 | 1049) {
             use crate::terminal::TerminalEvent;
             let mode_name = match param {
                 1 => "application_cursor",

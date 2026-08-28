@@ -227,6 +227,9 @@ DEC Private Mode sequences.
 - `?7` - Auto wrap mode (DECAWM)
 - `?25` - Show/hide cursor (DECTCEM)
 - `?69` - Enable left/right margins (DECLRMM)
+- `?47` - Use alternate screen (no clear, no cursor save)
+- `?1047` - Use alternate screen, cleared on entry and exit
+- `?1048` - Save/restore cursor (like DECSC/DECRC)
 - `?1049` - Save cursor and use alternate screen
 
 ### Standard Modes

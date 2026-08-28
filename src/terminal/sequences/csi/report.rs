@@ -136,8 +136,17 @@ impl Terminal {
                                     2
                                 }
                             }
-                            1049 => {
+                            47 | 1047 | 1049 => {
                                 if self.alt_screen_active {
+                                    1
+                                } else {
+                                    2
+                                }
+                            }
+                            1048 => {
+                                // 1048 is a save/restore action, not a persistent mode;
+                                // report whether a saved cursor is pending restore
+                                if self.saved_state.saved_cursor.is_some() {
                                     1
                                 } else {
                                     2

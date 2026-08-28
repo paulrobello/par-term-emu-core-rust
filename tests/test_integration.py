@@ -58,6 +58,41 @@ class TestFeatureIntegration:
         scrollback_after = term.scrollback()
         assert len(scrollback_after) == len(scrollback_before)
 
+    def test_legacy_alt_screen_modes(self):
+        """Test legacy alt-screen modes 47/1047 and cursor save/restore 1048."""
+        term = Terminal(80, 24)
+        term.process_str("primary")
+
+        # Mode 47: switch to alt screen without clearing it
+        term.process_str("\x1b[?47h")
+        assert term.is_alt_screen_active()
+        term.process_str("alt47")
+        term.process_str("\x1b[?47l")
+        assert not term.is_alt_screen_active()
+        assert "primary" in term.get_line(0)
+
+        # Re-enter via 47: alt content survives (no clear on entry or exit)
+        term.process_str("\x1b[?47h")
+        assert term.is_alt_screen_active()
+        assert term.get_char(0, 0) == "a"
+        assert term.get_char(4, 0) == "7"
+
+        # Leave via 1047 reset: clears the alt screen on exit
+        term.process_str("\x1b[?1047l")
+        assert not term.is_alt_screen_active()
+        term.process_str("\x1b[?47h")
+        assert term.get_char(0, 0) == " "
+        assert term.get_char(4, 0) == " "
+
+        # 1048: save/restore cursor without a screen switch
+        term.process_str("\x1b[?47l")
+        saved = term.cursor_position()
+        term.process_str("\x1b[?1048h")
+        term.process_str("\x1b[10;10H")
+        assert term.is_alt_screen_active() is False
+        term.process_str("\x1b[?1048l")
+        assert term.cursor_position() == saved
+
     def test_mouse_tracking_with_alternate_screen(self):
         """Test mouse tracking persists across screen switches."""
         term = Terminal(80, 24)
