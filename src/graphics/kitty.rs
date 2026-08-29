@@ -1934,7 +1934,7 @@ mod tests {
     fn herdr_by_placement_delete_preserves_sibling_placement() {
         let mut store = GraphicsStore::new();
         transmit_and_add(&mut store, 42, Some(1), (0, 0));
-        transmit_and_add(&mut store, 42, Some(2), (5, 0));
+        place_only(&mut store, 42, 2, (5, 0));
         assert_eq!(store.placements.len(), 2);
 
         let mut delete = KittyParser::new();
@@ -1950,7 +1950,7 @@ mod tests {
     fn herdr_by_id_delete_removes_all_image_placements() {
         let mut store = GraphicsStore::new();
         transmit_and_add(&mut store, 42, Some(1), (0, 0));
-        transmit_and_add(&mut store, 42, Some(2), (5, 0));
+        place_only(&mut store, 42, 2, (5, 0));
         assert_eq!(store.placements.len(), 2);
 
         let mut delete = KittyParser::new();
@@ -2044,14 +2044,29 @@ mod tests {
             other => panic!("transmit_and_add expected Graphic, got {:?}", other),
         }
     }
+    /// Place an already-transmitted image (a=p) without retransmitting.
+    fn place_only(
+        store: &mut GraphicsStore,
+        image_id: u32,
+        placement_id: u32,
+        position: (usize, usize),
+    ) {
+        let mut p = KittyParser::new();
+        let payload = format!("a=p,i={},p={};", image_id, placement_id);
+        p.parse_chunk(&payload).unwrap();
+        match p.build_graphic(position, store).unwrap() {
+            KittyGraphicResult::Graphic(g) => store.add_graphic(g),
+            other => panic!("place_only expected Graphic, got {:?}", other),
+        }
+    }
 
     #[test]
     fn test_repeated_nonzero_placement_pair_replaces() {
         // A repeated nonzero (image_id, placement_id) pair is an upsert:
-        // the second display replaces the first in place.
+        // the second a=p replaces the first in place without retransmitting.
         let mut store = GraphicsStore::new();
         transmit_and_add(&mut store, 5, Some(3), (0, 0));
-        transmit_and_add(&mut store, 5, Some(3), (4, 2));
+        place_only(&mut store, 5, 3, (4, 2));
         assert_eq!(store.placements.len(), 1);
         assert_eq!(store.placements[0].position, (4, 2));
         assert_eq!(store.placements[0].kitty_image_id, Some(5));
@@ -2061,20 +2076,17 @@ mod tests {
     #[test]
     fn test_zero_and_omitted_placement_ids_coexist_full_pipeline() {
         let mut store = GraphicsStore::new();
-        // Omitted p= — each display of the same image is a new placement.
+        // Transmit once; subsequent coexisting placements use a=p (no retransmit).
         transmit_and_add(&mut store, 5, None, (0, 0));
-        transmit_and_add(&mut store, 5, None, (1, 0));
+        assert_eq!(store.placements.len(), 1);
+        place_only(&mut store, 5, 0, (1, 0));
         assert_eq!(store.placements.len(), 2);
-        // Explicit p=0 is equally non-unique and coexists.
-        transmit_and_add(&mut store, 5, Some(0), (2, 0));
-        assert_eq!(store.placements.len(), 3);
-        // Distinct nonzero placement ids under the same image coexist.
-        transmit_and_add(&mut store, 5, Some(3), (3, 0));
-        transmit_and_add(&mut store, 5, Some(4), (4, 0));
-        assert_eq!(store.placements.len(), 5);
+        place_only(&mut store, 5, 3, (3, 0));
+        place_only(&mut store, 5, 4, (4, 0));
+        assert_eq!(store.placements.len(), 4);
         // Re-sending (5, 4) replaces only that placement.
-        transmit_and_add(&mut store, 5, Some(4), (9, 9));
-        assert_eq!(store.placements.len(), 5);
+        place_only(&mut store, 5, 4, (9, 9));
+        assert_eq!(store.placements.len(), 4);
         assert!(store
             .placements
             .iter()
@@ -2169,7 +2181,7 @@ mod tests {
     fn test_build_graphic_delete_by_placement() {
         let mut store = GraphicsStore::new();
         transmit_and_add(&mut store, 1, Some(100), (0, 0));
-        transmit_and_add(&mut store, 1, Some(200), (1, 0));
+        place_only(&mut store, 1, 200, (1, 0));
         assert_eq!(store.placements.len(), 2);
 
         // Delete only (image_id=1, placement_id=100)

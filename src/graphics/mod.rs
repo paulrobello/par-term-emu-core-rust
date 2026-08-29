@@ -598,6 +598,29 @@ impl GraphicsStore {
     /// upserts: redisplaying the same pair replaces it in place. A zero
     /// placement ID is intentionally non-unique and always coexists.
     pub fn add_graphic(&mut self, graphic: TerminalGraphic) {
+        log::debug!(
+            "[STORE] add_graphic: id={}, protocol={:?}, kitty_img={:?}, kitty_pid={:?}, pos=({},{}), size={}x{}, cols={:?} rows={:?} z={} x_off={} y_off={} src=({},{},{},{}) preserve={} mode={:?}",
+            graphic.id,
+            graphic.protocol,
+            graphic.kitty_image_id,
+            graphic.kitty_placement_id,
+            graphic.position.0,
+            graphic.position.1,
+            graphic.width,
+            graphic.height,
+            graphic.placement.columns,
+            graphic.placement.rows,
+            graphic.placement.z_index,
+            graphic.placement.x_offset,
+            graphic.placement.y_offset,
+            graphic.placement.source_x,
+            graphic.placement.source_y,
+            graphic.placement.source_width,
+            graphic.placement.source_height,
+            graphic.placement.preserve_aspect_ratio,
+            graphic.placement.display_mode,
+        );
+        // Exact (image_id, placement_id) upsert.
         if let (Some(image_id), Some(placement_id)) =
             (graphic.kitty_image_id, graphic.kitty_placement_id)
         {
@@ -612,6 +635,8 @@ impl GraphicsStore {
             }
         }
 
+        // Herdr replay dedup is handled by the retransmit-delete in
+        // store_kitty_image (spec-mandated); no position-based heuristic here.
         if self.placements.len() >= self.limits.max_graphics_count {
             self.placements.remove(0);
             self.dropped_count += 1;
@@ -685,6 +710,17 @@ impl GraphicsStore {
         height: usize,
         pixels: Vec<u8>,
     ) {
+        // Kitty spec (lines 547-550): retransmitting an existing image ID
+        // deletes the old image and all its placements before storing new data.
+        if self.shared_images.contains_key(&image_id) {
+            self.placements
+                .retain(|g| g.kitty_image_id != Some(image_id));
+            self.virtual_placements
+                .retain(|(img_id, _), _| *img_id != image_id);
+            self.scrollback
+                .retain(|g| g.kitty_image_id != Some(image_id));
+            self.animations.remove(&image_id);
+        }
         self.shared_images
             .insert(image_id, (width, height, Arc::new(pixels)));
     }
@@ -1200,6 +1236,57 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![1, 2]
         );
+    }
+
+    /// Retransmitting an existing image ID must delete all its placements
+    /// (Kitty spec lines 547-550), so a transmit → display → retransmit →
+    /// display cycle leaves exactly one placement.
+    #[test]
+    fn retransmit_deletes_old_placements_before_storing() {
+        let mut store = GraphicsStore::new();
+
+        // First transmit
+        store.store_kitty_image(7, 10, 10, vec![255; 400]);
+
+        // Display placement
+        let mut g = TerminalGraphic::new(1, GraphicProtocol::Kitty, (0, 0), 10, 10, vec![255; 400]);
+        g.kitty_image_id = Some(7);
+        g.kitty_placement_id = Some(100);
+        store.add_graphic(g);
+        assert_eq!(store.graphics_count(), 1);
+
+        // Simulate a scrollback placement for the same image
+        let mut sb =
+            TerminalGraphic::new(1, GraphicProtocol::Kitty, (0, 5), 10, 10, vec![255; 400]);
+        sb.kitty_image_id = Some(7);
+        sb.scrollback_row = Some(2);
+        store.scrollback.push(sb);
+
+        // Simulate an animation for the same image
+        let frame = crate::graphics::animation::AnimationFrame::new(1, vec![0; 4], 1, 1);
+        store.add_animation_frame(7, frame);
+
+        // Retransmit with same image_id — must delete active, scrollback, and animation
+        store.store_kitty_image(7, 10, 10, vec![0; 400]);
+        assert_eq!(
+            store.graphics_count(),
+            0,
+            "retransmit should clear active placements"
+        );
+        assert!(
+            store.scrollback.is_empty(),
+            "retransmit should clear scrollback placements"
+        );
+        assert!(
+            store.get_animation(7).is_none(),
+            "retransmit should clear animation state"
+        );
+        // New display placement
+        let mut g2 = TerminalGraphic::new(2, GraphicProtocol::Kitty, (0, 0), 10, 10, vec![0; 400]);
+        g2.kitty_image_id = Some(7);
+        g2.kitty_placement_id = Some(200);
+        store.add_graphic(g2);
+        assert_eq!(store.graphics_count(), 1);
     }
 
     #[test]
