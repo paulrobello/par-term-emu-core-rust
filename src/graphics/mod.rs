@@ -431,23 +431,67 @@ impl TerminalGraphic {
 
     /// Calculate how many terminal cells this graphic spans
     ///
-    /// An explicit placement footprint wins over pixel-derived sizes: a Kitty
-    /// placement carrying `c=`/`r=` renders into exactly that many cells
-    /// regardless of its native pixel dimensions, so the span must too.
-    /// Zero values fall through to the pixel-derived computation.
+    /// An explicit placement footprint wins over pixel-derived sizes. When
+    /// only one of `c=`/`r=` is specified, the omitted axis is computed from
+    /// the source aspect ratio per the Kitty graphics protocol so the image
+    /// is displayed without distortion.
     pub fn cell_span(&self, fallback_cell_width: u32, fallback_cell_height: u32) -> (usize, usize) {
         let (cell_w, cell_h) = self
             .cell_dimensions
-            .unwrap_or((fallback_cell_width, fallback_cell_height));
-        let cols = match self.placement.columns.filter(|&c| c > 0) {
-            Some(cols) => cols as usize,
-            None => (self.width as u32).div_ceil(cell_w) as usize,
+            .unwrap_or((fallback_cell_width.max(1), fallback_cell_height.max(1)));
+        let cols = self.placement.columns.filter(|&c| c > 0);
+        let rows = self.placement.rows.filter(|&r| r > 0);
+
+        match (cols, rows) {
+            (Some(c), Some(r)) => (c as usize, r as usize),
+            (Some(c), None) => {
+                let cols = c as usize;
+                let (src_w, src_h) = self.effective_source_dims();
+                let dest_w = cols as f32 * cell_w as f32;
+                let dest_h = dest_w * src_h as f32 / src_w as f32;
+                let rows = (dest_h / cell_h as f32).ceil() as usize;
+                (cols, rows.max(1))
+            }
+            (None, Some(r)) => {
+                let rows = r as usize;
+                let (src_w, src_h) = self.effective_source_dims();
+                let dest_h = rows as f32 * cell_h as f32;
+                let dest_w = dest_h * src_w as f32 / src_h as f32;
+                let cols = (dest_w / cell_w as f32).ceil() as usize;
+                (cols.max(1), rows)
+            }
+            (None, None) => {
+                let (src_w, src_h) = self.effective_source_dims();
+                let c = src_w.div_ceil(cell_w) as usize;
+                let r = src_h.div_ceil(cell_h) as usize;
+                (c, r)
+            }
+        }
+    }
+
+    /// Effective source dimensions after applying any crop rectangle.
+    ///
+    /// Returns the crop width/height when specified; otherwise the full
+    /// image dimensions. Zero crop extents extend to the image edge per
+    /// the Kitty graphics protocol.
+    fn effective_source_dims(&self) -> (u32, u32) {
+        let src_x = self.placement.source_x;
+        let src_y = self.placement.source_y;
+        let img_w = self.width as u32;
+        let img_h = self.height as u32;
+        let src_w = if self.placement.source_width > 0 {
+            self.placement.source_width.min(img_w.saturating_sub(src_x))
+        } else {
+            img_w.saturating_sub(src_x)
         };
-        let rows = match self.placement.rows.filter(|&r| r > 0) {
-            Some(rows) => rows as usize,
-            None => (self.height as u32).div_ceil(cell_h) as usize,
+        let src_h = if self.placement.source_height > 0 {
+            self.placement
+                .source_height
+                .min(img_h.saturating_sub(src_y))
+        } else {
+            img_h.saturating_sub(src_y)
         };
-        (cols, rows)
+        (src_w.max(1), src_h.max(1))
     }
 
     /// Get RGBA color at pixel coordinates
@@ -488,12 +532,12 @@ impl TerminalGraphic {
     }
 
     /// Calculate height in terminal rows
-    pub fn height_in_rows(&self, cell_height: u32) -> usize {
-        if let Some(rows) = self.placement.rows.filter(|&rows| rows > 0) {
-            return rows as usize;
-        }
-        let cell_h = self.cell_dimensions.map(|(_, h)| h).unwrap_or(cell_height);
-        (self.height as u32).div_ceil(cell_h) as usize
+    ///
+    /// Delegates to [`cell_span`](Self::cell_span) so the omitted-axis aspect
+    /// logic is shared. Callers that don't know cell width pass 0; the stored
+    /// cell_dimensions or pixel-derived fallback then takes over.
+    pub fn height_in_rows(&self, fallback_cell_width: u32, fallback_cell_height: u32) -> usize {
+        self.cell_span(fallback_cell_width, fallback_cell_height).1
     }
 }
 
@@ -586,7 +630,7 @@ impl GraphicsStore {
             .iter()
             .filter(|g| {
                 let start_row = g.position.1;
-                let end_row = start_row + g.height_in_rows(2);
+                let end_row = start_row + g.height_in_rows(1, 2);
                 row >= start_row && row < end_row
             })
             .collect()
@@ -837,7 +881,7 @@ impl GraphicsStore {
 
         self.placements.retain_mut(|g| {
             let graphic_row = g.position.1;
-            let graphic_height_in_rows = g.height_in_rows(2);
+            let graphic_height_in_rows = g.height_in_rows(1, 2);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
             // Check if graphic is within the scroll region
@@ -875,7 +919,7 @@ impl GraphicsStore {
     pub fn adjust_for_scroll_down(&mut self, lines: usize, top: usize, bottom: usize) {
         for g in &mut self.placements {
             let graphic_row = g.position.1;
-            let graphic_height_in_rows = g.height_in_rows(2);
+            let graphic_height_in_rows = g.height_in_rows(1, 2);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
             // Graphic starts within scroll region
             if graphic_bottom > top && graphic_row >= top && graphic_row <= bottom {
@@ -1216,20 +1260,20 @@ mod tests {
     #[test]
     fn test_height_in_rows_exact() {
         let graphic = make_graphics_test_graphic(100, 50, 0, 0);
-        assert_eq!(graphic.height_in_rows(10), 5);
+        assert_eq!(graphic.height_in_rows(1, 10), 5);
     }
 
     #[test]
     fn test_height_in_rows_ceiling() {
         let graphic = make_graphics_test_graphic(100, 51, 0, 0);
-        assert_eq!(graphic.height_in_rows(10), 6);
+        assert_eq!(graphic.height_in_rows(1, 10), 6);
     }
 
     #[test]
     fn test_height_in_rows_uses_stored_cell_height() {
         let mut graphic = make_graphics_test_graphic(100, 50, 0, 0);
         graphic.set_cell_dimensions(10, 25);
-        assert_eq!(graphic.height_in_rows(10), 2);
+        assert_eq!(graphic.height_in_rows(1, 10), 2);
     }
 
     #[test]
@@ -1287,5 +1331,66 @@ mod tests {
         let graphic = make_graphics_test_graphic(10, 10, 0, 0);
         let result = graphic.sample_half_block(100, 100, 10, 10);
         assert!(result.is_none(), "out-of-bounds cell should return None");
+    }
+
+    /// 100×100 source, cell 10×20, c-only=5: dest_w=50px,
+    /// dest_h=50px (1:1 aspect), rows=ceil(50/20)=3.
+    #[test]
+    fn cell_span_c_only_computes_rows_from_aspect() {
+        let mut graphic = make_graphics_test_graphic(100, 100, 0, 0);
+        graphic.placement.columns = Some(5);
+        let (cols, rows) = graphic.cell_span(10, 20);
+        assert_eq!(cols, 5);
+        assert_eq!(rows, 3);
+    }
+
+    /// 100×100 source, cell 10×20, r-only=2: dest_h=40px,
+    /// dest_w=40px (1:1 aspect), cols=ceil(40/10)=4.
+    #[test]
+    fn cell_span_r_only_computes_cols_from_aspect() {
+        let mut graphic = make_graphics_test_graphic(100, 100, 0, 0);
+        graphic.placement.rows = Some(2);
+        let (cols, rows) = graphic.cell_span(10, 20);
+        assert_eq!(cols, 4);
+        assert_eq!(rows, 2);
+    }
+
+    /// 100×50 (2:1) cropped to 50×50 (1:1), cell 10×20, c-only=5:
+    /// effective source is 50×50, dest_w=50, dest_h=50, rows=3.
+    #[test]
+    fn cell_span_c_only_uses_cropped_source_aspect() {
+        let mut graphic = make_graphics_test_graphic(100, 50, 0, 0);
+        graphic.placement.columns = Some(5);
+        graphic.placement.source_width = 50;
+        graphic.placement.source_height = 50;
+        let (cols, rows) = graphic.cell_span(10, 20);
+        assert_eq!(cols, 5);
+        assert_eq!(rows, 3);
+    }
+
+    /// Crop exceeding image bounds is clamped: source_x=80 on 100px image
+    /// with source_width=0 (extend to edge) gives src_w=20.
+    #[test]
+    fn effective_source_dims_clamps_to_image_bounds() {
+        let mut graphic = make_graphics_test_graphic(100, 100, 0, 0);
+        graphic.placement.source_x = 80;
+        graphic.placement.source_y = 60;
+        graphic.placement.source_width = 0;
+        graphic.placement.source_height = 0;
+        let (sw, sh) = graphic.effective_source_dims();
+        assert_eq!(sw, 20);
+        assert_eq!(sh, 40);
+    }
+
+    /// 100×100 source cropped to 20×20 at (0,0), cell 10×20, no c/r:
+    /// footprint should be 2×1 cells (from 20×20), not 10×5 (from 100×100).
+    #[test]
+    fn cell_span_no_placement_uses_cropped_source_dims() {
+        let mut graphic = make_graphics_test_graphic(100, 100, 0, 0);
+        graphic.placement.source_width = 20;
+        graphic.placement.source_height = 20;
+        let (cols, rows) = graphic.cell_span(10, 20);
+        assert_eq!(cols, 2);
+        assert_eq!(rows, 1);
     }
 }

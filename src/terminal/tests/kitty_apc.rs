@@ -265,7 +265,7 @@ fn scaled_kitty_placement_uses_c_r_for_rows_and_scroll() {
     let graphic = &term.graphics.graphics_store.all_graphics()[0];
     assert_eq!(graphic.cell_dimensions, Some((5, 4)));
     assert_eq!(graphic.cell_span(5, 4), (2, 1));
-    assert_eq!(graphic.height_in_rows(4), 1);
+    assert_eq!(graphic.height_in_rows(1, 2), 1);
     assert_eq!(term.graphics_at_row(20).len(), 1);
     assert_eq!(term.graphics_at_row(21).len(), 0);
 
