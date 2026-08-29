@@ -2741,7 +2741,11 @@ impl Terminal {
                             .kitty_parser
                             .build_graphic(position, &mut self.graphics.graphics_store)
                         {
-                            Ok(crate::graphics::kitty::KittyGraphicResult::Graphic(graphic)) => {
+                            Ok(crate::graphics::kitty::KittyGraphicResult::Graphic(
+                                mut graphic,
+                            )) => {
+                                let (cell_width, cell_height) = self.graphics.cell_dimensions;
+                                graphic.set_cell_dimensions(cell_width, cell_height);
                                 self.graphics.graphics_store.add_graphic(graphic);
                             }
                             Ok(

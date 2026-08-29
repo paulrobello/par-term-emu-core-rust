@@ -430,12 +430,23 @@ impl TerminalGraphic {
     }
 
     /// Calculate how many terminal cells this graphic spans
+    ///
+    /// An explicit placement footprint wins over pixel-derived sizes: a Kitty
+    /// placement carrying `c=`/`r=` renders into exactly that many cells
+    /// regardless of its native pixel dimensions, so the span must too.
+    /// Zero values fall through to the pixel-derived computation.
     pub fn cell_span(&self, fallback_cell_width: u32, fallback_cell_height: u32) -> (usize, usize) {
         let (cell_w, cell_h) = self
             .cell_dimensions
             .unwrap_or((fallback_cell_width, fallback_cell_height));
-        let cols = (self.width as u32).div_ceil(cell_w) as usize;
-        let rows = (self.height as u32).div_ceil(cell_h) as usize;
+        let cols = match self.placement.columns.filter(|&c| c > 0) {
+            Some(cols) => cols as usize,
+            None => (self.width as u32).div_ceil(cell_w) as usize,
+        };
+        let rows = match self.placement.rows.filter(|&r| r > 0) {
+            Some(rows) => rows as usize,
+            None => (self.height as u32).div_ceil(cell_h) as usize,
+        };
         (cols, rows)
     }
 
@@ -478,6 +489,9 @@ impl TerminalGraphic {
 
     /// Calculate height in terminal rows
     pub fn height_in_rows(&self, cell_height: u32) -> usize {
+        if let Some(rows) = self.placement.rows.filter(|&rows| rows > 0) {
+            return rows as usize;
+        }
         let cell_h = self.cell_dimensions.map(|(_, h)| h).unwrap_or(cell_height);
         (self.height as u32).div_ceil(cell_h) as usize
     }
@@ -572,9 +586,7 @@ impl GraphicsStore {
             .iter()
             .filter(|g| {
                 let start_row = g.position.1;
-                // Default cell height of 2 for half-block rendering
-                let cell_height = g.cell_dimensions.map(|(_, h)| h as usize).unwrap_or(2);
-                let end_row = start_row + g.height.div_ceil(cell_height);
+                let end_row = start_row + g.height_in_rows(2);
                 row >= start_row && row < end_row
             })
             .collect()
@@ -825,8 +837,7 @@ impl GraphicsStore {
 
         self.placements.retain_mut(|g| {
             let graphic_row = g.position.1;
-            let cell_height = g.cell_dimensions.map(|(_, h)| h as usize).unwrap_or(2);
-            let graphic_height_in_rows = g.height.div_ceil(cell_height);
+            let graphic_height_in_rows = g.height_in_rows(2);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
 
             // Check if graphic is within the scroll region
@@ -864,10 +875,8 @@ impl GraphicsStore {
     pub fn adjust_for_scroll_down(&mut self, lines: usize, top: usize, bottom: usize) {
         for g in &mut self.placements {
             let graphic_row = g.position.1;
-            let cell_height = g.cell_dimensions.map(|(_, h)| h as usize).unwrap_or(2);
-            let graphic_height_in_rows = g.height.div_ceil(cell_height);
+            let graphic_height_in_rows = g.height_in_rows(2);
             let graphic_bottom = graphic_row + graphic_height_in_rows;
-
             // Graphic starts within scroll region
             if graphic_bottom > top && graphic_row >= top && graphic_row <= bottom {
                 let new_row = graphic_row + lines;

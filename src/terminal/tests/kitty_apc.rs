@@ -249,6 +249,36 @@ fn placeholder_cells_render_at_scale_quickly() {
 }
 
 #[test]
+fn scaled_kitty_placement_uses_c_r_for_rows_and_scroll() {
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(5, 4);
+    for _ in 0..20 {
+        term.process(b"\n");
+    }
+
+    // 20x12 RGB pixels (720 bytes, encoded as 960 base64 zero bytes) are
+    // deliberately larger than the explicit two-column, one-row footprint.
+    let payload = "A".repeat(960);
+    let apc = format!("\x1b_Ga=T,f=24,i=7,s=20,v=12,c=2,r=1;{}\x1b\\", payload);
+    term.process(apc.as_bytes());
+
+    let graphic = &term.graphics.graphics_store.all_graphics()[0];
+    assert_eq!(graphic.cell_dimensions, Some((5, 4)));
+    assert_eq!(graphic.cell_span(5, 4), (2, 1));
+    assert_eq!(graphic.height_in_rows(4), 1);
+    assert_eq!(term.graphics_at_row(20).len(), 1);
+    assert_eq!(term.graphics_at_row(21).len(), 0);
+
+    // A 21-line scroll fully removes the one-row placement. Pixel-derived
+    // math would incorrectly retain this native 3-row image.
+    term.graphics
+        .graphics_store
+        .adjust_for_scroll_up_with_scrollback(21, 0, 23, 0);
+    assert_eq!(term.graphics_count(), 0);
+    assert_eq!(term.graphics.graphics_store.scrollback_count(), 1);
+}
+
+#[test]
 fn non_kitty_apc_is_left_alone() {
     let mut term = Terminal::new(80, 24);
 
