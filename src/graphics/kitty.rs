@@ -160,10 +160,18 @@ pub struct KittyParser {
     pub columns: Option<u32>,
     /// Rows to display (for scaling)
     pub rows: Option<u32>,
-    /// X offset within cell
+    /// X offset within cell (uppercase X= key)
     pub x_offset: Option<u32>,
-    /// Y offset within cell
+    /// Y offset within cell (uppercase Y= key)
     pub y_offset: Option<u32>,
+    /// Source crop origin X in pixels (lowercase x= key)
+    pub source_x: Option<u32>,
+    /// Source crop origin Y in pixels (lowercase y= key)
+    pub source_y: Option<u32>,
+    /// Source crop width in pixels (lowercase w= key)
+    pub source_width: Option<u32>,
+    /// Source crop height in pixels (lowercase h= key)
+    pub source_height: Option<u32>,
     /// Compression format (o= parameter)
     pub compression: KittyCompression,
     /// More chunks expected
@@ -296,9 +304,21 @@ impl KittyParser {
                         }
                     }
                     "x" => {
-                        self.x_offset = value.parse().ok();
+                        self.source_x = value.parse().ok();
                     }
                     "y" => {
+                        self.source_y = value.parse().ok();
+                    }
+                    "w" => {
+                        self.source_width = value.parse().ok();
+                    }
+                    "h" => {
+                        self.source_height = value.parse().ok();
+                    }
+                    "X" => {
+                        self.x_offset = value.parse().ok();
+                    }
+                    "Y" => {
                         self.y_offset = value.parse().ok();
                     }
                     "m" => {
@@ -407,8 +427,8 @@ impl KittyParser {
                 'p' | 'P' => self
                     .image_id
                     .map(|iid| KittyDeleteTarget::ByPlacement(iid, self.placement_id)),
-                'x' | 'X' => self.x_offset.map(KittyDeleteTarget::ByColumn),
-                'y' | 'Y' => self.y_offset.map(KittyDeleteTarget::ByRow),
+                'x' | 'X' => self.source_x.map(KittyDeleteTarget::ByColumn),
+                'y' | 'Y' => self.source_y.map(KittyDeleteTarget::ByRow),
                 _ => None,
             };
         }
@@ -466,10 +486,21 @@ impl KittyParser {
             placement.z_index = z;
         }
 
+        if let Some(x) = self.source_x {
+            placement.source_x = x;
+        }
+        if let Some(y) = self.source_y {
+            placement.source_y = y;
+        }
+        if let Some(width) = self.source_width {
+            placement.source_width = width;
+        }
+        if let Some(height) = self.source_height {
+            placement.source_height = height;
+        }
         if let Some(x) = self.x_offset {
             placement.x_offset = x;
         }
-
         if let Some(y) = self.y_offset {
             placement.y_offset = y;
         }
@@ -730,8 +761,8 @@ impl KittyParser {
                     frame = frame.with_delay(delay);
                 }
 
-                if let Some(x) = self.x_offset {
-                    if let Some(y) = self.y_offset {
+                if let Some(x) = self.source_x {
+                    if let Some(y) = self.source_y {
                         frame = frame.with_offset(x, y);
                     }
                 }
@@ -1383,10 +1414,16 @@ mod tests {
     #[test]
     fn test_kitty_build_placement_with_offsets() {
         let mut parser = KittyParser::new();
-        parser.parse_chunk("a=T,f=100,x=5,y=3;").unwrap();
+        parser
+            .parse_chunk("a=T,f=100,x=5,y=3,w=40,h=20,X=7,Y=9;")
+            .unwrap();
         let placement = parser.build_placement();
-        assert_eq!(placement.x_offset, 5);
-        assert_eq!(placement.y_offset, 3);
+        assert_eq!(placement.source_x, 5);
+        assert_eq!(placement.source_y, 3);
+        assert_eq!(placement.source_width, 40);
+        assert_eq!(placement.source_height, 20);
+        assert_eq!(placement.x_offset, 7);
+        assert_eq!(placement.y_offset, 9);
     }
 
     #[test]
@@ -1415,7 +1452,7 @@ mod tests {
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &pixel_data);
 
         let mut parser = KittyParser::new();
-        let payload = format!("a=T,f=32,s=2,v=2,c=10,r=5,x=2,y=3;{}", b64_data);
+        let payload = format!("a=T,f=32,s=2,v=2,c=10,r=5,X=2,Y=3;{}", b64_data);
         parser.parse_chunk(&payload).unwrap();
 
         let mut store = GraphicsStore::new();
@@ -1668,8 +1705,35 @@ mod tests {
     fn test_parse_chunk_x_y_offsets_parsed() {
         let mut parser = KittyParser::new();
         let _ = parser.parse_chunk("a=T,x=15,y=25;");
-        assert_eq!(parser.x_offset, Some(15));
-        assert_eq!(parser.y_offset, Some(25));
+        assert_eq!(parser.source_x, Some(15));
+        assert_eq!(parser.source_y, Some(25));
+        let _ = parser.parse_chunk("X=35,Y=45;");
+        assert_eq!(parser.x_offset, Some(35));
+        assert_eq!(parser.y_offset, Some(45));
+    }
+
+    #[test]
+    fn test_parse_chunk_herdr_scrambled_field_order() {
+        // Emitters disagree on key order (Herdr interleaves identifying and
+        // display params). Every field must parse regardless of position.
+        let mut parser = KittyParser::new();
+        let _ = parser
+            .parse_chunk("a=T,Y=9,X=7,h=20,w=40,y=3,x=5,r=5,c=10,s=11,v=13,i=9,p=2,z=3,q=1,U=0;");
+        assert_eq!(parser.image_id, Some(9));
+        assert_eq!(parser.placement_id, Some(2));
+        assert_eq!(parser.width, Some(11));
+        assert_eq!(parser.height, Some(13));
+        assert_eq!(parser.columns, Some(10));
+        assert_eq!(parser.rows, Some(5));
+        assert_eq!(parser.source_x, Some(5));
+        assert_eq!(parser.source_y, Some(3));
+        assert_eq!(parser.source_width, Some(40));
+        assert_eq!(parser.source_height, Some(20));
+        assert_eq!(parser.x_offset, Some(7));
+        assert_eq!(parser.y_offset, Some(9));
+        assert_eq!(parser.z_index, Some(3));
+        assert_eq!(parser.quietness, 1);
+        assert!(!parser.is_virtual);
     }
 
     #[test]
@@ -1821,15 +1885,15 @@ mod tests {
         let _ = p.parse_chunk("d=i;");
         assert_eq!(p.delete_target, Some(KittyDeleteTarget::ById(7)));
 
-        // d=x -> ByColumn(x_offset)
+        // d=x -> ByColumn(source_x)
         let mut p = KittyParser::new();
-        p.x_offset = Some(3);
+        p.source_x = Some(3);
         let _ = p.parse_chunk("d=x;");
         assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByColumn(3)));
 
-        // d=y -> ByRow(y_offset)
+        // d=y -> ByRow(source_y)
         let mut p = KittyParser::new();
-        p.y_offset = Some(9);
+        p.source_y = Some(9);
         let _ = p.parse_chunk("d=y;");
         assert_eq!(p.delete_target, Some(KittyDeleteTarget::ByRow(9)));
 
@@ -1979,6 +2043,42 @@ mod tests {
             KittyGraphicResult::Graphic(g) => store.add_graphic(g),
             other => panic!("transmit_and_add expected Graphic, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_repeated_nonzero_placement_pair_replaces() {
+        // A repeated nonzero (image_id, placement_id) pair is an upsert:
+        // the second display replaces the first in place.
+        let mut store = GraphicsStore::new();
+        transmit_and_add(&mut store, 5, Some(3), (0, 0));
+        transmit_and_add(&mut store, 5, Some(3), (4, 2));
+        assert_eq!(store.placements.len(), 1);
+        assert_eq!(store.placements[0].position, (4, 2));
+        assert_eq!(store.placements[0].kitty_image_id, Some(5));
+        assert_eq!(store.placements[0].kitty_placement_id, Some(3));
+    }
+
+    #[test]
+    fn test_zero_and_omitted_placement_ids_coexist_full_pipeline() {
+        let mut store = GraphicsStore::new();
+        // Omitted p= — each display of the same image is a new placement.
+        transmit_and_add(&mut store, 5, None, (0, 0));
+        transmit_and_add(&mut store, 5, None, (1, 0));
+        assert_eq!(store.placements.len(), 2);
+        // Explicit p=0 is equally non-unique and coexists.
+        transmit_and_add(&mut store, 5, Some(0), (2, 0));
+        assert_eq!(store.placements.len(), 3);
+        // Distinct nonzero placement ids under the same image coexist.
+        transmit_and_add(&mut store, 5, Some(3), (3, 0));
+        transmit_and_add(&mut store, 5, Some(4), (4, 0));
+        assert_eq!(store.placements.len(), 5);
+        // Re-sending (5, 4) replaces only that placement.
+        transmit_and_add(&mut store, 5, Some(4), (9, 9));
+        assert_eq!(store.placements.len(), 5);
+        assert!(store
+            .placements
+            .iter()
+            .any(|g| g.position == (9, 9) && g.kitty_placement_id == Some(4)));
     }
 
     #[test]
@@ -2180,7 +2280,7 @@ mod tests {
         let _ = tx.build_graphic((0, 0), &mut store).unwrap();
 
         let mut put = KittyParser::new();
-        put.parse_chunk("a=p,i=5,z=7,x=1,y=2;").unwrap();
+        put.parse_chunk("a=p,i=5,z=7,X=1,Y=2;").unwrap();
         let result = put.build_graphic((9, 9), &mut store).unwrap();
         match result {
             KittyGraphicResult::Graphic(g) => {
@@ -2547,8 +2647,8 @@ mod tests {
             KittyGraphicResult::Graphic(g) => {
                 assert_eq!(g.kitty_image_id, Some(77));
                 assert_eq!(g.position, (3, 4));
-                assert_eq!(g.placement.x_offset, 1);
-                assert_eq!(g.placement.y_offset, 2);
+                assert_eq!(g.placement.x_offset, 0);
+                assert_eq!(g.placement.y_offset, 0);
                 // x= was also used for frame offset
             }
             other => panic!("Expected Graphic for frame 1, got {:?}", other),

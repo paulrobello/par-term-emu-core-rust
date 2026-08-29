@@ -734,6 +734,10 @@ mod tests {
             z_index: -1,
             x_offset: 2,
             y_offset: 3,
+            source_x: 4,
+            source_y: 5,
+            source_width: 80,
+            source_height: 40,
         };
 
         let sg = SerializableGraphic::from(&g);
@@ -761,5 +765,30 @@ mod tests {
         assert_eq!(restored.placement.z_index, -1);
         assert_eq!(restored.placement.x_offset, 2);
         assert_eq!(restored.placement.y_offset, 3);
+        assert_eq!(restored.placement.source_x, 4);
+        assert_eq!(restored.placement.source_y, 5);
+        assert_eq!(restored.placement.source_width, 80);
+        assert_eq!(restored.placement.source_height, 40);
+    }
+
+    #[test]
+    fn test_placement_json_without_source_fields_uses_defaults() {
+        // Snapshots written before the source-crop fields existed must still
+        // deserialize: #[serde(default)] fills 0 (full-image crop) values.
+        let mut g = create_test_graphic();
+        g.placement.x_offset = 2;
+        let sg = SerializableGraphic::from(&g);
+        let mut value = serde_json::to_value(&sg).unwrap();
+        let placement = value.get_mut("placement").expect("placement field");
+        for key in ["source_x", "source_y", "source_width", "source_height"] {
+            placement.as_object_mut().unwrap().remove(key);
+        }
+        let deserialized: SerializableGraphic = serde_json::from_value(value).unwrap();
+        let restored = deserialized.to_terminal_graphic().unwrap();
+        assert_eq!(restored.placement.source_x, 0);
+        assert_eq!(restored.placement.source_y, 0);
+        assert_eq!(restored.placement.source_width, 0);
+        assert_eq!(restored.placement.source_height, 0);
+        assert_eq!(restored.placement.x_offset, 2);
     }
 }

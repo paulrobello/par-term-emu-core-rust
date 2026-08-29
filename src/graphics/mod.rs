@@ -162,10 +162,22 @@ pub struct ImagePlacement {
     pub rows: Option<u32>,
     /// Z-index for layering (Kitty z= parameter, 0 = default)
     pub z_index: i32,
-    /// X offset within the cell in pixels (Kitty x= parameter)
+    /// X offset within the cell in pixels (Kitty X= parameter)
     pub x_offset: u32,
-    /// Y offset within the cell in pixels (Kitty y= parameter)
+    /// Y offset within the cell in pixels (Kitty Y= parameter)
     pub y_offset: u32,
+    /// Source crop origin X in pixels (Kitty x= parameter; 0 = left edge)
+    #[serde(default)]
+    pub source_x: u32,
+    /// Source crop origin Y in pixels (Kitty y= parameter; 0 = top edge)
+    #[serde(default)]
+    pub source_y: u32,
+    /// Source crop width in pixels (Kitty w= parameter; 0 = to right edge)
+    #[serde(default)]
+    pub source_width: u32,
+    /// Source crop height in pixels (Kitty h= parameter; 0 = to bottom edge)
+    #[serde(default)]
+    pub source_height: u32,
 }
 
 impl ImagePlacement {
@@ -522,11 +534,27 @@ impl GraphicsStore {
         }
     }
 
-    /// Add a graphic placement
+    /// Add a graphic placement.
+    ///
+    /// Kitty placements with explicit nonzero image and placement IDs are
+    /// upserts: redisplaying the same pair replaces it in place. A zero
+    /// placement ID is intentionally non-unique and always coexists.
     pub fn add_graphic(&mut self, graphic: TerminalGraphic) {
-        // Enforce placement limit
+        if let (Some(image_id), Some(placement_id)) =
+            (graphic.kitty_image_id, graphic.kitty_placement_id)
+        {
+            if image_id != 0 && placement_id != 0 {
+                if let Some(existing) = self.placements.iter_mut().find(|existing| {
+                    existing.kitty_image_id == Some(image_id)
+                        && existing.kitty_placement_id == Some(placement_id)
+                }) {
+                    *existing = graphic;
+                    return;
+                }
+            }
+        }
+
         if self.placements.len() >= self.limits.max_graphics_count {
-            // Remove oldest placement
             self.placements.remove(0);
             self.dropped_count += 1;
         }
@@ -1070,9 +1098,55 @@ mod tests {
         assert!(!placement.preserve_aspect_ratio); // Default struct is false
         assert_eq!(placement.z_index, 0);
         assert_eq!(placement.x_offset, 0);
-        assert_eq!(placement.y_offset, 0);
-        assert!(placement.columns.is_none());
+        assert_eq!(placement.source_x, 0);
+        assert_eq!(placement.source_y, 0);
+        assert_eq!(placement.source_width, 0);
+        assert_eq!(placement.source_height, 0);
         assert!(placement.rows.is_none());
+    }
+
+    #[test]
+    fn test_graphics_store_upserts_explicit_kitty_placement() {
+        let mut store = GraphicsStore::new();
+        let mut first = TerminalGraphic::new(1, GraphicProtocol::Kitty, (1, 0), 1, 1, vec![1; 4]);
+        first.kitty_image_id = Some(42);
+        first.kitty_placement_id = Some(7);
+        store.add_graphic(first);
+        let mut replacement =
+            TerminalGraphic::new(2, GraphicProtocol::Kitty, (5, 0), 1, 1, vec![2; 4]);
+        replacement.kitty_image_id = Some(42);
+        replacement.kitty_placement_id = Some(7);
+        store.add_graphic(replacement);
+        assert_eq!(store.graphics_count(), 1);
+        assert_eq!(store.all_graphics()[0].id, 2);
+        assert_eq!(store.all_graphics()[0].position, (5, 0));
+    }
+
+    #[test]
+    fn test_graphics_store_zero_kitty_placement_ids_coexist() {
+        let mut store = GraphicsStore::new();
+        for id in [1, 2] {
+            let mut graphic = TerminalGraphic::new(
+                id,
+                GraphicProtocol::Kitty,
+                (id as usize, 0),
+                1,
+                1,
+                vec![1; 4],
+            );
+            graphic.kitty_image_id = Some(42);
+            graphic.kitty_placement_id = Some(0);
+            store.add_graphic(graphic);
+        }
+        assert_eq!(store.graphics_count(), 2);
+        assert_eq!(
+            store
+                .all_graphics()
+                .iter()
+                .map(|g| g.id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]
