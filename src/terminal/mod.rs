@@ -2693,20 +2693,29 @@ impl Terminal {
         // below doesn't alias a `&mut self` borrow.
         let mut passthrough = std::mem::take(&mut self.apc_passthrough);
         passthrough.clear();
-        let mut completed_payloads: Vec<Vec<u8>> = Vec::new();
+        // Record (passthrough_offset, payload) pairs so each APC is processed
+        // with the cursor state produced by the passthrough bytes that
+        // precede it in the stream (e.g. Herdr's CSI row;col H before each a=p).
+        let mut completed_with_offsets: Vec<(usize, Vec<u8>)> = Vec::new();
 
         apc_filter::feed(
             &mut self.apc_filter_state,
             &mut self.apc_buffer,
             data,
             &mut passthrough,
-            |apc| {
-                completed_payloads.push(apc.payload.to_vec());
+            |apc, offset| {
+                completed_with_offsets.push((offset, apc.payload.to_vec()));
             },
         );
 
-        // Process completed Kitty APC payloads.
-        for payload_bytes in completed_payloads {
+        // Process each APC with the cursor state from its preceding
+        // passthrough bytes, then advance the remaining tail.
+        let mut prev_offset = 0;
+        for (offset, payload_bytes) in completed_with_offsets {
+            if offset > prev_offset {
+                self.advance_parser(&passthrough[prev_offset..offset]);
+            }
+            prev_offset = offset;
             // Kitty payloads are ASCII text (key=value pairs + base64). Any
             // non-UTF-8 byte indicates a malformed APC; reset and skip.
             let payload = match std::str::from_utf8(&payload_bytes) {
@@ -2766,10 +2775,10 @@ impl Terminal {
             }
         }
 
-        // Feed the non-APC byte stream to vte, then return the (capacity-reused)
-        // buffer to the field for the next call.
-        if !passthrough.is_empty() {
-            self.advance_parser(&passthrough);
+        // Feed the remaining passthrough tail to vte, then return the
+        // (capacity-reused) buffer to the field for the next call.
+        if prev_offset < passthrough.len() {
+            self.advance_parser(&passthrough[prev_offset..]);
         }
         self.apc_passthrough = passthrough;
     }

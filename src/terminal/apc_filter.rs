@@ -58,7 +58,7 @@ pub(crate) fn feed<F>(
     passthrough: &mut Vec<u8>,
     mut on_kitty: F,
 ) where
-    F: FnMut(CompletedKittyApc<'_>),
+    F: FnMut(CompletedKittyApc<'_>, usize),
 {
     for &byte in data {
         match *state {
@@ -111,9 +111,12 @@ pub(crate) fn feed<F>(
                 }
                 0x9c => {
                     // 8-bit ST: terminate Kitty APC.
-                    on_kitty(CompletedKittyApc {
-                        payload: apc_buffer.as_slice(),
-                    });
+                    on_kitty(
+                        CompletedKittyApc {
+                            payload: apc_buffer.as_slice(),
+                        },
+                        passthrough.len(),
+                    );
                     *state = ApcFilterState::Outside;
                 }
                 other => {
@@ -123,9 +126,12 @@ pub(crate) fn feed<F>(
             ApcFilterState::InKittyApcSawEsc => match byte {
                 b'\\' => {
                     // 7-bit ST: terminate Kitty APC.
-                    on_kitty(CompletedKittyApc {
-                        payload: apc_buffer.as_slice(),
-                    });
+                    on_kitty(
+                        CompletedKittyApc {
+                            payload: apc_buffer.as_slice(),
+                        },
+                        passthrough.len(),
+                    );
                     *state = ApcFilterState::Outside;
                 }
                 0x1b => {
@@ -155,7 +161,7 @@ mod tests {
         let mut pass = Vec::new();
         let mut completed: Vec<Vec<u8>> = Vec::new();
         for chunk in chunks {
-            feed(&mut state, &mut buf, chunk, &mut pass, |apc| {
+            feed(&mut state, &mut buf, chunk, &mut pass, |apc, _offset| {
                 completed.push(apc.payload.to_vec());
             });
         }

@@ -598,28 +598,6 @@ impl GraphicsStore {
     /// upserts: redisplaying the same pair replaces it in place. A zero
     /// placement ID is intentionally non-unique and always coexists.
     pub fn add_graphic(&mut self, graphic: TerminalGraphic) {
-        log::debug!(
-            "[STORE] add_graphic: id={}, protocol={:?}, kitty_img={:?}, kitty_pid={:?}, pos=({},{}), size={}x{}, cols={:?} rows={:?} z={} x_off={} y_off={} src=({},{},{},{}) preserve={} mode={:?}",
-            graphic.id,
-            graphic.protocol,
-            graphic.kitty_image_id,
-            graphic.kitty_placement_id,
-            graphic.position.0,
-            graphic.position.1,
-            graphic.width,
-            graphic.height,
-            graphic.placement.columns,
-            graphic.placement.rows,
-            graphic.placement.z_index,
-            graphic.placement.x_offset,
-            graphic.placement.y_offset,
-            graphic.placement.source_x,
-            graphic.placement.source_y,
-            graphic.placement.source_width,
-            graphic.placement.source_height,
-            graphic.placement.preserve_aspect_ratio,
-            graphic.placement.display_mode,
-        );
         // Exact (image_id, placement_id) upsert.
         if let (Some(image_id), Some(placement_id)) =
             (graphic.kitty_image_id, graphic.kitty_placement_id)

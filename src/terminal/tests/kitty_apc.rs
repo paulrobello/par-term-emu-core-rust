@@ -299,3 +299,35 @@ fn non_kitty_apc_is_left_alone() {
     let cell = grid.get(0, 0).unwrap();
     assert_eq!(cell.c, ' ');
 }
+
+/// Herdr sends `CSI row;col H` before each `a=p` APC. The APC filter must
+/// advance the passthrough bytes (cursor moves) that precede each APC so
+/// slices at different rows get distinct terminal positions.
+#[test]
+fn interleaved_cursor_moves_produce_distinct_graphic_rows() {
+    let mut term = Terminal::new(80, 24);
+
+    // Transmit a 2×4 image (24 bytes RGB → 32 base64 chars).
+    term.process(b"\x1b_Ga=t,f=24,i=9,s=2,v=4;AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\x1b\\");
+
+    // Two placement APCs, each preceded by a cursor move to a different row.
+    // Stream: CSI 5;10H → a=p(y=0,h=2) → CSI 7;10H → a=p(y=2,h=2)
+    term.process(
+        b"\x1b[5;10H\x1b_Ga=p,i=9,p=1,c=2,r=1,y=0,h=2\x1b\\\
+          \x1b[7;10H\x1b_Ga=p,i=9,p=2,c=2,r=1,y=2,h=2\x1b\\",
+    );
+
+    let graphics = term.graphics.graphics_store.all_graphics();
+    assert_eq!(graphics.len(), 2, "two slices should be stored");
+
+    // Slice 1 should be at row 4 (0-indexed from CSI row 5).
+    assert_eq!(
+        graphics[0].position.1, 4,
+        "first slice should be at row 4 (CSI row 5, 0-indexed)"
+    );
+    // Slice 2 should be at row 6 (0-indexed from CSI row 7).
+    assert_eq!(
+        graphics[1].position.1, 6,
+        "second slice should be at row 6 (CSI row 7, 0-indexed)"
+    );
+}

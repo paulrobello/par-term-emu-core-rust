@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Kitty APCs now process in stream order with interleaved cursor movements** (`src/terminal/apc_filter.rs`, `src/terminal/mod.rs`). The APC pre-filter previously collected all completed Kitty payloads and processed them after the entire passthrough byte stream was fed to the VTE parser. This meant `CSI row;col H` cursor moves emitted by clients like Herdr before each `a=p` placement were applied only after all placements had already been built, stacking every image slice at a single terminal position. The filter now records the passthrough offset at each APC completion and the terminal advances each intervening passthrough slice before building that graphic, so slices land at their intended consecutive rows. Regression test added covering interleaved `CSI H` + APC pairs asserting distinct graphic rows.
+
 ## [0.47.0] - 2026-08-28
 
 ### Security
