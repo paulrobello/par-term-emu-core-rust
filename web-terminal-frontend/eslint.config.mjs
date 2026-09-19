@@ -39,6 +39,15 @@ const config = [
       "react-hooks/preserve-manual-memoization": "warn",
     },
   },
+  {
+    // next.config.js reads package.json via require() for a deterministic
+    // build ID (see the comment there). CommonJS in a config file is
+    // legitimate, so exempt just this file from the require-import rule.
+    files: ["next.config.js"],
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+    },
+  },
 ];
 
 export default config;
