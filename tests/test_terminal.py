@@ -2441,5 +2441,42 @@ def test_bce_default_bg_is_black():
     assert bg_erased == (0, 0, 0), f"Default bg should be black, got {bg_erased}"
 
 
+def test_kitty_placement_advances_cursor():
+    """A default Kitty a=p placement moves the cursor to the first line below
+    the image (Kitty TGP cursor movement), spanning the placement's rows"""
+    term = Terminal(40, 10)
+    # 1x5 RGB image spans 3 rows under the default (1x2) cell dimensions
+    # (15 bytes -> 20 base64 chars)
+    term.process_str("\x1b_Ga=t,f=24,i=5,s=1,v=5;" + "A" * 20 + "\x1b\\")
+    assert term.cursor_position() == (0, 0), "transmit alone must not move the cursor"
+    term.process_str("\x1b_Ga=p,i=5\x1b\\")
+    assert term.cursor_position() == (0, 3), (
+        f"cursor should land on the first line below the 3-row image, got {term.cursor_position()}"
+    )
+
+
+def test_kitty_placement_C1_suppresses_cursor_move():
+    """C=1 suppresses the post-placement cursor move; C=0 keeps the default"""
+    term = Terminal(40, 10)
+    # 1x5 image spans 3 rows under default cell dimensions
+    term.process_str("\x1b_Ga=t,f=24,i=5,s=1,v=5;" + "A" * 20 + "\x1b\\")
+
+    term.process_str("\x1b_Ga=p,i=5,C=1\x1b\\")
+    assert term.cursor_position() == (0, 0), "C=1 must suppress the cursor move"
+    assert term.graphics_count() == 1, "C=1 suppresses only the move, not the placement"
+
+    term.process_str("\x1b_Ga=p,i=5,C=0\x1b\\")
+    assert term.cursor_position() == (0, 3), "C=0 keeps the default advance"
+
+
+def test_kitty_virtual_placement_does_not_advance_cursor():
+    """U=1 virtual placements occupy placeholder cells but never move the cursor"""
+    term = Terminal(40, 10)
+    # 1x5 image spans 3 rows under default cell dimensions
+    term.process_str("\x1b_Ga=t,f=24,i=5,s=1,v=5;" + "A" * 20 + "\x1b\\")
+    term.process_str("\x1b_Ga=p,i=5,U=1,c=2,r=2\x1b\\")
+    assert term.cursor_position() == (0, 0), "U=1 placement must not move the cursor"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

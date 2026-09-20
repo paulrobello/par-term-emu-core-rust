@@ -2755,7 +2755,21 @@ impl Terminal {
                             )) => {
                                 let (cell_width, cell_height) = self.graphics.cell_dimensions;
                                 graphic.set_cell_dimensions(cell_width, cell_height);
+                                let span_rows = graphic.cell_span(cell_width, cell_height).1;
                                 self.graphics.graphics_store.add_graphic(graphic);
+                                if !self.kitty_parser.suppress_cursor_move {
+                                    // Kitty TGP: a placement at the cursor moves it
+                                    // to the first line below the image unless C=1
+                                    // suppresses the move. Written through the
+                                    // normal newline path so the scroll region and
+                                    // scrollback promotion apply exactly as they
+                                    // do for a multi-row text write. Virtual
+                                    // placements (U=1) never move the cursor.
+                                    for _ in 0..span_rows {
+                                        self.write_char('\n');
+                                    }
+                                    self.write_char('\r');
+                                }
                             }
                             Ok(
                                 crate::graphics::kitty::KittyGraphicResult::VirtualPlacement {

@@ -208,6 +208,9 @@ pub struct KittyParser {
     /// 1 = suppress OK reply only
     /// 2 = suppress all replies
     pub quietness: u8,
+    /// C=1: do not move the cursor after displaying the image (Kitty TGP).
+    /// C=0 or omitted uses the default (cursor moves).
+    pub suppress_cursor_move: bool,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -375,6 +378,12 @@ impl KittyParser {
                         if let Ok(level) = value.parse::<u8>() {
                             self.quietness = level;
                         }
+                    }
+                    "C" => {
+                        // C=1: do not move the cursor after display; C=0 or
+                        // omitted keeps the default (cursor advances below
+                        // the image) — terminal layer applies the move.
+                        self.suppress_cursor_move = value == "1";
                     }
                     _ => {}
                 }
@@ -1047,6 +1056,30 @@ mod tests {
         assert_eq!(parser.action, KittyAction::TransmitDisplay);
         assert_eq!(parser.format, KittyFormat::Png);
         assert_eq!(parser.image_id, Some(1));
+    }
+
+    #[test]
+    fn test_kitty_parser_c_key_controls_cursor_movement_flag() {
+        let mut parser = KittyParser::new();
+        parser.parse_chunk("a=p,i=1").unwrap();
+        assert!(
+            !parser.suppress_cursor_move,
+            "omitted C= keeps the default (cursor moves)"
+        );
+
+        parser.reset();
+        parser.parse_chunk("a=p,i=1,C=1").unwrap();
+        assert!(
+            parser.suppress_cursor_move,
+            "C=1 suppresses the cursor move"
+        );
+
+        parser.reset();
+        parser.parse_chunk("a=p,i=1,C=0").unwrap();
+        assert!(
+            !parser.suppress_cursor_move,
+            "C=0 keeps the default (cursor moves)"
+        );
     }
 
     #[test]

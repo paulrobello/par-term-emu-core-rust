@@ -1154,8 +1154,14 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 **Other:**
 - `U=1` - Virtual placement (Unicode placeholder mode)
 - `o=z` - Compression (z=zlib)
+- `C=1` - Suppress cursor movement after display (default: cursor advances below the image)
 
 #### Features
+
+**Cursor Movement:**
+- After a display placement (`a=T`/`a=p`), the cursor moves to the first line below the image, spanning the placement's row count (via `c=`/`r=` footprint or pixel-derived size)
+- `C=1` suppresses the move; virtual placements (`U=1`) never move the cursor
+- The advance flows through the ordinary newline path, so the scroll region and scrollback promotion apply exactly as for a multi-row text write
 
 **Image Reuse:**
 - Images transmitted with `a=t` are stored by ID

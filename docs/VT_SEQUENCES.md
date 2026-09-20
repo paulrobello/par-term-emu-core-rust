@@ -514,6 +514,9 @@ Kitty graphics protocol support for modern terminal graphics with animation, com
 - Virtual placements and relative positioning
 - Zlib compression (`o=z`)
 - Z-index layering
+- Cursor movement: after a display placement (`a=T`/`a=p`), the cursor moves to
+  the first line below the image (spanning the placement's row count). `C=1`
+  suppresses the move; virtual placements (`U=1`) never move it.
 
 > See [Kitty Graphics Protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/) for complete specification.
 
