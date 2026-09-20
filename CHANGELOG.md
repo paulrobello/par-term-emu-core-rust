@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **DECSDM sixel display mode (`CSI ? 80 h/l`) is now implemented** (`src/terminal/mod.rs`, `src/terminal/sequences/csi/mode.rs`, `src/terminal/sequences/csi/report.rs`, `src/terminal/sequences/dcs/mod.rs`). Previously mode 80 fell through to the unsupported-DECSET log; now set (display mode) paints sixel graphics at the home position without scrolling or moving the cursor, while reset (scrolling mode, the default and unchanged behavior) paints at the cursor with the existing cursor advance. DECRQM reports mode 80, and DECSTR/RIS restore the default. Legacy sixel emulators that assume display placement (xterm/mlterm/WezTerm semantics) now position correctly.
 - **Kitty placements now advance the cursor below the image** (`src/graphics/kitty.rs`, `src/terminal/mod.rs`). A display placement (`a=T`/`a=p`) at the cursor moves it to the first line below the image, spanning the placement's row count via the ordinary newline path — the scroll region and scrollback promotion apply exactly as for a multi-row text write. The `C=1` key suppresses the move (previously `C=` was silently dropped by the parser and the cursor never advanced, which broke layout for emitters like chafa); `C=0` or an omitted `C=` keeps the default, and virtual placements (`U=1`) never move the cursor, matching kitty's own rule for unicode placements.
 
 ## [0.48.0] - 2026-08-30

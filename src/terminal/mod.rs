@@ -600,6 +600,10 @@ pub(crate) struct TerminalModes {
     pub(crate) focus_tracking: bool,
     /// DECSACE extent for DECCARA/DECRARA attribute changes
     pub(crate) attribute_change_extent: AttributeChangeExtent,
+    /// Sixel Display Mode (DECSDM, DECSET 80): when set, sixel graphics paint
+    /// at the home position without scrolling; when reset (the default),
+    /// they paint at the cursor with the scrolling-mode cursor advance.
+    pub(crate) sixel_display_mode: bool,
 }
 
 /// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
@@ -1015,6 +1019,7 @@ impl Terminal {
                 mouse_encoding: MouseEncoding::Default,
                 focus_tracking: false,
                 attribute_change_extent: AttributeChangeExtent::Rectangle,
+                sixel_display_mode: false,
             },
             tab_stops,
             keyboard_state: KeyboardState {

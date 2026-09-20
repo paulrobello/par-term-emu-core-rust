@@ -2478,5 +2478,49 @@ def test_kitty_virtual_placement_does_not_advance_cursor():
     assert term.cursor_position() == (0, 0), "U=1 placement must not move the cursor"
 
 
+def test_decsdm_scrolling_mode_places_at_cursor():
+    """Default (DECSDM reset): sixel paints at the cursor and the cursor
+    advances below the image — the long-standing behavior"""
+    term = Terminal(40, 10)
+    term.process_str("\x1b[6;11H")
+    term.process_str("\x1bPq????\x1b\\")
+    assert term.graphics_count() == 1
+    g = term.graphics_at_row(5)[0]
+    assert g.position == (10, 5), f"expected cursor placement, got {g.position}"
+    assert term.cursor_position() == (0, 6), "cursor advances below the image"
+
+
+def test_decsdm_display_mode_places_at_home():
+    """DECSET 80: sixel paints at the home position without moving the cursor"""
+    term = Terminal(40, 10)
+    term.process_str("\x1b[?80h")
+    term.process_str("\x1b[6;11H")
+    term.process_str("\x1bPq????\x1b\\")
+    assert term.graphics_count() == 1
+    g = term.graphics_at_row(0)[0]
+    assert g.position == (0, 0), f"expected home placement, got {g.position}"
+    assert term.cursor_position() == (10, 5), "display mode must not move the cursor"
+
+
+def test_decsdm_decrqm_report_and_resets():
+    """DECSDM is reported by DECRQM and reset by DECSTR/RIS"""
+    term = Terminal(40, 10)
+    term.process_str("\x1b[?80$p")
+    assert term.drain_responses() == b"\x1b[?80;2$y"
+
+    term.process_str("\x1b[?80h")
+    term.process_str("\x1b[?80$p")
+    assert term.drain_responses() == b"\x1b[?80;1$y"
+
+    term.process_str("\x1b[?80l\x1b[?80$p")
+    assert term.drain_responses() == b"\x1b[?80;2$y"
+
+    term.process_str("\x1b[?80h\x1b[!p\x1b[?80$p")
+    assert term.drain_responses() == b"\x1b[?80;2$y", "DECSTR resets DECSDM"
+
+    term.process_str("\x1b[?80h\x1bc\x1b[?80$p")
+    assert term.drain_responses() == b"\x1b[?80;2$y", "RIS resets DECSDM"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
