@@ -38,6 +38,35 @@ impl PyTerminal {
         }
     }
 
+    /// Export recording to asciicast v3 format
+    ///
+    /// v3 uses a nested `term` header object, relative per-event intervals,
+    /// and `"COLSxROWS"` resize data. A `g` graphics event is emitted per
+    /// graphic in the store (live placements and scrollback promotions)
+    /// carrying protocol, geometry, position and base64 RGBA pixels.
+    ///
+    /// Args:
+    ///     session: RecordingSession from stop_recording()
+    ///
+    /// Returns:
+    ///     Asciicast v3 format string
+    #[pyo3(signature = (session=None))]
+    fn export_asciicast_v3(
+        &self,
+        session: Option<&crate::python_bindings::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            Ok(self.inner.export_asciicast_v3(&session.inner))
+        } else if let Some(active) = self.inner.get_recording_session() {
+            Ok(self.inner.export_asciicast_v3(active))
+        } else {
+            Err(PyValueError::new_err(
+                "No active recording (pass session=stop_recording())",
+            ))
+        }
+    }
+
     /// Export recording to JSON format
     ///
     /// Returns:

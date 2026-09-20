@@ -98,6 +98,11 @@ pub struct SerializableGraphic {
     /// Unified placement metadata
     pub placement: ImagePlacement,
 
+    /// Unix time in milliseconds when the graphic entered the store
+    /// (0 when unknown, for exports produced before this field existed)
+    #[serde(default)]
+    pub added_at: u64,
+
     /// Image pixel data reference
     pub data: ImageDataRef,
 }
@@ -145,6 +150,7 @@ impl From<&TerminalGraphic> for SerializableGraphic {
             relative_y_offset: g.relative_y_offset,
             was_compressed: g.was_compressed,
             placement: g.placement.clone(),
+            added_at: g.added_at,
             data: ImageDataRef::Inline(encoded),
         }
     }
@@ -180,6 +186,7 @@ impl SerializableGraphic {
             relative_y_offset: self.relative_y_offset,
             was_compressed: self.was_compressed,
             placement: self.placement.clone(),
+            added_at: self.added_at,
         })
     }
 
