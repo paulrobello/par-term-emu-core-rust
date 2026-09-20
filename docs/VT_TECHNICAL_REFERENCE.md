@@ -351,6 +351,7 @@ CSI 49 m    - Default background
 |------|------|---------|-------------|
 | 2004 | Bracketed Paste | Off | Wrap pasted text in escape sequences |
 | 2026 | Synchronized Update | Off | Batch updates for flicker-free rendering |
+| 80 | Sixel Display (DECSDM) | Off | Sixel paints at the home position without scrolling; off = scrolling placement at the cursor |
 
 ### Attribute Change Extent (VT420)
 
@@ -481,7 +482,7 @@ See also: [ESC Sequences](#esc-sequences) for ESC V/W details
 **Implementation:** `csi_dispatch_impl()` in `src/terminal/sequences/csi/mod.rs`
 
 **Supported Modes:**
-- DEC private (`CSI ? mode $ p`): 1, 6, 7, 25, 47, 1000, 1002, 1003, 1047, 1048, 1049, 2004, 2026
+- DEC private (`CSI ? mode $ p`): 1, 6, 7, 9, 25, 47, 80, 1000, 1002, 1003, 1047, 1048, 1049, 2004, 2026
 - ANSI (`CSI mode $ p`): 4, 20
 
 All other mode numbers return state `0` (not recognized).
@@ -1058,6 +1059,8 @@ DCS (Device Control String) sequences follow: `ESC P ... ESC \`
 - `Pa` - Pixel aspect ratio
 - `Pb` - Background mode (1=leave current, 2=use background color)
 - `Ph` - Horizontal grid size
+
+**Placement:** `CSI ? 80 h/l` (DECSDM) selects the placement mode — set (display): the image paints at the home position and the cursor stays put; reset (scrolling, the default): the image paints at the cursor and the cursor advances below it. DECRQM reports mode 80.
 
 **Sixel Commands:**
 

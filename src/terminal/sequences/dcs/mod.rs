@@ -144,7 +144,15 @@ impl Terminal {
         } else if self.dcs_state.dcs_kind == DcsKind::Sixel {
             self.process_sixel_command();
             if let Some(parser) = self.dcs_state.sixel_parser.take() {
-                let position = (self.cursor.col, self.cursor.row);
+                // DECSDM (DECSET 80) display mode paints at the home position
+                // and leaves the cursor alone; scrolling mode (default) paints
+                // at the cursor and advances it below the image.
+                let display_mode = self.modes.sixel_display_mode;
+                let position = if display_mode {
+                    (0, 0)
+                } else {
+                    (self.cursor.col, self.cursor.row)
+                };
                 let sixel_graphic = parser.build_graphic(position);
 
                 // Convert SixelGraphic to TerminalGraphic
@@ -174,14 +182,15 @@ impl Terminal {
                 let (cell_w, cell_h) = self.graphics.cell_dimensions;
                 graphic.set_cell_dimensions(cell_w, cell_h);
 
-                let row = self.cursor.row;
+                let row = if display_mode { 0 } else { self.cursor.row };
                 self.graphics.graphics_store.add_graphic(graphic);
                 self.events
                     .terminal_events
                     .push(crate::terminal::TerminalEvent::GraphicsAdded(row));
 
-                // Advance cursor to next line(s) as per test expectation
-                if cell_h > 0 {
+                // Advance cursor to next line(s) as per test expectation.
+                // DECSDM display mode leaves the cursor where it was.
+                if !display_mode && cell_h > 0 {
                     let rows = (sixel_graphic.height as f32 / cell_h as f32).ceil() as usize;
                     self.cursor.col = 0;
                     let (_cols, screen_rows) = self.size();

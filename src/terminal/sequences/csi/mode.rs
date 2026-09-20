@@ -117,6 +117,7 @@ impl Terminal {
                 "sync_updates:{}",
                 self.sync_state.synchronized_updates
             )),
+            80 => Some(format!("sixel_display:{}", self.modes.sixel_display_mode)),
             _ => None,
         };
 
@@ -143,6 +144,7 @@ impl Terminal {
             1004 => self.modes.focus_tracking = true,
             2004 => self.modes.bracketed_paste = true,
             2026 => self.sync_state.synchronized_updates = true,
+            80 => self.modes.sixel_display_mode = true,
             _ => {
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -193,6 +195,7 @@ impl Terminal {
                 1049 => "alternate_screen",
                 2004 => "bracketed_paste",
                 2026 => "synchronized_updates",
+                80 => "sixel_display_mode",
                 _ => "unknown",
             };
             self.events
@@ -218,6 +221,7 @@ impl Terminal {
                 "sync_updates:{}",
                 self.sync_state.synchronized_updates
             )),
+            80 => Some(format!("sixel_display:{}", self.modes.sixel_display_mode)),
             _ => None,
         };
 
@@ -243,6 +247,7 @@ impl Terminal {
                 self.sync_state.sync_update_explicitly_disabled = true;
                 self.flush_synchronized_updates();
             }
+            80 => self.modes.sixel_display_mode = false,
             _ => {
                 debug::log(
                     debug::DebugLevel::Debug,
@@ -293,6 +298,7 @@ impl Terminal {
                 1049 => "alternate_screen",
                 2004 => "bracketed_paste",
                 2026 => "synchronized_updates",
+                80 => "sixel_display_mode",
                 _ => "unknown",
             };
             self.events

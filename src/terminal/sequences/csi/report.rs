@@ -166,6 +166,13 @@ impl Terminal {
                                     2
                                 }
                             }
+                            80 => {
+                                if self.modes.sixel_display_mode {
+                                    1
+                                } else {
+                                    2
+                                }
+                            }
                             _ => 0, // Not recognized
                         };
                         (s, "?")

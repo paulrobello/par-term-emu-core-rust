@@ -426,6 +426,103 @@ fn test_dcs_cursor_position_after_graphic() {
     assert!(term.cursor.row >= 5);
 }
 
+/// DECSDM defaults to reset (scrolling mode): the sixel paints at the cursor
+/// and the cursor advances below the image (the long-standing behavior).
+#[test]
+fn test_decsdm_scrolling_mode_is_default() {
+    let mut term = create_test_terminal();
+    let params = create_empty_params();
+
+    term.cursor.col = 10;
+    term.cursor.row = 5;
+
+    term.dcs_hook(&params, &[], false, 'q');
+    for &byte in b"????" {
+        term.dcs_put(byte);
+    }
+    term.dcs_unhook();
+
+    let graphics = term.graphics.graphics_store.all_graphics();
+    assert_eq!(graphics.len(), 1, "sixel should be stored");
+    assert_eq!(
+        graphics[0].position,
+        (10, 5),
+        "scrolling mode must place at the cursor"
+    );
+    assert_eq!(term.cursor.col, 0, "scrolling mode advances the cursor");
+    assert!(term.cursor.row >= 5);
+}
+
+/// DECSET 80 (display mode) paints the sixel at the home position and leaves
+/// the cursor untouched.
+#[test]
+fn test_decsdm_display_mode_places_at_home_without_cursor_move() {
+    let mut term = create_test_terminal();
+    let params = create_empty_params();
+
+    term.process(b"\x1b[?80h");
+    term.cursor.col = 10;
+    term.cursor.row = 5;
+
+    term.dcs_hook(&params, &[], false, 'q');
+    for &byte in b"????" {
+        term.dcs_put(byte);
+    }
+    term.dcs_unhook();
+
+    let graphics = term.graphics.graphics_store.all_graphics();
+    assert_eq!(graphics.len(), 1, "sixel should be stored");
+    assert_eq!(
+        graphics[0].position,
+        (0, 0),
+        "display mode must paint at the home position"
+    );
+    assert_eq!(
+        (term.cursor.col, term.cursor.row),
+        (10, 5),
+        "display mode must not move the cursor"
+    );
+}
+
+#[test]
+fn test_decsdm_decrqm_reports_and_resets() {
+    let mut term = create_test_terminal();
+
+    term.process(b"\x1b[?80$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?80;2$y", "default is reset");
+
+    term.process(b"\x1b[?80h");
+    term.process(b"\x1b[?80$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?80;1$y", "set reports 1");
+
+    term.process(b"\x1b[?80l");
+    term.process(b"\x1b[?80$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?80;2$y", "reset reports 2");
+
+    // RIS restores the default
+    term.process(b"\x1b[?80h\x1bc");
+    term.process(b"\x1b[?80$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?80;2$y", "RIS resets DECSDM");
+}
+
+#[test]
+fn test_decsdm_reset_by_decstr() {
+    let mut term = create_test_terminal();
+
+    term.process(b"\x1b[?80h");
+    term.process(b"\x1b[?80$p");
+    assert_eq!(term.drain_responses(), b"\x1b[?80;1$y");
+
+    // DECSTR restores the default
+    term.process(b"\x1b[!p");
+    term.process(b"\x1b[?80$p");
+    assert_eq!(
+        term.drain_responses(),
+        b"\x1b[?80;2$y",
+        "DECSTR resets DECSDM"
+    );
+}
+
 #[test]
 fn test_dcs_non_sixel_action_ignored() {
     let mut term = create_test_terminal();

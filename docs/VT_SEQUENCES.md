@@ -272,6 +272,7 @@ Modern terminal features and VT520 extensions.
 - `CSI ? 1004 h/l` - Focus tracking (send CSI I/O on focus in/out)
 - `CSI ? 2004 h/l` - Bracketed paste mode (wrap pasted text)
 - `CSI ? 2026 h/l` - Synchronized updates (flicker-free rendering)
+- `CSI ? 80 h/l` - Sixel display mode, DECSDM (set: paint at home position, no scrolling; reset: paint at the cursor)
 
 **VT520 features:**
 - `CSI Ps SP u` - Set Margin-Bell Volume (DECSMBV, Ps = 0-8)
