@@ -14,6 +14,20 @@ A modern, sleek web-based terminal emulator built with Next.js, TypeScript, Tail
 - 🔗 **Link Detection**: Clickable URLs in terminal output
 - 🌈 **Unicode Support**: Full Unicode 11 support including emojis
 - 📲 **PWA Support**: Installable as a progressive web app with custom icons
+- 🖼️ **Inline Graphics**: Sixel and iTerm2 inline images via `@xterm/addon-image`
+
+### Graphics support
+
+The frontend loads `@xterm/addon-image`, so Sixel (`DCS q`) and iTerm2 inline
+images (`OSC 1337`) in the raw output stream render inline in the browser. The
+server already forwards output bytes unchanged, so no streaming protocol change
+is required for these two formats.
+
+Kitty graphics (`APC G`) are not rendered as pixel images by xterm.js. Kitty
+virtual placements may still appear as placeholder cells, but pixel-backed Kitty
+placements require a future overlay transport because xterm.js has no official
+Kitty image addon.
+
 
 ## Getting Started
 
@@ -111,6 +125,7 @@ web-terminal-frontend/
   - `@xterm/addon-webgl`: WebGL renderer for performance
   - `@xterm/addon-web-links`: Clickable URL detection
   - `@xterm/addon-unicode11`: Unicode 11 support
+  - `@xterm/addon-image`: Sixel and iTerm2 inline image rendering
 
 ## Customization
 

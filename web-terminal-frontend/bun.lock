@@ -7,6 +7,7 @@
       "dependencies": {
         "@bufbuild/protobuf": "^2.15.0",
         "@xterm/addon-fit": "^0.11.0",
+        "@xterm/addon-image": "^0.9.0",
         "@xterm/addon-unicode11": "^0.9.0",
         "@xterm/addon-web-links": "^0.12.0",
         "@xterm/addon-webgl": "^0.19.0",
@@ -377,6 +378,8 @@
     "@vitest/spy": ["@vitest/spy@5.0.1", "", {}, "sha512-rbto/mF/SGERxEgYOek7Xm6B9b+y+mVoo+f4b2LymYO8zM1b7uB5nHuhVMTP2hxdzgxvGiZYGxGIaMvL5y180Q=="],
 
     "@xterm/addon-fit": ["@xterm/addon-fit@0.11.0", "", {}, "sha512-jYcgT6xtVYhnhgxh3QgYDnnNMYTcf8ElbxxFzX0IZo+vabQqSPAjC3c1wJrKB5E19VwQei89QCiZZP86DCPF7g=="],
+
+    "@xterm/addon-image": ["@xterm/addon-image@0.9.0", "", {}, "sha512-oYWA8/QAr5/Emwl1xL7WCoOqeG3IZfpzEz/OVq1j4Oi9934TQmHiyubClikRf0D/jL3JNiNuz/Lsqx0kXQ02BA=="],
 
     "@xterm/addon-unicode11": ["@xterm/addon-unicode11@0.9.0", "", {}, "sha512-FxDnYcyuXhNl+XSqGZL/t0U9eiNb/q3EWT5rYkQT/zuig8Gz/VagnQANKHdDWFM2lTMk9ly0EFQxxxtZUoRetw=="],
 

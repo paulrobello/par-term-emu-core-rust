@@ -6,6 +6,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
+import { ImageAddon } from '@xterm/addon-image';
 import type { ConnectionStatus } from '@/types/terminal';
 import {
   createInputMessage,
@@ -254,10 +255,15 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         window.open(uri, '_blank', 'noopener,noreferrer');
       });
       const unicode11Addon = new Unicode11Addon();
+      // Renders Sixel (DCS q) and iTerm2 (OSC 1337) inline images from the
+      // raw output stream. Kitty (APC) graphics are not supported by this
+      // addon — see README ("Graphics support").
+      const imageAddon = new ImageAddon();
 
       term.loadAddon(fitAddon);
       term.loadAddon(webLinksAddon);
       term.loadAddon(unicode11Addon);
+      term.loadAddon(imageAddon);
       term.unicode.activeVersion = '11';
 
       // Wait for fonts to load before opening terminal
