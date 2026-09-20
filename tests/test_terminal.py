@@ -2522,5 +2522,37 @@ def test_decsdm_decrqm_report_and_resets():
     assert term.drain_responses() == b"\x1b[?80;2$y", "RIS resets DECSDM"
 
 
+def test_xtcolors_slot_store_and_restore():
+    """CSI Pi # P stores into slot Pi and CSI Pi # Q restores it without
+    popping; Pi 0/omitted keeps push/pop semantics"""
+    term = Terminal(40, 10)
+    term.process_str("\x1b]4;1;rgb:ff/00/ff\x1b\\")
+    term.process_str("\x1b[1#P")
+
+    # depth 1
+    term.process_str("\x1b[#R")
+    assert term.drain_responses() == b"\x1b[?1;1#Q"
+
+    term.process_str("\x1b]4;1;rgb:00/00/ff\x1b\\")
+    term.process_str("\x1b[1#Q")
+    # slot restore applied ff00ff and did not pop
+    term.process_str("\x1b[#R")
+    assert term.drain_responses() == b"\x1b[?1;1#Q"
+
+
+def test_xtcolors_slot_growth_reported():
+    """Storing into a slot beyond the current depth grows the stack; # R
+    reflects the depth and high-water mark"""
+    term = Terminal(40, 10)
+    term.process_str("\x1b[3#P")
+    term.process_str("\x1b[#R")
+    assert term.drain_responses() == b"\x1b[?3;3#Q"
+
+    term.process_str("\x1b[1#Q")  # slot restore: depth unchanged
+    term.process_str("\x1b[0#Q")  # pop: depth 2
+    term.process_str("\x1b[#R")
+    assert term.drain_responses() == b"\x1b[?2;3#Q"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

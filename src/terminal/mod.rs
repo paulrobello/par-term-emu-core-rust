@@ -503,6 +503,7 @@ pub(crate) struct MarginState {
 }
 
 /// Saved dynamic- and ANSI-palette colors for one XTPUSHCOLORS stack entry (ENH-003)
+#[derive(Clone)]
 pub(crate) struct ColorPaletteSnapshot {
     /// Default foreground (OSC 10 target)
     pub(crate) default_fg: Color,
