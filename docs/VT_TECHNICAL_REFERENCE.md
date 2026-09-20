@@ -129,12 +129,13 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 
 | Sequence | Name | Notes |
 |----------|------|-------|
-| `CSI # P` | XTPUSHCOLORS | ❌ Not implemented |
-| `CSI # Q` | XTPOPCOLORS | ❌ Not implemented |
+| `CSI # P` | XTPUSHCOLORS | ✅ Implemented (see [Color Palette Stack](#color-palette-stack)) |
+| `CSI # Q` | XTPOPCOLORS | ✅ Implemented |
+| `CSI # R` | XTREPORTCOLORS | ✅ Implemented |
 
 **Notes:**
-- There is no `#`-intermediate dispatch arm in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`). `CSI # P` falls through to the DCH handler (the intermediate is ignored), and `CSI # Q` is silently dropped (no `'Q'` action arm).
-- Support is planned under ENH-003; do not send these sequences until then.
+- Dispatched in `csi_dispatch_impl()` (`src/terminal/sequences/csi/mod.rs`) via `#`-intermediate arms; the handlers live in `src/terminal/sequences/csi/color_stack.rs`.
+- Parameterized slot forms (`CSI Pi # P` / `CSI Pi # Q`) are also implemented: Pi selects the stack slot to store/restore without pushing/popping; Pi 0 or omitted keeps push/pop semantics.
 
 **Note:** `CSI P` without the `#` intermediate is DCH (Delete Characters) — see Line and Character Editing below.
 
@@ -147,7 +148,7 @@ CSI (Control Sequence Introducer) sequences follow the pattern: `ESC [ params in
 | `CSI n @` | ICH (Insert Characters) | VT220 | Param 0→1, shifts line right |
 | `CSI n P` | DCH (Delete Characters) | VT220 | Param 0→1, shifts line left (see note) |
 
-**Note:** `CSI P` without '#' intermediate is DCH. `CSI # P` (XTPUSHCOLORS) is not implemented — see Color Stack Operations above.
+**Note:** `CSI P` without '#' intermediate is DCH. `CSI # P` (XTPUSHCOLORS) routes to the color stack — see Color Stack Operations above.
 
 **Line Editing Behavior:**
 - IL/DL only affect rows within scroll region
@@ -935,7 +936,7 @@ XTPUSHCOLORS/XTPOPCOLORS (xterm extension): save/restore the dynamic colors (OSC
 | `CSI # Q` | XTPOPCOLORS — pop and restore top entry | No-op on an empty stack |
 | `CSI # R` | XTREPORTCOLORS — report stack state | Response: `CSI ? used ; last # Q` |
 
-Implementation: `src/terminal/sequences/csi/color_stack.rs`. The report reply matches xterm byte-for-byte (`used` = current depth, `last` = high-water mark, private-marker `?`, intermediate `#`, final `Q`). Parameterized forms (`CSI Pi # P`/`CSI Pi # Q`, which store/restore a specific stack slot without pushing/popping) are not implemented; parameters are ignored. RIS and DECSTR clear the stack.
+Implementation: `src/terminal/sequences/csi/color_stack.rs`. The report reply matches xterm byte-for-byte (`used` = current depth, `last` = high-water mark, private-marker `?`, intermediate `#`, final `Q`). Parameterized forms: `CSI Pi # P` stores the current colors into stack slot Pi (1-10, padding intermediate slots with current-color snapshots when the slot is beyond the current depth) and `CSI Pi # Q` restores slot Pi without popping; Pi 0 or omitted keeps the push/pop semantics. RIS and DECSTR clear the stack.
 
 ### Shell Integration (OSC 133)
 

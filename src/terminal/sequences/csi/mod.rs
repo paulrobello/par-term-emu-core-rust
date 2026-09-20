@@ -110,7 +110,7 @@ impl Terminal {
             'P' => {
                 // P with # is XTPUSHCOLORS; bare P is DCH (delete chars)
                 if intermediates.contains(&b'#') {
-                    self.handle_xtpushcolors();
+                    self.handle_xtpushcolors(params);
                 } else {
                     self.handle_csi_edit(action, params, intermediates);
                 }
@@ -118,7 +118,7 @@ impl Terminal {
             'Q' => {
                 // Q with # is XTPOPCOLORS; bare Q is unused
                 if intermediates.contains(&b'#') {
-                    self.handle_xtpopcolors();
+                    self.handle_xtpopcolors(params);
                 } else {
                     debug::log(
                         debug::DebugLevel::Debug,

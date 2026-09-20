@@ -182,7 +182,7 @@ XTPUSHCOLORS/XTPOPCOLORS save and restore the dynamic colors (OSC 10/11/12) plus
 - `CSI # Q` - XTPOPCOLORS - Pop the top entry and restore its colors (no-op when empty)
 - `CSI # R` - XTREPORTCOLORS - Report stack state - Response: `CSI ? <used> ; <last> # Q` (`used` = current depth, `last` = high-water mark)
 
-Parameterized forms (`CSI Pi # P`/`CSI Pi # Q`, which store/restore a specific stack slot without pushing/popping) are not implemented; parameters are ignored and the no-parameter form applies. RIS and DECSTR clear the stack.
+Parameterized forms: `CSI Pi # P` stores the current colors into stack slot Pi (1-10, growing the stack — padded with current-color snapshots — when the slot is beyond the current depth) and `CSI Pi # Q` restores slot Pi without popping. `Pi` 0 or omitted keeps the push/pop semantics. RIS and DECSTR clear the stack.
 
 ## Tab Stops
 
