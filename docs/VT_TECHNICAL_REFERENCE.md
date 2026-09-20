@@ -1473,11 +1473,6 @@ The terminal provides comprehensive support for complex Unicode grapheme cluster
    - **Implemented:** Report queries (11, 13, 14, 16, 18, 19) and title stack (22, 23); manipulation ops accepted as no-ops
    - **Impact:** Low (a library core has no window anyway)
 
-3. **Color Stack (XTPUSHCOLORS/XTPOPCOLORS)**
-   - `CSI # P` / `CSI # Q`
-   - **Reason:** Not yet wired (planned as ENH-003)
-   - **Impact:** Low
-
 ### Implementation Notes: `CSI q` Forms
 
 `CSI q` is overloaded by intermediate bytes (`src/terminal/sequences/csi/report.rs`):
