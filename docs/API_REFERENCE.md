@@ -471,6 +471,7 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 - `record_marker(name: str)`: Add marker/bookmark
 - `record_resize(cols: int, rows: int)`: Record resize event
 - `export_asciicast(session: RecordingSession | None = None) -> str`: Export to asciicast v2 format
+- `export_asciicast_v3(session: RecordingSession | None = None) -> str`: Export to asciicast v3 format — nested `term` header, relative per-event intervals, `"COLSxROWS"` resize data, and a `g` graphics event per graphic in the store (live placements plus scrollback promotions) carrying protocol, geometry, position, and base64 RGBA pixels
 - `export_json(session: RecordingSession | None = None) -> str`: Export to JSON format
 
 ### Advanced Search and Regex

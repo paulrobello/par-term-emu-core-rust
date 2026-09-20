@@ -987,6 +987,37 @@ impl PyPtyTerminal {
         }
     }
 
+    /// Export recording to asciicast v3 format
+    ///
+    /// Args:
+    ///     session: RecordingSession from stop_recording()
+    ///
+    /// Returns:
+    ///     Asciicast v3 format string
+    fn export_asciicast_v3(
+        &self,
+        session: Option<&super::types::PyRecordingSession>,
+        _py: Python,
+    ) -> PyResult<String> {
+        if let Some(session) = session {
+            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
+                Ok(term.export_asciicast_v3(&session.inner))
+            } else {
+                Err(PyRuntimeError::new_err("Failed to lock terminal"))
+            }
+        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
+            if let Some(active) = term.get_recording_session() {
+                Ok(term.export_asciicast_v3(active))
+            } else {
+                Err(PyValueError::new_err(
+                    "No active recording (pass session=stop_recording())",
+                ))
+            }
+        } else {
+            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        }
+    }
+
     /// Export recording to JSON format
     ///
     /// Returns:

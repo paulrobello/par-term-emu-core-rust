@@ -2,6 +2,7 @@
 //!
 //! Provides types for recording terminal sessions in various formats.
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -76,6 +77,7 @@ pub enum RecordingExportFormat {
     Html,
 }
 
+use crate::graphics::TerminalGraphic;
 use crate::terminal::Terminal;
 
 impl Terminal {
@@ -182,6 +184,113 @@ impl Terminal {
 
             output.push_str(&event_json.to_string());
             output.push('\n');
+        }
+
+        output
+    }
+
+    /// Export a recording session to asciicast v3 format
+    ///
+    /// v3 (asciinema 3.x) moves the terminal size into a nested `term` header
+    /// object, replaces absolute event times with per-event relative
+    /// intervals, and formats resize data as `"COLSxROWS"`. The v3 event-code
+    /// list is open and readers must skip unknown codes, so this export adds
+    /// a `g` event carrying a JSON object per graphic that entered the store
+    /// during the recording window (live placements plus scrollback
+    /// promotions), letting replay clients repaint graphics the text-only
+    /// stream cannot convey.
+    pub fn export_asciicast_v3(&self, session: &RecordingSession) -> String {
+        let mut output = String::new();
+
+        // 1. Header line — v3 requires a nested `term` object with cols/rows.
+        let header = serde_json::json!({
+            "version": 3,
+            "term": {
+                "cols": session.initial_size.0,
+                "rows": session.initial_size.1,
+            },
+            "timestamp": session.created_at / 1000,
+            "title": session.title,
+            "env": session.env,
+        });
+        output.push_str(&header.to_string());
+        output.push('\n');
+
+        // 2. Collect timed event lines: session events plus graphics events
+        //    mapped to their store add-time relative to the recording start.
+        struct Timed {
+            t_ms: u64,
+            line: serde_json::Value,
+        }
+        let mut timed: Vec<Timed> = Vec::new();
+
+        for event in &session.events {
+            let t_ms = event.timestamp;
+            let line = match event.event_type {
+                RecordingEventType::Output => {
+                    let text = String::from_utf8_lossy(&event.data);
+                    serde_json::json!([0.0, "o", text])
+                }
+                RecordingEventType::Input => {
+                    let text = String::from_utf8_lossy(&event.data);
+                    serde_json::json!([0.0, "i", text])
+                }
+                RecordingEventType::Resize => {
+                    if let Some((cols, rows)) = event.metadata {
+                        serde_json::json!([0.0, "r", format!("{}x{}", cols, rows)])
+                    } else {
+                        continue;
+                    }
+                }
+                _ => continue,
+            };
+            timed.push(Timed { t_ms, line });
+        }
+
+        // 3. Graphics events from the store. `added_at` is a unix-ms stamp
+        //    taken when the graphic entered the store; 0 means unknown
+        //    (graphic predates the recording or was restored from JSON) and
+        //    maps to time 0.
+        let mut graphics: Vec<&TerminalGraphic> = self
+            .graphics
+            .graphics_store
+            .all_graphics()
+            .iter()
+            .chain(self.graphics.graphics_store.scrollback_entries().iter())
+            .collect();
+        graphics.sort_by_key(|g| g.id);
+
+        for g in graphics {
+            let rel_ms = g.added_at.saturating_sub(session.created_at);
+            let payload = serde_json::json!({
+                "protocol": g.protocol.as_str(),
+                "image_id": g.kitty_image_id,
+                "placement_id": g.kitty_placement_id,
+                "position": [g.position.0, g.position.1],
+                "width": g.width,
+                "height": g.height,
+                "cell_dimensions": g.cell_dimensions,
+                "scrollback": g.scrollback_row.is_some(),
+                "data": base64::engine::general_purpose::STANDARD
+                    .encode(g.pixels.as_ref()),
+            });
+            timed.push(Timed {
+                t_ms: rel_ms,
+                line: serde_json::json!([0.0, "g", payload]),
+            });
+        }
+
+        // 4. Stable sort by time, then emit with relative intervals in
+        //    seconds (v3): each interval is time since the previous event.
+        timed.sort_by_key(|e| e.t_ms);
+        let mut prev_ms: u64 = 0;
+        for e in timed {
+            let interval = (e.t_ms - prev_ms) as f64 / 1_000.0;
+            let mut line = e.line;
+            line[0] = serde_json::json!(interval);
+            output.push_str(&line.to_string());
+            output.push('\n');
+            prev_ms = e.t_ms;
         }
 
         output

@@ -3450,6 +3450,145 @@ fn test_export_asciicast() {
     assert!(asciicast.contains("height"));
 }
 
+/// v3 output parses per the spec: header first with version 3 and a nested
+/// `term` object, then NDJSON event lines with relative intervals.
+#[test]
+fn test_export_asciicast_v3_shape_and_intervals() {
+    let mut term = Terminal::new(80, 24);
+    term.start_recording(None);
+    term.process(b"line one\r\n");
+    term.process(b"line two\r\n");
+
+    let session = term.stop_recording().unwrap();
+    let cast = term.export_asciicast_v3(&session);
+    let mut lines = cast.lines();
+
+    let header: serde_json::Value =
+        serde_json::from_str(lines.next().expect("header line")).expect("header json");
+    assert_eq!(header["version"], 3);
+    assert_eq!(header["term"]["cols"], 80);
+    assert_eq!(header["term"]["rows"], 24);
+
+    let mut count = 0;
+    for line in lines {
+        let v: serde_json::Value = serde_json::from_str(line).expect("event json");
+        assert!(v.is_array(), "event lines are 3-element arrays");
+        assert!(v[0].is_number(), "v3 intervals are numeric seconds");
+        assert_eq!(v[1], "o");
+        count += 1;
+    }
+    assert!(count >= 2, "both output chunks recorded, got {}", count);
+}
+
+/// Graphics present in the store are exported as `g` events with base64
+/// RGBA data; scrollback-promoted graphics carry `scrollback: true`.
+#[test]
+fn test_export_asciicast_v3_graphics_events() {
+    use crate::graphics::{GraphicProtocol, TerminalGraphic};
+
+    let mut term = Terminal::new(80, 24);
+    term.start_recording(None);
+    term.process(b"hello\r\n");
+
+    // Live placement (sixel-style, pixels in store) parked low on screen so
+    // the scrollback promotion below leaves it visible
+    let live = TerminalGraphic::new(7, GraphicProtocol::Sixel, (0, 20), 4, 4, vec![64u8; 64]);
+    term.graphics.graphics_store.add_graphic(live);
+
+    // Scrollback-promoted graphic: scroll it off the top like normal output
+    let scrolled = TerminalGraphic::new(8, GraphicProtocol::Kitty, (0, 0), 4, 4, vec![64u8; 64]);
+    term.graphics.graphics_store.add_graphic(scrolled);
+    // The 4px image spans 2 rows at the default cell size; 3 lines take it
+    // fully into scrollback.
+    term.graphics
+        .graphics_store
+        .adjust_for_scroll_up_with_scrollback(3, 0, 23, 0);
+
+    let session = term.stop_recording().unwrap();
+    let cast = term.export_asciicast_v3(&session);
+
+    let mut graphics_events = Vec::new();
+    for line in cast.lines().skip(1) {
+        let v: serde_json::Value = serde_json::from_str(line).expect("event json");
+        if v[1] == "g" {
+            graphics_events.push(v);
+        }
+    }
+    assert_eq!(
+        graphics_events.len(),
+        2,
+        "live + scrollback graphics exported"
+    );
+
+    let live_ev = &graphics_events[0];
+    assert_eq!(live_ev[2]["protocol"], "sixel");
+    assert_eq!(live_ev[2]["scrollback"], false);
+    assert!(
+        live_ev[2]["data"]
+            .as_str()
+            .map(|d| !d.is_empty())
+            .unwrap_or(false),
+        "base64 RGBA payload present"
+    );
+
+    let scrolled_ev = &graphics_events[1];
+    assert_eq!(scrolled_ev[2]["protocol"], "kitty");
+    assert_eq!(scrolled_ev[2]["scrollback"], true);
+}
+
+/// v3 resize data is the `"COLSxROWS"` string form.
+#[test]
+fn test_export_asciicast_v3_resize_string() {
+    let mut term = Terminal::new(80, 24);
+    term.start_recording(None);
+    term.record_resize(120, 40);
+
+    let session = term
+        .get_recording_session()
+        .expect("recording session should exist");
+    let cast = term.export_asciicast_v3(session);
+    let mut lines = cast.lines();
+    let _header = lines.next();
+    let resize: serde_json::Value =
+        serde_json::from_str(lines.next().expect("resize event")).expect("json");
+    assert_eq!(resize[1], "r");
+    assert_eq!(resize[2], "120x40");
+}
+
+/// The v2 export is byte-shape compatible: absolute timestamps, `[cols, rows]`
+/// resize arrays, and no graphics events (unchanged shipped behavior).
+#[test]
+fn test_export_asciicast_v2_unchanged_shape() {
+    let mut term = Terminal::new(80, 24);
+    term.start_recording(None);
+    term.record_resize(120, 40);
+    term.process(b"abc");
+
+    let session = term.stop_recording().unwrap();
+    let cast = term.export_asciicast(&session);
+    let mut lines = cast.lines();
+
+    let header: serde_json::Value =
+        serde_json::from_str(lines.next().expect("header")).expect("json");
+    assert_eq!(header["version"], 2);
+    assert!(header["width"].is_number(), "v2 width stays flat");
+    assert!(header.get("term").is_none(), "v2 has no nested term object");
+
+    let resize: serde_json::Value =
+        serde_json::from_str(lines.next().expect("resize")).expect("json");
+    assert_eq!(resize[1], "r");
+    assert_eq!(
+        resize[2], 120,
+        "v2 resize keeps the [cols, rows] array form"
+    );
+    assert_eq!(resize[3], 40);
+
+    for line in lines {
+        let v: serde_json::Value = serde_json::from_str(line).expect("json");
+        assert_ne!(v[1], "g", "v2 export drops graphics entirely");
+    }
+}
+
 #[test]
 fn test_export_json() {
     let mut term = Terminal::new(80, 24);

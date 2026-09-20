@@ -2554,5 +2554,44 @@ def test_xtcolors_slot_growth_reported():
     assert term.drain_responses() == b"\x1b[?2;3#Q"
 
 
+def test_export_asciicast_v3_round_trip():
+    """export_asciicast_v3 parses per the v3 spec: version-3 header with a
+    nested term object, relative intervals, and g graphics events carrying
+    the stored graphics (live and scrollback) with base64 RGBA data"""
+    import base64
+    import json
+
+    term = Terminal(80, 10)
+    term.start_recording("v3 test")
+    term.process_str("hello\r\n")
+    term.process_str("\x1bPq????\x1b\\")  # minimal sixel -> 1 graphic
+    session = term.stop_recording()
+    cast = term.export_asciicast_v3(session)
+
+    lines = cast.splitlines()
+    header = json.loads(lines[0])
+    assert header["version"] == 3
+    assert header["term"]["cols"] == 80
+    assert header["term"]["rows"] == 10
+    assert header["title"] == "v3 test"
+
+    events = [json.loads(l) for l in lines[1:]]
+    outputs = [e for e in events if e[1] == "o"]
+    graphics = [e for e in events if e[1] == "g"]
+    assert outputs, "output events present"
+    assert all(isinstance(e[0], float) for e in events), "relative intervals"
+
+    assert len(graphics) == 1
+    payload = graphics[0][2]
+    assert payload["protocol"] == "sixel"
+    assert payload["scrollback"] is False
+    base64.b64decode(payload["data"])
+
+    # v2 export of the same session stays graphics-free (unchanged shape)
+    cast_v2 = term.export_asciicast(session)
+    v2_events = [json.loads(l) for l in cast_v2.splitlines()[1:]]
+    assert all(e[1] != "g" for e in v2_events)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

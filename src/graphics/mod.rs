@@ -287,6 +287,9 @@ pub struct TerminalGraphic {
     pub was_compressed: bool,
     /// Unified placement metadata (display mode, sizing, z-index, offsets)
     pub placement: ImagePlacement,
+    /// Unix time in milliseconds when the graphic entered the store
+    /// (set by the constructors; 0 when unknown, e.g. restored from JSON)
+    pub added_at: u64,
 }
 
 /// Pixel access shared by `TerminalGraphic` and the Python `Graphic`
@@ -388,6 +391,7 @@ impl TerminalGraphic {
             relative_y_offset: 0,
             was_compressed: false,
             placement: ImagePlacement::inline(),
+            added_at: crate::terminal::unix_millis(),
         }
     }
 
@@ -421,6 +425,7 @@ impl TerminalGraphic {
             relative_y_offset: 0,
             was_compressed: false,
             placement: ImagePlacement::inline(),
+            added_at: crate::terminal::unix_millis(),
         }
     }
 
@@ -642,6 +647,11 @@ impl GraphicsStore {
     /// Get all active graphics
     pub fn all_graphics(&self) -> &[TerminalGraphic] {
         &self.placements
+    }
+
+    /// All graphics promoted to scrollback, oldest first
+    pub fn scrollback_entries(&self) -> &Vec<TerminalGraphic> {
+        &self.scrollback
     }
 
     /// Get mutable access to all graphics
