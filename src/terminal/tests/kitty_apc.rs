@@ -328,6 +328,118 @@ fn interleaved_cursor_moves_produce_distinct_graphic_rows() {
     // Slice 2 should be at row 6 (0-indexed from CSI row 7).
     assert_eq!(
         graphics[1].position.1, 6,
-        "second slice should be at row 6 (CSI row 7, 0-indexed)"
+        "following slice should be at row 6 (CSI row 7, 0-indexed)"
+    );
+}
+
+/// A default Kitty placement moves the cursor to the first line below the
+/// image (Kitty TGP cursor movement), spanning the placement's row count.
+#[test]
+fn placement_advances_cursor_to_line_below() {
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(1, 1);
+
+    // 1×3 pixel image: cell dimensions (1,1) make the span 1 col × 3 rows.
+    term.process(b"\x1b_Ga=t,f=24,i=5,s=1,v=3;AAAAAAAAAAAA\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 0),
+        "transmit alone never moves the cursor"
+    );
+
+    term.process(b"\x1b_Ga=p,i=5\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 3),
+        "cursor must land on the first line below the 3-row image"
+    );
+}
+
+/// `C=1` suppresses the post-placement cursor move; `C=0` and an omitted `C=`
+/// keep the default advance. Covers the parser field and the end-to-end path.
+#[test]
+fn placement_c_key_controls_cursor_movement() {
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(1, 1);
+    term.process(b"\x1b_Ga=t,f=24,i=5,s=1,v=3;AAAAAAAAAAAA\x1b\\");
+
+    term.process(b"\x1b_Ga=p,i=5,C=1\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 0),
+        "C=1 must suppress the cursor move"
+    );
+    assert!(
+        term.graphics.graphics_store.all_graphics().len() == 1,
+        "C=1 suppresses only the cursor move, not the placement"
+    );
+
+    term.process(b"\x1b_Ga=p,i=5,C=0\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 3),
+        "C=0 keeps the default (cursor advances)"
+    );
+
+    term.process(b"\x1b_Ga=p,i=5\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 6),
+        "omitted C= keeps the default; advances accumulate across placements"
+    );
+}
+
+/// The post-placement advance flows through the ordinary newline path, so a
+/// placement that runs into the scroll region's bottom margin scrolls the
+/// region instead of moving the cursor past it.
+#[test]
+fn placement_advance_respects_scroll_region() {
+    let mut term = Terminal::new(80, 24);
+    // Scroll region rows 0..=9 (1-indexed 1;10). Park the cursor on the
+    // region's last row and place a 3-row image: two of the three advance
+    // newlines scroll the region.
+    term.set_cell_dimensions(1, 1);
+    term.process(b"\x1b[1;10r\x1b[10;1H");
+    assert_eq!((term.cursor().col, term.cursor().row), (0, 9));
+
+    term.process(b"\x1b_Ga=t,f=24,i=5,s=1,v=3;AAAAAAAAAAAA\x1b\\");
+    term.process(b"\x1b_Ga=p,i=5\x1b\\");
+
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 9),
+        "cursor clamps to the scroll region's bottom margin after scrolling"
+    );
+    // The scrolled placement rides the scroll like any multi-row write:
+    // placed at the region's bottom row, each advance newline scrolls it up.
+    assert_eq!(
+        term.graphics_at_row(6).len(),
+        1,
+        "placement moved up with the scroll"
+    );
+    assert_eq!(term.graphics_at_row(9).len(), 0);
+}
+
+/// Virtual placements (U=1) occupy cells via placeholder bookkeeping but do
+/// not move the cursor — kitty applies the same rule to unicode placements.
+#[test]
+fn virtual_placement_does_not_advance_cursor() {
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(1, 1);
+    term.process(b"\x1b_Ga=t,f=24,i=5,s=1,v=3;AAAAAAAAAAAA\x1b\\");
+
+    term.process(b"\x1b_Ga=p,i=5,U=1,c=2,r=2\x1b\\");
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 0),
+        "U=1 virtual placement must not move the cursor"
+    );
+    assert!(
+        !term
+            .graphics
+            .graphics_store
+            .all_virtual_placements()
+            .is_empty(),
+        "virtual placement is still registered"
     );
 }

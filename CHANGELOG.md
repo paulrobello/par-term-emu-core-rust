@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kitty placements now advance the cursor below the image** (`src/graphics/kitty.rs`, `src/terminal/mod.rs`). A display placement (`a=T`/`a=p`) at the cursor moves it to the first line below the image, spanning the placement's row count via the ordinary newline path — the scroll region and scrollback promotion apply exactly as for a multi-row text write. The `C=1` key suppresses the move (previously `C=` was silently dropped by the parser and the cursor never advanced, which broke layout for emitters like chafa); `C=0` or an omitted `C=` keeps the default, and virtual placements (`U=1`) never move the cursor, matching kitty's own rule for unicode placements.
+
 ## [0.48.0] - 2026-08-30
 
 ### Added
