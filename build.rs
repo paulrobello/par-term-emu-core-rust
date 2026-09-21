@@ -31,9 +31,22 @@ fn main() {
 }
 
 /// FNV-1a 64-bit checksum, matching the stamp written by `make proto-rust`.
-fn fnv1a(bytes: &[u8]) -> u64 {
+///
+/// `\r\n` is normalized to `\n` first: git can check the proto out with
+/// CRLF on Windows, and the checksum must not depend on checkout settings.
+fn fnv1a_normalized(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
+    let mut previous_cr = false;
     for &byte in bytes {
+        if previous_cr && byte == b'\n' {
+            // the \r was skipped; the \n of a CRLF pair is skipped too
+            previous_cr = false;
+            continue;
+        }
+        previous_cr = byte == b'\r';
+        if previous_cr {
+            continue;
+        }
         hash ^= u64::from(byte);
         hash = hash.wrapping_mul(0x100000001b3);
     }
@@ -65,7 +78,7 @@ fn check_proto_staleness() {
         return;
     };
 
-    if fnv1a(&proto_bytes) != embedded {
+    if fnv1a_normalized(&proto_bytes) != embedded {
         println!(
             "cargo:warning=ARC-020: proto/terminal.proto changed without regenerating \
              src/streaming/terminal.pb.rs (checksum mismatch). Run `make proto-rust` \

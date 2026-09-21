@@ -52,7 +52,7 @@ impl MuxClient {
         loop {
             match Self::connect(path) {
                 Ok(client) => return Ok(client),
-                Err(last) if Instant::now() < deadline => {
+                Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(50));
                 }
                 Err(last) => return Err(last),

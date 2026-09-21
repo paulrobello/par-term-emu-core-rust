@@ -223,6 +223,7 @@ fn dispatch(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn bind_replaces_a_stale_socket_file_and_sets_mode_0600() {
         let mut path = std::env::temp_dir();
