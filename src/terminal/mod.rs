@@ -2763,6 +2763,16 @@ impl Terminal {
                                 graphic.set_cell_dimensions(cell_width, cell_height);
                                 let span_rows = graphic.cell_span(cell_width, cell_height).1;
                                 self.graphics.graphics_store.add_graphic(graphic);
+                                // Graphic landed on screen: notify like the Sixel
+                                // (DCS) and iTerm2 inline paths do, so observers
+                                // and streaming graphics subscribers hear kitty
+                                // placements too. Row is the placement row,
+                                // captured before any cursor move.
+                                self.events
+                                    .terminal_events
+                                    .push(crate::terminal::TerminalEvent::GraphicsAdded(
+                                        position.1,
+                                    ));
                                 if !self.kitty_parser.suppress_cursor_move {
                                     // Kitty TGP: a placement at the cursor moves it
                                     // to the first line below the image unless C=1

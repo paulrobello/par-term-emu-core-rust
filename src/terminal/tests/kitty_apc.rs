@@ -443,3 +443,42 @@ fn virtual_placement_does_not_advance_cursor() {
         "virtual placement is still registered"
     );
 }
+
+/// a=t (transmit-and-display) and a=p (put) must emit GraphicsAdded like the
+/// Sixel (DCS) and iTerm2 inline paths do — otherwise observers subscribed to
+/// graphics_added and the streaming server's graphics subscribers never hear
+/// kitty placements. The event carries the placement row, captured before the
+/// cursor advance.
+#[test]
+fn display_paths_emit_graphics_added() {
+    use crate::terminal::TerminalEvent;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_cell_dimensions(1, 1);
+
+    // a=t: transmit a 2x2 image and display it at the cursor (0, 0).
+    term.process(b"\x1b_Ga=t,f=24,i=42,s=2,v=2;AAAAAAAAAAAAAAAA\x1b\\");
+    let row = term
+        .poll_events()
+        .into_iter()
+        .find_map(|e| match e {
+            TerminalEvent::GraphicsAdded(row) => Some(row),
+            _ => None,
+        })
+        .expect("a=t must emit GraphicsAdded");
+    assert_eq!(row, 0, "a=t at cursor (0, 0) reports the placement row");
+
+    // a=p: re-displaying the stored image is a new placement at the
+    // current cursor row.
+    let row_before = term.cursor().row;
+    term.process(b"\x1b_Ga=p,i=42\x1b\\");
+    let row = term
+        .poll_events()
+        .into_iter()
+        .find_map(|e| match e {
+            TerminalEvent::GraphicsAdded(row) => Some(row),
+            _ => None,
+        })
+        .expect("a=p must emit GraphicsAdded");
+    assert_eq!(row, row_before, "a=p reports the placement row");
+}
