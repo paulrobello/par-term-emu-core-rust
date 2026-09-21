@@ -186,7 +186,7 @@ impl MuxTree {
         command: Option<&str>,
     ) -> Result<PaneId, MuxError> {
         if !self.windows.contains_key(&window_id) {
-            return Err(MuxError::NoSuchPane(PaneId(0)));
+            return Err(MuxError::NoSuchWindow(window_id));
         }
         let pane_id = self.ids.next_pane();
         let pane = self.factory.create_pane(pane_id, cols, rows, command)?;
@@ -451,6 +451,13 @@ mod tests {
         let mut tree = tree();
         let result = tree.new_window(SessionId(999), "logs", 80, 24);
         assert!(matches!(result, Err(MuxError::NoSuchSession(_))));
+    }
+
+    #[test]
+    fn new_pane_rejects_an_unknown_window() {
+        let mut tree = tree();
+        let result = tree.new_pane(WindowId(999), 80, 24, None);
+        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
     }
 
     #[test]
