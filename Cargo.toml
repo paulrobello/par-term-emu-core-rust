@@ -72,6 +72,10 @@ axum = { version = "0.8.9", features = ["ws"], optional = true }
 tower-http = { version = "0.6.11", features = ["fs", "trace", "cors"], optional = true }
 futures-util = { version = "0.3.32", optional = true }
 
+# Cross-platform local socket (Unix domain sockets / Windows named pipes) for
+# the par-mux control socket (see par-mux.md D4).
+interprocess = { version = "2.4.2", optional = true }
+
 # CLI dependencies (for streaming server binary)
 clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
 anyhow = { version = "1.0.102", optional = true }
@@ -136,6 +140,12 @@ nix = { version = "0.31.3", features = ["process", "term", "signal"], optional =
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { version = "0.7.0", optional = true }
 
+# Windows-only: UTF-16 SDDL input for the par-mux named-pipe security
+# descriptor (par-mux.md D4). Referenced by the `mux` feature, which activates
+# it only where the target table applies.
+[target.'cfg(windows)'.dependencies]
+widestring = { version = "1.2", optional = true }
+
 [build-dependencies]
 # Only needed for regenerating protobuf code (requires protoc installed)
 prost-build = { version = "0.14.3", optional = true }
@@ -182,7 +192,9 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
 # control-mode socket. Needs real PTYs and an async runtime, so it is
 # deliberately absent from `default` and `sim` — see par-mux.md D1.
-mux = ["pty_session", "tokio"]
+# `widestring` exists only under [target.'cfg(windows)'.dependencies], so it is
+# pulled in on Windows builds only.
+mux = ["pty_session", "tokio", "interprocess", "widestring"]
 
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms

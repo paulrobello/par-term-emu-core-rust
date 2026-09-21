@@ -7,12 +7,15 @@
 
 use crate::mux::command::{parse_command, MuxCommand};
 use crate::mux::emit::{emit, emit_block};
+use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
+use interprocess::local_socket::traits::Listener as _;
+use interprocess::TryClone as _;
 use parking_lot::Mutex;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
@@ -29,26 +32,21 @@ static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
-    listener: UnixListener,
+    listener: LocalListener,
     path: PathBuf,
     tree: Arc<Mutex<MuxTree>>,
     clients: Arc<Mutex<Vec<(u64, Sender<String>)>>>,
 }
 
 impl MuxServer {
-    /// Bind to `path`, replacing any stale socket file.
+    /// Bind to `path`, refusing a path a live server already owns and
+    /// reclaiming one only a stale remnant holds.
     ///
-    /// The socket is created with mode `0600`: access control is the
-    /// filesystem's, matching tmux's own model.
+    /// Access control is the transport's: mode `0600` on Unix, an owner-only
+    /// security descriptor on Windows — see [`crate::mux::ipc`].
     pub fn bind(path: &Path) -> std::io::Result<Self> {
-        let _ = std::fs::remove_file(path);
-        let listener = UnixListener::bind(path)?;
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
+        prepare_socket_path(path)?;
+        let listener = bind_local_listener(path)?;
 
         Ok(Self {
             listener,
@@ -67,8 +65,10 @@ impl MuxServer {
 
     /// Accept connections until the listener is closed.
     pub fn run(self) {
-        for stream in self.listener.incoming() {
-            let Ok(stream) = stream else { break };
+        loop {
+            let Ok(stream) = self.listener.accept() else {
+                break;
+            };
             let tree = Arc::clone(&self.tree);
             let clients = Arc::clone(&self.clients);
             std::thread::spawn(move || handle_client(stream, tree, clients));
@@ -80,7 +80,7 @@ impl MuxServer {
 /// thread reading commands. On disconnect, only this client's broadcast
 /// sender is removed — the accept loop and the tree are untouched.
 fn handle_client(
-    stream: UnixStream,
+    stream: LocalStream,
     tree: Arc<Mutex<MuxTree>>,
     clients: Arc<Mutex<Vec<(u64, Sender<String>)>>>,
 ) {
