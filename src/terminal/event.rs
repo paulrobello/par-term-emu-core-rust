@@ -208,6 +208,20 @@ pub enum TerminalEvent {
         /// Whether the scrollback buffer was also cleared (ESC[3J vs ESC[2J).
         include_scrollback: bool,
     },
+    /// An OSC 1337 `File=`/`MultipartFile=`/`FilePart=` sequence was dropped:
+    /// malformed input, a limit rejection, or a decode failure. No graphic or
+    /// transfer state changed.
+    ///
+    /// Emitted as a visible diagnostic so a dropped image is distinguishable
+    /// from a sequence never sent (the debug log is env-gated off by default).
+    /// Malformed-arg note: iTerm2 ends the `File=` parameter section at the
+    /// first `:` (VT100XtermParser.m, `kXtermParserHeaderEndState`), so
+    /// colon-separated args are rejected there and here alike — arguments must
+    /// be `;`-separated with a single `:` before the base64 payload.
+    InlineImageDropped {
+        /// What was dropped and why
+        reason: String,
+    },
 }
 
 impl TerminalEvent {
@@ -239,6 +253,7 @@ impl TerminalEvent {
             TerminalEvent::FileTransferFailed { .. } => TerminalEventKind::FileTransferFailed,
             TerminalEvent::UploadRequested { .. } => TerminalEventKind::UploadRequested,
             TerminalEvent::ScreenCleared { .. } => TerminalEventKind::ScreenCleared,
+            TerminalEvent::InlineImageDropped { .. } => TerminalEventKind::InlineImageDropped,
         }
     }
 }
@@ -271,6 +286,7 @@ pub enum TerminalEventKind {
     FileTransferFailed,
     UploadRequested,
     ScreenCleared,
+    InlineImageDropped,
 }
 
 /// A drained shell integration event: (event_type, command, exit_code, timestamp, cursor_line).
@@ -513,6 +529,14 @@ mod tests {
             format: "base64".to_string(),
         };
         assert_eq!(event.kind(), TerminalEventKind::UploadRequested);
+    }
+
+    #[test]
+    fn test_event_kind_inline_image_dropped() {
+        let event = TerminalEvent::InlineImageDropped {
+            reason: "base64 decode failed".to_string(),
+        };
+        assert_eq!(event.kind(), TerminalEventKind::InlineImageDropped);
     }
 
     #[test]

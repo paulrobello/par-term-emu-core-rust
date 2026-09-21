@@ -1596,6 +1596,7 @@ impl PyTerminal {
             "file_transfer_completed" => Some(TerminalEventKind::FileTransferCompleted),
             "file_transfer_failed" => Some(TerminalEventKind::FileTransferFailed),
             "upload_requested" => Some(TerminalEventKind::UploadRequested),
+            "inline_image_dropped" => Some(TerminalEventKind::InlineImageDropped),
             _ => None,
         }
     }

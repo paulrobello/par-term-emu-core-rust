@@ -1975,3 +1975,159 @@ fn test_environment_changed_hostname() {
         "Expected EnvironmentChanged event for hostname"
     );
 }
+
+// === OSC 1337 iTerm2 inline image wire tests ===
+//
+// Wire format: `\x1b]1337;File=<params>:<base64>\x07` with `;`-separated
+// arguments. iTerm2 ends the parameter section at the FIRST ':'
+// (VT100XtermParser.m, kXtermParserHeaderEndState), so colon-separated
+// arguments truncate the params and the remainder fails base64 decode —
+// rejected here to match iTerm2.
+
+/// Base64 of a self-contained 2x2 red PNG (73 decoded bytes).
+const TINY_PNG_B64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==";
+const TINY_PNG_BYTES: usize = 73;
+
+fn tiny_png_inline_sequence() -> Vec<u8> {
+    format!(
+        "\x1b]1337;File=inline=1;size={}:{}\x07",
+        TINY_PNG_BYTES, TINY_PNG_B64
+    )
+    .into_bytes()
+}
+
+fn has_inline_image_dropped(events: &[crate::terminal::TerminalEvent]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, crate::terminal::TerminalEvent::InlineImageDropped { .. }))
+}
+
+#[test]
+fn test_osc1337_inline_image_single_sequence() {
+    let mut term = Terminal::new(80, 24);
+    term.process(&tiny_png_inline_sequence());
+
+    assert_eq!(term.graphics_count(), 1, "one inline image must be stored");
+    let graphic = &term.all_graphics()[0];
+    assert_eq!((graphic.width, graphic.height), (2, 2));
+
+    let events = term.poll_events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, crate::terminal::TerminalEvent::GraphicsAdded(_))),
+        "GraphicsAdded must fire for a placed inline image"
+    );
+    assert!(
+        !has_inline_image_dropped(&events),
+        "a well-formed sequence must not produce a drop diagnostic"
+    );
+}
+
+#[test]
+fn test_osc1337_inline_image_chunked_wire_delivery() {
+    // Feed the sequence 7 bytes at a time across process() calls — the way a
+    // PTY delivers it. The OSC parser must buffer until the terminator.
+    let seq = tiny_png_inline_sequence();
+    let mut term = Terminal::new(80, 24);
+    for chunk in seq.chunks(7) {
+        term.process(chunk);
+    }
+
+    assert_eq!(
+        term.graphics_count(),
+        1,
+        "chunked wire delivery must still yield the image"
+    );
+    assert_eq!(term.all_graphics()[0].width, 2);
+}
+
+#[test]
+fn test_osc1337_inline_image_multipart_delivery() {
+    let mut term = Terminal::new(80, 24);
+    term.process(
+        format!(
+            "\x1b]1337;MultipartFile=inline=1;size={}\x07",
+            TINY_PNG_BYTES
+        )
+        .as_bytes(),
+    );
+    // Split the base64 at a 4-character boundary so each half decodes
+    // independently (36 + 37 decoded bytes = 73).
+    let split = TINY_PNG_B64.len() / 2 / 4 * 4;
+    let (first, second) = TINY_PNG_B64.split_at(split);
+    term.process(format!("\x1b]1337;FilePart={}\x07", first).as_bytes());
+    term.process(format!("\x1b]1337;FilePart={}\x07", second).as_bytes());
+
+    assert_eq!(
+        term.graphics_count(),
+        1,
+        "MultipartFile/FilePart delivery must yield the image"
+    );
+}
+
+#[test]
+fn test_osc1337_malformed_missing_payload_separator() {
+    // ';' used where the ':' params/payload separator belongs: the sequence
+    // contains no colon at all.
+    let mut term = Terminal::new(80, 24);
+    term.process(format!("\x1b]1337;File=inline=1;size={}\x07", TINY_PNG_BYTES).as_bytes());
+
+    assert_eq!(term.graphics_count(), 0);
+    let events = term.poll_events();
+    assert!(
+        has_inline_image_dropped(&events),
+        "a malformed File= sequence must produce an InlineImageDropped diagnostic, got {:?}",
+        events
+    );
+}
+
+#[test]
+fn test_osc1337_malformed_colon_separated_args_rejected() {
+    // Args joined with ':' instead of ';' — observed twice from real emitters.
+    // iTerm2 ends the params section at the first ':' so the remaining args
+    // land in the payload and fail base64 decode; this test locks in the
+    // reject-to-match-iTerm2 decision.
+    let mut term = Terminal::new(80, 24);
+    term.process(
+        format!(
+            "\x1b]1337;File=inline=1:size={}:{}\x07",
+            TINY_PNG_BYTES, TINY_PNG_B64
+        )
+        .as_bytes(),
+    );
+
+    assert_eq!(term.graphics_count(), 0);
+    let events = term.poll_events();
+    assert!(
+        has_inline_image_dropped(&events),
+        "colon-separated args must be rejected with an InlineImageDropped diagnostic, got {:?}",
+        events
+    );
+}
+
+#[test]
+fn test_osc1337_malformed_invalid_base64() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b]1337;File=inline=1:not!base64@#\x07");
+
+    assert_eq!(term.graphics_count(), 0);
+    let events = term.poll_events();
+    assert!(
+        has_inline_image_dropped(&events),
+        "invalid base64 payload must produce an InlineImageDropped diagnostic"
+    );
+}
+
+#[test]
+fn test_osc1337_filepart_without_multipartfile() {
+    let mut term = Terminal::new(80, 24);
+    term.process(b"\x1b]1337;FilePart=aGVsbG8=\x07");
+
+    assert_eq!(term.graphics_count(), 0);
+    let events = term.poll_events();
+    assert!(
+        has_inline_image_dropped(&events),
+        "FilePart without MultipartFile must produce an InlineImageDropped diagnostic"
+    );
+}

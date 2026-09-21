@@ -740,6 +740,7 @@ File transfer events are delivered through the [Observer API](#observer-api). Su
 | `file_transfer_completed` | `id`, `filename`, `size` | Transfer finished successfully |
 | `file_transfer_failed` | `id`, `reason` | Transfer failed (decode error, size exceeded, cancelled) |
 | `upload_requested` | `format` | Host requested a file upload (e.g., `"tgz"`) |
+| `inline_image_dropped` | `reason` | An OSC 1337 `File=`/`MultipartFile=`/`FilePart=` sequence was dropped (malformed input, limit rejection, or decode failure) — the visible diagnostic that distinguishes a dropped image from a sequence never sent |
 
 #### Download Example
 

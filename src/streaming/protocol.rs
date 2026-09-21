@@ -144,6 +144,12 @@ pub fn terminal_event_to_server_message(event: TerminalEvent) -> Option<ServerMe
         TerminalEvent::ScreenCleared { include_scrollback } => {
             ServerMessage::screen_cleared(include_scrollback)
         }
+        TerminalEvent::InlineImageDropped { .. } => {
+            // Diagnostic-only event (OSC 1337 drop signal), not part of the
+            // streaming wire protocol; Python consumers read it via
+            // poll_events()/observers instead.
+            return None;
+        }
     })
 }
 

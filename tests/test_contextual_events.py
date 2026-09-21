@@ -224,3 +224,17 @@ def test_multiple_cwd_changes_emit_multiple_events() -> None:
     assert cwd_events[0]["value"] == "/dir1"
     assert cwd_events[1]["value"] == "/dir2"
     assert cwd_events[2]["value"] == "/dir3"
+
+
+def test_inline_image_dropped_event_for_malformed_osc1337() -> None:
+    """Malformed OSC 1337 File= sequences emit inline_image_dropped diagnostics."""
+    term = pte.Terminal(80, 24)
+    # Args joined with ':' instead of ';' — rejected to match iTerm2, which
+    # ends the params section at the first ':' (VT100XtermParser.m).
+    term.process(b"\x1b]1337;File=inline=1:size=3:AAAA\x07")
+    # Missing ':' payload separator entirely.
+    term.process(b"\x1b]1337;File=inline=1;size=3\x07")
+    events = term.poll_events()
+    drops = [e for e in events if e["type"] == "inline_image_dropped"]
+    assert len(drops) == 2
+    assert all("reason" in e for e in drops)

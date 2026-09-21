@@ -189,6 +189,14 @@ impl Terminal {
                             size, limits.max_total_memory
                         ),
                     );
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::InlineImageDropped {
+                            reason: format!(
+                                "MultipartFile rejected: size {} exceeds graphics limit {}",
+                                size, limits.max_total_memory
+                            ),
+                        },
+                    );
                     return;
                 }
             }
@@ -214,6 +222,14 @@ impl Terminal {
                             "MultipartFile file transfer rejected: size {} exceeds limit {}",
                             size, max_size
                         ),
+                    );
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::InlineImageDropped {
+                            reason: format!(
+                                "MultipartFile file transfer rejected: size {} exceeds limit {}",
+                                size, max_size
+                            ),
+                        },
                     );
                     return;
                 }
@@ -266,6 +282,11 @@ impl Terminal {
                     "ITERM",
                     "FilePart received without MultipartFile",
                 );
+                self.events.terminal_events.push(
+                    crate::terminal::TerminalEvent::InlineImageDropped {
+                        reason: "FilePart received without MultipartFile".to_string(),
+                    },
+                );
                 return;
             }
         };
@@ -296,6 +317,12 @@ impl Terminal {
                             },
                         );
                     }
+                } else {
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::InlineImageDropped {
+                            reason: format!("FilePart base64 decode failed: {}", e),
+                        },
+                    );
                 }
                 self.graphics.iterm_multipart_buffer = None;
                 return;
@@ -351,6 +378,14 @@ impl Terminal {
                             state.accumulated_size, decoded_size, expected_size
                         ),
                     );
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::InlineImageDropped {
+                            reason: format!(
+                                "FilePart rejected: accumulated {} + chunk {} > expected {}",
+                                state.accumulated_size, decoded_size, expected_size
+                            ),
+                        },
+                    );
                     self.graphics.iterm_multipart_buffer = None;
                     return;
                 }
@@ -387,6 +422,14 @@ impl Terminal {
                         },
                     );
                 }
+            } else {
+                self.events.terminal_events.push(
+                    crate::terminal::TerminalEvent::InlineImageDropped {
+                        reason:
+                            "MultipartFile missing size parameter - cannot determine completion"
+                                .to_string(),
+                    },
+                );
             }
             self.graphics.iterm_multipart_buffer = None;
             return;
@@ -483,6 +526,12 @@ impl Terminal {
                     "ITERM",
                     "No colon separator in File= format",
                 );
+                self.events.terminal_events.push(
+                    crate::terminal::TerminalEvent::InlineImageDropped {
+                        reason: "File= missing ':' separator between parameters and payload"
+                            .to_string(),
+                    },
+                );
                 return;
             }
         };
@@ -494,6 +543,14 @@ impl Terminal {
                 "ITERM",
                 &format!("Unsupported OSC 1337 command: {}", params_str),
             );
+            self.events
+                .terminal_events
+                .push(crate::terminal::TerminalEvent::InlineImageDropped {
+                    reason: format!(
+                        "unsupported OSC 1337 command (expected File=): {}",
+                        params_str
+                    ),
+                });
             return;
         }
 
@@ -573,6 +630,12 @@ impl Terminal {
                     // Add to graphics store (limit enforced internally)
                     self.graphics.graphics_store.add_graphic(graphic.clone());
 
+                    // Announce placement like the Sixel path (dcs) does so
+                    // graphics subscribers hear iTerm2 images too.
+                    self.events.terminal_events.push(
+                        crate::terminal::TerminalEvent::GraphicsAdded(graphic.position.1),
+                    );
+
                     debug::log(
                         debug::DebugLevel::Debug,
                         "ITERM",
@@ -588,11 +651,16 @@ impl Terminal {
                     );
                 }
                 Err(e) => {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "ITERM",
-                        &format!("Failed to decode iTerm image: {}", e),
-                    );
+                    let mut reason = format!("File= image decode failed: {}", e);
+                    if image_data.contains(':') {
+                        reason.push_str(
+                            " (payload contains ':' — arguments must be ';' separated; iTerm2 ends the params section at the first ':')",
+                        );
+                    }
+                    debug::log(debug::DebugLevel::Debug, "ITERM", &reason);
+                    self.events
+                        .terminal_events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped { reason });
                 }
             }
         } else {
@@ -604,11 +672,16 @@ impl Terminal {
             ) {
                 Ok(d) => d,
                 Err(e) => {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "ITERM",
-                        &format!("File transfer base64 decode failed: {}", e),
-                    );
+                    let mut reason = format!("File= payload base64 decode failed: {}", e);
+                    if image_data.contains(':') {
+                        reason.push_str(
+                            " (payload contains ':' — arguments must be ';' separated; iTerm2 ends the params section at the first ':')",
+                        );
+                    }
+                    debug::log(debug::DebugLevel::Debug, "ITERM", &reason);
+                    self.events
+                        .terminal_events
+                        .push(crate::terminal::TerminalEvent::InlineImageDropped { reason });
                     return;
                 }
             };
@@ -1151,19 +1224,28 @@ mod tests {
     #[test]
     fn test_handle_iterm_image_routes_file_part() {
         let mut term = create_test_terminal();
-        // FilePart= without a preceding MultipartFile -> early return, no state, no panic
+        // FilePart= without a preceding MultipartFile -> no state, no panic,
+        // and a drop diagnostic instead of silence
         term.handle_iterm_image("FilePart=AAAA");
         assert!(term.graphics.iterm_multipart_buffer.is_none());
-        assert!(term.events.terminal_events.is_empty());
+        assert!(term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::InlineImageDropped { .. })));
     }
 
     #[test]
     fn test_handle_iterm_image_routes_single_file_no_colon() {
         let mut term = create_test_terminal();
-        // No ':' separator -> early return, nothing added, no events
+        // No ':' separator -> nothing added, drop diagnostic emitted
         term.handle_iterm_image("File=inline=1");
         assert_eq!(term.graphics_count(), 0);
-        assert!(term.events.terminal_events.is_empty());
+        assert!(term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::InlineImageDropped { .. })));
     }
 
     // ====================================================================
@@ -1203,8 +1285,18 @@ mod tests {
             term.graphics.iterm_multipart_buffer.is_none(),
             "File-transfer MultipartFile exceeding max_transfer_size must be rejected"
         );
-        // No FileTransferStarted event should be emitted
-        assert!(term.events.terminal_events.is_empty());
+        // No FileTransferStarted event should be emitted, but the drop is
+        // diagnosed instead of silently vanishing
+        assert!(!term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::FileTransferStarted { .. })));
+        assert!(term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::InlineImageDropped { .. })));
     }
 
     #[test]
@@ -1239,11 +1331,15 @@ mod tests {
     // ====================================================================
 
     #[test]
-    fn test_file_part_without_multipart_is_noop() {
+    fn test_file_part_without_multipart_emits_diagnostic() {
         let mut term = create_test_terminal();
         term.handle_iterm_image("FilePart=AAAA");
         assert!(term.graphics.iterm_multipart_buffer.is_none());
-        assert!(term.events.terminal_events.is_empty());
+        assert!(term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::InlineImageDropped { .. })));
     }
 
     #[test]
@@ -1407,7 +1503,11 @@ mod tests {
         // Looks like an iTerm2 sequence but prefix is not "File="
         term.handle_iterm_image("SetUserVar=foo=bar:baz");
         assert_eq!(term.graphics_count(), 0);
-        assert!(term.events.terminal_events.is_empty());
+        assert!(term
+            .events
+            .terminal_events
+            .iter()
+            .any(|e| matches!(e, TerminalEvent::InlineImageDropped { .. })));
     }
 
     #[test]

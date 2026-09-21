@@ -1003,6 +1003,15 @@ OSC 133 ; D ; 0 ST       # Command finished with exit code 0
 OSC 1337 ; File=inline=1:iVBORw0KGgoAAAA... ST
 ```
 
+**Malformed input:** iTerm2 ends the parameter section at the *first* `:`
+(`VT100XtermParser.m` in the iTerm2 sources treats it as the header end for
+`File=`/`Copy=`), so arguments must be `;`-separated with a single `:` before
+the base64 payload. Sequences that join arguments with `:` are therefore
+rejected here as well — the remainder lands in the payload and fails base64
+decode. Every dropped `File=`/`MultipartFile=`/`FilePart=` sequence emits an
+`InlineImageDropped` terminal event (see `poll_events`) so a malformed emitter
+is distinguishable from a sequence never sent.
+
 **Features:**
 - Automatic image format detection (PNG, JPEG, GIF)
 - Dimension specification in multiple units

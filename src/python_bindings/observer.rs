@@ -285,6 +285,10 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
                 include_scrollback.to_string(),
             );
         }
+        TerminalEvent::InlineImageDropped { reason } => {
+            map.insert("type".to_string(), "inline_image_dropped".to_string());
+            map.insert("reason".to_string(), reason.clone());
+        }
     }
     map
 }
