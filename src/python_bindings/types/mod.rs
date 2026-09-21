@@ -13,7 +13,6 @@ pub mod notification;
 pub mod recording;
 pub mod screen;
 pub mod selection;
-pub mod session;
 pub mod shell;
 pub mod trigger;
 
@@ -26,7 +25,6 @@ pub use notification::*;
 pub use recording::*;
 pub use screen::*;
 pub use selection::*;
-pub use session::*;
 pub use shell::*;
 pub use trigger::*;
 

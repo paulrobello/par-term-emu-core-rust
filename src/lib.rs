@@ -123,13 +123,12 @@ pub use python_bindings::{
     PyImageDimension, PyImageFormat, PyImagePlacement, PyImageProtocol, PyInlineImage,
     PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEncoding, PyMouseEvent,
     PyMousePosition, PyNormalizationForm, PyNotification, PyNotificationConfig,
-    PyNotificationEvent, PyPaneState, PyPerformanceMetrics, PyProfilingData, PyProgressBar,
-    PyProgressState, PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
-    PyRenderingHint, PyScreenSnapshot, PyScreenshotConfig, PyScrollbackStats, PySearchMatch,
-    PySelection, PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats,
-    PySnapshotDiff, PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification,
-    PyTrigger, PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
-    PyWindowLayout,
+    PyNotificationEvent, PyPerformanceMetrics, PyProfilingData, PyProgressBar, PyProgressState,
+    PyPtyTerminal, PyRecordingEvent, PyRecordingSession, PyRegexMatch, PyRenderingHint,
+    PyScreenSnapshot, PyScreenshotConfig, PyScrollbackStats, PySearchMatch, PySelection,
+    PySelectionMode, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyStreamingConfig, PyStreamingServer, PyTerminal, PyTmuxNotification, PyTrigger,
+    PyTriggerAction, PyTriggerMatch, PyUnderlineStyle, PyUnicodeVersion, PyWidthConfig,
 };
 
 /// Convert PtyError to PyErr (QA-009: centralized error mapping)
@@ -253,9 +252,6 @@ fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyLineDiff>()?;
     m.add_class::<PySnapshotDiff>()?;
     m.add_class::<PyRegexMatch>()?;
-    m.add_class::<PyPaneState>()?;
-    m.add_class::<PyWindowLayout>()?;
-    m.add_class::<PySessionState>()?;
     m.add_class::<PyImageProtocol>()?;
     m.add_class::<PyImageFormat>()?;
     m.add_class::<PyInlineImage>()?;

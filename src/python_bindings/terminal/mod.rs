@@ -14,7 +14,6 @@ mod file_transfer_api;
 mod image_api;
 mod metrics_api;
 mod mouse_api;
-mod multiplexing_api;
 mod notification_api;
 mod recording_api;
 mod scrollback_api;

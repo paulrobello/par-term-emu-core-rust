@@ -45,9 +45,9 @@ pub use types::{
     PyDamageRegion, PyDetectedItem, PyEscapeSequenceProfile, PyFrameTiming, PyGraphic,
     PyImageDimension, PyImageFormat, PyImagePlacement, PyImageProtocol, PyInlineImage,
     PyJoinedLines, PyLineDiff, PyMacro, PyMacroEvent, PyMouseEvent, PyMousePosition,
-    PyNotification, PyNotificationConfig, PyNotificationEvent, PyPaneState, PyPerformanceMetrics,
+    PyNotification, PyNotificationConfig, PyNotificationEvent, PyPerformanceMetrics,
     PyProfilingData, PyProgressBar, PyRecordingEvent, PyRecordingSession, PyRegexMatch,
     PyRenderingHint, PyScreenSnapshot, PyScrollbackStats, PySearchMatch, PySelection,
-    PySelectionMode, PySessionState, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
-    PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch, PyWindowLayout,
+    PySelectionMode, PyShellIntegration, PyShellIntegrationStats, PySnapshotDiff,
+    PyTmuxNotification, PyTrigger, PyTriggerAction, PyTriggerMatch,
 };

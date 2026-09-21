@@ -15,7 +15,6 @@ mod graphics;
 pub mod image;
 pub mod macros;
 pub mod metrics;
-pub mod multiplexing;
 pub mod notification;
 pub mod progress;
 pub mod recording;
@@ -46,7 +45,6 @@ pub use metrics::{
     BenchmarkCategory, BenchmarkResult, BenchmarkSuite, EscapeSequenceProfile, FrameTiming,
     PerformanceMetrics, ProfileCategory, ProfilingData, TerminalStats,
 };
-pub use multiplexing::{LayoutDirection, PaneState, SessionState, WindowLayout};
 pub use notification::{
     Notification, NotificationAlert, NotificationConfig, NotificationEvent, NotificationTrigger,
     Urgency,
@@ -894,8 +892,6 @@ pub struct Terminal {
     pub(crate) rendering: RenderingState,
     /// Regex search state (ARC-001 sub-struct)
     pub(crate) search: SearchState,
-    /// Current pane state (for multiplexing)
-    pub(crate) pane_state: Option<PaneState>,
     /// Inline image storage (ARC-001 sub-struct)
     pub(crate) inline_image_state: InlineImageState,
 
@@ -1155,8 +1151,6 @@ impl Terminal {
                 regex_matches: Vec::new(),
                 current_regex_pattern: None,
             },
-            // Multiplexing
-            pane_state: None,
             // Inline images
             inline_image_state: InlineImageState {
                 inline_images: Vec::new(),
