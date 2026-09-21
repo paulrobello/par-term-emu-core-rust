@@ -127,6 +127,7 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
 
     - name: Prove mux is isolated from sim (D1)
+      shell: bash
       run: |
         cargo build --no-default-features --features sim
         if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty'; then
