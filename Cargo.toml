@@ -179,6 +179,11 @@ streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
 # deps the library streaming module never uses. Depends on `streaming`.
 streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
 
+# Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
+# control-mode socket. Needs real PTYs and an async runtime, so it is
+# deliberately absent from `default` and `sim` — see par-mux.md D1.
+mux = ["pty_session", "tokio"]
+
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms
 jemalloc = ["tikv-jemallocator"]

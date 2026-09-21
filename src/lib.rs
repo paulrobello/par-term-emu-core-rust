@@ -62,6 +62,8 @@ pub mod graphics;
 pub mod grid;
 pub mod html_export;
 pub mod macros;
+#[cfg(feature = "mux")]
+pub mod mux;
 pub mod mouse;
 pub mod observer;
 pub mod pty_error;
