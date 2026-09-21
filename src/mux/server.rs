@@ -295,30 +295,28 @@ fn dispatch(
         }
         MuxCommand::CapturePane {
             pane,
-            history_lines,
+            start_line,
+            end_line,
         } => {
             let guard = tree.lock();
             match guard.pane(pane) {
                 Some(target) => {
                     let terminal = target.terminal();
                     let term = terminal.read();
-                    let body = match history_lines {
-                        // Decision 2: no new Terminal API — the same
-                        // scrollback + visible-screen composition
-                        // export_text() already does, just capped to the
-                        // requested tail instead of the whole buffer.
-                        Some(lines) => {
-                            let mut out = term.export_scrollback(
-                                crate::terminal::ExportFormat::Plain,
-                                Some(lines),
-                            );
-                            if !out.is_empty() && !out.ends_with('\n') {
-                                out.push('\n');
-                            }
-                            out.push_str(&term.content());
-                            out
+                    let body = match (start_line, end_line) {
+                        // Decision 2: no new Terminal API — the default
+                        // capture is the same visible-screen read
+                        // refresh-client already does.
+                        (None, None) => term.content(),
+                        (start, end) => {
+                            // export_scrollback only takes a tail count, so
+                            // the tmux -S/-E range trim happens here on the
+                            // composed buffer, not in Terminal.
+                            let scrollback =
+                                term.export_scrollback(crate::terminal::ExportFormat::Plain, None);
+                            let screen = term.content();
+                            capture_range(&scrollback, &screen, start, end)
                         }
-                        None => term.content(),
                     };
                     emit_block(command_number, &body, true)
                 }
@@ -350,6 +348,55 @@ fn dispatch(
             }
         }
     }
+}
+
+/// Resolve a `-S`/`-E` capture range against a pane's composed buffer.
+///
+/// tmux anchors line `0` at the first line of the visible pane; negative
+/// numbers are history lines counted back from there (`-1` is the line
+/// directly above the screen) and positive numbers are screen lines below
+/// the first. Both bounds are inclusive, offsets beyond the buffer clamp to
+/// its edges, and a start past the end yields an empty capture. A `None`
+/// bound keeps tmux's defaults — start at the first visible line, end at
+/// the last — so `-S -3` alone captures three history lines plus the whole
+/// screen.
+///
+/// History lines are `export_scrollback`'s grid rows while screen lines are
+/// `content()`'s logical lines, so offsets count lines of the composed
+/// text, not of the raw grid. `scrollback` arrives newest-first, as
+/// `export_scrollback` emits it, and is reversed to chronological order
+/// before composing with `screen`.
+fn capture_range(scrollback: &str, screen: &str, start: Option<i64>, end: Option<i64>) -> String {
+    let mut lines: Vec<&str> = Vec::new();
+    if !scrollback.is_empty() {
+        // export_scrollback emits newest-first (its loop walks the
+        // logical indices backwards), so reverse to chronological before
+        // composing with the screen — tmux offsets count oldest-first.
+        let mut history: Vec<&str> = scrollback.trim_end_matches('\n').split('\n').collect();
+        history.reverse();
+        lines.extend(history);
+    }
+    let history = lines.len() as i64;
+    if !screen.is_empty() {
+        lines.extend(screen.split('\n'));
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let screen_len = lines.len() as i64 - history;
+    let resolve = |offset: Option<i64>, default: i64| -> usize {
+        offset
+            .unwrap_or(default)
+            .saturating_add(history)
+            .clamp(0, lines.len() as i64 - 1) as usize
+    };
+    let first = resolve(start, 0);
+    let last = resolve(end, screen_len - 1);
+    if first > last {
+        return String::new();
+    }
+    lines[first..=last].join("\n")
 }
 
 #[cfg(test)]
@@ -386,6 +433,28 @@ mod tests {
         let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
             ShellPaneFactory::default(),
         ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        (tree, clients)
+    }
+
+    /// A factory whose panes stay silent, so a capture-range test sees only
+    /// the bytes it fed the terminal itself — no shell-prompt races.
+    struct SilentPaneFactory;
+
+    impl crate::mux::pane::PaneFactory for SilentPaneFactory {
+        fn create_pane(
+            &self,
+            id: crate::mux::ids::PaneId,
+            cols: u16,
+            rows: u16,
+            _command: Option<&str>,
+        ) -> Result<crate::mux::pane::MuxPane, crate::mux::pane::MuxError> {
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 30"))
+        }
+    }
+
+    fn quiet_harness() -> (Arc<Mutex<MuxTree>>, Clients) {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(SilentPaneFactory))));
         let clients = Arc::new(Mutex::new(Vec::new()));
         (tree, clients)
     }
@@ -465,6 +534,88 @@ mod tests {
         let (tree, clients) = harness();
         let reply = dispatch("capture-pane -t %999 -p", 1, &tree, &clients);
         assert!(reply.contains("%error"));
+    }
+
+    #[test]
+    fn capture_range_slices_history_with_tmux_negative_offsets() {
+        // export_scrollback emits newest-first: h1 is the oldest history
+        // line, h3 the newest (the line directly above a two-line screen).
+        let out = capture_range("h3\nh2\nh1\n", "s1\ns2", Some(-2), Some(-1));
+        assert_eq!(out, "h2\nh3");
+    }
+
+    #[test]
+    fn capture_range_positive_offsets_address_screen_lines() {
+        let out = capture_range("h3\nh2\nh1\n", "s1\ns2", Some(0), Some(1));
+        assert_eq!(out, "s1\ns2");
+    }
+
+    #[test]
+    fn capture_range_start_only_defaults_end_to_the_screen_bottom() {
+        let out = capture_range("h3\nh2\nh1\n", "s1\ns2", Some(-3), None);
+        assert_eq!(out, "h1\nh2\nh3\ns1\ns2");
+    }
+
+    #[test]
+    fn capture_range_end_only_defaults_start_to_the_first_screen_line() {
+        let out = capture_range("h3\nh2\nh1\n", "s1\ns2", None, Some(0));
+        assert_eq!(out, "s1");
+    }
+
+    #[test]
+    fn capture_range_clamps_offsets_beyond_the_buffer() {
+        let out = capture_range("h1\n", "s1\ns2", Some(-99), Some(99));
+        assert_eq!(out, "h1\ns1\ns2");
+    }
+
+    #[test]
+    fn capture_range_returns_empty_for_a_reversed_range() {
+        let out = capture_range("h2\nh1\n", "s1", Some(1), Some(-1));
+        assert_eq!(out, "");
+    }
+
+    #[test]
+    fn capture_pane_s_and_e_return_the_requested_line_range() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // Thirty lines on a 24-row pane: L01..L06 scroll into history and
+        // L07..L30 stay visible. No trailing newline, so L30 holds the last
+        // row and nothing scrolls past it.
+        let payload = (1..=30)
+            .map(|n| format!("L{n:02}"))
+            .collect::<Vec<_>>()
+            .join("\r\n");
+        tree.lock()
+            .pane_mut(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(payload.as_bytes());
+
+        let reply = dispatch(
+            &format!("capture-pane -t {pane_id} -p -S -2 -E -1"),
+            2,
+            &tree,
+            &clients,
+        );
+        assert!(reply.contains("%end"), "capture succeeds: {reply}");
+        assert!(
+            reply.contains("L05"),
+            "second-to-last history line: {reply}"
+        );
+        assert!(reply.contains("L06"), "last history line: {reply}");
+        assert!(
+            !reply.contains("L04"),
+            "-S -2 starts at the second history line back: {reply}"
+        );
+        assert!(
+            !reply.contains("L07"),
+            "-E -1 ends above the visible screen: {reply}"
+        );
     }
 
     #[test]

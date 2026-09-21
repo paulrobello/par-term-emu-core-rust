@@ -64,9 +64,14 @@ pub enum MuxCommand {
     CapturePane {
         /// Target pane.
         pane: PaneId,
-        /// `-S`: how many scrollback lines to include before the visible
-        /// screen. `None` means the default (visible screen only).
-        history_lines: Option<usize>,
+        /// `-S`: first line to capture, tmux offset convention — `0` is the
+        /// first line of the visible screen, negative numbers are history
+        /// lines counted back from there (`-1` is the line directly above
+        /// the screen). `None` keeps tmux's default: the first visible line.
+        start_line: Option<i64>,
+        /// `-E`: last line to capture, inclusive, same offset convention.
+        /// `None` keeps tmux's default: the bottom of the visible screen.
+        end_line: Option<i64>,
     },
     /// Store text in the paste buffer.
     SetBuffer {
@@ -165,17 +170,16 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         "list-sessions" => Ok(MuxCommand::ListSessions),
         "capture-pane" => {
             let pane = target_pane("-t")?;
-            // tmux's `-S`/`-E` select a start/end line in scrollback (`-S`
-            // negative counts back from the bottom); Terminal only exposes a
-            // single `export_scrollback(max_lines)` knob (Decision 2), so `-S`
-            // maps onto that as a line count and `-E` is accepted but unused —
-            // capturing "the last N scrollback lines plus the visible screen"
-            // rather than an exact line range.
-            let history_lines = flag("-S")
-                .and_then(|raw| raw.parse::<i64>().ok().map(|n| n.unsigned_abs() as usize));
+            // tmux's `-S`/`-E` select a start/end line; the raw offsets are
+            // kept as-is (negative counts back from the screen top into
+            // history) and the server-side adapter resolves them against
+            // the combined scrollback+screen buffer.
+            let start_line = flag("-S").and_then(|raw| raw.parse::<i64>().ok());
+            let end_line = flag("-E").and_then(|raw| raw.parse::<i64>().ok());
             Ok(MuxCommand::CapturePane {
                 pane,
-                history_lines,
+                start_line,
+                end_line,
             })
         }
         "set-buffer" => {
@@ -323,14 +327,24 @@ mod tests {
             parse_command("capture-pane -t %3 -p").unwrap(),
             MuxCommand::CapturePane {
                 pane: PaneId(3),
-                history_lines: None
+                start_line: None,
+                end_line: None
             }
         );
         assert_eq!(
             parse_command("capture-pane -t %3 -p -S 50 -E -1").unwrap(),
             MuxCommand::CapturePane {
                 pane: PaneId(3),
-                history_lines: Some(50)
+                start_line: Some(50),
+                end_line: Some(-1)
+            }
+        );
+        assert_eq!(
+            parse_command("capture-pane -t %3 -p -S -20 -E -11").unwrap(),
+            MuxCommand::CapturePane {
+                pane: PaneId(3),
+                start_line: Some(-20),
+                end_line: Some(-11)
             }
         );
     }
