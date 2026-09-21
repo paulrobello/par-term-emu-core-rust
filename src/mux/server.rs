@@ -26,6 +26,12 @@ const DEFAULT_COLS: u16 = 80;
 /// Default pane size for sessions created without an explicit size.
 const DEFAULT_ROWS: u16 = 24;
 
+/// The paste buffer's name (single-buffer, no numbered stack — D3 non-goal).
+/// tmux's `set-buffer`/`show-buffer` grammar accepts an explicit `-b <name>`,
+/// but Phase 2's client never sends one, so every buffer command targets
+/// this one slot under the hood.
+const DEFAULT_BUFFER: &str = "default";
+
 /// Monotonic client ids, so a disconnecting client's broadcast sender can be
 /// removed eagerly rather than waiting for the next broadcast to fail.
 static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -287,6 +293,62 @@ fn dispatch(
                 .join("\n");
             emit_block(command_number, &body, true)
         }
+        MuxCommand::CapturePane {
+            pane,
+            history_lines,
+        } => {
+            let guard = tree.lock();
+            match guard.pane(pane) {
+                Some(target) => {
+                    let terminal = target.terminal();
+                    let term = terminal.read();
+                    let body = match history_lines {
+                        // Decision 2: no new Terminal API — the same
+                        // scrollback + visible-screen composition
+                        // export_text() already does, just capped to the
+                        // requested tail instead of the whole buffer.
+                        Some(lines) => {
+                            let mut out = term.export_scrollback(
+                                crate::terminal::ExportFormat::Plain,
+                                Some(lines),
+                            );
+                            if !out.is_empty() && !out.ends_with('\n') {
+                                out.push('\n');
+                            }
+                            out.push_str(&term.content());
+                            out
+                        }
+                        None => term.content(),
+                    };
+                    emit_block(command_number, &body, true)
+                }
+                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
+            }
+        }
+        MuxCommand::SetBuffer { content } => {
+            tree.lock().set_buffer(DEFAULT_BUFFER, content);
+            emit_block(command_number, "", true)
+        }
+        MuxCommand::ShowBuffer => {
+            let guard = tree.lock();
+            match guard.get_buffer(DEFAULT_BUFFER) {
+                Some(content) => emit_block(command_number, content, true),
+                None => emit_block(command_number, "no buffers", false),
+            }
+        }
+        MuxCommand::PasteBuffer { pane } => {
+            let mut guard = tree.lock();
+            let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
+                return emit_block(command_number, "no buffers", false);
+            };
+            match guard.pane_mut(pane) {
+                Some(target) => match target.write(content.as_bytes()) {
+                    Ok(()) => emit_block(command_number, "", true),
+                    Err(err) => emit_block(command_number, &err.to_string(), false),
+                },
+                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
+            }
+        }
     }
 }
 
@@ -382,5 +444,72 @@ mod tests {
             reply.contains("%error"),
             "unknown window is an error: {reply}"
         );
+    }
+
+    #[test]
+    fn capture_pane_reports_the_pane_screen() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // A freshly spawned pane's screen is empty until the shell writes a
+        // prompt; assert the reply is well-formed rather than racing that.
+        let reply = dispatch(&format!("capture-pane -t {pane_id} -p"), 2, &tree, &clients);
+        assert!(reply.contains("%end"), "capture-pane succeeds: {reply}");
+    }
+
+    #[test]
+    fn capture_pane_rejects_an_unknown_pane() {
+        let (tree, clients) = harness();
+        let reply = dispatch("capture-pane -t %999 -p", 1, &tree, &clients);
+        assert!(reply.contains("%error"));
+    }
+
+    #[test]
+    fn buffer_round_trips_through_set_and_show() {
+        let (tree, clients) = harness();
+        let empty = dispatch("show-buffer", 1, &tree, &clients);
+        assert!(empty.contains("%error"), "no buffer yet: {empty}");
+
+        let set = dispatch("set-buffer hello world", 2, &tree, &clients);
+        assert!(set.contains("%end"), "set-buffer succeeds");
+
+        let show = dispatch("show-buffer", 3, &tree, &clients);
+        assert!(show.contains("hello world"), "show-buffer: {show}");
+    }
+
+    #[test]
+    fn paste_buffer_writes_the_buffer_to_the_target_pane() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let pane_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(pane_id).unwrap().panes()[0];
+
+        dispatch("set-buffer echo par-mux-paste", 2, &tree, &clients);
+        let reply = dispatch(&format!("paste-buffer -t {pane_id}"), 3, &tree, &clients);
+        assert!(reply.contains("%end"), "paste-buffer succeeds: {reply}");
+    }
+
+    #[test]
+    fn paste_buffer_rejects_an_unknown_pane() {
+        let (tree, clients) = harness();
+        dispatch("set-buffer hi", 1, &tree, &clients);
+        let reply = dispatch("paste-buffer -t %999", 2, &tree, &clients);
+        assert!(reply.contains("%error"));
+    }
+
+    #[test]
+    fn paste_buffer_with_no_stored_buffer_is_an_error() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let pane_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(pane_id).unwrap().panes()[0];
+
+        let reply = dispatch(&format!("paste-buffer -t {pane_id}"), 2, &tree, &clients);
+        assert!(reply.contains("%error"), "no buffer set: {reply}");
     }
 }

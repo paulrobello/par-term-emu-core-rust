@@ -53,6 +53,9 @@ pub struct MuxTree {
     panes: HashMap<PaneId, MuxPane>,
     ids: IdAllocator,
     factory: Box<dyn PaneFactory>,
+    /// Named paste buffers (`set-buffer`/`show-buffer`). A single value per
+    /// name, not tmux's numbered stack — the Phase 2 non-goal in par-mux.md D3.
+    buffers: HashMap<String, String>,
 }
 
 impl MuxTree {
@@ -64,7 +67,18 @@ impl MuxTree {
             panes: HashMap::new(),
             ids: IdAllocator::new(),
             factory,
+            buffers: HashMap::new(),
         }
+    }
+
+    /// Store `content` under `name`, overwriting any existing value.
+    pub fn set_buffer(&mut self, name: &str, content: String) {
+        self.buffers.insert(name.to_string(), content);
+    }
+
+    /// Look up a named buffer's content.
+    pub fn get_buffer(&self, name: &str) -> Option<&str> {
+        self.buffers.get(name).map(String::as_str)
     }
 
     /// Every session id currently live.
@@ -514,5 +528,22 @@ mod tests {
         let mut tree = tree();
         let result = tree.kill_window(WindowId(999));
         assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
+    }
+
+    #[test]
+    fn buffer_starts_empty_and_round_trips_through_set_and_get() {
+        let mut tree = tree();
+        assert_eq!(tree.get_buffer("default"), None, "no buffer yet");
+
+        tree.set_buffer("default", "hello".to_string());
+        assert_eq!(tree.get_buffer("default"), Some("hello"));
+    }
+
+    #[test]
+    fn set_buffer_overwrites_the_previous_value() {
+        let mut tree = tree();
+        tree.set_buffer("default", "first".to_string());
+        tree.set_buffer("default", "second".to_string());
+        assert_eq!(tree.get_buffer("default"), Some("second"));
     }
 }

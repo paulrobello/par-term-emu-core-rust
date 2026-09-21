@@ -60,6 +60,26 @@ pub enum MuxCommand {
     ListWindows,
     /// List every session.
     ListSessions,
+    /// Print a pane's screen, optionally including scrollback.
+    CapturePane {
+        /// Target pane.
+        pane: PaneId,
+        /// `-S`: how many scrollback lines to include before the visible
+        /// screen. `None` means the default (visible screen only).
+        history_lines: Option<usize>,
+    },
+    /// Store text in the paste buffer.
+    SetBuffer {
+        /// Buffer content.
+        content: String,
+    },
+    /// Retrieve the paste buffer's content.
+    ShowBuffer,
+    /// Write the paste buffer's content to a pane, as `send-keys` would.
+    PasteBuffer {
+        /// Target pane.
+        pane: PaneId,
+    },
 }
 
 /// Parse one command line from a client.
@@ -143,6 +163,32 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         }
         "list-windows" => Ok(MuxCommand::ListWindows),
         "list-sessions" => Ok(MuxCommand::ListSessions),
+        "capture-pane" => {
+            let pane = target_pane("-t")?;
+            // tmux's `-S`/`-E` select a start/end line in scrollback (`-S`
+            // negative counts back from the bottom); Terminal only exposes a
+            // single `export_scrollback(max_lines)` knob (Decision 2), so `-S`
+            // maps onto that as a line count and `-E` is accepted but unused —
+            // capturing "the last N scrollback lines plus the visible screen"
+            // rather than an exact line range.
+            let history_lines = flag("-S")
+                .and_then(|raw| raw.parse::<i64>().ok().map(|n| n.unsigned_abs() as usize));
+            Ok(MuxCommand::CapturePane {
+                pane,
+                history_lines,
+            })
+        }
+        "set-buffer" => {
+            let content = args.join(" ");
+            if content.is_empty() {
+                return Err("set-buffer requires content".to_string());
+            }
+            Ok(MuxCommand::SetBuffer { content })
+        }
+        "show-buffer" => Ok(MuxCommand::ShowBuffer),
+        "paste-buffer" => Ok(MuxCommand::PasteBuffer {
+            pane: target_pane("-t")?,
+        }),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -269,5 +315,46 @@ mod tests {
         assert!(parse_command("new-window -t notasession").is_err());
         assert!(parse_command("select-window -t notawindow").is_err());
         assert!(parse_command("new-window").is_err(), "needs -t");
+    }
+
+    #[test]
+    fn parses_capture_pane_with_and_without_history() {
+        assert_eq!(
+            parse_command("capture-pane -t %3 -p").unwrap(),
+            MuxCommand::CapturePane {
+                pane: PaneId(3),
+                history_lines: None
+            }
+        );
+        assert_eq!(
+            parse_command("capture-pane -t %3 -p -S 50 -E -1").unwrap(),
+            MuxCommand::CapturePane {
+                pane: PaneId(3),
+                history_lines: Some(50)
+            }
+        );
+    }
+
+    #[test]
+    fn parses_set_buffer_show_buffer_and_paste_buffer() {
+        assert_eq!(
+            parse_command("set-buffer hello world").unwrap(),
+            MuxCommand::SetBuffer {
+                content: "hello world".into()
+            }
+        );
+        assert_eq!(
+            parse_command("show-buffer").unwrap(),
+            MuxCommand::ShowBuffer
+        );
+        assert_eq!(
+            parse_command("paste-buffer -t %2").unwrap(),
+            MuxCommand::PasteBuffer { pane: PaneId(2) }
+        );
+    }
+
+    #[test]
+    fn rejects_a_set_buffer_with_no_content() {
+        assert!(parse_command("set-buffer").is_err());
     }
 }
