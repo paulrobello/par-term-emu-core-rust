@@ -579,7 +579,7 @@ proto-rust:
 		echo "Copied generated code to src/streaming/terminal.pb.rs"; \
 		cargo fmt -- src/streaming/terminal.pb.rs; \
 		echo "Formatted src/streaming/terminal.pb.rs"; \
-		CHECKSUM=$$(python3 -c "h=0xcbf29ce484222325;[(h:=((h^b)*0x100000001b3)&0xFFFFFFFFFFFFFFFF) for b in open('proto/terminal.proto','rb').read().replace(b'\r\n',b'\n')];print(f'{h:016x}')"); \
+		CHECKSUM=$$(python3 -c "h=0xcbf29ce484222325;[(h:=((h^b)*0x100000001b3)&0xFFFFFFFFFFFFFFFF) for b in open('proto/terminal.proto','rb').read().replace(b'\r',b'')];print(f'{h:016x}')"); \
 		sed -i '' '/^\/\/ proto-fnv1a:/d' src/streaming/terminal.pb.rs; \
 		sed -i '' "1s|^|// proto-fnv1a:$$CHECKSUM\n|" src/streaming/terminal.pb.rs; \
 		echo "Stamped proto checksum $$CHECKSUM (verified by ARC-020 in build.rs)"; \

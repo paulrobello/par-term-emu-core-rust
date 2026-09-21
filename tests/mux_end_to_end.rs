@@ -4,9 +4,9 @@
 
 #![cfg(feature = "mux")]
 
-use par_term_emu_core_rust::mux::MuxServer;
+use interprocess::TryClone as _;
+use par_term_emu_core_rust::mux::{connect_local_stream, MuxServer};
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 fn socket_path(tag: &str) -> std::path::PathBuf {
@@ -21,10 +21,15 @@ fn spawn_server(path: &std::path::Path) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || server.run())
 }
 
-fn connect(path: &std::path::Path) -> (UnixStream, BufReader<UnixStream>) {
+fn connect(
+    path: &std::path::Path,
+) -> (
+    interprocess::local_socket::Stream,
+    BufReader<interprocess::local_socket::Stream>,
+) {
     let deadline = Instant::now() + Duration::from_secs(5);
     let stream = loop {
-        match UnixStream::connect(path) {
+        match connect_local_stream(path) {
             Ok(stream) => break stream,
             Err(_) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(25));
@@ -32,9 +37,6 @@ fn connect(path: &std::path::Path) -> (UnixStream, BufReader<UnixStream>) {
             Err(e) => panic!("server never accepted a connection: {e}"),
         }
     };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .expect("read timeout set");
     let writer = stream.try_clone().expect("clone for writing");
     let reader = BufReader::new(stream);
     (writer, reader)
@@ -42,7 +44,7 @@ fn connect(path: &std::path::Path) -> (UnixStream, BufReader<UnixStream>) {
 
 /// Read from `reader` until a complete `%begin`/`%end` block has arrived,
 /// failing on `%error`. Returns the body lines between the brackets.
-fn read_reply_block(reader: &mut BufReader<UnixStream>) -> Vec<String> {
+fn read_reply_block(reader: &mut BufReader<interprocess::local_socket::Stream>) -> Vec<String> {
     let mut saw_begin = false;
     let mut body = Vec::new();
     let mut line = String::new();

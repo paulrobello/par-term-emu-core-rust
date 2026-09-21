@@ -32,19 +32,13 @@ fn main() {
 
 /// FNV-1a 64-bit checksum, matching the stamp written by `make proto-rust`.
 ///
-/// `\r\n` is normalized to `\n` first: git can check the proto out with
-/// CRLF on Windows, and the checksum must not depend on checkout settings.
+/// Every `\r` is dropped first: git can check the proto out with CRLF on
+/// Windows, and the checksum must not depend on checkout settings. The proto
+/// contains no bare `\r`, so this is exactly line-ending normalization.
 fn fnv1a_normalized(bytes: &[u8]) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
-    let mut previous_cr = false;
     for &byte in bytes {
-        if previous_cr && byte == b'\n' {
-            // the \r was skipped; the \n of a CRLF pair is skipped too
-            previous_cr = false;
-            continue;
-        }
-        previous_cr = byte == b'\r';
-        if previous_cr {
+        if byte == b'\r' {
             continue;
         }
         hash ^= u64::from(byte);
