@@ -368,11 +368,15 @@ impl CoprocessManager {
             RestartPolicy::Never => false,
             RestartPolicy::Always => true,
             RestartPolicy::OnFailure => {
-                // Check exit code
-                match coproc.child.try_wait() {
-                    Ok(Some(status)) => !status.success(),
-                    // Process hasn't finished waiting yet or error — treat as failure
-                    Ok(None) => true,
+                // This is only called for a coprocess whose stdout reader thread has
+                // already hit EOF (running == false), so the child has exited or is
+                // exiting — a blocking wait() won't hang. try_wait() raced that: on a
+                // loaded runner the OS can be slower to reap the child than the reader
+                // thread is to observe EOF, so try_wait() returned Ok(None) and a clean
+                // exit was misread as "still running / treat as failure", restarting a
+                // process that should have been removed.
+                match coproc.child.wait() {
+                    Ok(status) => !status.success(),
                     Err(_) => true,
                 }
             }
