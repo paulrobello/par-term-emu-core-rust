@@ -131,7 +131,7 @@ jobs:
       run: |
         # git-bash prepends Git/usr/bin, whose coreutils link.exe shadows
         # MSVC's linker for cargo; drop it so link.exe resolves to MSVC.
-        export PATH="$(printf '%s\n' "$PATH" | grep -vi 'git/usr/bin' | tr '\n' ':')"
+        export PATH="$(printf '%s\n' "$PATH" | grep -viE 'git[\\/]usr[\\/]bin' | tr '\n' ':')"
         cargo build --no-default-features --features sim
         if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty'; then
           echo "D1 violation: sim pulled tokio or portable-pty"
