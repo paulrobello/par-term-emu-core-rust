@@ -48,6 +48,25 @@ class TestSyncObserver:
         term.process(b"\x1b]0;Filtered\x07")
         assert any(e["type"] == "title_changed" for e in events)
 
+    def test_observer_kind_filter_screen_cleared(self) -> None:
+        """kinds=["screen_cleared"] must subscribe, not silently drop.
+
+        Regression test: parse_event_kind had no "screen_cleared" arm, so the
+        filter_map dropped the string and the observer (subscribed with an
+        empty kind set) never fired.
+        """
+        term = Terminal(80, 24, scrollback=100)
+        events: list[dict[str, str]] = []
+        term.add_observer(lambda e: events.append(e), kinds=["screen_cleared"])
+        term.process(b"\x07")
+        assert not any(e["type"] == "bell" for e in events)
+        term.process(b"\x1b[2J")
+        assert any(
+            e["type"] == "screen_cleared"
+            and e["include_scrollback"] == "false"
+            for e in events
+        )
+
     def test_multiple_observers(self) -> None:
         term = Terminal(80, 24, scrollback=100)
         events1: list[dict[str, str]] = []

@@ -1229,7 +1229,10 @@ impl PyTerminal {
     ///            trigger_matched, user_var_changed, progress_bar_changed,
     ///            badge_changed, shell_integration, zone_opened, zone_closed,
     ///            zone_scrolled_out, environment_changed, remote_host_transition,
-    ///            sub_shell_detected.
+    ///            sub_shell_detected, file_transfer_started,
+    ///            file_transfer_progress, file_transfer_completed,
+    ///            file_transfer_failed, upload_requested, screen_cleared,
+    ///            inline_image_dropped.
     #[pyo3(signature = (kinds=None))]
     fn set_event_subscription(&mut self, kinds: Option<Vec<String>>) -> PyResult<()> {
         let mapped = kinds.map(|items| {
@@ -1597,6 +1600,7 @@ impl PyTerminal {
             "file_transfer_failed" => Some(TerminalEventKind::FileTransferFailed),
             "upload_requested" => Some(TerminalEventKind::UploadRequested),
             "inline_image_dropped" => Some(TerminalEventKind::InlineImageDropped),
+            "screen_cleared" => Some(TerminalEventKind::ScreenCleared),
             _ => None,
         }
     }
