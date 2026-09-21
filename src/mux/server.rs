@@ -145,7 +145,7 @@ fn dispatch(
                     let pane_ids: Vec<_> = window_ids
                         .iter()
                         .filter_map(|w| guard.window(*w))
-                        .flat_map(|w| w.panes.clone())
+                        .flat_map(|w| w.panes())
                         .collect();
                     for pane_id in pane_ids {
                         let sinks = Arc::clone(clients);
@@ -172,7 +172,7 @@ fn dispatch(
                 .filter_map(|s| guard.session(*s))
                 .flat_map(|s| s.windows.clone())
                 .filter_map(|w| guard.window(w))
-                .flat_map(|w| w.panes.clone())
+                .flat_map(|w| w.panes())
                 .map(|p| p.to_string())
                 .collect::<Vec<_>>()
                 .join("\n");

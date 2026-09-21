@@ -1,20 +1,32 @@
 //! The session/window/pane tree: the server's single source of truth.
 
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
+use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory};
 use std::collections::HashMap;
 
-/// One window: an ordered set of panes with one of them active.
+/// One window: an interior split structure (Task 2.1) with one pane active.
+///
+/// `active` is a pane id, not an index — [`LayoutTree`] has no stable linear
+/// order for a mutation (`split_pane`/`swap_pane`) to preserve, unlike the
+/// flat `Vec<PaneId>` this replaced.
 #[derive(Debug)]
 pub struct MuxWindow {
     /// This window's identifier.
     pub id: WindowId,
     /// Display name.
     pub name: String,
-    /// Panes in layout order.
-    pub panes: Vec<PaneId>,
-    /// Index into `panes` of the active pane.
-    pub active: usize,
+    /// The window's interior pane structure.
+    pub layout: LayoutTree,
+    /// The currently active pane.
+    pub active: PaneId,
+}
+
+impl MuxWindow {
+    /// Every pane id in this window's layout, in tree order.
+    pub fn panes(&self) -> Vec<PaneId> {
+        self.layout.pane_ids()
+    }
 }
 
 /// One session: an ordered set of windows with one of them active.
@@ -94,8 +106,8 @@ impl MuxTree {
             MuxWindow {
                 id: window_id,
                 name: name.to_string(),
-                panes: vec![pane_id],
-                active: 0,
+                layout: LayoutTree::leaf(pane_id),
+                active: pane_id,
             },
         );
 
@@ -136,8 +148,8 @@ impl MuxTree {
             MuxWindow {
                 id: window_id,
                 name: name.to_string(),
-                panes: vec![pane_id],
-                active: 0,
+                layout: LayoutTree::leaf(pane_id),
+                active: pane_id,
             },
         );
         if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -146,7 +158,15 @@ impl MuxTree {
         Ok(window_id)
     }
 
-    /// Add a pane to an existing window.
+    /// Add a pane to an existing window by splitting its active pane.
+    ///
+    /// Matches tmux's `split-window`: the new pane divides the currently
+    /// active leaf, and becomes the new active pane. `direction`/`ratio`
+    /// are Task 2.4's concern (the `split-window` command surface); this
+    /// constructor exists here, in Phase 1's shape, as the tree-backed
+    /// counterpart of the old flat `panes.push`, defaulting to an even
+    /// vertical split until Task 2.4 threads the command's real arguments
+    /// through.
     pub fn new_pane(
         &mut self,
         window_id: WindowId,
@@ -161,7 +181,20 @@ impl MuxTree {
         let pane = self.factory.create_pane(pane_id, cols, rows, command)?;
         self.panes.insert(pane_id, pane);
         if let Some(window) = self.windows.get_mut(&window_id) {
-            window.panes.push(pane_id);
+            let active = window.active;
+            // `split_pane` only fails when `active` is not a leaf in the
+            // window's own tree, which cannot happen — `active` is always
+            // kept in sync with the tree by every mutator.
+            window
+                .layout
+                .split_pane(
+                    active,
+                    pane_id,
+                    crate::mux::layout::SplitDirection::Vertical,
+                    0.5,
+                )
+                .expect("window.active is always a leaf of window.layout");
+            window.active = pane_id;
         }
         Ok(pane_id)
     }
@@ -178,16 +211,28 @@ impl MuxTree {
         let _ = pane.kill();
 
         let empty_window = self.windows.iter_mut().find_map(|(id, window)| {
-            if let Some(pos) = window.panes.iter().position(|p| *p == pane_id) {
-                window.panes.remove(pos);
-                if window.active >= window.panes.len() && !window.panes.is_empty() {
-                    window.active = window.panes.len() - 1;
+            match window.layout.remove_pane(pane_id) {
+                Ok(()) => {
+                    if window.active == pane_id {
+                        // Killed pane was active; the tree always has at
+                        // least one pane left here (remove_pane only errors
+                        // on the last pane, handled by the Err arm below),
+                        // so the first surviving leaf is a reasonable new
+                        // active pane. tmux's own choice of successor is
+                        // more elaborate (last-focused history); matching
+                        // that is Task 2.4's concern, not this constructor's.
+                        window.active = window.layout.pane_ids()[0];
+                    }
+                    None
                 }
-                if window.panes.is_empty() {
-                    return Some(*id);
+                Err(_)
+                    if window.active == pane_id && window.layout == LayoutTree::leaf(pane_id) =>
+                {
+                    // The window's only pane — the window itself closes.
+                    Some(*id)
                 }
+                Err(_) => None,
             }
-            None
         });
 
         if let Some(window_id) = empty_window {
@@ -237,9 +282,9 @@ mod tests {
 
         let window_id = session.windows[0];
         let window = tree.window(window_id).expect("window exists");
-        assert_eq!(window.panes.len(), 1, "a new window has exactly one pane");
+        assert_eq!(window.panes().len(), 1, "a new window has exactly one pane");
 
-        let pane_id = window.panes[0];
+        let pane_id = window.panes()[0];
         assert!(tree.pane(pane_id).is_some(), "the pane is in the tree");
     }
 
@@ -262,8 +307,8 @@ mod tests {
             .new_pane(window_id, 80, 12, None)
             .expect("pane creates");
         let window = tree.window(window_id).unwrap();
-        assert_eq!(window.panes.len(), 2);
-        assert!(window.panes.contains(&pane_id));
+        assert_eq!(window.panes().len(), 2);
+        assert!(window.panes().contains(&pane_id));
     }
 
     #[test]
@@ -275,7 +320,7 @@ mod tests {
 
         tree.kill_pane(extra).expect("kill succeeds");
         assert!(tree.pane(extra).is_none(), "pane is gone from the tree");
-        assert_eq!(tree.window(window_id).unwrap().panes.len(), 1);
+        assert_eq!(tree.window(window_id).unwrap().panes().len(), 1);
     }
 
     #[test]
@@ -283,7 +328,7 @@ mod tests {
         let mut tree = tree();
         let session_id = tree.new_session("main", 80, 24).unwrap();
         let window_id = tree.session(session_id).unwrap().windows[0];
-        let pane_id = tree.window(window_id).unwrap().panes[0];
+        let pane_id = tree.window(window_id).unwrap().panes()[0];
 
         tree.kill_pane(pane_id).expect("kill succeeds");
         assert!(
@@ -299,7 +344,7 @@ mod tests {
         let mut tree = tree();
         let session_id = tree.new_session("main", 80, 24).unwrap();
         let window_id = tree.session(session_id).unwrap().windows[0];
-        let pane_id = tree.window(window_id).unwrap().panes[0];
+        let pane_id = tree.window(window_id).unwrap().panes()[0];
 
         tree.kill_pane(pane_id).expect("kill succeeds");
         assert!(tree.window(window_id).is_none());

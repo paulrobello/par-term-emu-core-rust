@@ -13,6 +13,7 @@ pub mod command;
 pub mod emit;
 pub mod ids;
 pub mod ipc;
+pub mod layout;
 pub mod pane;
 pub mod server;
 pub mod tree;
@@ -25,6 +26,7 @@ pub use ipc::{
     bind_local_listener, connect_local_stream, default_socket_path, prepare_socket_path,
     LocalListener, LocalStream,
 };
+pub use layout::{LayoutTree, NoSuchLeaf, PaneGeometry, SplitDirection};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
 pub use server::MuxServer;
 pub use tree::{MuxSession, MuxTree, MuxWindow};
