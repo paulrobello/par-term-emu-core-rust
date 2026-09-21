@@ -45,6 +45,11 @@ claude_scratch/
 coverage.xml
 htmlcov/
 
+# Grind loop (make grind-*, ~/Repos/par-grind); .grind.local.json is covered
+# by the *.local.* rule below
+.grind-logs/
+.exit-grind
+
 
 # Local/user-specific configs
 CLAUDE.local.md
