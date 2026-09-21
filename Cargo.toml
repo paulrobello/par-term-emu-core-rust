@@ -46,6 +46,13 @@ name = "par-term-streamer"
 path = "src/bin/streaming_server/main.rs"
 required-features = ["streaming-bin"]
 
+# The par-mux daemon: owns PTYs and serves control mode over a local socket;
+# panes outlive every client (par-mux.md D5).
+[[bin]]
+name = "par-mux"
+path = "src/bin/par_mux/main.rs"
+required-features = ["mux"]
+
 [dependencies]
 log = "0.4"
 pyo3 = { version = "0.29", optional = true, features = ["multiple-pymethods"] }
