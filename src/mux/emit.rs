@@ -54,6 +54,22 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::PaneModeChanged { pane_id } => {
             format!("%pane-mode-changed {pane_id}\n")
         }
+        TmuxNotification::WindowRenamed { window_id, name } => {
+            format!("%window-renamed {window_id} {name}\n")
+        }
+        TmuxNotification::SessionChanged { session_id, name } => {
+            format!("%session-changed {session_id} {name}\n")
+        }
+        TmuxNotification::LayoutChange {
+            window_id,
+            window_layout,
+            window_visible_layout,
+            window_raw_flags,
+        } => {
+            format!(
+                "%layout-change {window_id} {window_layout} {window_visible_layout} {window_raw_flags}\n"
+            )
+        }
         TmuxNotification::Begin {
             timestamp,
             command_number,
@@ -227,6 +243,73 @@ mod tests {
             },
             TmuxNotification::UnlinkedWindowClose {
                 window_id: "@3".to_string(),
+            },
+        ];
+        for original in &originals {
+            let parsed = round_trip(original);
+            assert_eq!(
+                parsed.len(),
+                1,
+                "one line in, one notification out for {original:?}"
+            );
+            assert_eq!(&parsed[0], original, "round trip changed the notification");
+        }
+    }
+
+    #[test]
+    fn window_renamed_round_trips() {
+        let original = TmuxNotification::WindowRenamed {
+            window_id: "@1".to_string(),
+            name: "scratch".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn session_changed_round_trips() {
+        let original = TmuxNotification::SessionChanged {
+            session_id: "$0".to_string(),
+            name: "main".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn layout_change_round_trips() {
+        let original = TmuxNotification::LayoutChange {
+            window_id: "@0".to_string(),
+            window_layout: "0000,89x24,0,0,1".to_string(),
+            window_visible_layout: "0000,89x24,0,0,1".to_string(),
+            window_raw_flags: "*".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn task_2_6_notifications_round_trip_with_full_field_equality() {
+        // Same shape as every_phase_one_notification_round_trips: every
+        // variant this task adds, serialized and fed back through the real
+        // parser, asserting full equality rather than a spot check.
+        let originals = vec![
+            TmuxNotification::WindowRenamed {
+                window_id: "@2".to_string(),
+                name: "logs".to_string(),
+            },
+            TmuxNotification::SessionChanged {
+                session_id: "$1".to_string(),
+                name: "work".to_string(),
+            },
+            TmuxNotification::LayoutChange {
+                window_id: "@3".to_string(),
+                window_layout: "0000,89x24,0,0{44x24,0,0,1,44x24,45,0,2}".to_string(),
+                window_visible_layout: "0000,89x24,0,0{44x24,0,0,1,44x24,45,0,2}".to_string(),
+                window_raw_flags: "0".to_string(),
             },
         ];
         for original in &originals {
