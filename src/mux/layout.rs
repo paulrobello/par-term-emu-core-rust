@@ -266,49 +266,164 @@ impl LayoutTree {
     /// children with their sub-rects.
     pub fn geometry(&self, x: usize, y: usize, width: usize, height: usize) -> Vec<PaneGeometry> {
         let mut out = Vec::new();
-        self.geometry_into(x, y, width, height, &mut out);
-        out
-    }
-
-    fn geometry_into(
-        &self,
-        x: usize,
-        y: usize,
-        width: usize,
-        height: usize,
-        out: &mut Vec<PaneGeometry>,
-    ) {
-        match self {
-            LayoutTree::Pane(pane) => out.push(PaneGeometry {
-                pane: *pane,
+        self.geometry_into(
+            Rect {
                 x,
                 y,
                 width,
                 height,
-            }),
-            LayoutTree::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => match direction {
-                SplitDirection::Vertical => {
-                    let first_width = ((width as f32) * ratio).round() as usize;
-                    let first_width = first_width.min(width);
-                    let second_width = width.saturating_sub(first_width);
-                    first.geometry_into(x, y, first_width, height, out);
-                    second.geometry_into(x + first_width, y, second_width, height, out);
-                }
-                SplitDirection::Horizontal => {
-                    let first_height = ((height as f32) * ratio).round() as usize;
-                    let first_height = first_height.min(height);
-                    let second_height = height.saturating_sub(first_height);
-                    first.geometry_into(x, y, width, first_height, out);
-                    second.geometry_into(x, y + first_height, width, second_height, out);
-                }
             },
+            &mut out,
+        );
+        out
+    }
+
+    fn geometry_into(&self, rect: Rect, out: &mut Vec<PaneGeometry>) {
+        match self {
+            LayoutTree::Pane(pane) => out.push(PaneGeometry {
+                pane: *pane,
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+            }),
+            LayoutTree::Split { .. } => {
+                let (first, first_rect, second, second_rect) = self.split_rects(rect);
+                first.geometry_into(first_rect, out);
+                second.geometry_into(second_rect, out);
+            }
         }
     }
+
+    /// Divide `rect` between this split's two children along its
+    /// direction's axis, by `ratio`. Panics if `self` is not
+    /// [`LayoutTree::Split`] — an internal helper shared by [`Self::geometry`]
+    /// and [`Self::render`], both of which only call it on a `Split`.
+    fn split_rects(&self, rect: Rect) -> (&LayoutTree, Rect, &LayoutTree, Rect) {
+        let LayoutTree::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } = self
+        else {
+            unreachable!("split_rects called on a non-Split node");
+        };
+        match direction {
+            SplitDirection::Vertical => {
+                let first_width = (((rect.width as f32) * ratio).round() as usize).min(rect.width);
+                let second_width = rect.width.saturating_sub(first_width);
+                (
+                    first,
+                    Rect {
+                        width: first_width,
+                        ..rect
+                    },
+                    second,
+                    Rect {
+                        x: rect.x + first_width,
+                        width: second_width,
+                        ..rect
+                    },
+                )
+            }
+            SplitDirection::Horizontal => {
+                let first_height =
+                    (((rect.height as f32) * ratio).round() as usize).min(rect.height);
+                let second_height = rect.height.saturating_sub(first_height);
+                (
+                    first,
+                    Rect {
+                        height: first_height,
+                        ..rect
+                    },
+                    second,
+                    Rect {
+                        y: rect.y + first_height,
+                        height: second_height,
+                        ..rect
+                    },
+                )
+            }
+        }
+    }
+
+    /// Render the tmux wire layout grammar (`WIDTHxHEIGHT,X,Y{...}`/`[...]`/
+    /// `,ID`) for this tree, given the window's top-left corner and extent —
+    /// the same parameters [`Self::geometry`] takes.
+    ///
+    /// The string is prefixed with a placeholder 4-hex-digit checksum
+    /// (`0000,...`): `TmuxLayout::parse` never validates it (only checks the
+    /// shape), and tmux itself only uses it to bust a client-side cache, so
+    /// there is nothing for a real checksum to protect here. See Decision 1
+    /// in `par-mux.md`.
+    ///
+    /// A run of sibling splits sharing direction — `Split(Split(A,B,d),C,d)`
+    /// — collapses into one N-ary `{...}`/`[...]` group with 3+ children,
+    /// the inverse of what `par-term`'s `rebuild_multi_split_to_binary`
+    /// already does converting an incoming wire layout to nested binary.
+    pub fn render(&self, x: usize, y: usize, width: usize, height: usize) -> String {
+        format!(
+            "0000,{}",
+            self.render_node(Rect {
+                x,
+                y,
+                width,
+                height
+            })
+        )
+    }
+
+    fn render_node(&self, rect: Rect) -> String {
+        match self {
+            LayoutTree::Pane(pane) => format!(
+                "{}x{},{},{},{}",
+                rect.width, rect.height, rect.x, rect.y, pane.0
+            ),
+            LayoutTree::Split { direction, .. } => {
+                let mut children = Vec::new();
+                self.collect_same_direction(rect, *direction, &mut children);
+                let (open, close) = match direction {
+                    SplitDirection::Vertical => ('{', '}'),
+                    SplitDirection::Horizontal => ('[', ']'),
+                };
+                format!(
+                    "{}x{},{},{}{open}{}{close}",
+                    rect.width,
+                    rect.height,
+                    rect.x,
+                    rect.y,
+                    children.join(",")
+                )
+            }
+        }
+    }
+
+    /// Collect the rendered strings of every child in this node's
+    /// same-`direction` split chain, recursing through nested splits that
+    /// share `direction` and rendering (via [`Self::render_node`], which can
+    /// itself collapse an inner chain of a *different* direction) any child
+    /// that does not.
+    fn collect_same_direction(&self, rect: Rect, direction: SplitDirection, out: &mut Vec<String>) {
+        match self {
+            LayoutTree::Split { direction: d, .. } if *d == direction => {
+                let (first, first_rect, second, second_rect) = self.split_rects(rect);
+                first.collect_same_direction(first_rect, direction, out);
+                second.collect_same_direction(second_rect, direction, out);
+            }
+            other => out.push(other.render_node(rect)),
+        }
+    }
+}
+
+/// An absolute window-relative rectangle, in columns/rows — the internal
+/// unit [`LayoutTree::geometry`] and [`LayoutTree::render`] recurse over.
+#[derive(Debug, Clone, Copy)]
+struct Rect {
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
 }
 
 #[cfg(test)]
@@ -535,5 +650,271 @@ mod tests {
         assert_eq!(geo[0].x, 0);
         assert_eq!(geo[1].x, geo[0].x + geo[0].width);
         assert_eq!(geo[2].x, geo[1].x + geo[1].width);
+    }
+
+    #[test]
+    fn render_of_a_single_pane_has_a_checksum_prefix_and_no_group() {
+        let tree = LayoutTree::leaf(PaneId(0));
+        assert_eq!(tree.render(0, 0, 89, 24), "0000,89x24,0,0,0");
+    }
+
+    #[test]
+    fn render_of_a_vertical_split_uses_curly_braces() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        let rendered = tree.render(0, 0, 89, 24);
+        assert!(rendered.starts_with("0000,89x24,0,0{"));
+        assert!(rendered.ends_with('}'));
+        assert_eq!(rendered, "0000,89x24,0,0{45x24,0,0,0,44x24,45,0,1}");
+    }
+
+    #[test]
+    fn render_of_a_horizontal_split_uses_square_brackets() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        let rendered = tree.render(0, 0, 89, 24);
+        assert!(rendered.starts_with("0000,89x24,0,0["));
+        assert!(rendered.ends_with(']'));
+    }
+
+    #[test]
+    fn render_of_three_same_direction_splits_collapses_to_one_group() {
+        // Split(Split(A,B,Vertical),C,Vertical) — three side-by-side panes —
+        // must render as ONE {...} group with 3 children, not a nested
+        // {...{...}} shape. This is the inverse of par-term's
+        // rebuild_multi_split_to_binary.
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(1), PaneId(2), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        let rendered = tree.render(0, 0, 90, 24);
+
+        // Exactly one '{' / one '}' — a nested rendering would have two of each.
+        assert_eq!(rendered.matches('{').count(), 1, "rendered: {rendered}");
+        assert_eq!(rendered.matches('}').count(), 1, "rendered: {rendered}");
+        let inner = rendered
+            .split('{')
+            .nth(1)
+            .unwrap()
+            .strip_suffix('}')
+            .unwrap();
+        // Three pane entries, comma-joined at the top level (each entry is
+        // itself "WxH,X,Y,ID" — four comma-separated fields — so three
+        // panes means 3*4 - 1 = 11 top-level commas).
+        assert_eq!(inner.matches(',').count(), 11, "inner: {inner}");
+    }
+
+    #[test]
+    fn render_round_trips_through_a_ported_grammar_parser() {
+        for tree in [
+            LayoutTree::leaf(PaneId(0)),
+            {
+                let mut t = LayoutTree::leaf(PaneId(0));
+                t.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+                    .unwrap();
+                t
+            },
+            {
+                let mut t = LayoutTree::leaf(PaneId(0));
+                t.split_pane(PaneId(0), PaneId(1), SplitDirection::Horizontal, 0.25)
+                    .unwrap();
+                t
+            },
+            {
+                // Three-way collapse: the case Decision 1 exists for.
+                let mut t = LayoutTree::leaf(PaneId(0));
+                t.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+                    .unwrap();
+                t.split_pane(PaneId(1), PaneId(2), SplitDirection::Vertical, 0.5)
+                    .unwrap();
+                t
+            },
+            {
+                // Mixed directions: an outer vertical split whose second
+                // child is itself a horizontal split — no collapsing across
+                // the direction change.
+                let mut t = LayoutTree::leaf(PaneId(0));
+                t.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+                    .unwrap();
+                t.split_pane(PaneId(1), PaneId(2), SplitDirection::Horizontal, 0.5)
+                    .unwrap();
+                t
+            },
+        ] {
+            let expected_geo = tree.geometry(0, 0, 90, 24);
+            let rendered = tree.render(0, 0, 90, 24);
+
+            let parsed =
+                ported_parser::TmuxLayout::parse(&rendered).expect("render() output parses");
+            let mut parsed_panes = Vec::new();
+            ported_parser::collect_panes(&parsed.root, &mut parsed_panes);
+            parsed_panes.sort_by_key(|p| p.id);
+
+            let mut expected: Vec<_> = expected_geo
+                .iter()
+                .map(|g| (g.pane.0, g.x, g.y, g.width, g.height))
+                .collect();
+            expected.sort_by_key(|g| g.0);
+
+            assert_eq!(
+                parsed_panes
+                    .iter()
+                    .map(|p| (p.id, p.x, p.y, p.width, p.height))
+                    .collect::<Vec<_>>(),
+                expected,
+                "rendered: {rendered}"
+            );
+        }
+    }
+
+    /// A test-only port of `par-term-tmux`'s `TmuxLayout::parse`
+    /// (`par-term-tmux/src/types.rs:166-284`), used ONLY to prove
+    /// [`LayoutTree::render`] is self-consistent with a grammar parser that
+    /// is not this crate's own code, without a reverse dependency on
+    /// `par-term-tmux` (par-mux.md Phase 2 Task 2.2: the core cannot depend
+    /// on `par-term-tmux`, which already depends on the core).
+    ///
+    /// This is a FIXTURE, not a second implementation: it never leaves
+    /// `#[cfg(test)]`, and does not prove conformance with the real parser —
+    /// a copy that drifts from `par-term-tmux/src/types.rs` still agrees
+    /// with itself. The test that actually proves conformance is the
+    /// cross-repo integration test tracked on the `par-term` project
+    /// (kanban `01a0c5c74485730188f8a798fce521a1`), which calls this crate's
+    /// real `LayoutTree::render()` into the real `TmuxLayout::parse`.
+    mod ported_parser {
+        #[derive(Debug)]
+        pub struct TmuxLayout {
+            pub root: LayoutNode,
+        }
+
+        #[derive(Debug)]
+        pub enum LayoutNode {
+            Pane {
+                id: u32,
+                width: usize,
+                height: usize,
+                x: usize,
+                y: usize,
+            },
+            HorizontalSplit {
+                children: Vec<LayoutNode>,
+            },
+            VerticalSplit {
+                children: Vec<LayoutNode>,
+            },
+        }
+
+        pub struct ParsedPane {
+            pub id: u32,
+            pub x: usize,
+            pub y: usize,
+            pub width: usize,
+            pub height: usize,
+        }
+
+        pub fn collect_panes(node: &LayoutNode, out: &mut Vec<ParsedPane>) {
+            match node {
+                LayoutNode::Pane {
+                    id,
+                    width,
+                    height,
+                    x,
+                    y,
+                } => out.push(ParsedPane {
+                    id: *id,
+                    x: *x,
+                    y: *y,
+                    width: *width,
+                    height: *height,
+                }),
+                LayoutNode::HorizontalSplit { children }
+                | LayoutNode::VerticalSplit { children } => {
+                    for child in children {
+                        collect_panes(child, out);
+                    }
+                }
+            }
+        }
+
+        impl TmuxLayout {
+            pub fn parse(layout_str: &str) -> Option<Self> {
+                let layout_str = layout_str.trim();
+                let layout_str = if let Some(comma_idx) = layout_str.find(',') {
+                    if comma_idx == 4 && layout_str[..4].chars().all(|c| c.is_ascii_hexdigit()) {
+                        &layout_str[5..]
+                    } else {
+                        layout_str
+                    }
+                } else {
+                    layout_str
+                };
+                if layout_str.is_empty() {
+                    return None;
+                }
+                let (node, _) = Self::parse_node(layout_str)?;
+                Some(Self { root: node })
+            }
+
+            fn parse_node(s: &str) -> Option<(LayoutNode, &str)> {
+                let (width, s) = Self::parse_number(s)?;
+                let s = s.strip_prefix('x')?;
+                let (height, s) = Self::parse_number(s)?;
+                let s = s.strip_prefix(',')?;
+                let (x, s) = Self::parse_number(s)?;
+                let s = s.strip_prefix(',')?;
+                let (y, s) = Self::parse_number(s)?;
+
+                if let Some(rest) = s.strip_prefix('{') {
+                    let (children, rest) = Self::parse_children(rest, '}')?;
+                    Some((LayoutNode::VerticalSplit { children }, rest))
+                } else if let Some(rest) = s.strip_prefix('[') {
+                    let (children, rest) = Self::parse_children(rest, ']')?;
+                    Some((LayoutNode::HorizontalSplit { children }, rest))
+                } else if let Some(rest) = s.strip_prefix(',') {
+                    let (id, rest) = Self::parse_number(rest)?;
+                    Some((
+                        LayoutNode::Pane {
+                            id: id as u32,
+                            width,
+                            height,
+                            x,
+                            y,
+                        },
+                        rest,
+                    ))
+                } else {
+                    None
+                }
+            }
+
+            fn parse_children(s: &str, end_char: char) -> Option<(Vec<LayoutNode>, &str)> {
+                let mut children = Vec::new();
+                let mut remaining = s;
+                loop {
+                    let (child, rest) = Self::parse_node(remaining)?;
+                    children.push(child);
+                    remaining = rest;
+                    if remaining.starts_with(end_char) {
+                        return Some((children, &remaining[1..]));
+                    } else if remaining.starts_with(',') {
+                        remaining = &remaining[1..];
+                    } else {
+                        return None;
+                    }
+                }
+            }
+
+            fn parse_number(s: &str) -> Option<(usize, &str)> {
+                let end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+                if end == 0 {
+                    return None;
+                }
+                let num = s[..end].parse().ok()?;
+                Some((num, &s[end..]))
+            }
+        }
     }
 }
