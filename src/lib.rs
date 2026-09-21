@@ -69,7 +69,7 @@ pub mod observer;
 pub mod pty_error;
 #[cfg(feature = "pty_session")]
 pub mod pty_session;
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 pub mod python_bindings;
 pub mod screenshot;
 pub mod shell_integration;
@@ -102,13 +102,13 @@ pub use badge::{
     SessionVariables,
 };
 
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 use pyo3::exceptions::{PyIOError, PyRuntimeError};
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 use pyo3::prelude::*;
 
 // Re-export Python bindings for convenience
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 pub use python_bindings::{
     decode_client_message, decode_server_message, encode_client_message, encode_server_message,
     py_adjust_contrast_rgb, py_adjust_hue, py_adjust_saturation, py_char_width, py_char_width_cjk,
@@ -133,7 +133,7 @@ pub use python_bindings::{
 };
 
 /// Convert PtyError to PyErr (QA-009: centralized error mapping)
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 impl From<pty_error::PtyError> for PyErr {
     fn from(err: pty_error::PtyError) -> PyErr {
         match err {
@@ -158,7 +158,7 @@ impl From<pty_error::PtyError> for PyErr {
 }
 
 /// Convert ScreenshotError to PyErr (QA-009)
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 impl From<screenshot::ScreenshotError> for PyErr {
     fn from(err: screenshot::ScreenshotError) -> PyErr {
         use screenshot::ScreenshotError;
@@ -170,7 +170,7 @@ impl From<screenshot::ScreenshotError> for PyErr {
 }
 
 /// Convert GraphicsError to PyErr (QA-009)
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 impl From<graphics::GraphicsError> for PyErr {
     fn from(err: graphics::GraphicsError) -> PyErr {
         PyRuntimeError::new_err(err.to_string())
@@ -190,7 +190,7 @@ impl From<streaming::StreamingError> for PyErr {
 }
 
 /// A comprehensive terminal emulator library
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 #[pymodule(gil_used = true)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     register_constants(m)?;
@@ -203,7 +203,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Sixel rendering mode constants and other module-level scalars.
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 fn register_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Sixel rendering mode constants
     m.add("SIXEL_DISABLED", "disabled")?;
@@ -214,7 +214,7 @@ fn register_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Python classes exposed by the module.
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Classes
     m.add_class::<PyTerminal>()?;
@@ -291,7 +291,7 @@ fn register_classes(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Color utility functions.
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 fn register_color_utils(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Color utility functions
     m.add_function(wrap_pyfunction!(py_perceived_brightness_rgb, m)?)?;
@@ -317,7 +317,7 @@ fn register_color_utils(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Unicode width functions.
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 fn register_unicode_width(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Unicode width functions
     m.add_function(wrap_pyfunction!(py_char_width, m)?)?;
@@ -330,7 +330,7 @@ fn register_unicode_width(m: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Binary protocol functions for streaming.
-#[cfg(feature = "python")]
+#[cfg(any(feature = "python", feature = "python-test"))]
 fn register_streaming_codec(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Binary protocol functions for streaming
     m.add_function(wrap_pyfunction!(encode_server_message, m)?)?;

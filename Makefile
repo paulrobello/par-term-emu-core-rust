@@ -208,6 +208,8 @@ test: test-rust test-rust-streaming test-python
 test-rust:
 	@echo "Running Rust tests (lib unit tests + integration tests in tests/)..."
 	cargo test --no-default-features --features pyo3/auto-initialize
+	@echo "Running python_bindings unit tests (python-test: python minus extension-module, so tests link a real interpreter)..."
+	cargo test --lib --no-default-features --features python-test
 
 test-rust-streaming:
 	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
