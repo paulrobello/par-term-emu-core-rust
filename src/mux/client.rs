@@ -24,6 +24,10 @@ pub struct MuxClient {
     writer: LocalStream,
     reply_rx: Receiver<Vec<String>>,
     notifications_rx: Receiver<TmuxNotification>,
+    /// The daemon this client spawned, when it started one. Held so the
+    /// spawner can end what it created via [`MuxClient::kill_spawned_daemon`];
+    /// `None` when the client attached to an existing server.
+    spawned_daemon: Option<std::process::Child>,
 }
 
 impl MuxClient {
@@ -47,11 +51,14 @@ impl MuxClient {
         if let Ok(client) = Self::connect(path) {
             return Ok(client);
         }
-        spawn_daemon(path);
+        let daemon = spawn_daemon(path);
         let deadline = Instant::now() + SPAWN_CONNECT_DEADLINE;
         loop {
             match Self::connect(path) {
-                Ok(client) => return Ok(client),
+                Ok(mut client) => {
+                    client.spawned_daemon = daemon;
+                    return Ok(client);
+                }
                 Err(_) if Instant::now() < deadline => {
                     std::thread::sleep(Duration::from_millis(50));
                 }
@@ -69,6 +76,7 @@ impl MuxClient {
             writer,
             reply_rx,
             notifications_rx,
+            spawned_daemon: None,
         })
     }
 
@@ -92,6 +100,23 @@ impl MuxClient {
     /// Pushed notifications (`%output` and friends), already parsed.
     pub fn notifications(&self) -> &Receiver<TmuxNotification> {
         &self.notifications_rx
+    }
+
+    /// Terminate the daemon this client spawned, if it started one.
+    ///
+    /// The tmux model is daemon-outlives-client, so this is deliberately
+    /// NOT a `Drop` impl — a disconnecting client must not kill the server
+    /// other clients are using. It exists for tests and tooling that own
+    /// the daemon they created. A client that attached to an existing
+    /// server is a no-op.
+    pub fn kill_spawned_daemon(&mut self) -> io::Result<()> {
+        match self.spawned_daemon.as_mut() {
+            Some(child) => {
+                let _ = child.kill();
+                child.wait().map(|_| ())
+            }
+            None => Ok(()),
+        }
     }
 }
 
@@ -137,14 +162,14 @@ fn reader_loop(
 ///
 /// Best effort: if the binary is missing the bounded retry in
 /// [`MuxClient::connect_or_spawn_at`] turns that into a connect error rather
-/// than a panic.
-fn spawn_daemon(path: &Path) {
+/// than a panic. The child handle is returned so the spawner can end the
+/// daemon later — dropping it (as an earlier version did) orphans a live
+/// process, one leak per spawn.
+fn spawn_daemon(path: &Path) -> Option<std::process::Child> {
     let Ok(exe) = std::env::current_exe() else {
-        return;
+        return None;
     };
-    let Some(mut dir) = exe.parent().map(Path::to_path_buf) else {
-        return;
-    };
+    let mut dir = exe.parent().map(Path::to_path_buf)?;
     // Integration-test binaries live in <target>/<profile>/deps while bins
     // sit in <target>/<profile> — walk out of deps to find the sibling bin.
     if dir.file_name() == Some(std::ffi::OsStr::new("deps")) {
@@ -156,11 +181,12 @@ fn spawn_daemon(path: &Path) {
     let bin: PathBuf = dir.join("par-mux");
     #[cfg(windows)]
     let bin: PathBuf = dir.join("par-mux.exe");
-    let _ = std::process::Command::new(bin)
+    std::process::Command::new(bin)
         .arg("--socket")
         .arg(path)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
+        .spawn()
+        .ok()
 }

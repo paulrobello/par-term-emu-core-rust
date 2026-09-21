@@ -82,5 +82,11 @@ fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
         panes.contains('%'),
         "a spawned daemon should hold the new pane: {panes}"
     );
+    // The tmux model is daemon-outlives-client, so the daemon must be ended
+    // explicitly — dropping the client (or removing only the socket file)
+    // leaves a live process behind, one leak per test run.
+    client
+        .kill_spawned_daemon()
+        .expect("the spawned daemon is cleaned up");
     let _ = std::fs::remove_file(&path);
 }
