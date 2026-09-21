@@ -215,6 +215,78 @@ fn dispatch(
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
+        MuxCommand::NewWindow { session, name } => {
+            let name = name.unwrap_or_else(|| "0".to_string());
+            let mut guard = tree.lock();
+            match guard.new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS) {
+                Ok(window_id) => {
+                    // Wire the new window's pane the same way NewSession does.
+                    let pane_ids = guard
+                        .window(window_id)
+                        .map(|w| w.panes())
+                        .unwrap_or_default();
+                    for pane_id in pane_ids {
+                        let sinks = Arc::clone(clients);
+                        if let Some(pane) = guard.pane_mut(pane_id) {
+                            pane.on_output(move |bytes: &[u8]| {
+                                let line = emit(&TmuxNotification::Output {
+                                    pane_id: pane_id.to_string(),
+                                    data: bytes.to_vec(),
+                                });
+                                sinks.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
+                            });
+                        }
+                    }
+                    emit_block(command_number, &window_id.to_string(), true)
+                }
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::SelectWindow { window } => {
+            let mut guard = tree.lock();
+            match guard.select_window(window) {
+                Ok(()) => emit_block(command_number, "", true),
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::KillWindow { window } => {
+            let mut guard = tree.lock();
+            match guard.kill_window(window) {
+                Ok(()) => emit_block(command_number, "", true),
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::RenameWindow { window, name } => {
+            let mut guard = tree.lock();
+            match guard.rename_window(window, &name) {
+                Ok(()) => emit_block(command_number, "", true),
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::ListWindows => {
+            let guard = tree.lock();
+            let body = guard
+                .sessions()
+                .iter()
+                .filter_map(|s| guard.session(*s))
+                .flat_map(|s| s.windows.clone())
+                .filter_map(|w| guard.window(w))
+                .map(|w| format!("{}: {}", w.id, w.name))
+                .collect::<Vec<_>>()
+                .join("\n");
+            emit_block(command_number, &body, true)
+        }
+        MuxCommand::ListSessions => {
+            let guard = tree.lock();
+            let body = guard
+                .sessions()
+                .iter()
+                .filter_map(|s| guard.session(*s))
+                .map(|s| format!("{}: {}", s.id, s.name))
+                .collect::<Vec<_>>()
+                .join("\n");
+            emit_block(command_number, &body, true)
+        }
     }
 }
 
@@ -246,5 +318,69 @@ mod tests {
 
         drop(server);
         let _ = std::fs::remove_file(&path);
+    }
+
+    fn harness() -> (Arc<Mutex<MuxTree>>, Clients) {
+        let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(
+            ShellPaneFactory::default(),
+        ))));
+        let clients = Arc::new(Mutex::new(Vec::new()));
+        (tree, clients)
+    }
+
+    #[test]
+    fn new_window_dispatch_creates_a_window_and_wires_its_pane() {
+        let (tree, clients) = harness();
+        let session_reply = dispatch("new-session -s main", 1, &tree, &clients);
+        assert!(session_reply.contains("%end"), "new-session succeeds");
+
+        let session_id = tree.lock().sessions()[0];
+        let reply = dispatch(&format!("new-window -t {session_id}"), 2, &tree, &clients);
+        assert!(reply.contains("%end"), "new-window succeeds: {reply}");
+
+        let session = tree.lock().session(session_id).unwrap().windows.clone();
+        assert_eq!(session.len(), 2, "session now has two windows");
+    }
+
+    #[test]
+    fn window_lifecycle_dispatch_round_trips() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        dispatch(&format!("new-window -t {session_id}"), 2, &tree, &clients);
+        let window_id = tree.lock().session(session_id).unwrap().windows[1];
+
+        let select = dispatch(&format!("select-window -t {window_id}"), 3, &tree, &clients);
+        assert!(select.contains("%end"), "select-window succeeds");
+        assert_eq!(tree.lock().session(session_id).unwrap().active, 1);
+
+        let rename = dispatch(
+            &format!("rename-window -t {window_id} scratch"),
+            4,
+            &tree,
+            &clients,
+        );
+        assert!(rename.contains("%end"), "rename-window succeeds");
+        assert_eq!(tree.lock().window(window_id).unwrap().name, "scratch");
+
+        let list_windows = dispatch("list-windows", 5, &tree, &clients);
+        assert!(list_windows.contains("scratch"));
+
+        let list_sessions = dispatch("list-sessions", 6, &tree, &clients);
+        assert!(list_sessions.contains("main"));
+
+        let kill = dispatch(&format!("kill-window -t {window_id}"), 7, &tree, &clients);
+        assert!(kill.contains("%end"), "kill-window succeeds");
+        assert!(tree.lock().window(window_id).is_none());
+    }
+
+    #[test]
+    fn window_commands_report_an_error_block_for_an_unknown_target() {
+        let (tree, clients) = harness();
+        let reply = dispatch("select-window -t @999", 1, &tree, &clients);
+        assert!(
+            reply.contains("%error"),
+            "unknown window is an error: {reply}"
+        );
     }
 }

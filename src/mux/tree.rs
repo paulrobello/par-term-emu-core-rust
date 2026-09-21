@@ -133,10 +133,7 @@ impl MuxTree {
         rows: u16,
     ) -> Result<WindowId, MuxError> {
         if !self.sessions.contains_key(&session_id) {
-            // MuxError has no session/window variants yet; the server task
-            // (Task 6) extends the enum when it starts reporting these to
-            // clients. The placeholder pane id is never rendered.
-            return Err(MuxError::NoSuchPane(PaneId(0)));
+            return Err(MuxError::NoSuchSession(session_id));
         }
         let window_id = self.ids.next_window();
         let pane_id = self.ids.next_pane();
@@ -256,6 +253,66 @@ impl MuxTree {
 
         Ok(())
     }
+
+    /// Make `window_id` its session's active window.
+    ///
+    /// The session is derived from the window itself — a client targets
+    /// `@window_id` directly, the way `select-pane -t %pane_id` already does.
+    pub fn select_window(&mut self, window_id: WindowId) -> Result<(), MuxError> {
+        if !self.windows.contains_key(&window_id) {
+            return Err(MuxError::NoSuchWindow(window_id));
+        }
+        let session = self
+            .sessions
+            .values_mut()
+            .find(|s| s.windows.contains(&window_id))
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        let index = session
+            .windows
+            .iter()
+            .position(|w| *w == window_id)
+            .expect("just found by contains");
+        session.active = index;
+        Ok(())
+    }
+
+    /// Rename a window.
+    pub fn rename_window(&mut self, window_id: WindowId, name: &str) -> Result<(), MuxError> {
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        window.name = name.to_string();
+        Ok(())
+    }
+
+    /// Kill a window and every pane it holds, closing its session when it
+    /// was the last window — the same cascade [`Self::kill_pane`] uses.
+    pub fn kill_window(&mut self, window_id: WindowId) -> Result<(), MuxError> {
+        let window = self
+            .windows
+            .remove(&window_id)
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        for pane_id in window.panes() {
+            if let Some(mut pane) = self.panes.remove(&pane_id) {
+                let _ = pane.kill();
+            }
+        }
+
+        let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
+            let pos = session.windows.iter().position(|w| *w == window_id)?;
+            session.windows.remove(pos);
+            if session.active >= session.windows.len() && !session.windows.is_empty() {
+                session.active = session.windows.len() - 1;
+            }
+            session.windows.is_empty().then_some(*id)
+        });
+        if let Some(session_id) = empty_session {
+            self.sessions.remove(&session_id);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -359,5 +416,103 @@ mod tests {
         let mut tree = tree();
         let result = tree.kill_pane(PaneId(999));
         assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
+    }
+
+    #[test]
+    fn new_window_adds_a_window_to_the_session() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+
+        let window_id = tree
+            .new_window(session_id, "logs", 80, 24)
+            .expect("window creates");
+        let session = tree.session(session_id).unwrap();
+        assert_eq!(session.windows.len(), 2);
+        assert!(session.windows.contains(&window_id));
+        assert_eq!(tree.window(window_id).unwrap().name, "logs");
+    }
+
+    #[test]
+    fn new_window_rejects_an_unknown_session() {
+        let mut tree = tree();
+        let result = tree.new_window(SessionId(999), "logs", 80, 24);
+        assert!(matches!(result, Err(MuxError::NoSuchSession(_))));
+    }
+
+    #[test]
+    fn select_window_changes_the_session_active_index() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let second = tree.new_window(session_id, "logs", 80, 24).unwrap();
+        assert_eq!(tree.session(session_id).unwrap().active, 0);
+
+        tree.select_window(second).expect("select succeeds");
+        assert_eq!(tree.session(session_id).unwrap().active, 1);
+    }
+
+    #[test]
+    fn select_window_rejects_an_unknown_window() {
+        let mut tree = tree();
+        let result = tree.select_window(WindowId(999));
+        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
+    }
+
+    #[test]
+    fn rename_window_updates_the_name() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+
+        tree.rename_window(window_id, "scratch")
+            .expect("rename succeeds");
+        assert_eq!(tree.window(window_id).unwrap().name, "scratch");
+    }
+
+    #[test]
+    fn rename_window_rejects_an_unknown_window() {
+        let mut tree = tree();
+        let result = tree.rename_window(WindowId(999), "x");
+        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
+    }
+
+    #[test]
+    fn kill_window_removes_it_and_its_panes_but_keeps_the_session() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let second = tree.new_window(session_id, "logs", 80, 24).unwrap();
+        let pane_id = tree.window(second).unwrap().panes()[0];
+
+        tree.kill_window(second).expect("kill succeeds");
+        assert!(tree.window(second).is_none(), "window is gone");
+        assert!(tree.pane(pane_id).is_none(), "its pane is gone too");
+        assert_eq!(
+            tree.session(session_id).unwrap().windows,
+            vec![window_id],
+            "the surviving window remains"
+        );
+    }
+
+    #[test]
+    fn kill_window_of_the_only_window_cascades_to_the_session() {
+        // The same cascade kill_pane already has, entered from the window
+        // side: a session with no windows does not survive.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+
+        tree.kill_window(window_id).expect("kill succeeds");
+        assert!(tree.window(window_id).is_none());
+        assert!(
+            tree.session(session_id).is_none(),
+            "a session with no windows does not survive — matches tmux"
+        );
+    }
+
+    #[test]
+    fn kill_window_rejects_an_unknown_window() {
+        let mut tree = tree();
+        let result = tree.kill_window(WindowId(999));
+        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
     }
 }

@@ -1,6 +1,6 @@
 //! Control-mode command parsing (client → server).
 
-use crate::mux::ids::PaneId;
+use crate::mux::ids::{PaneId, SessionId, WindowId};
 
 /// A command received from a control-mode client.
 ///
@@ -32,6 +32,34 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
+    /// Add a window to a session, optionally named.
+    NewWindow {
+        /// Target session.
+        session: SessionId,
+        /// Window name; a default is chosen when absent.
+        name: Option<String>,
+    },
+    /// Set a session's active window.
+    SelectWindow {
+        /// Target window; its session is derived from it server-side.
+        window: WindowId,
+    },
+    /// Kill a window and every pane it holds.
+    KillWindow {
+        /// Target window.
+        window: WindowId,
+    },
+    /// Rename a window.
+    RenameWindow {
+        /// Target window.
+        window: WindowId,
+        /// New name.
+        name: String,
+    },
+    /// List every window across every session.
+    ListWindows,
+    /// List every session.
+    ListSessions,
 }
 
 /// Parse one command line from a client.
@@ -58,6 +86,29 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
             .map_err(|_| format!("invalid pane target: {raw}"))
     };
 
+    let target_window = |flag_name: &str| -> Result<WindowId, String> {
+        let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
+        raw.parse::<WindowId>()
+            .map_err(|_| format!("invalid window target: {raw}"))
+    };
+
+    let target_session = |flag_name: &str| -> Result<SessionId, String> {
+        let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
+        raw.parse::<SessionId>()
+            .map_err(|_| format!("invalid session target: {raw}"))
+    };
+
+    // Everything after a `-t <target>` pair, joined back with spaces — the
+    // same "trailing free text is the payload" shape `send-keys` already uses.
+    let trailing_after_target = || -> String {
+        args.iter()
+            .skip_while(|a| **a != "-t")
+            .skip(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
     match *name {
         "new-session" => Ok(MuxCommand::NewSession { name: flag("-s") }),
         "list-panes" => Ok(MuxCommand::ListPanes),
@@ -69,16 +120,29 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         }),
         "send-keys" => {
             let pane = target_pane("-t")?;
-            // Everything after the `-t <target>` pair is the payload.
-            let keys = args
-                .iter()
-                .skip_while(|a| **a != "-t")
-                .skip(2)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" ");
+            let keys = trailing_after_target();
             Ok(MuxCommand::SendKeys { pane, keys })
         }
+        "new-window" => Ok(MuxCommand::NewWindow {
+            session: target_session("-t")?,
+            name: flag("-n"),
+        }),
+        "select-window" => Ok(MuxCommand::SelectWindow {
+            window: target_window("-t")?,
+        }),
+        "kill-window" => Ok(MuxCommand::KillWindow {
+            window: target_window("-t")?,
+        }),
+        "rename-window" => {
+            let window = target_window("-t")?;
+            let name = trailing_after_target();
+            if name.is_empty() {
+                return Err("rename-window requires a new name".to_string());
+            }
+            Ok(MuxCommand::RenameWindow { window, name })
+        }
+        "list-windows" => Ok(MuxCommand::ListWindows),
+        "list-sessions" => Ok(MuxCommand::ListSessions),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -137,5 +201,73 @@ mod tests {
             parse_command("kill-pane").is_err(),
             "kill-pane needs a target"
         );
+    }
+
+    #[test]
+    fn parses_new_window_with_and_without_a_name() {
+        assert_eq!(
+            parse_command("new-window -t $0 -n build").unwrap(),
+            MuxCommand::NewWindow {
+                session: SessionId(0),
+                name: Some("build".into())
+            }
+        );
+        assert_eq!(
+            parse_command("new-window -t $0").unwrap(),
+            MuxCommand::NewWindow {
+                session: SessionId(0),
+                name: None
+            }
+        );
+    }
+
+    #[test]
+    fn parses_select_and_kill_window() {
+        assert_eq!(
+            parse_command("select-window -t @2").unwrap(),
+            MuxCommand::SelectWindow {
+                window: WindowId(2)
+            }
+        );
+        assert_eq!(
+            parse_command("kill-window -t @2").unwrap(),
+            MuxCommand::KillWindow {
+                window: WindowId(2)
+            }
+        );
+    }
+
+    #[test]
+    fn parses_rename_window_and_rejects_a_missing_name() {
+        assert_eq!(
+            parse_command("rename-window -t @1 scratch").unwrap(),
+            MuxCommand::RenameWindow {
+                window: WindowId(1),
+                name: "scratch".into()
+            }
+        );
+        assert!(
+            parse_command("rename-window -t @1").is_err(),
+            "rename-window needs a new name"
+        );
+    }
+
+    #[test]
+    fn parses_list_windows_and_list_sessions() {
+        assert_eq!(
+            parse_command("list-windows").unwrap(),
+            MuxCommand::ListWindows
+        );
+        assert_eq!(
+            parse_command("list-sessions").unwrap(),
+            MuxCommand::ListSessions
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_window_and_session_targets() {
+        assert!(parse_command("new-window -t notasession").is_err());
+        assert!(parse_command("select-window -t notawindow").is_err());
+        assert!(parse_command("new-window").is_err(), "needs -t");
     }
 }

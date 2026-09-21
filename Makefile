@@ -265,7 +265,7 @@ check:
 
 typecheck:
 	@echo "Running type checks (Rust + Python)..."
-	cargo check --all-targets --features python,streaming
+	cargo check --all-targets --features python,streaming,mux
 	uv run pyright
 
 clippy:

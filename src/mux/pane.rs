@@ -1,6 +1,6 @@
 //! Panes: PTY ownership, output plumbing, and the factory seam.
 
-use crate::mux::ids::PaneId;
+use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::pty_error::PtyError;
 use crate::pty_session::PtySession;
 use crate::terminal::Terminal;
@@ -8,13 +8,17 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// Errors raised while creating or driving a pane.
+/// Errors raised while creating or driving a pane, window, or session.
 #[derive(Debug)]
 pub enum MuxError {
     /// The underlying PTY layer failed.
     Pty(PtyError),
     /// The requested pane does not exist.
     NoSuchPane(PaneId),
+    /// The requested window does not exist.
+    NoSuchWindow(WindowId),
+    /// The requested session does not exist.
+    NoSuchSession(SessionId),
 }
 
 impl std::fmt::Display for MuxError {
@@ -22,6 +26,8 @@ impl std::fmt::Display for MuxError {
         match self {
             MuxError::Pty(err) => write!(f, "pty error: {err}"),
             MuxError::NoSuchPane(id) => write!(f, "no such pane: {id}"),
+            MuxError::NoSuchWindow(id) => write!(f, "no such window: {id}"),
+            MuxError::NoSuchSession(id) => write!(f, "no such session: {id}"),
         }
     }
 }
