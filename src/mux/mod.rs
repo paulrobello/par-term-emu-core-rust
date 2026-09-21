@@ -8,14 +8,18 @@
 //! parses. That parser is the format reference and the conformance oracle for
 //! everything here; see `par-mux.md`.
 
+pub mod command;
 pub mod emit;
 pub mod ids;
 pub mod pane;
+pub mod server;
 pub mod tree;
 
+pub use command::{parse_command, MuxCommand};
 pub use emit::{emit, emit_block, escape_output};
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
+pub use server::MuxServer;
 pub use tree::{MuxSession, MuxTree, MuxWindow};
 
 /// Marker type used by the feature-isolation test to prove this module is
