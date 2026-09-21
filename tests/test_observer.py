@@ -62,8 +62,7 @@ class TestSyncObserver:
         assert not any(e["type"] == "bell" for e in events)
         term.process(b"\x1b[2J")
         assert any(
-            e["type"] == "screen_cleared"
-            and e["include_scrollback"] == "false"
+            e["type"] == "screen_cleared" and e["include_scrollback"] == "false"
             for e in events
         )
 

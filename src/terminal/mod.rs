@@ -2768,11 +2768,9 @@ impl Terminal {
                                 // and streaming graphics subscribers hear kitty
                                 // placements too. Row is the placement row,
                                 // captured before any cursor move.
-                                self.events
-                                    .terminal_events
-                                    .push(crate::terminal::TerminalEvent::GraphicsAdded(
-                                        position.1,
-                                    ));
+                                self.events.terminal_events.push(
+                                    crate::terminal::TerminalEvent::GraphicsAdded(position.1),
+                                );
                                 if !self.kitty_parser.suppress_cursor_move {
                                     // Kitty TGP: a placement at the cursor moves it
                                     // to the first line below the image unless C=1
