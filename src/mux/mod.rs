@@ -8,6 +8,10 @@
 //! parses. That parser is the format reference and the conformance oracle for
 //! everything here; see `par-mux.md`.
 
+pub mod ids;
+
+pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};
+
 /// Marker type used by the feature-isolation test to prove this module is
 /// reachable exactly when the `mux` feature is enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
