@@ -695,16 +695,13 @@ mod tests {
         // Exactly one '{' / one '}' — a nested rendering would have two of each.
         assert_eq!(rendered.matches('{').count(), 1, "rendered: {rendered}");
         assert_eq!(rendered.matches('}').count(), 1, "rendered: {rendered}");
-        let inner = rendered
-            .split('{')
-            .nth(1)
-            .unwrap()
-            .strip_suffix('}')
-            .unwrap();
-        // Three pane entries, comma-joined at the top level (each entry is
-        // itself "WxH,X,Y,ID" — four comma-separated fields — so three
-        // panes means 3*4 - 1 = 11 top-level commas).
-        assert_eq!(inner.matches(',').count(), 11, "inner: {inner}");
+        // Exact string: proves the collapse produced the right geometry, not
+        // just the right punctuation — a comma count alone is satisfiable by
+        // a flat-but-wrong rendering (bad offsets, bad widths, bad IDs).
+        assert_eq!(
+            rendered,
+            "0000,90x24,0,0{45x24,0,0,0,23x24,45,0,1,22x24,68,0,2}"
+        );
     }
 
     #[test]
