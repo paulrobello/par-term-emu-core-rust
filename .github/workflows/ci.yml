@@ -126,13 +126,17 @@ jobs:
     - name: Set up Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Prove mux is isolated from sim (D1)
+    - name: Build sim (D1 isolation)
+      # Default shell (PowerShell on Windows): cargo links with MSVC's
+      # link.exe here, as the Test job proves. Under shell: bash, git-bash's
+      # coreutils link.exe in PATH shadows MSVC's and every build script
+      # fails to link.
+      run: cargo build --no-default-features --features sim
+
+    - name: Assert sim pulls neither tokio nor portable-pty (D1)
       shell: bash
+      # cargo tree resolves without linking, so the git-bash PATH is harmless.
       run: |
-        # git-bash prepends Git/usr/bin, whose coreutils link.exe shadows
-        # MSVC's linker for cargo; drop it so link.exe resolves to MSVC.
-        export PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -viE 'git[\\/]usr[\\/]bin' | tr '\n' ':')"
-        cargo build --no-default-features --features sim
         if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty'; then
           echo "D1 violation: sim pulled tokio or portable-pty"
           exit 1
