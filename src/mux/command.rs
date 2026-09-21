@@ -40,7 +40,7 @@ pub enum MuxCommand {
 /// real argument grammar (quoting, `--`, per-command option tables) is Phase 2
 /// work, and pretending to implement it here would hide that.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
-    let parts: Vec<&str> = line.trim().split_whitespace().collect();
+    let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
         return Err("empty command".to_string());
     };

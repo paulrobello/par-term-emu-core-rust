@@ -30,12 +30,15 @@ const DEFAULT_ROWS: u16 = 24;
 /// removed eagerly rather than waiting for the next broadcast to fail.
 static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Connected clients' broadcast senders, keyed by their monotonic id.
+type Clients = Arc<Mutex<Vec<(u64, Sender<String>)>>>;
+
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
     listener: LocalListener,
     path: PathBuf,
     tree: Arc<Mutex<MuxTree>>,
-    clients: Arc<Mutex<Vec<(u64, Sender<String>)>>>,
+    clients: Clients,
 }
 
 impl MuxServer {
@@ -79,11 +82,7 @@ impl MuxServer {
 /// Serve one connected client: a writer thread draining a channel, and this
 /// thread reading commands. On disconnect, only this client's broadcast
 /// sender is removed — the accept loop and the tree are untouched.
-fn handle_client(
-    stream: LocalStream,
-    tree: Arc<Mutex<MuxTree>>,
-    clients: Arc<Mutex<Vec<(u64, Sender<String>)>>>,
-) {
+fn handle_client(stream: LocalStream, tree: Arc<Mutex<MuxTree>>, clients: Clients) {
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel::<String>();
     clients.lock().push((client_id, tx.clone()));
@@ -124,7 +123,7 @@ fn dispatch(
     line: &str,
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
-    clients: &Arc<Mutex<Vec<(u64, Sender<String>)>>>,
+    clients: &Clients,
 ) -> String {
     let command = match parse_command(line) {
         Ok(command) => command,

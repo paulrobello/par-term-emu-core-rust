@@ -30,15 +30,13 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut saw = false;
         while Instant::now() < deadline && !saw {
-            if let Ok(notification) = client
+            // Debug of Output renders the payload as byte numbers, so match
+            // the variant and decode the bytes to find the marker.
+            if let Ok(TmuxNotification::Output { data, .. }) = client
                 .notifications()
                 .recv_timeout(Duration::from_millis(250))
             {
-                // Debug of Output renders the payload as byte numbers, so
-                // match the variant and decode the bytes to find the marker.
-                if let TmuxNotification::Output { data, .. } = &notification {
-                    saw = String::from_utf8_lossy(data).contains("par-mux-resync-marker");
-                }
+                saw = String::from_utf8_lossy(&data).contains("par-mux-resync-marker");
             }
         }
         assert!(saw, "first client should see the marker as pushed output");

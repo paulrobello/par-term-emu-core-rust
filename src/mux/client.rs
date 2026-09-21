@@ -61,7 +61,7 @@ impl MuxClient {
     }
 
     fn from_stream(stream: LocalStream) -> io::Result<Self> {
-        let mut writer = stream.try_clone()?;
+        let writer = stream.try_clone()?;
         let (reply_tx, reply_rx) = channel::<Vec<String>>();
         let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
         std::thread::spawn(move || reader_loop(stream, reply_tx, notification_tx));
