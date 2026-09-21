@@ -27,6 +27,11 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
+    /// Replay a pane's current screen to the requesting client.
+    RefreshClient {
+        /// Target pane.
+        pane: PaneId,
+    },
 }
 
 /// Parse one command line from a client.
@@ -57,6 +62,9 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         "new-session" => Ok(MuxCommand::NewSession { name: flag("-s") }),
         "list-panes" => Ok(MuxCommand::ListPanes),
         "kill-pane" => Ok(MuxCommand::KillPane {
+            pane: target_pane("-t")?,
+        }),
+        "refresh-client" => Ok(MuxCommand::RefreshClient {
             pane: target_pane("-t")?,
         }),
         "send-keys" => {

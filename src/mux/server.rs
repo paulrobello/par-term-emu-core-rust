@@ -196,6 +196,19 @@ fn dispatch(
                 None => emit_block(command_number, &format!("no such pane: {pane}"), false),
             }
         }
+        MuxCommand::RefreshClient { pane } => {
+            let guard = tree.lock();
+            match guard.pane(pane) {
+                // Resync (D5.4): replay the pane's current screen by reusing
+                // the Terminal's existing visible-screen snapshot, so a
+                // reattached client renders content, not a blank pane.
+                Some(target) => {
+                    let screen = target.terminal().read().content();
+                    emit_block(command_number, &screen, true)
+                }
+                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
+            }
+        }
         MuxCommand::KillPane { pane } => {
             let mut guard = tree.lock();
             match guard.kill_pane(pane) {
