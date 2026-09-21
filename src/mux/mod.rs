@@ -11,10 +11,12 @@
 pub mod emit;
 pub mod ids;
 pub mod pane;
+pub mod tree;
 
 pub use emit::{emit, emit_block, escape_output};
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
+pub use tree::{MuxSession, MuxTree, MuxWindow};
 
 /// Marker type used by the feature-isolation test to prove this module is
 /// reachable exactly when the `mux` feature is enabled.
