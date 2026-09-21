@@ -20,6 +20,20 @@ pub enum SplitDirection {
     Vertical,
 }
 
+/// Which way a resize adjustment pushes the pane's border, matching tmux's
+/// `resize-pane -L`/`-R`/`-U`/`-D` flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDirection {
+    /// `-L`: grow toward the left.
+    Left,
+    /// `-R`: grow toward the right.
+    Right,
+    /// `-U`: grow upward.
+    Up,
+    /// `-D`: grow downward.
+    Down,
+}
+
 /// A window's interior pane structure: either a single pane, or a binary
 /// split into two sub-trees with a ratio dividing them.
 #[derive(Debug, Clone, PartialEq)]
@@ -252,6 +266,33 @@ impl LayoutTree {
                     first
                         .resize_pane(target, new_ratio)
                         .or_else(|_| second.resize_pane(target, new_ratio))
+                }
+            }
+        }
+    }
+
+    /// The orientation and current ratio of the split whose `first` child
+    /// is the leaf holding `target` — the split [`Self::resize_pane`]
+    /// adjusts.
+    ///
+    /// `None` when `target` does not border a split as its `first` child
+    /// (including a single-pane tree), so a caller can distinguish "nothing
+    /// to resize" before computing a new ratio.
+    pub fn bordering_split(&self, target: PaneId) -> Option<(SplitDirection, f32)> {
+        match self {
+            LayoutTree::Pane(_) => None,
+            LayoutTree::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                if matches!(first.as_ref(), LayoutTree::Pane(id) if *id == target) {
+                    Some((*direction, *ratio))
+                } else {
+                    first
+                        .bordering_split(target)
+                        .or_else(|| second.bordering_split(target))
                 }
             }
         }
@@ -584,6 +625,21 @@ mod tests {
         tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
             .unwrap();
         assert!(tree.resize_pane(PaneId(1), 0.75).is_err());
+    }
+
+    #[test]
+    fn bordering_split_reports_the_split_the_target_borders() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Horizontal, 0.25)
+            .unwrap();
+        assert_eq!(
+            tree.bordering_split(PaneId(0)),
+            Some((SplitDirection::Horizontal, 0.25))
+        );
+        // The second child, an absent pane, and a lone leaf border nothing.
+        assert_eq!(tree.bordering_split(PaneId(1)), None);
+        assert_eq!(tree.bordering_split(PaneId(9)), None);
+        assert_eq!(LayoutTree::leaf(PaneId(0)).bordering_split(PaneId(0)), None);
     }
 
     #[test]

@@ -19,6 +19,12 @@ pub enum MuxError {
     NoSuchWindow(WindowId),
     /// The requested session does not exist.
     NoSuchSession(SessionId),
+    /// The two panes are not in the same window, so their positions cannot
+    /// be exchanged.
+    PanesInDifferentWindows(PaneId, PaneId),
+    /// The pane has no bordering split of the requested orientation to
+    /// adjust.
+    PaneNotResizable(PaneId),
 }
 
 impl std::fmt::Display for MuxError {
@@ -28,6 +34,12 @@ impl std::fmt::Display for MuxError {
             MuxError::NoSuchPane(id) => write!(f, "no such pane: {id}"),
             MuxError::NoSuchWindow(id) => write!(f, "no such window: {id}"),
             MuxError::NoSuchSession(id) => write!(f, "no such session: {id}"),
+            MuxError::PanesInDifferentWindows(a, b) => {
+                write!(f, "panes {a} and {b} are in different windows")
+            }
+            MuxError::PaneNotResizable(id) => {
+                write!(f, "pane {id} cannot be resized in that direction")
+            }
         }
     }
 }

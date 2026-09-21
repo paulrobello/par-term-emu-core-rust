@@ -1,6 +1,7 @@
 //! Control-mode command parsing (client → server).
 
 use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::layout::{ResizeDirection, SplitDirection};
 
 /// A command received from a control-mode client.
 ///
@@ -60,6 +61,39 @@ pub enum MuxCommand {
     ListWindows,
     /// List every session.
     ListSessions,
+    /// Split a pane's area in two, creating and focusing a new pane.
+    SplitWindow {
+        /// Target pane to split.
+        pane: PaneId,
+        /// Split orientation after tmux's flag mapping: `-h` puts the new
+        /// pane beside the target (side by side), `-v`/default below it.
+        direction: SplitDirection,
+        /// `-p`: percent of the split area given to the NEW pane, 50 when
+        /// absent (tmux semantics — the target keeps the remainder).
+        percent: u32,
+    },
+    /// Make a pane its window's active pane.
+    SelectPane {
+        /// Target pane.
+        pane: PaneId,
+    },
+    /// Grow or shrink a pane by moving its bordering divider.
+    ResizePane {
+        /// Target pane.
+        pane: PaneId,
+        /// Which way the border moves (`-L`/`-R`/`-U`/`-D`).
+        direction: ResizeDirection,
+        /// Cells to move it by; 5 when the flag carries no number (tmux's
+        /// default adjustment).
+        cells: u32,
+    },
+    /// Exchange two panes' positions within their window.
+    SwapPanes {
+        /// Pane swapped into the source's position (`-t`).
+        target: PaneId,
+        /// Pane swapped into the target's position (`-s`).
+        source: PaneId,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -104,6 +138,10 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
             .and_then(|i| args.get(i + 1))
             .map(|v| (*v).to_string())
     };
+
+    // Presence check for valueless flags (`-h`, `-R`, …) — `flag` cannot
+    // distinguish "absent" from "present with no following token".
+    let has_flag = |flag: &str| args.contains(&flag);
 
     let target_pane = |flag_name: &str| -> Result<PaneId, String> {
         let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
@@ -168,6 +206,65 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         }
         "list-windows" => Ok(MuxCommand::ListWindows),
         "list-sessions" => Ok(MuxCommand::ListSessions),
+        "split-window" => {
+            let pane = target_pane("-t")?;
+            // tmux's flags name the arrangement, not the divider: `-h`
+            // puts the new pane beside the target (our Vertical
+            // orientation), `-v`/default below it (Horizontal).
+            let direction = if has_flag("-h") {
+                SplitDirection::Vertical
+            } else {
+                SplitDirection::Horizontal
+            };
+            let percent = match flag("-p") {
+                Some(raw) => {
+                    let percent: u32 = raw
+                        .parse()
+                        .map_err(|_| format!("invalid percentage: {raw}"))?;
+                    if !(1..=99).contains(&percent) {
+                        return Err(format!("percentage must be 1-99: {raw}"));
+                    }
+                    percent
+                }
+                None => 50,
+            };
+            Ok(MuxCommand::SplitWindow {
+                pane,
+                direction,
+                percent,
+            })
+        }
+        "select-pane" => Ok(MuxCommand::SelectPane {
+            pane: target_pane("-t")?,
+        }),
+        "resize-pane" => {
+            let pane = target_pane("-t")?;
+            // tmux takes one direction flag; the first of the four wins.
+            let Some((flag_name, direction)) = [
+                ("-L", ResizeDirection::Left),
+                ("-R", ResizeDirection::Right),
+                ("-U", ResizeDirection::Up),
+                ("-D", ResizeDirection::Down),
+            ]
+            .into_iter()
+            .find(|(flag, _)| has_flag(flag)) else {
+                return Err("resize-pane requires one of -L -R -U -D".to_string());
+            };
+            // The cell count is the flag's value when present and numeric;
+            // tmux's default adjustment is 5 cells.
+            let cells = flag(flag_name)
+                .and_then(|raw| raw.parse::<u32>().ok())
+                .unwrap_or(5);
+            Ok(MuxCommand::ResizePane {
+                pane,
+                direction,
+                cells,
+            })
+        }
+        "swap-pane" => Ok(MuxCommand::SwapPanes {
+            target: target_pane("-t")?,
+            source: target_pane("-s")?,
+        }),
         "capture-pane" => {
             let pane = target_pane("-t")?;
             // tmux's `-S`/`-E` select a start/end line; the raw offsets are
@@ -347,6 +444,78 @@ mod tests {
                 end_line: Some(-11)
             }
         );
+    }
+
+    #[test]
+    fn parses_split_window_with_flags_and_defaults() {
+        // Default: new pane below the target (-v), 50 percent.
+        assert_eq!(
+            parse_command("split-window -t %0").unwrap(),
+            MuxCommand::SplitWindow {
+                pane: PaneId(0),
+                direction: SplitDirection::Horizontal,
+                percent: 50
+            }
+        );
+        assert_eq!(
+            parse_command("split-window -t %0 -v").unwrap(),
+            MuxCommand::SplitWindow {
+                pane: PaneId(0),
+                direction: SplitDirection::Horizontal,
+                percent: 50
+            }
+        );
+        // -h: side by side; -p: the NEW pane's share.
+        assert_eq!(
+            parse_command("split-window -t %0 -h -p 25").unwrap(),
+            MuxCommand::SplitWindow {
+                pane: PaneId(0),
+                direction: SplitDirection::Vertical,
+                percent: 25
+            }
+        );
+    }
+
+    #[test]
+    fn split_window_rejects_out_of_range_percent() {
+        assert!(parse_command("split-window -t %0 -p 0").is_err());
+        assert!(parse_command("split-window -t %0 -p 100").is_err());
+    }
+
+    #[test]
+    fn parses_select_and_swap_pane() {
+        assert_eq!(
+            parse_command("select-pane -t %2").unwrap(),
+            MuxCommand::SelectPane { pane: PaneId(2) }
+        );
+        assert_eq!(
+            parse_command("swap-pane -t %2 -s %5").unwrap(),
+            MuxCommand::SwapPanes {
+                target: PaneId(2),
+                source: PaneId(5)
+            }
+        );
+    }
+
+    #[test]
+    fn parses_resize_pane_with_default_and_explicit_cells() {
+        assert_eq!(
+            parse_command("resize-pane -t %0 -R").unwrap(),
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                direction: ResizeDirection::Right,
+                cells: 5
+            }
+        );
+        assert_eq!(
+            parse_command("resize-pane -t %0 -U 12").unwrap(),
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                direction: ResizeDirection::Up,
+                cells: 12
+            }
+        );
+        assert!(parse_command("resize-pane -t %0").is_err());
     }
 
     #[test]

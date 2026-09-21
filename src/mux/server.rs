@@ -7,6 +7,7 @@
 
 use crate::mux::command::{parse_command, MuxCommand};
 use crate::mux::emit::{emit, emit_block};
+use crate::mux::ids::WindowId;
 use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::tree::MuxTree;
@@ -221,6 +222,85 @@ fn dispatch(
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
+        MuxCommand::SplitWindow {
+            pane,
+            direction,
+            percent,
+        } => {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard
+                    .split_pane(pane, direction, percent as f32 / 100.0, None)
+                    .map(|new_pane| {
+                        let window_id = guard
+                            .window_of_pane(new_pane)
+                            .expect("the pane was just created in a live window");
+                        (new_pane, window_id)
+                    })
+            };
+            match outcome {
+                Ok((new_pane, window_id)) => {
+                    broadcast_layout_change(tree, clients, window_id);
+                    emit_block(command_number, &new_pane.to_string(), true)
+                }
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::SelectPane { pane } => {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard.select_pane(pane).map(|()| {
+                    guard
+                        .window_of_pane(pane)
+                        .expect("select_pane verified the pane")
+                })
+            };
+            match outcome {
+                Ok(window_id) => {
+                    broadcast_layout_change(tree, clients, window_id);
+                    emit_block(command_number, "", true)
+                }
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::ResizePane {
+            pane,
+            direction,
+            cells,
+        } => {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard.resize_pane(pane, direction, cells).map(|()| {
+                    guard
+                        .window_of_pane(pane)
+                        .expect("resize_pane verified the pane")
+                })
+            };
+            match outcome {
+                Ok(window_id) => {
+                    broadcast_layout_change(tree, clients, window_id);
+                    emit_block(command_number, "", true)
+                }
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
+        MuxCommand::SwapPanes { target, source } => {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard.swap_panes(target, source).map(|()| {
+                    guard
+                        .window_of_pane(target)
+                        .expect("swap_panes verified the pane")
+                })
+            };
+            match outcome {
+                Ok(window_id) => {
+                    broadcast_layout_change(tree, clients, window_id);
+                    emit_block(command_number, "", true)
+                }
+                Err(err) => emit_block(command_number, &err.to_string(), false),
+            }
+        }
         MuxCommand::NewWindow { session, name } => {
             let name = name.unwrap_or_else(|| "0".to_string());
             let mut guard = tree.lock();
@@ -348,6 +428,34 @@ fn dispatch(
             }
         }
     }
+}
+
+/// Push a `%layout-change` for `window_id` to every connected client.
+///
+/// tmux subscribers re-render their local pane grid from the wire layout
+/// string; the visible-layout copy and raw flags mirror tmux's frame shape
+/// (same string, empty flags) rather than carrying state Phase 2 does not
+/// track. Rendered after the tree lock is released, so a slow client
+/// channel never holds up a mutation.
+fn broadcast_layout_change(tree: &Arc<Mutex<MuxTree>>, clients: &Clients, window_id: WindowId) {
+    let line = {
+        let guard = tree.lock();
+        let Some(window) = guard.window(window_id) else {
+            return;
+        };
+        let layout = window
+            .layout
+            .render(0, 0, window.cols as usize, window.rows as usize);
+        emit(&TmuxNotification::LayoutChange {
+            window_id: window_id.to_string(),
+            window_layout: layout.clone(),
+            window_visible_layout: layout,
+            window_raw_flags: String::new(),
+        })
+    };
+    clients
+        .lock()
+        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
 }
 
 /// Resolve a `-S`/`-E` capture range against a pane's composed buffer.
@@ -513,6 +621,111 @@ mod tests {
             reply.contains("%error"),
             "unknown window is an error: {reply}"
         );
+    }
+
+    #[test]
+    fn split_window_dispatch_splits_and_broadcasts_a_layout_change() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // A second client observes the broadcast.
+        let (tx, rx) = channel();
+        clients.lock().push((u64::MAX, tx));
+
+        let reply = dispatch(
+            &format!("split-window -t {pane_id} -h -p 25"),
+            2,
+            &tree,
+            &clients,
+        );
+        assert!(reply.contains("%end"), "split-window succeeds: {reply}");
+
+        let notification = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("a %layout-change is broadcast");
+        assert!(
+            notification.contains("%layout-change"),
+            "notification: {notification}"
+        );
+        assert!(
+            notification.contains(&window_id.to_string()),
+            "names the mutated window: {notification}"
+        );
+
+        // The split geometry is real: -p 25 gives the new pane 20 of 80 cols.
+        let geo = {
+            let guard = tree.lock();
+            let window = guard.window(window_id).unwrap();
+            window
+                .layout
+                .geometry(0, 0, window.cols as usize, window.rows as usize)
+        };
+        let widths: Vec<_> = geo.iter().map(|g| (g.pane, g.width)).collect();
+        assert!(
+            widths.contains(&(pane_id, 60)),
+            "target keeps 60 cols: {widths:?}"
+        );
+        assert!(
+            widths.iter().any(|&(_, width)| width == 20),
+            "new pane gets 20 cols: {widths:?}"
+        );
+    }
+
+    #[test]
+    fn pane_commands_dispatch_through_the_tree() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let first = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // Side by side, so the -R resize below moves the shared divider.
+        let split = dispatch(&format!("split-window -t {first} -h"), 2, &tree, &clients);
+        assert!(split.contains("%end"), "split-window succeeds: {split}");
+        // The reply body carries the new pane id — a client needs it to
+        // address the pane it just created.
+        let second = tree.lock().window(window_id).unwrap().panes()[1];
+        assert!(
+            split.contains(&second.to_string()),
+            "reply names the new pane: {split}"
+        );
+
+        let select = dispatch(&format!("select-pane -t {first}"), 3, &tree, &clients);
+        assert!(select.contains("%end"), "select-pane succeeds: {select}");
+        assert_eq!(tree.lock().window(window_id).unwrap().active, first);
+
+        let resize = dispatch(&format!("resize-pane -t {first} -R 10"), 4, &tree, &clients);
+        assert!(resize.contains("%end"), "resize-pane succeeds: {resize}");
+
+        let swap = dispatch(
+            &format!("swap-pane -t {first} -s {second}"),
+            5,
+            &tree,
+            &clients,
+        );
+        assert!(swap.contains("%end"), "swap-pane succeeds: {swap}");
+        assert_eq!(
+            tree.lock().window(window_id).unwrap().panes(),
+            vec![second, first],
+            "the panes traded positions"
+        );
+    }
+
+    #[test]
+    fn pane_commands_report_an_error_block_for_unknown_panes() {
+        let (tree, clients) = harness();
+        for command in [
+            "split-window -t %999",
+            "select-pane -t %999",
+            "resize-pane -t %999 -R",
+            "swap-pane -t %999 -s %998",
+        ] {
+            let reply = dispatch(command, 1, &tree, &clients);
+            assert!(reply.contains("%error"), "{command} is an error: {reply}");
+        }
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! The session/window/pane tree: the server's single source of truth.
 
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
-use crate::mux::layout::LayoutTree;
+use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory};
 use std::collections::HashMap;
 
@@ -20,6 +20,11 @@ pub struct MuxWindow {
     pub layout: LayoutTree,
     /// The currently active pane.
     pub active: PaneId,
+    /// The window's width in columns — the extent the layout renders into
+    /// and the base a resize delta converts against.
+    pub cols: u16,
+    /// The window's height in rows.
+    pub rows: u16,
 }
 
 impl MuxWindow {
@@ -122,6 +127,8 @@ impl MuxTree {
                 name: name.to_string(),
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
+                cols,
+                rows,
             },
         );
 
@@ -161,6 +168,8 @@ impl MuxTree {
                 name: name.to_string(),
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
+                cols,
+                rows,
             },
         );
         if let Some(session) = self.sessions.get_mut(&session_id) {
@@ -169,45 +178,132 @@ impl MuxTree {
         Ok(window_id)
     }
 
-    /// Add a pane to an existing window by splitting its active pane.
+    /// Split `target`'s area in two and spawn a new pane in the other half.
     ///
-    /// Matches tmux's `split-window`: the new pane divides the currently
-    /// active leaf, and becomes the new active pane. `direction`/`ratio`
-    /// are Task 2.4's concern (the `split-window` command surface); this
-    /// constructor exists here, in Phase 1's shape, as the tree-backed
-    /// counterpart of the old flat `panes.push`, defaulting to an even
-    /// vertical split until Task 2.4 threads the command's real arguments
-    /// through.
-    pub fn new_pane(
+    /// tmux's `split-window`: the new pane divides the target's extent along
+    /// `direction`, receiving `new_share` of it (the `-p` percentage), and
+    /// becomes the window's active pane. The new pane's terminal is created
+    /// at the window's full size — per-pane geometry is a render-time
+    /// concern (the layout string), not a terminal-size concern.
+    pub fn split_pane(
         &mut self,
-        window_id: WindowId,
-        cols: u16,
-        rows: u16,
+        target: PaneId,
+        direction: SplitDirection,
+        new_share: f32,
         command: Option<&str>,
     ) -> Result<PaneId, MuxError> {
-        if !self.windows.contains_key(&window_id) {
-            return Err(MuxError::NoSuchWindow(window_id));
-        }
+        let window_id = self
+            .window_of_pane(target)
+            .ok_or(MuxError::NoSuchPane(target))?;
+        let (cols, rows) = {
+            let window = self.windows.get(&window_id).expect("just found");
+            (window.cols, window.rows)
+        };
         let pane_id = self.ids.next_pane();
         let pane = self.factory.create_pane(pane_id, cols, rows, command)?;
         self.panes.insert(pane_id, pane);
-        if let Some(window) = self.windows.get_mut(&window_id) {
-            let active = window.active;
-            // `split_pane` only fails when `active` is not a leaf in the
-            // window's own tree, which cannot happen — `active` is always
-            // kept in sync with the tree by every mutator.
-            window
-                .layout
-                .split_pane(
-                    active,
-                    pane_id,
-                    crate::mux::layout::SplitDirection::Vertical,
-                    0.5,
-                )
-                .expect("window.active is always a leaf of window.layout");
-            window.active = pane_id;
-        }
+        let window = self.windows.get_mut(&window_id).expect("just found");
+        // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
+        // (the target), while the command speaks in the NEW pane's share.
+        window
+            .layout
+            .split_pane(target, pane_id, direction, 1.0 - new_share)
+            .expect("window_of_pane only returns windows holding the pane as a leaf");
+        window.active = pane_id;
         Ok(pane_id)
+    }
+
+    /// The window whose layout holds `pane`, if any.
+    pub fn window_of_pane(&self, pane: PaneId) -> Option<WindowId> {
+        self.windows
+            .iter()
+            .find(|(_, window)| window.layout.pane_ids().contains(&pane))
+            .map(|(id, _)| *id)
+    }
+
+    /// Make `pane` its window's active pane.
+    pub fn select_pane(&mut self, pane: PaneId) -> Result<(), MuxError> {
+        let window_id = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        self.windows
+            .get_mut(&window_id)
+            .expect("window_of_pane only returns live windows")
+            .active = pane;
+        Ok(())
+    }
+
+    /// Swap two panes' positions within their window.
+    ///
+    /// tmux's `swap-pane` exchanges panes inside one window; panes in
+    /// different windows have no shared split structure to trade places in.
+    pub fn swap_panes(&mut self, target: PaneId, source: PaneId) -> Result<(), MuxError> {
+        let window_id = self
+            .window_of_pane(target)
+            .ok_or(MuxError::NoSuchPane(target))?;
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .expect("window_of_pane only returns live windows");
+        if !window.layout.pane_ids().contains(&source) {
+            return Err(MuxError::PanesInDifferentWindows(target, source));
+        }
+        window
+            .layout
+            .swap_pane(target, source)
+            .map_err(|_| MuxError::PanesInDifferentWindows(target, source))
+    }
+
+    /// Grow or shrink `pane` by `cells` toward `direction` (tmux's
+    /// `-L`/`-R`/`-U`/`-D`), adjusting the ratio of the split it borders.
+    ///
+    /// Only a split of the matching orientation can absorb the adjustment:
+    /// `-L`/`-R` move a side-by-side divider, `-U`/`-D` a stacked one. A
+    /// pane with no such bordering split — a lone pane, or one whose only
+    /// bordering split is the other orientation — is an error, not a no-op.
+    pub fn resize_pane(
+        &mut self,
+        pane: PaneId,
+        direction: ResizeDirection,
+        cells: u32,
+    ) -> Result<(), MuxError> {
+        let window_id = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        let window = self
+            .windows
+            .get_mut(&window_id)
+            .expect("window_of_pane only returns live windows");
+        let Some((split_direction, ratio)) = window.layout.bordering_split(pane) else {
+            return Err(MuxError::PaneNotResizable(pane));
+        };
+        let axis_matches = matches!(
+            (direction, split_direction),
+            (
+                ResizeDirection::Left | ResizeDirection::Right,
+                SplitDirection::Vertical
+            ) | (
+                ResizeDirection::Up | ResizeDirection::Down,
+                SplitDirection::Horizontal
+            )
+        );
+        if !axis_matches {
+            return Err(MuxError::PaneNotResizable(pane));
+        }
+        let extent = match split_direction {
+            SplitDirection::Vertical => window.cols as f32,
+            SplitDirection::Horizontal => window.rows as f32,
+        };
+        let sign = match direction {
+            ResizeDirection::Right | ResizeDirection::Down => 1.0,
+            ResizeDirection::Left | ResizeDirection::Up => -1.0,
+        };
+        let new_ratio = ratio + sign * (cells as f32) / extent;
+        window
+            .layout
+            .resize_pane(pane, new_ratio)
+            .expect("bordering_split found the split resize_pane adjusts");
+        Ok(())
     }
 
     /// Kill a pane, closing its window when it was the last one.
@@ -369,17 +465,36 @@ mod tests {
     }
 
     #[test]
-    fn new_pane_joins_an_existing_window() {
+    fn splitting_a_pane_joins_the_window_and_takes_its_requested_share() {
         let mut tree = tree();
         let session_id = tree.new_session("main", 80, 24).unwrap();
         let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
 
-        let pane_id = tree
-            .new_pane(window_id, 80, 12, None)
-            .expect("pane creates");
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.25, None)
+            .expect("split creates");
         let window = tree.window(window_id).unwrap();
         assert_eq!(window.panes().len(), 2);
-        assert!(window.panes().contains(&pane_id));
+        assert!(window.panes().contains(&second));
+
+        // -p 25 semantics: the NEW pane gets a quarter of the 80-column
+        // extent, the target keeps the rest.
+        let geo = window
+            .layout
+            .geometry(0, 0, window.cols as usize, window.rows as usize);
+        let width_of = |pane| {
+            geo.iter()
+                .find(|g| g.pane == pane)
+                .unwrap_or_else(|| panic!("pane {pane} in geometry"))
+                .width
+        };
+        assert_eq!(width_of(first), 60);
+        assert_eq!(width_of(second), 20);
+        assert_eq!(
+            window.active, second,
+            "tmux's split-window makes the new pane active"
+        );
     }
 
     #[test]
@@ -387,7 +502,10 @@ mod tests {
         let mut tree = tree();
         let session_id = tree.new_session("main", 80, 24).unwrap();
         let window_id = tree.session(session_id).unwrap().windows[0];
-        let extra = tree.new_pane(window_id, 80, 12, None).unwrap();
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let extra = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
 
         tree.kill_pane(extra).expect("kill succeeds");
         assert!(tree.pane(extra).is_none(), "pane is gone from the tree");
@@ -454,10 +572,112 @@ mod tests {
     }
 
     #[test]
-    fn new_pane_rejects_an_unknown_window() {
+    fn split_pane_rejects_an_unknown_pane() {
         let mut tree = tree();
-        let result = tree.new_pane(WindowId(999), 80, 24, None);
-        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
+        let result = tree.split_pane(PaneId(999), SplitDirection::Vertical, 0.5, None);
+        assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
+    }
+
+    #[test]
+    fn select_pane_changes_the_active_pane() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        assert_eq!(tree.window(window_id).unwrap().active, second);
+
+        tree.select_pane(first).expect("select succeeds");
+        assert_eq!(tree.window(window_id).unwrap().active, first);
+    }
+
+    #[test]
+    fn select_pane_rejects_an_unknown_pane() {
+        let mut tree = tree();
+        let result = tree.select_pane(PaneId(999));
+        assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
+    }
+
+    #[test]
+    fn swap_panes_exchanges_positions_within_a_window() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.swap_panes(first, second).expect("swap succeeds");
+        assert_eq!(
+            tree.window(window_id).unwrap().panes(),
+            vec![second, first],
+            "the panes traded tree positions"
+        );
+    }
+
+    #[test]
+    fn swap_panes_across_windows_is_an_error() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let first_window = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(first_window).unwrap().panes()[0];
+        let second_window = tree.new_window(session_id, "logs", 80, 24).unwrap();
+        let outsider = tree.window(second_window).unwrap().panes()[0];
+
+        let result = tree.swap_panes(first, outsider);
+        assert!(matches!(
+            result,
+            Err(MuxError::PanesInDifferentWindows(a, b)) if a == first && b == outsider
+        ));
+    }
+
+    #[test]
+    fn resize_pane_grows_the_bordering_split_by_cells() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        tree.split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        // -R 10 on a 0.5 ratio over 80 columns: 0.5 + 10/80 = 0.625.
+        tree.resize_pane(first, ResizeDirection::Right, 10)
+            .expect("resize succeeds");
+        let window = tree.window(window_id).unwrap();
+        let geo = window
+            .layout
+            .geometry(0, 0, window.cols as usize, window.rows as usize);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(first), 50);
+        assert_eq!(geo.iter().find(|g| g.pane != first).unwrap().width, 30);
+    }
+
+    #[test]
+    fn resize_pane_on_the_wrong_axis_is_an_error() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        // A stacked (Horizontal) split: -R moves a side-by-side divider.
+        tree.split_pane(first, SplitDirection::Horizontal, 0.5, None)
+            .unwrap();
+
+        let result = tree.resize_pane(first, ResizeDirection::Right, 5);
+        assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
+    }
+
+    #[test]
+    fn resize_pane_on_a_lone_pane_is_an_error() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+
+        let result = tree.resize_pane(first, ResizeDirection::Right, 5);
+        assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
     }
 
     #[test]
