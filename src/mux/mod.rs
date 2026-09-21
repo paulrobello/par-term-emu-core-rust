@@ -9,8 +9,10 @@
 //! everything here; see `par-mux.md`.
 
 pub mod ids;
+pub mod pane;
 
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};
+pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
 
 /// Marker type used by the feature-isolation test to prove this module is
 /// reachable exactly when the `mux` feature is enabled.
