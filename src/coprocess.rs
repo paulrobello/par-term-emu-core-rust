@@ -802,9 +802,12 @@ mod tests {
         };
         let id = mgr.start(config).unwrap();
 
-        // Wait for process to exit
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(mgr.status(id), Some(false));
+        // Wait for the reader thread to observe the exit — a fixed sleep here
+        // raced the scheduler on loaded CI boxes (run 35640504786, Windows)
+        assert!(
+            poll_until(2000, || mgr.status(id) == Some(false)),
+            "process never transitioned to dead"
+        );
 
         // First feed_output should record died_at but NOT restart yet
         mgr.feed_output(b"data\n");
@@ -812,13 +815,14 @@ mod tests {
         assert_eq!(mgr.list(), vec![id]);
         assert_eq!(mgr.status(id), Some(false)); // still dead
 
-        // Feed again before delay elapses — should still not restart
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Feed again immediately — well inside the delay window, so this must
+        // still not restart. Feeding right away (instead of after a fixed
+        // sleep) keeps the elapsed time near zero regardless of scheduler lag.
         mgr.feed_output(b"data\n");
         assert_eq!(mgr.status(id), Some(false)); // still dead
 
-        // Wait for delay to elapse and feed again
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        // Wait for the delay to elapse and feed again (overshoot only helps)
+        std::thread::sleep(std::time::Duration::from_millis(350));
         mgr.feed_output(b"data\n");
 
         // Now it should have restarted
