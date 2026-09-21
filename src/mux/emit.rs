@@ -1,0 +1,300 @@
+//! Control-mode emitter: `TmuxNotification` values onto the wire.
+
+use crate::tmux_control::TmuxNotification;
+
+/// Current time as epoch seconds, used for notification timestamps.
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Escape raw PTY bytes for a `%output` line.
+///
+/// tmux renders any byte that is not printable ASCII as a three-digit octal
+/// escape, and escapes the backslash itself so decoding is unambiguous. The
+/// parser in [`crate::tmux_control`] decodes exactly this form.
+pub fn escape_output(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len());
+    for &byte in bytes {
+        match byte {
+            b'\\' => out.push_str("\\134"),
+            0x20..=0x7e => out.push(byte as char),
+            other => {
+                out.push('\\');
+                out.push_str(&format!("{other:03o}"));
+            }
+        }
+    }
+    out
+}
+
+/// Render one notification as a control-mode line, newline-terminated.
+///
+/// Control mode is line-based: every line must carry its terminator or the
+/// client blocks waiting for it.
+pub fn emit(notification: &TmuxNotification) -> String {
+    match notification {
+        TmuxNotification::Output { pane_id, data } => {
+            format!("%output {} {}\n", pane_id, escape_output(data))
+        }
+        TmuxNotification::WindowAdd { window_id } => {
+            format!("%window-add {window_id}\n")
+        }
+        TmuxNotification::WindowClose { window_id } => {
+            format!("%window-close {window_id}\n")
+        }
+        TmuxNotification::UnlinkedWindowClose { window_id } => {
+            format!("%unlinked-window-close {window_id}\n")
+        }
+        TmuxNotification::WindowPaneChanged { window_id, pane_id } => {
+            format!("%window-pane-changed {window_id} {pane_id}\n")
+        }
+        TmuxNotification::PaneModeChanged { pane_id } => {
+            format!("%pane-mode-changed {pane_id}\n")
+        }
+        TmuxNotification::Begin {
+            timestamp,
+            command_number,
+            flags,
+        } => format!("%begin {timestamp} {command_number} {flags}\n"),
+        TmuxNotification::End {
+            timestamp,
+            command_number,
+            flags,
+        } => format!("%end {timestamp} {command_number} {flags}\n"),
+        TmuxNotification::Error {
+            timestamp,
+            command_number,
+            flags,
+        } => format!("%error {timestamp} {command_number} {flags}\n"),
+        // Seam S3: `TmuxNotification` carries 28 variants; Phase 1 emits the 9
+        // the spine needs and the rest fall through here, producing nothing
+        // rather than panicking. Adding a notification is therefore one new
+        // arm, never a change at the call sites. Real tmux clients ignore `%`
+        // lines they do not recognise, so a custom variant (e.g. a future
+        // `%agent-state-changed`) is backward compatible by construction.
+        _ => String::new(),
+    }
+}
+
+/// Render a complete command response block.
+///
+/// Every control-mode command reply is bracketed: `%begin`, the body, then
+/// `%end` on success or `%error` on failure. `command_number` ties the reply to
+/// the request and must match across the opening and closing lines.
+pub fn emit_block(command_number: u32, body: &str, ok: bool) -> String {
+    let timestamp = now_secs();
+    let mut out = String::new();
+    out.push_str(&emit(&TmuxNotification::Begin {
+        timestamp,
+        command_number,
+        flags: "1".to_string(),
+    }));
+    if !body.is_empty() {
+        out.push_str(body);
+        if !body.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+    let closing = if ok {
+        TmuxNotification::End {
+            timestamp,
+            command_number,
+            flags: "1".to_string(),
+        }
+    } else {
+        TmuxNotification::Error {
+            timestamp,
+            command_number,
+            flags: "1".to_string(),
+        }
+    };
+    out.push_str(&emit(&closing));
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tmux_control::{TmuxControlParser, TmuxNotification};
+
+    /// Feed an emitted line back through the real parser. This is the
+    /// conformance oracle: it checks the emitter against the decoder
+    /// `par-term-tmux` actually uses, not against a hand-written fixture.
+    fn round_trip(notification: &TmuxNotification) -> Vec<TmuxNotification> {
+        let line = emit(notification);
+        let mut parser = TmuxControlParser::new(true);
+        parser.parse(line.as_bytes())
+    }
+
+    #[test]
+    fn output_notification_round_trips() {
+        let original = TmuxNotification::Output {
+            pane_id: "%3".to_string(),
+            data: b"hello".to_vec(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        match &parsed[0] {
+            TmuxNotification::Output { pane_id, data } => {
+                assert_eq!(pane_id, "%3");
+                assert_eq!(data, b"hello");
+            }
+            other => panic!("expected Output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_with_control_bytes_round_trips_through_octal_escaping() {
+        // Agent TUIs emit escape sequences constantly; if this does not survive
+        // the round trip, nothing renders.
+        let payload = b"\x1b[31mred\x1b[0m\r\n".to_vec();
+        let original = TmuxNotification::Output {
+            pane_id: "%0".to_string(),
+            data: payload.clone(),
+        };
+        let parsed = round_trip(&original);
+        match &parsed[0] {
+            TmuxNotification::Output { data, .. } => assert_eq!(data, &payload),
+            other => panic!("expected Output, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn escape_output_uses_three_digit_octal() {
+        assert_eq!(escape_output(b"a"), "a");
+        assert_eq!(escape_output(b"\x1b"), "\\033");
+        assert_eq!(escape_output(b"\r"), "\\015");
+        assert_eq!(escape_output(b"\n"), "\\012");
+        // Backslash itself must be escaped or decoding is ambiguous.
+        assert_eq!(escape_output(b"\\"), "\\134");
+    }
+
+    #[test]
+    fn window_add_round_trips() {
+        let original = TmuxNotification::WindowAdd {
+            window_id: "@2".to_string(),
+        };
+        let parsed = round_trip(&original);
+        match &parsed[0] {
+            TmuxNotification::WindowAdd { window_id } => assert_eq!(window_id, "@2"),
+            other => panic!("expected WindowAdd, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_phase_one_notification_round_trips() {
+        // The nine variants Phase 1 emits, each serialized and fed back through
+        // the real parser, asserting full equality — not just the two the plan
+        // spot-checks. Field order and separator count are load-bearing.
+        let flags = || "1".to_string();
+        let originals = vec![
+            TmuxNotification::Begin {
+                timestamp: 1234567890,
+                command_number: 4,
+                flags: flags(),
+            },
+            TmuxNotification::End {
+                timestamp: 1234567890,
+                command_number: 4,
+                flags: flags(),
+            },
+            TmuxNotification::Error {
+                timestamp: 1234567890,
+                command_number: 4,
+                flags: flags(),
+            },
+            TmuxNotification::Output {
+                pane_id: "%1".to_string(),
+                data: Vec::new(),
+            },
+            // A single space of data: separator space plus data space on the wire.
+            TmuxNotification::Output {
+                pane_id: "%1".to_string(),
+                data: b" ".to_vec(),
+            },
+            TmuxNotification::PaneModeChanged {
+                pane_id: "%2".to_string(),
+            },
+            TmuxNotification::WindowPaneChanged {
+                window_id: "@0".to_string(),
+                pane_id: "%2".to_string(),
+            },
+            TmuxNotification::WindowClose {
+                window_id: "@0".to_string(),
+            },
+            TmuxNotification::UnlinkedWindowClose {
+                window_id: "@3".to_string(),
+            },
+        ];
+        for original in &originals {
+            let parsed = round_trip(original);
+            assert_eq!(
+                parsed.len(),
+                1,
+                "one line in, one notification out for {original:?}"
+            );
+            assert_eq!(&parsed[0], original, "round trip changed the notification");
+        }
+    }
+
+    #[test]
+    fn unemitted_variants_produce_nothing_rather_than_panicking() {
+        // Seam S3: the catch-all arm. Adding a notification later is one new
+        // arm here, never a change at call sites; until then it emits nothing.
+        assert_eq!(emit(&TmuxNotification::SessionsChanged), "");
+        assert_eq!(emit(&TmuxNotification::Exit), "");
+    }
+
+    #[test]
+    fn command_block_emits_begin_and_end() {
+        let block = emit_block(7, "pane_one\npane_two", true);
+        assert!(block.starts_with("%begin "), "block opens with %begin");
+        assert!(
+            block.contains("pane_one\npane_two"),
+            "body is carried verbatim"
+        );
+        assert!(block.contains("%end "), "successful block closes with %end");
+        assert!(!block.contains("%error"), "successful block has no %error");
+    }
+
+    #[test]
+    fn failed_command_block_emits_error() {
+        let block = emit_block(8, "no such pane", false);
+        assert!(block.starts_with("%begin "));
+        assert!(block.contains("%error "), "failed block closes with %error");
+        assert!(
+            !block.contains("%end "),
+            "failed block does not also close with %end"
+        );
+    }
+
+    #[test]
+    fn begin_and_end_carry_the_same_command_number() {
+        let block = emit_block(42, "body", true);
+        let numbers: Vec<&str> = block
+            .lines()
+            .filter(|l| l.starts_with("%begin") || l.starts_with("%end"))
+            .filter_map(|l| l.split_whitespace().nth(2))
+            .collect();
+        assert_eq!(
+            numbers.len(),
+            2,
+            "both %begin and %end carry a command number"
+        );
+        assert_eq!(numbers[0], numbers[1], "the numbers must match: {block:?}");
+        assert_eq!(numbers[0], "42");
+    }
+
+    #[test]
+    fn every_emitted_line_ends_with_a_newline() {
+        // Control mode is line-based; a missing terminator stalls the client.
+        let n = TmuxNotification::WindowClose {
+            window_id: "@1".to_string(),
+        };
+        assert!(emit(&n).ends_with('\n'));
+        assert!(emit_block(1, "x", true).ends_with('\n'));
+    }
+}

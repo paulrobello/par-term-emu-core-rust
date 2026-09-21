@@ -8,9 +8,11 @@
 //! parses. That parser is the format reference and the conformance oracle for
 //! everything here; see `par-mux.md`.
 
+pub mod emit;
 pub mod ids;
 pub mod pane;
 
+pub use emit::{emit, emit_block, escape_output};
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
 
