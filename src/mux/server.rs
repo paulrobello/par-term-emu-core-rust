@@ -28,6 +28,11 @@ const DEFAULT_COLS: u16 = 80;
 /// Default pane size for sessions created without an explicit size.
 const DEFAULT_ROWS: u16 = 24;
 
+/// How often the accept loop's idle poll runs the scrape tier — the
+/// fallback state pass over panes whose agent reports no state hook
+/// (par-mux.md Phase 5 scrape tier).
+const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// The paste buffer's name (single-buffer, no numbered stack — D3 non-goal).
 /// tmux's `set-buffer`/`show-buffer` grammar accepts an explicit `-b <name>`,
 /// but Phase 2's client never sends one, so every buffer command targets
@@ -130,6 +135,19 @@ impl MuxServer {
         // run starts clean.
         SHUTDOWN_REQUESTED.store(false, Ordering::Relaxed);
 
+        // The scrape tier rides this loop as its heartbeat: pattern
+        // overrides live beside the state file when there is one, and the
+        // idle poll doubles as the 1 s tick without a thread of its own to
+        // own a lifecycle for.
+        let engine = crate::mux::scrape::ScrapeEngine::load(
+            state_path
+                .as_ref()
+                .and_then(|path| path.parent())
+                .map(|dir| dir.join("agent-patterns"))
+                .as_deref(),
+        );
+        let mut last_scrape = std::time::Instant::now();
+
         loop {
             if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
                 // Tell the clients the daemon is ending deliberately, so
@@ -151,6 +169,12 @@ impl MuxServer {
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
+                    if last_scrape.elapsed() >= SCRAPE_INTERVAL {
+                        for notification in crate::mux::scrape::scrape_tick(&self.tree, &engine) {
+                            broadcast_notification(&self.clients, &notification);
+                        }
+                        last_scrape = std::time::Instant::now();
+                    }
                 }
                 // A signal may land mid-accept; that is not a listener fault.
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -335,10 +359,12 @@ fn dispatch_issued(
             emit_block(command_number, &body, true)
         }
         // Wire contract: list-agents is the roster — one line per pane a
-        // hook has CLAIMED, `%N <agent> <state>` (T5.4). Panes without a
-        // claim are absent outright: `unknown` means no hook ever reported,
-        // never "idle", so a hookless agent simply does not appear (the
-        // Phase 5 ruling). Fixed shape, no -F — the T4.E decision.
+        // hook has CLAIMED or a pattern has MATCHED, `%N <agent> <state>
+        // <source>` with source `hook` or `scrape` (T5.4 + the scrape
+        // tier's provenance rule: a consumer must tell a claim from a
+        // guess). Panes without either are absent outright: `unknown` means
+        // no hook ever reported and no rule ever matched, never "idle"
+        // (the Phase 5 ruling). Fixed shape, no -F — the T4.E decision.
         MuxCommand::ListAgents => {
             let guard = tree.lock();
             let mut roster: Vec<(PaneId, String)> = guard
@@ -352,7 +378,12 @@ fn dispatch_issued(
                     let pane = guard.pane(p)?;
                     let state = pane.metadata().get("agent_state")?;
                     let agent = pane.metadata().get("agent")?;
-                    Some((p, format!("{agent} {state}")))
+                    let source = pane
+                        .metadata()
+                        .get("agent_state_source")
+                        .map(String::as_str)
+                        .unwrap_or("hook");
+                    Some((p, format!("{agent} {state} {source}")))
                 })
                 .collect();
             roster.sort_by_key(|(pane, _)| *pane);

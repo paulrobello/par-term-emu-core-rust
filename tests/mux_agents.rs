@@ -177,8 +177,8 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     let roster = control.body_lines("list-agents");
     assert_eq!(
         roster,
-        vec![format!("{pane} kimi blocked")],
-        "list-agents agrees with the last report"
+        vec![format!("{pane} kimi blocked hook")],
+        "list-agents agrees with the last report, provenance included"
     );
 
     drop(control.0.shutdown(Shutdown::Both));
