@@ -217,12 +217,22 @@ const DUMMY_BCRYPT_HASH: &str = "$2b$10$HFz709l6DqV3WWAW.cpJrulajF3FVSf36C8Kh56z
 
 /// Password storage configuration.
 /// Sensitive data is zeroized on drop to prevent leaking credentials in memory.
-#[derive(Debug)]
 pub enum PasswordConfig {
     /// Clear text password (compared directly, zeroized on drop)
     ClearText(String),
     /// htpasswd format hash (bcrypt, apr1, sha1, md5crypt, zeroized on drop)
     Hash(String),
+}
+
+/// Redacting `Debug` (SEC-009): the stored password or hash must never
+/// appear in `{:?}` output — logs and error messages routinely format
+/// config values.
+impl std::fmt::Debug for PasswordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordConfig")
+            .field("secret", &"***")
+            .finish()
+    }
 }
 
 impl Clone for PasswordConfig {
@@ -293,7 +303,7 @@ impl HttpBasicAuthConfig {
 }
 
 /// Configuration for the streaming server
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamingConfig {
     /// Maximum number of concurrent clients
     pub max_clients: usize,
@@ -345,6 +355,44 @@ pub struct StreamingConfig {
     /// are rejected to prevent CSRF-via-WebSocket. Set this to expose the server
     /// to specific remote browser origins.
     pub allowed_origins: Option<Vec<String>>,
+}
+
+/// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
+/// except that `api_key` is replaced with a marker — `{:?}` output routinely
+/// lands in logs, which must not contain the credential. `http_basic_auth`
+/// is covered by `PasswordConfig`'s redacting `Debug`.
+impl std::fmt::Debug for StreamingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let api_key = self.api_key.as_ref().map(|_| "***");
+        f.debug_struct("StreamingConfig")
+            .field("max_clients", &self.max_clients)
+            .field("send_initial_screen", &self.send_initial_screen)
+            .field("keepalive_interval", &self.keepalive_interval)
+            .field("default_read_only", &self.default_read_only)
+            .field("enable_http", &self.enable_http)
+            .field("web_root", &self.web_root)
+            .field("initial_cols", &self.initial_cols)
+            .field("initial_rows", &self.initial_rows)
+            .field("tls", &self.tls)
+            .field("http_basic_auth", &self.http_basic_auth)
+            .field("max_sessions", &self.max_sessions)
+            .field("session_idle_timeout", &self.session_idle_timeout)
+            .field("presets", &self.presets)
+            .field("max_clients_per_session", &self.max_clients_per_session)
+            .field(
+                "input_rate_limit_bytes_per_sec",
+                &self.input_rate_limit_bytes_per_sec,
+            )
+            .field("enable_system_stats", &self.enable_system_stats)
+            .field(
+                "system_stats_interval_secs",
+                &self.system_stats_interval_secs,
+            )
+            .field("api_key", &api_key)
+            .field("allow_api_key_in_query", &self.allow_api_key_in_query)
+            .field("allowed_origins", &self.allowed_origins)
+            .finish()
+    }
 }
 
 impl Default for StreamingConfig {
@@ -506,6 +554,50 @@ mod tests {
         assert!(config.presets.is_empty());
         assert_eq!(config.max_clients_per_session, 0);
         assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
+    }
+    /// SEC-009: `{:?}` output must not contain the api key or the stored
+    /// password (clear text or hash).
+    #[test]
+    fn debug_output_redacts_secrets() {
+        let config = StreamingConfig {
+            api_key: Some("super-secret-api-key-42".to_string()),
+            http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                "admin".to_string(),
+                "hunter2-clear-password".to_string(),
+            )),
+            ..StreamingConfig::default()
+        };
+        let rendered = format!("{:?}", config);
+        assert!(
+            !rendered.contains("super-secret-api-key-42"),
+            "api key leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("hunter2-clear-password"),
+            "password leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("***"),
+            "no redaction marker: {}",
+            rendered
+        );
+
+        let hashed = bcrypt::hash("hashed-secret-password", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed.clone());
+        let rendered = format!("{:?}", auth);
+        assert!(
+            !rendered.contains(&hashed),
+            "password hash leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("hashed-secret-password"),
+            "password leaked in Debug: {}",
+            rendered
+        );
+        assert!(rendered.contains("***"));
     }
     #[tokio::test]
     async fn test_http_basic_auth_correct_password() {
