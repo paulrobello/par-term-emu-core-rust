@@ -670,3 +670,32 @@ fn cols_to_byte_range(line_text: &str, start_col: usize, end_col: usize) -> (usi
     }
     (start_byte, end_byte)
 }
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    #[test]
+    fn selection_coordinates_clamp_to_grid_bounds() {
+        let mut term = Terminal::new(4, 2);
+        term.set_selection((10, 5), (99, 9), SelectionMode::Character);
+        let sel = term.get_selection().expect("selection stored");
+        assert_eq!(sel.start, (3, 1));
+        assert_eq!(sel.end, (4, 1));
+    }
+
+    #[test]
+    fn wide_char_column_never_splits_a_char_boundary() {
+        // 日 occupies two display columns but is one char / three bytes.
+        let line = "日x";
+        // Selecting display columns 0..1 lands inside 日: the whole char is
+        // returned, never a byte index that would panic on slicing.
+        assert_eq!(cols_to_byte_range(line, 0, 1), (0, 3));
+        // Column 1..2 covers x only.
+        assert_eq!(cols_to_byte_range(line, 1, 2), (3, 4));
+        // Past-the-end columns clamp to the text length.
+        assert_eq!(cols_to_byte_range(line, 5, 9), (4, 4));
+        // An inverted client-supplied range comes back non-inverted.
+        assert_eq!(cols_to_byte_range(line, 2, 1), (3, 3));
+    }
+}
