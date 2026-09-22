@@ -209,6 +209,12 @@ pub struct HttpBasicAuthConfig {
     pub password: PasswordConfig,
 }
 
+/// Fixed bcrypt hash (cost 10) of a meaningless constant string, used as the
+/// dummy verification target when the username does not match (SEC-008), so
+/// the bcrypt work — and therefore the response timing — is identical whether
+/// or not the guessed username exists.
+const DUMMY_BCRYPT_HASH: &str = "$2b$10$HFz709l6DqV3WWAW.cpJrulajF3FVSf36C8Kh56zRga9.uCFtDQTi";
+
 /// Password storage configuration.
 /// Sensitive data is zeroized on drop to prevent leaking credentials in memory.
 #[derive(Debug)]
@@ -256,22 +262,33 @@ impl HttpBasicAuthConfig {
     }
 
     /// Verify a password against this config
+    ///
+    /// Both checks always run to completion and are combined at the end
+    /// (SEC-008): returning early on a username mismatch would skip the
+    /// expensive hash verification for every wrong username while running it
+    /// for the correct one, letting an attacker enumerate valid usernames by
+    /// timing responses. When the username does not match and the password is
+    /// stored as a hash, the bcrypt work runs against a fixed dummy hash so
+    /// the amount of work is identical either way.
     pub fn verify(&self, username: &str, password: &str) -> bool {
         use subtle::ConstantTimeEq;
-        if !bool::from(username.as_bytes().ct_eq(self.username.as_bytes())) {
-            return false;
-        }
-
-        match &self.password {
+        let user_ok = bool::from(username.as_bytes().ct_eq(self.username.as_bytes()));
+        let pass_ok = match &self.password {
             PasswordConfig::ClearText(expected) => {
                 bool::from(password.as_bytes().ct_eq(expected.as_bytes()))
             }
             PasswordConfig::Hash(hash) => {
                 // Verify htpasswd-format hashes (bcrypt / apr1 / md5crypt / {SHA})
                 // using maintained RustCrypto crates — see `auth_hash`.
-                crate::streaming::auth_hash::verify_htpasswd_hash(hash, password)
+                let target = if user_ok {
+                    hash.as_str()
+                } else {
+                    DUMMY_BCRYPT_HASH
+                };
+                crate::streaming::auth_hash::verify_htpasswd_hash(target, password)
             }
-        }
+        };
+        user_ok & pass_ok
     }
 }
 
@@ -538,6 +555,22 @@ mod tests {
         assert!(auth.verify("Admin", "Secret"));
         assert!(!auth.verify("admin", "Secret"));
         assert!(!auth.verify("Admin", "secret"));
+    }
+    #[tokio::test]
+    async fn test_http_basic_auth_hash_correct_password() {
+        let hashed = bcrypt::hash("secret123", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed);
+        assert!(auth.verify("admin", "secret123"));
+        assert!(!auth.verify("admin", "wrongpass"));
+    }
+    #[tokio::test]
+    async fn test_http_basic_auth_hash_wrong_username_runs_dummy_verify() {
+        // SEC-008: a wrong username with a hashed password must still return
+        // false (the dummy-hash path must not accidentally verify).
+        let hashed = bcrypt::hash("secret123", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed);
+        assert!(!auth.verify("root", "secret123"));
+        assert!(!auth.verify("root", "anything"));
     }
     #[tokio::test]
     async fn test_http_basic_auth_whitespace() {
