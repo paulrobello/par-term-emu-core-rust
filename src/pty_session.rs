@@ -1870,12 +1870,18 @@ mod tests {
 
         let gen_before = session.update_generation();
 
-        // Wait for the command to execute and produce output
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        // The generation counter MUST have incremented because the reader
-        // thread read data from the PTY (echo produces "hello\r\n").
-        let gen_after = session.update_generation();
+        // The reader thread bumps the generation as PTY bytes arrive; under
+        // load that can trail the spawn by more than any fixed window (the
+        // flake this poll replaced: "was 0, now 0" after 200 ms). Wait on
+        // the counter itself with a deadline instead.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let gen_after = loop {
+            let gen = session.update_generation();
+            if gen > gen_before || std::time::Instant::now() > deadline {
+                break gen;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
         assert!(
             gen_after > gen_before,
             "generation counter should have incremented after PTY output: was {}, now {}",
