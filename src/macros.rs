@@ -87,7 +87,7 @@ impl Macro {
             description: None,
             created: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis() as u64,
             terminal_size: None,
             env: HashMap::new(),
@@ -320,7 +320,7 @@ impl MacroPlayback {
     fn current_time_ms() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_millis() as u64
     }
 
