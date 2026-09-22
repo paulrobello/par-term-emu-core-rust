@@ -230,8 +230,11 @@ fn hook_report_replies_in_place_and_broadcasts_to_control_clients() {
     );
     assert_eq!(
         broadcast,
-        format!("%agent-state-changed {} kimi working\n", stage.pane),
-        "the broadcast carries pane, agent and state"
+        format!(
+            "%agent-state-changed {} kimi working source=hook\n",
+            stage.pane
+        ),
+        "the broadcast carries pane, agent, state and provenance"
     );
 
     stage.control.command("list-sessions"); // daemon still serves commands
@@ -290,8 +293,8 @@ fn list_agents_agrees_with_hook_reports_and_omits_hookless_panes() {
     let roster = stage.control.command("list-agents").join("");
     let lines = body_lines(&roster);
     assert!(
-        lines.contains(&format!("{claimed} kimi blocked").as_str()),
-        "the roster line matches the hook's claim: {lines:?}"
+        lines.contains(&format!("{claimed} kimi blocked hook").as_str()),
+        "the roster line matches the hook's claim, provenance included: {lines:?}"
     );
     assert!(
         !lines.iter().any(|l| l.starts_with(&hookless)),
@@ -426,7 +429,7 @@ fn herdr_kimi_script_env_renamed_drives_a_live_daemon() {
         );
         assert_eq!(
             broadcast,
-            format!("%agent-state-changed {pane} kimi {action}\n"),
+            format!("%agent-state-changed {pane} kimi {action} source=hook\n"),
             "the ported script drove the pane's state"
         );
     }
