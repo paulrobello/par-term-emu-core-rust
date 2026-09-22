@@ -45,6 +45,19 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 const WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
+/// Maximum accepted `Input` message payload (SEC-005). Larger payloads are
+/// logged and dropped — the WS frame cap (16 MiB) bounds transport memory,
+/// this bounds how much a single message can push at the PTY.
+const MAX_INPUT_PAYLOAD_BYTES: usize = 64 * 1024;
+/// Maximum accepted `Paste` message payload (SEC-005). Pastes are bulk
+/// transfers, so the cap is higher than single keystroke Input.
+const MAX_PASTE_PAYLOAD_BYTES: usize = 256 * 1024;
+
+/// How long a raw connection may take to complete its WebSocket (and TLS)
+/// handshake before the server drops it (SEC-004). Pre-upgrade connections
+/// are unauthenticated, so they must not be held indefinitely.
+const WS_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Request/response types for the tungstenite WS handshake header callback,
 /// aliased for readability (the `Callback` trait fixes these exactly).
 type WsHandshakeRequest = tokio_tungstenite::tungstenite::http::Request<()>;
@@ -219,6 +232,17 @@ pub struct ConnectionParams {
     pub preset: Option<String>,
 }
 
+/// Session ids must match `[A-Za-z0-9_-]{1,64}` (SEC-011): they are used as
+/// registry keys and passed to the session factory, so both charset and
+/// length are bounded to keep malformed ids out of the session machinery.
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 impl ConnectionParams {
     /// Parse connection parameters from a query string map
     pub fn from_query(params: &HashMap<String, String>) -> Self {
@@ -226,6 +250,21 @@ impl ConnectionParams {
             .get("session")
             .cloned()
             .unwrap_or_else(|| "default".to_string());
+        // SEC-011: session ids are registry keys and factory arguments —
+        // restrict them to a bounded `[A-Za-z0-9_-]` charset so malformed
+        // ids (path-ish strings, oversized values) never reach the session
+        // registry or the spawn factory. Invalid ids fall back to the
+        // default session.
+        let session_id = if is_valid_session_id(&session_id) {
+            session_id
+        } else {
+            crate::debug_error!(
+                "STREAMING",
+                "Rejecting invalid session id {:?} (must match [A-Za-z0-9_-]{{1,64}}); using default",
+                session_id
+            );
+            "default".to_string()
+        };
         let readonly = params
             .get("readonly")
             .map(|v| v == "true" || v == "1")
@@ -693,16 +732,18 @@ impl StreamingServer {
         }
     }
 
-    /// Start server with HTTP static file serving using Axum
+    /// Build the full HTTP application (API routes + static frontend)
+    /// shared by the plain and TLS listeners.
+    ///
+    /// API routes get the auth middleware when any auth method is
+    /// configured; static file serving stays unprotected so the browser can
+    /// load the page before authenticating the WebSocket. Every response —
+    /// API and static alike — carries the anti-framing headers (SEC-010)
+    /// and the CORS layer.
     #[cfg(feature = "streaming")]
-    async fn start_with_http(self: Arc<Self>) -> Result<()> {
+    fn build_http_app(self: &Arc<Self>) -> axum::Router {
         use axum::{routing::get, Router};
         use tower_http::services::ServeDir;
-
-        crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
-
-        self.spawn_default_broadcaster();
-        self.spawn_idle_reaper();
 
         // Build API routes (protected by auth)
         let api_routes = Router::new()
@@ -726,10 +767,22 @@ impl StreamingServer {
         };
 
         // Merge API routes with unprotected static file serving
-        let app = api_routes
+        api_routes
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone())
-            .layer(build_cors_layer(&self.config.allowed_origins));
+            .layer(build_cors_layer(&self.config.allowed_origins))
+            .layer(axum::middleware::from_fn(add_security_headers))
+    }
+
+    /// Start server with HTTP static file serving using Axum
+    #[cfg(feature = "streaming")]
+    async fn start_with_http(self: Arc<Self>) -> Result<()> {
+        crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
+
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
+
+        let app = self.build_http_app();
 
         // Start server
         let listener = tokio::net::TcpListener::bind(&self.addr)
@@ -746,9 +799,7 @@ impl StreamingServer {
     /// Start server with HTTPS/TLS static file serving using Axum
     #[cfg(feature = "streaming")]
     async fn start_with_https(self: Arc<Self>) -> Result<()> {
-        use axum::{routing::get, Router};
         use axum_server::tls_rustls::RustlsConfig;
-        use tower_http::services::ServeDir;
 
         let tls_config = self
             .config
@@ -765,32 +816,7 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Build API routes (protected by auth)
-        let api_routes = Router::new()
-            .route("/ws", get(ws_handler))
-            .route("/sessions", get(sessions_handler))
-            .route("/stats", get(stats_ws_handler));
-
-        // Apply auth middleware to API routes only if configured
-        let auth_config = ApiAuthConfig {
-            api_key: self.config.api_key.clone(),
-            http_basic_auth: self.config.http_basic_auth.clone(),
-            allow_api_key_in_query: self.config.allow_api_key_in_query,
-        };
-        let api_routes = if auth_config.is_configured() {
-            api_routes.layer(axum::middleware::from_fn(move |req, next| {
-                let auth_config = auth_config.clone();
-                api_auth_middleware(req, next, auth_config)
-            }))
-        } else {
-            api_routes
-        };
-
-        // Merge API routes with unprotected static file serving
-        let app = api_routes
-            .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone())
-            .layer(build_cors_layer(&self.config.allowed_origins));
+        let app = self.build_http_app();
 
         // Build TLS config for axum-server
         let rustls_config = RustlsConfig::from_der(
@@ -847,6 +873,25 @@ impl StreamingServer {
                     crate::debug_info!("STREAMING", "New connection from {}", addr);
                     let server = self.clone();
                     tokio::spawn(async move {
+                        // Reserve a global client slot for the whole handshake so
+                        // unauthenticated pre-upgrade connections cannot occupy
+                        // tasks indefinitely, uncapped by max_clients (SEC-004).
+                        // The guard releases on drop: handshake failure, timeout,
+                        // or session end.
+                        if !server.try_add_client() {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "Max clients reached ({}), rejecting connection from {}",
+                                server.config.max_clients,
+                                addr
+                            );
+                            return;
+                        }
+                        // Held for the whole connection: handshake, session,
+                        // and teardown. Moved into `handle_connection_ws`
+                        // after the handshake completes.
+                        let global_guard = GlobalClientGuard { server: &server };
+
                         // Accept WebSocket with header callback to capture URI query and validate auth
                         let (header_callback, uri_query) = build_ws_header_callback(
                             server.config.api_key.clone(),
@@ -858,19 +903,35 @@ impl StreamingServer {
                         // The tungstenite `Callback` trait fixes `ErrorResponse` as
                         // `HttpResponse<Option<String>>` — we cannot box or shrink it
                         // without violating the external API contract.
-                        let ws_result = accept_hdr_async_with_config(
-                            stream,
-                            header_callback,
-                            ws_accept_config(),
+                        let ws_result = match tokio::time::timeout(
+                            WS_HANDSHAKE_TIMEOUT,
+                            accept_hdr_async_with_config(
+                                stream,
+                                header_callback,
+                                ws_accept_config(),
+                            ),
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_) => {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "WebSocket handshake timed out from {} after {}s",
+                                    addr,
+                                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                                );
+                                return;
+                            }
+                        };
 
                         match ws_result {
                             Ok(ws_stream) => {
                                 let query_str = uri_query.lock().take();
                                 let params = ConnectionParams::from_uri_query(query_str.as_deref());
-                                if let Err(e) =
-                                    server.handle_connection_ws(ws_stream, &params).await
+                                if let Err(e) = server
+                                    .handle_connection_ws(ws_stream, &params, global_guard)
+                                    .await
                                 {
                                     crate::debug_error!(
                                         "STREAMING",
@@ -941,8 +1002,34 @@ impl StreamingServer {
                     let server = self.clone();
                     let acceptor = acceptor.clone();
                     tokio::spawn(async move {
-                        match acceptor.accept(stream).await {
-                            Ok(tls_stream) => {
+                        // Pre-handshake slot reservation, mirroring the plain
+                        // listener (SEC-004): held across both the TLS and
+                        // WebSocket handshakes, moved into the connection
+                        // handler after the handshake completes.
+                        if !server.try_add_client() {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "Max clients reached ({}), rejecting TLS connection from {}",
+                                server.config.max_clients,
+                                addr
+                            );
+                            return;
+                        }
+                        let global_guard = GlobalClientGuard { server: &server };
+
+                        let tls_result =
+                            tokio::time::timeout(WS_HANDSHAKE_TIMEOUT, acceptor.accept(stream))
+                                .await;
+                        match tls_result {
+                            Err(_) => {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "TLS handshake timed out from {} after {}s",
+                                    addr,
+                                    WS_HANDSHAKE_TIMEOUT.as_secs()
+                                );
+                            }
+                            Ok(Ok(tls_stream)) => {
                                 // Accept WebSocket with header callback to capture URI query and validate auth
                                 let (header_callback, uri_query) = build_ws_header_callback(
                                     server.config.api_key.clone(),
@@ -953,12 +1040,27 @@ impl StreamingServer {
 
                                 // Same as above: ErrorResponse type is fixed by the
                                 // tungstenite Callback trait and cannot be reduced.
-                                let ws_result = accept_hdr_async_with_config(
-                                    tls_stream,
-                                    header_callback,
-                                    ws_accept_config(),
+                                let ws_result = match tokio::time::timeout(
+                                    WS_HANDSHAKE_TIMEOUT,
+                                    accept_hdr_async_with_config(
+                                        tls_stream,
+                                        header_callback,
+                                        ws_accept_config(),
+                                    ),
                                 )
-                                .await;
+                                .await
+                                {
+                                    Ok(result) => result,
+                                    Err(_) => {
+                                        crate::debug_error!(
+                                            "STREAMING",
+                                            "TLS WebSocket handshake timed out from {} after {}s",
+                                            addr,
+                                            WS_HANDSHAKE_TIMEOUT.as_secs()
+                                        );
+                                        return;
+                                    }
+                                };
 
                                 match ws_result {
                                     Ok(ws_stream) => {
@@ -966,7 +1068,11 @@ impl StreamingServer {
                                         let params =
                                             ConnectionParams::from_uri_query(query_str.as_deref());
                                         if let Err(e) = server
-                                            .handle_tls_connection_ws(ws_stream, &params)
+                                            .handle_tls_connection_ws(
+                                                ws_stream,
+                                                &params,
+                                                global_guard,
+                                            )
                                             .await
                                         {
                                             crate::debug_error!(
@@ -987,7 +1093,7 @@ impl StreamingServer {
                                     }
                                 }
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 crate::debug_error!(
                                     "STREAMING",
                                     "TLS handshake failed from {}: {}",
@@ -1062,9 +1168,10 @@ impl StreamingServer {
         self: &Arc<Self>,
         ws_stream: tokio_tungstenite::WebSocketStream<TcpStream>,
         params: &ConnectionParams,
+        global_guard: GlobalClientGuard<'_>,
     ) -> Result<()> {
         let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params)?;
+            self.prepare_ws_session(params, global_guard)?;
         let client = Client::new(ws_stream, read_only);
         self.run_ws_session(client, session, read_only, "Client")
             .await
@@ -1075,9 +1182,10 @@ impl StreamingServer {
         self: &Arc<Self>,
         ws_stream: tokio_tungstenite::WebSocketStream<tokio_rustls::server::TlsStream<TcpStream>>,
         params: &ConnectionParams,
+        global_guard: GlobalClientGuard<'_>,
     ) -> Result<()> {
         let (session, _global_guard, _session_guard, read_only) =
-            self.prepare_ws_session(params)?;
+            self.prepare_ws_session(params, global_guard)?;
         let client = Client::new(ws_stream, read_only);
         self.run_ws_session(client, session, read_only, "TLS Client")
             .await
@@ -1085,24 +1193,24 @@ impl StreamingServer {
 
     /// Common pre-loop setup shared by both tungstenite WebSocket handlers.
     ///
-    /// Resolves the session, reserves the global + per-session client slots
-    /// (returning RAII guards whose `Drop` releases them), and computes the
-    /// read-only flag. The caller wraps the accepted stream in a `Client<S>`
-    /// and hands it to `run_ws_session`.
-    fn prepare_ws_session(
-        self: &Arc<Self>,
+    /// The global client slot must already be reserved by the caller
+    /// (`try_add_client` before the handshake, SEC-004) — the guard is
+    /// passed in and held for the connection's lifetime. This resolves the
+    /// session, reserves the per-session slot (returning an RAII guard whose
+    /// `Drop` releases it), and computes the read-only flag. The caller
+    /// wraps the accepted stream in a `Client<S>` and hands it to
+    /// `run_ws_session`.
+    fn prepare_ws_session<'s>(
+        self: &'s Arc<Self>,
         params: &ConnectionParams,
+        global_guard: GlobalClientGuard<'s>,
     ) -> Result<(
         Arc<StreamSessionState>,
-        GlobalClientGuard<'_>,
+        GlobalClientGuard<'s>,
         SessionClientGuard,
         bool,
     )> {
         let session = self.resolve_session(params)?;
-        if !self.try_add_client() {
-            return Err(StreamingError::MaxClientsReached);
-        }
-        let global_guard = GlobalClientGuard { server: self };
         if !session.try_add_client(self.config.max_clients_per_session) {
             return Err(StreamingError::MaxClientsReached);
         }
@@ -1147,6 +1255,17 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
+                if data.len() > MAX_INPUT_PAYLOAD_BYTES {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Dropping oversize Input from {} {} ({} bytes > {} cap)",
+                        transport_label,
+                        client_id,
+                        data.len(),
+                        MAX_INPUT_PAYLOAD_BYTES
+                    );
+                    return replies;
+                }
                 if let Some(ref mut limiter) = rate_limiter {
                     if !limiter.try_consume(data.len()) {
                         crate::debug_error!(
@@ -1163,17 +1282,27 @@ impl StreamingServer {
                         .metrics
                         .input_bytes
                         .fetch_add(data.len(), Ordering::Relaxed);
-                    let mut w = writer.lock();
-                    use std::io::Write;
-                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "PTY write error for session {}: {}",
-                            session.id,
-                            e
-                        );
-                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                    // SEC-005: never block the async runtime on a PTY write.
+                    // A non-reading foreground process with a full kernel
+                    // buffer would stall `write_all` and, on the tokio worker,
+                    // freeze every session sharing that worker. The payload
+                    // and writer handle move to the blocking pool; no lock is
+                    // held across an await.
+                    let payload = data.into_bytes();
+                    let session = Arc::clone(session);
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::Write;
+                        let mut w = writer.lock();
+                        if let Err(e) = w.write_all(&payload).and_then(|_| w.flush()) {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    });
                 }
             }
             crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
@@ -1291,6 +1420,17 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
+                if content.len() > MAX_PASTE_PAYLOAD_BYTES {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Dropping oversize Paste from {} {} ({} bytes > {} cap)",
+                        transport_label,
+                        client_id,
+                        content.len(),
+                        MAX_PASTE_PAYLOAD_BYTES
+                    );
+                    return replies;
+                }
                 if let Some(ref mut limiter) = rate_limiter {
                     if !limiter.try_consume(content.len()) {
                         crate::debug_error!(
@@ -1303,30 +1443,47 @@ impl StreamingServer {
                     }
                 }
                 if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                    let terminal = session.terminal.write();
+                    // Copy the bracketed-paste markers and payload out under
+                    // the terminal guard, then drop the guard before the
+                    // (blocking) PTY write (SEC-005).
+                    let (start, end, payload) = {
+                        let terminal = session.terminal.write();
+                        if terminal.bracketed_paste() {
+                            (
+                                terminal.bracketed_paste_start().to_vec(),
+                                terminal.bracketed_paste_end().to_vec(),
+                                content.into_bytes(),
+                            )
+                        } else {
+                            (Vec::new(), Vec::new(), content.into_bytes())
+                        }
+                    };
                     session
                         .metrics
                         .input_bytes
-                        .fetch_add(content.len(), Ordering::Relaxed);
-                    let mut w = writer.lock();
-                    use std::io::Write;
-                    let result = if terminal.bracketed_paste() {
-                        w.write_all(terminal.bracketed_paste_start())
-                            .and_then(|_| w.write_all(content.as_bytes()))
-                            .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
-                            .and_then(|_| w.flush())
-                    } else {
-                        w.write_all(content.as_bytes()).and_then(|_| w.flush())
-                    };
-                    if let Err(e) = result {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "PTY paste write error for session {}: {}",
-                            session.id,
-                            e
-                        );
-                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                        .fetch_add(payload.len(), Ordering::Relaxed);
+                    let session = Arc::clone(session);
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::Write;
+                        let mut w = writer.lock();
+                        let result = if !start.is_empty() {
+                            w.write_all(&start)
+                                .and_then(|_| w.write_all(&payload))
+                                .and_then(|_| w.write_all(&end))
+                                .and_then(|_| w.flush())
+                        } else {
+                            w.write_all(&payload).and_then(|_| w.flush())
+                        };
+                        if let Err(e) = result {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY paste write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    });
                 }
             }
             crate::streaming::protocol::ClientMessage::SelectionRequest {
@@ -1795,24 +1952,15 @@ impl StreamingServer {
         use axum::extract::ws::Message as AxumMessage;
         use futures_util::{SinkExt, StreamExt};
 
-        // Resolve session first
-        let session = self.resolve_session(&params)?;
-
-        // Try to reserve a global client slot
+        // Reserve the global client slot BEFORE resolving or creating a
+        // session, so max_clients bounds session spawns too (SEC-011). The
+        // guard releases on any early return below (guard → resolve →
+        // per-session slot, dropped in reverse order).
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
-        let _global_guard = GlobalClientGuard { server: self };
-
-        // Try to add client to session
-        if !session.try_add_client(self.config.max_clients_per_session) {
-            return Err(StreamingError::MaxClientsReached);
-        }
-        let _session_guard = SessionClientGuard {
-            session: Arc::clone(&session),
-        };
-
-        let read_only = params.readonly || self.config.default_read_only;
+        let (session, _global_guard, _session_guard, read_only) =
+            self.prepare_ws_session(&params, GlobalClientGuard { server: self })?;
 
         let client_id = uuid::Uuid::new_v4();
 
@@ -2207,6 +2355,30 @@ fn build_cors_layer(allowed_origins: &Option<Vec<String>>) -> tower_http::cors::
     }
 }
 
+/// Anti-framing headers on every response (SEC-010). The served web
+/// frontend drives a live shell; without `X-Frame-Options: DENY` and a
+/// `frame-ancestors 'none'` CSP, a transparent iframe on an attacker page
+/// plus cached Basic credentials lets the attacker clickjack keystrokes
+/// into the terminal. Applied at the outermost router so static files and
+/// API responses both carry it.
+async fn add_security_headers(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{HeaderName, HeaderValue};
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    res
+}
+
 #[cfg(test)]
 mod origin_tests {
     use super::{
@@ -2433,6 +2605,72 @@ mod origin_tests {
             .await
             .unwrap();
         assert_eq!(res.status(), 403);
+    }
+
+    /// SEC-010: every response from the HTTP app — static frontend files
+    /// (ServeDir fallback) and API routes alike — must carry the
+    /// anti-framing headers, or a transparent iframe plus cached Basic
+    /// credentials can clickjack keystrokes into the live shell.
+    #[tokio::test]
+    async fn http_app_responses_carry_anti_framing_headers() {
+        let web_root =
+            std::env::temp_dir().join(format!("par-term-webroot-headers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&web_root);
+        std::fs::create_dir_all(&web_root).unwrap();
+        std::fs::write(web_root.join("index.html"), "<html></html>").unwrap();
+
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let config = StreamingConfig {
+            web_root: web_root.to_string_lossy().into_owned(),
+            ..StreamingConfig::default()
+        };
+        let server = Arc::new(StreamingServer::with_config(
+            terminal,
+            "127.0.0.1:0".to_string(),
+            config,
+        ));
+        let app = server.build_http_app();
+
+        // Static frontend file via the ServeDir fallback.
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", "/", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("x-frame-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("frame-ancestors 'none'")
+        );
+
+        // API route response too.
+        let res = app
+            .oneshot(origin_request("GET", "/sessions", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("x-frame-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("frame-ancestors 'none'")
+        );
+
+        let _ = std::fs::remove_dir_all(&web_root);
     }
 }
 
@@ -2764,6 +3002,112 @@ mod tests {
         assert_eq!(params.session_id, "default");
         assert!(params.readonly);
         assert!(params.preset.is_none());
+    }
+
+    /// SEC-011: session ids that do not match `[A-Za-z0-9_-]{1,64}` are
+    /// rejected (never reach the session registry or factory) and the
+    /// connection falls back to the default session.
+    #[tokio::test]
+    async fn test_connection_params_rejects_invalid_session_id() {
+        for query in [
+            "session=../x",
+            "session=has%20space",
+            "session=../etc/passwd",
+            "session=a/b",
+            "session=..",
+            "session=.",
+        ] {
+            let params = ConnectionParams::from_uri_query(Some(query));
+            assert_eq!(
+                params.session_id, "default",
+                "session id from {:?} must be rejected",
+                query
+            );
+        }
+        // Over-length id (65+ chars) is rejected.
+        let long_id = "a".repeat(65);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", long_id)));
+        assert_eq!(params.session_id, "default");
+
+        // Legal ids still pass: dashes, underscores, mixed case, 64 chars.
+        let params = ConnectionParams::from_uri_query(Some("session=my-Sess_ion-42"));
+        assert_eq!(params.session_id, "my-Sess_ion-42");
+        let ok_id = "a".repeat(64);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", ok_id)));
+        assert_eq!(params.session_id, ok_id);
+    }
+
+    /// Session factory stub that counts spawns (SEC-011 test).
+    struct CountingFactory {
+        spawns: Arc<AtomicUsize>,
+    }
+
+    impl SessionFactory for CountingFactory {
+        fn create_session(
+            &self,
+            _session_id: &str,
+            _cols: u16,
+            _rows: u16,
+            _shell_command: Option<&str>,
+        ) -> std::result::Result<SessionFactoryResult, StreamingError> {
+            self.spawns.fetch_add(1, Ordering::Relaxed);
+            Ok(SessionFactoryResult {
+                terminal: Arc::new(RwLock::new(Terminal::new(80, 24))),
+                pty_writer: None,
+            })
+        }
+        fn setup_session(
+            &self,
+            _session_id: &str,
+            _session: &Arc<StreamSessionState>,
+        ) -> std::result::Result<(), StreamingError> {
+            Ok(())
+        }
+        fn teardown_session(&self, _session_id: &str) {}
+    }
+
+    /// SEC-011: the global client slot must be reserved before the session
+    /// is resolved/created, so a server at max_clients rejects a new
+    /// connection with a fresh session id without ever invoking the
+    /// session factory (no PTY spawn for a connection that will be
+    /// refused anyway).
+    #[tokio::test]
+    async fn max_clients_reached_rejects_before_session_spawn() {
+        let config = StreamingConfig {
+            max_clients: 1,
+            ..StreamingConfig::default()
+        };
+        let spawns = Arc::new(AtomicUsize::new(0));
+        let factory = Arc::new(CountingFactory {
+            spawns: Arc::clone(&spawns),
+        });
+        let server = Arc::new(StreamingServer::with_factory(
+            "127.0.0.1:0".to_string(),
+            config,
+            factory,
+        ));
+
+        // First client takes the only slot.
+        assert!(server.try_add_client());
+        let _held = GlobalClientGuard { server: &server };
+
+        // A second client with a fresh session id is rejected by the slot
+        // reservation — the factory never spawns.
+        assert!(!server.try_add_client());
+        assert_eq!(spawns.load(Ordering::Relaxed), 0);
+
+        // Positive control: with the slot released, resolving a fresh
+        // session id does spawn exactly one session through prepare.
+        drop(_held);
+        let params = ConnectionParams {
+            session_id: "fresh-session".to_string(),
+            readonly: false,
+            preset: None,
+        };
+        let (_session, _g, _s, _ro) = server
+            .prepare_ws_session(&params, GlobalClientGuard { server: &server })
+            .expect("fresh session resolves once a slot is free");
+        assert_eq!(spawns.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]

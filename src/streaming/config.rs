@@ -30,6 +30,28 @@ impl Clone for TlsConfig {
     }
 }
 
+/// Reject private-key material readable by group/other (SEC-006).
+///
+/// Shared by both TLS loading paths — `from_files` (separate key file) and
+/// `from_pem` (combined PEM, which contains the key too) — so neither can
+/// bypass the 0600/0400 discipline the other enforces.
+#[cfg(unix)]
+fn reject_world_readable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(StreamingError::ServerError(format!(
+                "Private key file '{}' has overly permissive permissions (mode {:o}). \
+                 Set to 600 or 400 for security.",
+                path.display(),
+                mode & 0o777
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl TlsConfig {
     /// Create TLS config from separate certificate and private key PEM files
     ///
@@ -80,20 +102,7 @@ impl TlsConfig {
 
         // Validate private key file permissions on Unix
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = std::fs::metadata(key_path) {
-                let mode = metadata.permissions().mode();
-                if mode & 0o077 != 0 {
-                    return Err(StreamingError::ServerError(format!(
-                        "Private key file '{}' has overly permissive permissions (mode {:o}). \
-                         Set to 600 or 400 for security.",
-                        key_path.display(),
-                        mode & 0o777
-                    )));
-                }
-            }
-        }
+        reject_world_readable(key_path)?;
 
         let mut key_reader = BufReader::new(key_file);
         let key = match PrivateKeyDer::pem_reader_iter(&mut key_reader).next() {
@@ -125,6 +134,11 @@ impl TlsConfig {
     /// Returns error if file cannot be read or parsed
     pub fn from_pem<P: AsRef<Path>>(pem_path: P) -> Result<Self> {
         let pem_path = pem_path.as_ref();
+
+        // The combined PEM contains the private key, so it is held to the
+        // same permission discipline as a standalone key file (SEC-006).
+        #[cfg(unix)]
+        reject_world_readable(pem_path)?;
 
         let pem_bytes = std::fs::read(pem_path).map_err(|e| {
             StreamingError::ServerError(format!(
@@ -195,14 +209,30 @@ pub struct HttpBasicAuthConfig {
     pub password: PasswordConfig,
 }
 
+/// Fixed bcrypt hash (cost 10) of a meaningless constant string, used as the
+/// dummy verification target when the username does not match (SEC-008), so
+/// the bcrypt work — and therefore the response timing — is identical whether
+/// or not the guessed username exists.
+const DUMMY_BCRYPT_HASH: &str = "$2b$10$HFz709l6DqV3WWAW.cpJrulajF3FVSf36C8Kh56zRga9.uCFtDQTi";
+
 /// Password storage configuration.
 /// Sensitive data is zeroized on drop to prevent leaking credentials in memory.
-#[derive(Debug)]
 pub enum PasswordConfig {
     /// Clear text password (compared directly, zeroized on drop)
     ClearText(String),
     /// htpasswd format hash (bcrypt, apr1, sha1, md5crypt, zeroized on drop)
     Hash(String),
+}
+
+/// Redacting `Debug` (SEC-009): the stored password or hash must never
+/// appear in `{:?}` output — logs and error messages routinely format
+/// config values.
+impl std::fmt::Debug for PasswordConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordConfig")
+            .field("secret", &"***")
+            .finish()
+    }
 }
 
 impl Clone for PasswordConfig {
@@ -242,27 +272,38 @@ impl HttpBasicAuthConfig {
     }
 
     /// Verify a password against this config
+    ///
+    /// Both checks always run to completion and are combined at the end
+    /// (SEC-008): returning early on a username mismatch would skip the
+    /// expensive hash verification for every wrong username while running it
+    /// for the correct one, letting an attacker enumerate valid usernames by
+    /// timing responses. When the username does not match and the password is
+    /// stored as a hash, the bcrypt work runs against a fixed dummy hash so
+    /// the amount of work is identical either way.
     pub fn verify(&self, username: &str, password: &str) -> bool {
         use subtle::ConstantTimeEq;
-        if !bool::from(username.as_bytes().ct_eq(self.username.as_bytes())) {
-            return false;
-        }
-
-        match &self.password {
+        let user_ok = bool::from(username.as_bytes().ct_eq(self.username.as_bytes()));
+        let pass_ok = match &self.password {
             PasswordConfig::ClearText(expected) => {
                 bool::from(password.as_bytes().ct_eq(expected.as_bytes()))
             }
             PasswordConfig::Hash(hash) => {
                 // Verify htpasswd-format hashes (bcrypt / apr1 / md5crypt / {SHA})
                 // using maintained RustCrypto crates — see `auth_hash`.
-                crate::streaming::auth_hash::verify_htpasswd_hash(hash, password)
+                let target = if user_ok {
+                    hash.as_str()
+                } else {
+                    DUMMY_BCRYPT_HASH
+                };
+                crate::streaming::auth_hash::verify_htpasswd_hash(target, password)
             }
-        }
+        };
+        user_ok & pass_ok
     }
 }
 
 /// Configuration for the streaming server
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct StreamingConfig {
     /// Maximum number of concurrent clients
     pub max_clients: usize,
@@ -314,6 +355,44 @@ pub struct StreamingConfig {
     /// are rejected to prevent CSRF-via-WebSocket. Set this to expose the server
     /// to specific remote browser origins.
     pub allowed_origins: Option<Vec<String>>,
+}
+
+/// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
+/// except that `api_key` is replaced with a marker — `{:?}` output routinely
+/// lands in logs, which must not contain the credential. `http_basic_auth`
+/// is covered by `PasswordConfig`'s redacting `Debug`.
+impl std::fmt::Debug for StreamingConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let api_key = self.api_key.as_ref().map(|_| "***");
+        f.debug_struct("StreamingConfig")
+            .field("max_clients", &self.max_clients)
+            .field("send_initial_screen", &self.send_initial_screen)
+            .field("keepalive_interval", &self.keepalive_interval)
+            .field("default_read_only", &self.default_read_only)
+            .field("enable_http", &self.enable_http)
+            .field("web_root", &self.web_root)
+            .field("initial_cols", &self.initial_cols)
+            .field("initial_rows", &self.initial_rows)
+            .field("tls", &self.tls)
+            .field("http_basic_auth", &self.http_basic_auth)
+            .field("max_sessions", &self.max_sessions)
+            .field("session_idle_timeout", &self.session_idle_timeout)
+            .field("presets", &self.presets)
+            .field("max_clients_per_session", &self.max_clients_per_session)
+            .field(
+                "input_rate_limit_bytes_per_sec",
+                &self.input_rate_limit_bytes_per_sec,
+            )
+            .field("enable_system_stats", &self.enable_system_stats)
+            .field(
+                "system_stats_interval_secs",
+                &self.system_stats_interval_secs,
+            )
+            .field("api_key", &api_key)
+            .field("allow_api_key_in_query", &self.allow_api_key_in_query)
+            .field("allowed_origins", &self.allowed_origins)
+            .finish()
+    }
 }
 
 impl Default for StreamingConfig {
@@ -369,6 +448,100 @@ impl ApiAuthConfig {
 mod tests {
     use super::*;
 
+    /// Build a parseable PEM block around `der` bytes. Block headers are
+    /// assembled from parts so the committed source contains no key-shaped
+    /// literal that secret scanners would flag. The payloads used with it
+    /// are structurally valid but cryptographically meaningless test data.
+    fn pem_block(kind: &str, der: &[u8]) -> String {
+        use base64::Engine;
+        format!(
+            "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+            base64::engine::general_purpose::STANDARD.encode(der)
+        )
+    }
+
+    /// A combined PEM that `from_pem` accepts: one throwaway certificate
+    /// block plus one structural (fixed-seed) PKCS#8 Ed25519-style key
+    /// block. No real key material is involved.
+    fn test_combined_pem() -> String {
+        let cert_der: &[u8] = &[0x30, 0x03, 0x02, 0x01, 0x2a];
+        let pkcs8_der: &[u8] = &[
+            0x30, 0x51, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+            0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+            0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+        ];
+        format!(
+            "{}{}",
+            pem_block("CERTIFICATE", cert_der),
+            pem_block("PRIVATE KEY", pkcs8_der)
+        )
+    }
+
+    /// Write `contents` to a uniquely named temp file with the given (Unix)
+    /// permission mode and return its path. `label` keeps concurrent tests
+    /// from colliding on the same filename.
+    #[cfg(unix)]
+    fn write_temp_pem(label: &str, mode: u32, contents: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "par-term-tls-{}-{}-{:o}.pem",
+            label,
+            std::process::id(),
+            mode
+        ));
+        std::fs::write(&path, contents).expect("write temp PEM");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("chmod temp PEM");
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_pem_rejects_world_readable_combined_pem() {
+        let path = write_temp_pem("pem-combined", 0o644, &test_combined_pem());
+        let err = TlsConfig::from_pem(&path).expect_err("0644 combined PEM must be rejected");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("overly permissive permissions"),
+            "expected permissions error, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_pem_accepts_owner_only_combined_pem() {
+        let path = write_temp_pem("pem-combined", 0o600, &test_combined_pem());
+        let tls = TlsConfig::from_pem(&path).expect("0600 combined PEM must load");
+        assert_eq!(tls.certs.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_files_rejects_world_readable_key() {
+        let combined = test_combined_pem();
+        // The key block is the second half (after the certificate block).
+        let split_at = combined
+            .find(&format!("-----BEGIN {}", "PRIVATE KEY"))
+            .expect("test PEM contains a key block");
+        let (cert_pem, key_pem) = combined.split_at(split_at);
+        let cert_path = write_temp_pem("files-cert", 0o600, cert_pem);
+        let key_path = write_temp_pem("files-key", 0o644, key_pem);
+        let err =
+            TlsConfig::from_files(&cert_path, &key_path).expect_err("0644 key must be rejected");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("overly permissive permissions"),
+            "expected permissions error, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&cert_path);
+        let _ = std::fs::remove_file(&key_path);
+    }
+
     #[tokio::test]
     async fn test_streaming_config_default() {
         let config = StreamingConfig::default();
@@ -381,6 +554,50 @@ mod tests {
         assert!(config.presets.is_empty());
         assert_eq!(config.max_clients_per_session, 0);
         assert_eq!(config.input_rate_limit_bytes_per_sec, 0);
+    }
+    /// SEC-009: `{:?}` output must not contain the api key or the stored
+    /// password (clear text or hash).
+    #[test]
+    fn debug_output_redacts_secrets() {
+        let config = StreamingConfig {
+            api_key: Some("super-secret-api-key-42".to_string()),
+            http_basic_auth: Some(HttpBasicAuthConfig::with_password(
+                "admin".to_string(),
+                "hunter2-clear-password".to_string(),
+            )),
+            ..StreamingConfig::default()
+        };
+        let rendered = format!("{:?}", config);
+        assert!(
+            !rendered.contains("super-secret-api-key-42"),
+            "api key leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("hunter2-clear-password"),
+            "password leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("***"),
+            "no redaction marker: {}",
+            rendered
+        );
+
+        let hashed = bcrypt::hash("hashed-secret-password", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed.clone());
+        let rendered = format!("{:?}", auth);
+        assert!(
+            !rendered.contains(&hashed),
+            "password hash leaked in Debug: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("hashed-secret-password"),
+            "password leaked in Debug: {}",
+            rendered
+        );
+        assert!(rendered.contains("***"));
     }
     #[tokio::test]
     async fn test_http_basic_auth_correct_password() {
@@ -430,6 +647,22 @@ mod tests {
         assert!(auth.verify("Admin", "Secret"));
         assert!(!auth.verify("admin", "Secret"));
         assert!(!auth.verify("Admin", "secret"));
+    }
+    #[tokio::test]
+    async fn test_http_basic_auth_hash_correct_password() {
+        let hashed = bcrypt::hash("secret123", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed);
+        assert!(auth.verify("admin", "secret123"));
+        assert!(!auth.verify("admin", "wrongpass"));
+    }
+    #[tokio::test]
+    async fn test_http_basic_auth_hash_wrong_username_runs_dummy_verify() {
+        // SEC-008: a wrong username with a hashed password must still return
+        // false (the dummy-hash path must not accidentally verify).
+        let hashed = bcrypt::hash("secret123", 4).unwrap();
+        let auth = HttpBasicAuthConfig::with_hash("admin".to_string(), hashed);
+        assert!(!auth.verify("root", "secret123"));
+        assert!(!auth.verify("root", "anything"));
     }
     #[tokio::test]
     async fn test_http_basic_auth_whitespace() {

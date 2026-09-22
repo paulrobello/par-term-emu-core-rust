@@ -108,7 +108,12 @@ async fn main() -> Result<()> {
         println!("par-term-streamer v{}", env!("CARGO_PKG_VERSION"));
         println!("Downloading web frontend...\n");
 
-        frontend_download::download_frontend(&args.frontend_version, &args.web_root).await?;
+        frontend_download::download_frontend(
+            &args.frontend_version,
+            &args.web_root,
+            args.force_web_download,
+        )
+        .await?;
 
         println!("\nTo run the server with the downloaded frontend:");
         println!(
