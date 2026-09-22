@@ -7,6 +7,15 @@ use pyo3::prelude::*;
 
 use super::PyTerminal;
 
+/// One active trigger highlight: (row, col_start, col_end, fg, bg).
+type TriggerHighlight = (
+    usize,
+    usize,
+    usize,
+    Option<(u8, u8, u8)>,
+    Option<(u8, u8, u8)>,
+);
+
 #[pymethods]
 impl PyTerminal {
     // === Feature 18: Triggers & Automation ===
@@ -125,18 +134,7 @@ impl PyTerminal {
     /// Returns:
     ///     list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
     ///         where fg and bg are optional (r, g, b) tuples
-    #[allow(clippy::type_complexity)]
-    fn get_trigger_highlights(
-        &self,
-    ) -> PyResult<
-        Vec<(
-            usize,
-            usize,
-            usize,
-            Option<(u8, u8, u8)>,
-            Option<(u8, u8, u8)>,
-        )>,
-    > {
+    fn get_trigger_highlights(&self) -> PyResult<Vec<TriggerHighlight>> {
         Ok(self
             .inner
             .get_trigger_highlights()

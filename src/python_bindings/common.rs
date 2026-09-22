@@ -27,6 +27,20 @@ pub(crate) trait TerminalAccess {
     fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = Terminal>;
 }
 
+/// Word-selection bounds: ((start_col, start_row), (end_col, end_row)).
+///
+/// `pub` (not `pub(crate)`): referenced via `$crate::...` from
+/// `impl_terminal_exports!`'s expansion sites in other modules (QA-114).
+pub type WordSelectionBounds = ((usize, usize), (usize, usize));
+
+/// One scrollback cell: (grapheme, fg rgb, bg rgb, attributes).
+pub type ScrollbackCell = (
+    String,
+    (u8, u8, u8),
+    (u8, u8, u8),
+    crate::python_bindings::types::PyAttributes,
+);
+
 /// Emit a small set of simple read-only getters for `$ty`, using
 /// [`TerminalAccess::term_ref`]. Validates the shared-method macro pattern
 /// (ARC-003/QA-001); the same shape scales to the full duplicated set.
@@ -1730,14 +1744,13 @@ macro_rules! impl_terminal_search_select {
             ///
             /// Returns:
             ///     ((start_col, start_row), (end_col, end_row)) or None if not on a word
-            #[allow(clippy::type_complexity)]
             #[pyo3(signature = (col, row, word_chars = None))]
             fn select_word(
                 &mut self,
                 col: usize,
                 row: usize,
                 word_chars: Option<&str>,
-            ) -> pyo3::PyResult<Option<((usize, usize), (usize, usize))>> {
+            ) -> pyo3::PyResult<Option<$crate::python_bindings::common::WordSelectionBounds>> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 Ok(t.select_word(col, row, word_chars))
             }
@@ -1772,20 +1785,10 @@ macro_rules! impl_terminal_search_select {
             /// Returns:
             ///     List of tuples (char, (fg_r, fg_g, fg_b), (bg_r, bg_g, bg_b), attributes),
             ///     or None if index is out of bounds
-            #[allow(clippy::type_complexity)]
             fn scrollback_line(
                 &self,
                 index: usize,
-            ) -> pyo3::PyResult<
-                Option<
-                    Vec<(
-                        String,
-                        (u8, u8, u8),
-                        (u8, u8, u8),
-                        $crate::python_bindings::types::PyAttributes,
-                    )>,
-                >,
-            > {
+            ) -> pyo3::PyResult<Option<Vec<$crate::python_bindings::common::ScrollbackCell>>> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 let grid = t.grid();
                 if let Some(line) = grid.scrollback_line(index) {

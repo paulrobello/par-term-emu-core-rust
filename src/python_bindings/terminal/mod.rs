@@ -29,6 +29,9 @@ use std::collections::HashMap;
 
 use super::enums::PyMouseEncoding;
 
+/// One hyperlink and its cell positions: (url, positions, id).
+type HyperlinkEntry = (String, Vec<(usize, usize)>, Option<String>);
+
 /// Python wrapper for the Terminal
 #[pyclass(name = "Terminal")]
 pub struct PyTerminal {
@@ -1376,8 +1379,7 @@ impl PyTerminal {
     ///
     /// Returns:
     ///     List of dictionaries with 'url' (string), 'positions' (list of (col, row) tuples), and optional 'id' (string)
-    #[allow(clippy::type_complexity)]
-    fn get_all_hyperlinks(&self) -> PyResult<Vec<(String, Vec<(usize, usize)>, Option<String>)>> {
+    fn get_all_hyperlinks(&self) -> PyResult<Vec<HyperlinkEntry>> {
         let links = self.inner.get_all_hyperlinks();
         Ok(links
             .iter()
