@@ -320,7 +320,7 @@ The main terminal emulator that ties everything together, organized into submodu
 
 `PtySession` owns:
 
-- A `parking_lot::RwLock` (wrapped in `Arc<RwLock<Terminal>>`) for all terminal state (migrated from `Mutex` in ARC-009 to let concurrent readers — e.g. Python API queries — proceed without blocking each other). `parking_lot` is used for performance and to eliminate lock poisoning risk. Writers (the PTY reader thread calling `term.process(..)`, resize, etc.) still take the lock exclusively via `.write()`; readers use `.read()`.
+- A `parking_lot::RwLock` (wrapped in `Arc<RwLock<Terminal>>`) for all terminal state (migrated from `Mutex` in ARC-009 to let concurrent readers — e.g. Python API queries — proceed without blocking each other). `parking_lot` is used for performance and to eliminate lock poisoning risk. Writers (the PTY reader thread calling `term.process(..)`, resize, etc.) still take the lock exclusively via `.write()`; readers use `.read()`. New Rust code should prefer the closure accessors `with_terminal` / `with_terminal_mut`, which release the guard when the closure returns. `terminal()` hands out an owned `Arc` for long-lived subscribers. Never hold a guard across a slow operation or a call into Python.
 - A `portable_pty::PtyPair` and child process handle.
 - A background reader thread that:
   - Reads from the PTY master.

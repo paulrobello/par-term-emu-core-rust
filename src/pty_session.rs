@@ -1167,9 +1167,71 @@ impl PtySession {
         }
     }
 
-    /// Get a reference to the underlying terminal
+    /// Get an owned, shared handle to the underlying terminal.
+    ///
+    /// This returns an `Arc` clone, so the handle can outlive the current
+    /// borrow of `self`. Use it for long-lived subscribers: a background task,
+    /// an observer, or a struct field that keeps the terminal reachable after
+    /// this call returns. For a single quick read or write, prefer
+    /// [`with_terminal`](Self::with_terminal) /
+    /// [`with_terminal_mut`](Self::with_terminal_mut), or
+    /// [`terminal_ref`](Self::terminal_ref) when a borrowed handle is enough.
+    ///
+    /// Holding the `Arc` is cheap. Holding a guard taken from it is not:
+    ///
+    /// - The background PTY reader thread takes the **write** lock while it
+    ///   runs [`Terminal::process`] on PTY output. A read guard held for a long
+    ///   time stalls output processing, and a write guard held for a long time
+    ///   also blocks every reader.
+    /// - Never hold the lock (read or write) while calling into Python. A
+    ///   Python callback that re-enters the terminal, or another thread that
+    ///   holds the GIL while waiting for this lock, deadlocks.
+    ///
+    /// Take a guard, copy out what you need, and drop it before doing anything
+    /// slow or calling back into Python.
     pub fn terminal(&self) -> Arc<RwLock<Terminal>> {
         Arc::clone(&self.terminal)
+    }
+
+    /// Run `f` with shared read access to the terminal and return its result.
+    ///
+    /// The read lock is held only for the duration of `f`, so the guard cannot
+    /// escape the closure. Prefer this over [`terminal`](Self::terminal) or
+    /// [`terminal_ref`](Self::terminal_ref) in new code that needs a
+    /// short-lived read. Keep `f` short: it blocks the PTY reader thread's
+    /// write lock while it runs, and it must not call into Python.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use par_term_emu_core_rust::pty_session::PtySession;
+    ///
+    /// let session = PtySession::new(80, 24, 1000);
+    /// let (cols, rows) = session.with_terminal(|term| term.size());
+    /// assert_eq!((cols, rows), (80, 24));
+    /// ```
+    pub fn with_terminal<R>(&self, f: impl FnOnce(&Terminal) -> R) -> R {
+        let guard = self.terminal.read();
+        f(&guard)
+    }
+
+    /// Run `f` with exclusive write access to the terminal and return its result.
+    ///
+    /// The write lock is held only for the duration of `f`, so the guard cannot
+    /// escape the closure. While `f` runs, the PTY reader thread and every
+    /// reader are blocked, so keep it short and never call into Python from it.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use par_term_emu_core_rust::pty_session::PtySession;
+    ///
+    /// let session = PtySession::new(80, 24, 1000);
+    /// session.with_terminal_mut(|term| term.process(b"hello"));
+    /// ```
+    pub fn with_terminal_mut<R>(&self, f: impl FnOnce(&mut Terminal) -> R) -> R {
+        let mut guard = self.terminal.write();
+        f(&mut guard)
     }
 
     /// Get a borrowed reference to the underlying terminal `Arc`.
@@ -1441,6 +1503,20 @@ mod tests {
         let session = PtySession::new(80, 24, 1000);
         assert_eq!(session.size(), (80, 24));
         assert!(!session.is_running());
+    }
+
+    #[test]
+    fn test_with_terminal_accessors() {
+        let session = PtySession::new(80, 24, 1000);
+        assert_eq!(session.with_terminal(|term| term.size()), (80, 24));
+
+        session.with_terminal_mut(|term| term.process(b"hello"));
+        assert!(session
+            .with_terminal(|term| term.content())
+            .contains("hello"));
+
+        // Both guards are released on return, so a fresh write lock is free.
+        assert!(session.terminal_ref().try_write().is_some());
     }
 
     #[test]
