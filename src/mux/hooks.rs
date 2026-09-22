@@ -150,6 +150,21 @@ fn handle_state_report(
                 pane.set_metadata(field, value);
             }
         }
+        // The blocked reason pi and omp attach to their reports (the
+        // scannability field the roster exists for): stored when present,
+        // CLEARED when a later report omits it, so a stale reason cannot
+        // survive into a new state. Whitespace is collapsed at the door —
+        // the roster line is one line.
+        let message = params
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+            .map(|message| message.split_whitespace().collect::<Vec<_>>().join(" "));
+        match message {
+            Some(message) => pane.set_metadata("agent_message", &message),
+            None => pane.clear_metadata(&["agent_message"]),
+        }
 
         Some(TmuxNotification::AgentStateChanged {
             pane_id: header.pane_id.to_string(),
@@ -300,6 +315,64 @@ mod tests {
         format!(
             r#"{{"id":"t-{seq}","method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"{state}","seq":{seq},"source":"par-mux:test"}}}}"#
         )
+    }
+
+    /// A pi/omp-shaped state report: same grammar, plus the optional
+    /// blocked-reason `message` field both send.
+    fn state_report_with_message(
+        pane: PaneId,
+        agent: &str,
+        state: &str,
+        message: &str,
+        seq: u64,
+    ) -> String {
+        format!(
+            r#"{{"id":"t-{seq}","method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"{state}","message":"{message}","seq":{seq},"source":"par-mux:test"}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_blocked_reason_is_stored_collapsed_and_cleared_by_the_next_bare_report() {
+        let (tree, pane_id) = tree_with_pane();
+
+        // The JSON carries the reason with an escaped newline — how the
+        // wire form of a multi-line reason arrives — which the endpoint
+        // collapses at the door.
+        let (reply, _) = handle_report(
+            &state_report_with_message(
+                pane_id,
+                "pi",
+                "blocked",
+                "permission needed\\n  for  rm -rf build/",
+                1_000,
+            ),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert_eq!(
+                pane.metadata().get("agent_message").map(String::as_str),
+                Some("permission needed for rm -rf build/"),
+                "stored, whitespace collapsed to one line"
+            );
+        }
+
+        // The next report carries no message: the stale reason must not
+        // survive into the working state.
+        handle_report(&state_report(pane_id, "pi", "working", 2_000), &tree);
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_state").map(String::as_str),
+            Some("working")
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_message"),
+            "the blocked reason left with the blocked state: {:?}",
+            pane.metadata()
+        );
     }
 
     #[test]

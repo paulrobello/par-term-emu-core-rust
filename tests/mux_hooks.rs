@@ -215,6 +215,84 @@ fn report(pane: &str, state: &str, seq: u64) -> String {
     )
 }
 
+/// A pi/omp-shaped report: same grammar, plus the optional blocked-reason
+/// `message` both agents send.
+fn report_with_message(pane: &str, state: &str, message: &str, seq: u64) -> String {
+    format!(
+        r#"{{"id":"probe-{seq}","method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"pi","state":"{state}","message":"{message}","seq":{seq},"source":"par-mux:test"}}}}"#
+    )
+}
+
+#[test]
+fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
+    let mut stage = stage("reason");
+
+    // The reply block's body lines, with protocol framing stripped (the
+    // roster test's local helper, repeated here).
+    fn body_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|l| {
+                !l.starts_with("%output")
+                    && !l.starts_with("%begin")
+                    && !l.starts_with("%end")
+                    && !l.starts_with("%error")
+            })
+            .map(str::trim)
+            .collect()
+    }
+
+    // The pi-shaped blocked report with a reason drives the live daemon.
+    let reply = hook_round_trip(
+        &stage.path,
+        &report_with_message(
+            &stage.pane,
+            "blocked",
+            "permission needed for rm -rf build/",
+            1_000,
+        ),
+    );
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the blocked broadcast",
+    );
+
+    // The reason is readable through list-agents without waiting for a
+    // broadcast — the reattaching-client case the roster serves.
+    let roster = stage.control.command("list-agents").join("");
+    let lines = body_lines(&roster);
+    assert!(
+        lines.contains(
+            &format!(
+                "{} pi blocked hook permission needed for rm -rf build/",
+                stage.pane
+            )
+            .as_str()
+        ),
+        "the reason rides the roster line: {lines:?}"
+    );
+
+    // A later report without a message (empty string = absent) clears it: a
+    // stale blocked reason cannot survive into a working state.
+    hook_round_trip(
+        &stage.path,
+        &report_with_message(&stage.pane, "working", "", 2_000),
+    );
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the working broadcast",
+    );
+    let roster = stage.control.command("list-agents").join("");
+    let lines = body_lines(&roster);
+    assert!(
+        lines.contains(&format!("{} pi working hook", stage.pane).as_str()),
+        "no reason residue on a message-less state: {lines:?}"
+    );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
 #[test]
 fn hook_report_replies_in_place_and_broadcasts_to_control_clients() {
     let mut stage = stage("report");

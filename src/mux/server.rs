@@ -362,9 +362,11 @@ fn dispatch_issued(
         // hook has CLAIMED or a pattern has MATCHED, `%N <agent> <state>
         // <source>` with source `hook` or `scrape` (T5.4 + the scrape
         // tier's provenance rule: a consumer must tell a claim from a
-        // guess). Panes without either are absent outright: `unknown` means
-        // no hook ever reported and no rule ever matched, never "idle"
-        // (the Phase 5 ruling). Fixed shape, no -F — the T4.E decision.
+        // guess), plus an optional trailing blocked-reason column (the
+        // rest of the line; whitespace-collapsed at the endpoint). Panes
+        // without either are absent outright: `unknown` means no hook ever
+        // reported and no rule ever matched, never "idle" (the Phase 5
+        // ruling). Fixed shape, no -F — the T4.E decision.
         MuxCommand::ListAgents => {
             let guard = tree.lock();
             let mut roster: Vec<(PaneId, String)> = guard
@@ -383,7 +385,16 @@ fn dispatch_issued(
                         .get("agent_state_source")
                         .map(String::as_str)
                         .unwrap_or("hook");
-                    Some((p, format!("{agent} {state} {source}")))
+                    // The blocked reason rides as the rest of the line —
+                    // already whitespace-collapsed by the endpoint, so it
+                    // cannot break the one-line-per-pane shape. Absent
+                    // message, four tokens exactly.
+                    let reason = pane.metadata().get("agent_message");
+                    let entry = match reason {
+                        Some(reason) => format!("{agent} {state} {source} {reason}"),
+                        None => format!("{agent} {state} {source}"),
+                    };
+                    Some((p, entry))
                 })
                 .collect();
             roster.sort_by_key(|(pane, _)| *pane);
