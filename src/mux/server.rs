@@ -198,12 +198,13 @@ fn handle_client(
             continue;
         }
         command_number += 1;
-        let reply = dispatch(
+        let reply = dispatch_issued(
             &line,
             command_number,
             &tree,
             &clients,
             state_path.as_deref(),
+            Some(&tx),
         );
         if tx.send(reply).is_err() {
             break;
@@ -212,19 +213,24 @@ fn handle_client(
     clients.lock().retain(|(id, _)| *id != client_id);
 }
 
-/// Execute one command and render its reply block.
+/// Execute one command and render its reply block, with an issuer channel.
 ///
 /// `state_path` (the daemon always passes one): when a command mutated the
 /// tree or its buffers, the whole state is atomically saved to this file
 /// before the reply is sent (par-mux.md D3.3). Content-only commands
 /// (`send-keys`, `paste-buffer`) do not save — their staleness window is
 /// bounded by the next structural save and the clean shutdown save.
-fn dispatch(
+///
+/// `issuer` is the channel of the client that sent this command, used for
+/// notifications that concern that client specifically (`%session-changed`);
+/// lifecycle broadcasts go to everyone via `clients`.
+fn dispatch_issued(
     line: &str,
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
     state_path: Option<&Path>,
+    issuer: Option<&Sender<String>>,
 ) -> String {
     let command = match parse_command(line) {
         Ok(command) => command,
@@ -235,24 +241,46 @@ fn dispatch(
     let reply = match command {
         MuxCommand::NewSession { name } => {
             let name = name.unwrap_or_else(|| "0".to_string());
-            let mut guard = tree.lock();
-            match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
-                Ok(session_id) => {
-                    mutated = true;
-                    // Wire every pane in the new session to push its output.
-                    let window_ids = guard
-                        .session(session_id)
-                        .map(|s| s.windows.clone())
-                        .unwrap_or_default();
-                    let pane_ids: Vec<_> = window_ids
-                        .iter()
-                        .filter_map(|w| guard.window(*w))
-                        .flat_map(|w| w.panes())
-                        .collect();
-                    for pane_id in pane_ids {
-                        if let Some(pane) = guard.pane_mut(pane_id) {
-                            pane.on_output(pane_output_sink(clients, pane_id));
+            let outcome = {
+                let mut guard = tree.lock();
+                match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
+                    Ok(session_id) => {
+                        // Wire every pane in the new session to push its output.
+                        let window_ids = guard
+                            .session(session_id)
+                            .map(|s| s.windows.clone())
+                            .unwrap_or_default();
+                        let pane_ids: Vec<_> = window_ids
+                            .iter()
+                            .filter_map(|w| guard.window(*w))
+                            .flat_map(|w| w.panes())
+                            .collect();
+                        for pane_id in pane_ids {
+                            if let Some(pane) = guard.pane_mut(pane_id) {
+                                pane.on_output(pane_output_sink(clients, pane_id));
+                            }
                         }
+                        Ok((session_id, window_ids))
+                    }
+                    Err(err) => Err(err),
+                }
+            };
+            match outcome {
+                Ok((session_id, window_ids)) => {
+                    mutated = true;
+                    for window in window_ids {
+                        broadcast_notification(
+                            clients,
+                            &TmuxNotification::WindowAdd {
+                                window_id: window.to_string(),
+                            },
+                        );
+                    }
+                    if let Some(tx) = issuer {
+                        let _ = tx.send(emit(&TmuxNotification::SessionChanged {
+                            session_id: session_id.to_string(),
+                            name,
+                        }));
                     }
                     emit_block(command_number, &session_id.to_string(), true)
                 }
@@ -305,10 +333,32 @@ fn dispatch(
             }
         }
         MuxCommand::KillPane { pane } => {
-            let mut guard = tree.lock();
-            match guard.kill_pane(pane) {
-                Ok(()) => {
+            // Resolve the window before killing: afterwards the pane (and its
+            // window membership) is gone and cannot be looked up.
+            let outcome = {
+                let mut guard = tree.lock();
+                let window_id = guard.window_of_pane(pane);
+                guard.kill_pane(pane).map(|()| window_id)
+            };
+            match outcome {
+                Ok(window_id) => {
                     mutated = true;
+                    if let Some(window_id) = window_id {
+                        broadcast_layout_change(tree, clients, window_id);
+                        // The tree refuses to kill a window's last pane, so a
+                        // surviving window always has an active pane to name.
+                        if let Some(active) =
+                            tree.lock().window(window_id).map(|w| w.active)
+                        {
+                            broadcast_notification(
+                                clients,
+                                &TmuxNotification::WindowPaneChanged {
+                                    window_id: window_id.to_string(),
+                                    pane_id: active.to_string(),
+                                },
+                            );
+                        }
+                    }
                     emit_block(command_number, "", true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
@@ -334,6 +384,14 @@ fn dispatch(
                 Ok((new_pane, window_id)) => {
                     mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
+                    // split-window focuses the new pane (tmux semantics).
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowPaneChanged {
+                            window_id: window_id.to_string(),
+                            pane_id: new_pane.to_string(),
+                        },
+                    );
                     emit_block(command_number, &new_pane.to_string(), true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
@@ -352,6 +410,13 @@ fn dispatch(
                 Ok(window_id) => {
                     mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowPaneChanged {
+                            window_id: window_id.to_string(),
+                            pane_id: pane.to_string(),
+                        },
+                    );
                     emit_block(command_number, "", true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
@@ -399,50 +464,90 @@ fn dispatch(
         }
         MuxCommand::NewWindow { session, name } => {
             let name = name.unwrap_or_else(|| "0".to_string());
-            let mut guard = tree.lock();
-            match guard.new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS) {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard
+                    .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
+                    .map(|window_id| {
+                        // Wire the new window's pane the same way NewSession does.
+                        let pane_ids = guard
+                            .window(window_id)
+                            .map(|w| w.panes())
+                            .unwrap_or_default();
+                        for pane_id in pane_ids {
+                            if let Some(pane) = guard.pane_mut(pane_id) {
+                                pane.on_output(pane_output_sink(clients, pane_id));
+                            }
+                        }
+                        window_id
+                    })
+            };
+            match outcome {
                 Ok(window_id) => {
                     mutated = true;
-                    // Wire the new window's pane the same way NewSession does.
-                    let pane_ids = guard
-                        .window(window_id)
-                        .map(|w| w.panes())
-                        .unwrap_or_default();
-                    for pane_id in pane_ids {
-                        if let Some(pane) = guard.pane_mut(pane_id) {
-                            pane.on_output(pane_output_sink(clients, pane_id));
-                        }
-                    }
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowAdd {
+                            window_id: window_id.to_string(),
+                        },
+                    );
                     emit_block(command_number, &window_id.to_string(), true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
         MuxCommand::SelectWindow { window } => {
-            let mut guard = tree.lock();
-            match guard.select_window(window) {
-                Ok(()) => {
+            let outcome = {
+                let mut guard = tree.lock();
+                guard
+                    .select_window(window)
+                    .map(|()| guard.window(window).map(|w| w.active))
+            };
+            match outcome {
+                Ok(active) => {
                     mutated = true;
+                    if let Some(pane) = active {
+                        broadcast_notification(
+                            clients,
+                            &TmuxNotification::WindowPaneChanged {
+                                window_id: window.to_string(),
+                                pane_id: pane.to_string(),
+                            },
+                        );
+                    }
                     emit_block(command_number, "", true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
         MuxCommand::KillWindow { window } => {
-            let mut guard = tree.lock();
-            match guard.kill_window(window) {
+            let outcome = tree.lock().kill_window(window);
+            match outcome {
                 Ok(()) => {
                     mutated = true;
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowClose {
+                            window_id: window.to_string(),
+                        },
+                    );
                     emit_block(command_number, "", true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
         MuxCommand::RenameWindow { window, name } => {
-            let mut guard = tree.lock();
-            match guard.rename_window(window, &name) {
+            let outcome = tree.lock().rename_window(window, &name);
+            match outcome {
                 Ok(()) => {
                     mutated = true;
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowRenamed {
+                            window_id: window.to_string(),
+                            name,
+                        },
+                    );
                     emit_block(command_number, "", true)
                 }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
@@ -537,6 +642,28 @@ fn dispatch(
         }
     }
     reply
+}
+
+/// Execute one command with no issuer channel — the in-process shape tests
+/// and tooling use.
+fn dispatch(
+    line: &str,
+    command_number: u32,
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+    state_path: Option<&Path>,
+) -> String {
+    dispatch_issued(line, command_number, tree, clients, state_path, None)
+}
+
+/// Push one notification line to every connected client.
+///
+/// The lifecycle counterpart of [`broadcast_layout_change`]: a client that
+/// did not issue the mutating command still learns about the window it
+/// affected, which is what a push-driven sync layer consumes.
+fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
+    let line = emit(notification);
+    clients.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
 }
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
@@ -784,6 +911,134 @@ mod tests {
         );
         assert!(kill.contains("%end"), "kill-window succeeds");
         assert!(tree.lock().window(window_id).is_none());
+    }
+
+    /// Collect every broadcast a non-issuing client receives within a bounded
+    /// window after a dispatch, so lifecycle-notification assertions see the
+    /// push lines rather than the command's own reply block.
+    fn drain_broadcasts(rx: &std::sync::mpsc::Receiver<String>) -> Vec<String> {
+        let mut lines = Vec::new();
+        while let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(200)) {
+            lines.push(line);
+        }
+        lines
+    }
+
+    #[test]
+    fn mutating_dispatches_broadcast_lifecycle_notifications_to_other_clients() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let first = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // A second, non-issuing client: everything it sees is a broadcast.
+        let (tx, rx) = channel();
+        clients.lock().push((u64::MAX, tx));
+
+        // new-window broadcasts %window-add naming the new window.
+        dispatch(
+            &format!("new-window -t {session_id} -n logs"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        let second_window = tree.lock().session(session_id).unwrap().windows[1];
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("%window-add")
+                    && l.contains(&second_window.to_string())),
+            "new-window must broadcast %window-add naming it: {lines:?}"
+        );
+
+        // rename-window broadcasts %window-renamed with the new name.
+        dispatch(
+            &format!("rename-window -t {window_id} scratch"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%window-renamed")
+                && l.contains(&window_id.to_string())
+                && l.contains("scratch")),
+            "rename-window must broadcast %window-renamed: {lines:?}"
+        );
+
+        // split-window focuses the new pane; select-pane moves focus back.
+        dispatch(
+            &format!("split-window -t {first} -h"),
+            4,
+            &tree,
+            &clients,
+            None,
+        );
+        let _ = drain_broadcasts(&rx);
+        dispatch(&format!("select-pane -t {first}"), 5, &tree, &clients, None);
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%window-pane-changed")
+                && l.contains(&first.to_string())),
+            "select-pane must broadcast %window-pane-changed: {lines:?}"
+        );
+
+        // kill-pane changes geometry (and focus, since the active pane died).
+        let second_pane = tree.lock().window(window_id).unwrap().panes()[1];
+        dispatch(&format!("kill-pane -t {second_pane}"), 6, &tree, &clients, None);
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%layout-change")),
+            "kill-pane must broadcast %layout-change: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("%window-pane-changed")),
+            "kill-pane of the active pane must broadcast %window-pane-changed: {lines:?}"
+        );
+
+        // kill-window broadcasts %window-close naming the window.
+        dispatch(
+            &format!("kill-window -t {second_window}"),
+            7,
+            &tree,
+            &clients,
+            None,
+        );
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%window-close")
+                && l.contains(&second_window.to_string())),
+            "kill-window must broadcast %window-close naming it: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn new_session_broadcasts_window_add_and_notifies_the_issuer() {
+        let (tree, clients) = harness();
+        // The issuing client is NOT in the broadcast set: its channel receives
+        // only what dispatch directs to it specifically.
+        let (issuer_tx, issuer_rx) = channel();
+        dispatch_issued(
+            "new-session -s main",
+            1,
+            &tree,
+            &clients,
+            None,
+            Some(&issuer_tx),
+        );
+        let lines = drain_broadcasts(&issuer_rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%session-changed")
+                && l.contains("main")),
+            "the issuing client must be told %session-changed: {lines:?}"
+        );
+        // The broadcast set (no other clients here) separately receives
+        // %window-add for the session's initial window; that half is covered
+        // by mutating_dispatches_broadcast_lifecycle_notifications_to_other_clients.
     }
 
     #[test]
