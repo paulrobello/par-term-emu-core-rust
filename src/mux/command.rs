@@ -157,6 +157,165 @@ pub enum MuxCommand {
     },
 }
 
+impl MuxCommand {
+    /// Whether dispatching this command mutates the tree or buffers — the
+    /// persistence rule stated on the command type: a structural command
+    /// saves the whole state after it lands (par-mux.md D3.3); a content or
+    /// read-only command does not, its staleness window bounded by the next
+    /// structural save and the clean-shutdown save.
+    ///
+    /// `refresh-client` is the one dual-mode command: with `-C WxH` it
+    /// resizes a window (structural); without it, it only replays a screen.
+    pub fn mutates(&self) -> bool {
+        match self {
+            MuxCommand::NewSession { .. }
+            | MuxCommand::KillPane { .. }
+            | MuxCommand::NewWindow { .. }
+            | MuxCommand::SelectWindow { .. }
+            | MuxCommand::KillWindow { .. }
+            | MuxCommand::RenameWindow { .. }
+            | MuxCommand::SplitWindow { .. }
+            | MuxCommand::SelectPane { .. }
+            | MuxCommand::ResizePane { .. }
+            | MuxCommand::SwapPanes { .. }
+            | MuxCommand::SetBuffer { .. } => true,
+            MuxCommand::RefreshClient { size, .. } => size.is_some(),
+            MuxCommand::ListPanes
+            | MuxCommand::ListAgents
+            | MuxCommand::ListWindows
+            | MuxCommand::ListSessions
+            | MuxCommand::SendKeys { .. }
+            | MuxCommand::CapturePane { .. }
+            | MuxCommand::ShowBuffer
+            | MuxCommand::PasteBuffer { .. } => false,
+        }
+    }
+}
+
+/// One line from a client, classified by grammar: a line whose first
+/// non-whitespace byte is `{` is a JSON hook report (see
+/// [`crate::mux::hooks`]); anything else is a control command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Line {
+    /// A hook report, carried raw — the hook layer parses the JSON itself.
+    Hook(String),
+    /// A parsed control command.
+    Control(MuxCommand),
+}
+
+/// Classify and parse one client line (see [`Line`]).
+pub fn parse_line(line: &str) -> Result<Line, String> {
+    if line.trim_start().starts_with('{') {
+        Ok(Line::Hook(line.to_string()))
+    } else {
+        parse_command(line).map(Line::Control)
+    }
+}
+
+/// One pre-split command line: the shared cursor every per-command parser
+/// reads flags, targets, and payloads through.
+///
+/// Private by design — it is the grammar's internal shape, not part of the
+/// [`MuxCommand`] contract callers consume.
+struct Args<'a> {
+    /// The command name (the first whitespace-separated token).
+    name: &'a str,
+    /// The tokens after the name.
+    args: &'a [&'a str],
+    /// The raw, untrimmed line — `send-keys` re-slices its payload from it,
+    /// because its quoting cannot survive the whitespace split.
+    line: &'a str,
+}
+
+impl Args<'_> {
+    /// The value following `flag`, when present — `None` both for an absent
+    /// flag and for one with no following token.
+    fn flag(&self, flag: &str) -> Option<String> {
+        self.args
+            .iter()
+            .position(|a| *a == flag)
+            .and_then(|i| self.args.get(i + 1))
+            .map(|v| (*v).to_string())
+    }
+
+    /// Presence check for valueless flags (`-h`, `-R`, …) — [`Self::flag`]
+    /// cannot distinguish "absent" from "present with no following token".
+    fn has_flag(&self, flag: &str) -> bool {
+        self.args.contains(&flag)
+    }
+
+    fn pane(&self, flag_name: &str) -> Result<PaneId, String> {
+        let raw = self
+            .flag(flag_name)
+            .ok_or_else(|| format!("{} requires {flag_name}", self.name))?;
+        raw.parse::<PaneId>()
+            .map_err(|_| format!("invalid pane target: {raw}"))
+    }
+
+    fn window(&self, flag_name: &str) -> Result<WindowId, String> {
+        let raw = self
+            .flag(flag_name)
+            .ok_or_else(|| format!("{} requires {flag_name}", self.name))?;
+        raw.parse::<WindowId>()
+            .map_err(|_| format!("invalid window target: {raw}"))
+    }
+
+    fn session(&self, flag_name: &str) -> Result<Option<SessionId>, String> {
+        match self.flag(flag_name) {
+            Some(raw) => Some(
+                raw.parse()
+                    .map_err(|_| format!("invalid session target: {raw}")),
+            )
+            .transpose(),
+            None => Ok(None),
+        }
+    }
+
+    /// Everything after a `<flag> <value>` pair, joined back with spaces —
+    /// the same "trailing free text is the payload" shape `send-keys`
+    /// already uses.
+    fn trailing_after(&self, flag: &str) -> String {
+        self.args
+            .iter()
+            .skip_while(|a| **a != flag)
+            .skip(2)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    /// A positive single-dimension size flag (`-x 120`, `-y 40`) —
+    /// [`parse_size_flag`] over [`Self::flag`].
+    fn size(&self, flag_name: &str) -> Result<Option<u16>, String> {
+        parse_size_flag(&self.flag(flag_name), flag_name, self.name)
+    }
+
+    /// A `WxH` size-pair flag (`-C 120x40`) — the renderer-report form.
+    fn size_pair(&self, flag_name: &str) -> Result<Option<(u16, u16)>, String> {
+        let Some(raw) = self.flag(flag_name) else {
+            return Ok(None);
+        };
+        let (width, height) = raw
+            .split_once('x')
+            .ok_or_else(|| format!("{}: {flag_name} expects WxH, got: {raw}", self.name))?;
+        let dims @ (width, height) = (
+            width
+                .parse::<u16>()
+                .map_err(|_| format!("{}: invalid {flag_name} size: {raw}", self.name))?,
+            height
+                .parse::<u16>()
+                .map_err(|_| format!("{}: invalid {flag_name} size: {raw}", self.name))?,
+        );
+        if width == 0 || height == 0 {
+            return Err(format!(
+                "{}: {flag_name} size must be positive: {raw}",
+                self.name
+            ));
+        }
+        Ok(Some(dims))
+    }
+}
+
 /// Split `rest` at its first whitespace-separated `flag` occurrence, into the
 /// flag's value and the raw remainder following that value.
 ///
@@ -369,6 +528,34 @@ fn parse_size_flag(
     Ok(Some(parsed))
 }
 
+/// One per-command parser, dispatched by name from the [`COMMANDS`] table.
+type CommandParser = fn(&Args<'_>) -> Result<MuxCommand, String>;
+
+/// The command table: every command name with its parser. Adding a tmux
+/// command is one `parse_<cmd>` function plus one row here.
+const COMMANDS: &[(&str, CommandParser)] = &[
+    ("new-session", parse_new_session),
+    ("list-panes", parse_list_panes),
+    ("list-agents", parse_list_agents),
+    ("kill-pane", parse_kill_pane),
+    ("refresh-client", parse_refresh_client),
+    ("send-keys", parse_send_keys),
+    ("new-window", parse_new_window),
+    ("select-window", parse_select_window),
+    ("kill-window", parse_kill_window),
+    ("rename-window", parse_rename_window),
+    ("list-windows", parse_list_windows),
+    ("list-sessions", parse_list_sessions),
+    ("split-window", parse_split_window),
+    ("select-pane", parse_select_pane),
+    ("resize-pane", parse_resize_pane),
+    ("swap-pane", parse_swap_pane),
+    ("capture-pane", parse_capture_pane),
+    ("set-buffer", parse_set_buffer),
+    ("show-buffer", parse_show_buffer),
+    ("paste-buffer", parse_paste_buffer),
+];
+
 /// Parse one command line from a client.
 ///
 /// Deliberately minimal: whitespace-split with a `-t`/`-s` flag scan. tmux's
@@ -382,204 +569,196 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let Some((name, args)) = parts.split_first() else {
         return Err("empty command".to_string());
     };
+    let a = Args { name, args, line };
+    let (_, parse) = COMMANDS
+        .iter()
+        .find(|(known, _)| known == name)
+        .ok_or_else(|| format!("unknown command: {name}"))?;
+    parse(&a)
+}
 
-    let flag = |flag: &str| -> Option<String> {
-        args.iter()
-            .position(|a| *a == flag)
-            .and_then(|i| args.get(i + 1))
-            .map(|v| (*v).to_string())
-    };
+fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::NewSession { name: a.flag("-s") })
+}
 
-    // Presence check for valueless flags (`-h`, `-R`, …) — `flag` cannot
-    // distinguish "absent" from "present with no following token".
-    let has_flag = |flag: &str| args.contains(&flag);
+fn parse_list_panes(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListPanes)
+}
 
-    let target_pane = |flag_name: &str| -> Result<PaneId, String> {
-        let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
-        raw.parse::<PaneId>()
-            .map_err(|_| format!("invalid pane target: {raw}"))
-    };
+fn parse_list_agents(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListAgents)
+}
 
-    let target_window = |flag_name: &str| -> Result<WindowId, String> {
-        let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
-        raw.parse::<WindowId>()
-            .map_err(|_| format!("invalid window target: {raw}"))
-    };
+fn parse_kill_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::KillPane {
+        pane: a.pane("-t")?,
+    })
+}
 
-    // Everything after a `-t <target>` pair, joined back with spaces — the
-    // same "trailing free text is the payload" shape `send-keys` already uses.
-    let trailing_after_target = || -> String {
-        args.iter()
-            .skip_while(|a| **a != "-t")
-            .skip(2)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
+fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::RefreshClient {
+        pane: a.pane("-t")?,
+        size: a.size_pair("-C")?,
+    })
+}
 
-    match *name {
-        "new-session" => Ok(MuxCommand::NewSession { name: flag("-s") }),
-        "list-panes" => Ok(MuxCommand::ListPanes),
-        "kill-pane" => Ok(MuxCommand::KillPane {
-            pane: target_pane("-t")?,
-        }),
-        "refresh-client" => {
-            let pane = target_pane("-t")?;
-            let size = match flag("-C") {
-                Some(raw) => {
-                    let (width, height) = raw
-                        .split_once('x')
-                        .ok_or_else(|| format!("{name}: -C expects WxH, got: {raw}"))?;
-                    let dims @ (width, height) = (
-                        width
-                            .parse::<u16>()
-                            .map_err(|_| format!("{name}: invalid -C size: {raw}"))?,
-                        height
-                            .parse::<u16>()
-                            .map_err(|_| format!("{name}: invalid -C size: {raw}"))?,
-                    );
-                    if width == 0 || height == 0 {
-                        return Err(format!("{name}: -C size must be positive: {raw}"));
-                    }
-                    Some(dims)
-                }
-                None => None,
-            };
-            Ok(MuxCommand::RefreshClient { pane, size })
-        }
-        "send-keys" => {
-            let rest = line
-                .strip_prefix(name)
-                .expect("the command name prefixes the line");
-            let (target_value, payload_raw) =
-                split_after_flag(rest, "-t").ok_or_else(|| format!("{name} requires -t"))?;
-            let pane: PaneId = target_value
-                .parse()
-                .map_err(|_| format!("invalid pane target: {target_value}"))?;
-            let keys = parse_send_keys_payload(payload_raw)?;
-            Ok(MuxCommand::SendKeys { pane, keys })
-        }
-        "new-window" => Ok(MuxCommand::NewWindow {
-            session: match flag("-t") {
-                Some(raw) => Some(
-                    raw.parse()
-                        .map_err(|_| format!("invalid session target: {raw}"))?,
-                ),
-                None => None,
-            },
-            name: flag("-n"),
-        }),
-        "select-window" => Ok(MuxCommand::SelectWindow {
-            window: target_window("-t")?,
-        }),
-        "kill-window" => Ok(MuxCommand::KillWindow {
-            window: target_window("-t")?,
-        }),
-        "rename-window" => {
-            let window = target_window("-t")?;
-            let name = trailing_after_target();
-            if name.is_empty() {
-                return Err("rename-window requires a new name".to_string());
-            }
-            Ok(MuxCommand::RenameWindow { window, name })
-        }
-        "list-windows" => Ok(MuxCommand::ListWindows),
-        "list-sessions" => Ok(MuxCommand::ListSessions),
-        "list-agents" => Ok(MuxCommand::ListAgents),
-        "split-window" => {
-            let pane = target_pane("-t")?;
-            // tmux's flags name the arrangement, not the divider: `-h`
-            // puts the new pane beside the target (our Vertical
-            // orientation), `-v`/default below it (Horizontal).
-            let direction = if has_flag("-h") {
-                SplitDirection::Vertical
-            } else {
-                SplitDirection::Horizontal
-            };
-            let percent = match flag("-p") {
-                Some(raw) => {
-                    let percent: u32 = raw
-                        .parse()
-                        .map_err(|_| format!("invalid percentage: {raw}"))?;
-                    if !(1..=99).contains(&percent) {
-                        return Err(format!("percentage must be 1-99: {raw}"));
-                    }
-                    percent
-                }
-                None => 50,
-            };
-            Ok(MuxCommand::SplitWindow {
-                pane,
-                direction,
-                percent,
-            })
-        }
-        "select-pane" => Ok(MuxCommand::SelectPane {
-            pane: target_pane("-t")?,
-        }),
-        "resize-pane" => {
-            let pane = target_pane("-t")?;
-            // The absolute form: -x COLS and/or -y ROWS, at least one.
-            let cols = parse_size_flag(&flag("-x"), "-x", name)?;
-            let rows = parse_size_flag(&flag("-y"), "-y", name)?;
-            // tmux takes one direction flag; the first of the four wins.
-            let direction_flag = [
-                ("-L", ResizeDirection::Left),
-                ("-R", ResizeDirection::Right),
-                ("-U", ResizeDirection::Up),
-                ("-D", ResizeDirection::Down),
-            ]
-            .into_iter()
-            .find(|(flag, _)| has_flag(flag));
-            if (cols.is_some() || rows.is_some()) && direction_flag.is_some() {
-                return Err("resize-pane: -x/-y cannot combine with -L -R -U -D".to_string());
-            }
-            let adjustment = if cols.is_some() || rows.is_some() {
-                ResizeAdjustment::Absolute { cols, rows }
-            } else {
-                let Some((flag_name, direction)) = direction_flag else {
-                    return Err("resize-pane requires one of -L -R -U -D, or -x/-y".to_string());
-                };
-                // The cell count is the flag's value when present and
-                // numeric; tmux's default adjustment is 5 cells.
-                let cells = flag(flag_name)
-                    .and_then(|raw| raw.parse::<u32>().ok())
-                    .unwrap_or(5);
-                ResizeAdjustment::Relative { direction, cells }
-            };
-            Ok(MuxCommand::ResizePane { pane, adjustment })
-        }
-        "swap-pane" => Ok(MuxCommand::SwapPanes {
-            target: target_pane("-t")?,
-            source: target_pane("-s")?,
-        }),
-        "capture-pane" => {
-            let pane = target_pane("-t")?;
-            // tmux's `-S`/`-E` select a start/end line; the raw offsets are
-            // kept as-is (negative counts back from the screen top into
-            // history) and the server-side adapter resolves them against
-            // the combined scrollback+screen buffer.
-            let start_line = flag("-S").and_then(|raw| raw.parse::<i64>().ok());
-            let end_line = flag("-E").and_then(|raw| raw.parse::<i64>().ok());
-            Ok(MuxCommand::CapturePane {
-                pane,
-                start_line,
-                end_line,
-            })
-        }
-        "set-buffer" => {
-            let content = args.join(" ");
-            if content.is_empty() {
-                return Err("set-buffer requires content".to_string());
-            }
-            Ok(MuxCommand::SetBuffer { content })
-        }
-        "show-buffer" => Ok(MuxCommand::ShowBuffer),
-        "paste-buffer" => Ok(MuxCommand::PasteBuffer {
-            pane: target_pane("-t")?,
-        }),
-        other => Err(format!("unknown command: {other}")),
+fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let rest = a
+        .line
+        .strip_prefix(a.name)
+        .expect("the command name prefixes the line");
+    let (target_value, payload_raw) =
+        split_after_flag(rest, "-t").ok_or_else(|| format!("{} requires -t", a.name))?;
+    let pane: PaneId = target_value
+        .parse()
+        .map_err(|_| format!("invalid pane target: {target_value}"))?;
+    let keys = parse_send_keys_payload(payload_raw)?;
+    Ok(MuxCommand::SendKeys { pane, keys })
+}
+
+fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::NewWindow {
+        session: a.session("-t")?,
+        name: a.flag("-n"),
+    })
+}
+
+fn parse_select_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SelectWindow {
+        window: a.window("-t")?,
+    })
+}
+
+fn parse_kill_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::KillWindow {
+        window: a.window("-t")?,
+    })
+}
+
+fn parse_rename_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let window = a.window("-t")?;
+    let name = a.trailing_after("-t");
+    if name.is_empty() {
+        return Err("rename-window requires a new name".to_string());
     }
+    Ok(MuxCommand::RenameWindow { window, name })
+}
+
+fn parse_list_windows(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListWindows)
+}
+
+fn parse_list_sessions(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ListSessions)
+}
+
+fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    // tmux's flags name the arrangement, not the divider: `-h`
+    // puts the new pane beside the target (our Vertical
+    // orientation), `-v`/default below it (Horizontal).
+    let direction = if a.has_flag("-h") {
+        SplitDirection::Vertical
+    } else {
+        SplitDirection::Horizontal
+    };
+    let percent = match a.flag("-p") {
+        Some(raw) => {
+            let percent: u32 = raw
+                .parse()
+                .map_err(|_| format!("invalid percentage: {raw}"))?;
+            if !(1..=99).contains(&percent) {
+                return Err(format!("percentage must be 1-99: {raw}"));
+            }
+            percent
+        }
+        None => 50,
+    };
+    Ok(MuxCommand::SplitWindow {
+        pane,
+        direction,
+        percent,
+    })
+}
+
+fn parse_select_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SelectPane {
+        pane: a.pane("-t")?,
+    })
+}
+
+fn parse_resize_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    // The absolute form: -x COLS and/or -y ROWS, at least one.
+    let cols = a.size("-x")?;
+    let rows = a.size("-y")?;
+    // tmux takes one direction flag; the first of the four wins.
+    let direction_flag = [
+        ("-L", ResizeDirection::Left),
+        ("-R", ResizeDirection::Right),
+        ("-U", ResizeDirection::Up),
+        ("-D", ResizeDirection::Down),
+    ]
+    .into_iter()
+    .find(|(flag, _)| a.has_flag(flag));
+    if (cols.is_some() || rows.is_some()) && direction_flag.is_some() {
+        return Err("resize-pane: -x/-y cannot combine with -L -R -U -D".to_string());
+    }
+    let adjustment = if cols.is_some() || rows.is_some() {
+        ResizeAdjustment::Absolute { cols, rows }
+    } else {
+        let Some((flag_name, direction)) = direction_flag else {
+            return Err("resize-pane requires one of -L -R -U -D, or -x/-y".to_string());
+        };
+        // The cell count is the flag's value when present and
+        // numeric; tmux's default adjustment is 5 cells.
+        let cells = a
+            .flag(flag_name)
+            .and_then(|raw| raw.parse::<u32>().ok())
+            .unwrap_or(5);
+        ResizeAdjustment::Relative { direction, cells }
+    };
+    Ok(MuxCommand::ResizePane { pane, adjustment })
+}
+
+fn parse_swap_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::SwapPanes {
+        target: a.pane("-t")?,
+        source: a.pane("-s")?,
+    })
+}
+
+fn parse_capture_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    // tmux's `-S`/`-E` select a start/end line; the raw offsets are
+    // kept as-is (negative counts back from the screen top into
+    // history) and the server-side adapter resolves them against
+    // the combined scrollback+screen buffer.
+    let start_line = a.flag("-S").and_then(|raw| raw.parse::<i64>().ok());
+    let end_line = a.flag("-E").and_then(|raw| raw.parse::<i64>().ok());
+    Ok(MuxCommand::CapturePane {
+        pane,
+        start_line,
+        end_line,
+    })
+}
+
+fn parse_set_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let content = a.args.join(" ");
+    if content.is_empty() {
+        return Err("set-buffer requires content".to_string());
+    }
+    Ok(MuxCommand::SetBuffer { content })
+}
+
+fn parse_show_buffer(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::ShowBuffer)
+}
+
+fn parse_paste_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::PasteBuffer {
+        pane: a.pane("-t")?,
+    })
 }
 
 #[cfg(test)]
@@ -1031,5 +1210,103 @@ mod tests {
     #[test]
     fn rejects_a_set_buffer_with_no_content() {
         assert!(parse_command("set-buffer").is_err());
+    }
+
+    #[test]
+    fn mutates_marks_exactly_the_structural_commands() {
+        // The persistence rule on the type — the pre-decomposition
+        // `mutated = true` set, verbatim. Structural commands save the state
+        // file on success; content and read-only commands never do.
+        let structural = [
+            MuxCommand::NewSession { name: None },
+            MuxCommand::KillPane { pane: PaneId(0) },
+            MuxCommand::RefreshClient {
+                pane: PaneId(0),
+                size: Some((80, 24)),
+            },
+            MuxCommand::NewWindow {
+                session: None,
+                name: None,
+            },
+            MuxCommand::SelectWindow {
+                window: WindowId(0),
+            },
+            MuxCommand::KillWindow {
+                window: WindowId(0),
+            },
+            MuxCommand::RenameWindow {
+                window: WindowId(0),
+                name: String::new(),
+            },
+            MuxCommand::SplitWindow {
+                pane: PaneId(0),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+            },
+            MuxCommand::SelectPane { pane: PaneId(0) },
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                adjustment: ResizeAdjustment::Relative {
+                    direction: ResizeDirection::Right,
+                    cells: 5,
+                },
+            },
+            MuxCommand::SwapPanes {
+                target: PaneId(0),
+                source: PaneId(1),
+            },
+            MuxCommand::SetBuffer {
+                content: String::new(),
+            },
+        ];
+        for command in &structural {
+            assert!(
+                command.mutates(),
+                "{command:?} is structural and must mutate"
+            );
+        }
+        let non_mutating = [
+            MuxCommand::ListPanes,
+            MuxCommand::ListAgents,
+            MuxCommand::SendKeys {
+                pane: PaneId(0),
+                keys: Vec::new(),
+            },
+            MuxCommand::RefreshClient {
+                pane: PaneId(0),
+                size: None,
+            },
+            MuxCommand::ListWindows,
+            MuxCommand::ListSessions,
+            MuxCommand::CapturePane {
+                pane: PaneId(0),
+                start_line: None,
+                end_line: None,
+            },
+            MuxCommand::ShowBuffer,
+            MuxCommand::PasteBuffer { pane: PaneId(0) },
+        ];
+        for command in &non_mutating {
+            assert!(
+                !command.mutates(),
+                "{command:?} is content or read-only and must not mutate"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_line_routes_hook_reports_and_control_commands() {
+        assert_eq!(
+            parse_line(r#" {"id":1,"method":"pane.report_agent"}"#).unwrap(),
+            Line::Hook(r#" {"id":1,"method":"pane.report_agent"}"#.to_string())
+        );
+        assert_eq!(
+            parse_line("list-panes").unwrap(),
+            Line::Control(MuxCommand::ListPanes)
+        );
+        let Err(err) = parse_line("frobnicate") else {
+            panic!("an unknown command is a parse error");
+        };
+        assert_eq!(err, "unknown command: frobnicate");
     }
 }

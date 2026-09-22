@@ -3,13 +3,17 @@
 //! One Unix socket, one accept loop, one thread-per-client writer. Pane output
 //! is pushed to connected clients from the PTY reader callback as bytes arrive
 //! — there is no polling anywhere in this path, which is the whole point of
-//! the module (see `par-mux.md`).
+//! the module (see `par-mux.md`). Command dispatch itself lives in
+//! [`crate::mux::dispatch`]: this module hands each parsed command over and
+//! keeps the accept loop, client threads, and broadcast sinks.
 
-use crate::mux::command::{parse_command, MuxCommand, ResizeAdjustment};
+#[cfg(test)]
+use crate::mux::command::parse_command;
+use crate::mux::command::{parse_line, Line};
+use crate::mux::dispatch::{dispatch_command, Ctx};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
 use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
-use crate::mux::pane::MuxError;
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
@@ -23,28 +27,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
-/// Default pane size for sessions created without an explicit size.
-const DEFAULT_COLS: u16 = 80;
-/// Default pane size for sessions created without an explicit size.
-const DEFAULT_ROWS: u16 = 24;
-
 /// How often the accept loop's idle poll runs the scrape tier — the
 /// fallback state pass over panes whose agent reports no state hook
 /// (par-mux.md Phase 5 scrape tier).
 const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// The paste buffer's name (single-buffer, no numbered stack — D3 non-goal).
-/// tmux's `set-buffer`/`show-buffer` grammar accepts an explicit `-b <name>`,
-/// but Phase 2's client never sends one, so every buffer command targets
-/// this one slot under the hood.
-const DEFAULT_BUFFER: &str = "default";
 
 /// Monotonic client ids, so a disconnecting client's broadcast sender can be
 /// removed eagerly rather than waiting for the next broadcast to fail.
 static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
-type Clients = Arc<Mutex<Vec<(u64, Sender<String>)>>>;
+pub(crate) type Clients = Arc<Mutex<Vec<(u64, Sender<String>)>>>;
 
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
@@ -193,10 +186,11 @@ impl MuxServer {
 }
 
 /// Serve one connected client: a writer thread draining a channel, and this
-/// thread reading lines. The socket carries two grammars (Phase 5): a line
-/// whose first non-whitespace byte is `{` is a JSON hook report answered in
-/// place; anything else is a tmux control command. Broadcast registration is
-/// deferred until the first CONTROL command, so a hook connection — the
+/// thread reading lines. The socket carries two grammars (Phase 5),
+/// classified by [`parse_line`]: a JSON hook report (a line whose first
+/// non-whitespace byte is `{`) is answered in place; anything else is a tmux
+/// control command. Broadcast registration is deferred until the first
+/// CONTROL command, so a hook connection — the
 /// send-one-line/read-one-reply/close pattern herdr's integration scripts
 /// use — never receives pushed notifications. On disconnect, only this
 /// client's broadcast sender is removed — the accept loop and the tree are
@@ -230,31 +224,45 @@ fn handle_client(
         if line.trim().is_empty() {
             continue;
         }
-        if line.trim_start().starts_with('{') {
-            let (reply, broadcast) = crate::mux::hooks::handle_report(&line, &tree);
-            if let Some(notification) = broadcast {
-                broadcast_notification(&clients, &notification);
+        // One line, two grammars: [`parse_line`] classifies. A hook report
+        // is answered in place (no registration, no command number); a
+        // control command — or a parse error — is a numbered dispatch.
+        match parse_line(&line) {
+            Ok(Line::Hook(report)) => {
+                let (reply, broadcast) = crate::mux::hooks::handle_report(&report, &tree);
+                if let Some(notification) = broadcast {
+                    broadcast_notification(&clients, &notification);
+                }
+                if tx.send(reply).is_err() {
+                    break;
+                }
             }
-            if tx.send(reply).is_err() {
-                break;
+            Ok(Line::Control(command)) => {
+                if !registered {
+                    clients.lock().push((client_id, tx.clone()));
+                    registered = true;
+                }
+                command_number += 1;
+                let ctx = Ctx {
+                    tree: &tree,
+                    clients: &clients,
+                    command_number,
+                };
+                let reply = dispatch_command(command, &ctx, state_path.as_deref(), Some(&tx));
+                if tx.send(reply).is_err() {
+                    break;
+                }
             }
-            continue;
-        }
-        if !registered {
-            clients.lock().push((client_id, tx.clone()));
-            registered = true;
-        }
-        command_number += 1;
-        let reply = dispatch_issued(
-            &line,
-            command_number,
-            &tree,
-            &clients,
-            state_path.as_deref(),
-            Some(&tx),
-        );
-        if tx.send(reply).is_err() {
-            break;
+            Err(err) => {
+                if !registered {
+                    clients.lock().push((client_id, tx.clone()));
+                    registered = true;
+                }
+                command_number += 1;
+                if tx.send(emit_block(command_number, &err, false)).is_err() {
+                    break;
+                }
+            }
         }
     }
     if registered {
@@ -262,17 +270,11 @@ fn handle_client(
     }
 }
 
-/// Execute one command and render its reply block, with an issuer channel.
-///
-/// `state_path` (the daemon always passes one): when a command mutated the
-/// tree or its buffers, the whole state is atomically saved to this file
-/// before the reply is sent (par-mux.md D3.3). Content-only commands
-/// (`send-keys`, `paste-buffer`) do not save — their staleness window is
-/// bounded by the next structural save and the clean shutdown save.
-///
-/// `issuer` is the channel of the client that sent this command, used for
-/// notifications that concern that client specifically (`%session-changed`);
-/// lifecycle broadcasts go to everyone via `clients`.
+/// Execute one parsed-or-not command line and render its reply block, with
+/// an issuer channel — the line-level entry the unit tests below drive. The
+/// socket path parses once via [`parse_line`] and enters dispatch with the
+/// parsed command, so this wrapper exists for line-shaped callers.
+#[cfg(test)]
 fn dispatch_issued(
     line: &str,
     command_number: u32,
@@ -281,496 +283,17 @@ fn dispatch_issued(
     state_path: Option<&Path>,
     issuer: Option<&Sender<String>>,
 ) -> String {
-    let command = match parse_command(line) {
-        Ok(command) => command,
-        Err(err) => return emit_block(command_number, &err, false),
-    };
-
-    let mut mutated = false;
-    let reply = match command {
-        MuxCommand::NewSession { name } => {
-            let name = name.unwrap_or_else(|| "0".to_string());
-            let outcome = {
-                let mut guard = tree.lock();
-                match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
-                    Ok(session_id) => {
-                        // Wire every pane in the new session to push its output.
-                        let window_ids = guard
-                            .session(session_id)
-                            .map(|s| s.windows.clone())
-                            .unwrap_or_default();
-                        let pane_ids: Vec<_> = window_ids
-                            .iter()
-                            .filter_map(|w| guard.window(*w))
-                            .flat_map(|w| w.panes())
-                            .collect();
-                        for pane_id in pane_ids {
-                            if let Some(pane) = guard.pane_mut(pane_id) {
-                                pane.on_output(pane_output_sink(clients, pane_id));
-                            }
-                        }
-                        Ok((session_id, window_ids))
-                    }
-                    Err(err) => Err(err),
-                }
+    match parse_command(line) {
+        Ok(command) => {
+            let ctx = Ctx {
+                tree,
+                clients,
+                command_number,
             };
-            match outcome {
-                Ok((session_id, window_ids)) => {
-                    mutated = true;
-                    for window in window_ids {
-                        broadcast_notification(
-                            clients,
-                            &TmuxNotification::WindowAdd {
-                                window_id: window.to_string(),
-                            },
-                        );
-                    }
-                    if let Some(tx) = issuer {
-                        let _ = tx.send(emit(&TmuxNotification::SessionChanged {
-                            session_id: session_id.to_string(),
-                            name,
-                        }));
-                    }
-                    emit_block(command_number, &session_id.to_string(), true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
+            dispatch_command(command, &ctx, state_path, issuer)
         }
-        // Wire contract: list-panes replies one line per pane, globally, each
-        // just the pane id (`%N`). Geometry arrives via %layout-change
-        // pushes; there is no -F (Phase 4 T4.E decision — push covers what
-        // the -F polling fallback existed for).
-        MuxCommand::ListPanes => {
-            let guard = tree.lock();
-            let body = guard
-                .sessions()
-                .iter()
-                .filter_map(|s| guard.session(*s))
-                .flat_map(|s| s.windows.clone())
-                .filter_map(|w| guard.window(w))
-                .flat_map(|w| w.panes())
-                .map(|p| p.to_string())
-                .collect::<Vec<_>>()
-                .join("\n");
-            emit_block(command_number, &body, true)
-        }
-        // Wire contract: list-agents is the roster — one line per pane a
-        // hook has CLAIMED or a pattern has MATCHED, `%N <agent> <state>
-        // <source>` with source `hook` or `scrape` (T5.4 + the scrape
-        // tier's provenance rule: a consumer must tell a claim from a
-        // guess), plus an optional trailing blocked-reason column (the
-        // rest of the line; whitespace-collapsed at the endpoint). Panes
-        // without either are absent outright: `unknown` means no hook ever
-        // reported and no rule ever matched, never "idle" (the Phase 5
-        // ruling). Fixed shape, no -F — the T4.E decision.
-        MuxCommand::ListAgents => {
-            let guard = tree.lock();
-            let mut roster: Vec<(PaneId, String)> = guard
-                .sessions()
-                .iter()
-                .filter_map(|s| guard.session(*s))
-                .flat_map(|s| s.windows.clone())
-                .filter_map(|w| guard.window(w))
-                .flat_map(|w| w.panes())
-                .filter_map(|p| {
-                    let pane = guard.pane(p)?;
-                    let state = pane.metadata().get("agent_state")?;
-                    let agent = pane.metadata().get("agent")?;
-                    let source = pane
-                        .metadata()
-                        .get("agent_state_source")
-                        .map(String::as_str)
-                        .unwrap_or("hook");
-                    // The blocked reason rides as the rest of the line —
-                    // already whitespace-collapsed by the endpoint, so it
-                    // cannot break the one-line-per-pane shape. Absent
-                    // message, four tokens exactly.
-                    let reason = pane.metadata().get("agent_message");
-                    let entry = match reason {
-                        Some(reason) => format!("{agent} {state} {source} {reason}"),
-                        None => format!("{agent} {state} {source}"),
-                    };
-                    Some((p, entry))
-                })
-                .collect();
-            roster.sort_by_key(|(pane, _)| *pane);
-            let body = roster
-                .iter()
-                .map(|(pane, entry)| format!("{pane} {entry}"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            emit_block(command_number, &body, true)
-        }
-        MuxCommand::SendKeys { pane, keys } => {
-            let mut guard = tree.lock();
-            match guard.pane_mut(pane) {
-                Some(target) => match target.write(&keys) {
-                    Ok(()) => emit_block(command_number, "", true),
-                    Err(err) => emit_block(command_number, &err.to_string(), false),
-                },
-                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
-            }
-        }
-        MuxCommand::RefreshClient { pane, size } => match size {
-            // The window-size policy's input (T4.C): a client's renderer
-            // reports its grid size, the pane's window is resized to it, and
-            // every pane terminal re-fits to the re-divided geometry —
-            // followed by a %layout-change so clients re-render.
-            // Latest report wins (par-mux.md Phase 4 decision).
-            Some((cols, rows)) => {
-                let outcome = {
-                    let mut guard = tree.lock();
-                    match guard.window_of_pane(pane) {
-                        Some(window_id) => guard
-                            .resize_window(window_id, cols, rows)
-                            .map(|()| window_id),
-                        None => Err(MuxError::NoSuchPane(pane)),
-                    }
-                };
-                match outcome {
-                    Ok(window_id) => {
-                        mutated = true;
-                        broadcast_layout_change(tree, clients, window_id);
-                        emit_block(command_number, "", true)
-                    }
-                    Err(err) => emit_block(command_number, &err.to_string(), false),
-                }
-            }
-            // Resync (D5.4): replay the pane's current screen by reusing
-            // the Terminal's existing visible-screen snapshot, so a
-            // reattached client renders content, not a blank pane.
-            None => {
-                let guard = tree.lock();
-                match guard.pane(pane) {
-                    Some(target) => {
-                        let screen = target.terminal().read().content();
-                        emit_block(command_number, &screen, true)
-                    }
-                    None => emit_block(command_number, &format!("no such pane: {pane}"), false),
-                }
-            }
-        },
-        MuxCommand::KillPane { pane } => {
-            // Resolve the window before killing: afterwards the pane (and its
-            // window membership) is gone and cannot be looked up.
-            let outcome = {
-                let mut guard = tree.lock();
-                let window_id = guard.window_of_pane(pane);
-                guard.kill_pane(pane).map(|()| window_id)
-            };
-            match outcome {
-                Ok(window_id) => {
-                    mutated = true;
-                    if let Some(window_id) = window_id {
-                        broadcast_layout_change(tree, clients, window_id);
-                        // The tree refuses to kill a window's last pane, so a
-                        // surviving window always has an active pane to name.
-                        if let Some(active) = tree.lock().window(window_id).map(|w| w.active) {
-                            broadcast_notification(
-                                clients,
-                                &TmuxNotification::WindowPaneChanged {
-                                    window_id: window_id.to_string(),
-                                    pane_id: active.to_string(),
-                                },
-                            );
-                        }
-                    }
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::SplitWindow {
-            pane,
-            direction,
-            percent,
-        } => {
-            let outcome = {
-                let mut guard = tree.lock();
-                guard
-                    .split_pane(pane, direction, percent as f32 / 100.0, None)
-                    .map(|new_pane| {
-                        let window_id = guard
-                            .window_of_pane(new_pane)
-                            .expect("the pane was just created in a live window");
-                        (new_pane, window_id)
-                    })
-            };
-            match outcome {
-                Ok((new_pane, window_id)) => {
-                    mutated = true;
-                    broadcast_layout_change(tree, clients, window_id);
-                    // split-window focuses the new pane (tmux semantics).
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowPaneChanged {
-                            window_id: window_id.to_string(),
-                            pane_id: new_pane.to_string(),
-                        },
-                    );
-                    emit_block(command_number, &new_pane.to_string(), true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::SelectPane { pane } => {
-            let outcome = {
-                let mut guard = tree.lock();
-                guard.select_pane(pane).map(|()| {
-                    guard
-                        .window_of_pane(pane)
-                        .expect("select_pane verified the pane")
-                })
-            };
-            match outcome {
-                Ok(window_id) => {
-                    mutated = true;
-                    broadcast_layout_change(tree, clients, window_id);
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowPaneChanged {
-                            window_id: window_id.to_string(),
-                            pane_id: pane.to_string(),
-                        },
-                    );
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::ResizePane { pane, adjustment } => {
-            let outcome = {
-                let mut guard = tree.lock();
-                match adjustment {
-                    ResizeAdjustment::Relative { direction, cells } => {
-                        guard.resize_pane(pane, direction, cells)
-                    }
-                    ResizeAdjustment::Absolute { cols, rows } => {
-                        guard.resize_pane_absolute(pane, cols, rows)
-                    }
-                }
-                .map(|()| {
-                    guard
-                        .window_of_pane(pane)
-                        .expect("both resize paths verified the pane")
-                })
-            };
-            match outcome {
-                Ok(window_id) => {
-                    mutated = true;
-                    broadcast_layout_change(tree, clients, window_id);
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::SwapPanes { target, source } => {
-            let outcome = {
-                let mut guard = tree.lock();
-                guard.swap_panes(target, source).map(|()| {
-                    guard
-                        .window_of_pane(target)
-                        .expect("swap_panes verified the pane")
-                })
-            };
-            match outcome {
-                Ok(window_id) => {
-                    mutated = true;
-                    broadcast_layout_change(tree, clients, window_id);
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::NewWindow { session, name } => {
-            let name = name.unwrap_or_else(|| "0".to_string());
-            let outcome = {
-                let mut guard = tree.lock();
-                // Bare `new-window` targets the most-recently-created
-                // session — ids are monotonic and the registry keeps
-                // insertion order, so the last entry is the newest.
-                let Some(session) = session.or_else(|| guard.sessions().last().copied()) else {
-                    return emit_block(command_number, "no sessions exist", false);
-                };
-                guard
-                    .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
-                    .inspect(|&window_id| {
-                        // Wire the new window's pane the same way NewSession does.
-                        let pane_ids = guard
-                            .window(window_id)
-                            .map(|w| w.panes())
-                            .unwrap_or_default();
-                        for pane_id in pane_ids {
-                            if let Some(pane) = guard.pane_mut(pane_id) {
-                                pane.on_output(pane_output_sink(clients, pane_id));
-                            }
-                        }
-                    })
-            };
-            match outcome {
-                Ok(window_id) => {
-                    mutated = true;
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowAdd {
-                            window_id: window_id.to_string(),
-                        },
-                    );
-                    emit_block(command_number, &window_id.to_string(), true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::SelectWindow { window } => {
-            let outcome = {
-                let mut guard = tree.lock();
-                guard
-                    .select_window(window)
-                    .map(|()| guard.window(window).map(|w| w.active))
-            };
-            match outcome {
-                Ok(active) => {
-                    mutated = true;
-                    if let Some(pane) = active {
-                        broadcast_notification(
-                            clients,
-                            &TmuxNotification::WindowPaneChanged {
-                                window_id: window.to_string(),
-                                pane_id: pane.to_string(),
-                            },
-                        );
-                    }
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::KillWindow { window } => {
-            let outcome = tree.lock().kill_window(window);
-            match outcome {
-                Ok(()) => {
-                    mutated = true;
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowClose {
-                            window_id: window.to_string(),
-                        },
-                    );
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        MuxCommand::RenameWindow { window, name } => {
-            let outcome = tree.lock().rename_window(window, &name);
-            match outcome {
-                Ok(()) => {
-                    mutated = true;
-                    broadcast_notification(
-                        clients,
-                        &TmuxNotification::WindowRenamed {
-                            window_id: window.to_string(),
-                            name,
-                        },
-                    );
-                    emit_block(command_number, "", true)
-                }
-                Err(err) => emit_block(command_number, &err.to_string(), false),
-            }
-        }
-        // Wire contract: list-windows replies one line per window,
-        // globally, as `@N: name`.
-        MuxCommand::ListWindows => {
-            let guard = tree.lock();
-            let body = guard
-                .sessions()
-                .iter()
-                .filter_map(|s| guard.session(*s))
-                .flat_map(|s| s.windows.clone())
-                .filter_map(|w| guard.window(w))
-                .map(|w| format!("{}: {}", w.id, w.name))
-                .collect::<Vec<_>>()
-                .join("\n");
-            emit_block(command_number, &body, true)
-        }
-        // Wire contract: list-sessions replies one line per session as
-        // `$N: name`.
-        MuxCommand::ListSessions => {
-            let guard = tree.lock();
-            let body = guard
-                .sessions()
-                .iter()
-                .filter_map(|s| guard.session(*s))
-                .map(|s| format!("{}: {}", s.id, s.name))
-                .collect::<Vec<_>>()
-                .join("\n");
-            emit_block(command_number, &body, true)
-        }
-        MuxCommand::CapturePane {
-            pane,
-            start_line,
-            end_line,
-        } => {
-            let guard = tree.lock();
-            match guard.pane(pane) {
-                Some(target) => {
-                    let terminal = target.terminal();
-                    let term = terminal.read();
-                    let body = match (start_line, end_line) {
-                        // Decision 2: no new Terminal API — the default
-                        // capture is the same visible-screen read
-                        // refresh-client already does.
-                        (None, None) => term.content(),
-                        (start, end) => {
-                            // export_scrollback only takes a tail count, so
-                            // the tmux -S/-E range trim happens here on the
-                            // composed buffer, not in Terminal.
-                            let scrollback =
-                                term.export_scrollback(crate::terminal::ExportFormat::Plain, None);
-                            let screen = term.content();
-                            capture_range(&scrollback, &screen, start, end)
-                        }
-                    };
-                    emit_block(command_number, &body, true)
-                }
-                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
-            }
-        }
-        MuxCommand::SetBuffer { content } => {
-            tree.lock().set_buffer(DEFAULT_BUFFER, content);
-            mutated = true;
-            emit_block(command_number, "", true)
-        }
-        MuxCommand::ShowBuffer => {
-            let guard = tree.lock();
-            match guard.get_buffer(DEFAULT_BUFFER) {
-                Some(content) => emit_block(command_number, content, true),
-                None => emit_block(command_number, "no buffers", false),
-            }
-        }
-        MuxCommand::PasteBuffer { pane } => {
-            let mut guard = tree.lock();
-            let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
-                return emit_block(command_number, "no buffers", false);
-            };
-            match guard.pane_mut(pane) {
-                Some(target) => match target.write(content.as_bytes()) {
-                    Ok(()) => emit_block(command_number, "", true),
-                    Err(err) => emit_block(command_number, &err.to_string(), false),
-                },
-                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
-            }
-        }
-    };
-
-    if mutated {
-        if let Some(path) = state_path {
-            if let Err(err) = crate::mux::persist::save_to(&tree.lock(), path) {
-                eprintln!("par-mux: saving state to {} failed: {err}", path.display());
-            }
-        }
+        Err(err) => emit_block(command_number, &err, false),
     }
-    reply
 }
 
 /// Execute one command with no issuer channel — the in-process shape tests
@@ -786,16 +309,21 @@ fn dispatch(
     dispatch_issued(line, command_number, tree, clients, state_path, None)
 }
 
+/// Push one line to every connected client, dropping the senders whose
+/// client has gone — the single fan-out every broadcast and sink shares.
+pub(crate) fn push_to_clients(clients: &Clients, line: String) {
+    clients
+        .lock()
+        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
+}
+
 /// Push one notification line to every connected client.
 ///
 /// The lifecycle counterpart of [`broadcast_layout_change`]: a client that
 /// did not issue the mutating command still learns about the window it
 /// affected, which is what a push-driven sync layer consumes.
-fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
-    let line = emit(notification);
-    clients
-        .lock()
-        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
+pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
+    push_to_clients(clients, emit(notification));
 }
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
@@ -804,14 +332,17 @@ fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
 /// Shared by pane creation (`new-session`/`new-window`/`split-window` wiring)
 /// and the restore path — a restored pane pushes output exactly like a
 /// freshly created one.
-fn pane_output_sink(clients: &Clients, pane_id: PaneId) -> impl Fn(&[u8]) + Send + Sync + 'static {
+pub(crate) fn pane_output_sink(
+    clients: &Clients,
+    pane_id: PaneId,
+) -> impl Fn(&[u8]) + Send + Sync + 'static {
     let sinks = Arc::clone(clients);
     move |bytes: &[u8]| {
         let line = emit(&TmuxNotification::Output {
             pane_id: pane_id.to_string(),
             data: bytes.to_vec(),
         });
-        sinks.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
+        push_to_clients(&sinks, line);
     }
 }
 
@@ -844,7 +375,11 @@ fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
 /// (same string, empty flags) rather than carrying state Phase 2 does not
 /// track. Rendered after the tree lock is released, so a slow client
 /// channel never holds up a mutation.
-fn broadcast_layout_change(tree: &Arc<Mutex<MuxTree>>, clients: &Clients, window_id: WindowId) {
+pub(crate) fn broadcast_layout_change(
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+    window_id: WindowId,
+) {
     let line = {
         let guard = tree.lock();
         let Some(window) = guard.window(window_id) else {
@@ -860,9 +395,7 @@ fn broadcast_layout_change(tree: &Arc<Mutex<MuxTree>>, clients: &Clients, window
             window_raw_flags: String::new(),
         })
     };
-    clients
-        .lock()
-        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
+    push_to_clients(clients, line);
 }
 
 /// Resolve a `-S`/`-E` capture range against a pane's composed buffer.
@@ -881,7 +414,12 @@ fn broadcast_layout_change(tree: &Arc<Mutex<MuxTree>>, clients: &Clients, window
 /// text, not of the raw grid. `scrollback` arrives newest-first, as
 /// `export_scrollback` emits it, and is reversed to chronological order
 /// before composing with `screen`.
-fn capture_range(scrollback: &str, screen: &str, start: Option<i64>, end: Option<i64>) -> String {
+pub(crate) fn capture_range(
+    scrollback: &str,
+    screen: &str,
+    start: Option<i64>,
+    end: Option<i64>,
+) -> String {
     let mut lines: Vec<&str> = Vec::new();
     if !scrollback.is_empty() {
         // export_scrollback emits newest-first (its loop walks the

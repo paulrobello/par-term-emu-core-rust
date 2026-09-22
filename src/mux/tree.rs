@@ -194,6 +194,20 @@ impl MuxTree {
         new_share: f32,
         command: Option<&str>,
     ) -> Result<PaneId, MuxError> {
+        self.split_pane_in_window(target, direction, new_share, command)
+            .map(|(pane_id, _)| pane_id)
+    }
+
+    /// [`Self::split_pane`] also reporting the window the new pane landed
+    /// in — the dispatcher's form, so its `%layout-change` broadcast names
+    /// the window without re-deriving it after the fact.
+    pub fn split_pane_in_window(
+        &mut self,
+        target: PaneId,
+        direction: SplitDirection,
+        new_share: f32,
+        command: Option<&str>,
+    ) -> Result<(PaneId, WindowId), MuxError> {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
@@ -215,7 +229,7 @@ impl MuxTree {
             window.active = pane_id;
         }
         self.sync_pane_sizes(window_id);
-        Ok(pane_id)
+        Ok((pane_id, window_id))
     }
 
     /// The window whose layout holds `pane`, if any.
@@ -226,8 +240,9 @@ impl MuxTree {
             .map(|(id, _)| *id)
     }
 
-    /// Make `pane` its window's active pane.
-    pub fn select_pane(&mut self, pane: PaneId) -> Result<(), MuxError> {
+    /// Make `pane` its window's active pane, returning the window — the
+    /// dispatcher's `%layout-change` target.
+    pub fn select_pane(&mut self, pane: PaneId) -> Result<WindowId, MuxError> {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
@@ -235,15 +250,16 @@ impl MuxTree {
             .get_mut(&window_id)
             .expect("window_of_pane only returns live windows")
             .active = pane;
-        Ok(())
+        Ok(window_id)
     }
 
-    /// Swap two panes' positions within their window.
+    /// Swap two panes' positions within their window, returning it — the
+    /// dispatcher's `%layout-change` target.
     ///
     /// tmux's `swap-pane` exchanges panes inside one window; panes in
     /// different windows have no shared split structure to trade places in.
     /// Both terminals are resized to their traded geometry.
-    pub fn swap_panes(&mut self, target: PaneId, source: PaneId) -> Result<(), MuxError> {
+    pub fn swap_panes(&mut self, target: PaneId, source: PaneId) -> Result<WindowId, MuxError> {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
@@ -261,7 +277,7 @@ impl MuxTree {
                 .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
         }
         self.sync_pane_sizes(window_id);
-        Ok(())
+        Ok(window_id)
     }
 
     /// Grow or shrink `pane` by `cells` toward `direction` (tmux's
@@ -272,13 +288,14 @@ impl MuxTree {
     /// `-L`/`-R` move a side-by-side divider, `-U`/`-D` a stacked one. A
     /// pane with no such bordering split — a lone pane, or one whose only
     /// bordering split is the other orientation — is an error, not a no-op.
-    /// Pane terminals are resized to the new geometry.
+    /// Pane terminals are resized to the new geometry. The Ok payload is the
+    /// pane's window — the dispatcher's `%layout-change` target.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,
         direction: ResizeDirection,
         cells: u32,
-    ) -> Result<(), MuxError> {
+    ) -> Result<WindowId, MuxError> {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
@@ -324,7 +341,7 @@ impl MuxTree {
                 .expect("bordering_split found the split set_bordering_share adjusts");
         }
         self.sync_pane_sizes(window_id);
-        Ok(())
+        Ok(window_id)
     }
 
     /// Set `pane`'s absolute width and/or height (tmux's `resize-pane -x`/
@@ -334,13 +351,14 @@ impl MuxTree {
     /// Either bound may be `None` (only the given axis is set). A pane with
     /// no enclosing split along a requested axis — one that already spans
     /// the window there — is an error, not a no-op: there is no divider to
-    /// move. Pane terminals are resized to the new geometry.
+    /// move. Pane terminals are resized to the new geometry. The Ok payload
+    /// is the pane's window — the dispatcher's `%layout-change` target.
     pub fn resize_pane_absolute(
         &mut self,
         pane: PaneId,
         cols: Option<u16>,
         rows: Option<u16>,
-    ) -> Result<(), MuxError> {
+    ) -> Result<WindowId, MuxError> {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
@@ -368,7 +386,7 @@ impl MuxTree {
             }
         }
         self.sync_pane_sizes(window_id);
-        Ok(())
+        Ok(window_id)
     }
 
     /// Set a window's extent and re-fit every pane terminal to the
@@ -418,19 +436,24 @@ impl MuxTree {
         }
     }
 
-    /// Kill a pane, closing its window when it was the last one.
+    /// Kill a pane, closing its window when it was the last one, and return
+    /// the window that held it — resolved BEFORE the kill, because the pane's
+    /// window membership is gone afterwards. The dispatcher's
+    /// `%layout-change` target; a window closing entirely reports its own
+    /// `%window-close` instead.
     ///
     /// Cascading matches tmux: a window with no panes and a session with no
     /// windows do not linger. A surviving pane is resized to the extent the
     /// killed pane freed.
-    pub fn kill_pane(&mut self, pane_id: PaneId) -> Result<(), MuxError> {
+    pub fn kill_pane(&mut self, pane_id: PaneId) -> Result<WindowId, MuxError> {
+        let affected_window = self
+            .window_of_pane(pane_id)
+            .ok_or(MuxError::NoSuchPane(pane_id))?;
         let mut pane = self
             .panes
             .remove(&pane_id)
             .ok_or(MuxError::NoSuchPane(pane_id))?;
         let _ = pane.kill();
-
-        let affected_window = self.window_of_pane(pane_id);
         let empty_window = self.windows.iter_mut().find_map(|(id, window)| {
             match window.layout.remove_pane(pane_id) {
                 Ok(()) => {
@@ -477,11 +500,9 @@ impl MuxTree {
 
         // The killed pane left its window's layout; a surviving pane takes
         // the freed extent and its terminal must grow into it.
-        if let Some(window_id) = affected_window {
-            self.sync_pane_sizes(window_id);
-        }
+        self.sync_pane_sizes(affected_window);
 
-        Ok(())
+        Ok(affected_window)
     }
 
     /// Make `window_id` its session's active window.

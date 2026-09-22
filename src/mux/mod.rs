@@ -22,6 +22,10 @@ pub mod scrape;
 pub mod server;
 pub mod tree;
 
+/// Per-command dispatch — private, reached only through `server` (the
+/// socket loop) and its line-level test shims.
+mod dispatch;
+
 pub use client::MuxClient;
 pub use command::{parse_command, MuxCommand};
 pub use emit::{emit, emit_block, escape_output};
