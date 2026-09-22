@@ -207,9 +207,50 @@ impl PaneFactory for ShellPaneFactory {
     }
 }
 
+/// The Phase 5 agent layer's factory (seam S1): an agent CLI pane.
+///
+/// Wraps [`ShellPaneFactory`]'s spawn path — same PTY plumbing, same env
+/// contract — and adds the one thing that distinguishes an agent pane:
+/// `metadata["agent"]` tagged at spawn, so the pane shows up in the roster
+/// (and, in Phase 6, in the persisted layout) without waiting for its first
+/// hook report. Embedders and the Phase 6 resume path construct trees with
+/// this factory; the daemon's default stays [`ShellPaneFactory`], because an
+/// agent pane is just a command pane until a hook claims it. Hook
+/// INSTALLATION (writing the agent's own hook config) is out of scope by
+/// design.
+pub struct AgentPaneFactory {
+    /// The agent label recorded as `metadata["agent"]` — what `list-agents`
+    /// and `%agent-state-changed` report.
+    pub agent: String,
+    /// Working directory for new panes; the process default when `None`.
+    pub cwd: Option<std::path::PathBuf>,
+    /// Control-socket path exported with the hook env contract (see
+    /// [`ShellPaneFactory::socket_path`]).
+    pub socket_path: Option<String>,
+}
+
+impl PaneFactory for AgentPaneFactory {
+    fn create_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+    ) -> Result<MuxPane, MuxError> {
+        let shell = ShellPaneFactory {
+            cwd: self.cwd.clone(),
+            socket_path: self.socket_path.clone(),
+        };
+        let mut pane = shell.create_pane(id, cols, rows, command)?;
+        pane.set_metadata("agent", &self.agent);
+        Ok(pane)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use parking_lot::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
@@ -277,6 +318,62 @@ mod tests {
             pane.metadata().get("agent").map(String::as_str),
             Some("claude")
         );
+    }
+
+    #[test]
+    fn agent_factory_tags_the_agent_at_spawn() {
+        let factory = AgentPaneFactory {
+            agent: "kimi".to_string(),
+            cwd: None,
+            socket_path: None,
+        };
+        let pane = factory
+            .create_pane(PaneId(5), 80, 24, Some("sleep 30"))
+            .expect("agent pane should spawn");
+        assert!(pane.is_running(), "the agent CLI pane runs");
+        assert!(pane.child_pid().is_some(), "it has a child pid");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("kimi"),
+            "metadata[agent] is tagged at spawn (seam S1)"
+        );
+    }
+
+    #[test]
+    fn agent_factory_seeds_the_hook_env_contract() {
+        let socket = format!("/tmp/par-mux-agent-env-{}", std::process::id());
+        let factory = AgentPaneFactory {
+            agent: "kimi".to_string(),
+            cwd: None,
+            socket_path: Some(socket.clone()),
+        };
+        let mut pane = factory
+            .create_pane(
+                PaneId(6),
+                80,
+                24,
+                Some("echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET"),
+            )
+            .expect("agent pane should spawn");
+
+        // Collect the pane's output until the env line lands — the child
+        // sees the contract, which is what a ported hook script keys on.
+        let seen: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        pane.on_output(move |bytes: &[u8]| sink.lock().extend_from_slice(bytes));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let text = String::from_utf8_lossy(&seen.lock().clone()).to_string();
+            if text.contains(&format!("AGENV=1/%6/{socket}")) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never saw the env contract; output so far: {text}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     #[test]
