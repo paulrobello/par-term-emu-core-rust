@@ -1,5 +1,5 @@
 //! End-to-end smoke test for the refactored WebSocket session dispatch
-//! (ARC-004 / QA-002).
+//! (ARC-004 / QA-002, ARC-001).
 //!
 //! Exercises the plain-WS path (`handle_connection_ws` → `run_ws_session`)
 //! against a real `StreamingServer` brought up via its public `start()`
@@ -9,6 +9,11 @@
 //! This is the strongest guard against subtle async regressions introduced by
 //! the deduplication of the three WS handlers into the shared `run_ws_session`.
 //!
+//! The second test covers ARC-001: the HTTP-served axum path (`/ws`) must
+//! forward `Mouse` input to the session's PTY writer — that path used to
+//! silently drop Mouse/Focus/Paste/Selection/Clipboard messages behind a
+//! `_ => {}` wildcard.
+//!
 //! Requires the `streaming` feature. Run with:
 //!   cargo test --test test_ws_smoke --no-default-features \
 //!     --features pyo3/auto-initialize,streaming
@@ -16,12 +21,15 @@
 #![cfg(feature = "streaming")]
 
 use futures_util::{SinkExt, StreamExt};
+use par_term_emu_core_rust::mouse::{MouseEncoding, MouseMode};
 use par_term_emu_core_rust::streaming::proto::{decode_server_message, encode_client_message};
 use par_term_emu_core_rust::streaming::protocol::{ClientMessage, ServerMessage};
-use par_term_emu_core_rust::streaming::StreamingServer;
+use par_term_emu_core_rust::streaming::{StreamingConfig, StreamingServer};
 use par_term_emu_core_rust::terminal::Terminal;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
+use std::io::Write;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -91,6 +99,125 @@ async fn ws_smoke_ping_pong_round_trip() {
         }
     }
     assert!(saw_pong, "did not receive Pong within message budget");
+
+    server_handle.abort();
+}
+
+/// PTY writer stub that records every byte written through it.
+struct CapturingWriter {
+    captured: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for CapturingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.captured.lock().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// ARC-001: a `Mouse` message sent over the axum HTTP-served path
+/// (`start_with_http`, `/ws` endpoint) must reach the session's PTY writer.
+/// That loop used to drop Mouse/Focus/Paste/Selection/Clipboard messages via
+/// a `_ => {}` wildcard, so browser clients in `--http` mode silently lost
+/// mouse input. Both loops now share `handle_client_message`; this test
+/// guards the browser-reachable path end to end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn axum_http_path_forwards_mouse_to_pty_writer() {
+    let port = ephemeral_port();
+    let addr = format!("127.0.0.1:{}", port);
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+
+    let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let server = {
+        let config = StreamingConfig {
+            enable_http: true,
+            ..Default::default()
+        };
+        Arc::new(StreamingServer::with_config(
+            Arc::clone(&terminal),
+            addr.clone(),
+            config,
+        ))
+    };
+    server.set_pty_writer(Arc::new(Mutex::new(Box::new(CapturingWriter {
+        captured: Arc::clone(&captured),
+    }) as Box<dyn Write + Send>)));
+
+    let server_handle = tokio::spawn(async move { server.start().await });
+
+    // Wait briefly for the listener to come up.
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // Connect a real WS client to the axum-served /ws endpoint.
+    let url = format!("ws://{}/ws", addr);
+    let (mut ws, _response) = connect_async(url).await.expect("WS handshake via axum /ws");
+
+    // Expect an initial Connected message from the server.
+    let first = ws.next().await.expect("server sent a message").unwrap();
+    match first {
+        Message::Binary(data) => {
+            let msg = decode_server_message(&data).expect("decode Connected");
+            assert!(
+                matches!(msg, ServerMessage::Connected { .. }),
+                "expected Connected, got {:?}",
+                msg
+            );
+        }
+        other => panic!("expected Binary Connected, got {:?}", other),
+    }
+
+    // Enable SGR mouse tracking, as a real frontend does (DECSET 1000/1006);
+    // with tracking off `report_mouse` legitimately encodes nothing.
+    {
+        let mut term = terminal.write();
+        term.set_mouse_mode(MouseMode::Normal);
+        term.set_mouse_encoding(MouseEncoding::Sgr);
+    }
+
+    // Left-button press at col=10, row=4.
+    let mouse = ClientMessage::Mouse {
+        col: 10,
+        row: 4,
+        button: 0,
+        shift: false,
+        ctrl: false,
+        alt: false,
+        event_type: "press".to_string(),
+    };
+    ws.send(Message::Binary(
+        encode_client_message(&mouse).unwrap().into(),
+    ))
+    .await
+    .expect("send Mouse");
+
+    // SGR encoding of button 0 press at (10, 4): CSI < 0 ; 11 ; 5 M
+    // (1-based coords in the escape sequence).
+    let expected: &[u8] = b"\x1b[<0;11;5M";
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        {
+            let buf = captured.lock();
+            if buf.as_slice() == expected {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "PTY writer never received the mouse bytes; captured so far: {:?}",
+            captured.lock()
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     server_handle.abort();
 }

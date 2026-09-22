@@ -1113,16 +1113,386 @@ impl StreamingServer {
         Ok((session, global_guard, session_guard, read_only))
     }
 
+    /// Handle one decoded `ClientMessage` from a connected client.
+    ///
+    /// This is the single arm-set for client-message dispatch, shared by every
+    /// WebSocket transport (the tungstenite `run_ws_session` loop and the
+    /// axum HTTP-served loop). The match is exhaustive over `ClientMessage`
+    /// with no wildcard arm on purpose: adding a variant must be handled here
+    /// — once — and forgetting an arm is a compile error instead of a
+    /// silently dropped message. (ARC-001: the axum path previously dropped
+    /// Mouse/FocusChange/Paste/SelectionRequest/ClipboardRequest via a
+    /// `_ => {}` wildcard.)
+    ///
+    /// `subscriptions` and `rate_limiter` are the caller's per-connection
+    /// state, mutated in place. Returns the direct replies to send back to
+    /// this client; messages that only write to the PTY or broadcast to the
+    /// session produce no direct reply.
+    #[allow(clippy::too_many_arguments)]
+    fn handle_client_message(
+        self: &Arc<Self>,
+        session: &Arc<StreamSessionState>,
+        transport_label: &str,
+        client_id: uuid::Uuid,
+        read_only: bool,
+        subscriptions: &mut Option<
+            std::collections::HashSet<crate::streaming::protocol::EventType>,
+        >,
+        rate_limiter: &mut Option<InputRateLimiter>,
+        msg: crate::streaming::protocol::ClientMessage,
+    ) -> Vec<ServerMessage> {
+        let mut replies = Vec::new();
+        match msg {
+            crate::streaming::protocol::ClientMessage::Input { data } => {
+                if read_only {
+                    return replies;
+                }
+                if let Some(ref mut limiter) = rate_limiter {
+                    if !limiter.try_consume(data.len()) {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Rate limit exceeded for {} {}",
+                            transport_label,
+                            client_id
+                        );
+                        return replies;
+                    }
+                }
+                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                    session
+                        .metrics
+                        .input_bytes
+                        .fetch_add(data.len(), Ordering::Relaxed);
+                    let mut w = writer.lock();
+                    use std::io::Write;
+                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "PTY write error for session {}: {}",
+                            session.id,
+                            e
+                        );
+                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                if read_only {
+                    return replies;
+                }
+                if let Err(e) = validate_terminal_size(cols, rows) {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "{} {} sent invalid resize: {}",
+                        transport_label,
+                        client_id,
+                        e
+                    );
+                } else {
+                    let _ = session.resize_tx.send((cols, rows));
+                }
+            }
+            crate::streaming::protocol::ClientMessage::Ping => {
+                replies.push(ServerMessage::pong());
+            }
+            crate::streaming::protocol::ClientMessage::RequestRefresh => {
+                if let Some(msg) = Self::build_refresh_message(&session.terminal) {
+                    replies.push(msg);
+                }
+            }
+            crate::streaming::protocol::ClientMessage::Subscribe { events } => {
+                *subscriptions = Some(events.into_iter().collect());
+            }
+            crate::streaming::protocol::ClientMessage::Mouse {
+                col,
+                row,
+                button,
+                shift,
+                ctrl,
+                alt,
+                event_type,
+            } => {
+                if read_only {
+                    return replies;
+                }
+                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                    let bytes = {
+                        let mut terminal = session.terminal.write();
+                        // Build modifiers bitmask: shift=1, meta/alt=2, ctrl=4
+                        let mods = if shift { 1u8 } else { 0 }
+                            | if alt { 2 } else { 0 }
+                            | if ctrl { 4 } else { 0 };
+                        let pressed = event_type != "release";
+                        let mouse_event = crate::mouse::MouseEvent::new(
+                            button,
+                            col as usize,
+                            row as usize,
+                            pressed,
+                            mods,
+                        );
+                        terminal.report_mouse(mouse_event)
+                    };
+                    if !bytes.is_empty() {
+                        session
+                            .metrics
+                            .input_bytes
+                            .fetch_add(bytes.len(), Ordering::Relaxed);
+                        let mut w = writer.lock();
+                        use std::io::Write;
+                        if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY mouse write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
+                if read_only {
+                    return replies;
+                }
+                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                    let bytes = {
+                        let terminal = session.terminal.write();
+                        if terminal.focus_tracking() {
+                            if focused {
+                                terminal.report_focus_in()
+                            } else {
+                                terminal.report_focus_out()
+                            }
+                        } else {
+                            Vec::new()
+                        }
+                    };
+                    if !bytes.is_empty() {
+                        session
+                            .metrics
+                            .input_bytes
+                            .fetch_add(bytes.len(), Ordering::Relaxed);
+                        let mut w = writer.lock();
+                        use std::io::Write;
+                        if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY focus write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+            }
+            crate::streaming::protocol::ClientMessage::Paste { content } => {
+                if read_only {
+                    return replies;
+                }
+                if let Some(ref mut limiter) = rate_limiter {
+                    if !limiter.try_consume(content.len()) {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "Rate limit exceeded for {} {}",
+                            transport_label,
+                            client_id
+                        );
+                        return replies;
+                    }
+                }
+                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                    let terminal = session.terminal.write();
+                    session
+                        .metrics
+                        .input_bytes
+                        .fetch_add(content.len(), Ordering::Relaxed);
+                    let mut w = writer.lock();
+                    use std::io::Write;
+                    let result = if terminal.bracketed_paste() {
+                        w.write_all(terminal.bracketed_paste_start())
+                            .and_then(|_| w.write_all(content.as_bytes()))
+                            .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
+                            .and_then(|_| w.flush())
+                    } else {
+                        w.write_all(content.as_bytes()).and_then(|_| w.flush())
+                    };
+                    if let Err(e) = result {
+                        crate::debug_error!(
+                            "STREAMING",
+                            "PTY paste write error for session {}: {}",
+                            session.id,
+                            e
+                        );
+                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
+            crate::streaming::protocol::ClientMessage::SelectionRequest {
+                start_col,
+                start_row,
+                end_col,
+                end_row,
+                mode,
+            } => {
+                if read_only {
+                    return replies;
+                }
+                let (term_cols, term_rows) = {
+                    let terminal = session.terminal.read();
+                    terminal.size()
+                };
+                if usize::from(start_row) >= term_rows
+                    || usize::from(end_row) >= term_rows
+                    || usize::from(start_col) > term_cols
+                    || usize::from(end_col) > term_cols
+                {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "{} {} sent out-of-range selection {},{}-{},{}",
+                        transport_label,
+                        client_id,
+                        start_col,
+                        start_row,
+                        end_col,
+                        end_row
+                    );
+                    return replies;
+                }
+                let selection_msg = {
+                    let mut terminal = session.terminal.write();
+                    if mode == "clear" {
+                        terminal.clear_selection();
+                        Some(ServerMessage::selection_cleared())
+                    } else if mode == "word" {
+                        terminal.select_word_at(start_col as usize, start_row as usize);
+                        if let Some(sel) = terminal.get_selection() {
+                            let text = terminal.get_selected_text();
+                            Some(ServerMessage::selection_changed(
+                                Some(sel.start.0 as u16),
+                                Some(sel.start.1 as u16),
+                                Some(sel.end.0 as u16),
+                                Some(sel.end.1 as u16),
+                                text,
+                                "chars".to_string(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else if mode == "line" {
+                        terminal.select_line(start_row as usize);
+                        if let Some(sel) = terminal.get_selection() {
+                            let text = terminal.get_selected_text();
+                            Some(ServerMessage::selection_changed(
+                                Some(sel.start.0 as u16),
+                                Some(sel.start.1 as u16),
+                                Some(sel.end.0 as u16),
+                                Some(sel.end.1 as u16),
+                                text,
+                                "line".to_string(),
+                                false,
+                            ))
+                        } else {
+                            None
+                        }
+                    } else {
+                        let sel_mode = match mode.as_str() {
+                            "block" => SelectionMode::Block,
+                            "line" => SelectionMode::Line,
+                            _ => SelectionMode::Character,
+                        };
+                        terminal.set_selection(
+                            (start_col as usize, start_row as usize),
+                            (end_col as usize, end_row as usize),
+                            sel_mode,
+                        );
+                        let text = terminal.get_selected_text();
+                        Some(ServerMessage::selection_changed(
+                            Some(start_col),
+                            Some(start_row),
+                            Some(end_col),
+                            Some(end_row),
+                            text,
+                            mode,
+                            false,
+                        ))
+                    }
+                };
+                if let Some(msg) = selection_msg {
+                    self.broadcast_to_session(&session.id, msg);
+                }
+            }
+            crate::streaming::protocol::ClientMessage::ClipboardRequest {
+                operation,
+                content,
+                target,
+            } => {
+                if read_only {
+                    return replies;
+                }
+                match operation.as_str() {
+                    "set" => {
+                        if let Some(ref text) = content {
+                            let mut terminal = session.terminal.write();
+                            terminal.set_clipboard(Some(text.clone()));
+                            self.broadcast_to_session(
+                                &session.id,
+                                ServerMessage::clipboard_sync(
+                                    "set".to_string(),
+                                    text.clone(),
+                                    target,
+                                ),
+                            );
+                        }
+                    }
+                    "get" => {
+                        let clipboard = {
+                            let terminal = session.terminal.write();
+                            if !terminal.allow_clipboard_read() {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "Clipboard read denied for {} {}: allow_clipboard_read is off",
+                                    transport_label,
+                                    client_id
+                                );
+                                None
+                            } else {
+                                Some(terminal.clipboard().unwrap_or_default().to_string())
+                            }
+                        };
+                        let Some(clipboard) = clipboard else {
+                            return replies;
+                        };
+                        replies.push(ServerMessage::clipboard_sync(
+                            "get_response".to_string(),
+                            clipboard,
+                            target,
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            crate::streaming::protocol::ClientMessage::SnapshotRequest {
+                scope,
+                max_commands,
+            } => {
+                let msg = Self::build_snapshot_message(&session.terminal, &scope, max_commands);
+                replies.push(msg);
+            }
+        }
+        replies
+    }
+
     /// Shared dispatch loop for both tungstenite WebSocket transports
     /// (plain TCP and TLS). The transport stream type is captured by the
     /// `Client<S>` generic; all protobuf encode/decode and ping/pong handling
     /// lives in `Client`. `transport_label` is used only in debug logs so the
     /// two transports remain distinguishable.
     ///
-    /// This implements the full client-message dispatch (all `ClientMessage`
-    /// arms). Both transports now share identical message handling —
-    /// previously the TLS path silently dropped Mouse/Focus/Paste/Selection/
-    /// Clipboard messages; they are now handled uniformly.
+    /// Client messages are dispatched via [`Self::handle_client_message`],
+    /// the single arm-set shared with the axum HTTP-served path.
     async fn run_ws_session<S>(
         self: &Arc<Self>,
         mut client: Client<S>,
@@ -1156,8 +1526,6 @@ impl StreamingServer {
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
 
-        let terminal_for_refresh = Arc::clone(&session.terminal);
-
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -1186,261 +1554,24 @@ impl StreamingServer {
                         }
                         Ok(msg_opt) => match msg_opt {
                         Some(client_msg) => {
-                            match client_msg {
-                                crate::streaming::protocol::ClientMessage::Input { data } => {
-                                    if read_only {
-                                        continue;
-                                    }
-                                    if let Some(ref mut limiter) = rate_limiter {
-                                        if !limiter.try_consume(data.len()) {
-                                            crate::debug_error!("STREAMING", "Rate limit exceeded for {} {}", transport_label, client_id);
-                                            continue;
-                                        }
-                                    }
-                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                        let mut w = writer.lock();
-                                        use std::io::Write;
-                                        if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                            crate::debug_error!("STREAMING", "PTY write error for session {}: {}", session.id, e);
-                                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                    if read_only { continue; }
-                                    if let Err(e) = validate_terminal_size(cols, rows) {
-                                        crate::debug_error!("STREAMING", "{} {} sent invalid resize: {}", transport_label, client_id, e);
-                                    } else {
-                                        let _ = session.resize_tx.send((cols, rows));
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::Ping => {
-                                    if let Err(e) = client.send(ServerMessage::pong()).await {
-                                        crate::debug_error!("STREAMING", "Failed to send pong to {} {}: {}", transport_label, client_id, e);
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                    if let Some(msg) = Self::build_refresh_message(&terminal_for_refresh) {
-                                        if let Err(e) = client.send(msg).await {
-                                            crate::debug_error!("STREAMING", "Failed to send refresh to {} {}: {}", transport_label, client_id, e);
-                                        }
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::Subscribe { events } => {
-                                    subscriptions = Some(events.into_iter().collect());
-                                }
-                                crate::streaming::protocol::ClientMessage::Mouse {
-                                    col, row, button, shift, ctrl, alt, event_type,
-                                } => {
-                                    if read_only { continue; }
-                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        let bytes = {
-                                            let mut terminal = session.terminal.write();
-                                            // Build modifiers bitmask: shift=1, meta/alt=2, ctrl=4
-                                            let mods = if shift { 1u8 } else { 0 }
-                                                | if alt { 2 } else { 0 }
-                                                | if ctrl { 4 } else { 0 };
-                                            let pressed = event_type != "release";
-                                            let mouse_event = crate::mouse::MouseEvent::new(
-                                                button,
-                                                col as usize,
-                                                row as usize,
-                                                pressed,
-                                                mods,
-                                            );
-                                            terminal.report_mouse(mouse_event)
-                                        };
-                                        if !bytes.is_empty() {
-                                            session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
-                                            let mut w = writer.lock();
-                                            use std::io::Write;
-                                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                                                crate::debug_error!("STREAMING", "PTY mouse write error for session {}: {}", session.id, e);
-                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                            }
-                                        }
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
-                                    if read_only { continue; }
-                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        let bytes = {
-                                            let terminal = session.terminal.write();
-                                            if terminal.focus_tracking() {
-                                                if focused {
-                                                    terminal.report_focus_in()
-                                                } else {
-                                                    terminal.report_focus_out()
-                                                }
-                                            } else {
-                                                Vec::new()
-                                            }
-                                        };
-                                        if !bytes.is_empty() {
-                                            session.metrics.input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
-                                            let mut w = writer.lock();
-                                            use std::io::Write;
-                                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                                                crate::debug_error!("STREAMING", "PTY focus write error for session {}: {}", session.id, e);
-                                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                            }
-                                        }
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::Paste { content } => {
-                                    if read_only { continue; }
-                                    if let Some(ref mut limiter) = rate_limiter {
-                                        if !limiter.try_consume(content.len()) {
-                                            crate::debug_error!("STREAMING", "Rate limit exceeded for {} {}", transport_label, client_id);
-                                            continue;
-                                        }
-                                    }
-                                    if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                        let terminal = session.terminal.write();
-                                        session.metrics.input_bytes.fetch_add(content.len(), Ordering::Relaxed);
-                                        let mut w = writer.lock();
-                                        use std::io::Write;
-                                        let result = if terminal.bracketed_paste() {
-                                            w.write_all(terminal.bracketed_paste_start())
-                                                .and_then(|_| w.write_all(content.as_bytes()))
-                                                .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
-                                                .and_then(|_| w.flush())
-                                        } else {
-                                            w.write_all(content.as_bytes())
-                                                .and_then(|_| w.flush())
-                                        };
-                                        if let Err(e) = result {
-                                            crate::debug_error!("STREAMING", "PTY paste write error for session {}: {}", session.id, e);
-                                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                        }
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::SelectionRequest {
-                                    start_col, start_row, end_col, end_row, mode,
-                                } => {
-                                    if read_only { continue; }
-                                    let (term_cols, term_rows) = {
-                                        let terminal = session.terminal.read();
-                                        terminal.size()
-                                    };
-                                    if usize::from(start_row) >= term_rows
-                                        || usize::from(end_row) >= term_rows
-                                        || usize::from(start_col) > term_cols
-                                        || usize::from(end_col) > term_cols
-                                    {
-                                        crate::debug_error!("STREAMING", "{} {} sent out-of-range selection {},{}-{},{}", transport_label, client_id, start_col, start_row, end_col, end_row);
-                                        continue;
-                                    }
-                                    let selection_msg = {
-                                        let mut terminal = session.terminal.write();
-                                        if mode == "clear" {
-                                            terminal.clear_selection();
-                                            Some(ServerMessage::selection_cleared())
-                                        } else if mode == "word" {
-                                            terminal.select_word_at(start_col as usize, start_row as usize);
-                                            if let Some(sel) = terminal.get_selection() {
-                                                let text = terminal.get_selected_text();
-                                                Some(ServerMessage::selection_changed(
-                                                    Some(sel.start.0 as u16),
-                                                    Some(sel.start.1 as u16),
-                                                    Some(sel.end.0 as u16),
-                                                    Some(sel.end.1 as u16),
-                                                    text,
-                                                    "chars".to_string(),
-                                                    false,
-                                                ))
-                                            } else {
-                                                None
-                                            }
-                                        } else if mode == "line" {
-                                            terminal.select_line(start_row as usize);
-                                            if let Some(sel) = terminal.get_selection() {
-                                                let text = terminal.get_selected_text();
-                                                Some(ServerMessage::selection_changed(
-                                                    Some(sel.start.0 as u16),
-                                                    Some(sel.start.1 as u16),
-                                                    Some(sel.end.0 as u16),
-                                                    Some(sel.end.1 as u16),
-                                                    text,
-                                                    "line".to_string(),
-                                                    false,
-                                                ))
-                                            } else {
-                                                None
-                                            }
-                                        } else {
-                                            let sel_mode = match mode.as_str() {
-                                                "block" => SelectionMode::Block,
-                                                "line" => SelectionMode::Line,
-                                                _ => SelectionMode::Character,
-                                            };
-                                            terminal.set_selection(
-                                                (start_col as usize, start_row as usize),
-                                                (end_col as usize, end_row as usize),
-                                                sel_mode,
-                                            );
-                                            let text = terminal.get_selected_text();
-                                            Some(ServerMessage::selection_changed(
-                                                Some(start_col),
-                                                Some(start_row),
-                                                Some(end_col),
-                                                Some(end_row),
-                                                text,
-                                                mode,
-                                                false,
-                                            ))
-                                        }
-                                    };
-                                    if let Some(msg) = selection_msg {
-                                        self.broadcast_to_session(&session.id, msg);
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::ClipboardRequest {
-                                    operation, content, target,
-                                } => {
-                                    if read_only { continue; }
-                                    match operation.as_str() {
-                                        "set" => {
-                                            if let Some(ref text) = content {
-                                                let mut terminal = session.terminal.write();
-                                                terminal.set_clipboard(Some(text.clone()));
-                                                self.broadcast_to_session(
-                                                    &session.id,
-                                                    ServerMessage::clipboard_sync(
-                                                        "set".to_string(),
-                                                        text.clone(),
-                                                        target,
-                                                    ),
-                                                );
-                                            }
-                                        }
-                                        "get" => {
-                                            let clipboard = {
-                                                let terminal = session.terminal.write();
-                                                if !terminal.allow_clipboard_read() {
-                                                    crate::debug_error!("STREAMING", "Clipboard read denied for {} {}: allow_clipboard_read is off", transport_label, client_id);
-                                                    None
-                                                } else {
-                                                    Some(terminal.clipboard().unwrap_or_default().to_string())
-                                                }
-                                            };
-                                            let Some(clipboard) = clipboard else { continue; };
-                                            let response = ServerMessage::clipboard_sync(
-                                                "get_response".to_string(),
-                                                clipboard,
-                                                target,
-                                            );
-                                            let _ = client.send(response).await;
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                                crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                    let msg = Self::build_snapshot_message(&terminal_for_refresh, &scope, max_commands);
-                                    if let Err(e) = client.send(msg).await {
-                                        crate::debug_error!("STREAMING", "Failed to send snapshot to {} {}: {}", transport_label, client_id, e);
-                                    }
+                            let replies = self.handle_client_message(
+                                &session,
+                                transport_label,
+                                client_id,
+                                read_only,
+                                &mut subscriptions,
+                                &mut rate_limiter,
+                                client_msg,
+                            );
+                            for reply in replies {
+                                if let Err(e) = client.send(reply).await {
+                                    crate::debug_error!(
+                                        "STREAMING",
+                                        "Failed to send reply to {} {}: {}",
+                                        transport_label,
+                                        client_id,
+                                        e
+                                    );
                                 }
                             }
                         }
@@ -1715,9 +1846,6 @@ impl StreamingServer {
         // Subscribe to session broadcasts
         let mut output_rx = session.broadcast_tx.subscribe();
 
-        let terminal_for_refresh = Arc::clone(&session.terminal);
-        let resize_tx = session.resize_tx.clone();
-
         // Setup keepalive timer
         let keepalive_interval = if self.config.keepalive_interval > 0 {
             Some(Duration::from_secs(self.config.keepalive_interval))
@@ -1743,60 +1871,39 @@ impl StreamingServer {
                         Some(Ok(AxumMessage::Binary(data))) => {
                             match decode_client_message(&data) {
                                 Ok(client_msg) => {
-                                    match client_msg {
-                                        crate::streaming::protocol::ClientMessage::Input { data } => {
-                                            if read_only {
-                                                continue;
-                                            }
-                                            if let Some(ref mut limiter) = rate_limiter {
-                                                if !limiter.try_consume(data.len()) {
-                                                    crate::debug_error!("STREAMING", "Rate limit exceeded for Axum client {}", client_id);
-                                                    continue;
+                                    let replies = self.handle_client_message(
+                                        &session,
+                                        "Axum WebSocket",
+                                        client_id,
+                                        read_only,
+                                        &mut subscriptions,
+                                        &mut rate_limiter,
+                                        client_msg,
+                                    );
+                                    for reply in replies {
+                                        match encode_server_message(&reply) {
+                                            Ok(bytes) => {
+                                                if ws_tx
+                                                    .send(AxumMessage::Binary(bytes.into()))
+                                                    .await
+                                                    .is_err()
+                                                {
+                                                    crate::debug_error!(
+                                                        "STREAMING",
+                                                        "Failed to send reply to Axum WebSocket {}",
+                                                        client_id
+                                                    );
                                                 }
                                             }
-                                            if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                                                session.metrics.input_bytes.fetch_add(data.len(), Ordering::Relaxed);
-                                                let mut w = writer.lock();
-                                                use std::io::Write;
-                                                if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                                                    crate::debug_error!("STREAMING", "PTY write error for Axum session {}: {}", session.id, e);
-                                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                                                }
+                                            Err(e) => {
+                                                crate::debug_error!(
+                                                    "STREAMING",
+                                                    "Failed to encode reply for Axum WebSocket {}: {}",
+                                                    client_id,
+                                                    e
+                                                );
                                             }
                                         }
-                                        crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
-                                            if read_only {
-                                                continue;
-                                            }
-                                            if let Err(e) = validate_terminal_size(cols, rows) {
-                                                crate::debug_error!("STREAMING", "Axum client {} sent invalid resize: {}", client_id, e);
-                                            } else {
-                                                let _ = resize_tx.send((cols, rows));
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::Ping => {
-                                            if let Ok(bytes) = encode_server_message(&ServerMessage::pong()) {
-                                                let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::RequestRefresh => {
-                                            if let Some(msg) = Self::build_refresh_message(&terminal_for_refresh) {
-                                                if let Ok(bytes) = encode_server_message(&msg) {
-                                                    let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
-                                                }
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::SnapshotRequest { scope, max_commands } => {
-                                            let msg = Self::build_snapshot_message(&terminal_for_refresh, &scope, max_commands);
-                                            if let Ok(bytes) = encode_server_message(&msg) {
-                                                let _ = ws_tx.send(AxumMessage::Binary(bytes.into())).await;
-                                            }
-                                        }
-                                        crate::streaming::protocol::ClientMessage::Subscribe { events } => {
-                                            subscriptions = Some(events.into_iter().collect());
-                                        }
-                                        // Mouse, Focus, Paste, Selection, Clipboard handled only in primary handlers
-                                        _ => {}
                                     }
                                 }
                                 Err(e) => {
