@@ -210,6 +210,8 @@ test-rust:
 	cargo test --no-default-features --features pyo3/auto-initialize
 	@echo "Running python_bindings unit tests (python-test: python minus extension-module, so tests link a real interpreter)..."
 	cargo test --lib --no-default-features --features python-test
+	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
+	cargo test --lib --no-default-features --features rust-only,serde
 
 test-rust-streaming:
 	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
@@ -250,7 +252,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,serde --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:
@@ -270,7 +272,7 @@ typecheck:
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,serde -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Build with streaming first so streaming-only methods are captured:

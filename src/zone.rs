@@ -5,6 +5,7 @@
 
 /// Type of semantic zone in the terminal buffer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ZoneType {
     /// Shell prompt text (between OSC 133;A and OSC 133;B)
     Prompt,
@@ -30,6 +31,7 @@ impl std::fmt::Display for ZoneType {
 /// They are created by OSC 133 shell integration markers and stored in a
 /// Vec on the Grid, sorted by `abs_row_start`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Zone {
     /// Unique zone identifier (monotonically increasing per terminal)
     pub id: usize,

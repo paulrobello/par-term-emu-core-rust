@@ -11,6 +11,7 @@ use crate::zone::Zone;
 
 /// Snapshot of a single Grid's state (primary or alternate screen).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GridSnapshot {
     /// Visible screen cells (row-major, cols * rows)
     pub cells: Vec<Cell>,
@@ -38,6 +39,7 @@ pub struct GridSnapshot {
 
 /// Complete snapshot of terminal state at a point in time.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TerminalSnapshot {
     /// Timestamp in Unix milliseconds when this snapshot was captured
     pub timestamp: u64,
@@ -445,5 +447,64 @@ mod tests {
         assert_eq!(cloned.zones.len(), 2);
         assert_eq!(cloned.zones[0].id, 1);
         assert_eq!(cloned.zones[1].id, 2);
+    }
+}
+
+/// Round-trip coverage for the `serde` feature's snapshot derives (par-mux.md
+/// D3.1): a capture → serialize → deserialize → restore sequence must land in
+/// exactly the state a direct restore produces.
+#[cfg(all(test, feature = "serde"))]
+mod serde_tests {
+    use super::*;
+
+    /// Serialize with the capture timestamp zeroed so two captures taken at
+    /// different times still compare equal.
+    fn normalized_json(snap: &TerminalSnapshot) -> String {
+        let mut s = snap.clone();
+        s.timestamp = 0;
+        serde_json::to_string(&s).expect("snapshot must serialize")
+    }
+
+    #[test]
+    fn test_snapshot_serde_round_trip_equals_direct_restore() {
+        let mut term = Terminal::new(20, 6);
+        // Colors, 256-color fg, curly underline, bold — Cell/Color/CellFlags leaves.
+        term.process(b"\x1b[1;4:3;38;5;196mred curly\x1b[0m plain");
+        // Explicit underline color (Option<Color>) and RGB background.
+        term.process(b"\x1b[58;2;10;20;30;48;2;1;2;3mstyled\x1b[0m");
+        // Title, mouse tracking + SGR encoding.
+        term.process(b"\x1b]0;Replay Title\x07");
+        term.process(b"\x1b[?1000h\x1b[?1006h");
+        // OSC 133 semantic zones and an OSC 8 hyperlink (NonZeroU32 hyperlink_id).
+        term.process(b"\x1b]133;A\x07$ \x1b]133;B\x07cargo build\x1b]133;C\x07");
+        term.process(b"\x1b]8;id=3;https://example.com\x07link\x1b]8;;\x07");
+        // Wide characters (WIDE_CHAR flag) and enough lines to populate scrollback.
+        term.process("日本語 wide\r\n".as_bytes());
+        for i in 0..12 {
+            term.process(format!("scroll line {i}\r\n").as_bytes());
+        }
+
+        let snap = term.capture_snapshot();
+        assert!(
+            snap.grid.scrollback_cells.len() >= 20 * 6,
+            "test setup must push real content into scrollback, got {} cells",
+            snap.grid.scrollback_cells.len()
+        );
+
+        // Serialize → deserialize reproduces the snapshot exactly.
+        let json = serde_json::to_string(&snap).expect("serialize");
+        let revived: TerminalSnapshot = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(normalized_json(&snap), normalized_json(&revived));
+
+        // Restoring through the revived snapshot equals a direct restore.
+        let mut direct = Terminal::new(20, 6);
+        direct.restore_from_snapshot(snap);
+        let mut via_serde = Terminal::new(20, 6);
+        via_serde.restore_from_snapshot(revived);
+        assert_eq!(
+            normalized_json(&direct.capture_snapshot()),
+            normalized_json(&via_serde.capture_snapshot()),
+            "restore via serde round-trip must equal direct restore"
+        );
     }
 }
