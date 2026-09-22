@@ -5,8 +5,9 @@
 //! "params":{…}}` — read one reply, and close. par-mux accepts herdr's two
 //! methods verbatim (`pane.report_agent`, `pane.report_agent_session`) so
 //! those scripts port with an env-var rename (`HERDR_*` → `PAR_MUX_*`); the
-//! server's client loop routes any line whose first non-whitespace byte is
-//! `{` here, and anything else remains a tmux control command.
+//! server's client loop routes every line
+//! [`parse_line`](crate::mux::command::parse_line) classifies as a hook
+//! report here, and anything else remains a tmux control command.
 //!
 //! Authorization is the socket's own `0600` owner-only boundary: a hook
 //! claiming another pane's id is same-user by construction, the same trust

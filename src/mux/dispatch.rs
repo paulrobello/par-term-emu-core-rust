@@ -1,0 +1,590 @@
+//! Per-command dispatch: one handler per [`MuxCommand`] variant plus the
+//! shared post-dispatch tail.
+//!
+//! Each handler is small and shape-identical: take the tree lock, run one
+//! tree operation, and report an [`Outcome`] — the reply block, lifecycle
+//! notifications, issuer-only notifications, and the window whose layout
+//! changed. The tail then emits everything in wire order, saves state for
+//! mutating commands (par-mux.md D3.3), and returns the reply. Adding a
+//! tmux command is one `parse_<cmd>` in [`crate::mux::command`], one
+//! [`MuxCommand`] variant, one `cmd_<name>` handler here, and its match arm
+//! in [`dispatch_command`].
+//!
+//! [`crate::mux::server`] keeps the accept loop, client threads, and the
+//! broadcast sinks this module calls into.
+
+use crate::mux::command::{MuxCommand, ResizeAdjustment};
+use crate::mux::emit::{emit, emit_block};
+use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::layout::SplitDirection;
+use crate::mux::pane::MuxError;
+use crate::mux::server::{
+    broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink, Clients,
+};
+use crate::mux::tree::MuxTree;
+use crate::tmux_control::TmuxNotification;
+use parking_lot::Mutex;
+use std::path::Path;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
+
+/// Default pane size for sessions and windows created without an explicit
+/// size.
+const DEFAULT_COLS: u16 = 80;
+/// Default pane size for sessions and windows created without an explicit
+/// size.
+const DEFAULT_ROWS: u16 = 24;
+
+/// The paste buffer's name (single-buffer, no numbered stack — D3 non-goal).
+/// tmux's `set-buffer`/`show-buffer` grammar accepts an explicit `-b <name>`,
+/// but Phase 2's client never sends one, so every buffer command targets
+/// this one slot under the hood.
+const DEFAULT_BUFFER: &str = "default";
+
+/// The per-dispatch context every handler shares.
+pub(super) struct Ctx<'a> {
+    /// The whole pane tree behind its lock.
+    pub(super) tree: &'a Arc<Mutex<MuxTree>>,
+    /// Connected clients' broadcast senders.
+    pub(super) clients: &'a Clients,
+    /// The issuing client's per-connection command counter — the `%begin`/
+    /// `%end` number the reply block carries.
+    pub(super) command_number: u32,
+}
+
+/// What one handler produced: the reply block plus everything the shared
+/// tail emits around it.
+pub(super) struct Outcome {
+    /// The `%begin`…`%end` block answering the command.
+    pub(super) reply: String,
+    /// Lifecycle notifications broadcast to every connected client.
+    pub(super) notifications: Vec<TmuxNotification>,
+    /// Notifications sent only to the issuing client (`%session-changed`).
+    pub(super) issuer_only: Vec<TmuxNotification>,
+    /// The window a `%layout-change` is broadcast for.
+    pub(super) layout_changed: Option<WindowId>,
+    /// Whether the handler's tree operation landed — gates persistence
+    /// alongside [`MuxCommand::mutates`], so a mutating command that failed
+    /// (`kill-pane` of an unknown pane) does not save.
+    pub(super) succeeded: bool,
+}
+
+impl Outcome {
+    /// A successful handler's reply block over `body`.
+    fn ok(ctx: &Ctx<'_>, body: &str) -> Self {
+        Self {
+            reply: emit_block(ctx.command_number, body, true),
+            notifications: Vec::new(),
+            issuer_only: Vec::new(),
+            layout_changed: None,
+            succeeded: true,
+        }
+    }
+
+    /// A failed handler's error block over `message`.
+    fn err(ctx: &Ctx<'_>, message: &str) -> Self {
+        Self {
+            reply: emit_block(ctx.command_number, message, false),
+            notifications: Vec::new(),
+            issuer_only: Vec::new(),
+            layout_changed: None,
+            succeeded: false,
+        }
+    }
+
+    /// Queue a lifecycle broadcast.
+    fn notifying(mut self, notification: TmuxNotification) -> Self {
+        self.notifications.push(notification);
+        self
+    }
+
+    /// Queue a notification for the issuing client only.
+    fn telling_issuer(mut self, notification: TmuxNotification) -> Self {
+        self.issuer_only.push(notification);
+        self
+    }
+
+    /// Queue the `%layout-change` window.
+    fn with_layout(mut self, window_id: WindowId) -> Self {
+        self.layout_changed = Some(window_id);
+        self
+    }
+}
+
+/// Dispatch one parsed command: run its handler, then the shared tail.
+///
+/// `state_path` (the daemon always passes one): when a mutating command
+/// succeeded, the whole state is atomically saved to this file before the
+/// reply is sent (par-mux.md D3.3). `issuer` is the channel of the client
+/// that sent the command, for notifications that concern that client
+/// specifically; lifecycle broadcasts go to everyone via `ctx.clients`.
+///
+/// The tail emits in the pre-decomposition wire order — `%layout-change`
+/// first (it carries the geometry the pane-changed notification is read
+/// against), then lifecycle broadcasts, then the issuer-only notifications.
+pub(super) fn dispatch_command(
+    command: MuxCommand,
+    ctx: &Ctx<'_>,
+    state_path: Option<&Path>,
+    issuer: Option<&Sender<String>>,
+) -> String {
+    let mutates = command.mutates();
+    let outcome = match command {
+        MuxCommand::NewSession { name } => cmd_new_session(ctx, name),
+        MuxCommand::ListPanes => cmd_list_panes(ctx),
+        MuxCommand::ListAgents => cmd_list_agents(ctx),
+        MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
+        MuxCommand::RefreshClient { pane, size } => cmd_refresh_client(ctx, pane, size),
+        MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
+        MuxCommand::SplitWindow {
+            pane,
+            direction,
+            percent,
+        } => cmd_split_window(ctx, pane, direction, percent),
+        MuxCommand::SelectPane { pane } => cmd_select_pane(ctx, pane),
+        MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
+        MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
+        MuxCommand::NewWindow { session, name } => cmd_new_window(ctx, session, name),
+        MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
+        MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
+        MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
+        MuxCommand::ListWindows => cmd_list_windows(ctx),
+        MuxCommand::ListSessions => cmd_list_sessions(ctx),
+        MuxCommand::CapturePane {
+            pane,
+            start_line,
+            end_line,
+        } => cmd_capture_pane(ctx, pane, start_line, end_line),
+        MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
+        MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
+        MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
+    };
+
+    if let Some(window_id) = outcome.layout_changed {
+        broadcast_layout_change(ctx.tree, ctx.clients, window_id);
+    }
+    for notification in &outcome.notifications {
+        broadcast_notification(ctx.clients, notification);
+    }
+    for notification in &outcome.issuer_only {
+        if let Some(tx) = issuer {
+            let _ = tx.send(emit(notification));
+        }
+    }
+    if mutates && outcome.succeeded {
+        if let Some(path) = state_path {
+            if let Err(err) = crate::mux::persist::save_to(&ctx.tree.lock(), path) {
+                eprintln!("par-mux: saving state to {} failed: {err}", path.display());
+            }
+        }
+    }
+    outcome.reply
+}
+
+fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
+    let name = name.unwrap_or_else(|| "0".to_string());
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
+            Ok(session_id) => {
+                // Wire every pane in the new session to push its output.
+                let window_ids = guard
+                    .session(session_id)
+                    .map(|s| s.windows.clone())
+                    .unwrap_or_default();
+                let pane_ids: Vec<_> = window_ids
+                    .iter()
+                    .filter_map(|w| guard.window(*w))
+                    .flat_map(|w| w.panes())
+                    .collect();
+                for pane_id in pane_ids {
+                    if let Some(pane) = guard.pane_mut(pane_id) {
+                        pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                    }
+                }
+                Ok((session_id, window_ids))
+            }
+            Err(err) => Err(err),
+        }
+    };
+    match outcome {
+        Ok((session_id, window_ids)) => {
+            let mut result = Outcome::ok(ctx, &session_id.to_string());
+            for window in window_ids {
+                result = result.notifying(TmuxNotification::WindowAdd {
+                    window_id: window.to_string(),
+                });
+            }
+            result.telling_issuer(TmuxNotification::SessionChanged {
+                session_id: session_id.to_string(),
+                name,
+            })
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_list_panes(ctx: &Ctx<'_>) -> Outcome {
+    // Wire contract: list-panes replies one line per pane, globally, each
+    // just the pane id (`%N`). Geometry arrives via %layout-change
+    // pushes; there is no -F (Phase 4 T4.E decision — push covers what
+    // the -F polling fallback existed for).
+    let guard = ctx.tree.lock();
+    let body = guard
+        .sessions()
+        .iter()
+        .filter_map(|s| guard.session(*s))
+        .flat_map(|s| s.windows.clone())
+        .filter_map(|w| guard.window(w))
+        .flat_map(|w| w.panes())
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
+    // Wire contract: list-agents is the roster — one line per pane a
+    // hook has CLAIMED or a pattern has MATCHED, `%N <agent> <state>
+    // <source>` with source `hook` or `scrape` (T5.4 + the scrape
+    // tier's provenance rule: a consumer must tell a claim from a
+    // guess), plus an optional trailing blocked-reason column (the
+    // rest of the line; whitespace-collapsed at the endpoint). Panes
+    // without either are absent outright: `unknown` means no hook ever
+    // reported and no rule ever matched, never "idle" (the Phase 5
+    // ruling). Fixed shape, no -F — the T4.E decision.
+    let guard = ctx.tree.lock();
+    let mut roster: Vec<(PaneId, String)> = guard
+        .sessions()
+        .iter()
+        .filter_map(|s| guard.session(*s))
+        .flat_map(|s| s.windows.clone())
+        .filter_map(|w| guard.window(w))
+        .flat_map(|w| w.panes())
+        .filter_map(|p| {
+            let pane = guard.pane(p)?;
+            let state = pane.metadata().get("agent_state")?;
+            let agent = pane.metadata().get("agent")?;
+            let source = pane
+                .metadata()
+                .get("agent_state_source")
+                .map(String::as_str)
+                .unwrap_or("hook");
+            // The blocked reason rides as the rest of the line —
+            // already whitespace-collapsed by the endpoint, so it
+            // cannot break the one-line-per-pane shape. Absent
+            // message, four tokens exactly.
+            let reason = pane.metadata().get("agent_message");
+            let entry = match reason {
+                Some(reason) => format!("{agent} {state} {source} {reason}"),
+                None => format!("{agent} {state} {source}"),
+            };
+            Some((p, entry))
+        })
+        .collect();
+    roster.sort_by_key(|(pane, _)| *pane);
+    let body = roster
+        .iter()
+        .map(|(pane, entry)| format!("{pane} {entry}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+fn cmd_send_keys(ctx: &Ctx<'_>, pane: PaneId, keys: &[u8]) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    match guard.pane_mut(pane) {
+        Some(target) => match target.write(keys) {
+            Ok(()) => Outcome::ok(ctx, ""),
+            Err(err) => Outcome::err(ctx, &err.to_string()),
+        },
+        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    }
+}
+
+fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> Outcome {
+    match size {
+        // The window-size policy's input (T4.C): a client's renderer
+        // reports its grid size, the pane's window is resized to it, and
+        // every pane terminal re-fits to the re-divided geometry —
+        // followed by a %layout-change so clients re-render.
+        // Latest report wins (par-mux.md Phase 4 decision).
+        Some((cols, rows)) => {
+            let outcome = {
+                let mut guard = ctx.tree.lock();
+                match guard.window_of_pane(pane) {
+                    Some(window_id) => guard
+                        .resize_window(window_id, cols, rows)
+                        .map(|()| window_id),
+                    None => Err(MuxError::NoSuchPane(pane)),
+                }
+            };
+            match outcome {
+                Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+                Err(err) => Outcome::err(ctx, &err.to_string()),
+            }
+        }
+        // Resync (D5.4): replay the pane's current screen by reusing
+        // the Terminal's existing visible-screen snapshot, so a
+        // reattached client renders content, not a blank pane.
+        None => {
+            let guard = ctx.tree.lock();
+            match guard.pane(pane) {
+                Some(target) => {
+                    let screen = target.terminal().read().content();
+                    Outcome::ok(ctx, &screen)
+                }
+                None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+            }
+        }
+    }
+}
+
+fn cmd_kill_pane(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    // kill_pane resolves and returns the owning window: afterwards the
+    // pane (and its window membership) is gone and cannot be looked up.
+    // The lock guard is let-bound so it is gone before the successor
+    // lookup below takes the tree again (parking_lot is not reentrant).
+    let outcome = ctx.tree.lock().kill_pane(pane);
+    match outcome {
+        Ok(window_id) => {
+            let mut result = Outcome::ok(ctx, "").with_layout(window_id);
+            // The tree refuses to kill a window's last pane, so a
+            // surviving window always has an active pane to name.
+            if let Some(active) = ctx.tree.lock().window(window_id).map(|w| w.active) {
+                result = result.notifying(TmuxNotification::WindowPaneChanged {
+                    window_id: window_id.to_string(),
+                    pane_id: active.to_string(),
+                });
+            }
+            result
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_split_window(
+    ctx: &Ctx<'_>,
+    pane: PaneId,
+    direction: SplitDirection,
+    percent: u32,
+) -> Outcome {
+    let outcome =
+        ctx.tree
+            .lock()
+            .split_pane_in_window(pane, direction, percent as f32 / 100.0, None);
+    match outcome {
+        Ok((new_pane, window_id)) => {
+            // split-window focuses the new pane (tmux semantics).
+            Outcome::ok(ctx, &new_pane.to_string())
+                .with_layout(window_id)
+                .notifying(TmuxNotification::WindowPaneChanged {
+                    window_id: window_id.to_string(),
+                    pane_id: new_pane.to_string(),
+                })
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_select_pane(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    match ctx.tree.lock().select_pane(pane) {
+        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id).notifying(
+            TmuxNotification::WindowPaneChanged {
+                window_id: window_id.to_string(),
+                pane_id: pane.to_string(),
+            },
+        ),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_resize_pane(ctx: &Ctx<'_>, pane: PaneId, adjustment: ResizeAdjustment) -> Outcome {
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        match adjustment {
+            ResizeAdjustment::Relative { direction, cells } => {
+                guard.resize_pane(pane, direction, cells)
+            }
+            ResizeAdjustment::Absolute { cols, rows } => {
+                guard.resize_pane_absolute(pane, cols, rows)
+            }
+        }
+    };
+    match outcome {
+        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_swap_panes(ctx: &Ctx<'_>, target: PaneId, source: PaneId) -> Outcome {
+    match ctx.tree.lock().swap_panes(target, source) {
+        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_new_window(ctx: &Ctx<'_>, session: Option<SessionId>, name: Option<String>) -> Outcome {
+    let name = name.unwrap_or_else(|| "0".to_string());
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        // Bare `new-window` targets the most-recently-created
+        // session — ids are monotonic and the registry keeps
+        // insertion order, so the last entry is the newest.
+        let Some(session) = session.or_else(|| guard.sessions().last().copied()) else {
+            return Outcome::err(ctx, "no sessions exist");
+        };
+        guard
+            .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
+            .inspect(|&window_id| {
+                // Wire the new window's pane the same way new-session does.
+                let pane_ids = guard
+                    .window(window_id)
+                    .map(|w| w.panes())
+                    .unwrap_or_default();
+                for pane_id in pane_ids {
+                    if let Some(pane) = guard.pane_mut(pane_id) {
+                        pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                    }
+                }
+            })
+    };
+    match outcome {
+        Ok(window_id) => {
+            Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
+                window_id: window_id.to_string(),
+            })
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_select_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        guard
+            .select_window(window)
+            .map(|()| guard.window(window).map(|w| w.active))
+    };
+    match outcome {
+        Ok(active) => {
+            let mut result = Outcome::ok(ctx, "");
+            if let Some(pane) = active {
+                result = result.notifying(TmuxNotification::WindowPaneChanged {
+                    window_id: window.to_string(),
+                    pane_id: pane.to_string(),
+                });
+            }
+            result
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_kill_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
+    match ctx.tree.lock().kill_window(window) {
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+            window_id: window.to_string(),
+        }),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_rename_window(ctx: &Ctx<'_>, window: WindowId, name: String) -> Outcome {
+    match ctx.tree.lock().rename_window(window, &name) {
+        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WindowRenamed {
+            window_id: window.to_string(),
+            name,
+        }),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_list_windows(ctx: &Ctx<'_>) -> Outcome {
+    // Wire contract: list-windows replies one line per window,
+    // globally, as `@N: name`.
+    let guard = ctx.tree.lock();
+    let body = guard
+        .sessions()
+        .iter()
+        .filter_map(|s| guard.session(*s))
+        .flat_map(|s| s.windows.clone())
+        .filter_map(|w| guard.window(w))
+        .map(|w| format!("{}: {}", w.id, w.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+fn cmd_list_sessions(ctx: &Ctx<'_>) -> Outcome {
+    // Wire contract: list-sessions replies one line per session as
+    // `$N: name`.
+    let guard = ctx.tree.lock();
+    let body = guard
+        .sessions()
+        .iter()
+        .filter_map(|s| guard.session(*s))
+        .map(|s| format!("{}: {}", s.id, s.name))
+        .collect::<Vec<_>>()
+        .join("\n");
+    Outcome::ok(ctx, &body)
+}
+
+fn cmd_capture_pane(
+    ctx: &Ctx<'_>,
+    pane: PaneId,
+    start_line: Option<i64>,
+    end_line: Option<i64>,
+) -> Outcome {
+    let guard = ctx.tree.lock();
+    match guard.pane(pane) {
+        Some(target) => {
+            let terminal = target.terminal();
+            let term = terminal.read();
+            let body = match (start_line, end_line) {
+                // Decision 2: no new Terminal API — the default
+                // capture is the same visible-screen read
+                // refresh-client already does.
+                (None, None) => term.content(),
+                (start, end) => {
+                    // export_scrollback only takes a tail count, so
+                    // the tmux -S/-E range trim happens here on the
+                    // composed buffer, not in Terminal.
+                    let scrollback =
+                        term.export_scrollback(crate::terminal::ExportFormat::Plain, None);
+                    let screen = term.content();
+                    capture_range(&scrollback, &screen, start, end)
+                }
+            };
+            Outcome::ok(ctx, &body)
+        }
+        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    }
+}
+
+fn cmd_set_buffer(ctx: &Ctx<'_>, content: String) -> Outcome {
+    ctx.tree.lock().set_buffer(DEFAULT_BUFFER, content);
+    Outcome::ok(ctx, "")
+}
+
+fn cmd_show_buffer(ctx: &Ctx<'_>) -> Outcome {
+    let guard = ctx.tree.lock();
+    match guard.get_buffer(DEFAULT_BUFFER) {
+        Some(content) => Outcome::ok(ctx, content),
+        None => Outcome::err(ctx, "no buffers"),
+    }
+}
+
+fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
+        return Outcome::err(ctx, "no buffers");
+    };
+    match guard.pane_mut(pane) {
+        Some(target) => match target.write(content.as_bytes()) {
+            Ok(()) => Outcome::ok(ctx, ""),
+            Err(err) => Outcome::err(ctx, &err.to_string()),
+        },
+        None => Outcome::err(ctx, &format!("no such pane: {pane}")),
+    }
+}
