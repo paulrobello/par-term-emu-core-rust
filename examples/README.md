@@ -349,7 +349,16 @@ if term.has_updates_since(last_generation):
 | | `test_sixel_display.py` | Image display |
 | | `display_image_sixel.py` | Image converter utility |
 | | `screenshot_demo.py` | Terminal to image |
+| **Streaming** | `streaming_demo.py` | Live terminal streaming to browsers (requires a build with the `streaming` feature: `make dev-streaming`) |
+| | `streaming_debug.py` | Streaming gradient-rendering debugger: verbose size logging, state capture around Rich |
+| | `streaming_client.html` | Minimal standalone WebSocket client (no build step) |
+| **Rendering diagnostics** | `bce_scroll_test.py` | Background color erase behavior on scroll |
+| | `char_test.py` | Per-character FG+BG rendering (half-block artifact isolation) |
+| | `gradient_test.py` | Width-exact gradient bar for line-wrap verification |
+| | `rich_mimic_test.py` | Reproduces Rich's gradient output pattern in one large write |
+| | `scroll_timing_test.py` | Isolates scroll timing during styled output |
 | **Utilities** | `render_utils.py` | Rendering helpers |
+| | `demo.yaml` | Saved macro recording used by the MACROS.md examples |
 
 ### By Protocol/Feature
 

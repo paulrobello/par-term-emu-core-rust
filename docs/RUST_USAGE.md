@@ -11,6 +11,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 - [PTY Session](#pty-session-shell-interaction)
 - [Macro Recording and Playback](#macro-recording-and-playback)
 - [WebSocket Streaming Server](#websocket-streaming-server)
+- [Terminal Multiplexer (par-mux)](#terminal-multiplexer-par-mux)
 - [Feature Flags](#feature-flags)
 - [Building](#building)
 - [Example Projects](#example-projects)
@@ -78,7 +79,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["pty_session"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -88,7 +89,7 @@ par-term-emu-core-rust = { version = "0.46", default-features = false, features 
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -96,9 +97,9 @@ par-term-emu-core-rust = { version = "0.46", default-features = false, features 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46" }
+par-term-emu-core-rust = { version = "0.50" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.46", features = ["python"] }
+par-term-emu-core-rust = { version = "0.50", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -107,10 +108,10 @@ par-term-emu-core-rust = { version = "0.46", features = ["python"] }
 ```toml
 [dependencies]
 # Streaming server library only:
-par-term-emu-core-rust = { version = "0.46", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.50", features = ["python", "streaming"] }
 # Or the convenience feature, which also pulls in the CLI deps used by the
 # standalone `par-term-streamer` binary (clap, tracing, reqwest, tar, ...):
-par-term-emu-core-rust = { version = "0.46", features = ["full"] }
+par-term-emu-core-rust = { version = "0.50", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
@@ -309,7 +310,7 @@ fn main() -> std::io::Result<()> {
 
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # The crate uses parking_lot internally; PtySession::get_writer() and
 # terminal() return parking_lot locks, so reuse it for your own wrappers.
@@ -432,6 +433,29 @@ let config = StreamingConfig {
     ..Default::default()
 };
 ```
+
+## Terminal Multiplexer (par-mux)
+
+> **Note:** Requires the `mux` feature flag (Rust only; not part of the default build).
+
+The crate ships a tmux-control-mode multiplexer: sessions, windows, and split panes of real PTYs served over a local socket, with an agent layer on top (state hook reports, a scrape fallback for agents without hooks, and session resume across daemon restarts).
+
+```rust
+use par_term_emu_core_rust::mux::MuxClient;
+
+// Attach to the daemon for a named socket, spawning one if none is running
+let mut client = MuxClient::connect_or_spawn("default")?;
+
+// Run a command; the reply is the block's body lines
+let panes = client.send("list-panes")?;
+
+// Pushed notifications (%output, %layout-change, …) arrive on this channel
+while let Ok(note) = client.notifications().try_recv() {
+    // …
+}
+```
+
+The server side (`MuxServer`), the full command table, hook-report JSON contract, persistence/quarantine, and shutdown semantics are documented in [MUX.md](MUX.md).
 
 ## Feature Flags
 
@@ -583,6 +607,7 @@ pub extern "C" fn terminal_free(ptr: *mut Terminal) {
 - [BUILDING.md](BUILDING.md) - Build instructions and requirements
 - [API_REFERENCE.md](API_REFERENCE.md) - Python API documentation
 - [STREAMING.md](STREAMING.md) - WebSocket streaming server guide
+- [MUX.md](MUX.md) - par-mux multiplexer daemon reference
 - [MACROS.md](MACROS.md) - Macro recording and playback documentation
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
 

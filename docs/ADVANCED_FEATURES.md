@@ -285,7 +285,7 @@ ratio = contrast_ratio((0, 0, 0), (255, 255, 255))  # 21.0:1
 meets_aa = meets_wcag_aa((0, 0, 0), (255, 255, 255))  # True
 ```
 
-See the [Color Utilities](#color-utilities) section in the main README for complete documentation.
+See the [Color Utility Functions](#color-utility-functions) section earlier in this document for the complete function list, and [Color Utilities](../README.md#color-utilities) in the main README for the Python-level overview.
 
 ### How It Works
 

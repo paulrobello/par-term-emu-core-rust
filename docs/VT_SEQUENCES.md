@@ -456,7 +456,7 @@ Full VT340 Sixel graphics support for inline images with configurable limits.
 
 **Security:** Can be disabled via `disable_insecure_sequences`. Default limits: 16384x16384 pixels.
 
-> See [VT_TECHNICAL_REFERENCE.md#sixel-graphics](VT_TECHNICAL_REFERENCE.md#sixel-graphics) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
+> See [VT_TECHNICAL_REFERENCE.md#sixel-graphics-dcs-q](VT_TECHNICAL_REFERENCE.md#sixel-graphics-dcs-q) for detailed command syntax and [Sixel Graphics Specification](https://vt100.net/docs/vt3xx-gp/chapter14.html).
 
 ### XTGETTCAP (Terminal Capability Query)
 

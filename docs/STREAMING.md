@@ -10,6 +10,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [WebSocket Protocol](#websocket-protocol)
 - [Server Implementation](#server-implementation)
   - [Rust Standalone Server](#rust-standalone-server)
+  - [Command-Line Options and Environment Variables](#command-line-options-and-environment-variables)
   - [Python Integration](#python-integration)
   - [Configuration](#configuration)
 - [Web Frontend](#web-frontend)
@@ -242,6 +243,10 @@ par-term-streamer --enable-http --api-key my-secret-key
 # Combined: API key + HTTP Basic Auth (either satisfies auth)
 par-term-streamer --enable-http --http-user admin --http-password secret --api-key my-secret-key
 ```
+
+### Command-Line Options and Environment Variables
+
+Every CLI option has an environment-variable equivalent with the `PAR_TERM_` prefix. The table below is the complete option reference:
 
 **Environment Variables:**
 
@@ -623,11 +628,11 @@ npm run proto:generate
 
 **Component Overview:**
 
-- `app/page.tsx`: Main application UI with connection controls and status indicator
-- `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
-- `lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
-- `lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
-- `next.config.js`: Configures Next.js for static export (`output: 'export'`)
+- `web-terminal-frontend/app/page.tsx`: Main application UI with connection controls and status indicator
+- `web-terminal-frontend/components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
+- `web-terminal-frontend/lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
+- `web-terminal-frontend/lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
+- `web-terminal-frontend/next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
 ### Mobile Support
 
@@ -1593,7 +1598,7 @@ The streaming protocol tracks environment changes and remote host transitions.
 
 The streaming server supports TLS/SSL for secure HTTPS and WSS (WebSocket Secure) connections.
 
-### CLI Options
+### TLS CLI Options
 
 **Using Separate Certificate and Key Files:**
 ```bash

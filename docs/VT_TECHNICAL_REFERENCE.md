@@ -50,10 +50,10 @@ The terminal implementation uses a modular structure:
 **Primary directory:** `src/terminal/`
 
 **Sequence handlers** (in `src/terminal/sequences/`):
-- `csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
+- `src/terminal/sequences/csi/mod.rs` - CSI sequence handler (`csi_dispatch_impl()`) with submodules for cursor, edit, erase, keyboard, mode, report, scroll, style, window
 - `esc.rs` - ESC sequence handler (`esc_dispatch_impl()`)
-- `osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
-- `dcs/mod.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
+- `src/terminal/sequences/osc/mod.rs` - OSC sequence handler (`osc_dispatch_impl()`) with submodules for clipboard, color, image, iterm, notify, shell, title
+- `src/terminal/sequences/dcs/mod.rs` - DCS and APC sequence handler (`dcs_hook()`, `dcs_put()`, `dcs_unhook()`) with submodules for query and sixel
 
 **Core components:**
 - `src/terminal/mod.rs` - Terminal core, VTE callbacks, APC to DCS conversion
@@ -1608,7 +1608,7 @@ To validate VT compatibility, test with:
 - [unicode-width crate](https://docs.rs/unicode-width/) - Unicode character width detection
 - par-term-emu-core-rust source:
   - Terminal core: `src/terminal/mod.rs`
-  - Sequence handlers: `src/terminal/sequences/` (`csi/mod.rs`, `esc.rs`, `osc/mod.rs`, `dcs/mod.rs`)
+  - Sequence handlers: `src/terminal/sequences/` (`csi`, `esc.rs`, `osc`, `dcs` module directories)
   - Character writing: `src/terminal/write.rs`
   - Screen buffer: `src/grid/mod.rs`
   - Graphics:
