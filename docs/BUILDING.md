@@ -17,6 +17,7 @@ This guide explains how to build and install the par-term-emu-core-rust library.
   - [Production Build](#production-build)
   - [Auto-rebuild on Changes](#auto-rebuild-on-changes)
   - [Building with Streaming Feature](#building-with-streaming-feature)
+  - [Building the Multiplexer Daemon](#building-the-multiplexer-daemon)
 - [Running Tests](#running-tests)
   - [Rust Tests](#rust-tests)
   - [Python Tests](#python-tests)
@@ -190,6 +191,28 @@ This enables:
 > **📝 Note:** jemalloc is a separate optional feature for improved server performance on non-Windows platforms. Enable it explicitly with `--features streaming,jemalloc` (e.g. `uv run maturin develop --release --features streaming,jemalloc`). It is not enabled automatically by `streaming` and is unavailable on the Windows MSVC target.
 
 See [STREAMING.md](STREAMING.md) for complete streaming server documentation.
+
+### Building the Multiplexer Daemon
+
+The `par-mux` daemon (tmux-control-mode terminal multiplexer) is a separate binary built with the Rust `mux` feature:
+
+```bash
+# Build the daemon binary
+cargo build --bin par-mux --no-default-features --features mux
+
+# Run it (prints its socket path and serves until killed)
+cargo run --bin par-mux --no-default-features --features mux
+```
+
+The daemon is independent of the Python bindings — it is not part of the default `make dev` build or the PyPI wheel.
+
+Its test suites must run serialized (the integration tests spawn daemons on colliding socket paths):
+
+```bash
+cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
+```
+
+See [MUX.md](MUX.md) for the complete daemon reference (CLI, socket/state paths, protocol, persistence).
 
 ## Running Tests
 

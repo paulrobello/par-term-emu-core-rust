@@ -11,6 +11,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 - [PTY Session](#pty-session-shell-interaction)
 - [Macro Recording and Playback](#macro-recording-and-playback)
 - [WebSocket Streaming Server](#websocket-streaming-server)
+- [Terminal Multiplexer (par-mux)](#terminal-multiplexer-par-mux)
 - [Feature Flags](#feature-flags)
 - [Building](#building)
 - [Example Projects](#example-projects)
@@ -433,6 +434,29 @@ let config = StreamingConfig {
 };
 ```
 
+## Terminal Multiplexer (par-mux)
+
+> **Note:** Requires the `mux` feature flag (Rust only; not part of the default build).
+
+The crate ships a tmux-control-mode multiplexer: sessions, windows, and split panes of real PTYs served over a local socket, with an agent layer on top (state hook reports, a scrape fallback for agents without hooks, and session resume across daemon restarts).
+
+```rust
+use par_term_emu_core_rust::mux::MuxClient;
+
+// Attach to the daemon for a named socket, spawning one if none is running
+let mut client = MuxClient::connect_or_spawn("default")?;
+
+// Run a command; the reply is the block's body lines
+let panes = client.send("list-panes")?;
+
+// Pushed notifications (%output, %layout-change, …) arrive on this channel
+while let Ok(note) = client.notifications().try_recv() {
+    // …
+}
+```
+
+The server side (`MuxServer`), the full command table, hook-report JSON contract, persistence/quarantine, and shutdown semantics are documented in [MUX.md](MUX.md).
+
 ## Feature Flags
 
 | Feature | Description | Includes |
@@ -583,6 +607,7 @@ pub extern "C" fn terminal_free(ptr: *mut Terminal) {
 - [BUILDING.md](BUILDING.md) - Build instructions and requirements
 - [API_REFERENCE.md](API_REFERENCE.md) - Python API documentation
 - [STREAMING.md](STREAMING.md) - WebSocket streaming server guide
+- [MUX.md](MUX.md) - par-mux multiplexer daemon reference
 - [MACROS.md](MACROS.md) - Macro recording and playback documentation
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
 

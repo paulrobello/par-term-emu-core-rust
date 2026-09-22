@@ -132,6 +132,14 @@ is documented there (older README release notes were merged into the changelog).
 - **Browser Compatible** - Works with any WebSocket client (xterm.js recommended)
 - **Modern Web Frontend** - Next.js/React application with Tailwind CSS v4 and xterm.js
 
+### Terminal Multiplexer (par-mux)
+
+- **tmux Control Mode** - Sessions, windows, and split panes served over a local socket, attachable by tmux control-mode clients
+- **Real-Time Push** - Pane output streams to clients as bytes arrive; no polling
+- **Agent Awareness** - Panes report agent state over the same socket (JSON hook reports), with a scrape fallback for agents without hooks and an agent roster query
+- **Session Resume** - Agent session identity persists across daemon restarts; agent panes respawn through their resume invocations
+- **Crash-Safe State** - Atomic saves with quarantine of unreadable state files; a clean SIGTERM never loses the last window
+
 ### Screenshots and Export
 
 - **Multiple Formats** - PNG, JPEG, BMP, SVG (vector), HTML
@@ -177,6 +185,7 @@ is documented there (older README release notes were merged into the changelog).
 - **[Fonts](docs/FONTS.md)** - Font configuration and rendering
 - **[Macros](docs/MACROS.md)** - Macro recording and playback system
 - **[Streaming](docs/STREAMING.md)** - WebSocket terminal streaming
+- **[Multiplexer](docs/MUX.md)** - par-mux terminal multiplexer daemon
 - **[Rust Usage](docs/RUST_USAGE.md)** - Using the library in pure Rust projects
 - **[Observers](docs/OBSERVERS.md)** - Push-based event delivery (callbacks and asyncio queues)
 - **[Instant Replay](docs/INSTANT_REPLAY.md)** - Cell-level snapshots and timeline navigation

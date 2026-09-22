@@ -40,6 +40,7 @@ par-term-emu-core-rust is a terminal emulator library written in Rust with Pytho
 - **Python Extension**: Built with Maturin, provides `par_term_emu_core_rust._native` module
 - **Rust Library**: Can be used as a `cdylib` or `rlib` for other Rust projects
 - **Streaming Server Binary**: `par-term-streamer` - WebSocket-based terminal streaming server (optional, requires `streaming` feature)
+- **Multiplexer Daemon**: `par-mux` - tmux-control-mode terminal multiplexer over a local socket (optional, Rust `mux` feature; see [MUX.md](MUX.md))
 
 ## Core Components
 
@@ -228,6 +229,11 @@ The main terminal emulator that ties everything together, organized into submodu
 
 **Triggers & Automation** (`src/terminal/trigger.rs`)
 - Regex-based pattern matching on terminal output
+
+**Multiplexer Daemon** (`src/mux/`, binary `src/bin/par_mux/`; Rust `mux` feature)
+- A tmux-control-mode multiplexer: owns PTY-backed panes in a session/window/pane tree and serves the control protocol over a local socket, with an agent layer (state hook reports, scrape tier, session resume) on top
+- Key submodules: `server.rs` (accept loop, client threads), `dispatch.rs` (per-command handlers), `command.rs` (parsing + the persistence rule), `emit.rs` (wire lines), `tree.rs`/`layout.rs` (tree + split geometry), `pane.rs` (PTY panes + env contract), `ipc.rs` (Unix socket / Windows named pipe transport), `persist.rs` (save format, quarantine, restore), `hooks.rs`/`scrape.rs`/`agent_resume.rs` (agent layer), `client.rs` (`MuxClient`)
+- Full operational reference: [MUX.md](MUX.md); the D-numbered design decisions cited in its code comments live in [par-mux.md](par-mux.md) (the `par-agent-os` repository's design document)
 - `TriggerRegistry` with `RegexSet` for efficient multi-pattern matching
 - Trigger actions: Highlight, Notify, MarkLine, SetVariable (core-handled); RunCommand, PlaySound, SendText (frontend events)
 - Capture group substitution (`$1`, `$2`, etc.) in action parameters
@@ -1149,4 +1155,5 @@ When contributing, please:
 - [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) - Terminal configuration reference
 - [BUILDING.md](BUILDING.md) - Build and installation instructions
 - [SECURITY.md](SECURITY.md) - Security considerations for PTY usage
+- [MUX.md](MUX.md) - par-mux multiplexer daemon operational reference
 - [README.md](../README.md) - Project overview and API reference
