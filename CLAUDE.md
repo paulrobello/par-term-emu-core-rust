@@ -74,18 +74,22 @@ make web-build-static    # Rebuild frontend with new proto
 The crate produces three artifacts:
 - **Python extension** (`cdylib`): Built via maturin, exposes `par_term_emu_core_rust._native` module
 - **Rust library** (`rlib`): For use by other Rust projects (e.g., `par-term`)
-- **Streaming server binary** (`par-term-streamer`): Requires `streaming` feature flag
+- **Streaming server binary** (`par-term-streamer`): Requires `streaming-bin` feature flag
 
 ### Feature Flags
 
 | Feature | Purpose |
 |---------|---------|
 | `python` (default) | PyO3 bindings with `extension-module`; also enables `pty_session` |
-| `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python` and `streaming-bin` |
-| `streaming` | WebSocket server, protobuf, TLS, HTTP, CLI deps |
-| `rust-only` | No Python bindings |
+| `python-test` | The `python` feature's dependencies with `pyo3/auto-initialize` instead of `extension-module`, so the bindings (and their unit tests) link a real interpreter under `cargo test` |
+| `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |
+| `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
+| `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session`) |
+| `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence. Enables `pty_session`, `interprocess`, `serde`, `dirs`, `toml` |
+| `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence |
+| `rust-only` | No Python bindings (empty convenience feature) |
 | `sim` | Headless profile: grid + terminal + screenshot only (no PTY/python/streaming). For pure-Rust embedders, e.g. a server-side screen model |
-| `full` | `python` + `streaming` |
+| `full` | `python` + `streaming` + `streaming-bin` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` |
 | `jemalloc` | Better server performance (non-Windows) |
 
