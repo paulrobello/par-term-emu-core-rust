@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **par-mux state persistence no longer blocks control traffic (Rust `mux` feature)** (`src/mux/persist.rs`, `src/mux/server.rs`, `src/mux/dispatch.rs`, `src/mux/pane.rs`; ARC-003). A mutating command no longer serializes every pane's scrollback and fsyncs while holding the tree lock: dispatch captures the `PersistState` under the lock (cheap clones, with a per-pane snapshot cache keyed on the PTY generation and terminal size so an idle pane costs one `Vec<Cell>` clone) and hands it to a single persist worker thread that coalesces bursts to the newest state before writing. Structural-command latency no longer scales with total scrollback. A clean shutdown joins the worker before the existing synchronous final save, so the on-disk format and the "clean SIGTERM never loses the last window" guarantee (D3.3) are unchanged.
+
 ### Security
 - **OSC/DCS parser accumulation is now capped incrementally — behavior-affecting default change** (`src/terminal/mod.rs`, `src/terminal/sequences/osc/mod.rs`, `src/terminal/sequences/dcs/mod.rs`; SEC-003). `DEFAULT_MAX_OSC_DATA_LENGTH` drops from 128 MiB to 1 MiB: the old value only bounded the *dispatch*-time check, while vte 0.15's internal OSC buffer (which has no per-byte hook) grew unbounded until that check fired. The cap is now enforced in `Terminal::advance_parser` — payload bytes past `max_osc_data_length` are never fed to vte, terminators always are (so the parser never desyncs), and the truncated dispatch is dropped whole. The non-Sixel DCS accumulation buffer is capped at 64 KiB with the overflowed sequence dropped at unhook. Deployments pushing larger inline images (iTerm2/Kitty base64 in OSC 1337) can raise the limit with `set_max_osc_data_length`.
 

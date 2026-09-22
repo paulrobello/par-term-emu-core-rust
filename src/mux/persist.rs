@@ -250,7 +250,7 @@ impl MuxTree {
                     .expect("layout leaf ids are always live panes");
                 PersistPane {
                     id: pane_id.0,
-                    terminal: pane.terminal().read().capture_snapshot(),
+                    terminal: pane.persisted_snapshot(),
                     spawn_command: pane.spawn_command().map(str::to_string),
                     agent_session: agent_session_from_metadata(pane.metadata()),
                 }
@@ -416,9 +416,19 @@ fn state_file_in(base: &Path, socket_path: &Path) -> PathBuf {
 /// leaves either the complete previous state or a leftover tmp the next
 /// save overwrites, never a torn file. On Unix the file is created `0600`,
 /// the same owner-only posture as the socket (D3.4).
+///
+/// The synchronous entry the shutdown save and tests use; the per-command
+/// path captures a [`PersistState`] under the tree lock and hands it to the
+/// server's persist worker, which writes through [`write_state`] off the
+/// lock.
 pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
-    let state = tree.to_persist_state();
+    write_state(&tree.to_persist_state(), target)
+}
 
+/// Serialize and atomically land one already-captured state (D3.3): write to
+/// `<target>.tmp`, fsync, then rename over the target. No tree access —
+/// callable from a thread that holds no locks.
+pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistError> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }

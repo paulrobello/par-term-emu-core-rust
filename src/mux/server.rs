@@ -15,6 +15,7 @@ use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
 use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
 use crate::mux::pane::ShellPaneFactory;
+use crate::mux::persist::{write_state, PersistState};
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use interprocess::local_socket::traits::Listener as _;
@@ -24,13 +25,19 @@ use std::io::{BufRead, BufReader, Write};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 /// How often the accept loop's idle poll runs the scrape tier — the
 /// fallback state pass over panes whose agent reports no state hook
 /// (par-mux.md Phase 5 scrape tier).
 const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How often the persist worker re-checks the shutdown flag while idle.
+/// Bounds how long the shutdown join waits after the flag is set.
+const PERSIST_POLL: Duration = Duration::from_millis(200);
 
 /// Monotonic client ids, so a disconnecting client's broadcast sender can be
 /// removed eagerly rather than waiting for the next broadcast to fail.
@@ -136,6 +143,17 @@ impl MuxServer {
             .set_nonblocking(ListenerNonblockingMode::Accept)
             .expect("the listener was just bound");
 
+        // ARC-003: the persist worker owns serialization + fsync, off the
+        // tree lock. Dispatch captures a PersistState under the lock (cheap
+        // clones) and sends it here; bursts coalesce to the newest state.
+        let (persist_tx, persist_worker) = match state_path
+            .clone()
+            .map(|path| spawn_persist_worker(path, Arc::clone(&self.shutdown)))
+        {
+            Some((tx, join)) => (Some(tx), Some(join)),
+            None => (None, None),
+        };
+
         // The scrape tier rides this loop as its heartbeat: pattern
         // overrides live beside the state file when there is one, and the
         // idle poll doubles as the 1 s tick without a thread of its own to
@@ -165,8 +183,8 @@ impl MuxServer {
                     let _ = stream.set_nonblocking(false);
                     let tree = Arc::clone(&self.tree);
                     let clients = Arc::clone(&self.clients);
-                    let state_path = state_path.clone();
-                    std::thread::spawn(move || handle_client(stream, tree, clients, state_path));
+                    let persist = persist_tx.clone();
+                    std::thread::spawn(move || handle_client(stream, tree, clients, persist));
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -181,6 +199,76 @@ impl MuxServer {
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(_) => break,
             }
+        }
+
+        // Shutdown ordering (ARC-003): join the persist worker BEFORE
+        // `run_persisting`'s final synchronous save, so the worker's
+        // in-flight write and the final save never touch the same tmp file
+        // concurrently. Joined only on a REQUESTED shutdown — a listener
+        // fault breaks the loop without one, leaving the worker detached to
+        // die with the process exactly like its client threads.
+        drop(persist_tx);
+        if self.shutdown.load(Ordering::Relaxed) {
+            if let Some(worker) = persist_worker {
+                let _ = worker.join();
+            }
+        }
+    }
+}
+
+/// Spawn the persist worker (ARC-003): the one thread that serializes and
+/// fsyncs state, so no dispatch ever holds the tree lock across a write.
+/// Dispatch captures a [`PersistState`] under the lock and sends it here;
+/// the worker coalesces bursts to the newest state before writing.
+fn spawn_persist_worker(
+    path: PathBuf,
+    shutdown: Arc<AtomicBool>,
+) -> (Sender<PersistState>, JoinHandle<()>) {
+    let (tx, rx) = channel::<PersistState>();
+    let join = std::thread::spawn(move || {
+        persist_worker_loop(rx, &path, &shutdown, write_state);
+    });
+    (tx, join)
+}
+
+/// The worker's loop, generic over the write op so the coalescing test can
+/// count writes through a delegating closure instead of the file.
+///
+/// Never blocks indefinitely: `recv_timeout` returns at least every
+/// [`PERSIST_POLL`], and the exit conditions are the channel disconnecting
+/// (no senders remain) or the shutdown flag observed while idle.
+fn persist_worker_loop<W>(
+    rx: Receiver<PersistState>,
+    path: &Path,
+    shutdown: &AtomicBool,
+    mut write: W,
+) where
+    W: FnMut(&PersistState, &Path) -> Result<(), crate::mux::persist::PersistError>,
+{
+    let mut write_newest = |mut newest: PersistState| {
+        // Coalesce: everything queued behind the newest arrival is strictly
+        // newer state; only the last needs writing.
+        while let Ok(later) = rx.try_recv() {
+            newest = later;
+        }
+        if let Err(err) = write(&newest, path) {
+            log::error!("par-mux: state save to {} failed: {err}", path.display());
+        }
+    };
+    loop {
+        match rx.recv_timeout(PERSIST_POLL) {
+            Ok(newest) => write_newest(newest),
+            Err(RecvTimeoutError::Timeout) => {
+                if shutdown.load(Ordering::Relaxed) {
+                    // A dispatch may have raced the timeout — drain once
+                    // more before exiting.
+                    if let Ok(newest) = rx.try_recv() {
+                        write_newest(newest);
+                    }
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     }
 }
@@ -199,7 +287,7 @@ fn handle_client(
     stream: LocalStream,
     tree: Arc<Mutex<MuxTree>>,
     clients: Clients,
-    state_path: Option<PathBuf>,
+    persist: Option<Sender<PersistState>>,
 ) {
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel::<String>();
@@ -248,7 +336,7 @@ fn handle_client(
                     clients: &clients,
                     command_number,
                 };
-                let reply = dispatch_command(command, &ctx, state_path.as_deref(), Some(&tx));
+                let reply = dispatch_command(command, &ctx, persist.as_ref(), Some(&tx));
                 if tx.send(reply).is_err() {
                     break;
                 }
@@ -280,7 +368,7 @@ fn dispatch_issued(
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
-    state_path: Option<&Path>,
+    persist: Option<&Sender<PersistState>>,
     issuer: Option<&Sender<String>>,
 ) -> String {
     match parse_command(line) {
@@ -290,7 +378,7 @@ fn dispatch_issued(
                 clients,
                 command_number,
             };
-            dispatch_command(command, &ctx, state_path, issuer)
+            dispatch_command(command, &ctx, persist, issuer)
         }
         Err(err) => emit_block(command_number, &err, false),
     }
@@ -304,9 +392,9 @@ fn dispatch(
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
-    state_path: Option<&Path>,
+    persist: Option<&Sender<PersistState>>,
 ) -> String {
-    dispatch_issued(line, command_number, tree, clients, state_path, None)
+    dispatch_issued(line, command_number, tree, clients, persist, None)
 }
 
 /// Push one line to every connected client, dropping the senders whose
@@ -1195,14 +1283,23 @@ mod tests {
         let target = std::env::temp_dir()
             .join(format!("par-mux-server-state-{}", std::process::id()))
             .join("state.json");
+        let _ = std::fs::remove_file(&target);
 
-        dispatch("list-sessions", 1, &tree, &clients, Some(&target));
+        let (tx, worker) = spawn_persist_worker(target.clone(), Arc::new(AtomicBool::new(false)));
+
+        dispatch("list-sessions", 1, &tree, &clients, Some(&tx));
         assert!(
             !target.exists(),
             "a read-only dispatch must not touch the state file"
         );
 
-        dispatch("new-session -s main", 2, &tree, &clients, Some(&target));
+        dispatch("new-session -s main", 2, &tree, &clients, Some(&tx));
+        // The worker writes off the dispatch path, so poll for the landing
+        // rather than asserting synchronously (the wait_until shape).
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !target.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert!(target.exists(), "a mutating dispatch saves the state file");
 
         match crate::mux::persist::load_or_quarantine(&target) {
@@ -1213,5 +1310,61 @@ mod tests {
             }
             other => panic!("expected a readable state file, got {other:?}"),
         }
+
+        // The channel closing (all senders dropped) is the worker's exit.
+        drop(tx);
+        let _ = worker.join();
+        let _ = std::fs::remove_file(&target);
+    }
+
+    /// A burst of queued states must coalesce: fewer writes than states,
+    /// and the last state written is the newest one sent.
+    #[test]
+    fn persist_worker_coalesces_a_burst_to_the_newest_state() {
+        let (tx, rx) = channel::<PersistState>();
+        let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let last_seen = Arc::new(Mutex::new(None::<u64>));
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let write_count = Arc::clone(&writes);
+        let seen = Arc::clone(&last_seen);
+        let worker = std::thread::spawn(move || {
+            persist_worker_loop(
+                rx,
+                Path::new("/nonexistent-par-mux-coalescing-test"),
+                &stop,
+                |state: &PersistState, _path| {
+                    write_count.fetch_add(1, Ordering::Relaxed);
+                    *seen.lock() = Some(state.saved_at_unix_ms);
+                    Ok(())
+                },
+            )
+        });
+
+        // Hand-constructed states with distinct capture stamps; the worker
+        // cannot keep up with 50 in-flight sends, so writes < sends.
+        let burst: u64 = 50;
+        for stamp in 1..=burst {
+            let state = PersistState {
+                format_version: crate::mux::persist::FORMAT_VERSION,
+                saved_at_unix_ms: stamp,
+                next_ids: (0, 0, 0),
+                sessions: Vec::new(),
+                buffers: std::collections::HashMap::new(),
+            };
+            tx.send(state).expect("worker owns the receiver");
+        }
+        drop(tx);
+        worker.join().expect("worker exits when the channel closes");
+        assert!(
+            (writes.load(Ordering::Relaxed) as u64) < burst,
+            "a burst of {burst} states coalesced to {} writes",
+            writes.load(Ordering::Relaxed)
+        );
+        assert_eq!(
+            last_seen.lock().as_ref().copied(),
+            Some(burst),
+            "the newest state is the one written"
+        );
     }
 }

@@ -3,8 +3,9 @@
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::pty_error::PtyError;
 use crate::pty_session::PtySession;
+use crate::terminal::replay_snapshot::TerminalSnapshot;
 use crate::terminal::Terminal;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -68,6 +69,25 @@ pub struct MuxPane {
     /// can respawn the same program.
     spawn_command: Option<String>,
     metadata: HashMap<String, String>,
+    /// Last persistence snapshot, valid while the terminal has not changed
+    /// since it was taken — see [`MuxPane::persisted_snapshot`].
+    snapshot_cache: Mutex<Option<SnapshotCacheEntry>>,
+}
+
+/// The validity key of a cached snapshot: the pane's PTY generation (bumped
+/// on every processed read) plus the terminal size. The size rides along
+/// because a resize re-fits the grid without producing PTY output, so the
+/// generation alone would keep serving a stale-geometry snapshot.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct SnapshotCacheKey {
+    generation: u64,
+    cols: usize,
+    rows: usize,
+}
+
+struct SnapshotCacheEntry {
+    key: SnapshotCacheKey,
+    snapshot: TerminalSnapshot,
 }
 
 impl MuxPane {
@@ -85,6 +105,37 @@ impl MuxPane {
     /// The terminal emulator backing this pane.
     pub fn terminal(&self) -> Arc<RwLock<Terminal>> {
         self.session.terminal()
+    }
+
+    /// The pane's persistence snapshot, reusing the cached capture while the
+    /// terminal has not changed since it was taken.
+    ///
+    /// Saves capture every pane on every structural command, but a pane only
+    /// changes through PTY output (which bumps the session's update
+    /// generation) or a resize (which changes the size) — so an idle pane
+    /// costs one `Vec<Cell>` clone instead of a full grid walk. Keyed on
+    /// both, per [`SnapshotCacheKey`].
+    pub fn persisted_snapshot(&self) -> TerminalSnapshot {
+        let terminal = self.session.terminal();
+        let generation = self.session.update_generation();
+        let (cols, rows) = terminal.read().size();
+        let key = SnapshotCacheKey {
+            generation,
+            cols,
+            rows,
+        };
+        let mut cache = self.snapshot_cache.lock();
+        if let Some(entry) = cache.as_ref() {
+            if entry.key == key {
+                return entry.snapshot.clone();
+            }
+        }
+        let snapshot = terminal.read().capture_snapshot();
+        *cache = Some(SnapshotCacheEntry {
+            key,
+            snapshot: snapshot.clone(),
+        });
+        snapshot
     }
 
     /// Whether the pane's child process is still running.
@@ -212,6 +263,7 @@ impl PaneFactory for ShellPaneFactory {
             session,
             spawn_command: command.map(str::to_string),
             metadata: HashMap::new(),
+            snapshot_cache: Mutex::new(None),
         })
     }
 }
