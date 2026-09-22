@@ -138,8 +138,11 @@ image = { version = "0.25.10", default-features = false, features = ["bmp", "ff"
 # while keeping the tree free of unmaintained transitive dependencies.
 swash = "0.2.7"
 parking_lot = "0.12.5"
-subtle = "2.6.1"
-zeroize = "1.8.2"
+# Streaming-only: constant-time credential compares and zeroizing drops
+# (src/streaming/config.rs, auth paths). Optional so headless profiles
+# (sim/rust-only/mux) pull neither.
+subtle = { version = "2.6.1", optional = true }
+zeroize = { version = "1.8.2", optional = true }
 
 # Unicode text handling
 unicode-segmentation = "1.13.3"
@@ -203,7 +206,7 @@ python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_sessi
 pty_session = ["portable-pty", "nix"]
 # Library streaming: WebSocket/protobuf server for embedders. Excludes the
 # binary-only deps (clap/anyhow/tracing/reqwest/tar) — see `streaming-bin`.
-streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo"]
+streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util", "prost", "rustls", "tokio-rustls", "axum-server", "bcrypt", "md-5", "sha1", "headers", "sysinfo", "subtle", "zeroize"]
 
 # Standalone `par-term-streamer` binary only (ARC-015): CLI/logging/download
 # deps the library streaming module never uses. Depends on `streaming`.

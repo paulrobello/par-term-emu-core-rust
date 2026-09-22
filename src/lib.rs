@@ -74,6 +74,10 @@ pub mod python_bindings;
 pub mod screenshot;
 pub mod shell_integration;
 pub mod sixel;
+// The streaming module compiles for the streaming server itself and for the
+// Python bindings (whose codec entry points stub out when `streaming` is
+// off); headless profiles (sim/rust-only/mux) pull neither it nor its deps.
+#[cfg(any(feature = "streaming", feature = "python", feature = "python-test"))]
 pub mod streaming;
 pub mod terminal;
 pub mod text_utils;

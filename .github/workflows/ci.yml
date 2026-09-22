@@ -133,12 +133,12 @@ jobs:
       # fails to link.
       run: cargo build --no-default-features --features sim
 
-    - name: Assert sim pulls neither tokio nor portable-pty (D1)
+    - name: Assert sim pulls no runtime/auth/proto deps (D1)
       shell: bash
       # cargo tree resolves without linking, so the git-bash PATH is harmless.
       run: |
-        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty'; then
-          echo "D1 violation: sim pulled tokio or portable-pty"
+        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum'; then
+          echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, or axum"
           exit 1
         fi
 
