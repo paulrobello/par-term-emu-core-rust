@@ -1745,7 +1745,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "spawns a real PTY and shell/cmd process and polls its live output for up to 5s; too slow/flaky for the default suite, run explicitly with --ignored"]
     fn test_spawn_with_env_cwd() {
         let mut session = PtySession::new(80, 24, 1000);
 

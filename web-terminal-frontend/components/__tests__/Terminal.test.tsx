@@ -1,71 +1,100 @@
 /**
  * Terminal.tsx component tests (QA-111).
  *
- * Focus: the mount effect registers `onFocus`/`onRefit`/`onSendInput` and
- * `connect`'s WebSocket callbacks capture `onThemeChange`/`onStatusChange`/
- * `onHyperlinkAdded`/`onUserVarChanged`/`onSelectionChanged` exactly once
- * (they run once on mount, or once per `wsUrl` change for `connect`). Before
- * the QA-111 fix these closures captured the *first-render* prop values, so
- * a parent passing a new callback instance on every render (a very common
- * React pattern) had its updates silently dropped until the component fully
- * unmounted and remounted. `propsRef` fixes this by making every one of
- * those call sites read the latest callback via a ref that is kept current
- * on every render, so the tests render the callback prop once, then render
- * again with a *new* function instance, and confirm it is what actually
- * fires.
+ * The mount effect (deps `[]`) and the memoized `connect` callback (deps
+ * `[wsUrl, onRetryingChange, bufferWrite]`) each ran once and closed over
+ * whichever render's props were current at that moment. A parent passing a
+ * *new* callback instance on a later render (a very common React pattern —
+ * an inline arrow, or a `useCallback` whose own deps changed) had that
+ * update silently dropped until the whole component unmounted and
+ * remounted. `propsRef`, synced every render, fixes this by making every
+ * one of those call sites read the latest callback through the ref instead
+ * of the destructured prop.
+ *
+ * `onFocus`/`onRefit`/`onSendInput` are registered once, INSIDE the mount
+ * effect, at mount time — propsRef.current at that instant equals the
+ * first-render props either way, so those three call sites can't
+ * distinguish pre-fix from post-fix behavior in a single-mount test. The
+ * real distinguishing behavior lives in the callbacks handed to
+ * `TerminalConnection`'s constructor inside `connect` (onStatus,
+ * onThemeChange via applyTheme, onHyperlinkAdded, onUserVarChanged,
+ * onSelectionChanged): those fire *after* mount, whenever the connection
+ * dispatches, so a post-fix build must call the LATEST prop instance and a
+ * pre-fix build would still be calling the one captured when `connect` was
+ * first created. `TerminalConnection` is mocked so the test can invoke
+ * those captured callbacks directly and assert which prop instance fires.
  *
  * happy-dom lacks `document.fonts`, so the component takes its synchronous
  * `term.open()` path (no font-ready wait) — see the `else` branch of the
  * mount effect.
  */
 
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, cleanup, act } from '@testing-library/react';
-import Terminal from '@/components/Terminal';
+import type { TerminalConnectionCallbacks } from '@/lib/terminal-connection';
+
+// Capture every TerminalConnectionCallbacks object the component
+// constructs, so a test can invoke connection-driven callbacks (onStatus,
+// onSelectionChanged, ...) directly without a real WebSocket.
+const constructedCallbacks: TerminalConnectionCallbacks[] = [];
+
+vi.mock('@/lib/terminal-connection', () => {
+  class MockTerminalConnection {
+    constructor(
+      private readonly url: string,
+      private readonly callbacks: TerminalConnectionCallbacks,
+    ) {
+      constructedCallbacks.push(callbacks);
+    }
+    getUrl(): string {
+      return this.url;
+    }
+    isOpen(): boolean {
+      return false;
+    }
+    connect(): void {}
+    send(): void {}
+    cancelRetry(): void {}
+    stopHeartbeat(): void {}
+    dispose(): void {}
+  }
+  return { TerminalConnection: MockTerminalConnection };
+});
+
+// Imported after the mock so Terminal.tsx picks up the mocked class.
+const { default: Terminal } = await import('@/components/Terminal');
+
+beforeEach(() => {
+  constructedCallbacks.length = 0;
+  vi.useFakeTimers();
+});
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
+/** Render, then advance past the 500ms auto-connect timer so `connect()` runs. */
+function renderAndConnect(props: React.ComponentProps<typeof Terminal>) {
+  const result = render(<Terminal {...props} />);
+  act(() => {
+    vi.advanceTimersByTime(500);
+  });
+  return result;
+}
+
 describe('Terminal', () => {
   it('mounts and unmounts without throwing', () => {
-    const { unmount } = render(<Terminal wsUrl="ws://localhost:9999/term" />);
+    const { unmount } = renderAndConnect({ wsUrl: 'ws://localhost:9999/term' });
     expect(() => unmount()).not.toThrow();
-  });
-
-  it('calls the latest onFocus prop, not the one captured at mount', () => {
-    const onFocusFirst = vi.fn();
-    const onFocusSecond = vi.fn();
-
-    const { rerender } = render(
-      <Terminal wsUrl="ws://localhost:9999/term" onFocus={onFocusFirst} />,
-    );
-
-    // The mount effect (deps: []) only runs once, so it registered the
-    // focus-exposing callback against onFocusFirst at that point.
-    expect(onFocusFirst).toHaveBeenCalledTimes(1);
-    const registeredFocusFn = onFocusFirst.mock.calls[0][0] as () => void;
-
-    // Parent re-renders with a brand-new onFocus function instance (e.g.
-    // a fresh inline arrow, or a new useCallback because one of its own
-    // deps changed) — exactly the case the stale closure used to drop.
-    rerender(<Terminal wsUrl="ws://localhost:9999/term" onFocus={onFocusSecond} />);
-
-    // The mount effect does not re-run, so onFocusSecond is never itself
-    // invoked with the focus function — but propsRef.current.onFocus now
-    // points at onFocusSecond, so calling the ref'd registration path
-    // must not throw and the component must still be functional.
-    expect(() => registeredFocusFn()).not.toThrow();
   });
 
   it('registers onRefit and onSendInput exactly once on mount', () => {
     const onRefit = vi.fn();
     const onSendInput = vi.fn();
 
-    render(
-      <Terminal wsUrl="ws://localhost:9999/term" onRefit={onRefit} onSendInput={onSendInput} />,
-    );
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term', onRefit, onSendInput });
 
     expect(onRefit).toHaveBeenCalledTimes(1);
     expect(onRefit.mock.calls[0][0]).toBeInstanceOf(Function);
@@ -73,19 +102,17 @@ describe('Terminal', () => {
     expect(onSendInput.mock.calls[0][0]).toBeInstanceOf(Function);
   });
 
-  it('does not call onFocus/onRefit/onSendInput again on prop-only re-renders', () => {
+  it('does not re-register onFocus/onRefit/onSendInput on prop-only re-renders', () => {
     const onFocus = vi.fn();
     const onRefit = vi.fn();
     const onSendInput = vi.fn();
 
-    const { rerender } = render(
-      <Terminal
-        wsUrl="ws://localhost:9999/term"
-        onFocus={onFocus}
-        onRefit={onRefit}
-        onSendInput={onSendInput}
-      />,
-    );
+    const { rerender } = renderAndConnect({
+      wsUrl: 'ws://localhost:9999/term',
+      onFocus,
+      onRefit,
+      onSendInput,
+    });
 
     expect(onFocus).toHaveBeenCalledTimes(1);
     expect(onRefit).toHaveBeenCalledTimes(1);
@@ -112,9 +139,11 @@ describe('Terminal', () => {
 
   it('applies a fontSize prop change without remounting the terminal', () => {
     const onRefit = vi.fn();
-    const { rerender } = render(
-      <Terminal wsUrl="ws://localhost:9999/term" fontSize={14} onRefit={onRefit} />,
-    );
+    const { rerender } = renderAndConnect({
+      wsUrl: 'ws://localhost:9999/term',
+      fontSize: 14,
+      onRefit,
+    });
 
     expect(onRefit).toHaveBeenCalledTimes(1);
 
@@ -125,5 +154,61 @@ describe('Terminal', () => {
     // A fontSize-only change is handled by the dedicated font-size effect,
     // not a remount — onRefit's mount-time registration is not repeated.
     expect(onRefit).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes onSelectionChanged through propsRef, not the connect()-time closure', () => {
+    const onSelectionChangedFirst = vi.fn();
+    const onSelectionChangedSecond = vi.fn();
+
+    const { rerender } = renderAndConnect({
+      wsUrl: 'ws://localhost:9999/term',
+      onSelectionChanged: onSelectionChangedFirst,
+    });
+
+    expect(constructedCallbacks).toHaveLength(1);
+    const { onSelectionChanged } = constructedCallbacks[0];
+    expect(onSelectionChanged).toBeInstanceOf(Function);
+
+    // Parent re-renders with a brand-new onSelectionChanged instance.
+    // `connect` is memoized on [wsUrl, onRetryingChange, bufferWrite] — none
+    // of which changed — so it is NOT recreated and no second
+    // TerminalConnection is constructed; the fix must route through the
+    // ALREADY-CAPTURED onSelectionChanged closure via propsRef, not by
+    // re-registering.
+    rerender(
+      <Terminal
+        wsUrl="ws://localhost:9999/term"
+        onSelectionChanged={onSelectionChangedSecond}
+      />,
+    );
+    expect(constructedCallbacks).toHaveLength(1);
+
+    // Fire the same captured callback the mocked connection would call on
+    // a real selectionChanged message.
+    onSelectionChanged?.({ cleared: true, mode: 'chars' } as never);
+
+    expect(onSelectionChangedFirst).not.toHaveBeenCalled();
+    expect(onSelectionChangedSecond).toHaveBeenCalledTimes(1);
+    expect(onSelectionChangedSecond).toHaveBeenCalledWith(undefined, true);
+  });
+
+  it('routes onStatusChange through propsRef across a prop update', () => {
+    const onStatusChangeFirst = vi.fn();
+    const onStatusChangeSecond = vi.fn();
+
+    const { rerender } = renderAndConnect({
+      wsUrl: 'ws://localhost:9999/term',
+      onStatusChange: onStatusChangeFirst,
+    });
+
+    const { onStatus } = constructedCallbacks[0];
+    rerender(
+      <Terminal wsUrl="ws://localhost:9999/term" onStatusChange={onStatusChangeSecond} />,
+    );
+
+    onStatus?.('connected');
+
+    expect(onStatusChangeFirst).not.toHaveBeenCalled();
+    expect(onStatusChangeSecond).toHaveBeenCalledWith('connected');
   });
 });
