@@ -18,7 +18,7 @@ use parking_lot::Mutex;
 use std::io::{BufRead, BufReader, Write};
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::Arc;
 
@@ -84,31 +84,81 @@ impl MuxServer {
         &self.path
     }
 
-    /// Accept connections until the listener is closed, with no on-disk
-    /// persistence — the embedding choice for tests and in-process use.
-    /// The daemon binary runs [`Self::run_persisting`] instead (D3.3).
+    /// Accept connections until the listener is closed or shutdown is
+    /// requested, with no on-disk persistence — the embedding choice for
+    /// tests and in-process use. The daemon binary runs
+    /// [`Self::run_persisting`] instead (D3.3).
     pub fn run(self) {
         self.run_with_state_path(None)
     }
 
     /// [`Self::run`] with the whole state atomically saved to `state_path`
     /// after every mutating dispatch — the mode the `par-mux` daemon runs
-    /// in. Callers resolve the path with
+    /// in. On a requested shutdown (Task 3.5) a final save captures content
+    /// that arrived since the last structural one, so a clean SIGTERM never
+    /// loses the last window. Callers resolve the path with
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
-        self.run_with_state_path(Some(state_path))
+        self.run_with_state_path(Some(state_path.clone()));
+        if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
+            if let Err(err) = crate::mux::persist::save_to(&self.tree.lock(), &state_path) {
+                eprintln!("par-mux: final state save failed: {err}");
+            }
+        }
     }
 
-    fn run_with_state_path(self, state_path: Option<PathBuf>) {
+    fn run_with_state_path(&self, state_path: Option<PathBuf>) {
+        // The loop must be able to NOTICE a shutdown request while idle,
+        // but `accept` transparently retries EINTR, so a blocking accept
+        // never returns on a signal (observed: the daemon ignored SIGTERM
+        // entirely). Nonblocking accept + a short idle sleep is the escape —
+        // this poll is on the ACCEPT path only; pane output remains pure
+        // push, which is the property the module header states.
+        use interprocess::local_socket::ListenerNonblockingMode;
+        self.listener
+            .set_nonblocking(ListenerNonblockingMode::Accept)
+            .expect("the listener was just bound");
+
+        // A previous server in this process may have been shut down; each
+        // run starts clean.
+        SHUTDOWN_REQUESTED.store(false, Ordering::Relaxed);
+
         loop {
-            let Ok(stream) = self.listener.accept() else {
+            if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
                 break;
-            };
-            let tree = Arc::clone(&self.tree);
-            let clients = Arc::clone(&self.clients);
-            let state_path = state_path.clone();
-            std::thread::spawn(move || handle_client(stream, tree, clients, state_path));
+            }
+            match self.listener.accept() {
+                Ok(stream) => {
+                    // BSD/macOS accepted sockets inherit O_NONBLOCK from the
+                    // listening socket; the handler loop is written against
+                    // blocking reads, so flip the stream back.
+                    use interprocess::local_socket::traits::Stream as _;
+                    let _ = stream.set_nonblocking(false);
+                    let tree = Arc::clone(&self.tree);
+                    let clients = Arc::clone(&self.clients);
+                    let state_path = state_path.clone();
+                    std::thread::spawn(move || handle_client(stream, tree, clients, state_path));
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                // A signal may land mid-accept; that is not a listener fault.
+                Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
         }
+    }
+}
+
+/// Set by [`MuxServer::request_shutdown`] and checked between accepts.
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+impl MuxServer {
+    /// Ask a running server to stop: its accept loop notices on its next
+    /// tick and `run`/`run_persisting` return. One atomic store, so a
+    /// signal handler may call this directly.
+    pub fn request_shutdown() {
+        SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
     }
 }
 

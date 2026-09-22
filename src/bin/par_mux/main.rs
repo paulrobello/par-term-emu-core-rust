@@ -44,6 +44,35 @@ fn main() -> std::io::Result<()> {
         None => par_term_emu_core_rust::mux::MuxServer::bind(&path)?,
     };
     eprintln!("par-mux listening on {}", path.display());
+
+    // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
+    // shutdown with one atomic store (async-signal-safe), the accept loop
+    // notices, and run_persisting's final save captures every completed
+    // mutation. kill -9 skips all of this and simply loses the last window
+    // (D3.3 covers why that is acceptable).
+    #[cfg(unix)]
+    install_sigterm_handler()?;
+
     server.run_persisting(state_path);
+    Ok(())
+}
+
+/// Minimal async-signal-safe handler: request shutdown and return.
+#[cfg(unix)]
+extern "C" fn on_sigterm(_signum: i32) {
+    par_term_emu_core_rust::mux::MuxServer::request_shutdown();
+}
+
+/// Install the SIGTERM handler. The accept loop notices the shutdown flag on
+/// its own tick, so no SA_RESTART subtleties are involved.
+#[cfg(unix)]
+fn install_sigterm_handler() -> std::io::Result<()> {
+    use nix::sys::signal::{self, SaFlags, SigAction, SigHandler};
+    let action = SigAction::new(
+        SigHandler::Handler(on_sigterm),
+        SaFlags::empty(),
+        signal::SigSet::empty(),
+    );
+    unsafe { signal::sigaction(signal::SIGTERM, &action) }.map_err(std::io::Error::other)?;
     Ok(())
 }

@@ -177,3 +177,111 @@ fn a_restored_tree_serves_its_prior_ids_and_content() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// Task 3.5: a clean SIGTERM stops the daemon with a final save — the state
+/// file reflects every completed mutation, so the next start restores from
+/// it rather than starting empty.
+#[cfg(unix)]
+#[test]
+fn sigterm_saves_state_on_the_way_out() {
+    use nix::sys::signal::{self, Signal};
+    use nix::unistd::Pid;
+    use par_term_emu_core_rust::mux::persist::{load_or_quarantine, Loaded};
+
+    let path = socket("sigterm");
+    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
+    let _ = std::fs::remove_file(&state_path);
+
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(&path)
+        .spawn()
+        .expect("daemon binary spawns");
+
+    // Wait for the listener, then drive two structural mutations.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while connect_local_stream(&path).is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let stream = connect_local_stream(&path).expect("daemon accepts");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s sig");
+    let listed = command(&mut writer, &mut reader, "list-panes").join("");
+    // Body lines sit between %begin/%end; a pane id is '%' followed by a digit.
+    let pane = listed
+        .lines()
+        .find(|l| {
+            l.trim_start()
+                .strip_prefix('%')
+                .is_some_and(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        })
+        .expect("a pane was created")
+        .trim()
+        .to_string();
+    command(
+        &mut writer,
+        &mut reader,
+        &format!("split-window -t {pane} -h"),
+    );
+
+    // Content AFTER the last structural mutation: send-keys does not trigger
+    // a per-mutation save, so only the shutdown save can capture it.
+    command(
+        &mut writer,
+        &mut reader,
+        &format!("send-keys -t {pane} \"echo ZQX-SHUTDOWN-MARKER\""),
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let screen = command(
+            &mut writer,
+            &mut reader,
+            &format!("refresh-client -t {pane}"),
+        )
+        .join("");
+        if screen.contains("ZQX-SHUTDOWN-MARKER") || Instant::now() > deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    drop((writer, reader));
+
+    signal::kill(Pid::from_raw(child.id() as i32), Signal::SIGTERM).expect("SIGTERM delivered");
+    let status = child.wait().expect("daemon exits");
+    assert!(
+        status.success(),
+        "a clean SIGTERM exits 0 after saving, got {status:?}"
+    );
+
+    match load_or_quarantine(&state_path) {
+        Loaded::State(state) => {
+            assert_eq!(state.sessions.len(), 1, "the session survived");
+            assert_eq!(
+                state.sessions[0].windows[0].panes.len(),
+                2,
+                "the split survived"
+            );
+            // The marker was typed after the split's per-mutation save, so
+            // its presence proves the SHUTDOWN save ran. Cells serialize as
+            // per-character objects, so the text must be reassembled from
+            // the JSON value rather than searched for as a substring.
+            let value = serde_json::to_value(&state).expect("state serializes");
+            let screen_text: String = value["sessions"][0]["windows"][0]["panes"][0]["terminal"]
+                ["grid"]["cells"]
+                .as_array()
+                .expect("cells are an array")
+                .iter()
+                .filter_map(|cell| cell["c"].as_str())
+                .collect();
+            assert!(
+                screen_text.contains("ZQX-SHUTDOWN-MARKER"),
+                "the shutdown save captured content typed after the last structural save; screen: {screen_text:?}"
+            );
+        }
+        other => panic!("expected the shutdown save, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&state_path);
+}
