@@ -1825,7 +1825,7 @@ Difference between two screen snapshots. Obtain one from `diff_snapshots(old_sna
 Tmux control mode notification.
 
 **Properties:**
-- `notification_type: str`: Notification type (e.g. "layout_change", "output", "pane_mode")
+- `notification_type: str`: Notification type (e.g. "layout_change", "output", "pane_mode", "agent_state_changed" — the last is par-mux hook-fed, carried as `name`=agent label and `value`=state)
 - `pane_id: str | None`: Pane identifier
 - `window_id: str | None`: Window identifier
 - `session_id: str | None`: Session identifier

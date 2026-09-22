@@ -147,6 +147,15 @@ pub enum TmuxNotification {
     /// Arguments: buffer_name
     PasteBufferDeleted { name: String },
 
+    /// A pane's agent reported a state change (par-mux hook-fed agent
+    /// layer, Phase 5 seam S3; real tmux never emits this).
+    /// Arguments: pane_id, agent_label, state
+    AgentStateChanged {
+        pane_id: String,
+        agent: String,
+        state: String,
+    },
+
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
     Unknown { line: String },
@@ -186,6 +195,7 @@ impl TmuxNotification {
             Self::LayoutChange { .. } => "layout-change",
             Self::PasteBufferChanged { .. } => "paste-buffer-changed",
             Self::PasteBufferDeleted { .. } => "paste-buffer-deleted",
+            Self::AgentStateChanged { .. } => "agent-state-changed",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
         }
@@ -398,6 +408,7 @@ impl TmuxControlParser {
             "layout-change" => Self::parse_layout_change(args),
             "paste-buffer-changed" => Self::parse_paste_buffer_changed(args),
             "paste-buffer-deleted" => Self::parse_paste_buffer_deleted(args),
+            "agent-state-changed" => Self::parse_agent_state_changed(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
             }),
@@ -682,6 +693,20 @@ impl TmuxControlParser {
     fn parse_paste_buffer_deleted(args: &str) -> Option<TmuxNotification> {
         Some(TmuxNotification::PasteBufferDeleted {
             name: args.trim().to_string(),
+        })
+    }
+
+    fn parse_agent_state_changed(args: &str) -> Option<TmuxNotification> {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.len() < 3 {
+            return None;
+        }
+        Some(TmuxNotification::AgentStateChanged {
+            pane_id: parts[0].to_string(),
+            agent: parts[1].to_string(),
+            // The state is the rest of the line, so a multi-word state
+            // survives the round trip.
+            state: parts[2..].join(" "),
         })
     }
 

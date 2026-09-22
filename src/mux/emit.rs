@@ -89,12 +89,18 @@ pub fn emit(notification: &TmuxNotification) -> String {
         // close, so a client learns the daemon ended deliberately rather
         // than inferring death from a dropped connection.
         TmuxNotification::Exit => "%exit\n".to_string(),
-        // Seam S3: `TmuxNotification` carries 28 variants; Phase 1 emits the 9
-        // the spine needs and the rest fall through here, producing nothing
+        TmuxNotification::AgentStateChanged {
+            pane_id,
+            agent,
+            state,
+        } => format!("%agent-state-changed {pane_id} {agent} {state}\n"),
+        // Seam S3: `TmuxNotification` carries 29 variants; Phase 1 emits the
+        // 9 the spine needs and the rest fall through here, producing nothing
         // rather than panicking. Adding a notification is therefore one new
         // arm, never a change at the call sites. Real tmux clients ignore `%`
-        // lines they do not recognise, so a custom variant (e.g. a future
-        // `%agent-state-changed`) is backward compatible by construction.
+        // lines they do not recognise (this parser maps them to `Unknown`,
+        // which still reaches the client), so a custom variant like
+        // `%agent-state-changed` is backward compatible by construction.
         _ => String::new(),
     }
 }
@@ -332,6 +338,47 @@ mod tests {
         // Seam S3: the catch-all arm. Adding a notification later is one new
         // arm here, never a change at call sites; until then it emits nothing.
         assert_eq!(emit(&TmuxNotification::SessionsChanged), "");
+    }
+
+    #[test]
+    fn agent_state_changed_round_trips() {
+        let original = TmuxNotification::AgentStateChanged {
+            pane_id: "%3".to_string(),
+            agent: "kimi".to_string(),
+            state: "working".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn agent_state_changed_line_reaches_an_unupgraded_client() {
+        // The backward-compatibility mechanism itself: BEFORE the parse arm
+        // existed (and for any FUTURE variant), an unrecognized `%` line
+        // parses to Unknown { line } and still reaches the client — a client
+        // that never learns %agent-state-changed sees the raw line rather
+        // than a parse error or a dropped notification.
+        let mut parser = TmuxControlParser::new(true);
+        let parsed = parser.parse(b"%agent-state-changed %3 kimi working\n");
+        match parsed.as_slice() {
+            [TmuxNotification::Unknown { line }] => {
+                assert!(
+                    line.contains("%agent-state-changed %3 kimi working"),
+                    "the raw line survives: {line}"
+                );
+            }
+            [TmuxNotification::AgentStateChanged { .. }] => {
+                // The parse arm exists now, so this path is taken — the
+                // Unknown tolerance is still proven by an unrecognized line:
+                let parsed2 = parser.parse(b"%some-future-variant x y\n");
+                assert!(
+                    matches!(parsed2.as_slice(), [TmuxNotification::Unknown { .. }]),
+                    "an unrecognized variant still reaches the client as Unknown"
+                );
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]
