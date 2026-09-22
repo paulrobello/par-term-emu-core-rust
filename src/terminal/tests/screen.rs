@@ -294,6 +294,46 @@ fn test_get_selected_text() {
 }
 
 #[test]
+fn test_selection_columns_inside_multibyte_chars_do_not_panic() {
+    // SEC-002: display columns must map to char boundaries, never byte
+    // offsets. Columns 2 and 4 of "aé🇺🇸b" fall on the flag grapheme.
+    let mut term = Terminal::new(80, 24);
+    term.process("aé🇺🇸b".as_bytes());
+
+    term.set_selection((2, 0), (4, 0), SelectionMode::Character);
+    let text = term.get_selected_text().expect("selection text");
+    assert!(
+        !text.contains('a') && !text.contains('b'),
+        "columns 2..4 exclude the ASCII edges, got: {:?}",
+        text
+    );
+
+    term.set_selection((1, 0), (3, 0), SelectionMode::Block);
+    let _ = term.get_selected_text().expect("block selection text");
+}
+
+#[test]
+fn test_selection_coords_clamped_to_grid() {
+    // SEC-002: client-supplied coordinates arrive unvalidated; absurd
+    // values must clamp instead of slicing out of range.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"hello world");
+    term.set_selection((999, 999), (1234, 1234), SelectionMode::Character);
+    let sel = term.get_selection().expect("selection should be set");
+    assert!(
+        sel.start.0 <= 80 && sel.end.0 <= 80,
+        "cols clamped: {:?}",
+        sel
+    );
+    assert!(
+        sel.start.1 <= 23 && sel.end.1 <= 23,
+        "rows clamped: {:?}",
+        sel
+    );
+    let _ = term.get_selected_text().expect("must not panic");
+}
+
+#[test]
 fn test_clear_selection() {
     let mut term = Terminal::new(80, 24);
     term.set_selection((0, 0), (5, 0), SelectionMode::Character);

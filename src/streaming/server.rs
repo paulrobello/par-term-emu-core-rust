@@ -1320,6 +1320,18 @@ impl StreamingServer {
                                     start_col, start_row, end_col, end_row, mode,
                                 } => {
                                     if read_only { continue; }
+                                    let (term_cols, term_rows) = {
+                                        let terminal = session.terminal.read();
+                                        terminal.size()
+                                    };
+                                    if usize::from(start_row) >= term_rows
+                                        || usize::from(end_row) >= term_rows
+                                        || usize::from(start_col) > term_cols
+                                        || usize::from(end_col) > term_cols
+                                    {
+                                        crate::debug_error!("STREAMING", "{} {} sent out-of-range selection {},{}-{},{}", transport_label, client_id, start_col, start_row, end_col, end_row);
+                                        continue;
+                                    }
                                     let selection_msg = {
                                         let mut terminal = session.terminal.write();
                                         if mode == "clear" {

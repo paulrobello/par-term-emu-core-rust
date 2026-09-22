@@ -400,12 +400,21 @@ impl Terminal {
     // === Selection Management ===
 
     /// Set the current selection
+    ///
+    /// Coordinates are clamped to the grid: client-supplied columns and rows
+    /// arrive unvalidated. `end.0` may equal `cols` (word selections report an
+    /// exclusive end column).
     pub fn set_selection(
         &mut self,
         start: (usize, usize),
         end: (usize, usize),
         mode: SelectionMode,
     ) {
+        let grid = self.active_grid();
+        let (cols, rows) = (grid.cols(), grid.rows());
+        let max_row = rows.saturating_sub(1);
+        let start = (start.0.min(cols.saturating_sub(1)), start.1.min(max_row));
+        let end = (end.0.min(cols), end.1.min(max_row));
         self.selection = Some(Selection { start, end, mode });
     }
 
@@ -429,14 +438,12 @@ impl Terminal {
                     if let Some(line) = grid.row(row) {
                         let line_text = crate::terminal::cells_to_text(line);
                         let row_start = if row == start_row { start_col } else { 0 };
-                        let row_end = if row == end_row {
-                            end_col.min(line_text.len())
-                        } else {
-                            line_text.len()
-                        };
+                        let row_end = if row == end_row { end_col } else { usize::MAX };
 
-                        if row_start < line_text.len() {
-                            text.push_str(&line_text[row_start..row_end]);
+                        let (start_byte, end_byte) =
+                            cols_to_byte_range(&line_text, row_start, row_end);
+                        if start_byte < line_text.len() {
+                            text.push_str(&line_text[start_byte..end_byte]);
                             if row < end_row {
                                 text.push('\n');
                             }
@@ -462,8 +469,10 @@ impl Terminal {
                 for row in start_row..=end_row {
                     if let Some(line) = grid.row(row) {
                         let line_text = crate::terminal::cells_to_text(line);
-                        let row_text = if start_col < line_text.len() {
-                            &line_text[start_col..end_col.min(line_text.len())]
+                        let (start_byte, end_byte) =
+                            cols_to_byte_range(&line_text, start_col, end_col);
+                        let row_text = if start_byte < line_text.len() {
+                            &line_text[start_byte..end_byte]
                         } else {
                             ""
                         };
@@ -633,4 +642,31 @@ impl Terminal {
 
         lines.join("\n")
     }
+}
+
+/// Map display-column bounds to UTF-8 byte offsets that land on char
+/// boundaries.
+///
+/// Columns count `char`s of the `cells_to_text` output, not bytes: a column
+/// landing inside a multi-byte grapheme must never become a slice index
+/// (SEC-002). Bounds past the end of the text clamp to its length; callers
+/// pass `usize::MAX` for a whole-line remainder.
+fn cols_to_byte_range(line_text: &str, start_col: usize, end_col: usize) -> (usize, usize) {
+    let mut start_byte = line_text.len();
+    let mut end_byte = line_text.len();
+    for (idx, (byte, _)) in line_text.char_indices().enumerate() {
+        if idx == start_col {
+            start_byte = byte;
+        }
+        if idx == end_col {
+            end_byte = byte;
+            break;
+        }
+    }
+    // Callers normalize start <= end, but client-supplied coordinates reach
+    // this function: never hand back an inverted range.
+    if start_byte > end_byte {
+        return (end_byte, end_byte);
+    }
+    (start_byte, end_byte)
 }
