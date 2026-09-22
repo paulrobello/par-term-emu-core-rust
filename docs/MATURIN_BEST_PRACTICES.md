@@ -514,7 +514,7 @@ strip = true       # Strip symbols (smaller wheel)
 
 ## Compliance Scorecard
 
-**Last Updated**: 2026-07-09 (Version 0.45.0)
+**Last verified**: 2026-07-09 against 0.45.0 — scores have not been re-verified for later releases
 
 | Category | Score | Notes |
 |----------|-------|-------|

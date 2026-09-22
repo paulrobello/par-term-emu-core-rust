@@ -79,7 +79,7 @@ Choose the feature set that matches your needs:
 #### Rust Only (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["pty_session"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros
 **Use for:** Pure Rust applications, embedded terminals, CLI tools
@@ -89,7 +89,7 @@ par-term-emu-core-rust = { version = "0.46", default-features = false, features 
 #### Rust with Streaming (No Python)
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
 ```
 **Includes:** Everything in "Rust Only" + WebSocket server, HTTP server, Axum, Tokio, Protocol Buffers
 **Use for:** Web-based terminals, remote terminal access, terminal sharing
@@ -97,9 +97,9 @@ par-term-emu-core-rust = { version = "0.46", default-features = false, features 
 #### Python Only
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46" }
+par-term-emu-core-rust = { version = "0.50" }
 # Or explicitly:
-par-term-emu-core-rust = { version = "0.46", features = ["python"] }
+par-term-emu-core-rust = { version = "0.50", features = ["python"] }
 ```
 **Includes:** Terminal emulation, PTY support, Macros + Python bindings (PyO3)
 **Use for:** Python applications, TUI frameworks, Jupyter kernels
@@ -108,10 +108,10 @@ par-term-emu-core-rust = { version = "0.46", features = ["python"] }
 ```toml
 [dependencies]
 # Streaming server library only:
-par-term-emu-core-rust = { version = "0.46", features = ["python", "streaming"] }
+par-term-emu-core-rust = { version = "0.50", features = ["python", "streaming"] }
 # Or the convenience feature, which also pulls in the CLI deps used by the
 # standalone `par-term-streamer` binary (clap, tracing, reqwest, tar, ...):
-par-term-emu-core-rust = { version = "0.46", features = ["full"] }
+par-term-emu-core-rust = { version = "0.50", features = ["full"] }
 ```
 **Includes:** Everything + Python bindings + WebSocket/HTTP server + Protocol Buffers
 **Use for:** Full-featured terminal applications with remote access
@@ -310,7 +310,7 @@ fn main() -> std::io::Result<()> {
 
 ```toml
 [dependencies]
-par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }
+par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 # The crate uses parking_lot internally; PtySession::get_writer() and
 # terminal() return parking_lot locks, so reuse it for your own wrappers.

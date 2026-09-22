@@ -229,10 +229,10 @@ The library can be used in pure Rust projects without Python. Choose your featur
 
 | Use Case | Cargo.toml | What's Included |
 |----------|------------|-----------------|
-| **Rust Only** | `par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["pty_session"] }` | Terminal, PTY, Macros |
-| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.46", default-features = false, features = ["streaming", "pty_session"] }` | + WebSocket/HTTP server |
-| **Python Only** | `par-term-emu-core-rust = "0.46"` | + Python bindings |
-| **Everything** | `par-term-emu-core-rust = { version = "0.46", features = ["full"] }` | All features |
+| **Rust Only** | `par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["pty_session"] }` | Terminal, PTY, Macros |
+| **Rust + Streaming** | `par-term-emu-core-rust = { version = "0.50", default-features = false, features = ["streaming", "pty_session"] }` | + WebSocket/HTTP server |
+| **Python Only** | `par-term-emu-core-rust = "0.50"` | + Python bindings |
+| **Everything** | `par-term-emu-core-rust = { version = "0.50", features = ["full"] }` | All features |
 
 > **Note:** Since v0.46.0 the `pty_session` module (real PTY backend) is a separate feature. Omit it only for headless use without `PtySession`. See [docs/RUST_USAGE.md](docs/RUST_USAGE.md) for details.
 
