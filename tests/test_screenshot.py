@@ -4,6 +4,7 @@ import os
 import tempfile
 
 import pytest
+from conftest import wait_for
 from par_term_emu_core_rust import PtyTerminal, Terminal
 
 
@@ -257,12 +258,11 @@ class TestPtyTerminalScreenshot:
     @pytest.mark.skip(reason="PTY screenshot tests hang in CI")
     def test_pty_screenshot(self):
         """Test screenshot from PTY terminal"""
-        import time
-
         with PtyTerminal(80, 24) as pty:
             # Spawn a shell to activate the PTY
             pty.spawn_shell()
-            time.sleep(0.1)  # Let shell start
+            # Wait for the shell prompt to render before screenshotting
+            assert wait_for(lambda: pty.content().strip())
 
             # Take screenshot (should capture shell prompt)
             png_bytes = pty.screenshot()
@@ -271,16 +271,13 @@ class TestPtyTerminalScreenshot:
 
             # Clean exit
             pty.write_str("exit\n")
-            time.sleep(0.1)
 
     @pytest.mark.skip(reason="PTY screenshot tests hang in CI")
     def test_pty_screenshot_to_file(self):
         """Test saving PTY screenshot to file"""
-        import time
-
         with PtyTerminal(80, 24) as pty:
             pty.spawn_shell()
-            time.sleep(0.1)
+            assert wait_for(lambda: pty.content().strip())
 
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 filename = f.name
@@ -294,7 +291,6 @@ class TestPtyTerminalScreenshot:
                     os.remove(filename)
 
             pty.write_str("exit\n")
-            time.sleep(0.1)
 
 
 class TestScreenshotEdgeCases:

@@ -7,9 +7,9 @@ This test checks the actual ioctl behavior, not just SIGWINCH delivery.
 import os
 import sys
 import tempfile
-import time
 
 import pytest
+from conftest import wait_for
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
@@ -72,62 +72,35 @@ with open(log_file, 'a') as f:
     f.flush()
 """
 
-        def wait_for(marker: str, timeout_s: float = 5.0) -> str:
-            """Poll the log file for ``marker`` up to ``timeout_s`` seconds.
-
-            Fixed ``time.sleep`` races the scheduler under CPU contention on
-            loaded machines — the subprocess that writes the log file may
-            not have run yet. Poll instead so we stay responsive without
-            gambling on arbitrary sleep durations.
-            """
-            deadline = time.monotonic() + timeout_s
-            content = ""
-            while time.monotonic() < deadline:
-                with open(log_file) as f:
-                    content = f.read()
-                if marker in content:
-                    return content
-                time.sleep(0.05)
-            return content
+        def read_log() -> str:
+            with open(log_file) as f:
+                return f.read()
 
         term = PtyTerminal(80, 24)
         term.spawn("/usr/bin/python3", args=["-c", script])
 
         # Verify initial size (poll — subprocess startup is not instant)
-        content = wait_for("INITIAL_SIZE:80x24")
-        print(f"After spawn: {content}")
-        assert "INITIAL_SIZE:80x24" in content, (
-            f"Expected INITIAL_SIZE:80x24, got: {content}"
+        assert wait_for(lambda: "INITIAL_SIZE:80x24" in read_log()), (
+            f"Expected INITIAL_SIZE:80x24, got: {read_log()}"
         )
-
-        def wait_for_either(markers: tuple[str, ...], timeout_s: float = 5.0) -> str:
-            deadline = time.monotonic() + timeout_s
-            content = ""
-            while time.monotonic() < deadline:
-                with open(log_file) as f:
-                    content = f.read()
-                if any(m in content for m in markers):
-                    return content
-                time.sleep(0.05)
-            return content
 
         # Resize
         print("Resizing to 100x30...")
         term.resize(100, 30)
-        content = wait_for_either(("SIGWINCH_SIZE:100x30", "POLL_SIZE:100x30"))
-        print(f"After first resize: {content}")
-        assert "SIGWINCH_SIZE:100x30" in content or "POLL_SIZE:100x30" in content, (
-            f"Expected size 100x30 to be visible via ioctl, but got:\n{content}"
-        )
+        assert wait_for(
+            lambda: (
+                "SIGWINCH_SIZE:100x30" in read_log() or "POLL_SIZE:100x30" in read_log()
+            )
+        ), f"Expected size 100x30 to be visible via ioctl, but got:\n{read_log()}"
 
         # Resize again
         print("Resizing to 120x40...")
         term.resize(120, 40)
-        content = wait_for_either(("SIGWINCH_SIZE:120x40", "POLL_SIZE:120x40"))
-        print(f"After second resize: {content}")
-        assert "SIGWINCH_SIZE:120x40" in content or "POLL_SIZE:120x40" in content, (
-            f"Expected size 120x40 to be visible via ioctl, but got:\n{content}"
-        )
+        assert wait_for(
+            lambda: (
+                "SIGWINCH_SIZE:120x40" in read_log() or "POLL_SIZE:120x40" in read_log()
+            )
+        ), f"Expected size 120x40 to be visible via ioctl, but got:\n{read_log()}"
 
         term.kill()
 

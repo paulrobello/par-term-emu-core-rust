@@ -14,11 +14,12 @@ suite's 5s per-test timeout is not exceeded.
 from __future__ import annotations
 
 import asyncio
-import time
+import socket
 from typing import TYPE_CHECKING, Any
 
 import pytest
 import pytest_asyncio
+from conftest import wait_for
 
 # Streaming is optional, so skip all tests if not available
 pytest.importorskip("websockets")
@@ -60,11 +61,21 @@ except (ImportError, RuntimeError, TypeError):
 # Fixtures
 
 
+def port_open(port: int) -> bool:
+    """Whether the streaming server's TCP port accepts connections.
+
+    The server binds on its own background thread, so this (polled via
+    ``wait_for``) is the readiness observable; ``server.addr`` is only the
+    configured address, set before the listener exists.
+    """
+    with socket.socket() as sock:
+        sock.settimeout(0.1)
+        return sock.connect_ex(("127.0.0.1", port)) == 0
+
+
 @pytest.fixture
 def streaming_port():
     """Get an available port for testing."""
-    import socket
-
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -94,8 +105,9 @@ async def streaming_server(pty_terminal, streaming_port):
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
 
-    # Give server time to start
-    await asyncio.sleep(0.1)
+    # The listener binds on a background thread; wait for it. Blocking the
+    # test loop here is safe — the server runs on its own thread + runtime.
+    wait_for(lambda: port_open(streaming_port))
 
     yield server, streaming_port
 
@@ -219,14 +231,13 @@ def test_server_start_stop(pty_terminal, streaming_port):
 
     # Start server
     server.start()
-    time.sleep(0.1)
+    assert wait_for(lambda: port_open(streaming_port))
 
     # Server should be running (bound address is set once started)
     assert server.addr != ""
 
     # Stop server
     server.shutdown("test shutdown")
-    time.sleep(0.1)
 
     # Server should be stopped (no clients remain)
     assert server.client_count() == 0
@@ -236,7 +247,7 @@ def test_server_client_count_no_clients(pty_terminal, streaming_port):
     """Test client count with no connected clients."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    time.sleep(0.1)
+    assert wait_for(lambda: port_open(streaming_port))
 
     assert server.client_count() == 0
 
@@ -317,7 +328,7 @@ async def test_websocket_close_handshake_http(pty_terminal, streaming_port):
     config = StreamingConfig(enable_http=True)
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     try:
         uri = f"ws://127.0.0.1:{streaming_port}/ws"
@@ -374,16 +385,11 @@ async def test_websocket_multiple_clients(streaming_server):
         for i in range(3):
             client = await websockets.connect(uri, close_timeout=1)
             clients.append(client)
-            await asyncio.sleep(0.05)
 
         # All should be connected
         assert len(clients) == 3
         for client in clients:
             assert client.state.name == "OPEN"
-
-        # Check client count
-        # Note: This may not work immediately due to async nature
-        await asyncio.sleep(0.2)
 
     finally:
         # Close all clients
@@ -420,20 +426,18 @@ async def test_broadcast_to_all_clients(pty_terminal, streaming_port):
     """Test broadcasting output to all connected clients."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
     # Connect two clients
     client1 = await websockets.connect(uri, close_timeout=1)
     client2 = await websockets.connect(uri, close_timeout=1)
-    await asyncio.sleep(0.1)
 
     try:
         # Send output through terminal
         test_message = "Hello, World!\n"
         pty_terminal.write_str(test_message)
-        await asyncio.sleep(0.2)
 
         # Both clients should receive the output
         # This is a simplified test - actual output may include ANSI codes
@@ -467,9 +471,7 @@ def test_max_clients_limit(pty_terminal, streaming_port):
     config = StreamingConfig(max_clients=2)
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
     server.start()
-
-    # Configuration should be set
-    time.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     server.shutdown("test shutdown")
 
@@ -480,7 +482,7 @@ async def test_send_initial_screen_enabled(pty_terminal, streaming_port):
     config = StreamingConfig(send_initial_screen=True)
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
@@ -501,7 +503,7 @@ async def test_send_initial_screen_disabled(pty_terminal, streaming_port):
     config = StreamingConfig(send_initial_screen=False)
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
@@ -524,14 +526,13 @@ async def test_terminal_resize_notification(pty_terminal, streaming_port):
     """Test terminal resize notifications through WebSocket."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
     async with websockets.connect(uri, close_timeout=1) as websocket:
         # Resize terminal
         pty_terminal.resize(100, 30)
-        await asyncio.sleep(0.2)
 
         # Client might receive resize notification
         # (Implementation-specific behavior)
@@ -552,7 +553,7 @@ def test_server_bind_error_duplicate_port(pty_terminal, streaming_port):
     """Test error when binding to already-used port."""
     server1 = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server1.start()
-    time.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     # Try to create another server on same port
     # This should either fail immediately or when started
@@ -561,7 +562,6 @@ def test_server_bind_error_duplicate_port(pty_terminal, streaming_port):
         pty_terminal2.spawn_shell()
         server2 = StreamingServer(pty_terminal2, f"127.0.0.1:{streaming_port}")
         server2.start()
-        time.sleep(0.1)
 
         # If we got here, check if both are actually running
         # (some implementations may handle this gracefully)
@@ -580,10 +580,9 @@ def test_server_operations_after_stop(pty_terminal, streaming_port):
     """Test server operations after stopping."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    time.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     server.shutdown("test shutdown")
-    time.sleep(0.1)
 
     # Should report no clients after shutdown
     assert server.client_count() == 0
@@ -601,17 +600,15 @@ async def test_high_throughput_output(pty_terminal, streaming_port):
     """Test streaming with high-throughput output."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
     async with websockets.connect(uri, close_timeout=1) as websocket:
-        # Generate lots of output
+        # Generate lots of output (the 10ms pacing spreads the writes)
         for i in range(50):
             pty_terminal.write_str(f"Line {i}: " + "X" * 70 + "\n")
             await asyncio.sleep(0.01)
-
-        await asyncio.sleep(0.5)
 
         # Should have received multiple messages
         messages_received = 0
@@ -634,7 +631,7 @@ async def test_many_clients_sequential(pty_terminal, streaming_port):
     """Test many clients connecting and disconnecting sequentially."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
@@ -663,7 +660,7 @@ async def test_full_session_workflow(pty_terminal, streaming_port):
     """Test a complete terminal session workflow with streaming."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 
@@ -677,13 +674,12 @@ async def test_full_session_workflow(pty_terminal, streaming_port):
 
         for cmd in commands:
             pty_terminal.write_str(cmd + "\n")
-            await asyncio.sleep(0.2)
 
             # Collect output
             output_chunks = []
             try:
                 for _ in range(3):
-                    chunk = await asyncio.wait_for(websocket.recv(), timeout=0.2)
+                    chunk = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                     output_chunks.append(chunk)
             except TimeoutError:
                 pass
@@ -699,7 +695,7 @@ async def test_concurrent_read_write(pty_terminal, streaming_port):
     """Test concurrent reading and writing with streaming."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    await asyncio.sleep(0.1)
+    wait_for(lambda: port_open(streaming_port))
 
     uri = f"ws://127.0.0.1:{streaming_port}"
 

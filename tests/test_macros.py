@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 import pytest
+from conftest import wait_for
 from par_term_emu_core_rust import Macro, PtyTerminal
 
 
@@ -147,12 +148,16 @@ def test_macro_playback_simple() -> None:
     term.load_macro("echo_test", macro)
     term.play_macro("echo_test", speed=100.0)  # Very fast for testing
 
-    # Tick the macro to execute it
+    # Tick the macro until it finishes; each tick advances one event
     executed = False
-    for _ in range(10):
+
+    def _advance() -> bool:
+        nonlocal executed
         if term.tick_macro():
             executed = True
-        time.sleep(0.01)
+        return not term.is_macro_playing()
+
+    assert wait_for(_advance)
 
     assert executed
     assert not term.is_macro_playing()  # Should be finished
@@ -242,7 +247,8 @@ def test_recording_to_macro_conversion() -> None:
     # Start recording
     term.start_recording("test recording")
 
-    # Simulate some input
+    # Simulate some input. The sleeps are input spacing, not synchronization:
+    # the gap between writes becomes the delay event in the converted macro.
     term.write_str("echo hello")
     time.sleep(0.1)
     term.write_str("\n")

@@ -7,11 +7,20 @@ This test mimics the actual TUI use case where bash spawns Python.
 import os
 import sys
 import tempfile
-import time
 
 import pytest
+from conftest import wait_for
 
 pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")
+
+
+def read_log(path: str) -> str:
+    """Current contents of the child's log file (empty until it writes)."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
@@ -84,41 +93,36 @@ with open(log_file, 'a') as f:
         term = PtyTerminal(80, 24)
         term.spawn_shell()  # Spawns bash
 
-        time.sleep(0.5)
+        assert wait_for(lambda: term.content().strip())
 
         # Execute the Python script from bash
         cmd = f"{sys.executable} {script_file} &\n"
         print(f"Executing in bash: {cmd}")
         term.write_str(cmd)
-        time.sleep(1.0)  # Give it more time to start
+        assert wait_for(lambda: "INITIAL:" in read_log(log_file))
 
         # Read the log to get process info
-        with open(log_file) as f:
-            content = f.read()
-            print(f"Initial state:\n{content}")
+        content = read_log(log_file)
+        print(f"Initial state:\n{content}")
 
         # Resize the terminal
         print("\nResizing to 100x30...")
         term.resize(100, 30)
-        time.sleep(0.5)
 
-        # Check what the Python process sees
-        with open(log_file) as f:
-            content = f.read()
-            print(f"\nAfter resize:\n{content}")
+        # Check what the Python process sees. Nested SIGWINCH delivery is a
+        # known-broken path, so absence within a bounded window skips rather
+        # than fails (the original test's expected-failure probe).
+        try:
+            assert wait_for(
+                lambda: "SIGWINCH:100x30" in read_log(log_file), timeout=2.0
+            )
+        except AssertionError:
+            print(f"After resize:\n{read_log(log_file)}")
+            pytest.skip(
+                "Nested resize not yet working - need to investigate process groups"
+            )
 
-            # The Python process should have received SIGWINCH with new size
-            if "SIGWINCH:100x30" in content:
-                print("✓ SUCCESS: Python grandchild received resize!")
-            else:
-                print("✗ FAILURE: Python grandchild did NOT see resize")
-                print(f"Full log:\n{content}")
-
-                # This is the expected failure case - let's not fail the test yet
-                # Just report what we found
-                pytest.skip(
-                    "Nested resize not yet working - need to investigate process groups"
-                )
+        print("✓ SUCCESS: Python grandchild received resize!")
 
         term.kill()
 
