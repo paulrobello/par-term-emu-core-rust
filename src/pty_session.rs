@@ -1930,11 +1930,21 @@ mod tests {
         let result = session.spawn("cmd.exe", &["/C", "echo hello"]);
         assert!(result.is_ok());
 
-        // Wait for the command to run, produce output, and be fully processed.
-        std::thread::sleep(std::time::Duration::from_millis(300));
-
-        let observed = observed_in_window.load(Ordering::SeqCst);
-        let final_gen = session.update_generation();
+        // Wait for the command to run, produce output, and be fully
+        // processed: the callback must observe the pre-processing bump AND
+        // the post-write bump must land after it. A fixed sleep flakes
+        // under load — the reader thread can lag the wait (observed locally
+        // 2026-09-22 under back-to-back gate runs) — so poll with a
+        // deadline for both conditions before asserting.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let (observed, final_gen) = loop {
+            let observed = observed_in_window.load(Ordering::SeqCst);
+            let final_gen = session.update_generation();
+            if (observed > 0 && final_gen > observed) || std::time::Instant::now() >= deadline {
+                break (observed, final_gen);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
 
         assert!(
             observed > 0,
