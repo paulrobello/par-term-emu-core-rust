@@ -41,6 +41,12 @@ const DEFAULT_ROWS: u16 = 24;
 /// this one slot under the hood.
 const DEFAULT_BUFFER: &str = "default";
 
+/// QA-113 test hook: when set, `dispatch_command` panics before running the
+/// command, so the containment tests can drive a guaranteed panic.
+#[cfg(test)]
+pub(crate) static PANIC_ON_COMMAND: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// The per-dispatch context every handler shares.
 pub(super) struct Ctx<'a> {
     /// The whole pane tree behind its lock.
@@ -131,6 +137,12 @@ pub(super) fn dispatch_command(
     persist: Option<&Sender<PersistState>>,
     issuer: Option<&SyncSender<String>>,
 ) -> String {
+    // QA-113 test hook: force a dispatcher panic to exercise the client
+    // thread's containment (see `dispatch_contained`).
+    #[cfg(test)]
+    if crate::mux::dispatch::PANIC_ON_COMMAND.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("injected dispatcher panic (QA-113)");
+    }
     let mutates = command.mutates();
     let outcome = match command {
         MuxCommand::NewSession { name } => cmd_new_session(ctx, name),

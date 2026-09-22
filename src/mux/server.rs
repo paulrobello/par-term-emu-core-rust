@@ -345,7 +345,7 @@ fn handle_client(
                     clients: &clients,
                     command_number,
                 };
-                let reply = dispatch_command(command, &ctx, persist.as_ref(), Some(&tx));
+                let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
                 if tx.send(reply).is_err() {
                     break;
                 }
@@ -425,6 +425,38 @@ pub(crate) fn push_to_clients(clients: &Clients, line: String) {
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
         });
+}
+
+/// Execute one command with panic containment (QA-113): a panicking
+/// handler becomes an error block for the issuer plus an error log,
+/// instead of tearing down the client thread with no reply and no trace.
+/// The tree lock is a parking_lot guard, so unwinding releases it — the
+/// server keeps serving whatever survived the panic.
+fn dispatch_contained(
+    command: crate::mux::command::MuxCommand,
+    ctx: &Ctx<'_>,
+    persist: Option<&Sender<PersistState>>,
+    issuer: Option<&SyncSender<String>>,
+) -> String {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        dispatch_command(command, ctx, persist, issuer)
+    })) {
+        Ok(reply) => reply,
+        Err(payload) => {
+            let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "unknown panic".to_string()
+            };
+            log::error!(
+                "par-mux: command {} panicked: {message}",
+                ctx.command_number
+            );
+            emit_block(ctx.command_number, "internal error", false)
+        }
+    }
 }
 
 /// Push one notification line to every connected client.
@@ -1428,5 +1460,40 @@ mod tests {
         assert_eq!(received.first().map(String::as_str), Some("line-0"));
         let last = format!("line-{CLIENT_QUEUE_DEPTH}");
         assert_eq!(received.last().map(String::as_str), Some(last.as_str()));
+    }
+
+    /// QA-113: a panicking dispatcher is contained — the issuer gets an
+    /// error block, and the same "connection" answers the next command.
+    #[test]
+    fn a_panicking_command_yields_an_error_block_and_the_next_command_survives() {
+        let (tree, clients) = harness();
+
+        crate::mux::dispatch::PANIC_ON_COMMAND.store(true, Ordering::Relaxed);
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 1,
+        };
+        let poisoned = parse_command("list-sessions").expect("parses");
+        let reply = dispatch_contained(poisoned, &ctx, None, None);
+        assert!(
+            reply.contains("%error") && reply.contains("internal error"),
+            "a panicked command answers with an error block: {reply}"
+        );
+        crate::mux::dispatch::PANIC_ON_COMMAND.store(false, Ordering::Relaxed);
+
+        // The tree lock unwound free; the next command on the same
+        // connection dispatches normally.
+        let ctx = Ctx {
+            tree: &tree,
+            clients: &clients,
+            command_number: 2,
+        };
+        let healthy = parse_command("list-sessions").expect("parses");
+        let reply = dispatch_contained(healthy, &ctx, None, None);
+        assert!(
+            reply.contains("%end"),
+            "the connection survives the panic: {reply}"
+        );
     }
 }
