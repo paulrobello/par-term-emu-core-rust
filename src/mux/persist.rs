@@ -7,6 +7,7 @@
 //! (D3.5: spawn first, restore second — startup bytes must not overwrite a
 //! restored screen).
 
+use crate::mux::agent_resume::{render_argv, resume_invocation};
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, PaneFactory};
@@ -291,11 +292,25 @@ impl MuxTree {
             let mut window_ids = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
                 for pane in &window.panes {
+                    // The effective command (D6.3): a resumable agent
+                    // session rewrites what the pane respawns as — the
+                    // hook-reported invocation first, the per-agent table
+                    // second. Every failure mode of that chain is an Option
+                    // degrading to the pane's original `spawn_command`,
+                    // exactly Phase 3 behavior; no retry and no probe (an
+                    // agent that accepts a resume flag and starts fresh is
+                    // 6.4's after-the-fact question, not spawn time's).
+                    let effective = pane
+                        .agent_session
+                        .as_ref()
+                        .and_then(resume_invocation)
+                        .map(|argv| render_argv(&argv))
+                        .or_else(|| pane.spawn_command.clone());
                     let mut created = factory.create_pane(
                         PaneId(pane.id),
                         window.cols,
                         window.rows,
-                        pane.spawn_command.as_deref(),
+                        effective.as_deref(),
                     )?;
                     // Identity comes back as metadata so the format
                     // round-trips and task 6.3's hook-first lookup reads it
@@ -488,7 +503,7 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
 mod tests {
     use super::*;
     use crate::mux::layout::SplitDirection;
-    use crate::mux::pane::ShellPaneFactory;
+    use crate::mux::pane::{MuxPane, PaneFactory, ShellPaneFactory};
     use std::path::PathBuf;
 
     /// A per-test target path under a unique temp dir; `save_to` creates the
@@ -508,6 +523,43 @@ mod tests {
 
     pub(super) fn tree() -> MuxTree {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
+    }
+
+    /// Records the command each restore computed, delegating the actual
+    /// spawn to a bounded sleeper: restoring an agent pane must not launch a
+    /// real agent CLI from a unit test, and the recorded value is the
+    /// assertion target — exactly what `from_persist_state` handed the
+    /// factory.
+    #[derive(Clone, Default)]
+    struct RecordingFactory {
+        received: std::sync::Arc<std::sync::Mutex<Vec<(PaneId, Option<String>)>>>,
+    }
+
+    impl RecordingFactory {
+        fn command_for(&self, id: PaneId) -> Option<String> {
+            self.received
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(pane, _)| *pane == id)
+                .and_then(|(_, command)| command.clone())
+        }
+    }
+
+    impl PaneFactory for RecordingFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+        ) -> Result<MuxPane, MuxError> {
+            self.received
+                .lock()
+                .unwrap()
+                .push((id, command.map(str::to_string)));
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"))
+        }
     }
 
     /// Two sessions: the first with a split window plus a second window, the
@@ -779,8 +831,9 @@ mod tests {
         assert_ne!(a, b, "two servers on different sockets never share state");
     }
 
-    /// One pane whose metadata carries the full hook-reported identity.
-    fn tree_with_agent_pane() -> (MuxTree, PaneId) {
+    /// One pane carrying the given metadata keys — the shared base for the
+    /// agent-identity tests.
+    fn tree_with_metadata(metadata: &[(&str, &str)]) -> (MuxTree, PaneId) {
         let mut tree = tree();
         let session = tree.new_session("agents", 80, 24).unwrap();
         let pane_id = tree
@@ -793,20 +846,29 @@ mod tests {
             .next()
             .unwrap();
         let pane = tree.pane_mut(pane_id).unwrap();
-        pane.set_metadata("agent", "pi");
-        pane.set_metadata("agent_session_id", "s-1");
-        pane.set_metadata("agent_session_path", "/tmp/pi-session.jsonl");
-        pane.set_metadata("agent_source", "par-mux:pi");
-        pane.set_metadata(
-            "agent_resume_argv",
-            r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
-        );
-        // Keys that must NOT travel: state-shaped and provenance-of-start.
-        pane.set_metadata("agent_state", "working");
-        pane.set_metadata("agent_state_source", "hook");
-        pane.set_metadata("agent_seq", "1000");
-        pane.set_metadata("agent_session_start_source", "startup");
+        for (key, value) in metadata {
+            pane.set_metadata(key, value);
+        }
         (tree, pane_id)
+    }
+
+    /// One pane whose metadata carries the full hook-reported identity.
+    fn tree_with_agent_pane() -> (MuxTree, PaneId) {
+        tree_with_metadata(&[
+            ("agent", "pi"),
+            ("agent_session_id", "s-1"),
+            ("agent_session_path", "/tmp/pi-session.jsonl"),
+            ("agent_source", "par-mux:pi"),
+            (
+                "agent_resume_argv",
+                r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
+            ),
+            // Keys that must NOT travel: state-shaped and provenance-of-start.
+            ("agent_state", "working"),
+            ("agent_state_source", "hook"),
+            ("agent_seq", "1000"),
+            ("agent_session_start_source", "startup"),
+        ])
     }
 
     #[test]
@@ -831,8 +893,16 @@ mod tests {
 
         // Restore writes the identity back as metadata, so a re-capture of
         // the restored tree holds the same identity — the format round-trip.
-        let restored =
-            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        // The recording factory keeps the real pi CLI out of the test while
+        // proving what restore actually spawned (task 6.3): the reported
+        // invocation, verbatim.
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.command_for(pane_id).as_deref(),
+            Some("'pi' '--session' '/tmp/pi-session.jsonl'"),
+            "restore spawns the hook-reported invocation, not the original command"
+        );
         let recaptured = restored.to_persist_state();
         assert_eq!(
             recaptured.sessions[0].windows[0].panes[0].agent_session,
@@ -889,8 +959,8 @@ mod tests {
             "a path-only ref is identity enough — the id-OR-path wire contract"
         );
 
-        let restored =
-            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
         assert!(
             restored
                 .pane(pane_id)
@@ -899,6 +969,123 @@ mod tests {
                 .contains_key("agent_resume_argv"),
             "the override 6.2 reads survives the restart"
         );
+        assert_eq!(
+            factory.command_for(pane_id).as_deref(),
+            Some("'omp' '--resume=/tmp/omp-session.jsonl'"),
+            "restore spawns the reported invocation for the path-only shape too"
+        );
+    }
+
+    /// Task 6.3: an agent with NO reported invocation gets the table's argv
+    /// through the same restore chain.
+    #[test]
+    fn restore_spawns_a_table_resume_for_an_agent_without_a_reported_invocation() {
+        let (original, pane_id) =
+            tree_with_metadata(&[("agent", "claude"), ("agent_session_id", "abc-123")]);
+        let state = original.to_persist_state();
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.command_for(pane_id).as_deref(),
+            Some("'claude' '--resume' 'abc-123'"),
+            "the table builds the invocation when nothing was reported"
+        );
+        assert_eq!(
+            restored
+                .pane(pane_id)
+                .unwrap()
+                .metadata()
+                .get("agent")
+                .map(String::as_str),
+            Some("claude"),
+            "identity still lands as metadata for the next cycle"
+        );
+    }
+
+    /// Task 6.3 degradation 1: an agent with no table entry and no report
+    /// falls back to the pane's original spawn command.
+    #[test]
+    fn an_agent_with_no_table_entry_and_no_report_falls_back_to_the_original_command() {
+        let mut tree = tree();
+        let session = tree.new_session("agents", 80, 24).unwrap();
+        let main_window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(main_window).unwrap().panes()[0];
+        let pane_id = tree
+            .split_pane(first, SplitDirection::Vertical, 0.25, Some("sleep 60"))
+            .unwrap();
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.set_metadata("agent", "kimi");
+        pane.set_metadata("agent_session_id", "kimi-arc-1");
+
+        let state = tree.to_persist_state();
+        // Real factory: the fallback command is the original sleep, safe to
+        // actually spawn.
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_eq!(
+            restored.pane(pane_id).unwrap().spawn_command(),
+            Some("sleep 60"),
+            "no table entry means fresh-spawn behavior, not an error"
+        );
+    }
+
+    /// Task 6.3 degradation 2: a session ref the table cannot use (a path
+    /// for an id-only agent) falls back the same way.
+    #[test]
+    fn a_ref_the_table_cannot_use_falls_back_to_the_original_command() {
+        let (original, pane_id) =
+            tree_with_metadata(&[("agent", "claude"), ("agent_session_path", "/tmp/s.jsonl")]);
+        let state = original.to_persist_state();
+        let factory = RecordingFactory::default();
+        MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.command_for(pane_id),
+            None,
+            "claude cannot resume from a path — the pane restores as it was"
+        );
+    }
+
+    /// Task 6.3 degradation 3: an agent binary that no longer exists. The
+    /// resume command is spawned anyway — no probe detects the absence, no
+    /// fallback is swapped in; the shell's own "command not found" lands in
+    /// the pane exactly as a Phase 3 command failure would.
+    #[test]
+    fn an_absent_agent_binary_degrades_inside_the_pane_not_the_restore() {
+        let (original, pane_id) = tree_with_metadata(&[
+            ("agent", "pi"),
+            ("agent_session_id", "s-1"),
+            (
+                "agent_resume_argv",
+                r#"["par-mux-test-no-such-binary","--resume","s-1"]"#,
+            ),
+        ]);
+        let state = original.to_persist_state();
+        let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+            .expect("restore completes — an absent binary is the pane's problem");
+        assert_eq!(
+            restored.pane(pane_id).unwrap().spawn_command(),
+            Some("'par-mux-test-no-such-binary' '--resume' 's-1'"),
+            "no probe swapped in a fallback — the failure is contained in the pane"
+        );
+    }
+
+    /// Task 6.3 criterion 3: a non-agent pane restores byte-identically to
+    /// Phase 3 — same spawn command through the real factory, and the
+    /// restore invents no agent session.
+    #[test]
+    fn non_agent_panes_restore_through_the_unchanged_phase3_path() {
+        let original = populated_tree();
+        let state = original.to_persist_state();
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_same_shape(&restored, &original);
+        let recaptured = restored.to_persist_state();
+        assert!(recaptured
+            .sessions
+            .iter()
+            .flat_map(|session| session.windows.iter())
+            .flat_map(|window| window.panes.iter())
+            .all(|pane| pane.agent_session.is_none()));
     }
 
     #[test]

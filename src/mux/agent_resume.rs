@@ -96,6 +96,18 @@ fn id_ref(session: &PersistAgentSession) -> Option<String> {
     non_empty(session.session_id.as_deref())
 }
 
+/// Render an argv as a POSIX shell command line — the shape the factory's
+/// `sh -c` spawn consumes (task 6.3). Every argument is single-quoted
+/// unconditionally: the argv crosses from a validated structure into a
+/// string a shell re-parses, and picking an "unquotable" alphabet is a
+/// guess about vendor CLIs the table exists not to make.
+pub fn render_argv(argv: &[String]) -> String {
+    argv.iter()
+        .map(|part| format!("'{}'", part.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// The session ref for pi/omp, which accept a transcript path as well as an
 /// id. Path-first when both are present, matching what our own extensions
 /// report.
@@ -281,6 +293,29 @@ mod tests {
         assert_eq!(
             resume_invocation(&session("cursor", Some("s-1"), None)),
             None
+        );
+    }
+
+    // --- rendering for the factory's `sh -c` spawn (task 6.3) ---
+
+    #[test]
+    fn render_argv_single_quotes_every_argument() {
+        let argv: Vec<String> = ["omp", "--resume=/tmp/s.jsonl", ""]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        assert_eq!(render_argv(&argv), "'omp' '--resume=/tmp/s.jsonl' ''");
+    }
+
+    #[test]
+    fn render_argv_quotes_spaces_and_embedded_quotes_safely() {
+        let argv: Vec<String> = ["pi", "--session", "/tmp/my session's file.jsonl"]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        assert_eq!(
+            render_argv(&argv),
+            "'pi' '--session' '/tmp/my session'\\''s file.jsonl'"
         );
     }
 }
