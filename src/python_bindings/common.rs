@@ -8,9 +8,8 @@
 //! [`TerminalAccess`] abstracts the "give me the terminal" step (returning a
 //! `Deref<Target=Terminal>` guard for each type's native form), and the macros
 //! below emit the shared `#[pymethods]` definitions ONCE, invoked per type.
-//! Behavior is preserved (the macros use the clean `Terminal`-method form; the
-//! duplicated `Ok::<_, ()>(lock())` dead-fallback copies in `pty.rs` are
-//! dropped, which is safe because `parking_lot` locks never fail).
+//! Behavior is preserved (the macros use the clean `Terminal`-method form;
+//! `parking_lot` locks never fail, so no lock-fallback path is needed).
 
 use crate::terminal::Terminal;
 
@@ -25,7 +24,6 @@ pub(crate) trait TerminalAccess {
     /// Shared (immutable) access to the terminal.
     fn term_ref(&self) -> impl std::ops::Deref<Target = Terminal>;
     /// Exclusive (mutable) access to the terminal.
-    #[allow(dead_code)] // used once setters/mutating methods are migrated (ARC-003/QA-001 scaling)
     fn term_mut(&mut self) -> impl std::ops::DerefMut<Target = Terminal>;
 }
 
@@ -2063,6 +2061,386 @@ macro_rules! impl_terminal_exports {
             fn update_animations(&mut self) -> pyo3::PyResult<Vec<u32>> {
                 let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
                 Ok(t.update_animations())
+            }
+
+            /// Export recording to asciicast v2 format
+            ///
+            /// Args:
+            ///     session: RecordingSession from stop_recording()
+            ///
+            /// Returns:
+            ///     Asciicast format string
+            #[pyo3(signature = (session=None))]
+            fn export_asciicast(
+                &self,
+                session: Option<&$crate::python_bindings::types::PyRecordingSession>,
+                _py: pyo3::Python,
+            ) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(session) = session {
+                    Ok(t.export_asciicast(&session.inner))
+                } else if let Some(active) = t.get_recording_session() {
+                    Ok(t.export_asciicast(active))
+                } else {
+                    Err(pyo3::exceptions::PyValueError::new_err(
+                        "No active recording session (pass session=stop_recording())",
+                    ))
+                }
+            }
+
+            /// Export recording to asciicast v3 format
+            ///
+            /// v3 uses a nested `term` header object, relative per-event intervals,
+            /// and `"COLSxROWS"` resize data. A `g` graphics event is emitted per
+            /// graphic in the store (live placements and scrollback promotions)
+            /// carrying protocol, geometry, position and base64 RGBA pixels.
+            ///
+            /// Args:
+            ///     session: RecordingSession from stop_recording()
+            ///
+            /// Returns:
+            ///     Asciicast v3 format string
+            #[pyo3(signature = (session=None))]
+            fn export_asciicast_v3(
+                &self,
+                session: Option<&$crate::python_bindings::types::PyRecordingSession>,
+                _py: pyo3::Python,
+            ) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(session) = session {
+                    Ok(t.export_asciicast_v3(&session.inner))
+                } else if let Some(active) = t.get_recording_session() {
+                    Ok(t.export_asciicast_v3(active))
+                } else {
+                    Err(pyo3::exceptions::PyValueError::new_err(
+                        "No active recording (pass session=stop_recording())",
+                    ))
+                }
+            }
+
+            /// Export recording to JSON format
+            ///
+            /// Returns:
+            ///     JSON format string
+            #[pyo3(signature = (session=None))]
+            fn export_json(
+                &self,
+                session: Option<&$crate::python_bindings::types::PyRecordingSession>,
+                _py: pyo3::Python,
+            ) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(session) = session {
+                    Ok(t.export_json(&session.inner))
+                } else if let Some(active) = t.get_recording_session() {
+                    Ok(t.export_json(active))
+                } else {
+                    Err(pyo3::exceptions::PyValueError::new_err(
+                        "No active recording session (pass session=stop_recording())",
+                    ))
+                }
+            }
+
+            /// Get the number of scrollback lines
+            ///
+            /// Returns:
+            ///     Number of lines in scrollback buffer
+            fn scrollback_len(&self) -> pyo3::PyResult<usize> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.grid().scrollback_len())
+            }
+
+            /// Get a specific line from the terminal buffer
+            ///
+            /// Args:
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     String content of the specified row, or None if row is out of bounds
+            fn get_line(&self, row: usize) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(line) = t.grid().row(row) {
+                    Ok(Some(
+                        line.iter()
+                            .filter(|cell| !cell.flags.wide_char_spacer())
+                            .map(|cell| cell.get_grapheme())
+                            .collect::<Vec<String>>()
+                            .join(""),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Get a cell's character at the specified position (includes combining characters/modifiers)
+            ///
+            /// Args:
+            ///     col: Column index (0-based)
+            ///     row: Row index (0-based)
+            ///
+            /// Returns:
+            ///     Character (grapheme cluster) at the position, or None if out of bounds
+            fn get_char(&self, col: usize, row: usize) -> pyo3::PyResult<Option<String>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                if let Some(cell) = t.active_grid().get(col, row) {
+                    Ok(Some(cell.get_grapheme()))
+                } else {
+                    Ok(None)
+                }
+            }
+
+            /// Create atomic snapshot of current screen state
+            ///
+            /// Captures all lines, cursor state, and screen identity atomically.
+            /// The snapshot is immutable and will not change even if the terminal
+            /// state changes (e.g., alternate screen switches).
+            ///
+            /// Returns:
+            ///     ScreenSnapshot with all terminal state
+            fn create_snapshot(
+                &self,
+            ) -> pyo3::PyResult<$crate::python_bindings::types::PyScreenSnapshot> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+
+                // Get current grid (will be either primary or alternate)
+                let grid = t.active_grid();
+                let rows = grid.rows();
+                let cols = grid.cols();
+
+                // Get bold brightening setting
+                let bold_brightening = t.bold_brightening();
+
+                // Get ANSI palette for color resolution
+                let ansi_palette = t.get_ansi_palette();
+
+                // Resolve a color through the ANSI palette for the 16 base slots
+                let resolve_color = |color: $crate::color::Color| -> (u8, u8, u8) {
+                    match color {
+                        $crate::color::Color::Named(named) => {
+                            let palette_idx = named as usize;
+                            if palette_idx < 16 {
+                                ansi_palette[palette_idx].to_rgb()
+                            } else {
+                                color.to_rgb()
+                            }
+                        }
+                        $crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
+                            ansi_palette[idx as usize].to_rgb()
+                        }
+                        _ => color.to_rgb(),
+                    }
+                };
+
+                // Capture all lines while holding terminal reference
+                let mut lines = Vec::with_capacity(rows);
+                let mut wrapped_lines = Vec::with_capacity(rows);
+                for row in 0..rows {
+                    let mut line = Vec::with_capacity(cols);
+                    for col in 0..cols {
+                        if let Some(cell) = grid.get(col, row) {
+                            // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
+                            let mut fg = cell.fg;
+                            if bold_brightening && cell.flags.bold() {
+                                if let $crate::color::Color::Named(named) = fg {
+                                    if (named as u8) < 8 {
+                                        fg = $crate::color::Color::Named(
+                                            $crate::color::NamedColor::from_u8(named as u8 + 8),
+                                        );
+                                    }
+                                }
+                            }
+
+                            line.push((
+                                cell.get_grapheme(),
+                                resolve_color(fg),
+                                resolve_color(cell.bg),
+                                $crate::python_bindings::types::PyAttributes::from(cell),
+                            ));
+                        } else {
+                            // Empty cell
+                            line.push((
+                                " ".to_string(),
+                                (0, 0, 0),
+                                (0, 0, 0),
+                                $crate::python_bindings::types::PyAttributes::default(),
+                            ));
+                        }
+                    }
+                    lines.push(line);
+                    wrapped_lines.push(grid.is_line_wrapped(row));
+                }
+
+                let cursor = t.cursor();
+
+                Ok($crate::python_bindings::types::PyScreenSnapshot {
+                    lines,
+                    wrapped_lines,
+                    cursor_pos: (cursor.col, cursor.row),
+                    cursor_visible: cursor.visible,
+                    cursor_style: cursor.style.into(),
+                    is_alt_screen: t.is_alt_screen_active(),
+                    generation: 0, // Terminal doesn't have generation tracking
+                    size: (cols, rows),
+                })
+            }
+
+            /// Get terminal statistics
+            ///
+            /// Returns:
+            ///     Dictionary with statistics: cols, rows, scrollback_lines, total_cells,
+            ///     non_whitespace_lines, graphics_count, estimated_memory_bytes
+            fn get_stats(&self) -> pyo3::PyResult<std::collections::HashMap<String, usize>> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                let stats = t.get_stats();
+                let mut result = std::collections::HashMap::new();
+                result.insert("cols".to_string(), stats.cols);
+                result.insert("rows".to_string(), stats.rows);
+                result.insert("scrollback_lines".to_string(), stats.scrollback_lines);
+                result.insert("total_cells".to_string(), stats.total_cells);
+                result.insert(
+                    "non_whitespace_lines".to_string(),
+                    stats.non_whitespace_lines,
+                );
+                result.insert("graphics_count".to_string(), stats.graphics_count);
+                result.insert(
+                    "estimated_memory_bytes".to_string(),
+                    stats.estimated_memory_bytes,
+                );
+                result.insert("hyperlink_count".to_string(), stats.hyperlink_count);
+                result.insert(
+                    "hyperlink_memory_bytes".to_string(),
+                    stats.hyperlink_memory_bytes,
+                );
+                result.insert("color_stack_depth".to_string(), stats.color_stack_depth);
+                result.insert("title_stack_depth".to_string(), stats.title_stack_depth);
+                result.insert(
+                    "keyboard_stack_depth".to_string(),
+                    stats.keyboard_stack_depth,
+                );
+                result.insert(
+                    "response_buffer_size".to_string(),
+                    stats.response_buffer_size,
+                );
+                result.insert("dirty_row_count".to_string(), stats.dirty_row_count);
+                result.insert("pending_bell_events".to_string(), stats.pending_bell_events);
+                result.insert(
+                    "pending_terminal_events".to_string(),
+                    stats.pending_terminal_events,
+                );
+                Ok(result)
+            }
+
+            /// Get scrollback usage
+            ///
+            /// Returns:
+            ///     Tuple of (used_lines, max_capacity)
+            fn get_scrollback_usage(&self) -> pyo3::PyResult<(usize, usize)> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok((t.get_scrollback_usage(), t.grid().max_scrollback()))
+            }
+
+            /// Set keyboard protocol flags (Kitty keyboard protocol)
+            ///
+            /// Args:
+            ///     flags: Flags to set (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
+            ///     mode: 0=disable all, 1=set flags, 2=lock flags (default: 1)
+            ///
+            /// Sends: CSI = flags ; mode u
+            #[pyo3(signature = (flags, mode=1))]
+            fn set_keyboard_flags(&mut self, flags: u16, mode: u8) -> pyo3::PyResult<()> {
+                let sequence = format!("\x1b[={};{}u", flags, mode);
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(sequence.as_bytes());
+                Ok(())
+            }
+
+            /// Query current keyboard flags (Kitty keyboard protocol)
+            ///
+            /// Returns:
+            ///     Query sequence sent to terminal (response will be in drain_responses())
+            fn query_keyboard_flags(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(b"\x1b[?u");
+                Ok(())
+            }
+
+            /// Push current keyboard flags to stack and set new flags
+            ///
+            /// Args:
+            ///     flags: New flags to set
+            ///
+            /// Sends: CSI > flags u
+            fn push_keyboard_flags(&mut self, flags: u16) -> pyo3::PyResult<()> {
+                let sequence = format!("\x1b[>{}u", flags);
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(sequence.as_bytes());
+                Ok(())
+            }
+
+            /// Pop keyboard flags from stack
+            ///
+            /// Args:
+            ///     count: Number of flags to pop from stack (default: 1)
+            ///
+            /// Sends: CSI < count u
+            #[pyo3(signature = (count=1))]
+            fn pop_keyboard_flags(&mut self, count: usize) -> pyo3::PyResult<()> {
+                let sequence = format!("\x1b[<{}u", count);
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(sequence.as_bytes());
+                Ok(())
+            }
+
+            /// Query default foreground color (OSC 10)
+            ///
+            /// Sends OSC 10 ; ? ST query and returns response in drain_responses().
+            /// Response format: ESC ] 10 ; rgb:rrrr/gggg/bbbb ESC \
+            fn query_default_fg(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(b"\x1b]10;?\x1b\\");
+                Ok(())
+            }
+
+            /// Query default background color (OSC 11)
+            ///
+            /// Sends OSC 11 ; ? ST query and returns response in drain_responses().
+            /// Response format: ESC ] 11 ; rgb:rrrr/gggg/bbbb ESC \
+            fn query_default_bg(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(b"\x1b]11;?\x1b\\");
+                Ok(())
+            }
+
+            /// Query cursor color (OSC 12)
+            ///
+            /// Sends OSC 12 ; ? ST query and returns response in drain_responses().
+            /// Response format: ESC ] 12 ; rgb:rrrr/gggg/bbbb ESC \
+            fn query_cursor_color(&mut self) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.process(b"\x1b]12;?\x1b\\");
+                Ok(())
+            }
+
+            /// Set ANSI palette color (0-15)
+            ///
+            /// Args:
+            ///     index: Palette index (0-15)
+            ///     r: Red component (0-255)
+            ///     g: Green component (0-255)
+            ///     b: Blue component (0-255)
+            ///
+            /// Raises:
+            ///     ValueError: If index is not in range 0-15
+            fn set_ansi_palette_color(
+                &mut self,
+                index: usize,
+                r: u8,
+                g: u8,
+                b: u8,
+            ) -> pyo3::PyResult<()> {
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_ansi_palette_color(index, $crate::color::Color::Rgb(r, g, b))
+                    .map_err(pyo3::PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
+                Ok(())
             }
         }
     };
