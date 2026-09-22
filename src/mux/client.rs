@@ -47,16 +47,32 @@ impl MuxClient {
     ///
     /// Losing the spawn race is not an error: another client's daemon won the
     /// path, and connecting to the winner is the correct outcome.
+    ///
+    /// A daemon that cannot be STARTED at all — a missing or unrunnable
+    /// `par-mux` binary — fails immediately, naming the path that was tried.
+    /// Only a daemon that really was spawned earns `SPAWN_CONNECT_DEADLINE`:
+    /// retrying a socket nothing will ever bind buries the real cause under
+    /// ten seconds of generic connect errors.
     pub fn connect_or_spawn_at(path: &Path) -> io::Result<Self> {
         if let Ok(client) = Self::connect(path) {
             return Ok(client);
         }
-        let daemon = spawn_daemon(path);
+        Self::spawn_and_connect(&daemon_binary_path()?, path)
+    }
+
+    /// Start `bin` as the daemon for `socket`, then wait for it to bind.
+    ///
+    /// Split out of [`Self::connect_or_spawn_at`] so tests can drive the two
+    /// outcomes whose costs differ by ten seconds — an unspawnable binary and
+    /// a spawned daemon slow to bind — against a chosen binary path, rather
+    /// than against whatever the ambient target directory happens to hold.
+    fn spawn_and_connect(bin: &Path, socket: &Path) -> io::Result<Self> {
+        let daemon = spawn_daemon(bin, socket)?;
         let deadline = Instant::now() + SPAWN_CONNECT_DEADLINE;
         loop {
-            match Self::connect(path) {
+            match Self::connect(socket) {
                 Ok(mut client) => {
-                    client.spawned_daemon = daemon;
+                    client.spawned_daemon = Some(daemon);
                     return Ok(client);
                 }
                 Err(_) if Instant::now() < deadline => {
@@ -158,18 +174,18 @@ fn reader_loop(
     }
 }
 
-/// Start a par-mux daemon for `path`, next to our own executable.
-///
-/// Best effort: if the binary is missing the bounded retry in
-/// [`MuxClient::connect_or_spawn_at`] turns that into a connect error rather
-/// than a panic. The child handle is returned so the spawner can end the
-/// daemon later — dropping it (as an earlier version did) orphans a live
-/// process, one leak per spawn.
-fn spawn_daemon(path: &Path) -> Option<std::process::Child> {
-    let Ok(exe) = std::env::current_exe() else {
-        return None;
+/// Where the par-mux daemon binary should sit: next to our own executable.
+fn daemon_binary_path() -> io::Result<PathBuf> {
+    let exe = std::env::current_exe()?;
+    let Some(mut dir) = exe.parent().map(Path::to_path_buf) else {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "cannot locate the par-mux daemon binary: {} has no parent directory",
+                exe.display()
+            ),
+        ));
     };
-    let mut dir = exe.parent().map(Path::to_path_buf)?;
     // Integration-test binaries live in <target>/<profile>/deps while bins
     // sit in <target>/<profile> — walk out of deps to find the sibling bin.
     if dir.file_name() == Some(std::ffi::OsStr::new("deps")) {
@@ -181,12 +197,176 @@ fn spawn_daemon(path: &Path) -> Option<std::process::Child> {
     let bin: PathBuf = dir.join("par-mux");
     #[cfg(windows)]
     let bin: PathBuf = dir.join("par-mux.exe");
+    Ok(bin)
+}
+
+/// Start `bin` as a par-mux daemon owning `socket`.
+///
+/// A spawn failure is returned, not swallowed: it means no process will ever
+/// bind `socket`, so the caller has to fail now rather than spend
+/// `SPAWN_CONNECT_DEADLINE` waiting on a daemon that was never started. The
+/// error names the path tried and keeps the OS error kind, so a missing
+/// binary stays distinguishable from one that is present but unexecutable.
+///
+/// The child handle is returned so the spawner can end the daemon later —
+/// dropping it (as an earlier version did) orphans a live process, one leak
+/// per spawn.
+fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
     std::process::Command::new(bin)
         .arg("--socket")
-        .arg(path)
+        .arg(socket)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .ok()
+        .map_err(|err| {
+            io::Error::new(
+                err.kind(),
+                format!(
+                    "cannot start the par-mux daemon binary at {}: {err} — build it \
+                     or place it next to the executable",
+                    bin.display()
+                ),
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mux::ipc::bind_local_listener;
+    use interprocess::local_socket::traits::Listener as _;
+
+    /// How long the slow-bind daemon waits before binding its socket. Long
+    /// enough that a caller which did not retry would miss it, short enough to
+    /// stay far below `SPAWN_CONNECT_DEADLINE`.
+    const SLOW_BIND_DELAY: Duration = Duration::from_millis(300);
+    /// The bar the fast-fail path must clear. The bug was that an unspawnable
+    /// binary cost the full `SPAWN_CONNECT_DEADLINE` (10s); anything near a
+    /// second means the retry loop was entered anyway.
+    const FAST_FAIL_BUDGET: Duration = Duration::from_millis(1000);
+
+    fn temp_socket(tag: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        path.push(format!("par-mux-client-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        path
+    }
+
+    /// A binary path guaranteed not to exist, so `spawn` must fail.
+    ///
+    /// The parent directory is absent too: a bare missing file next to the
+    /// test binary would start existing the moment a full `cargo test` built
+    /// the real `par-mux`, and the test would silently stop testing anything.
+    fn missing_binary(tag: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "par-mux-absent-{}-{tag}/par-mux",
+            std::process::id()
+        ))
+    }
+
+    /// A binary that exists and spawns cleanly: this test process itself.
+    ///
+    /// libtest rejects `--socket` and exits immediately, which is exactly the
+    /// stub wanted here — a real child process that never binds the socket,
+    /// leaving the bind to the listener the test raises on its own schedule.
+    fn spawnable_stub() -> PathBuf {
+        std::env::current_exe().expect("the test binary's own path")
+    }
+
+    #[test]
+    fn an_unspawnable_daemon_binary_fails_fast_and_names_the_path() {
+        let socket = temp_socket("nospawn");
+        let bin = missing_binary("nospawn");
+
+        let started = Instant::now();
+        let err = MuxClient::spawn_and_connect(&bin, &socket)
+            .err()
+            .expect("a daemon binary that cannot be started is an error");
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < FAST_FAIL_BUDGET,
+            "a daemon binary that cannot be started must fail immediately, not \
+             after the {}s spawn-connect deadline — nothing will ever bind the \
+             socket, so every retry is waste. Took {elapsed:?}",
+            SPAWN_CONNECT_DEADLINE.as_secs()
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains(&bin.display().to_string()),
+            "the error must name the binary path that was tried, or the caller \
+             cannot tell a missing daemon from an unreachable socket: {message}"
+        );
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::NotFound,
+            "an absent binary keeps its OS error kind, so a missing daemon \
+             stays distinguishable from one present but unexecutable: {message}"
+        );
+    }
+
+    #[test]
+    fn a_spawned_daemon_slow_to_bind_still_gets_the_retry_deadline() {
+        let socket = temp_socket("slowbind");
+        let bind_at = socket.clone();
+
+        // The daemon that binds late. The retry loop must outlast this.
+        let binder = std::thread::spawn(move || {
+            std::thread::sleep(SLOW_BIND_DELAY);
+            let listener = bind_local_listener(&bind_at).expect("late bind");
+            // One accept: the client only has to reach a live socket, and
+            // holding the stream briefly keeps its reader thread attached.
+            let stream = listener.accept().expect("accept the retrying client");
+            std::thread::sleep(Duration::from_millis(100));
+            drop(stream);
+        });
+
+        let started = Instant::now();
+        let client = MuxClient::spawn_and_connect(&spawnable_stub(), &socket);
+        let elapsed = started.elapsed();
+
+        assert!(
+            client.is_ok(),
+            "a daemon that really was spawned must keep the full {}s deadline \
+             to bind — fast-failing this case would break every slow start: {:?}",
+            SPAWN_CONNECT_DEADLINE.as_secs(),
+            client.err()
+        );
+        assert!(
+            elapsed >= SLOW_BIND_DELAY,
+            "the connect can only have succeeded by retrying past the bind \
+             delay — {elapsed:?} is too fast to have waited for it"
+        );
+        assert!(
+            elapsed < SPAWN_CONNECT_DEADLINE,
+            "the retry loop must still be bounded: {elapsed:?}"
+        );
+
+        drop(client);
+        binder.join().expect("binder thread");
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[test]
+    fn the_daemon_binary_resolves_next_to_the_current_executable() {
+        let bin = daemon_binary_path().expect("the current exe has a directory");
+        let name = bin
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .expect("a binary file name");
+        assert!(
+            name.starts_with("par-mux"),
+            "the resolved daemon binary is par-mux: {}",
+            bin.display()
+        );
+        // Test binaries live in <target>/<profile>/deps while the daemon is
+        // the sibling bin one level up, so `deps` must have been walked out of.
+        assert_ne!(
+            bin.parent().and_then(Path::file_name),
+            Some(std::ffi::OsStr::new("deps")),
+            "the deps walk-out did not happen: {}",
+            bin.display()
+        );
+    }
 }
