@@ -15,8 +15,18 @@ import tempfile
 import time
 
 import pytest
+from conftest import wait_for
 
 pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")
+
+
+def read_log(path: str) -> str:
+    """Current contents of the child's log file (empty until it writes)."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
@@ -78,36 +88,23 @@ with open(log_file, 'a') as f:
         term.spawn("/usr/bin/python3", args=["-c", script])
 
         # Wait for script to initialize
-        time.sleep(0.2)
-
-        # Verify initial size was logged
-        with open(log_file) as f:
-            content = f.read()
-            assert "INITIAL:80x24" in content, f"Expected INITIAL:80x24, got: {content}"
+        assert wait_for(lambda: "INITIAL:80x24" in read_log(log_file)), (
+            f"Expected INITIAL:80x24, got: {read_log(log_file)}"
+        )
 
         # Resize the terminal
         term.resize(100, 30)
 
-        # Wait for SIGWINCH to be delivered and processed
-        time.sleep(0.3)
-
         # Check that SIGWINCH was received with correct size
-        with open(log_file) as f:
-            content = f.read()
-            assert "SIGWINCH:100x30" in content, (
-                f"Expected SIGWINCH:100x30 in log, got: {content}"
-            )
+        assert wait_for(lambda: "SIGWINCH:100x30" in read_log(log_file)), (
+            f"Expected SIGWINCH:100x30 in log, got: {read_log(log_file)}"
+        )
 
         # Resize again
         term.resize(120, 40)
-        time.sleep(0.3)
-
-        # Check second resize
-        with open(log_file) as f:
-            content = f.read()
-            assert "SIGWINCH:120x40" in content, (
-                f"Expected SIGWINCH:120x40 in log, got: {content}"
-            )
+        assert wait_for(lambda: "SIGWINCH:120x40" in read_log(log_file)), (
+            f"Expected SIGWINCH:120x40 in log, got: {read_log(log_file)}"
+        )
 
         # Kill the process
         term.kill()
@@ -126,23 +123,19 @@ def test_sigwinch_with_shell():
     term = PtyTerminal(80, 24)
     term.spawn_shell()
 
-    # Wait for shell to start
-    time.sleep(0.5)
+    # Wait for the shell to become interactive (a prompt produces output)
+    assert wait_for(lambda: term.content().strip())
 
     # Query initial size
     term.write_str("echo SIZE:${COLUMNS}x${LINES}\n")
-    time.sleep(0.2)
+    assert wait_for(lambda: "SIZE:" in term.content())
 
-    # Shell should show 80x24 (or close to it, depending on shell behavior)
-    # Note: Some shells don't update env vars on SIGWINCH
-
-    # Resize
+    # Resize (synchronous — the ioctl winsize updates before it returns)
     term.resize(100, 30)
-    time.sleep(0.3)
 
     # Query size again
     term.write_str("echo RESIZED:${COLUMNS}x${LINES}\n")
-    time.sleep(0.2)
+    assert wait_for(lambda: "RESIZED:" in term.content())
 
     # At minimum, the terminal should have resized
     assert term.size() == (100, 30)
@@ -192,25 +185,26 @@ with open(log_file, 'a') as f:
         term = PtyTerminal(80, 24)
         term.spawn("/usr/bin/python3", args=["-c", script])
 
-        time.sleep(0.2)
+        assert wait_for(lambda: "STARTED" in read_log(log_file))
 
-        # Perform multiple rapid resizes
+        # Perform multiple resizes. The 100ms pacing is load-bearing, not a
+        # wait: SIGWINCH is a standard (non-queued) signal, so resizes fired
+        # back-to-back can coalesce into one delivery and undercount.
         sizes = [(90, 25), (100, 30), (110, 35), (120, 40), (100, 30)]
         for cols, rows in sizes:
             term.resize(cols, rows)
             time.sleep(0.1)
 
-        # Wait for script to finish
-        time.sleep(1)
+        # Wait for the child to log its total (it sleeps ~2s before writing it)
+        assert wait_for(lambda: "TOTAL:" in read_log(log_file), timeout=5)
 
         # Check that we got SIGWINCH signals
-        with open(log_file) as f:
-            content = f.read()
-            # We should see multiple SIGWINCH entries
-            sigwinch_count = content.count("SIGWINCH:")
-            assert sigwinch_count >= 3, (
-                f"Expected at least 3 SIGWINCH signals, got {sigwinch_count}: {content}"
-            )
+        content = read_log(log_file)
+        # We should see multiple SIGWINCH entries
+        sigwinch_count = content.count("SIGWINCH:")
+        assert sigwinch_count >= 3, (
+            f"Expected at least 3 SIGWINCH signals, got {sigwinch_count}: {content}"
+        )
 
         term.kill()
 

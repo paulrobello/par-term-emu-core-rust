@@ -2,9 +2,12 @@
 
 #![cfg(feature = "mux")]
 
+mod common;
+
+use common::{command, wait_listening};
 use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::{connect_local_stream, prepare_socket_path, MuxServer};
-use std::io::{BufRead, BufReader, Write};
+use std::io::BufReader;
 use std::time::{Duration, Instant};
 
 fn socket(tag: &str) -> std::path::PathBuf {
@@ -12,23 +15,6 @@ fn socket(tag: &str) -> std::path::PathBuf {
     path.push(format!("par-mux-daemon-{}-{}", std::process::id(), tag));
     let _ = std::fs::remove_file(&path);
     path
-}
-
-/// Run one command and drain its `%begin`…`%end` block.
-fn command(stream: &mut impl Write, reader: &mut impl BufRead, line: &str) -> Vec<String> {
-    writeln!(stream, "{line}").expect("write command");
-    stream.flush().expect("flush");
-    let mut out = Vec::new();
-    loop {
-        let mut buf = String::new();
-        let n = reader.read_line(&mut buf).expect("read reply");
-        assert!(n > 0, "server closed while answering {line:?}");
-        let done = buf.starts_with("%end") || buf.starts_with("%error");
-        out.push(buf);
-        if done {
-            return out;
-        }
-    }
 }
 
 #[test]
@@ -49,8 +35,11 @@ fn panes_survive_every_client_disconnecting() {
     };
     assert!(pane_line.contains('%'), "a pane was created: {pane_line}");
 
-    // Give the server a moment to notice the disconnect and (wrongly) exit.
-    std::thread::sleep(Duration::from_millis(300));
+    // The requirement is that the server is STILL listening after its last
+    // client left. Poll the socket (bounded) instead of sleeping a guessed
+    // 300ms: if the server wrongly exited on the disconnect, the connect
+    // below fails and the test fails, on fast and slow machines alike.
+    wait_listening(&path);
 
     // Second client: the session must still be there.
     let stream = connect_local_stream(&path).expect(
@@ -77,10 +66,7 @@ fn prepare_socket_path_makes_auto_spawn_race_safe() {
     let _handle = std::thread::spawn(move || server.run());
 
     // Wait for the listener to be reachable.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while connect_local_stream(&path).is_err() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_listening(&path);
 
     // A second would-be daemon must refuse rather than steal the path.
     let err =
@@ -199,10 +185,7 @@ fn sigterm_saves_state_on_the_way_out() {
         .expect("daemon binary spawns");
 
     // Wait for the listener, then drive two structural mutations.
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while connect_local_stream(&path).is_err() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(25));
-    }
+    wait_listening(&path);
     let stream = connect_local_stream(&path).expect("daemon accepts");
     let mut writer = stream.try_clone().expect("clone");
     let mut reader = BufReader::new(stream);

@@ -3,9 +3,9 @@ Integration tests for PTY functionality
 """
 
 import sys
-import time
 
 import pytest
+from conftest import wait_for
 
 pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")
 
@@ -63,12 +63,8 @@ def test_spawn_simple_command_unix():
     term = PtyTerminal(80, 24)
     term.spawn("/bin/echo", args=["hello", "world"])
 
-    # Give it time to execute and capture output
-    time.sleep(0.2)
-
     # Check that content was captured
-    content = term.content()
-    assert "hello" in content or "world" in content
+    assert wait_for(lambda: "hello" in term.content() or "world" in term.content())
 
     # Process should have exited
     exit_code = term.try_wait()
@@ -84,12 +80,8 @@ def test_spawn_simple_command_windows():
     term = PtyTerminal(80, 24)
     term.spawn("cmd.exe", args=["/C", "echo hello world"])
 
-    # Give it time to execute
-    time.sleep(0.2)
-
     # Check that content was captured
-    content = term.content()
-    assert "hello" in content
+    assert wait_for(lambda: "hello" in term.content())
 
     # Process should have exited
     exit_code = term.try_wait()
@@ -109,16 +101,13 @@ def test_write_to_process_unix():
 
     # Write to cat
     term.write_str("hello\n")
-    time.sleep(0.1)
 
     # cat should echo it back
-    content = term.content()
-    assert "hello" in content
+    assert wait_for(lambda: "hello" in term.content())
 
     # Kill the process
     term.kill()
-    time.sleep(0.1)
-    assert not term.is_running()
+    assert wait_for(lambda: not term.is_running())
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
@@ -133,10 +122,7 @@ def test_spawn_with_env_vars():
         env={"TEST_VAR": "test_value"},
     )
 
-    time.sleep(0.2)
-
-    content = term.content()
-    assert "test_value" in content
+    assert wait_for(lambda: "test_value" in term.content())
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
@@ -147,10 +133,7 @@ def test_spawn_with_cwd():
     term = PtyTerminal(80, 24)
     term.spawn("/bin/pwd", cwd="/tmp")
 
-    time.sleep(0.2)
-
-    content = term.content()
-    assert "/tmp" in content
+    assert wait_for(lambda: "/tmp" in term.content())
 
 
 def test_resize():
@@ -202,9 +185,7 @@ def test_kill_process():
     assert term.is_running()
 
     term.kill()
-    time.sleep(0.1)
-
-    assert not term.is_running()
+    assert wait_for(lambda: not term.is_running())
 
 
 def test_terminal_query_methods():
@@ -231,7 +212,7 @@ def test_get_line():
     term = PtyTerminal(80, 24)
     term.spawn("/bin/echo", args=["test"])
 
-    time.sleep(0.2)
+    assert wait_for(lambda: "test" in (term.get_line(0) or ""))
 
     # Get the first line
     line = term.get_line(0)
@@ -247,7 +228,7 @@ def test_get_char_and_colors():
     term = PtyTerminal(80, 24)
     term.spawn("/bin/echo", args=["test"])
 
-    time.sleep(0.2)
+    assert wait_for(lambda: "test" in term.content())
 
     # Try to get a character (might be None if position is empty)
     term.get_char(0, 0)
@@ -310,7 +291,7 @@ def test_generation_counter_increments_on_output():
     term.spawn("/bin/echo", args=["hello"])
 
     gen_before = term.update_generation()
-    time.sleep(0.3)
+    assert wait_for(lambda: term.update_generation() > gen_before)
 
     gen_after = term.update_generation()
     assert gen_after > gen_before, (
@@ -328,16 +309,15 @@ def test_generation_counter_after_ctrl_c():
 
     term = PtyTerminal(80, 24)
     term.spawn_shell()
-    time.sleep(0.5)
+    assert wait_for(lambda: term.content().strip())
 
     # Send Ctrl+C
     term.write(b"\x03")
-    time.sleep(0.3)
 
     # Send a normal command after Ctrl+C
     gen_before = term.update_generation()
     term.write_str("echo GENERATION_TEST\n")
-    time.sleep(0.5)
+    assert wait_for(lambda: term.update_generation() > gen_before)
 
     gen_after = term.update_generation()
     assert gen_after > gen_before, (
@@ -469,17 +449,13 @@ def test_multiple_writes():
     term = PtyTerminal(80, 24)
     term.spawn("/bin/cat")
 
-    # Write multiple times
+    # Writes to the same PTY are ordered, so no pacing between them is needed.
     term.write_str("line1\n")
-    time.sleep(0.05)
     term.write_str("line2\n")
-    time.sleep(0.05)
     term.write_str("line3\n")
-    time.sleep(0.1)
 
-    content = term.content()
-    # At least one line should be captured
-    assert "line" in content
+    # All three lines should be echoed back
+    assert wait_for(lambda: all(f"line{i}" in term.content() for i in (1, 2, 3)))
 
     term.kill()
 
@@ -496,11 +472,7 @@ def test_spawn_shell():
 
     # Write a simple command
     term.write_str("echo test\n")
-    time.sleep(0.2)
-
-    content = term.content()
-    # Shell should produce some output
-    assert len(content) > 0
+    assert wait_for(lambda: "test" in term.content())
 
     term.kill()
 
@@ -537,11 +509,8 @@ def test_spawn_shell_with_env():
 
     # Echo the var to verify it was passed
     term.write_str(f"echo ${unique_var}\n")
-    time.sleep(0.3)
-
-    content = term.content()
-    assert "hello_from_shell" in content, (
-        f"Expected env var value in output, got: {content}"
+    assert wait_for(lambda: "hello_from_shell" in term.content()), (
+        f"Expected env var value in output, got: {term.content()}"
     )
 
     # Verify the var was NOT leaked to parent process
@@ -564,13 +533,9 @@ def test_spawn_shell_with_cwd():
 
     # Print current directory
     term.write_str("pwd\n")
-    time.sleep(0.3)
-
-    content = term.content()
-    # On macOS, /tmp is a symlink to /private/tmp
-    assert "/tmp" in content or "/private/tmp" in content, (
-        f"Expected /tmp in output, got: {content}"
-    )
+    assert wait_for(
+        lambda: "/tmp" in term.content() or "/private/tmp" in term.content()
+    ), f"Expected /tmp in output, got: {term.content()}"
 
     term.kill()
 
@@ -587,10 +552,7 @@ def test_spawn_shell_backward_compatible():
     assert term.is_running()
 
     term.write_str("echo backward_compat_test\n")
-    time.sleep(0.2)
-
-    content = term.content()
-    assert "backward_compat_test" in content
+    assert wait_for(lambda: "backward_compat_test" in term.content())
 
     term.kill()
 
@@ -612,14 +574,13 @@ def test_spawn_shell_with_env_and_cwd():
 
     # Verify both env var and cwd
     term.write_str(f"echo ${unique_var} && pwd\n")
-    time.sleep(0.3)
 
-    content = term.content()
-    assert "combined_test" in content, (
-        f"Expected env var value in output, got: {content}"
-    )
-    assert "/tmp" in content or "/private/tmp" in content, (
-        f"Expected /tmp in output, got: {content}"
+    def _combined_output() -> str:
+        content = term.content()
+        return content if ("combined_test" in content and "/tmp" in content) else ""
+
+    assert wait_for(_combined_output), (
+        f"Expected env var value and /tmp in output, got: {term.content()}"
     )
 
     # Verify parent env unchanged
@@ -644,11 +605,8 @@ def test_spawn_with_env_dict():
         "/bin/sh", ["-c", f"echo ${unique_var}"], env={unique_var: "spawn_env_value"}
     )
 
-    time.sleep(0.3)
-
-    content = term.content()
-    assert "spawn_env_value" in content, (
-        f"Expected env var value in output, got: {content}"
+    assert wait_for(lambda: "spawn_env_value" in term.content()), (
+        f"Expected env var value in output, got: {term.content()}"
     )
 
     # Verify parent env unchanged

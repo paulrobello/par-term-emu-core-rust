@@ -244,9 +244,27 @@ mod tests {
     fn test_blend_out_of_bounds() {
         let mut image = RgbaImage::new(10, 10);
 
-        // Should not panic on out-of-bounds coordinates
+        // An in-bounds blend proves the helpers write when they should
+        blend_rgba_pixel(&mut image, 5, 5, (255, 0, 0), 255, 10, 10);
+        assert_eq!(
+            image.get_pixel(5, 5),
+            &Rgba([255, 0, 0, 255]),
+            "in-bounds blend writes the pixel"
+        );
+
+        // Out-of-bounds coordinates must be dropped, not wrapped/clamped
         blend_grayscale_pixel(&mut image, 100, 100, (0, 0, 0), 255, 10, 10);
         blend_rgba_pixel(&mut image, 100, 100, (255, 0, 0), 255, 10, 10);
+        assert_eq!(
+            image.get_pixel(5, 5),
+            &Rgba([255, 0, 0, 255]),
+            "out-of-bounds blends leave existing pixels untouched"
+        );
+        assert_eq!(
+            image.get_pixel(0, 0),
+            &Rgba([0, 0, 0, 0]),
+            "out-of-bounds blends write nothing anywhere"
+        );
     }
 
     #[test]

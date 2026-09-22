@@ -147,9 +147,9 @@ mod tests {
         ];
 
         for err in errors {
-            // All errors should be displayable
-            let _ = err.to_string();
-            let _ = format!("{:?}", err);
+            // Every variant must Display something non-empty
+            let text = err.to_string();
+            assert!(!text.is_empty(), "{err:?} displays a message");
         }
     }
 }

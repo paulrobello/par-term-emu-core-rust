@@ -2,6 +2,9 @@
 
 #![cfg(feature = "mux")]
 
+mod common;
+
+use common::wait_listening;
 use par_term_emu_core_rust::mux::{MuxClient, MuxServer};
 use par_term_emu_core_rust::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
@@ -43,7 +46,10 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         // Client drops — par-term has "restarted".
     }
 
-    std::thread::sleep(Duration::from_millis(300));
+    // The daemon must still be listening after its client left. Poll the
+    // socket (bounded) rather than sleeping a guessed 300ms — the reattach
+    // below is the assertion, so it must run against a live listener.
+    wait_listening(&path);
 
     // Second client: reattach and ask the pane to replay its screen.
     let mut client = MuxClient::connect(&path).expect("reconnect to the live daemon");

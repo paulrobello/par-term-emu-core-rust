@@ -7,6 +7,7 @@ and advanced macro features.
 import time
 
 import pytest
+from conftest import wait_for
 from par_term_emu_core_rust import Macro, PtyTerminal
 
 # Edge Cases and Error Handling Tests
@@ -294,8 +295,7 @@ def test_macro_playback_empty_macro() -> None:
     term.load_macro("empty_test", macro)
     term.play_macro("empty_test", speed=1.0)
 
-    # Should not be playing (empty macro)
-    time.sleep(0.1)
+    # An empty macro is finished the moment it starts (no wait needed)
     assert not term.is_macro_playing()
 
 
@@ -320,15 +320,14 @@ def test_macro_playback_very_fast_speed() -> None:
     term.load_macro("fast_test", macro)
     term.play_macro("fast_test", speed=10.0)  # 10x speed
 
-    # Tick through quickly
-    start_time = time.time()
-    for _ in range(50):
-        if not term.is_macro_playing():
-            break
+    # Tick through quickly; each tick advances one event
+    def _advance() -> bool:
         term.tick_macro()
-        time.sleep(0.01)
+        return not term.is_macro_playing()
 
-    elapsed = time.time() - start_time
+    start_time = time.monotonic()
+    assert wait_for(_advance, timeout=2.0)
+    elapsed = time.monotonic() - start_time
 
     # Should finish quickly
     assert elapsed < 2.0
@@ -390,14 +389,16 @@ def test_macro_playback_change_speed_during_playback() -> None:
     term.load_macro("test", macro)
     term.play_macro("test", speed=1.0)
 
-    # Change speed multiple times
+    # The macro has 10 keys + 10 delays at 1x, so it is still playing here
+    assert term.is_macro_playing()
+
+    # Change speed multiple times (synchronous state mutations, no wait needed)
     speeds = [0.5, 2.0, 1.0, 5.0]
     for speed in speeds:
         term.set_macro_speed(speed)
-        time.sleep(0.05)
 
-    # Should still be playing or finished
     term.stop_macro()
+    assert not term.is_macro_playing()
 
 
 def test_macro_playback_stop_while_paused() -> None:
@@ -431,18 +432,17 @@ def test_macro_playback_progress_tracking() -> None:
     term.load_macro("test", macro)
     term.play_macro("test", speed=100.0)
 
-    # Track progress
+    # Track progress while ticking; each tick advances one event
     progress_points = []
-    for _ in range(20):
-        if not term.is_macro_playing():
-            break
 
+    def _advance() -> bool:
         progress = term.get_macro_progress()
         if progress:
             progress_points.append(progress)
-
         term.tick_macro()
-        time.sleep(0.01)
+        return not term.is_macro_playing()
+
+    assert wait_for(_advance)
 
     # Should have tracked some progress
     assert len(progress_points) > 0
@@ -544,13 +544,15 @@ def test_screenshot_triggers_multiple_in_sequence() -> None:
     term.load_macro("test", macro)
     term.play_macro("test", speed=100.0)
 
-    # Collect all triggers
+    # Collect all triggers while ticking; each tick advances one event
     all_triggers = []
-    for _ in range(30):
+
+    def _advance() -> bool:
         term.tick_macro()
-        triggers = term.get_macro_screenshot_triggers()
-        all_triggers.extend(triggers)
-        time.sleep(0.01)
+        all_triggers.extend(term.get_macro_screenshot_triggers())
+        return len(all_triggers) >= 10
+
+    assert wait_for(_advance)
 
     # Should have collected all 10 triggers
     assert len(all_triggers) == 10
@@ -592,7 +594,8 @@ def test_recording_to_macro_preserves_timing() -> None:
     # Start recording
     term.start_recording("timing_test")
 
-    # Write with delays
+    # Write with delays. The sleeps are input spacing, not synchronization:
+    # the gaps between writes become the delay events asserted below.
     term.write_str("a")
     time.sleep(0.1)
     term.write_str("b")
@@ -675,10 +678,12 @@ def test_macro_chained_execution() -> None:
     for name in ["m1", "m2", "m3"]:
         term.play_macro(name, speed=100.0)
 
-        # Wait for completion
-        while term.is_macro_playing():
+        # Wait for completion; each tick advances one event
+        def _advance() -> bool:
             term.tick_macro()
-            time.sleep(0.01)
+            return not term.is_macro_playing()
+
+        assert wait_for(_advance)
 
 
 @pytest.mark.slow
@@ -699,17 +704,13 @@ def test_macro_very_long_playback() -> None:
     term.load_macro("long_test", macro)
     term.play_macro("long_test", speed=10.0)
 
-    # Play through (with timeout)
-    max_iterations = 1000
-    iterations = 0
-
-    while term.is_macro_playing() and iterations < max_iterations:
+    # Play through; each tick advances one event and delay events need real
+    # wall time to elapse, so the poll interval provides it
+    def _advance() -> bool:
         term.tick_macro()
-        iterations += 1
-        time.sleep(0.001)
+        return not term.is_macro_playing()
 
-    # Should have completed or hit timeout
-    assert iterations < max_iterations or not term.is_macro_playing()
+    assert wait_for(_advance, timeout=20.0)
 
 
 if __name__ == "__main__":

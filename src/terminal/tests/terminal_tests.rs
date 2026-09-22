@@ -3040,8 +3040,22 @@ fn test_detect_multiple_urls() {
     term.process(b"http://test.com and https://example.org");
 
     let items = term.detect_urls();
-    // May detect URLs or not depending on implementation - just verify it doesn't panic
-    let _ = items.len();
+    let urls: Vec<&String> = items
+        .iter()
+        .filter_map(|item| match item {
+            DetectedItem::Url(url, _, _) => Some(url),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(urls.len(), 2, "both URLs detected: {urls:?}");
+    assert!(
+        urls.iter().any(|u| u.contains("http://test.com")),
+        "http URL detected: {urls:?}"
+    );
+    assert!(
+        urls.iter().any(|u| u.contains("https://example.org")),
+        "https URL detected: {urls:?}"
+    );
 }
 
 #[test]
@@ -3173,24 +3187,29 @@ fn test_export_scrollback_ansi_format() {
 fn test_search_clipboard_history() {
     let mut term = Terminal::new(80, 24);
 
-    // Add clipboard entries
-    term.process(b"\x1b]52;c;SGVsbG8=\x07"); // "Hello" in base64
-    std::thread::sleep(std::time::Duration::from_millis(10));
-    term.process(b"\x1b]52;c;V29ybGQ=\x07"); // "World" in base64
+    // Add clipboard entries (history is recorded by the set_clipboard*
+    // API; the raw OSC 52 path only updates the current content)
+    term.set_clipboard_with_slot("Hello".to_string(), ClipboardSlot::Clipboard);
+    term.set_clipboard_with_slot("World".to_string(), ClipboardSlot::Clipboard);
+
+    // Both writes land in the Clipboard slot's history
+    let history = term.get_clipboard_history(ClipboardSlot::Clipboard);
+    assert_eq!(history.len(), 2, "both writes recorded: {history:?}");
 
     let results = term.search_clipboard_history("Hello", None);
-    // Clipboard history search may or may not find results depending on implementation
-    // Just ensure it doesn't panic
-    let _ = results.len();
+    assert_eq!(results.len(), 1, "only the Hello entry matches");
+    assert_eq!(results[0].content, "Hello");
 }
 
 #[test]
 fn test_clipboard_history() {
     let mut term = Terminal::new(80, 24);
 
-    term.process(b"\x1b]52;c;SGVsbG8=\x07"); // "Hello"
-    let history = term.get_clipboard_history(ClipboardSlot::Primary);
-    let _ = history.len(); // History may or may not be populated depending on config - just verify it doesn't panic
+    term.set_clipboard_with_slot("Hello".to_string(), ClipboardSlot::Clipboard);
+    // The recording API lands entries in the slot's history
+    let history = term.get_clipboard_history(ClipboardSlot::Clipboard);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].content, "Hello");
 }
 
 #[test]
@@ -3427,13 +3446,17 @@ fn test_recording_session() {
     term.process(b"echo test");
     term.process(b"\r\n");
 
-    let session = term.stop_recording();
-    // Recording may or may not be supported depending on features
-    if let Some(s) = session {
-        // If recording is supported, verify basic properties don't panic
-        let _ = s.events.len();
-        let _ = s.duration;
-    }
+    let session = term.stop_recording().expect("recording returns a session");
+    // process() records Output events while recording is active
+    assert!(
+        !session.events.is_empty(),
+        "the processed bytes were recorded"
+    );
+    assert!(session
+        .events
+        .iter()
+        .all(|e| e.event_type == RecordingEventType::Output));
+    assert_eq!(session.initial_size, (80, 24));
 }
 
 #[test]

@@ -1612,19 +1612,35 @@ def test_decrara_reverse_attributes():
     assert term.get_char(1, 1) == "B", "Character should remain 'B'"
 
 
+def _reverse_at(term: Terminal, col: int, row: int) -> bool:
+    return term.get_attributes(col, row).reverse
+
+
 def test_decsace_attribute_change_extent():
-    """Test DECSACE - Select Attribute Change Extent (VT420)"""
-    term = Terminal(80, 24)
+    """DECSACE switches DECCARA between rectangle and stream extent (VT420)"""
 
-    # Set to stream mode (1)
-    # DECSACE: CSI Ps * x
-    term.process(b"\x1b[1*x")
+    # DECCARA on rows 1-2, cols 3-5 with attribute 7 (reverse); the extent
+    # decides which cells around that area are covered.
+    def prepare(mode: bytes) -> Terminal:
+        term = Terminal(80, 24)
+        term.process(b"\x1b[1;1HABCDEFGH\r\nIJKLMNOP")
+        term.process(mode)
+        term.process(b"\x1b[1;3;2;5;7$r")
+        return term
 
-    # Set to rectangle mode (2) - default
-    term.process(b"\x1b[2*x")
+    rectangle = prepare(b"\x1b[2*x")
+    # Only cols 3-5 (0-indexed 2-4) on rows 1-2 are reversed
+    assert _reverse_at(rectangle, 2, 0) and _reverse_at(rectangle, 4, 1)
+    assert not _reverse_at(rectangle, 7, 0), "row 1 past the rectangle"
+    assert not _reverse_at(rectangle, 1, 1), "row 2 before the rectangle"
 
-    # This is a mode-setting sequence, so just verify it doesn't crash
-    # The actual behavior affects how DECCARA/DECRARA work
+    stream = prepare(b"\x1b[1*x")
+    # Reading order from (1,3) to (2,5): all of row 1 after col 3, and
+    # row 2 up to col 5
+    assert _reverse_at(stream, 7, 0), "row 1 extends to the line end"
+    assert _reverse_at(stream, 1, 1) and _reverse_at(stream, 4, 1)
+    assert not _reverse_at(stream, 7, 1), "row 2 stops at col 5"
+    assert not _reverse_at(stream, 1, 0), "row 1 starts at col 3"
 
 
 def test_decrqcra_request_checksum():

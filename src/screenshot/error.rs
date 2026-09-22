@@ -114,10 +114,7 @@ mod tests {
     fn test_from_io_error() {
         let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "test");
         let err: ScreenshotError = io_err.into();
-        match err {
-            ScreenshotError::IoError(_) => {}
-            _ => panic!("Expected IoError variant"),
-        }
+        assert!(matches!(err, ScreenshotError::IoError(_)));
     }
 
     #[test]
@@ -147,12 +144,27 @@ mod tests {
 
     #[test]
     fn test_all_error_variants_create() {
-        let _ = ScreenshotError::FontLoadError("test".to_string());
-        let _ = ScreenshotError::RenderError("test".to_string());
-        let _ = ScreenshotError::FormatError("test".to_string());
-        let _ = ScreenshotError::InvalidConfig("test".to_string());
-        let io_err = std::io::Error::other("test");
-        let _ = ScreenshotError::IoError(io_err);
+        // Every variant must be constructible AND display a non-empty,
+        // distinguishable message.
+        let variants: Vec<ScreenshotError> = vec![
+            ScreenshotError::FontLoadError("font msg".to_string()),
+            ScreenshotError::RenderError("render msg".to_string()),
+            ScreenshotError::FormatError("format msg".to_string()),
+            ScreenshotError::InvalidConfig("config msg".to_string()),
+            ScreenshotError::IoError(std::io::Error::other("io msg")),
+        ];
+        let displays: Vec<String> = variants.iter().map(|e| e.to_string()).collect();
+        for d in &displays {
+            assert!(!d.is_empty(), "variant displays a message");
+        }
+        let mut unique = displays.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            displays.len(),
+            "each variant's Display is distinguishable: {displays:?}"
+        );
     }
 
     #[test]

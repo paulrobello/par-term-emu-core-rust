@@ -1485,11 +1485,36 @@ mod tests {
         assert_eq!(session.size(), (100, 30));
     }
 
+    /// Poll `export_text()` until `marker` appears (5s deadline), then
+    /// return the final text — the shared shape for spawn-then-assert tests.
+    fn wait_for_text(session: &PtySession, marker: &str) -> String {
+        let start_wait = std::time::Instant::now();
+        let timeout = std::time::Duration::from_secs(5);
+        loop {
+            let content = session.export_text();
+            if content.contains(marker) || start_wait.elapsed() > timeout {
+                return content;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
     #[test]
     fn test_set_env() {
         let mut session = PtySession::new(80, 24, 1000);
         session.set_env("TEST_VAR", "test_value");
-        // Just ensure it doesn't panic
+        // The stored var must reach the spawned process: echo it through
+        // the PTY and assert the value lands in the terminal.
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-$TEST_VAR"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-%TEST_VAR%"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-test_value");
+        assert!(
+            content.contains("ZQX-test_value"),
+            "env var reached the child: {content}"
+        );
     }
 
     #[test]
@@ -1498,7 +1523,17 @@ mod tests {
         session.set_env("VAR1", "value1");
         session.set_env("VAR2", "value2");
         session.set_env("VAR3", "value3");
-        // Should allow multiple env vars
+        // All three stored vars must reach the spawned process together.
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-$VAR1-$VAR2-$VAR3"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-%VAR1%-%VAR2%-%VAR3%"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-value1-value2-value3");
+        assert!(
+            content.contains("ZQX-value1-value2-value3"),
+            "all env vars reached the child: {content}"
+        );
     }
 
     #[test]
@@ -1506,7 +1541,24 @@ mod tests {
         let mut session = PtySession::new(80, 24, 1000);
         let path = std::path::Path::new("/tmp");
         session.set_cwd(path);
-        // Just ensure it doesn't panic
+        // The stored cwd must reach the spawned process: /bin/pwd prints it.
+        #[cfg(unix)]
+        let result = session.spawn("/bin/pwd", &[]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "cd"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "tmp");
+        // On macOS /tmp is a symlink to /private/tmp, so accept either
+        #[cfg(unix)]
+        assert!(
+            content.contains("/tmp") || content.contains("private/tmp"),
+            "child ran in the set cwd: {content}"
+        );
+        #[cfg(windows)]
+        assert!(
+            !content.trim().is_empty(),
+            "child printed its cwd: {content}"
+        );
     }
 
     #[test]
@@ -1521,7 +1573,12 @@ mod tests {
     fn test_terminal_access() {
         let session = PtySession::new(80, 24, 1000);
         let terminal = session.terminal();
-        let _guard = terminal.write();
+        let mut guard = terminal.write();
+        guard.process(b"ZQX-TERMINAL-ACCESS");
+        assert!(
+            guard.content().contains("ZQX-TERMINAL-ACCESS"),
+            "the write lock grants terminal access"
+        );
     }
 
     #[test]
@@ -1599,9 +1656,13 @@ mod tests {
         {
             let terminal = session.terminal();
             let _lock1 = terminal.write();
-            // While holding lock, should not be able to get another
+            // While holding the write lock, a second writer is excluded
+            assert!(
+                terminal.try_write().is_none(),
+                "write lock excludes a second writer"
+            );
         }
-        // After releasing, should be able to lock again
+        // After releasing, the terminal is lockable again
         let terminal = session.terminal();
         let _lock2 = terminal.write();
         drop(_lock2); // Explicitly drop to avoid unused variable warning
@@ -1612,14 +1673,36 @@ mod tests {
         let mut session = PtySession::new(80, 24, 1000);
         session.set_env("EMPTY_VAR", "");
         session.set_env("", "value");
-        // Should handle edge cases without panicking
+        // The edge-case entries must not poison the next spawn: echo a
+        // marker through and assert it lands.
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-EMPTY-ENV-OK"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-EMPTY-ENV-OK"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-EMPTY-ENV-OK");
+        assert!(
+            content.contains("ZQX-EMPTY-ENV-OK"),
+            "spawn works with edge-case env entries: {content}"
+        );
     }
 
     #[test]
     fn test_set_env_with_unicode() {
         let mut session = PtySession::new(80, 24, 1000);
         session.set_env("UNICODE_VAR", "Hello 世界 🌍");
-        // Should handle unicode without panicking
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-$UNICODE_VAR"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-%UNICODE_VAR%"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-Hello");
+        // Wide glyphs occupy two cells, so export_text() renders them with
+        // padding spaces — match per-character instead of as one substring.
+        assert!(
+            content.contains("ZQX-Hello") && ["世", "界", "🌍"].iter().all(|c| content.contains(c)),
+            "unicode env var reached the child: {content}"
+        );
     }
 
     #[test]
@@ -2125,7 +2208,22 @@ mod tests {
             called_clone.store(true, Ordering::Relaxed);
         }));
         session.clear_output_callback();
-        // After clear, no callback is set (smoke test, no panic)
+        // Drive real output through the reader thread, then assert the
+        // cleared callback never fired even though content arrived.
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-CALLBACK"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-CALLBACK"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-CALLBACK");
+        assert!(
+            content.contains("ZQX-CALLBACK"),
+            "output arrived: {content}"
+        );
+        assert!(
+            !called.load(Ordering::Relaxed),
+            "cleared callback must not fire"
+        );
     }
 
     // ===================================================================
@@ -2312,10 +2410,21 @@ mod tests {
 
     #[test]
     fn test_clear_output_callback_without_set_is_noop() {
-        // clear_output_callback before any set must be safe (no panic).
+        // clear_output_callback before any set must be safe (no panic) and
+        // must not break the next spawn: drive output through afterwards.
         let mut session = PtySession::new(80, 24, 1000);
         session.clear_output_callback();
         session.clear_output_callback(); // idempotent
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "echo ZQX-NOOP-CLEAR"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo ZQX-NOOP-CLEAR"]);
+        assert!(result.is_ok());
+        let content = wait_for_text(&session, "ZQX-NOOP-CLEAR");
+        assert!(
+            content.contains("ZQX-NOOP-CLEAR"),
+            "output flows: {content}"
+        );
     }
 
     #[test]
@@ -2440,39 +2549,33 @@ mod tests {
         // Mirror of the existing try_wait test, but pin the specific variant
         // so future refactors don't silently swap error types.
         let mut session = PtySession::new(80, 24, 1000);
-        match session.try_wait() {
-            Err(PtyError::NotStartedError) => {}
-            other => panic!("expected NotStartedError, got {:?}", other),
-        }
+        assert!(matches!(session.try_wait(), Err(PtyError::NotStartedError)));
     }
 
     #[test]
     fn test_kill_before_spawn_returns_not_started_error() {
         let mut session = PtySession::new(80, 24, 1000);
-        match session.kill() {
-            Err(PtyError::NotStartedError) => {}
-            other => panic!("expected NotStartedError, got {:?}", other),
-        }
+        assert!(matches!(session.kill(), Err(PtyError::NotStartedError)));
     }
 
     #[test]
     fn test_write_before_spawn_returns_not_started_error() {
         // write() must fail deterministically with NotStartedError before spawn.
         let mut session = PtySession::new(80, 24, 1000);
-        match session.write(b"data") {
-            Err(PtyError::NotStartedError) => {}
-            other => panic!("expected NotStartedError, got {:?}", other),
-        }
+        assert!(matches!(
+            session.write(b"data"),
+            Err(PtyError::NotStartedError)
+        ));
     }
 
     #[test]
     fn test_write_str_before_spawn_returns_not_started_error() {
         // write_str delegates to write(), so the same error path applies.
         let mut session = PtySession::new(80, 24, 1000);
-        match session.write_str("data") {
-            Err(PtyError::NotStartedError) => {}
-            other => panic!("expected NotStartedError, got {:?}", other),
-        }
+        assert!(matches!(
+            session.write_str("data"),
+            Err(PtyError::NotStartedError)
+        ));
     }
 
     #[test]
