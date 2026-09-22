@@ -11,8 +11,10 @@ This directory contains the GitHub Actions workflows that build, test, and publi
 | **CI** | `ci.yml` | Manual (`workflow_dispatch`) | Version check + multi-OS test/lint/build gate (no publish) |
 | **Publish 🐍 📦 to TestPyPI** | `publish-testpypi.yml` | Manual (`workflow_dispatch`) | Build + publish to TestPyPI + verify install |
 | **Publish to crates.io** | `publish-crates.yml` | Manual (`workflow_dispatch`) | Standalone crates.io publish (idempotent; for republishing without a full release) |
+| **Claude Code** | `claude.yml` | `@claude` mention in an issue/PR comment or issue body | Run a Claude Code session on GitHub that answers the mention |
+| **Claude Code Review** | `claude-code-review.yml` | Pull request opened/synchronized | AI review comment on the PR (quality, bugs, performance, security, test coverage) |
 
-All workflows are **manual-dispatch only** — none run on push or PR. The everyday quality gate is the local pre-commit setup (`make pre-commit-run`, also enforced on commit); these workflows are run on demand.
+All release/CI workflows are **manual-dispatch only** — none run on push or PR. The everyday quality gate is the local pre-commit setup (`make pre-commit-run`, also enforced on commit); these workflows are run on demand.
 
 ## The release process (`deployment.yml`)
 
@@ -89,12 +91,19 @@ Manual-only. Builds wheels for 5 platforms (Linux x86_64/aarch64, macOS x86_64/u
 ### `publish-crates.yml` — standalone crates.io publish
 Manual-only, with a `skip_tests` input. Checks whether the version already exists on crates.io (`cargo search`); if not, runs tests, dry-runs, then publishes with `CARGO_REGISTRY_TOKEN`. Idempotent — use it to republish or repair a crates.io release without rebuilding the Python wheels or cutting a new GitHub release.
 
+### `claude.yml` — Claude Code on mentions
+The only event-triggered workflow besides code review: runs when an issue comment, PR review comment, PR review, or new issue contains `@claude`. Starts a Claude Code session (via `anthropics/claude-code-action`) authenticated with `CLAUDE_CODE_OAUTH_TOKEN`, which reads the mention and responds. It can also read CI results on PRs (`actions: read`).
+
+### `claude-code-review.yml` — AI review on PRs
+Runs on every PR open/update. Claude reviews the diff for code quality, bugs, performance, security, and test coverage — using the repository's CLAUDE.md for conventions — and posts the review as a PR comment via `gh pr comment` (tool access restricted to read-only `gh` commands). Authenticated with `CLAUDE_CODE_OAUTH_TOKEN`.
+
 ## Required secrets
 
 | Secret | Used by | Purpose |
 |--------|---------|---------|
 | `DISCORD_WEBHOOK` | all publishing jobs | Success notifications (`continue-on-error: true`, so a bad webhook never fails a release) |
 | `CARGO_REGISTRY_TOKEN` | `publish-crates` job in `deployment.yml`, and `publish-crates.yml` | crates.io publish |
+| `CLAUDE_CODE_OAUTH_TOKEN` | `claude.yml`, `claude-code-review.yml` | Claude Code OAuth token for `anthropics/claude-code-action` |
 
 PyPI and TestPyPI use **trusted publishing (OIDC)** — no API-token secret is required, but the trusted publisher must be registered on each registry (see below).
 
@@ -121,6 +130,8 @@ crates.io uses a token (`CARGO_REGISTRY_TOKEN`) rather than OIDC.
 | `ci.yml` | `contents: read` | Checkout only |
 | `publish-testpypi.yml` | `contents: read` (publish job adds `id-token: write`) | Checkout; TestPyPI trusted publish |
 | `publish-crates.yml` | `contents: read` | Checkout only |
+| `claude.yml` | `contents`, `pull-requests`, `issues`, `actions`: read; `id-token: write` | Read the repo/PR/issue + CI results; action authentication |
+| `claude-code-review.yml` | `contents`, `pull-requests`, `issues`: read; `id-token: write` | Read the PR; action authentication |
 
 ## Troubleshooting
 
