@@ -372,23 +372,35 @@ impl PyTerminal {
     }
 
     /// Set maximum clipboard sync events retained (0 disables buffering)
+    ///
+    /// Args:
+    ///     max: Maximum clipboard sync events to buffer (0 disables buffering)
     fn set_max_clipboard_sync_events(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_sync_events(max);
         Ok(())
     }
 
     /// Get maximum clipboard sync events retained
+    ///
+    /// Returns:
+    ///     int: Maximum clipboard sync events buffered
     fn get_max_clipboard_sync_events(&self) -> PyResult<usize> {
         Ok(self.inner.max_clipboard_sync_events())
     }
 
     /// Set maximum bytes cached per clipboard sync event (0 clears content)
+    ///
+    /// Args:
+    ///     max_bytes: Maximum bytes cached per event (0 clears cached content)
     fn set_max_clipboard_event_bytes(&mut self, max_bytes: usize) -> PyResult<()> {
         self.inner.set_max_clipboard_event_bytes(max_bytes);
         Ok(())
     }
 
     /// Get maximum bytes cached per clipboard sync event
+    ///
+    /// Returns:
+    ///     int: Maximum bytes cached per clipboard event
     fn get_max_clipboard_event_bytes(&self) -> PyResult<usize> {
         Ok(self.inner.max_clipboard_event_bytes())
     }

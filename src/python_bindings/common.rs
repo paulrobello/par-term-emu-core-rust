@@ -36,30 +36,45 @@ macro_rules! impl_terminal_simple_getters {
         #[pymethods]
         impl $ty {
             /// Get the cursor color (OSC 12)
+            ///
+            /// Returns:
+            ///     tuple[int, int, int]: Cursor color as (r, g, b), 0-255 each
             fn cursor_color(&self) -> pyo3::PyResult<(u8, u8, u8)> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.cursor_color().to_rgb())
             }
 
             /// Whether the cursor is visible (DECTCE)
+            ///
+            /// Returns:
+            ///     bool: True if the cursor is visible
             fn cursor_visible(&self) -> pyo3::PyResult<bool> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.cursor().visible)
             }
 
             /// Whether bracketed-paste mode is active
+            ///
+            /// Returns:
+            ///     bool: True if pastes are wrapped in bracketed-paste markers
             fn bracketed_paste(&self) -> pyo3::PyResult<bool> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.bracketed_paste())
             }
 
             /// Whether OSC 52 clipboard reads are allowed
+            ///
+            /// Returns:
+            ///     bool: True if applications may read the clipboard via OSC 52
             fn allow_clipboard_read(&self) -> pyo3::PyResult<bool> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.allow_clipboard_read())
             }
 
             /// Whether OSC 7 directory-tracking sequences are accepted
+            ///
+            /// Returns:
+            ///     bool: True if OSC 7 updates the tracked working directory
             fn accept_osc7(&self) -> pyo3::PyResult<bool> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.accept_osc7())

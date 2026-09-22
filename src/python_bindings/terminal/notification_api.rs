@@ -111,12 +111,18 @@ impl PyTerminal {
     }
 
     /// Set maximum number of OSC 9/777 notifications to retain (0 disables buffering)
+    ///
+    /// Args:
+    ///     max: Maximum notifications to buffer (0 disables buffering)
     fn set_max_notifications(&mut self, max: usize) -> PyResult<()> {
         self.inner.set_max_notifications(max);
         Ok(())
     }
 
     /// Get maximum retained OSC 9/777 notifications
+    ///
+    /// Returns:
+    ///     int: Maximum notifications buffered (0 means buffering is disabled)
     fn get_max_notifications(&self) -> PyResult<usize> {
         Ok(self.inner.max_notifications())
     }

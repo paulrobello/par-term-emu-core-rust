@@ -54,6 +54,12 @@ impl PyTerminal {
     // === Feature 9: Line Wrapping Utilities ===
 
     /// Join wrapped lines starting from a given row
+    ///
+    /// Args:
+    ///     start_row: Row (0-indexed) whose logical line to rejoin
+    ///
+    /// Returns:
+    ///     JoinedLines | None: The rejoined line, or None if the row is empty
     fn join_wrapped_lines(
         &self,
         start_row: usize,
@@ -71,11 +77,20 @@ impl PyTerminal {
     }
 
     /// Get all logical lines (unwrapped)
+    ///
+    /// Returns:
+    ///     list[str]: Logical lines with wrapped segments joined
     fn get_logical_lines(&self) -> PyResult<Vec<String>> {
         Ok(self.inner.get_logical_lines())
     }
 
     /// Check if a row starts a new logical line
+    ///
+    /// Args:
+    ///     row: 0-indexed row number
+    ///
+    /// Returns:
+    ///     bool: True if the row begins a new logical line
     fn is_line_start(&self, row: usize) -> PyResult<bool> {
         Ok(self.inner.is_line_start(row))
     }

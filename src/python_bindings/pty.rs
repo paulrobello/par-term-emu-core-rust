@@ -68,6 +68,12 @@ impl PyPtyTerminal {
     ///     cols: Number of columns (width)
     ///     rows: Number of rows (height)
     ///     scrollback: Maximum number of scrollback lines (default: 10000)
+    ///
+    /// Returns:
+    ///     PtyTerminal: A new terminal with no process spawned yet
+    ///
+    /// Example:
+    ///     >>> term = PtyTerminal(80, 24)
     #[new]
     #[pyo3(signature = (cols, rows, scrollback=10000))]
     fn new(cols: usize, rows: usize, scrollback: usize) -> PyResult<Self> {
