@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
@@ -73,7 +73,7 @@ const getResponsiveFontSize = (): number => {
 // are left ungated since they surface real diagnostics.
 const debugLog = (...args: unknown[]): void => {
   if (process.env.NODE_ENV !== 'production') {
-    debugLog(...args);
+    console.log(...args);
   }
 };
 
@@ -89,7 +89,6 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   const xtermRef = useRef<XTerm | null>(null);
   const connectionRef = useRef<TerminalConnection | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const [status, setStatus] = useState<ConnectionStatus>('disconnected');
 
   // RAF-batched write buffer for performance optimization
   // Instead of writing to terminal on every WebSocket message, we buffer
@@ -122,10 +121,33 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   // Track fontSize prop for use in handlers
   const fontSizeRef = useRef<number | undefined>(fontSize);
 
-  const updateStatus = (newStatus: ConnectionStatus) => {
-    setStatus(newStatus);
-    onStatusChange?.(newStatus);
-  };
+  // Latest callback props, updated every render (see the effect below).
+  // The mount effect and `connect` below only run once (or on `wsUrl`
+  // change) and must not close over the props from that one render, or a
+  // later prop update (e.g. a new `onFocus`/`onRefit` from the parent)
+  // would be silently ignored until the next full remount.
+  const propsRef = useRef({
+    onFocus,
+    onRefit,
+    onSendInput,
+    onThemeChange,
+    onStatusChange,
+    onHyperlinkAdded,
+    onSelectionChanged,
+    onUserVarChanged,
+  });
+  useEffect(() => {
+    propsRef.current = {
+      onFocus,
+      onRefit,
+      onSendInput,
+      onThemeChange,
+      onStatusChange,
+      onHyperlinkAdded,
+      onSelectionChanged,
+      onUserVarChanged,
+    };
+  });
 
   // Flush buffered writes to terminal - called once per animation frame
   const flushWrites = useCallback(() => {
@@ -184,8 +206,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       containerRef.current.style.backgroundColor = bgHex;
     }
 
-    // Notify parent component of background color change
-    onThemeChange?.(bgHex);
+    // Notify parent component of background color change. Read from
+    // propsRef (not the `onThemeChange` closure argument) since this
+    // function is invoked from inside the memoized `connect` callback,
+    // which must not need to be recreated every time the parent passes a
+    // new callback instance.
+    propsRef.current.onThemeChange?.(bgHex);
   };
 
   useEffect(() => {
@@ -210,7 +236,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     } else {
       // Fresh initialization
       const mobile = isMobile();
-      const initialFontSize = fontSize ?? getResponsiveFontSize();
+      const initialFontSize = fontSizeRef.current ?? getResponsiveFontSize();
       debugLog(`Terminal init: width=${window.innerWidth}, mobile=${mobile}, fontSize=${initialFontSize}`);
 
       // Initialize xterm.js
@@ -316,9 +342,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     fitAddonRef.current = fitAddon;
     xtermRef.current = term;
 
-    // Expose refit function to parent
-    if (onRefit) {
-      onRefit(() => {
+    // Expose refit function to parent. Reads props from propsRef (not the
+    // destructured `onRefit` argument) so this mount-only effect doesn't
+    // need `onRefit` in its dependency array.
+    if (propsRef.current.onRefit) {
+      propsRef.current.onRefit(() => {
         setTimeout(() => {
           // Use explicit fontSize prop if set, otherwise use responsive sizing
           const newFontSize = fontSizeRef.current ?? getResponsiveFontSize();
@@ -352,15 +380,15 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     }
 
     // Expose focus function to parent
-    if (onFocus) {
-      onFocus(() => {
+    if (propsRef.current.onFocus) {
+      propsRef.current.onFocus(() => {
         term.focus();
       });
     }
 
     // Expose sendInput function to parent for onscreen keyboard
-    if (onSendInput) {
-      onSendInput((data: string) => {
+    if (propsRef.current.onSendInput) {
+      propsRef.current.onSendInput((data: string) => {
         connectionRef.current?.send(createInputMessage(data));
       });
     }
@@ -569,7 +597,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     if (!connectionRef.current) {
       connectionRef.current = new TerminalConnection(wsUrl, {
-        onStatus: updateStatus,
+        onStatus: (newStatus) => propsRef.current.onStatusChange?.(newStatus),
         onRetryingChange,
         onConnectionClosed: () => {
           xtermRef.current?.write('\r\n\x1b[1;33mDisconnected from server\x1b[0m\r\n');
@@ -716,7 +744,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           const rowLinks = hyperlinksRef.current.get(link.row) || [];
           rowLinks.push(entry);
           hyperlinksRef.current.set(link.row, rowLinks);
-          onHyperlinkAdded?.(link.url, link.row, link.col, link.id);
+          propsRef.current.onHyperlinkAdded?.(link.url, link.row, link.col, link.id);
         },
         onUserVarChanged: (uv) => {
           if (!xtermRef.current) return;
@@ -725,7 +753,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           } else {
             userVarsRef.current.set(uv.name, uv.value);
           }
-          onUserVarChanged?.(uv.name, uv.value, uv.oldValue);
+          propsRef.current.onUserVarChanged?.(uv.name, uv.value, uv.oldValue);
         },
         onSelectionChanged: (sel) => {
           const term = xtermRef.current;
@@ -765,7 +793,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             }
           }
 
-          onSelectionChanged?.(sel.text, sel.cleared);
+          propsRef.current.onSelectionChanged?.(sel.text, sel.cleared);
         },
       });
     }
