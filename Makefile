@@ -212,8 +212,8 @@ test-rust:
 	cargo test --lib --no-default-features --features python-test
 	@echo "Running serde-feature tests (replay-snapshot round-trip; rust-only keeps the dep tree small)..."
 	cargo test --lib --no-default-features --features rust-only,serde
-	@echo "Running mux persist tests (envelope round trip; mux+serde is the combo the Phase 3 derives exist for)..."
-	cargo test --lib --no-default-features --features rust-only,mux,serde mux::persist -- --test-threads=1
+	@echo "Running the full mux suite (lib unit tests + integration tests; serialized because PTY spawns contend in parallel)..."
+	cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
 
 test-rust-streaming:
 	@echo "Running Rust streaming tests (lib unit tests + integration tests in tests/)..."
