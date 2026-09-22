@@ -1,8 +1,9 @@
 //! Guards the feature isolation D1 depends on.
 //!
 //! `sim` is a PTY-free, runtime-free profile for embedders that vendor the
-//! crate as a pure screen model. `mux` pulls in `portable-pty` and `tokio`, so
-//! it must never reach that profile — or the default one.
+//! crate as a pure screen model. `mux` pulls in `portable-pty` (real PTYs
+//! and a local socket), so it must never reach that profile — or the
+//! default one.
 
 /// The `mux` module must exist when the feature is on.
 #[cfg(feature = "mux")]

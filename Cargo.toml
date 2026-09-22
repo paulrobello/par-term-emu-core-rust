@@ -210,13 +210,13 @@ streaming = ["tokio", "tokio-tungstenite", "axum", "tower-http", "futures-util",
 streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber", "reqwest", "tar", "pty_session"]
 
 # Terminal multiplexer server (par-mux): owns PTYs, a session tree, and a
-# control-mode socket. Needs real PTYs and an async runtime, so it is
+# control-mode socket. Needs real PTYs and a local socket, so it is
 # deliberately absent from `default` and `sim` — see par-mux.md D1.
 # `widestring` exists only under [target.'cfg(windows)'.dependencies], so it is
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "tokio", "interprocess", "widestring", "serde", "dirs", "dep:toml"]
+mux = ["pty_session", "interprocess", "widestring", "serde", "dirs", "dep:toml"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
