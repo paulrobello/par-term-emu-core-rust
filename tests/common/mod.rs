@@ -8,8 +8,77 @@
 #![allow(dead_code)]
 
 use par_term_emu_core_rust::mux::connect_local_stream;
+use par_term_emu_core_rust::mux::persist::{state_file_in, state_file_path};
 use std::io::{BufRead, Write};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+
+/// A socket path and state dir that no other test run can ever name,
+/// removed even when the test panics.
+///
+/// A `process::id()`-derived path in the shared temp dir repeats once the OS
+/// recycles the pid, so a remnant of an earlier run — or an orphaned daemon
+/// still listening on it — collides with a later one. A trailing
+/// `remove_file` never runs on an early return or a failed assertion, so the
+/// remnants accumulate. `TempDir` answers both: its name carries OS-provided
+/// randomness and its `Drop` removes the directory, socket and state included.
+///
+/// The socket's file NAME carries that randomness too, not just its
+/// directory: the daemon keys its state file by the socket's stem, and a
+/// daemon this test cannot pass `--state-dir` to (one started by
+/// `MuxClient::connect_or_spawn_at`) writes into the shared platform state
+/// dir, where a fixed stem would collide across runs. `Drop` removes that
+/// platform file for this fixture's stem only.
+pub struct MuxFixture {
+    dir: tempfile::TempDir,
+    socket: PathBuf,
+}
+
+impl MuxFixture {
+    pub fn new(tag: &str) -> Self {
+        // Short prefix and name: macOS caps a Unix socket path at 104 bytes
+        // and `$TMPDIR` alone already spends ~49 of them.
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-")
+            .tempdir()
+            .expect("create fixture temp dir");
+        let unique = dir
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("par-mux-"))
+            .expect("tempdir name carries the prefix")
+            .to_string();
+        let socket = dir.path().join(format!("{tag}-{unique}"));
+        Self { dir, socket }
+    }
+
+    /// The socket path to bind or connect.
+    pub fn socket(&self) -> &Path {
+        &self.socket
+    }
+
+    /// The `--state-dir` a spawned daemon persists under — inside the
+    /// fixture, so the platform state dir is never touched.
+    pub fn state_dir(&self) -> PathBuf {
+        self.dir.path().join("state")
+    }
+
+    /// Where a daemon started with [`Self::state_dir`] saves its tree.
+    pub fn state_path(&self) -> PathBuf {
+        state_file_in(&self.state_dir(), &self.socket)
+    }
+}
+
+impl Drop for MuxFixture {
+    fn drop(&mut self) {
+        let platform = state_file_path(&self.socket);
+        let mut tmp = platform.as_os_str().to_os_string();
+        tmp.push(".tmp");
+        let _ = std::fs::remove_file(&platform);
+        let _ = std::fs::remove_file(PathBuf::from(tmp));
+    }
+}
 
 /// Run one command and drain its `%begin`…`%end` block. Pushed `%output`
 /// notifications may interleave with the reply; they are collected as body
@@ -60,15 +129,17 @@ pub fn pid_after(marker: &str, text: &str) -> Option<u32> {
     None
 }
 
-/// Spawn the daemon binary on `path` with null stdio: a daemon that
-/// outlives a failed assertion must not hold the test harness's output
-/// pipe open, or `cargo test` hangs at exit instead of reporting the
-/// failure.
-pub fn spawn_daemon(path: &std::path::Path) -> std::process::Child {
+/// Spawn the daemon binary on the fixture's socket, persisting into the
+/// fixture's state dir, with null stdio: a daemon that outlives a failed
+/// assertion must not hold the test harness's output pipe open, or
+/// `cargo test` hangs at exit instead of reporting the failure.
+pub fn spawn_daemon(fixture: &MuxFixture) -> std::process::Child {
     use std::process::Stdio;
     std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
         .arg("--socket")
-        .arg(path)
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

@@ -695,12 +695,24 @@ contains = ["Override Idle"]
         );
     }
 
+    /// A fresh override directory per test: its name carries OS-provided
+    /// randomness, so no other test run can collide with it (a
+    /// `process::id()`-derived name repeats once the OS recycles the pid and
+    /// would load a stale override left by an earlier run), and its `Drop`
+    /// removes it even when an assertion fails.
+    fn override_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("par-mux-scrape-")
+            .tempdir()
+            .expect("create override temp dir")
+    }
+
     #[test]
     fn override_shadows_bundled_for_its_agent_only() {
-        let dir = std::env::temp_dir().join(format!("par-mux-scrape-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let tmp = override_dir();
+        let dir = tmp.path();
         std::fs::write(dir.join("claude.toml"), OVERRIDE_SET).expect("write override");
-        let engine = ScrapeEngine::load(Some(&dir));
+        let engine = ScrapeEngine::load(Some(dir));
 
         let set = engine.set_for("claude").expect("claude present");
         let snapshot = PaneSnapshot {
@@ -730,16 +742,14 @@ contains = ["Override Idle"]
             codex.evaluate(&snapshot).map(|(s, _)| s.to_string()),
             Some("blocked".to_string())
         );
-        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]
     fn a_broken_override_falls_back_to_bundled() {
-        let dir =
-            std::env::temp_dir().join(format!("par-mux-scrape-broken-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let tmp = override_dir();
+        let dir = tmp.path();
         std::fs::write(dir.join("grok.toml"), "this is not toml [[[").expect("write junk");
-        let engine = ScrapeEngine::load(Some(&dir));
+        let engine = ScrapeEngine::load(Some(dir));
 
         let set = engine.set_for("grok").expect("grok still served");
         let idle = PaneSnapshot {
@@ -751,19 +761,18 @@ contains = ["Override Idle"]
             Some("idle".to_string()),
             "bundled rules survived the broken override"
         );
-        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]
     fn an_override_can_add_an_agent_with_no_bundled_set() {
-        let dir = std::env::temp_dir().join(format!("par-mux-scrape-new-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
+        let tmp = override_dir();
+        let dir = tmp.path();
         std::fs::write(
             dir.join("kimi.toml"),
             OVERRIDE_SET.replace("claude", "kimi"),
         )
         .expect("write");
-        let engine = ScrapeEngine::load(Some(&dir));
+        let engine = ScrapeEngine::load(Some(dir));
         let set = engine.set_for("kimi").expect("override-only agent loads");
         let snapshot = PaneSnapshot {
             title: "Override Idle".to_string(),
@@ -773,7 +782,6 @@ contains = ["Override Idle"]
             set.evaluate(&snapshot).map(|(s, _)| s.to_string()),
             Some("idle".to_string())
         );
-        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 
     #[test]

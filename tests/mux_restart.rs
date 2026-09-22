@@ -11,17 +11,11 @@ mod common;
 
 use common::{
     command, pane_ids, sigterm_clean, spawn_daemon, wait_for, wait_for_pid, wait_listening,
+    MuxFixture,
 };
 use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::connect_local_stream;
 use std::io::BufReader;
-
-fn socket(tag: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("par-mux-restart-{}-{}", std::process::id(), tag));
-    let _ = std::fs::remove_file(&path);
-    path
-}
 
 /// Task 3.6: one daemon builds a session with a split, screen content and
 /// scrollback; a SIGTERM stops it; a second daemon on the SAME socket must
@@ -30,14 +24,13 @@ fn socket(tag: &str) -> std::path::PathBuf {
 /// honesty, asserted by asking the shells for their pids).
 #[test]
 fn a_restart_serves_the_saved_tree_with_new_processes() {
-    let path = socket("arc");
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
-    let _ = std::fs::remove_file(&state_path);
+    let fixture = MuxFixture::new("arc");
+    let path = fixture.socket();
 
     // First daemon: a split layout with real content in both panes.
-    let mut first = spawn_daemon(&path);
-    wait_listening(&path);
-    let stream = connect_local_stream(&path).expect("first daemon accepts");
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("first daemon accepts");
     let mut writer = stream.try_clone().expect("clone");
     let mut reader = BufReader::new(stream);
     command(&mut writer, &mut reader, "new-session -s restart");
@@ -118,9 +111,9 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
     sigterm_clean(&mut first);
 
     // Second daemon on the same socket.
-    let mut second = spawn_daemon(&path);
-    wait_listening(&path);
-    let stream = connect_local_stream(&path).expect("second daemon accepts");
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("second daemon accepts");
     let mut writer = stream.try_clone().expect("clone");
     let mut reader = BufReader::new(stream);
 
@@ -202,7 +195,4 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
 
     drop((writer, reader));
     sigterm_clean(&mut second);
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&state_path);
 }

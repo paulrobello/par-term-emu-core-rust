@@ -12,28 +12,13 @@
 
 #![cfg(all(feature = "mux", unix))]
 
+mod common;
+
+use common::{spawn_daemon, MuxFixture};
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
-
-fn socket(tag: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("par-mux-agents-{}-{}", std::process::id(), tag));
-    let _ = std::fs::remove_file(&path);
-    path
-}
-
-fn spawn_daemon(path: &std::path::Path) -> std::process::Child {
-    use std::process::Stdio;
-    std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
-        .arg("--socket")
-        .arg(path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("daemon binary spawns")
-}
 
 fn wait_listening(path: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -171,14 +156,14 @@ fn any_state_key(value: &serde_json::Value) -> bool {
 
 #[test]
 fn the_agent_arc_lives_and_dies_with_the_daemon() {
-    let path = socket("arc");
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
-    let _ = std::fs::remove_file(&state_path);
+    let fixture = MuxFixture::new("arc");
+    let path = fixture.socket();
+    let state_path = fixture.state_path();
 
     // First daemon: a pane, driven by the ported herdr script.
-    let mut first = spawn_daemon(&path);
-    wait_listening(&path);
-    let mut control = Control::connect(&path);
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
     control.command("new-session -s agents");
     let pane = control
         .body_lines("list-panes")
@@ -187,7 +172,7 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         .clone();
 
     for (action, session_id) in [("working", Some("kimi-arc-1")), ("blocked", None)] {
-        script_reports(&path, &pane, action, session_id);
+        script_reports(path, &pane, action, session_id);
         let broadcast = control.line_until(
             |line| line.starts_with("%agent-state-changed"),
             &format!("the {action} broadcast"),
@@ -224,9 +209,9 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     );
 
     // The second daemon serves the layout back but an EMPTY roster.
-    let mut second = spawn_daemon(&path);
-    wait_listening(&path);
-    let mut control = Control::connect(&path);
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
     let panes = control.body_lines("list-panes");
     assert!(
         panes.contains(&pane),
@@ -240,8 +225,6 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
 
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut second);
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&state_path);
 }
 
 /// Task 6.4: a restart RESUMES an agent pane rather than respawning it
@@ -254,17 +237,17 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
 /// spawns fresh shows no resume marker at all and fails here.
 #[test]
 fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
-    let path = socket("resume");
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
-    let _ = std::fs::remove_file(&state_path);
+    let fixture = MuxFixture::new("resume");
+    let path = fixture.socket();
+    let state_path = fixture.state_path();
     let script =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assets/par-mux-fake-agent.sh");
 
     // First daemon: the fake agent runs inside the pane's default shell,
     // reports identity + resume invocation, and announces startup.
-    let mut first = spawn_daemon(&path);
-    wait_listening(&path);
-    let mut control = Control::connect(&path);
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
     control.command("new-session -s agents");
     let pane = control
         .body_lines("list-panes")
@@ -305,9 +288,9 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
     // Second daemon: the pane must come back as the RESUME invocation —
     // the marker's id comes from the argv the daemon built out of the
     // PERSISTED identity, and only a --resume invocation prints it.
-    let mut second = spawn_daemon(&path);
-    wait_listening(&path);
-    let mut control = Control::connect(&path);
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
     let mut resume_line = String::new();
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
@@ -338,7 +321,4 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
         saved2.contains("par-mux:fx:resume"),
         "the post-restart hook report (same id, start_source=resume) was accepted: {saved2}"
     );
-
-    let _ = std::fs::remove_file(&path);
-    let _ = std::fs::remove_file(&state_path);
 }

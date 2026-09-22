@@ -9,11 +9,17 @@ use par_term_emu_core_rust::mux::{connect_local_stream, MuxServer};
 use std::io::{BufRead, BufReader, Write};
 use std::time::{Duration, Instant};
 
-fn socket_path(tag: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("par-mux-test-{}-{tag}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&path);
-    path
+/// A socket path inside a fresh `TempDir`: the directory name carries
+/// OS-provided randomness, so no other test run can name the same path (a
+/// pid-derived name repeats once the OS recycles the pid), and dropping the
+/// returned guard removes the socket even when the test panics.
+fn socket_path(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::Builder::new()
+        .prefix("par-mux-")
+        .tempdir()
+        .expect("create socket temp dir");
+    let path = dir.path().join(format!("{tag}.sock"));
+    (dir, path)
 }
 
 fn spawn_server(path: &std::path::Path) -> std::thread::JoinHandle<()> {
@@ -68,7 +74,7 @@ fn read_reply_block(reader: &mut BufReader<interprocess::local_socket::Stream>) 
 
 #[test]
 fn client_creates_a_session_and_receives_pushed_output() {
-    let path = socket_path("e2e");
+    let (_dir, path) = socket_path("e2e");
     let handle = spawn_server(&path);
 
     let (mut writer, mut reader) = connect(&path);
@@ -105,7 +111,6 @@ fn client_creates_a_session_and_receives_pushed_output() {
         "expected a pushed %output line carrying the marker within 10s"
     );
 
-    let _ = std::fs::remove_file(&path);
     drop(writer);
     // run() serves until the listener closes; Phase 1 has no shutdown path
     // (Task 8's daemon owns lifecycle), so the server thread is detached and
@@ -115,7 +120,7 @@ fn client_creates_a_session_and_receives_pushed_output() {
 
 #[test]
 fn a_disconnecting_client_does_not_stop_the_server_or_touch_the_tree() {
-    let path = socket_path("disconnect");
+    let (_dir, path) = socket_path("disconnect");
     let handle = spawn_server(&path);
 
     // Client A creates a session, then disconnects abruptly.
@@ -142,6 +147,5 @@ fn a_disconnecting_client_does_not_stop_the_server_or_touch_the_tree() {
         "both sessions' panes survive the disconnect: {panes:?}"
     );
 
-    let _ = std::fs::remove_file(&path);
     drop(handle);
 }

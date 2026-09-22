@@ -598,19 +598,26 @@ pub(crate) fn capture_range(
 mod tests {
     use super::*;
 
+    /// A fresh `TempDir` for a test's socket or state file: the directory
+    /// name carries OS-provided randomness, so no other test run can name the
+    /// same path (a `process::id()`-derived name repeats once the OS recycles
+    /// the pid, and an orphaned listener on it answers as a live server), and
+    /// its `Drop` removes everything inside even when the test panics.
+    fn temp_dir() -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix("par-mux-server-")
+            .tempdir()
+            .expect("create test temp dir")
+    }
+
     #[cfg(unix)]
     #[cfg(unix)]
     #[test]
     fn graceful_shutdown_pushes_exit_to_clients_before_closing() {
         use crate::mux::ipc::connect_local_stream;
 
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "par-mux-exit-{}-{}.sock",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let dir = temp_dir();
+        let path = dir.path().join("exit.sock");
         let server = MuxServer::bind(&path).expect("bind");
         let shutdown = server.shutdown_handle();
         std::thread::spawn(move || server.run());
@@ -654,19 +661,13 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("%exit arrives before the socket closes");
         assert_eq!(line, "%exit\n", "graceful shutdown pushes %exit first");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(unix)]
     #[test]
     fn bind_replaces_a_stale_socket_file_and_sets_mode_0600() {
-        let mut path = std::env::temp_dir();
-        path.push(format!(
-            "par-mux-stale-{}-{}.sock",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_file(&path);
+        let dir = temp_dir();
+        let path = dir.path().join("stale.sock");
         std::fs::write(&path, b"stale junk").expect("write stale file");
 
         let server = MuxServer::bind(&path).expect("bind replaces a stale socket file");
@@ -680,7 +681,6 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600, "socket must be owner-only");
 
         drop(server);
-        let _ = std::fs::remove_file(&path);
     }
 
     fn harness() -> (Arc<Mutex<MuxTree>>, Clients) {
@@ -1334,10 +1334,8 @@ mod tests {
     #[test]
     fn mutating_dispatch_saves_state_and_read_only_dispatch_does_not() {
         let (tree, clients) = quiet_harness();
-        let target = std::env::temp_dir()
-            .join(format!("par-mux-server-state-{}", std::process::id()))
-            .join("state.json");
-        let _ = std::fs::remove_file(&target);
+        let dir = temp_dir();
+        let target = dir.path().join("state.json");
 
         let (tx, worker) = spawn_persist_worker(target.clone(), Arc::new(AtomicBool::new(false)));
 
@@ -1368,7 +1366,6 @@ mod tests {
         // The channel closing (all senders dropped) is the worker's exit.
         drop(tx);
         let _ = worker.join();
-        let _ = std::fs::remove_file(&target);
     }
 
     /// A burst of queued states must coalesce: fewer writes than states,

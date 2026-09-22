@@ -12,30 +12,13 @@
 
 #![cfg(all(feature = "mux", unix))]
 
+mod common;
+
+use common::{spawn_daemon, MuxFixture};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
-
-fn socket(tag: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("par-mux-hooks-{}-{}", std::process::id(), tag));
-    let _ = std::fs::remove_file(&path);
-    path
-}
-
-fn spawn_daemon(path: &std::path::Path) -> std::process::Child {
-    // Null stdio: a daemon that outlives a failed assertion must not hold
-    // the test harness's output pipe open (the mux_restart.rs lesson).
-    use std::process::Stdio;
-    std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
-        .arg("--socket")
-        .arg(path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("daemon binary spawns")
-}
 
 fn wait_listening(path: &std::path::Path) {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -151,16 +134,17 @@ fn pane_ids(text: &str) -> Vec<String> {
 struct Stage {
     daemon: std::process::Child,
     path: std::path::PathBuf,
-    state_path: std::path::PathBuf,
     control: Control,
     pane: String,
+    // Last, so it drops after Drop::drop has stopped the daemon: removes the
+    // socket and state dir even when the test panicked.
+    _fixture: MuxFixture,
 }
 
 fn stage(tag: &str) -> Stage {
-    let path = socket(tag);
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
-    let _ = std::fs::remove_file(&state_path);
-    let daemon = spawn_daemon(&path);
+    let fixture = MuxFixture::new(tag);
+    let path = fixture.socket().to_path_buf();
+    let daemon = spawn_daemon(&fixture);
     wait_listening(&path);
     let mut control = Control::connect(&path);
     control.command("new-session -s hooks");
@@ -171,9 +155,9 @@ fn stage(tag: &str) -> Stage {
     Stage {
         daemon,
         path,
-        state_path,
         control,
         pane,
+        _fixture: fixture,
     }
 }
 
@@ -186,8 +170,6 @@ impl Drop for Stage {
         use nix::unistd::Pid;
         let _ = signal::kill(Pid::from_raw(self.daemon.id() as i32), Signal::SIGTERM);
         let _ = self.daemon.wait();
-        let _ = std::fs::remove_file(&self.path);
-        let _ = std::fs::remove_file(&self.state_path);
     }
 }
 

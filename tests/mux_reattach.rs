@@ -4,27 +4,21 @@
 
 mod common;
 
-use common::wait_listening;
+use common::{wait_listening, MuxFixture};
 use par_term_emu_core_rust::mux::{MuxClient, MuxServer};
 use par_term_emu_core_rust::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
 
-fn socket(tag: &str) -> std::path::PathBuf {
-    let mut path = std::env::temp_dir();
-    path.push(format!("par-mux-reattach-{}-{}", std::process::id(), tag));
-    let _ = std::fs::remove_file(&path);
-    path
-}
-
 #[test]
 fn a_reconnecting_client_resyncs_the_pane_screen() {
-    let path = socket("resync");
-    let server = MuxServer::bind(&path).expect("bind");
+    let fixture = MuxFixture::new("resync");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
     let _handle = std::thread::spawn(move || server.run());
 
     // First client: create a session and produce recognisable output.
     {
-        let mut client = MuxClient::connect(&path).expect("first connect");
+        let mut client = MuxClient::connect(path).expect("first connect");
         client.send("new-session -s resync").expect("new-session");
         client
             .send("send-keys -t %0 'echo par-mux-resync-marker' Enter")
@@ -49,10 +43,10 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
     // The daemon must still be listening after its client left. Poll the
     // socket (bounded) rather than sleeping a guessed 300ms — the reattach
     // below is the assertion, so it must run against a live listener.
-    wait_listening(&path);
+    wait_listening(path);
 
     // Second client: reattach and ask the pane to replay its screen.
-    let mut client = MuxClient::connect(&path).expect("reconnect to the live daemon");
+    let mut client = MuxClient::connect(path).expect("reconnect to the live daemon");
     let panes = client.send("list-panes").expect("list-panes").join("");
     assert!(panes.contains('%'), "the pane survived the client: {panes}");
 
@@ -65,16 +59,15 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         "a reattached client must receive the pane's CURRENT SCREEN, not a blank \
          pane — otherwise par-term reattaches to empty panes. Got: {replay}"
     );
-
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
-    let path = socket("spawn");
+    let fixture = MuxFixture::new("spawn");
+    let path = fixture.socket();
     // Nothing is listening. The client must start one.
     let mut client =
-        MuxClient::connect_or_spawn_at(&path).expect("connect_or_spawn starts a daemon");
+        MuxClient::connect_or_spawn_at(path).expect("connect_or_spawn starts a daemon");
     // A session first: an empty daemon's list-panes block has no body lines,
     // so prove liveness by creating a pane and listing it.
     client
@@ -94,9 +87,7 @@ fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     client
         .kill_spawned_daemon()
         .expect("the spawned daemon is cleaned up");
-    let _ = std::fs::remove_file(&path);
-    // The spawned daemon persisted its tree (D3.3) next to the test's socket
-    // stem in the real platform state dir — remove that too, or every test
-    // run leaves a stray state file behind.
-    let _ = std::fs::remove_file(par_term_emu_core_rust::mux::persist::state_file_path(&path));
+    // The spawned daemon persisted its tree (D3.3) under the test socket's
+    // stem in the real platform state dir (connect_or_spawn_at passes no
+    // --state-dir); the fixture's Drop removes that file for this stem.
 }
