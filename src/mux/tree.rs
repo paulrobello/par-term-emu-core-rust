@@ -53,14 +53,16 @@ pub struct MuxSession {
 /// addressed directly by the protocol (`%3`) far more often than they are
 /// walked to from a session.
 pub struct MuxTree {
-    sessions: HashMap<SessionId, MuxSession>,
-    windows: HashMap<WindowId, MuxWindow>,
-    panes: HashMap<PaneId, MuxPane>,
-    ids: IdAllocator,
+    // pub(crate): the persistence conversions (mux::persist) read and rebuild
+    // the tree wholesale; the field set IS the save format's source.
+    pub(crate) sessions: HashMap<SessionId, MuxSession>,
+    pub(crate) windows: HashMap<WindowId, MuxWindow>,
+    pub(crate) panes: HashMap<PaneId, MuxPane>,
+    pub(crate) ids: IdAllocator,
     factory: Box<dyn PaneFactory>,
     /// Named paste buffers (`set-buffer`/`show-buffer`). A single value per
     /// name, not tmux's numbered stack — the Phase 2 non-goal in par-mux.md D3.
-    buffers: HashMap<String, String>,
+    pub(crate) buffers: HashMap<String, String>,
 }
 
 impl MuxTree {

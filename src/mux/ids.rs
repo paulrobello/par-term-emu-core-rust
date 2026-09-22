@@ -20,6 +20,11 @@ macro_rules! mux_id {
     ($name:ident, $sigil:literal, $what:literal) => {
         #[doc = concat!("A ", $what, " identifier, rendered as `", $sigil, "N` on the wire.")]
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[cfg_attr(
+            feature = "serde",
+            derive(serde::Serialize, serde::Deserialize),
+            serde(transparent)
+        )]
         pub struct $name(pub u32);
 
         impl fmt::Display for $name {
@@ -78,6 +83,30 @@ impl IdAllocator {
     /// Allocate the next pane identifier.
     pub fn next_pane(&self) -> PaneId {
         PaneId(self.pane.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// The next identifier each kind will hand out — `(session, window,
+    /// pane)`, in that order.
+    ///
+    /// The persistence path stores these counters (par-mux.md D3.5) so a
+    /// restored server's new panes do not collide with restored ones.
+    pub fn next_ids(&self) -> (u32, u32, u32) {
+        (
+            self.session.load(Ordering::Relaxed),
+            self.window.load(Ordering::Relaxed),
+            self.pane.load(Ordering::Relaxed),
+        )
+    }
+
+    /// Resume an allocator whose counters were captured by
+    /// [`Self::next_ids`] — the restore-side counterpart.
+    pub fn resume(next: (u32, u32, u32)) -> Self {
+        let (session, window, pane) = next;
+        Self {
+            session: AtomicU32::new(session),
+            window: AtomicU32::new(window),
+            pane: AtomicU32::new(pane),
+        }
     }
 }
 

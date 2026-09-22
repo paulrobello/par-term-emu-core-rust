@@ -13,6 +13,7 @@ use crate::mux::ids::PaneId;
 
 /// Split orientation, matching `par-term`'s `SplitDirection` naming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SplitDirection {
     /// Panes are stacked vertically (split creates top/bottom panes).
     Horizontal,
@@ -37,6 +38,7 @@ pub enum ResizeDirection {
 /// A window's interior pane structure: either a single pane, or a binary
 /// split into two sub-trees with a ratio dividing them.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum LayoutTree {
     /// A leaf holding one pane.
     Pane(PaneId),

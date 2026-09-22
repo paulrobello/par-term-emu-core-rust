@@ -143,7 +143,7 @@ jobs:
         fi
 
     - name: Run mux tests (lib + e2e + daemon + reattach)
-      run: cargo test --no-default-features --features rust-only,mux
+      run: cargo test --no-default-features --features rust-only,mux,serde
 
   lint:
     name: Lint

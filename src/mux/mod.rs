@@ -15,6 +15,7 @@ pub mod ids;
 pub mod ipc;
 pub mod layout;
 pub mod pane;
+pub mod persist;
 pub mod server;
 pub mod tree;
 
@@ -28,6 +29,7 @@ pub use ipc::{
 };
 pub use layout::{LayoutTree, NoSuchLeaf, PaneGeometry, SplitDirection};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
+pub use persist::{PersistError, PersistState, FORMAT_VERSION};
 pub use server::MuxServer;
 pub use tree::{MuxSession, MuxTree, MuxWindow};
 

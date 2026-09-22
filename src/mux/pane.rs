@@ -63,6 +63,10 @@ const DEFAULT_SCROLLBACK: usize = 10_000;
 pub struct MuxPane {
     id: PaneId,
     session: PtySession,
+    /// The command this pane's process was spawned with (`None` = default
+    /// shell), recorded at spawn so a save/restore cycle (par-mux.md D3.5)
+    /// can respawn the same program.
+    spawn_command: Option<String>,
     metadata: HashMap<String, String>,
 }
 
@@ -70,6 +74,12 @@ impl MuxPane {
     /// This pane's identifier.
     pub fn id(&self) -> PaneId {
         self.id
+    }
+
+    /// The command this pane was spawned with, if any — what a restore
+    /// respawns.
+    pub fn spawn_command(&self) -> Option<&str> {
+        self.spawn_command.as_deref()
     }
 
     /// The terminal emulator backing this pane.
@@ -180,6 +190,7 @@ impl PaneFactory for ShellPaneFactory {
         Ok(MuxPane {
             id,
             session,
+            spawn_command: command.map(str::to_string),
             metadata: HashMap::new(),
         })
     }
