@@ -201,18 +201,18 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
         &mut writer,
         &mut reader,
         &format!(
-            "send-keys -t {first_pane} for i in $(seq 1 30); do printf 'ZQX-HIST-%02d\\n' $i; done"
+            "send-keys -t {first_pane} 'for i in $(seq 1 30); do printf \"ZQX-HIST-%02d\\n\" $i; done' Enter"
         ),
     );
     command(
         &mut writer,
         &mut reader,
-        &format!("send-keys -t {first_pane} echo ZQX-FIRST-PID $$"),
+        &format!("send-keys -t {first_pane} 'echo ZQX-FIRST-PID $$' Enter"),
     );
     command(
         &mut writer,
         &mut reader,
-        &format!("send-keys -t {second_pane} echo ZQX-RIGHT-PANE"),
+        &format!("send-keys -t {second_pane} 'echo ZQX-RIGHT-PANE' Enter"),
     );
 
     let old_pid = wait_for_pid(&mut writer, &mut reader, &first_pane, "ZQX-FIRST-PID");
@@ -310,7 +310,7 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
     command(
         &mut writer,
         &mut reader,
-        &format!("send-keys -t {first_pane} echo ZQX-SECOND-PID $$"),
+        &format!("send-keys -t {first_pane} 'echo ZQX-SECOND-PID $$' Enter"),
     );
     let screen = wait_for_pid(&mut writer, &mut reader, &first_pane, "ZQX-SECOND-PID");
     assert_ne!(

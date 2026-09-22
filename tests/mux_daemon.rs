@@ -230,7 +230,7 @@ fn sigterm_saves_state_on_the_way_out() {
     command(
         &mut writer,
         &mut reader,
-        &format!("send-keys -t {pane} \"echo ZQX-SHUTDOWN-MARKER\""),
+        &format!("send-keys -t {pane} 'echo ZQX-SHUTDOWN-MARKER' Enter"),
     );
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {

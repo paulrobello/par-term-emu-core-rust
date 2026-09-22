@@ -16,12 +16,14 @@ pub enum MuxCommand {
     },
     /// List every live pane.
     ListPanes,
-    /// Send literal keys to a pane.
+    /// Send keys to a pane.
     SendKeys {
         /// Target pane.
         pane: PaneId,
-        /// Literal text to write to the pane's PTY.
-        keys: String,
+        /// Final bytes for the pane's PTY — key names interpreted, quotes
+        /// resolved, no terminator added. `Enter` is an expressible key, not
+        /// an implicit one (tmux semantics; par-mux.md Phase 4 T4.B).
+        keys: Vec<u8>,
     },
     /// Kill a pane.
     KillPane {
@@ -121,6 +123,195 @@ pub enum MuxCommand {
     },
 }
 
+/// Split `rest` at its first whitespace-separated `flag` occurrence, into the
+/// flag's value and the raw remainder following that value.
+///
+/// The remainder is a raw slice, not a joined token list: send-keys payloads
+/// carry quoting that pre-splitting would destroy. The flag must precede the
+/// payload — every sender par-mux targets puts `-t` first, and the bounded
+/// grammar here documents that rather than papering over it.
+fn split_after_flag<'a>(rest: &'a str, flag: &str) -> Option<(&'a str, &'a str)> {
+    let bytes = rest.as_bytes();
+    let flag = flag.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let start = i;
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if start == i {
+            break;
+        }
+        if &bytes[start..i] == flag {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            let value_start = j;
+            while j < bytes.len() && !bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if value_start == j {
+                return None;
+            }
+            let mut k = j;
+            while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                k += 1;
+            }
+            return Some((&rest[value_start..j], &rest[k..]));
+        }
+    }
+    None
+}
+
+/// Split a payload into shell-style words: single- or double-quoted regions
+/// contribute their literal content, a backslash outside quotes escapes the
+/// next character, and unquoted whitespace separates words.
+///
+/// This is the bounded grammar par-term's senders actually emit (the `'\''`
+/// idiom for embedded quotes); it is not a full shell parser and does not
+/// interpolate anything.
+fn shell_split(raw: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut have_token = false;
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' | '"' => {
+                have_token = true;
+                let quote = c;
+                for inner in chars.by_ref() {
+                    if inner == quote {
+                        break;
+                    }
+                    current.push(inner);
+                }
+            }
+            '\\' => {
+                have_token = true;
+                if let Some(escaped) = chars.next() {
+                    current.push(escaped);
+                }
+            }
+            c if c.is_whitespace() => {
+                if have_token {
+                    tokens.push(std::mem::take(&mut current));
+                    have_token = false;
+                }
+            }
+            c => {
+                have_token = true;
+                current.push(c);
+            }
+        }
+    }
+    if have_token {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Map one send-keys token to the bytes a terminal expects for that key.
+///
+/// The table covers exactly the names par-term's `escape_keys_for_tmux`
+/// emits, plus `Enter` (which replaces the removed implicit newline) and the
+/// arrow keys. Unknown tokens are NOT errors: they are written literally, so
+/// passthrough text works without quoting every word (a deliberate, narrower
+/// contract than tmux's, which rejects unknown key names).
+fn key_to_bytes(name: &str) -> Option<Vec<u8>> {
+    match name {
+        "C-Space" => Some(vec![0x00]),
+        "Enter" => Some(vec![0x0d]),
+        "Escape" | "Esc" => Some(vec![0x1b]),
+        "BSpace" => Some(vec![0x7f]),
+        "Space" => Some(vec![b' ']),
+        "Up" => Some(vec![0x1b, b'[', b'A']),
+        "Down" => Some(vec![0x1b, b'[', b'B']),
+        "Right" => Some(vec![0x1b, b'[', b'C']),
+        "Left" => Some(vec![0x1b, b'[', b'D']),
+        _ => {
+            let letter = name.strip_prefix("C-")?;
+            if letter.len() != 1 {
+                return None;
+            }
+            let c = letter.chars().next()?.to_ascii_lowercase();
+            if c.is_ascii_lowercase() {
+                Some(vec![c as u8 - b'a' + 1])
+            } else {
+                None
+            }
+        }
+    }
+}
+
+/// A bare `0xNN` token: one raw byte, the form `escape_keys_for_tmux` uses
+/// for high bytes.
+fn hex_byte_token(token: &str) -> Option<u8> {
+    let digits = token.strip_prefix("0x")?;
+    if digits.len() != 2 {
+        return None;
+    }
+    u8::from_str_radix(digits, 16).ok()
+}
+
+/// Parse a send-keys payload into the final bytes for the pane's PTY.
+///
+/// Three modes, mirroring tmux's contract:
+/// - default: tokens are keys — quoted or bare words resolve through the key
+///   table, `0xNN` tokens are raw bytes, anything else is literal text.
+///   Tokens join with NOTHING between them; a space must be an explicit
+///   `Space` key or live inside a quoted run (exactly how
+///   `escape_keys_for_tmux` encodes spaces).
+/// - `-l`: everything is literal text (quotes still resolved, no key
+///   interpretation).
+/// - `-H`: tokens are hex byte pairs, `0x` prefix optional.
+///
+/// No terminator is appended in any mode.
+fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("send-keys requires a payload".to_string());
+    }
+    let (literal, hex, body) = match raw {
+        "-l" | "-H" => return Err("send-keys requires a payload".to_string()),
+        _ if let Some(rest) = raw.strip_prefix("-l ") => (true, false, rest),
+        _ if let Some(rest) = raw.strip_prefix("-H ") => (false, true, rest),
+        _ => (false, false, raw),
+    };
+    let tokens = shell_split(body);
+    if tokens.is_empty() {
+        return Err("send-keys requires a payload".to_string());
+    }
+    let mut out = Vec::new();
+    if hex {
+        for token in &tokens {
+            let digits = token.strip_prefix("0x").unwrap_or(token);
+            let byte = u8::from_str_radix(digits, 16)
+                .map_err(|_| format!("invalid hex byte: {token}"))?;
+            out.push(byte);
+        }
+    } else if literal {
+        for token in tokens {
+            out.extend_from_slice(token.as_bytes());
+        }
+    } else {
+        for token in tokens {
+            if let Some(bytes) = key_to_bytes(&token) {
+                out.extend_from_slice(&bytes);
+            } else if let Some(byte) = hex_byte_token(&token) {
+                out.push(byte);
+            } else {
+                out.extend_from_slice(token.as_bytes());
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Parse one command line from a client.
 ///
 /// Deliberately minimal: whitespace-split with a `-t`/`-s` flag scan. tmux's
@@ -182,8 +373,15 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
             pane: target_pane("-t")?,
         }),
         "send-keys" => {
-            let pane = target_pane("-t")?;
-            let keys = trailing_after_target();
+            let rest = line
+                .strip_prefix(name)
+                .expect("the command name prefixes the line");
+            let (target_value, payload_raw) =
+                split_after_flag(rest, "-t").ok_or_else(|| format!("{name} requires -t"))?;
+            let pane: PaneId = target_value
+                .parse()
+                .map_err(|_| format!("invalid pane target: {target_value}"))?;
+            let keys = parse_send_keys_payload(payload_raw)?;
             Ok(MuxCommand::SendKeys { pane, keys })
         }
         "new-window" => Ok(MuxCommand::NewWindow {
@@ -322,9 +520,118 @@ mod tests {
             cmd,
             MuxCommand::SendKeys {
                 pane: PaneId(3),
-                keys: "hello".into()
+                keys: b"hello".to_vec()
             }
         );
+    }
+
+    #[test]
+    fn send_keys_interprets_key_names() {
+        let cmd = parse_command("send-keys -t %3 C-c").expect("parses");
+        assert_eq!(
+            cmd,
+            MuxCommand::SendKeys {
+                pane: PaneId(3),
+                keys: vec![0x03]
+            }
+        );
+        let cmd = parse_command("send-keys -t %3 C-Space Escape BSpace Space Enter").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, vec![0x00, 0x1b, 0x7f, b' ', 0x0d]);
+    }
+
+    #[test]
+    fn send_keys_maps_arrows_to_csi_sequences() {
+        let cmd = parse_command("send-keys -t %3 Up Down Left Right").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"\x1b[A\x1b[B\x1b[D\x1b[C".to_vec());
+    }
+
+    #[test]
+    fn send_keys_resolves_quoted_runs_and_the_quote_idiom() {
+        // Quoted runs are literal, spaces inside them survive, and the
+        // '\'' idiom yields a real single quote — the escape_keys_for_tmux
+        // round trip.
+        let cmd = parse_command("send-keys -t %3 'hello world'").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"hello world".to_vec());
+
+        let cmd = parse_command("send-keys -t %3 'it'\\''s'").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"it's".to_vec());
+    }
+
+    #[test]
+    fn send_keys_space_between_bare_words_is_explicit_not_implicit() {
+        // tmux semantics: tokens join with nothing between them; a space is
+        // the Space key. escape_keys_for_tmux encodes exactly this.
+        let cmd = parse_command("send-keys -t %3 'hello' Space 'world'").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"hello world".to_vec());
+
+        let cmd = parse_command("send-keys -t %3 hello world").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"helloworld".to_vec());
+    }
+
+    #[test]
+    fn send_keys_literal_flag_disables_interpretation() {
+        let cmd = parse_command("send-keys -t %3 -l C-c").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"C-c".to_vec());
+    }
+
+    #[test]
+    fn send_keys_hex_flag_takes_byte_pairs() {
+        // The form format_send_hex_keys emits for CSI-u sequences.
+        let cmd = parse_command("send-keys -t %3 -H 1b 5b 41").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, vec![0x1b, 0x5b, 0x41]);
+
+        assert!(parse_command("send-keys -t %3 -H zz").is_err());
+    }
+
+    #[test]
+    fn send_keys_bare_hex_token_is_one_byte() {
+        let cmd = parse_command("send-keys -t %3 0x1b 'prompt> '").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"\x1bprompt> ".to_vec());
+    }
+
+    #[test]
+    fn send_keys_round_trips_an_escape_keys_for_tmux_stream() {
+        // Representative output of par-term's escape_keys_for_tmux for the
+        // bytes b"hi \xe2\x82\xacC-c": printable run quoted, high bytes as
+        // 0xNN tokens, the control key by name.
+        let cmd = parse_command("send-keys -t %3 'hi ' 0xe2 0x82 0xac C-c").unwrap();
+        let MuxCommand::SendKeys { keys, .. } = cmd else {
+            panic!("send-keys");
+        };
+        assert_eq!(keys, b"hi \xe2\x82\xac\x03".to_vec());
+    }
+
+    #[test]
+    fn send_keys_requires_a_payload() {
+        assert!(parse_command("send-keys -t %3").is_err());
+        assert!(parse_command("send-keys -t %3 -l").is_err());
     }
 
     #[test]

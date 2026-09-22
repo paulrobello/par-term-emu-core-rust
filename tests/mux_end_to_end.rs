@@ -81,7 +81,7 @@ fn client_creates_a_session_and_receives_pushed_output() {
 
     // 2. Send a command into the shell and expect its output to be PUSHED
     //    back as %output without us polling for it.
-    writeln!(writer, "send-keys -t %0 echo par-mux-marker").expect("write send-keys");
+    writeln!(writer, "send-keys -t %0 'echo par-mux-marker' Enter").expect("write send-keys");
     writer.flush().expect("flush");
 
     let deadline = Instant::now() + Duration::from_secs(10);

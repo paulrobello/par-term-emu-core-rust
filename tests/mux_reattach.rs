@@ -24,7 +24,7 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         let mut client = MuxClient::connect(&path).expect("first connect");
         client.send("new-session -s resync").expect("new-session");
         client
-            .send("send-keys -t %0 echo par-mux-resync-marker")
+            .send("send-keys -t %0 'echo par-mux-resync-marker' Enter")
             .expect("send-keys");
 
         let deadline = Instant::now() + Duration::from_secs(10);

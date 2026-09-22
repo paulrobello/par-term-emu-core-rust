@@ -304,18 +304,10 @@ fn dispatch_issued(
         MuxCommand::SendKeys { pane, keys } => {
             let mut guard = tree.lock();
             match guard.pane_mut(pane) {
-                Some(target) => {
-                    // The Phase 1 grammar is a whitespace split, so a literal
-                    // newline cannot survive parse_command; append the one the
-                    // shell needs to execute the payload. Expressing Enter as
-                    // a distinct key is Phase 2 argument-grammar work.
-                    let mut payload = keys.into_bytes();
-                    payload.push(b'\n');
-                    match target.write(&payload) {
-                        Ok(()) => emit_block(command_number, "", true),
-                        Err(err) => emit_block(command_number, &err.to_string(), false),
-                    }
-                }
+                Some(target) => match target.write(&keys) {
+                    Ok(()) => emit_block(command_number, "", true),
+                    Err(err) => emit_block(command_number, &err.to_string(), false),
+                },
                 None => emit_block(command_number, &format!("no such pane: {pane}"), false),
             }
         }
