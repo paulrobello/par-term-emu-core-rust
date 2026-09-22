@@ -1,0 +1,178 @@
+# par-mux agent scrape patterns — claude (Claude Code).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest version 2026.09.11.1
+# (updated_at 2026-09-11). Ported 2026-09-22.
+#
+# Omissions vs upstream, with reasons:
+#   - osc_progress_idle: the emulator core parses OSC 9;4 into ProgressState
+#     and does not retain the raw payload the rule matches on.
+#   - transcript_viewer, model_picker_menu: unknown/skip_state_update
+#     suppression rules; par-mux v1 has no suppression tier.
+#   - live_blocked_form (region after_last_horizontal_rule) and
+#     live_prompt_box (prompt_box_body): engine-v3 regions not implemented.
+#     generic_permission_prompt carries the blocked-form signal against
+#     `whole` instead, and idle coverage rides the title rules.
+# Region remaps: whole_recent -> whole; last_non_empty_above_prompt_box ->
+# bottom_non_empty_lines(12) (precise line matcher, noted per rule).
+#
+# Licensed under the Apache License, Version 2.0 as pattern data derived
+# from herdr; see herdr's LICENSE file for the license text.
+id = "claude"
+version = "2026.09.11.1-parmux1"
+updated_at = "2026-09-11T00:00:00Z"
+aliases = ["claude-code"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1100
+region = "osc_title"
+regex = ['^[\x{2800}-\x{28FF}\x{25D0}-\x{25D3}] ']
+
+# Upstream region: last_non_empty_above_prompt_box.
+[[rules]]
+id = "background_agents_working"
+state = "working"
+priority = 965
+region = "bottom_non_empty_lines(12)"
+line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}]\s+Waiting for [1-9]\d* background agents? to finish\s*$']
+
+[[rules]]
+id = "live_turn_working"
+state = "working"
+priority = 970
+region = "bottom_non_empty_lines(12)"
+any = [
+  { line_regex = ['^\s*[⏸⏵].*esc to interrupt(?:\s|·|$)'] },
+  { line_regex = ['^\s*[\x{002A}\x{00B7}\x{2722}\x{2733}\x{2736}\x{273B}\x{273D}]\s+\S.*…(?:\s+\(\d+[smh](?:\s|·)|\s*$)'] },
+]
+
+[[rules]]
+id = "btw_overlay_working"
+state = "working"
+priority = 975
+region = "bottom_non_empty_lines(5)"
+line_regex = [
+  '^\s*/btw(?:\s|$)',
+  '(?i)esc to close\s*$',
+]
+
+[[rules]]
+id = "background_mcp_task_working"
+state = "working"
+priority = 965
+region = "bottom_non_empty_lines(12)"
+# Claude renders activity summaries at column zero; wrapped continuations
+# are indented. Keeping that shape prevents user prompt text from
+# impersonating this signal.
+regex = ['(?m)^[\x{002A}\x{00B7}\x{2722}\x{2736}\x{273B}\x{273D}][ \t]+\S[^\n]*?(?:\n[ \t]+[^\n]*?){0,3}·(?:[ \t]+|\n[ \t]*)[1-9]\d*(?:[ \t]+|\n[ \t]*)MCP(?:[ \t]+|\n[ \t]*)tasks?(?:[ \t]+|\n[ \t]*)still(?:[ \t]+|\n[ \t]*)running[ \t]*$']
+not = [
+  { contains = ["do you want to proceed?"] },
+  { contains = ["esc to cancel"] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "dynamic_workflow_prompt"
+state = "blocked"
+priority = 980
+region = "whole"
+contains = ["run a dynamic workflow?", "esc to cancel"]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "mcp_elicitation_prompt"
+state = "blocked"
+priority = 980
+region = "whole"
+# MCP elicitation dialogs (elicitation/create) show Accept/Decline controls
+# with an "Esc to cancel" footer but no Enter hint, so a form-shape rule
+# cannot see them. Gate on the invariant header line, the Accept/Decline
+# control line, and the cancel footer.
+contains = ["esc to cancel"]
+line_regex = ['(?i)^\s*MCP server ["\x{201C}].+["\x{201D}] requests your input\s*$']
+all = [
+  { any = [
+    { line_regex = ['^\s*\x{276F}?\s*Accept\b'] },
+    { line_regex = ['^\s*\x{276F}?\s*Decline\b'] },
+  ] },
+]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "bash_permission_prompt"
+state = "blocked"
+priority = 850
+region = "whole"
+contains = ["do you want to proceed?"]
+any = [
+  { contains = ["bash command"] },
+  { contains = ["bash("] },
+  { contains = ["contains expansion"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+]
+# Claude marks the selected option with "❯", so every option branch has to
+# allow that prefix; numbered branches cover both the two-option and
+# "don't ask again" three-option shapes so this rule, not the narrower
+# generic_permission_prompt, claims Bash approvals.
+all = [
+  { any = [
+    { line_regex = ['(?i)^\s*❯?\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*no\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*3\.\s*no\b'] },
+  ] },
+]
+
+# Upstream region: after_last_horizontal_rule — the form area below the last
+# ─ rule. par-mux v1 has no hrule region; the precise contains/branch shape
+# runs against the whole screen instead.
+[[rules]]
+id = "generic_permission_prompt"
+state = "blocked"
+priority = 840
+region = "whole"
+contains = ["do you want to proceed?", "esc to cancel"]
+all = [
+  { any = [
+    { line_regex = ['(?i)^\s*❯?\s*1\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*yes\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*2\.\s*no\b'] },
+    { line_regex = ['(?i)^\s*❯?\s*3\.\s*no\b'] },
+  ] },
+]
+
+# Upstream region: whole_recent.
+[[rules]]
+id = "legacy_no_prompt_blocker"
+state = "blocked"
+priority = 300
+region = "whole"
+any = [
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["waiting for permission"] },
+  { contains = ["do you want to allow this connection?"] },
+  { contains = ["tab to amend"] },
+  { contains = ["ctrl+e to explain"] },
+  { contains = ["do you want to proceed?", "esc to cancel"] },
+  { contains = ["review your answers"] },
+  { contains = ["skip interview and plan immediately"] },
+]
+not = [
+  { regex = ['(?m)^\s*❯\s*$'] },
+]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 250
+region = "osc_title"
+regex = ['^\x{2733} ']

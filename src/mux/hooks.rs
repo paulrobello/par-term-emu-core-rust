@@ -135,6 +135,10 @@ fn handle_state_report(
 
         pane.set_metadata("agent", &header.agent);
         pane.set_metadata("agent_state", state);
+        // A hook state report makes this pane hook-authoritative from now
+        // on: the scrape tier skips it forever after (the structural
+        // precedence rule — a claim is never overwritten by a guess).
+        pane.set_metadata("agent_state_source", "hook");
         pane.set_metadata("agent_seq", &header.seq.to_string());
         if let Some(source) = &header.source {
             pane.set_metadata("agent_source", source);
@@ -151,6 +155,7 @@ fn handle_state_report(
             pane_id: header.pane_id.to_string(),
             agent: header.agent.clone(),
             state: state.to_string(),
+            source: "hook".to_string(),
         })
     };
     (ok_reply(id), notification)
@@ -210,12 +215,21 @@ fn handle_session_report(
             pane.set_metadata("agent_session_start_source", start);
         }
 
+        // The rebroadcast keeps the state's OWN provenance: a claude-shaped
+        // pane (identity by hook, state by scrape) must not relabel a
+        // scrape guess as a hook claim on its session reports.
+        let state_source = pane
+            .metadata()
+            .get("agent_state_source")
+            .cloned()
+            .unwrap_or_else(|| "hook".to_string());
         pane.metadata()
             .get("agent_state")
             .map(|state| TmuxNotification::AgentStateChanged {
                 pane_id: header.pane_id.to_string(),
                 agent: header.agent.clone(),
                 state: state.clone(),
+                source: state_source,
             })
     };
     (ok_reply(id), notification)
@@ -303,7 +317,8 @@ mod tests {
             Some(TmuxNotification::AgentStateChanged {
                 pane_id: pane_id.to_string(),
                 agent: "kimi".to_string(),
-                state: "working".to_string()
+                state: "working".to_string(),
+                source: "hook".to_string()
             })
         );
 
@@ -316,6 +331,13 @@ mod tests {
         assert_eq!(
             pane.metadata().get("agent_state").map(String::as_str),
             Some("working")
+        );
+        assert_eq!(
+            pane.metadata()
+                .get("agent_state_source")
+                .map(String::as_str),
+            Some("hook"),
+            "a hook report marks the pane hook-authoritative"
         );
         assert_eq!(
             pane.metadata().get("agent_seq").map(String::as_str),
@@ -455,7 +477,8 @@ mod tests {
             Some(TmuxNotification::AgentStateChanged {
                 pane_id: pane_id.to_string(),
                 agent: "kimi".to_string(),
-                state: "working".to_string()
+                state: "working".to_string(),
+                source: "hook".to_string()
             })
         );
     }

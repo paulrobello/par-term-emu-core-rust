@@ -169,8 +169,8 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         );
         assert_eq!(
             broadcast,
-            format!("%agent-state-changed {pane} kimi {action}\n"),
-            "the second client observed the lifecycle"
+            format!("%agent-state-changed {pane} kimi {action} source=hook\n"),
+            "the second client observed the lifecycle, provenance included"
         );
     }
 

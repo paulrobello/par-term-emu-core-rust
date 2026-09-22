@@ -1,0 +1,87 @@
+# par-mux agent scrape patterns — codex (OpenAI Codex CLI).
+#
+# Pattern data ported from herdr (https://github.com/ogulcancelik/herdr,
+# Apache License 2.0), upstream manifest version 2026.09.15.1
+# (updated_at 2026-09-15). Ported 2026-09-22.
+#
+# Omissions vs upstream, with reasons:
+#   - transcript_viewer: unknown/skip_state_update suppression rule; par-mux
+#     v1 has no suppression tier.
+#   - live_strong_blocker (after_last_prompt_marker) and
+#     screen_working_fallback (before_current_prompt_marker): engine-v3
+#     prompt-marker regions not implemented. Working coverage rides the
+#     title rule; blocked coverage rides the title rule plus the rules
+#     below.
+# Region remaps: whole_recent_without_current_prompt_marker -> whole, with
+# an added `not` so text typed at an idle codex prompt (a trailing › line)
+# cannot read as blocked — the protection upstream got from excluding the
+# current prompt marker region.
+#
+# Licensed under the Apache License, Version 2.0 as pattern data derived
+# from herdr; see herdr's LICENSE file for the license text.
+id = "codex"
+version = "2026.09.15.1-parmux1"
+updated_at = "2026-09-15T00:00:00Z"
+
+[[rules]]
+id = "osc_title_blocked"
+state = "blocked"
+priority = 1100
+region = "osc_title"
+contains = ["Action Required"]
+
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "trust_directory"
+state = "blocked"
+priority = 950
+region = "top_non_empty_lines(20)"
+all = [
+  { regex = ['\A> You are in [^\r\n]+(?:\r?\n|$)'] },
+  { regex = ['(?s)Do\s+you\s+trust\s+the\s+contents\s+of\s+this\s+directory\?'] },
+]
+
+[[rules]]
+id = "startup_update"
+state = "blocked"
+priority = 950
+region = "bottom_non_empty_lines(20)"
+contains = ["Update available!", "Update now"]
+regex = ['Skip\s+until\s+next\s+version', 'Press enter to continue\s*\z']
+
+# Upstream region: whole_recent_without_current_prompt_marker. The first
+# `not` is upstream's (a live, sparkled prompt marker makes any earlier
+# prompt stale); the second is the port's guard for a bare trailing prompt
+# line, so "[y/n]" typed into the composer cannot match.
+[[rules]]
+id = "weak_blocker"
+state = "blocked"
+priority = 600
+region = "whole"
+not = [
+  { regex = ['(?m)^›[⠁⠂⠄⠈⠐⠠⡀⢀][^\n]*(?:\n(?:[^•■✗✓\n][^\n]*)?)*\z'] },
+  { regex = ['(?m)^›[^\n]*\z'] },
+]
+any = [
+  { contains = ["[y/n]"] },
+  { contains = ["yes (y)"] },
+  { contains = ["do you want to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+  { contains = ["would you like to"], any = [{ contains = ["yes"] }, { contains = ["❯"] }] },
+]
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 100
+region = "osc_title"
+regex = ['\S']
+not = [
+  { regex = ['(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)'] },
+  { contains = ["Action Required"] },
+]

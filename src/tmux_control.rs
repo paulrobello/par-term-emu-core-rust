@@ -149,11 +149,15 @@ pub enum TmuxNotification {
 
     /// A pane's agent reported a state change (par-mux hook-fed agent
     /// layer, Phase 5 seam S3; real tmux never emits this).
-    /// Arguments: pane_id, agent_label, state
+    /// Arguments: pane_id, agent_label, state, source (`hook` or `scrape`)
     AgentStateChanged {
         pane_id: String,
         agent: String,
         state: String,
+        /// Who asserted the state: `hook` (the agent claimed it) or
+        /// `scrape` (a pattern guessed it from pane content). Empty when
+        /// the line carried no `source=` token.
+        source: String,
     },
 
     /// Unknown or unrecognized notification
@@ -701,12 +705,27 @@ impl TmuxControlParser {
         if parts.len() < 3 {
             return None;
         }
+        // The provenance token is optional and trailing (`source=hook` /
+        // `source=scrape`), so a line without one — an older emitter or a
+        // hand-written fixture — parses with an empty source rather than
+        // folding the token into the state.
+        let has_source = parts.len() >= 4 && parts[parts.len() - 1].starts_with("source=");
+        let state_end = if has_source {
+            parts.len() - 1
+        } else {
+            parts.len()
+        };
         Some(TmuxNotification::AgentStateChanged {
             pane_id: parts[0].to_string(),
             agent: parts[1].to_string(),
             // The state is the rest of the line, so a multi-word state
             // survives the round trip.
-            state: parts[2..].join(" "),
+            state: parts[2..state_end].join(" "),
+            source: if has_source {
+                parts[parts.len() - 1]["source=".len()..].to_string()
+            } else {
+                String::new()
+            },
         })
     }
 

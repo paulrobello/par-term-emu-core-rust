@@ -12,6 +12,11 @@ pub struct PyTmuxNotification {
     /// Notification type (e.g., "output", "window-add", "session-changed")
     pub notification_type: String,
 
+    /// Provenance of an agent-state-changed state: "hook" (the agent claimed
+    /// it) or "scrape" (a pattern matched pane content). None for every
+    /// other notification type and for lines with no `source=` token.
+    pub source: Option<String>,
+
     /// Pane ID (for notifications that involve a pane)
     pub pane_id: Option<String>,
 
@@ -131,6 +136,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 flags,
             } => PyTmuxNotification {
                 notification_type: "begin".to_string(),
+                source: None,
                 timestamp: Some(*timestamp),
                 command_number: Some(*command_number),
                 flags: Some(flags.clone()),
@@ -154,6 +160,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 flags,
             } => PyTmuxNotification {
                 notification_type: "end".to_string(),
+                source: None,
                 timestamp: Some(*timestamp),
                 command_number: Some(*command_number),
                 flags: Some(flags.clone()),
@@ -177,6 +184,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 flags,
             } => PyTmuxNotification {
                 notification_type: "error".to_string(),
+                source: None,
                 timestamp: Some(*timestamp),
                 command_number: Some(*command_number),
                 flags: Some(flags.clone()),
@@ -196,6 +204,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::Output { pane_id, data } => PyTmuxNotification {
                 notification_type: "output".to_string(),
+                source: None,
                 pane_id: Some(pane_id.clone()),
                 data: Some(data.clone()),
                 timestamp: None,
@@ -215,6 +224,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::PaneModeChanged { pane_id } => PyTmuxNotification {
                 notification_type: "pane-mode-changed".to_string(),
+                source: None,
                 pane_id: Some(pane_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -234,6 +244,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::WindowPaneChanged { window_id, pane_id } => PyTmuxNotification {
                 notification_type: "window-pane-changed".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 pane_id: Some(pane_id.clone()),
                 timestamp: None,
@@ -253,6 +264,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::WindowClose { window_id } => PyTmuxNotification {
                 notification_type: "window-close".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -272,6 +284,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::UnlinkedWindowClose { window_id } => PyTmuxNotification {
                 notification_type: "unlinked-window-close".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -291,6 +304,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::WindowAdd { window_id } => PyTmuxNotification {
                 notification_type: "window-add".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -310,6 +324,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::UnlinkedWindowAdd { window_id } => PyTmuxNotification {
                 notification_type: "unlinked-window-add".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -329,6 +344,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::WindowRenamed { window_id, name } => PyTmuxNotification {
                 notification_type: "window-renamed".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 name: Some(name.clone()),
                 timestamp: None,
@@ -348,6 +364,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::UnlinkedWindowRenamed { window_id, name } => PyTmuxNotification {
                 notification_type: "unlinked-window-renamed".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 name: Some(name.clone()),
                 timestamp: None,
@@ -367,6 +384,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::SessionChanged { session_id, name } => PyTmuxNotification {
                 notification_type: "session-changed".to_string(),
+                source: None,
                 session_id: Some(session_id.clone()),
                 name: Some(name.clone()),
                 timestamp: None,
@@ -390,6 +408,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 name,
             } => PyTmuxNotification {
                 notification_type: "client-session-changed".to_string(),
+                source: None,
                 client: Some(client.clone()),
                 session_id: Some(session_id.clone()),
                 name: Some(name.clone()),
@@ -409,6 +428,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::SessionRenamed { session_id, name } => PyTmuxNotification {
                 notification_type: "session-renamed".to_string(),
+                source: None,
                 session_id: Some(session_id.clone()),
                 name: Some(name.clone()),
                 timestamp: None,
@@ -428,6 +448,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::SessionsChanged => PyTmuxNotification {
                 notification_type: "sessions-changed".to_string(),
+                source: None,
                 timestamp: None,
                 command_number: None,
                 flags: None,
@@ -450,6 +471,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 window_id,
             } => PyTmuxNotification {
                 notification_type: "session-window-changed".to_string(),
+                source: None,
                 session_id: Some(session_id.clone()),
                 window_id: Some(window_id.clone()),
                 timestamp: None,
@@ -469,6 +491,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::ClientDetached { client } => PyTmuxNotification {
                 notification_type: "client-detached".to_string(),
+                source: None,
                 client: Some(client.clone()),
                 timestamp: None,
                 command_number: None,
@@ -488,6 +511,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::Exit => PyTmuxNotification {
                 notification_type: "exit".to_string(),
+                source: None,
                 timestamp: None,
                 command_number: None,
                 flags: None,
@@ -510,8 +534,10 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 pane_id,
                 agent,
                 state,
+                source,
             } => PyTmuxNotification {
                 notification_type: "agent-state-changed".to_string(),
+                source: Some(source.clone()),
                 timestamp: None,
                 command_number: None,
                 flags: None,
@@ -531,6 +557,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::Pause { pane_id } => PyTmuxNotification {
                 notification_type: "pause".to_string(),
+                source: None,
                 pane_id: Some(pane_id.clone()),
                 timestamp: None,
                 command_number: None,
@@ -554,6 +581,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 data,
             } => PyTmuxNotification {
                 notification_type: "extended-output".to_string(),
+                source: None,
                 pane_id: Some(pane_id.clone()),
                 delay_ms: Some(*delay_ms),
                 data: Some(data.clone()),
@@ -573,6 +601,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::Continue => PyTmuxNotification {
                 notification_type: "continue".to_string(),
+                source: None,
                 timestamp: None,
                 command_number: None,
                 flags: None,
@@ -592,6 +621,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::SubscriptionChanged { name, value } => PyTmuxNotification {
                 notification_type: "subscription-changed".to_string(),
+                source: None,
                 subscription_name: Some(name.clone()),
                 value: Some(value.clone()),
                 timestamp: None,
@@ -616,6 +646,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 window_raw_flags,
             } => PyTmuxNotification {
                 notification_type: "layout-change".to_string(),
+                source: None,
                 window_id: Some(window_id.clone()),
                 window_layout: Some(window_layout.clone()),
                 window_visible_layout: Some(window_visible_layout.clone()),
@@ -635,6 +666,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::PasteBufferChanged { name } => PyTmuxNotification {
                 notification_type: "paste-buffer-changed".to_string(),
+                source: None,
                 name: Some(name.clone()),
                 timestamp: None,
                 command_number: None,
@@ -654,6 +686,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::PasteBufferDeleted { name } => PyTmuxNotification {
                 notification_type: "paste-buffer-deleted".to_string(),
+                source: None,
                 name: Some(name.clone()),
                 timestamp: None,
                 command_number: None,
@@ -673,6 +706,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::Unknown { line } => PyTmuxNotification {
                 notification_type: "unknown".to_string(),
+                source: None,
                 raw_line: Some(line.clone()),
                 timestamp: None,
                 command_number: None,
@@ -692,6 +726,7 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
             },
             TmuxNotification::TerminalOutput { data } => PyTmuxNotification {
                 notification_type: "terminal-output".to_string(),
+                source: None,
                 data: Some(data.clone()),
                 timestamp: None,
                 command_number: None,

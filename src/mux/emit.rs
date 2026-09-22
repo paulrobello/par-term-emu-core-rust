@@ -93,7 +93,18 @@ pub fn emit(notification: &TmuxNotification) -> String {
             pane_id,
             agent,
             state,
-        } => format!("%agent-state-changed {pane_id} {agent} {state}\n"),
+            source,
+        } => {
+            // The source token rides only when set, so a hand-constructed
+            // notification with no provenance emits the Phase 5 line shape
+            // unchanged.
+            let tail = if source.is_empty() {
+                String::new()
+            } else {
+                format!(" source={source}")
+            };
+            format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
+        }
         // Seam S3: `TmuxNotification` carries 29 variants; Phase 1 emits the
         // 9 the spine needs and the rest fall through here, producing nothing
         // rather than panicking. Adding a notification is therefore one new
@@ -346,10 +357,35 @@ mod tests {
             pane_id: "%3".to_string(),
             agent: "kimi".to_string(),
             state: "working".to_string(),
+            source: "hook".to_string(),
         };
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn agent_state_changed_without_a_source_round_trips() {
+        // Both wire shapes must survive: the Phase 5 three-token line (no
+        // provenance) and the four-token form. The parser treats a missing
+        // `source=` as empty rather than folding the token into the state.
+        let mut parser = TmuxControlParser::new(true);
+        let parsed = parser.parse(b"%agent-state-changed %4 claude blocked\n");
+        match parsed.as_slice() {
+            [TmuxNotification::AgentStateChanged {
+                pane_id,
+                agent,
+                state,
+                source,
+            }] => {
+                assert_eq!(
+                    (pane_id.as_str(), agent.as_str(), state.as_str()),
+                    ("%4", "claude", "blocked")
+                );
+                assert!(source.is_empty(), "no source token on the wire");
+            }
+            other => panic!("unexpected parse: {other:?}"),
+        }
     }
 
     #[test]
