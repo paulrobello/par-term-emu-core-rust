@@ -104,7 +104,7 @@ Input bytes → VTE Parser → Perform trait callbacks → Terminal state (Grid/
 - `src/terminal/trigger.rs` - Regex-based output pattern matching
 - `src/grid/` - 2D terminal buffer with scrollback (flat Vec, row-major), split into `mod.rs`, `edit.rs`, `erase.rs`, `export.rs`, `rect.rs`, `scroll.rs`, `zone.rs`
 - `src/pty_session.rs` - PTY session with background reader thread
-- `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + 17 themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
+- `src/python_bindings/` - PyO3 wrappers (`terminal/` directory with `mod.rs` + 16 themed `*_api.rs` files, `pty.rs`, `streaming.rs`, `types/` directory of data types, `enums.rs`, `common.rs`)
 - `src/streaming/` - WebSocket streaming protocol
 - `src/mux/` - par-mux multiplexer daemon (tmux control mode over a local socket; `server.rs` accept loop + `dispatch.rs` per-command handlers + `command.rs` parsing + `persist.rs` save/restore) — operational reference in `docs/MUX.md`
 - `src/screenshot/` - Terminal-to-image rendering (embedded JetBrains Mono + Noto Emoji fonts)

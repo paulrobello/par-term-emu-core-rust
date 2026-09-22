@@ -39,7 +39,7 @@ par-term-emu-core-rust is a terminal emulator library written in Rust with Pytho
 **Library Artifacts:**
 - **Python Extension**: Built with Maturin, provides `par_term_emu_core_rust._native` module
 - **Rust Library**: Can be used as a `cdylib` or `rlib` for other Rust projects
-- **Streaming Server Binary**: `par-term-streamer` - WebSocket-based terminal streaming server (optional, requires `streaming` feature)
+- **Streaming Server Binary**: `par-term-streamer` - WebSocket-based terminal streaming server (optional, requires `streaming-bin` feature)
 - **Multiplexer Daemon**: `par-mux` - tmux-control-mode terminal multiplexer over a local socket (optional, Rust `mux` feature; see [MUX.md](MUX.md))
 
 ## Core Components
@@ -488,7 +488,7 @@ The Kitty APC pre-filter runs before the `vte` parser because `vte` does not exp
 
 ## Python Bindings
 
-The Python bindings live in `src/python_bindings/`. **As of ARC-002, `terminal.rs` is no longer a single file** — it is a directory, `src/python_bindings/terminal/`, containing `mod.rs` (the `PyTerminal` struct, constructor, and any methods not yet split out) plus 17 themed `*_api.rs` files, each a separate `#[pymethods] impl PyTerminal` block covering one feature area:
+The Python bindings live in `src/python_bindings/`. **As of ARC-002, `terminal.rs` is no longer a single file** — it is a directory, `src/python_bindings/terminal/`, containing `mod.rs` (the `PyTerminal` struct, constructor, and any methods not yet split out) plus 16 themed `*_api.rs` files, each a separate `#[pymethods] impl PyTerminal` block covering one feature area:
 
 - `badge_api.rs` - OSC 1337 badge format + semantic snapshots
 - `bookmark_api.rs` - Bookmarks
@@ -513,7 +513,7 @@ Other submodules:
 - `pty.rs` - `PyPtyTerminal` struct and its implementation (PTY support). Holds the `Terminal` behind `PtySession`'s `Arc<RwLock<Terminal>>` rather than owning it directly.
 - `common.rs` - Shared Terminal-access macros (ARC-003/QA-001): `impl_terminal_query_getters!` and `impl_terminal_state_setters!` generate identical getter/setter methods for both `PyTerminal` and `PyPtyTerminal` from one macro body, via the `TerminalAccess` trait that abstracts over "owns a `Terminal` directly" vs. "reaches it through an `Arc<RwLock<Terminal>>`". This is why most methods appear on both classes without duplicated code.
 - `screenshot_config.rs` - `PyScreenshotConfig` (`ScreenshotConfig`), a reusable options object for `screenshot_config()`/`screenshot_to_file_config()` so callers don't repeat 16+ keyword args per call (QA-005, added 0.43.0)
-- `types/` - Data types directory (formerly a single ~4,000-line `types.rs`, now split by domain: `clipboard.rs`, `color.rs`, `graphics.rs`, `metrics.rs`, `mouse.rs`, `notification.rs`, `recording.rs`, `screen.rs`, `selection.rs`, `session.rs`, `shell.rs`, `trigger.rs`, with `mod.rs` re-exporting every `Py*` type so `python_bindings::types::PyX` and the crate-level re-exports are unchanged). Holds PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more.
+- `types/` - Data types directory (formerly a single ~4,000-line `types.rs`, now split by domain: `clipboard.rs`, `color.rs`, `graphics.rs`, `metrics.rs`, `mouse.rs`, `notification.rs`, `recording.rs`, `screen.rs`, `selection.rs`, `shell.rs`, `trigger.rs`, with `mod.rs` re-exporting every `Py*` type so `python_bindings::types::PyX` and the crate-level re-exports are unchanged). Holds PyAttributes, PyScreenSnapshot, PyShellIntegration, PyGraphic, PyTmuxNotification, PySearchMatch, PyDetectedItem, PySelection, PyScrollbackStats, PyBookmark, PyPerformanceMetrics, and many more.
 - `enums.rs` - Enum types (PyCursorStyle, PyUnderlineStyle, PySelectionMode, PyWidthConfig, and more)
 - `observer.rs` - `PyCallbackObserver`/`PyQueueObserver`, bridging the Rust `TerminalObserver` trait to Python callables/`asyncio.Queue`
 - `streaming.rs` - `StreamingServer`/`StreamingConfig` Python bindings (requires the `streaming` feature)
