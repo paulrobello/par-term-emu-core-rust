@@ -359,7 +359,6 @@ pub struct Terminal {
     margin_bell_volume: u8,
     dirty_rows: HashSet<usize>,
     selection: Option<Selection>,
-    pane_state: Option<PaneState>,
     event_subscription: Option<HashSet<TerminalEventKind>>,
 
     // One field per feature sub-struct (ARC-001)

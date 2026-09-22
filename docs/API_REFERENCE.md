@@ -105,13 +105,11 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [MouseEncoding](#mouseencoding)
   - [MouseEvent](#mouseevent)
   - [MousePosition](#mouseposition)
-  - [PaneState](#panestate)
   - [ScreenshotConfig](#screenshotconfig)
   - [PerformanceMetrics](#performancemetrics)
   - [ProfilingData](#profilingdata)
   - [RegexMatch](#regexmatch)
   - [RenderingHint](#renderinghint)
-  - [SessionState](#sessionstate)
   - [ShellIntegrationStats](#shellintegrationstats)
   - [SnapshotDiff](#snapshotdiff)
   - [TmuxNotification](#tmuxnotification)
@@ -124,7 +122,6 @@ Complete Python API documentation for par-term-emu-core-rust.
   - [WidthConfig](#widthconfig)
   - [ProgressBar](#progressbar)
   - [CoprocessConfig](#coprocessconfig)
-  - [WindowLayout](#windowlayout)
   - [ColorHSL](#colorhsl)
   - [ColorHSV](#colorhsv)
   - [ColorPalette](#colorpalette)
@@ -852,15 +849,8 @@ Save and restore terminal state:
 
 - `set_remote_session_id(id: str | None)`: Set remote session identifier
 - `remote_session_id() -> str | None`: Get remote session identifier
-- `serialize_session() -> bytes`: Serialize terminal state to bytes
-- `deserialize_session(data: bytes)`: Restore terminal state from bytes
-- `create_session_state() -> SessionState`: Create session state snapshot
-- `capture_pane_state(id: str, cwd: str | None = None) -> PaneState`: Capture pane state for window management
-- `restore_pane_state(state: PaneState)`: Restore pane state
-- `get_pane_state() -> PaneState | None`: Get current pane state
-- `set_pane_state(state: PaneState)`: Set pane state
-- `clear_pane_state()`: Clear pane state
-- `create_window_layout() -> WindowLayout`: Create window layout descriptor
+
+> The pane/window session-state API (`PaneState`, `SessionState`, `WindowLayout` and the `*_pane_state` / `serialize_session` / `deserialize_session` / `create_session_state` / `create_window_layout` methods) was removed in 0.50.0 — see the [0.50.0 changelog entry](CHANGELOG.md#0500---2026-09-21) for the rationale and the `replay_snapshot` replacement.
 
 ### Advanced Text Operations
 
@@ -1654,23 +1644,6 @@ Mouse cursor position.
 - `row: int`: Row position
 - `timestamp: int`: Position timestamp in milliseconds
 
-### PaneState
-
-Terminal pane state for window management.
-
-**Properties:**
-- `id: str`: Pane identifier
-- `title: str`: Pane title
-- `size: tuple[int, int]`: Pane dimensions (cols, rows)
-- `position: tuple[int, int]`: Pane position (x, y)
-- `cwd: str | None`: Working directory
-- `content: list[str]`: Pane content (per line)
-- `cursor: tuple[int, int]`: Cursor position (col, row)
-- `alt_screen: bool`: Whether alternate screen is active
-- `scroll_offset: int`: Scroll offset
-- `created_at: int`: Creation timestamp
-- `last_activity: int`: Last activity timestamp
-
 ### ScreenshotConfig
 
 Reusable screenshot rendering options (QA-005, added 0.43.0), so callers don't have to repeat 16+ keyword arguments on every `screenshot()` / `screenshot_to_file()` call. Pass an instance to `screenshot_config()` / `screenshot_to_file_config()` on `Terminal` or `PtyTerminal`.
@@ -1784,19 +1757,6 @@ Rendering optimization hint.
 - `layer: str`: Z-layer hint
 - `animation: str`: Animation hint
 - `priority: int`: Update priority (0-255)
-
-### SessionState
-
-Complete terminal session state.
-
-**Properties:**
-- `id: str`: Session identifier
-- `name: str`: Session name
-- `panes: list[PaneState]`: Panes in this session
-- `layouts: list[WindowLayout]`: Window layouts
-- `active_layout: int`: Index of active layout
-- `created_at: int`: Creation timestamp
-- `last_saved: int`: Last saved timestamp
 
 ### ShellIntegrationStats
 
@@ -1941,15 +1901,6 @@ Configuration for starting a coprocess.
 - `copy_terminal_output: bool`: Whether to pipe terminal output to coprocess stdin
 - `restart_policy: str`: Restart policy - `"never"` (default), `"always"`, or `"on_failure"` (restart on non-zero exit)
 - `restart_delay_ms: int`: Delay in milliseconds before restarting (default: 0 = immediate)
-
-### WindowLayout
-
-Window layout descriptor.
-
-**Properties:**
-- `layout_type: str`: Layout type ("horizontal", "vertical", "single")
-- `panes: list[PaneState]`: Pane states
-- `active_pane: int`: Active pane index
 
 ### ColorHSL
 
