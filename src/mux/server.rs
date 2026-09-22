@@ -125,6 +125,9 @@ impl MuxServer {
 
         loop {
             if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
+                // Tell the clients the daemon is ending deliberately, so
+                // they do not have to infer death from a dropped socket.
+                broadcast_notification(&self.clients, &TmuxNotification::Exit);
                 break;
             }
             match self.listener.accept() {
@@ -777,6 +780,64 @@ fn capture_range(scrollback: &str, screen: &str, start: Option<i64>, end: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[cfg(unix)]
+    #[test]
+    fn graceful_shutdown_pushes_exit_to_clients_before_closing() {
+        use crate::mux::ipc::connect_local_stream;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "par-mux-exit-{}-{}.sock",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let server = MuxServer::bind(&path).expect("bind");
+        std::thread::spawn(move || server.run());
+
+        let stream = connect_local_stream(&path).expect("connect");
+        // Reading happens on a thread with channel deadlines (the
+        // interprocess stream exposes no set_read_timeout). Registration
+        // must be PROVEN before requesting shutdown: a command round-trip
+        // means handle_client has registered this connection's sender, so
+        // the shutdown broadcast has someone to reach.
+        let (tx, rx) = channel();
+        let (reply_seen_tx, reply_seen_rx) = channel();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader, Write};
+            let mut writer = stream.try_clone().expect("clone stream");
+            writeln!(writer, "list-sessions").expect("write command");
+            writer.flush().expect("flush");
+            let mut reader = BufReader::new(stream);
+            let mut in_reply_block = false;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line.starts_with("%begin") {
+                    in_reply_block = true;
+                } else if line.starts_with("%end") || line.starts_with("%error") {
+                    in_reply_block = false;
+                    let _ = reply_seen_tx.send(());
+                } else if !in_reply_block {
+                    let _ = tx.send(line);
+                }
+            }
+        });
+        reply_seen_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("command reply arrives first");
+        MuxServer::request_shutdown();
+
+        let line = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("%exit arrives before the socket closes");
+        assert_eq!(line, "%exit\n", "graceful shutdown pushes %exit first");
+        let _ = std::fs::remove_file(&path);
+    }
 
     #[cfg(unix)]
     #[test]

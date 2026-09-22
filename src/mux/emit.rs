@@ -85,6 +85,10 @@ pub fn emit(notification: &TmuxNotification) -> String {
             command_number,
             flags,
         } => format!("%error {timestamp} {command_number} {flags}\n"),
+        // Sent to every client on a graceful shutdown, before the sockets
+        // close, so a client learns the daemon ended deliberately rather
+        // than inferring death from a dropped connection.
+        TmuxNotification::Exit => "%exit\n".to_string(),
         // Seam S3: `TmuxNotification` carries 28 variants; Phase 1 emits the 9
         // the spine needs and the rest fall through here, producing nothing
         // rather than panicking. Adding a notification is therefore one new
@@ -328,7 +332,13 @@ mod tests {
         // Seam S3: the catch-all arm. Adding a notification later is one new
         // arm here, never a change at call sites; until then it emits nothing.
         assert_eq!(emit(&TmuxNotification::SessionsChanged), "");
-        assert_eq!(emit(&TmuxNotification::Exit), "");
+    }
+
+    #[test]
+    fn exit_round_trips() {
+        let parsed = round_trip(&TmuxNotification::Exit);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(parsed[0], TmuxNotification::Exit);
     }
 
     #[test]
