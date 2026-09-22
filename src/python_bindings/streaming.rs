@@ -79,186 +79,279 @@ impl PyStreamingConfig {
     }
 
     /// Get the maximum number of clients
+    ///
+    /// Returns:
+    ///     int: Maximum number of simultaneous clients allowed
     #[getter]
     fn max_clients(&self) -> usize {
         self.inner.max_clients
     }
 
     /// Set the maximum number of clients
+    ///
+    /// Args:
+    ///     max_clients: New maximum number of simultaneous clients
     #[setter]
     fn set_max_clients(&mut self, max_clients: usize) {
         self.inner.max_clients = max_clients;
     }
 
     /// Get whether to send initial screen
+    ///
+    /// Returns:
+    ///     bool: True if new clients receive the current screen contents
     #[getter]
     fn send_initial_screen(&self) -> bool {
         self.inner.send_initial_screen
     }
 
     /// Set whether to send initial screen
+    ///
+    /// Args:
+    ///     send_initial_screen: True to send new clients the current screen
     #[setter]
     fn set_send_initial_screen(&mut self, send_initial_screen: bool) {
         self.inner.send_initial_screen = send_initial_screen;
     }
 
     /// Get keepalive interval in seconds
+    ///
+    /// Returns:
+    ///     int: Seconds between WebSocket keepalive pings
     #[getter]
     fn keepalive_interval(&self) -> u64 {
         self.inner.keepalive_interval
     }
 
     /// Set keepalive interval in seconds
+    ///
+    /// Args:
+    ///     keepalive_interval: Seconds between WebSocket keepalive pings
     #[setter]
     fn set_keepalive_interval(&mut self, keepalive_interval: u64) {
         self.inner.keepalive_interval = keepalive_interval;
     }
 
     /// Get default read-only mode
+    ///
+    /// Returns:
+    ///     bool: True if clients start in read-only mode by default
     #[getter]
     fn default_read_only(&self) -> bool {
         self.inner.default_read_only
     }
 
     /// Set default read-only mode
+    ///
+    /// Args:
+    ///     default_read_only: True for clients to start read-only by default
     #[setter]
     fn set_default_read_only(&mut self, default_read_only: bool) {
         self.inner.default_read_only = default_read_only;
     }
 
     /// Get initial terminal columns (0 = use terminal's current size)
+    ///
+    /// Returns:
+    ///     int: Initial column count, or 0 to adopt the terminal's size
     #[getter]
     fn initial_cols(&self) -> u16 {
         self.inner.initial_cols
     }
 
     /// Set initial terminal columns (0 = use terminal's current size)
+    ///
+    /// Args:
+    ///     initial_cols: Initial column count, or 0 to adopt the terminal's size
     #[setter]
     fn set_initial_cols(&mut self, initial_cols: u16) {
         self.inner.initial_cols = initial_cols;
     }
 
     /// Get initial terminal rows (0 = use terminal's current size)
+    ///
+    /// Returns:
+    ///     int: Initial row count, or 0 to adopt the terminal's size
     #[getter]
     fn initial_rows(&self) -> u16 {
         self.inner.initial_rows
     }
 
     /// Set initial terminal rows (0 = use terminal's current size)
+    ///
+    /// Args:
+    ///     initial_rows: Initial row count, or 0 to adopt the terminal's size
     #[setter]
     fn set_initial_rows(&mut self, initial_rows: u16) {
         self.inner.initial_rows = initial_rows;
     }
 
     /// Get whether HTTP static file serving is enabled
+    ///
+    /// Returns:
+    ///     bool: True if the HTTP server serves the web frontend
     #[getter]
     fn enable_http(&self) -> bool {
         self.inner.enable_http
     }
 
     /// Set whether HTTP static file serving is enabled
+    ///
+    /// Args:
+    ///     enable_http: True to serve the web frontend over HTTP
     #[setter]
     fn set_enable_http(&mut self, enable_http: bool) {
         self.inner.enable_http = enable_http;
     }
 
     /// Get the web root directory for static files
+    ///
+    /// Returns:
+    ///     str: Directory the HTTP server serves static files from
     #[getter]
     fn web_root(&self) -> String {
         self.inner.web_root.clone()
     }
 
     /// Set the web root directory for static files
+    ///
+    /// Args:
+    ///     web_root: Directory the HTTP server serves static files from
     #[setter]
     fn set_web_root(&mut self, web_root: String) {
         self.inner.web_root = web_root;
     }
 
     /// Get the maximum number of concurrent sessions
+    ///
+    /// Returns:
+    ///     int: Maximum number of concurrent terminal sessions
     #[getter]
     fn max_sessions(&self) -> usize {
         self.inner.max_sessions
     }
 
     /// Set the maximum number of concurrent sessions
+    ///
+    /// Args:
+    ///     max_sessions: Maximum number of concurrent terminal sessions
     #[setter]
     fn set_max_sessions(&mut self, max_sessions: usize) {
         self.inner.max_sessions = max_sessions;
     }
 
     /// Get the idle session timeout in seconds (0 = never timeout)
+    ///
+    /// Returns:
+    ///     int: Seconds before an idle session is reaped, or 0 for never
     #[getter]
     fn session_idle_timeout(&self) -> u64 {
         self.inner.session_idle_timeout
     }
 
     /// Set the idle session timeout in seconds (0 = never timeout)
+    ///
+    /// Args:
+    ///     session_idle_timeout: Seconds before an idle session is reaped, or 0 for never
     #[setter]
     fn set_session_idle_timeout(&mut self, session_idle_timeout: u64) {
         self.inner.session_idle_timeout = session_idle_timeout;
     }
 
     /// Get the maximum clients per session (0 = unlimited)
+    ///
+    /// Returns:
+    ///     int: Maximum clients attached to one session, or 0 for unlimited
     #[getter]
     fn max_clients_per_session(&self) -> usize {
         self.inner.max_clients_per_session
     }
 
     /// Set the maximum clients per session (0 = unlimited)
+    ///
+    /// Args:
+    ///     max_clients_per_session: Maximum clients attached to one session, or 0 for unlimited
     #[setter]
     fn set_max_clients_per_session(&mut self, max_clients_per_session: usize) {
         self.inner.max_clients_per_session = max_clients_per_session;
     }
 
     /// Get the input rate limit in bytes per second (0 = unlimited)
+    ///
+    /// Returns:
+    ///     int: Per-client input limit in bytes/second, or 0 for unlimited
     #[getter]
     fn input_rate_limit_bytes_per_sec(&self) -> usize {
         self.inner.input_rate_limit_bytes_per_sec
     }
 
     /// Set the input rate limit in bytes per second (0 = unlimited)
+    ///
+    /// Args:
+    ///     input_rate_limit_bytes_per_sec: Per-client input limit in bytes/second, or 0 for unlimited
     #[setter]
     fn set_input_rate_limit_bytes_per_sec(&mut self, input_rate_limit_bytes_per_sec: usize) {
         self.inner.input_rate_limit_bytes_per_sec = input_rate_limit_bytes_per_sec;
     }
 
     /// Get whether system stats collection is enabled
+    ///
+    /// Returns:
+    ///     bool: True if CPU/memory stats are streamed to clients
     #[getter]
     fn enable_system_stats(&self) -> bool {
         self.inner.enable_system_stats
     }
 
     /// Set whether system stats collection is enabled
+    ///
+    /// Args:
+    ///     enable_system_stats: True to stream CPU/memory stats to clients
     #[setter]
     fn set_enable_system_stats(&mut self, enable_system_stats: bool) {
         self.inner.enable_system_stats = enable_system_stats;
     }
 
     /// Get the system stats collection interval in seconds
+    ///
+    /// Returns:
+    ///     int: Seconds between system stats updates
     #[getter]
     fn system_stats_interval_secs(&self) -> u64 {
         self.inner.system_stats_interval_secs
     }
 
     /// Set the system stats collection interval in seconds
+    ///
+    /// Args:
+    ///     system_stats_interval_secs: Seconds between system stats updates
     #[setter]
     fn set_system_stats_interval_secs(&mut self, system_stats_interval_secs: u64) {
         self.inner.system_stats_interval_secs = system_stats_interval_secs;
     }
 
     /// Get the API key for authentication (None if not set)
+    ///
+    /// Returns:
+    ///     str | None: Current API key, or None if authentication is off
     #[getter]
     fn api_key(&self) -> Option<String> {
         self.inner.api_key.clone()
     }
 
     /// Set the API key for authentication (None to disable)
+    ///
+    /// Args:
+    ///     api_key: New API key, or None to disable authentication
     #[setter]
     fn set_api_key(&mut self, api_key: Option<String>) {
         self.inner.api_key = api_key;
     }
 
     /// Get whether API key authentication via query parameter is allowed
+    ///
+    /// Returns:
+    ///     bool: True if the API key may be passed as a query parameter
     #[getter]
     fn allow_api_key_in_query(&self) -> bool {
         self.inner.allow_api_key_in_query
@@ -266,12 +359,18 @@ impl PyStreamingConfig {
 
     /// Set whether to allow API key authentication via query parameter.
     /// Disabled by default because query params are logged by proxies and saved in browser history.
+    ///
+    /// Args:
+    ///     allow: True to accept the API key as a query parameter
     #[setter]
     fn set_allow_api_key_in_query(&mut self, allow: bool) {
         self.inner.allow_api_key_in_query = allow;
     }
 
     /// Get the allowed browser origins allowlist (None = local/non-browser only).
+    ///
+    /// Returns:
+    ///     list[str] | None: Allowed origins, or None for local/non-browser only
     #[getter]
     fn allowed_origins(&self) -> Option<Vec<String>> {
         self.inner.allowed_origins.clone()
@@ -281,6 +380,9 @@ impl PyStreamingConfig {
     /// When None, only non-browser clients and local (loopback) browser origins
     /// are accepted. Set to a list of origin strings (e.g.
     /// ["https://app.example.com"]) to allow specific remote browser origins.
+    ///
+    /// Args:
+    ///     origins: Allowed origin strings, or None for local/non-browser only
     #[setter]
     fn set_allowed_origins(&mut self, origins: Option<Vec<String>>) {
         self.inner.allowed_origins = origins;
@@ -377,6 +479,9 @@ impl PyStreamingServer {
     ///     pty_terminal: The PyPtyTerminal instance to stream (mutable to set callback)
     ///     addr: The address to bind to (e.g., "127.0.0.1:8080")
     ///     config: Optional StreamingConfig for server configuration
+    ///
+    /// Returns:
+    ///     StreamingServer: A new server (call start() to begin serving)
     #[new]
     #[pyo3(signature = (pty_terminal, addr, config=None))]
     fn new(
@@ -505,6 +610,9 @@ impl PyStreamingServer {
     }
 
     /// Get the number of connected clients
+    ///
+    /// Returns:
+    ///     int: Number of currently connected clients (0 when stopped)
     fn client_count(&self) -> PyResult<usize> {
         if let Some(server) = &self.server {
             Ok(server.client_count())
@@ -514,6 +622,9 @@ impl PyStreamingServer {
     }
 
     /// Get the maximum number of clients allowed
+    ///
+    /// Returns:
+    ///     int: Configured client limit (0 when stopped)
     fn max_clients(&self) -> PyResult<usize> {
         if let Some(server) = &self.server {
             Ok(server.max_clients())
@@ -534,6 +645,12 @@ impl PyStreamingServer {
     ///     foreground: RGB tuple for foreground color (r, g, b)
     ///     normal: List of 8 RGB tuples for normal ANSI colors 0-7
     ///     bright: List of 8 RGB tuples for bright ANSI colors 8-15
+    ///
+    /// Returns:
+    ///     dict: Theme info dict accepted by set_theme()
+    ///
+    /// Raises:
+    ///     RuntimeError: If normal or bright does not contain exactly 8 tuples
     #[staticmethod]
     fn create_theme_info(
         name: String,
@@ -639,6 +756,10 @@ impl PyStreamingServer {
     }
 
     /// Send a mode changed event to all clients
+    ///
+    /// Args:
+    ///     mode: Mode name (e.g. "alt_screen", "cursor_visible")
+    ///     enabled: Whether the mode is now enabled
     fn send_mode_changed(&self, mode: String, enabled: bool) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_mode_changed(mode, enabled);
@@ -649,6 +770,9 @@ impl PyStreamingServer {
     }
 
     /// Send a graphics added event to all clients
+    ///
+    /// Args:
+    ///     row: Grid row the new graphic was placed on
     fn send_graphics_added(&self, row: u16) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_graphics_added(row);
@@ -659,6 +783,12 @@ impl PyStreamingServer {
     }
 
     /// Send a hyperlink added event to all clients
+    ///
+    /// Args:
+    ///     url: Hyperlink target URL
+    ///     row: Grid row the link starts on (0-indexed)
+    ///     col: Grid column the link starts at (0-indexed)
+    ///     id: Optional link id for grouping multi-cell links
     #[pyo3(signature = (url, row, col, id=None))]
     fn send_hyperlink_added(
         &self,
@@ -676,6 +806,11 @@ impl PyStreamingServer {
     }
 
     /// Send a user variable changed event to all clients
+    ///
+    /// Args:
+    ///     name: Variable name
+    ///     value: New variable value
+    ///     old_value: Previous value, if known
     #[pyo3(signature = (name, value, old_value=None))]
     fn send_user_var_changed(
         &self,
@@ -692,6 +827,11 @@ impl PyStreamingServer {
     }
 
     /// Send a cursor position event to all clients
+    ///
+    /// Args:
+    ///     col: Cursor column (0-indexed)
+    ///     row: Cursor row (0-indexed)
+    ///     visible: Whether the cursor is visible
     fn send_cursor_position(&self, col: u16, row: u16, visible: bool) -> PyResult<()> {
         if let Some(server) = &self.server {
             server.send_cursor_position(col, row, visible);
@@ -702,6 +842,9 @@ impl PyStreamingServer {
     }
 
     /// Send a badge changed event to all clients
+    ///
+    /// Args:
+    ///     badge: New badge text, or None to clear the badge
     #[pyo3(signature = (badge=None))]
     fn send_badge_changed(&self, badge: Option<String>) -> PyResult<()> {
         if let Some(server) = &self.server {
@@ -856,6 +999,9 @@ impl PyStreamingServer {
     }
 
     /// Get the server address
+    ///
+    /// Returns:
+    ///     str: The address the server is bound to
     #[getter]
     fn addr(&self) -> String {
         self.addr.clone()
@@ -875,6 +1021,8 @@ impl PyStreamingServer {
 }
 
 // For non-streaming builds, provide stub classes
+/// Placeholder `StreamingServer` for builds without the `streaming` feature;
+/// its constructor always raises `RuntimeError`.
 #[cfg(not(feature = "streaming"))]
 #[pyclass(name = "StreamingServer")]
 pub struct PyStreamingServer;
@@ -893,6 +1041,8 @@ impl PyStreamingServer {
     }
 }
 
+/// Placeholder `StreamingConfig` for builds without the `streaming` feature;
+/// its constructor always raises `RuntimeError`.
 #[cfg(not(feature = "streaming"))]
 #[pyclass(name = "StreamingConfig")]
 pub struct PyStreamingConfig;
@@ -1059,6 +1209,7 @@ pub fn decode_client_message<'py>(
 
 // Stub functions for non-streaming builds
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 #[pyo3(signature = (_message_type, **_kwargs))]
 pub fn encode_server_message<'py>(
@@ -1072,6 +1223,7 @@ pub fn encode_server_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 pub fn decode_server_message<'py>(
     _py: Python<'py>,
@@ -1083,6 +1235,7 @@ pub fn decode_server_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 #[pyo3(signature = (_message_type, **_kwargs))]
 pub fn encode_client_message<'py>(
@@ -1096,6 +1249,7 @@ pub fn encode_client_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 pub fn decode_client_message<'py>(
     _py: Python<'py>,

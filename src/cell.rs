@@ -69,122 +69,146 @@ impl Default for CellFlags {
 
 impl CellFlags {
     // Getter methods for each flag
+    /// Whether the bold attribute is set.
     #[inline]
     pub fn bold(&self) -> bool {
         self.bits.contains(CellBitflags::BOLD)
     }
 
+    /// Whether the dim attribute is set.
     #[inline]
     pub fn dim(&self) -> bool {
         self.bits.contains(CellBitflags::DIM)
     }
 
+    /// Whether the italic attribute is set.
     #[inline]
     pub fn italic(&self) -> bool {
         self.bits.contains(CellBitflags::ITALIC)
     }
 
+    /// Whether the underline attribute is set.
     #[inline]
     pub fn underline(&self) -> bool {
         self.bits.contains(CellBitflags::UNDERLINE)
     }
 
+    /// Whether the blink attribute is set.
     #[inline]
     pub fn blink(&self) -> bool {
         self.bits.contains(CellBitflags::BLINK)
     }
 
+    /// Whether the reverse attribute is set.
     #[inline]
     pub fn reverse(&self) -> bool {
         self.bits.contains(CellBitflags::REVERSE)
     }
 
+    /// Whether the hidden attribute is set.
     #[inline]
     pub fn hidden(&self) -> bool {
         self.bits.contains(CellBitflags::HIDDEN)
     }
 
+    /// Whether the strikethrough attribute is set.
     #[inline]
     pub fn strikethrough(&self) -> bool {
         self.bits.contains(CellBitflags::STRIKETHROUGH)
     }
 
+    /// Whether the overline attribute is set.
     #[inline]
     pub fn overline(&self) -> bool {
         self.bits.contains(CellBitflags::OVERLINE)
     }
 
+    /// Whether the protected (DECSCA guarded) attribute is set.
     #[inline]
     pub fn guarded(&self) -> bool {
         self.bits.contains(CellBitflags::GUARDED)
     }
 
+    /// Whether the wide-character attribute is set.
     #[inline]
     pub fn wide_char(&self) -> bool {
         self.bits.contains(CellBitflags::WIDE_CHAR)
     }
 
+    /// Whether the wide-character spacer attribute is set.
     #[inline]
     pub fn wide_char_spacer(&self) -> bool {
         self.bits.contains(CellBitflags::WIDE_CHAR_SPACER)
     }
 
     // Setter methods for each flag
+    /// Set or clear the bold attribute.
     #[inline]
     pub fn set_bold(&mut self, value: bool) {
         self.bits.set(CellBitflags::BOLD, value);
     }
 
+    /// Set or clear the dim attribute.
     #[inline]
     pub fn set_dim(&mut self, value: bool) {
         self.bits.set(CellBitflags::DIM, value);
     }
 
+    /// Set or clear the italic attribute.
     #[inline]
     pub fn set_italic(&mut self, value: bool) {
         self.bits.set(CellBitflags::ITALIC, value);
     }
 
+    /// Set or clear the underline attribute.
     #[inline]
     pub fn set_underline(&mut self, value: bool) {
         self.bits.set(CellBitflags::UNDERLINE, value);
     }
 
+    /// Set or clear the blink attribute.
     #[inline]
     pub fn set_blink(&mut self, value: bool) {
         self.bits.set(CellBitflags::BLINK, value);
     }
 
+    /// Set or clear the reverse attribute.
     #[inline]
     pub fn set_reverse(&mut self, value: bool) {
         self.bits.set(CellBitflags::REVERSE, value);
     }
 
+    /// Set or clear the hidden attribute.
     #[inline]
     pub fn set_hidden(&mut self, value: bool) {
         self.bits.set(CellBitflags::HIDDEN, value);
     }
 
+    /// Set or clear the strikethrough attribute.
     #[inline]
     pub fn set_strikethrough(&mut self, value: bool) {
         self.bits.set(CellBitflags::STRIKETHROUGH, value);
     }
 
+    /// Set or clear the overline attribute.
     #[inline]
     pub fn set_overline(&mut self, value: bool) {
         self.bits.set(CellBitflags::OVERLINE, value);
     }
 
+    /// Set or clear the protected (DECSCA guarded) attribute.
     #[inline]
     pub fn set_guarded(&mut self, value: bool) {
         self.bits.set(CellBitflags::GUARDED, value);
     }
 
+    /// Set or clear the wide-character attribute.
     #[inline]
     pub fn set_wide_char(&mut self, value: bool) {
         self.bits.set(CellBitflags::WIDE_CHAR, value);
     }
 
+    /// Set or clear the wide-character spacer attribute.
     #[inline]
     pub fn set_wide_char_spacer(&mut self, value: bool) {
         self.bits.set(CellBitflags::WIDE_CHAR_SPACER, value);
@@ -347,6 +371,7 @@ impl Cell {
         }
     }
 
+    /// Return the base character plus any combining characters as a String.
     pub fn get_grapheme(&self) -> String {
         let mut result = String::with_capacity(1 + self.combining.len());
         self.push_grapheme(&mut result);

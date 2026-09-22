@@ -71,6 +71,12 @@ impl PyTerminal {
     ///     cols: Number of columns (width)
     ///     rows: Number of rows (height)
     ///     scrollback: Maximum number of scrollback lines (default: 10000)
+    ///
+    /// Returns:
+    ///     Terminal: A new terminal with a blank grid of the given size
+    ///
+    /// Example:
+    ///     >>> term = Terminal(80, 24)
     #[new]
     #[pyo3(signature = (cols, rows, scrollback=10000))]
     fn new(cols: usize, rows: usize, scrollback: usize) -> PyResult<Self> {
@@ -974,6 +980,9 @@ impl PyTerminal {
     ///
     /// Returns a sorted list of 0-indexed row numbers that have been modified
     /// since the last mark_clean() call.
+    ///
+    /// Returns:
+    ///     list[int]: Sorted 0-indexed dirty row numbers
     fn get_dirty_rows(&self) -> PyResult<Vec<usize>> {
         Ok(self.inner.get_dirty_rows())
     }
@@ -993,6 +1002,9 @@ impl PyTerminal {
     }
 
     /// Mark a specific row as dirty
+    ///
+    /// Args:
+    ///     row: 0-indexed row number to mark dirty
     fn mark_row_dirty(&mut self, row: usize) -> PyResult<()> {
         self.inner.mark_row_dirty(row);
         Ok(())
@@ -1002,6 +1014,9 @@ impl PyTerminal {
     ///
     /// Returns and clears the buffer of bell events.
     /// Each event is a string: 'visual', 'warning:<volume>', or 'margin:<volume>'
+    ///
+    /// Returns:
+    ///     list[str]: Bell events received since the last drain
     fn drain_bell_events(&mut self) -> PyResult<Vec<String>> {
         use crate::terminal::BellEvent;
         Ok(self
@@ -1020,6 +1035,9 @@ impl PyTerminal {
     ///
     /// Returns and clears the buffer of terminal events.
     /// Events are returned as dictionaries with 'type' and additional fields.
+    ///
+    /// Returns:
+    ///     list[dict]: Event dicts with a 'type' key plus event-specific fields
     fn poll_events(&mut self) -> PyResult<Vec<HashMap<String, String>>> {
         use crate::python_bindings::observer::event_to_dict;
         let events = self.inner.poll_events();
@@ -1247,16 +1265,25 @@ impl PyTerminal {
     }
 
     /// Get auto-wrap mode (DECAWM)
+    ///
+    /// Returns:
+    ///     bool: True if characters wrap to the next line at the right margin
     fn auto_wrap_mode(&self) -> PyResult<bool> {
         Ok(self.inner.auto_wrap_mode())
     }
 
     /// Get origin mode (DECOM)
+    ///
+    /// Returns:
+    ///     bool: True if cursor addressing is relative to the scroll region
     fn origin_mode(&self) -> PyResult<bool> {
         Ok(self.inner.origin_mode())
     }
 
     /// Get application cursor mode
+    ///
+    /// Returns:
+    ///     bool: True if the cursor keys send application-mode sequences
     fn application_cursor(&self) -> PyResult<bool> {
         Ok(self.inner.application_cursor())
     }
@@ -1278,6 +1305,12 @@ impl PyTerminal {
     }
 
     /// Get an ANSI palette color by index (0-15)
+    ///
+    /// Args:
+    ///     index: Palette index, 0-15
+    ///
+    /// Returns:
+    ///     tuple[int, int, int] | None: (r, g, b) if the color is RGB, None otherwise
     fn get_ansi_color(&self, index: u8) -> PyResult<Option<(u8, u8, u8)>> {
         use crate::color::Color;
         if let Some(color) = self.inner.get_ansi_color(index as usize) {
@@ -1308,17 +1341,26 @@ impl PyTerminal {
     }
 
     /// Get all tab stop positions
+    ///
+    /// Returns:
+    ///     list[int]: Sorted 0-indexed columns with a tab stop set
     fn get_tab_stops(&self) -> PyResult<Vec<usize>> {
         Ok(self.inner.get_tab_stops())
     }
 
     /// Set a tab stop at the specified column
+    ///
+    /// Args:
+    ///     col: 0-indexed column for the new tab stop
     fn set_tab_stop(&mut self, col: usize) -> PyResult<()> {
         self.inner.set_tab_stop(col);
         Ok(())
     }
 
     /// Clear a tab stop at the specified column
+    ///
+    /// Args:
+    ///     col: 0-indexed column whose tab stop is removed
     fn clear_tab_stop(&mut self, col: usize) -> PyResult<()> {
         self.inner.clear_tab_stop(col);
         Ok(())
@@ -1346,7 +1388,15 @@ impl PyTerminal {
     /// Get a rectangular region of the screen
     ///
     /// Returns cells in rectangle bounded by (top, left) to (bottom, right) inclusive.
-    /// Returns list of rows, where each row is a list of Cell dictionaries.
+    ///
+    /// Args:
+    ///     top: First row (0-indexed, inclusive)
+    ///     left: First column (0-indexed, inclusive)
+    ///     bottom: Last row (0-indexed, inclusive)
+    ///     right: Last column (0-indexed, inclusive)
+    ///
+    /// Returns:
+    ///     list[list[dict]]: Rows of Cell dicts with 'char' and 'width' keys
     fn get_rectangle(
         &self,
         top: usize,
@@ -1371,6 +1421,13 @@ impl PyTerminal {
     }
 
     /// Fill a rectangle with a character
+    ///
+    /// Args:
+    ///     top: First row (0-indexed, inclusive)
+    ///     left: First column (0-indexed, inclusive)
+    ///     bottom: Last row (0-indexed, inclusive)
+    ///     right: Last column (0-indexed, inclusive)
+    ///     ch: Character to fill with
     fn fill_rectangle(
         &mut self,
         top: usize,
@@ -1384,6 +1441,12 @@ impl PyTerminal {
     }
 
     /// Erase a rectangle
+    ///
+    /// Args:
+    ///     top: First row (0-indexed, inclusive)
+    ///     left: First column (0-indexed, inclusive)
+    ///     bottom: Last row (0-indexed, inclusive)
+    ///     right: Last column (0-indexed, inclusive)
     fn erase_rectangle(
         &mut self,
         top: usize,

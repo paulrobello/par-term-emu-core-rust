@@ -190,6 +190,20 @@ impl PyTerminal {
     // === Feature 15: Regex Search ===
 
     /// Perform regex search on terminal content
+    ///
+    /// Args:
+    ///     pattern: Regex pattern to search for
+    ///     case_insensitive: Match without regard to case (default False)
+    ///     multiline: Let ^ and $ match line boundaries (default True)
+    ///     include_scrollback: Search scrollback as well as the screen (default True)
+    ///     max_matches: Stop after this many matches, 0 for unlimited
+    ///     reverse: Search from the end backwards (default False)
+    ///
+    /// Returns:
+    ///     list[RegexMatch]: Matches found, in search order
+    ///
+    /// Raises:
+    ///     ValueError: If the pattern is not a valid regex
     #[pyo3(signature = (pattern, case_insensitive=false, multiline=true, include_scrollback=true, max_matches=0, reverse=false))]
     fn regex_search(
         &mut self,
@@ -222,6 +236,9 @@ impl PyTerminal {
     }
 
     /// Get cached regex matches
+    ///
+    /// Returns:
+    ///     list[RegexMatch]: Matches from the most recent regex search
     fn get_regex_matches(&self) -> PyResult<Vec<crate::python_bindings::types::PyRegexMatch>> {
         Ok(self
             .inner
@@ -232,6 +249,9 @@ impl PyTerminal {
     }
 
     /// Get current regex search pattern
+    ///
+    /// Returns:
+    ///     str | None: The active regex pattern, or None if no search ran
     fn get_current_regex_pattern(&self) -> PyResult<Option<String>> {
         Ok(self.inner.get_current_regex_pattern())
     }
@@ -243,6 +263,13 @@ impl PyTerminal {
     }
 
     /// Find next regex match from a position
+    ///
+    /// Args:
+    ///     from_row: Row to search from (0-indexed)
+    ///     from_col: Column to search from (0-indexed)
+    ///
+    /// Returns:
+    ///     RegexMatch | None: Next match at or after the position, if any
     fn next_regex_match(
         &self,
         from_row: usize,
@@ -255,6 +282,13 @@ impl PyTerminal {
     }
 
     /// Find previous regex match from a position
+    ///
+    /// Args:
+    ///     from_row: Row to search from (0-indexed)
+    ///     from_col: Column to search from (0-indexed)
+    ///
+    /// Returns:
+    ///     RegexMatch | None: Previous match at or before the position, if any
     fn prev_regex_match(
         &self,
         from_row: usize,

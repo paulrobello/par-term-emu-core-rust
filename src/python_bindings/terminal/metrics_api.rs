@@ -13,6 +13,9 @@ impl PyTerminal {
     // === Feature 7: Performance Metrics ===
 
     /// Get current performance metrics
+    ///
+    /// Returns:
+    ///     PerformanceMetrics: Aggregate counters since the last reset
     fn get_performance_metrics(
         &self,
     ) -> PyResult<crate::python_bindings::types::PyPerformanceMetrics> {
@@ -36,6 +39,11 @@ impl PyTerminal {
     }
 
     /// Record a frame timing
+    ///
+    /// Args:
+    ///     processing_us: Frame processing time in microseconds
+    ///     cells_updated: Number of cells updated in the frame
+    ///     bytes_processed: Number of input bytes processed in the frame
     fn record_frame_timing(
         &mut self,
         processing_us: u64,
@@ -48,6 +56,12 @@ impl PyTerminal {
     }
 
     /// Get recent frame timings
+    ///
+    /// Args:
+    ///     count: Maximum timings to return (None for all buffered)
+    ///
+    /// Returns:
+    ///     list[FrameTiming]: Most recent frame timings, oldest first
     #[pyo3(signature = (count=None))]
     fn get_frame_timings(
         &self,
@@ -66,11 +80,17 @@ impl PyTerminal {
     }
 
     /// Get average frame time in microseconds
+    ///
+    /// Returns:
+    ///     int: Mean frame processing time in microseconds
     fn get_average_frame_time(&self) -> PyResult<u64> {
         Ok(self.inner.get_average_frame_time())
     }
 
     /// Get frames per second
+    ///
+    /// Returns:
+    ///     float: Recent frame rate in frames per second
     fn get_fps(&self) -> PyResult<f64> {
         Ok(self.inner.get_fps())
     }
@@ -90,11 +110,17 @@ impl PyTerminal {
     }
 
     /// Check if profiling is enabled
+    ///
+    /// Returns:
+    ///     bool: True if performance profiling is collecting data
     fn is_profiling_enabled(&self) -> PyResult<bool> {
         Ok(self.inner.is_profiling_enabled())
     }
 
     /// Get profiling data
+    ///
+    /// Returns:
+    ///     ProfilingData | None: Collected profiling data, or None if empty
     fn get_profiling_data(
         &self,
     ) -> PyResult<Option<crate::python_bindings::types::PyProfilingData>> {
@@ -111,6 +137,10 @@ impl PyTerminal {
     }
 
     /// Record an escape sequence execution
+    ///
+    /// Args:
+    ///     category: One of "csi", "osc", "esc", "dcs", "print", "control"
+    ///     time_us: Execution time in microseconds
     fn record_escape_sequence(&mut self, category: &str, time_us: u64) -> PyResult<()> {
         use crate::terminal::ProfileCategory;
 
@@ -129,12 +159,18 @@ impl PyTerminal {
     }
 
     /// Record memory allocation
+    ///
+    /// Args:
+    ///     bytes: Number of bytes allocated
     fn record_allocation(&mut self, bytes: u64) -> PyResult<()> {
         self.inner.record_allocation(bytes);
         Ok(())
     }
 
     /// Update peak memory usage
+    ///
+    /// Args:
+    ///     current_bytes: Current total memory usage in bytes
     fn update_peak_memory(&mut self, current_bytes: usize) -> PyResult<()> {
         self.inner.update_peak_memory(current_bytes);
         Ok(())

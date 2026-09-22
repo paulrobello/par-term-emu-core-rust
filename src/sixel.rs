@@ -23,15 +23,21 @@ use crate::graphics::{GraphicProtocol, TerminalGraphic};
 /// Hard upper bounds for Sixel resources. These are deliberately high but
 /// finite, and are used to clamp user-configurable limits.
 pub const SIXEL_HARD_MAX_WIDTH: usize = 4096;
+/// Hard upper bound for Sixel image height in pixels.
 pub const SIXEL_HARD_MAX_HEIGHT: usize = 4096;
+/// Hard upper bound for Sixel repeat counts.
 pub const SIXEL_HARD_MAX_REPEAT: usize = 10_000;
+/// Hard upper bound for concurrent Sixel graphics per terminal.
 pub const SIXEL_HARD_MAX_GRAPHICS: usize = 1024;
 
 /// Default per-terminal Sixel limits. These can be overridden via API but
 /// are themselves clamped to the hard maxima.
 pub const SIXEL_DEFAULT_MAX_WIDTH: usize = 1024;
+/// Default Sixel height limit in pixels.
 pub const SIXEL_DEFAULT_MAX_HEIGHT: usize = 1024;
+/// Default Sixel repeat limit.
 pub const SIXEL_DEFAULT_MAX_REPEAT: usize = 10_000;
+/// Default limit on concurrent Sixel graphics.
 pub const SIXEL_DEFAULT_MAX_GRAPHICS: usize = 256;
 
 /// Per-terminal Sixel resource limits
@@ -43,6 +49,7 @@ pub struct SixelLimits {
 }
 
 impl SixelLimits {
+    /// Create limits, clamping each value to its hard maximum.
     pub fn new(max_width: usize, max_height: usize, max_repeat: usize) -> Self {
         Self {
             max_width: max_width.clamp(1, SIXEL_HARD_MAX_WIDTH),
@@ -71,10 +78,12 @@ pub struct SixelColor {
 }
 
 impl SixelColor {
+    /// Create a color from 0-255 RGB components.
     pub fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
 
+    /// Create a color from HLS values (h in degrees 0-360, l/s 0-255).
     pub fn from_hls(h: u16, l: u8, s: u8) -> Self {
         // Convert HLS to RGB
         // H: 0-360 degrees
@@ -127,6 +136,7 @@ impl SixelColor {
         Self::new(r, g, b)
     }
 
+    /// Create a color from 0-100 percentage RGB components.
     pub fn from_rgb_percent(r: u8, g: u8, b: u8) -> Self {
         // Convert 0-100 percent to 0-255
         let r = ((r.min(100) as f32 / 100.0) * 255.0) as u8;
@@ -163,6 +173,7 @@ pub struct SixelGraphic {
 }
 
 impl SixelGraphic {
+    /// Create a blank RGBA graphic at the given cell position with a unique id.
     pub fn new(position: (usize, usize), width: usize, height: usize) -> Self {
         let id = SIXEL_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let pixels = vec![0u8; width * height * 4]; // RGBA
@@ -262,6 +273,7 @@ pub struct SixelParser {
 }
 
 impl SixelParser {
+    /// Create a parser with the default limits and the default VGA palette.
     pub fn new() -> Self {
         Self::new_with_limits(SixelLimits::default())
     }
@@ -300,6 +312,7 @@ impl SixelParser {
         }
     }
 
+    /// Store the DCS introducer parameters; P2 selects the background mode.
     pub fn set_params(&mut self, params: &[u16]) {
         self.params = params.to_vec();
         // P2 is background mode
