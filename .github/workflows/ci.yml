@@ -143,7 +143,11 @@ jobs:
         fi
 
     - name: Run mux tests (lib + e2e + daemon + reattach)
-      run: cargo test --no-default-features --features rust-only,mux,serde
+      # Serial: the suite's PTY spawns contend under parallel test threads —
+      # moving-target openpty failures observed locally (card
+      # 01a0c64fc43e7913b474c038db0635d5); the whole suite is seconds, so
+      # serialization costs nothing.
+      run: cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
 
   lint:
     name: Lint
