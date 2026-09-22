@@ -184,9 +184,9 @@ impl MuxTree {
     ///
     /// tmux's `split-window`: the new pane divides the target's extent along
     /// `direction`, receiving `new_share` of it (the `-p` percentage), and
-    /// becomes the window's active pane. The new pane's terminal is created
-    /// at the window's full size — per-pane geometry is a render-time
-    /// concern (the layout string), not a terminal-size concern.
+    /// becomes the window's active pane. Afterwards every pane terminal in
+    /// the window is resized to the new geometry — the layout is the source
+    /// of truth for pane extents, and the terminals follow it.
     pub fn split_pane(
         &mut self,
         target: PaneId,
@@ -204,14 +204,17 @@ impl MuxTree {
         let pane_id = self.ids.next_pane();
         let pane = self.factory.create_pane(pane_id, cols, rows, command)?;
         self.panes.insert(pane_id, pane);
-        let window = self.windows.get_mut(&window_id).expect("just found");
-        // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
-        // (the target), while the command speaks in the NEW pane's share.
-        window
-            .layout
-            .split_pane(target, pane_id, direction, 1.0 - new_share)
-            .expect("window_of_pane only returns windows holding the pane as a leaf");
-        window.active = pane_id;
+        {
+            let window = self.windows.get_mut(&window_id).expect("just found");
+            // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
+            // (the target), while the command speaks in the NEW pane's share.
+            window
+                .layout
+                .split_pane(target, pane_id, direction, 1.0 - new_share)
+                .expect("window_of_pane only returns windows holding the pane as a leaf");
+            window.active = pane_id;
+        }
+        self.sync_pane_sizes(window_id);
         Ok(pane_id)
     }
 
@@ -239,30 +242,37 @@ impl MuxTree {
     ///
     /// tmux's `swap-pane` exchanges panes inside one window; panes in
     /// different windows have no shared split structure to trade places in.
+    /// Both terminals are resized to their traded geometry.
     pub fn swap_panes(&mut self, target: PaneId, source: PaneId) -> Result<(), MuxError> {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
-        let window = self
-            .windows
-            .get_mut(&window_id)
-            .expect("window_of_pane only returns live windows");
-        if !window.layout.pane_ids().contains(&source) {
-            return Err(MuxError::PanesInDifferentWindows(target, source));
+        {
+            let window = self
+                .windows
+                .get_mut(&window_id)
+                .expect("window_of_pane only returns live windows");
+            if !window.layout.pane_ids().contains(&source) {
+                return Err(MuxError::PanesInDifferentWindows(target, source));
+            }
+            window
+                .layout
+                .swap_pane(target, source)
+                .map_err(|_| MuxError::PanesInDifferentWindows(target, source))?;
         }
-        window
-            .layout
-            .swap_pane(target, source)
-            .map_err(|_| MuxError::PanesInDifferentWindows(target, source))
+        self.sync_pane_sizes(window_id);
+        Ok(())
     }
 
     /// Grow or shrink `pane` by `cells` toward `direction` (tmux's
-    /// `-L`/`-R`/`-U`/`-D`), adjusting the ratio of the split it borders.
+    /// `-L`/`-R`/`-U`/`-D`), adjusting the ratio of the split it borders —
+    /// from either side of it.
     ///
     /// Only a split of the matching orientation can absorb the adjustment:
     /// `-L`/`-R` move a side-by-side divider, `-U`/`-D` a stacked one. A
     /// pane with no such bordering split — a lone pane, or one whose only
     /// bordering split is the other orientation — is an error, not a no-op.
+    /// Pane terminals are resized to the new geometry.
     pub fn resize_pane(
         &mut self,
         pane: PaneId,
@@ -272,46 +282,147 @@ impl MuxTree {
         let window_id = self
             .window_of_pane(pane)
             .ok_or(MuxError::NoSuchPane(pane))?;
+        {
+            let window = self
+                .windows
+                .get_mut(&window_id)
+                .expect("window_of_pane only returns live windows");
+            let Some((split_direction, ratio, target_is_first)) =
+                window.layout.bordering_split(pane)
+            else {
+                return Err(MuxError::PaneNotResizable(pane));
+            };
+            let axis_matches = matches!(
+                (direction, split_direction),
+                (
+                    ResizeDirection::Left | ResizeDirection::Right,
+                    SplitDirection::Vertical
+                ) | (
+                    ResizeDirection::Up | ResizeDirection::Down,
+                    SplitDirection::Horizontal
+                )
+            );
+            if !axis_matches {
+                return Err(MuxError::PaneNotResizable(pane));
+            }
+            let extent = match split_direction {
+                SplitDirection::Vertical => window.cols as f32,
+                SplitDirection::Horizontal => window.rows as f32,
+            };
+            let sign = match direction {
+                ResizeDirection::Right | ResizeDirection::Down => 1.0,
+                ResizeDirection::Left | ResizeDirection::Up => -1.0,
+            };
+            // The pane's own share of the split grows by the adjustment,
+            // whichever side of the divider it sits on; the setter converts
+            // back to the split's first-perspective ratio.
+            let current_share = if target_is_first { ratio } else { 1.0 - ratio };
+            let new_share = current_share + sign * (cells as f32) / extent;
+            window
+                .layout
+                .set_bordering_share(pane, new_share)
+                .expect("bordering_split found the split set_bordering_share adjusts");
+        }
+        self.sync_pane_sizes(window_id);
+        Ok(())
+    }
+
+    /// Set `pane`'s absolute width and/or height (tmux's `resize-pane -x`/
+    /// `-y`), moving the pane's innermost enclosing split of the matching
+    /// orientation — the renderer-driven form par-term sends.
+    ///
+    /// Either bound may be `None` (only the given axis is set). A pane with
+    /// no enclosing split along a requested axis — one that already spans
+    /// the window there — is an error, not a no-op: there is no divider to
+    /// move. Pane terminals are resized to the new geometry.
+    pub fn resize_pane_absolute(
+        &mut self,
+        pane: PaneId,
+        cols: Option<u16>,
+        rows: Option<u16>,
+    ) -> Result<(), MuxError> {
+        let window_id = self
+            .window_of_pane(pane)
+            .ok_or(MuxError::NoSuchPane(pane))?;
+        {
+            let window = self
+                .windows
+                .get_mut(&window_id)
+                .expect("window_of_pane only returns live windows");
+            let bounds = [
+                (cols, SplitDirection::Vertical, window.cols as usize),
+                (rows, SplitDirection::Horizontal, window.rows as usize),
+            ];
+            for (bound, axis, extent) in bounds {
+                let Some(cells) = bound else { continue };
+                match window
+                    .layout
+                    .set_leaf_extent(pane, axis, cells, extent)
+                    .map_err(|_| MuxError::NoSuchPane(pane))?
+                {
+                    crate::mux::layout::ExtentOutcome::Adjusted => {}
+                    crate::mux::layout::ExtentOutcome::SpansAxis => {
+                        return Err(MuxError::PaneNotResizable(pane));
+                    }
+                }
+            }
+        }
+        self.sync_pane_sizes(window_id);
+        Ok(())
+    }
+
+    /// Set a window's extent and re-fit every pane terminal to the
+    /// re-divided geometry.
+    ///
+    /// The landing point of the window-size policy (par-mux.md Phase 4
+    /// T4.C): `refresh-client -C WxH` carries a client's renderer size, and
+    /// the latest such report wins — par-mux has no other client-size
+    /// input, so "latest-attached-client" and "latest `-C`" are the same
+    /// rule here.
+    pub fn resize_window(
+        &mut self,
+        window_id: WindowId,
+        cols: u16,
+        rows: u16,
+    ) -> Result<(), MuxError> {
         let window = self
             .windows
             .get_mut(&window_id)
-            .expect("window_of_pane only returns live windows");
-        let Some((split_direction, ratio)) = window.layout.bordering_split(pane) else {
-            return Err(MuxError::PaneNotResizable(pane));
-        };
-        let axis_matches = matches!(
-            (direction, split_direction),
-            (
-                ResizeDirection::Left | ResizeDirection::Right,
-                SplitDirection::Vertical
-            ) | (
-                ResizeDirection::Up | ResizeDirection::Down,
-                SplitDirection::Horizontal
-            )
-        );
-        if !axis_matches {
-            return Err(MuxError::PaneNotResizable(pane));
-        }
-        let extent = match split_direction {
-            SplitDirection::Vertical => window.cols as f32,
-            SplitDirection::Horizontal => window.rows as f32,
-        };
-        let sign = match direction {
-            ResizeDirection::Right | ResizeDirection::Down => 1.0,
-            ResizeDirection::Left | ResizeDirection::Up => -1.0,
-        };
-        let new_ratio = ratio + sign * (cells as f32) / extent;
-        window
-            .layout
-            .resize_pane(pane, new_ratio)
-            .expect("bordering_split found the split resize_pane adjusts");
+            .ok_or(MuxError::NoSuchWindow(window_id))?;
+        window.cols = cols;
+        window.rows = rows;
+        self.sync_pane_sizes(window_id);
         Ok(())
+    }
+
+    /// Resize every pane terminal (and PTY) in `window_id` to the window's
+    /// current layout geometry — the step every extent-affecting mutation
+    /// ends with, so the terminals `capture-pane` reads and clients render
+    /// agree with the layout string the server broadcasts.
+    ///
+    /// A pane whose PTY cannot be resized (its child is gone) does not fail
+    /// the structural mutation around it — the same best-effort treatment
+    /// [`Self::kill_pane`] gives pane teardown. The terminal itself, which
+    /// is what capture and rendering read, always resizes.
+    pub(crate) fn sync_pane_sizes(&mut self, window_id: WindowId) {
+        let Some(window) = self.windows.get(&window_id) else {
+            return;
+        };
+        let geometry = window
+            .layout
+            .geometry(0, 0, window.cols as usize, window.rows as usize);
+        for pane_geometry in geometry {
+            if let Some(pane) = self.panes.get_mut(&pane_geometry.pane) {
+                let _ = pane.resize(pane_geometry.width as u16, pane_geometry.height as u16);
+            }
+        }
     }
 
     /// Kill a pane, closing its window when it was the last one.
     ///
     /// Cascading matches tmux: a window with no panes and a session with no
-    /// windows do not linger.
+    /// windows do not linger. A surviving pane is resized to the extent the
+    /// killed pane freed.
     pub fn kill_pane(&mut self, pane_id: PaneId) -> Result<(), MuxError> {
         let mut pane = self
             .panes
@@ -319,6 +430,7 @@ impl MuxTree {
             .ok_or(MuxError::NoSuchPane(pane_id))?;
         let _ = pane.kill();
 
+        let affected_window = self.window_of_pane(pane_id);
         let empty_window = self.windows.iter_mut().find_map(|(id, window)| {
             match window.layout.remove_pane(pane_id) {
                 Ok(()) => {
@@ -361,6 +473,12 @@ impl MuxTree {
             if let Some(session_id) = empty_session {
                 self.sessions.remove(&session_id);
             }
+        }
+
+        // The killed pane left its window's layout; a surviving pane takes
+        // the freed extent and its terminal must grow into it.
+        if let Some(window_id) = affected_window {
+            self.sync_pane_sizes(window_id);
         }
 
         Ok(())
@@ -680,6 +798,236 @@ mod tests {
 
         let result = tree.resize_pane(first, ResizeDirection::Right, 5);
         assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
+    }
+
+    #[test]
+    fn split_pane_resizes_both_terminals_to_the_layout_geometry() {
+        // The Phase 4 T4.C fidelity contract: the layout tree is the source
+        // of truth for pane extents, and the terminals (with their PTYs)
+        // follow it. Before T4.C the new pane spawned at the window's full
+        // size and the target kept its old size, so capture-pane and client
+        // rendering disagreed with the layout string.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        let size_of = |pane| {
+            tree.pane(pane)
+                .expect("pane in tree")
+                .terminal()
+                .read()
+                .size()
+        };
+        assert_eq!(size_of(first), (40, 24), "the target shrank to its half");
+        assert_eq!(
+            size_of(second),
+            (40, 24),
+            "the new pane spawned at its geometry, not the window's full size"
+        );
+    }
+
+    #[test]
+    fn resize_pane_relative_syncs_pane_terminals() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.resize_pane(first, ResizeDirection::Right, 10).unwrap();
+
+        let size_of = |pane| tree.pane(pane).unwrap().terminal().read().size();
+        assert_eq!(size_of(first), (50, 24));
+        assert_eq!(size_of(second), (30, 24));
+    }
+
+    #[test]
+    fn resize_pane_relative_works_for_the_second_pane_too() {
+        // A pane on either side of its bordering split can grow; before
+        // T4.C only the split's `first` child was resizable.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        // -R on the right-hand pane: it grows by taking from its sibling.
+        tree.resize_pane(second, ResizeDirection::Right, 10)
+            .unwrap();
+
+        let geo = tree
+            .window(window_id)
+            .unwrap()
+            .layout
+            .geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(second), 50);
+        assert_eq!(width_of(first), 30);
+    }
+
+    #[test]
+    fn resize_pane_absolute_sets_exact_dimensions() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        tree.split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.resize_pane_absolute(first, Some(25), None).unwrap();
+
+        let geo = tree
+            .window(window_id)
+            .unwrap()
+            .layout
+            .geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(first), 25);
+        assert_eq!(
+            width_of(tree.window(window_id).unwrap().panes()[1]),
+            55,
+            "the sibling absorbs the difference"
+        );
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (25, 24),
+            "the terminal follows the absolute size"
+        );
+    }
+
+    #[test]
+    fn resize_pane_absolute_through_a_cross_orientation_ancestor() {
+        // Split(V){0, Split(H){1,2}}: pane 1's width is set by the OUTER
+        // vertical divider — its direct parent is horizontal, so a naive
+        // direct-parent lookup would wrongly call it unresizable.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let third = tree
+            .split_pane(second, SplitDirection::Horizontal, 0.5, None)
+            .unwrap();
+
+        tree.resize_pane_absolute(second, Some(20), None).unwrap();
+
+        let geo = tree
+            .window(window_id)
+            .unwrap()
+            .layout
+            .geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(second), 20);
+        assert_eq!(width_of(third), 20, "the stacked sibling shares the width");
+        assert_eq!(width_of(first), 60);
+    }
+
+    #[test]
+    fn resize_pane_absolute_on_a_spanning_pane_is_an_error() {
+        // A lone pane spans both axes; there is no divider to move.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+
+        let result = tree.resize_pane_absolute(first, Some(40), None);
+        assert!(matches!(result, Err(MuxError::PaneNotResizable(_))));
+    }
+
+    #[test]
+    fn resize_pane_absolute_rejects_an_unknown_pane() {
+        let mut tree = tree();
+        let result = tree.resize_pane_absolute(PaneId(999), Some(40), None);
+        assert!(matches!(result, Err(MuxError::NoSuchPane(_))));
+    }
+
+    #[test]
+    fn killing_a_pane_resizes_the_survivor_to_the_full_window() {
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.kill_pane(second).unwrap();
+
+        assert_eq!(
+            tree.pane(first).unwrap().terminal().read().size(),
+            (80, 24),
+            "the surviving pane takes the freed extent"
+        );
+    }
+
+    #[test]
+    fn swapping_panes_trades_their_terminal_sizes() {
+        // An asymmetric split: swap must resize both terminals to their new
+        // geometry, not just exchange tree positions.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.25, None)
+            .unwrap();
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (60, 24));
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (20, 24)
+        );
+
+        tree.swap_panes(first, second).unwrap();
+
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (20, 24));
+        assert_eq!(
+            tree.pane(second).unwrap().terminal().read().size(),
+            (60, 24)
+        );
+    }
+
+    #[test]
+    fn resize_window_refits_every_pane_terminal() {
+        // The refresh-client -C landing point: the window's extent changes,
+        // the layout re-divides it, the terminals follow.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        tree.split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+
+        tree.resize_window(window_id, 120, 40).unwrap();
+
+        let window = tree.window(window_id).unwrap();
+        assert_eq!((window.cols, window.rows), (120, 40));
+        assert_eq!(tree.pane(first).unwrap().terminal().read().size(), (60, 40));
+        assert_eq!(
+            tree.pane(window.panes()[1])
+                .unwrap()
+                .terminal()
+                .read()
+                .size(),
+            (60, 40)
+        );
+    }
+
+    #[test]
+    fn resize_window_rejects_an_unknown_window() {
+        let mut tree = tree();
+        let result = tree.resize_window(WindowId(999), 120, 40);
+        assert!(matches!(result, Err(MuxError::NoSuchWindow(_))));
     }
 
     #[test]

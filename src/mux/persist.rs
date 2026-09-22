@@ -280,6 +280,13 @@ impl MuxTree {
         tree.windows = windows;
         tree.panes = panes;
         tree.buffers = state.buffers.clone();
+        // Panes were spawned at their window's full extent, but the restored
+        // layout divides that extent — re-fit every terminal (and PTY) to
+        // its geometry, exactly as a live resize would have, so a restart
+        // lands in the same state a running server would be in.
+        for window_id in tree.windows.keys().copied().collect::<Vec<_>>() {
+            tree.sync_pane_sizes(window_id);
+        }
         Ok(tree)
     }
 }

@@ -5,10 +5,11 @@
 //! — there is no polling anywhere in this path, which is the whole point of
 //! the module (see `par-mux.md`).
 
-use crate::mux::command::{parse_command, MuxCommand};
+use crate::mux::command::{parse_command, MuxCommand, ResizeAdjustment};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
 use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
+use crate::mux::pane::MuxError;
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
@@ -318,19 +319,45 @@ fn dispatch_issued(
                 None => emit_block(command_number, &format!("no such pane: {pane}"), false),
             }
         }
-        MuxCommand::RefreshClient { pane } => {
-            let guard = tree.lock();
-            match guard.pane(pane) {
-                // Resync (D5.4): replay the pane's current screen by reusing
-                // the Terminal's existing visible-screen snapshot, so a
-                // reattached client renders content, not a blank pane.
-                Some(target) => {
-                    let screen = target.terminal().read().content();
-                    emit_block(command_number, &screen, true)
+        MuxCommand::RefreshClient { pane, size } => match size {
+            // The window-size policy's input (T4.C): a client's renderer
+            // reports its grid size, the pane's window is resized to it, and
+            // every pane terminal re-fits to the re-divided geometry —
+            // followed by a %layout-change so clients re-render.
+            // Latest report wins (par-mux.md Phase 4 decision).
+            Some((cols, rows)) => {
+                let outcome = {
+                    let mut guard = tree.lock();
+                    match guard.window_of_pane(pane) {
+                        Some(window_id) => guard
+                            .resize_window(window_id, cols, rows)
+                            .map(|()| window_id),
+                        None => Err(MuxError::NoSuchPane(pane)),
+                    }
+                };
+                match outcome {
+                    Ok(window_id) => {
+                        mutated = true;
+                        broadcast_layout_change(tree, clients, window_id);
+                        emit_block(command_number, "", true)
+                    }
+                    Err(err) => emit_block(command_number, &err.to_string(), false),
                 }
-                None => emit_block(command_number, &format!("no such pane: {pane}"), false),
             }
-        }
+            // Resync (D5.4): replay the pane's current screen by reusing
+            // the Terminal's existing visible-screen snapshot, so a
+            // reattached client renders content, not a blank pane.
+            None => {
+                let guard = tree.lock();
+                match guard.pane(pane) {
+                    Some(target) => {
+                        let screen = target.terminal().read().content();
+                        emit_block(command_number, &screen, true)
+                    }
+                    None => emit_block(command_number, &format!("no such pane: {pane}"), false),
+                }
+            }
+        },
         MuxCommand::KillPane { pane } => {
             // Resolve the window before killing: afterwards the pane (and its
             // window membership) is gone and cannot be looked up.
@@ -419,17 +446,21 @@ fn dispatch_issued(
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
-        MuxCommand::ResizePane {
-            pane,
-            direction,
-            cells,
-        } => {
+        MuxCommand::ResizePane { pane, adjustment } => {
             let outcome = {
                 let mut guard = tree.lock();
-                guard.resize_pane(pane, direction, cells).map(|()| {
+                match adjustment {
+                    ResizeAdjustment::Relative { direction, cells } => {
+                        guard.resize_pane(pane, direction, cells)
+                    }
+                    ResizeAdjustment::Absolute { cols, rows } => {
+                        guard.resize_pane_absolute(pane, cols, rows)
+                    }
+                }
+                .map(|()| {
                     guard
                         .window_of_pane(pane)
-                        .expect("resize_pane verified the pane")
+                        .expect("both resize paths verified the pane")
                 })
             };
             match outcome {
@@ -1259,11 +1290,104 @@ mod tests {
             "split-window -t %999",
             "select-pane -t %999",
             "resize-pane -t %999 -R",
+            "resize-pane -t %999 -x 40",
             "swap-pane -t %999 -s %998",
         ] {
             let reply = dispatch(command, 1, &tree, &clients, None);
             assert!(reply.contains("%error"), "{command} is an error: {reply}");
         }
+    }
+
+    #[test]
+    fn resize_pane_absolute_dispatches_and_tracks_the_terminals() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let first = tree.lock().window(window_id).unwrap().panes()[0];
+        let split = dispatch(
+            &format!("split-window -t {first} -h"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        assert!(split.contains("%end"));
+        let second = tree.lock().window(window_id).unwrap().panes()[1];
+
+        // A second client observes the size-driven re-layout.
+        let (tx, rx) = channel();
+        clients.lock().push((u64::MAX, tx));
+
+        let reply = dispatch(
+            &format!("resize-pane -t {first} -x 25"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
+        assert!(reply.contains("%end"), "absolute resize succeeds: {reply}");
+
+        let notification = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("a %layout-change follows the size-driven re-layout");
+        assert!(
+            notification.contains("%layout-change"),
+            "notification: {notification}"
+        );
+
+        let size_of = |pane| tree.lock().pane(pane).unwrap().terminal().read().size();
+        assert_eq!(size_of(first), (25, 24));
+        assert_eq!(
+            size_of(second),
+            (55, 24),
+            "the sibling absorbs the difference on the wire too"
+        );
+    }
+
+    #[test]
+    fn refresh_client_size_report_resizes_the_window_and_broadcasts() {
+        let (tree, clients) = harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        let (tx, rx) = channel();
+        clients.lock().push((u64::MAX, tx));
+
+        let reply = dispatch(
+            &format!("refresh-client -t {pane_id} -C 120x40"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        assert!(reply.contains("%end"), "-C report succeeds: {reply}");
+
+        let notification = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("a %layout-change follows the window resize");
+        assert!(
+            notification.contains("%layout-change") && notification.contains("120x40"),
+            "the broadcast carries the new geometry: {notification}"
+        );
+
+        let guard = tree.lock();
+        let window = guard.window(window_id).unwrap();
+        assert_eq!((window.cols, window.rows), (120, 40));
+        assert_eq!(
+            guard.pane(pane_id).unwrap().terminal().read().size(),
+            (120, 40),
+            "the pane terminal was re-fitted"
+        );
+    }
+
+    #[test]
+    fn refresh_client_size_report_rejects_an_unknown_pane() {
+        let (tree, clients) = harness();
+        let reply = dispatch("refresh-client -t %999 -C 120x40", 1, &tree, &clients, None);
+        assert!(reply.contains("%error"));
     }
 
     #[test]

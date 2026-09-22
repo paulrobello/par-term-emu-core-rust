@@ -3,6 +3,29 @@
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
 
+/// How a `resize-pane` moves a pane's borders (T4.C).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResizeAdjustment {
+    /// `-L`/`-R`/`-U`/`-D` [cells]: move the bordering divider relatively;
+    /// 5 cells when the flag carries no number (tmux's default adjustment).
+    Relative {
+        /// Which way the border moves.
+        direction: ResizeDirection,
+        /// Cells to move it by.
+        cells: u32,
+    },
+    /// `-x COLS` and/or `-y ROWS`: set absolute extents — the
+    /// renderer-driven form par-term sends (gateway resize), where the
+    /// client knows the exact size a pane should be. At least one bound is
+    /// present.
+    Absolute {
+        /// `-x`: the pane's width in columns.
+        cols: Option<u16>,
+        /// `-y`: the pane's height in rows.
+        rows: Option<u16>,
+    },
+}
+
 /// A command received from a control-mode client.
 ///
 /// Phase 1 implements the four commands that prove the spine end to end.
@@ -30,10 +53,18 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
-    /// Replay a pane's current screen to the requesting client.
+    /// Replay a pane's current screen to the requesting client, or report
+    /// the client's renderer size (`-C`) and resize the pane's window.
     RefreshClient {
-        /// Target pane.
+        /// Target pane; the window it belongs to is the one a `-C` resize
+        /// applies to.
         pane: PaneId,
+        /// `-C WxH`: the client's renderer grid size. The window-size
+        /// policy (par-mux.md Phase 4): the LATEST such report wins —
+        /// par-mux has no other client-size input, so latest-attached-client
+        /// and latest `-C` are the same rule here. `None` keeps the
+        /// replay-only behavior.
+        size: Option<(u16, u16)>,
     },
     /// Add a window to a session, optionally named.
     NewWindow {
@@ -82,15 +113,13 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
-    /// Grow or shrink a pane by moving its bordering divider.
+    /// Grow or shrink a pane by moving its bordering divider, or set its
+    /// absolute extents.
     ResizePane {
         /// Target pane.
         pane: PaneId,
-        /// Which way the border moves (`-L`/`-R`/`-U`/`-D`).
-        direction: ResizeDirection,
-        /// Cells to move it by; 5 when the flag carries no number (tmux's
-        /// default adjustment).
-        cells: u32,
+        /// Relative (`-L`/`-R`/`-U`/`-D` cells) or absolute (`-x`/`-y`).
+        adjustment: ResizeAdjustment,
     },
     /// Exchange two panes' positions within their window.
     SwapPanes {
@@ -315,6 +344,29 @@ fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Parse a positive-size flag value (`-x 120`, `-y 40`, `-C 120x40`) into
+/// one dimension or a WxH pair.
+///
+/// `None` flag means `None` value (the flag is absent); a present flag with
+/// a missing or malformed value is an error, as is zero — tmux panes are
+/// always at least one cell.
+fn parse_size_flag(
+    raw: &Option<String>,
+    flag_name: &str,
+    command: &str,
+) -> Result<Option<u16>, String> {
+    let Some(raw) = raw else { return Ok(None) };
+    let parsed: u16 = raw
+        .parse()
+        .map_err(|_| format!("{command}: invalid {flag_name} size: {raw}"))?;
+    if parsed == 0 {
+        return Err(format!(
+            "{command}: {flag_name} size must be positive: {raw}"
+        ));
+    }
+    Ok(Some(parsed))
+}
+
 /// Parse one command line from a client.
 ///
 /// Deliberately minimal: whitespace-split with a `-t`/`-s` flag scan. tmux's
@@ -369,9 +421,30 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         "kill-pane" => Ok(MuxCommand::KillPane {
             pane: target_pane("-t")?,
         }),
-        "refresh-client" => Ok(MuxCommand::RefreshClient {
-            pane: target_pane("-t")?,
-        }),
+        "refresh-client" => {
+            let pane = target_pane("-t")?;
+            let size = match flag("-C") {
+                Some(raw) => {
+                    let (width, height) = raw
+                        .split_once('x')
+                        .ok_or_else(|| format!("{name}: -C expects WxH, got: {raw}"))?;
+                    let dims @ (width, height) = (
+                        width
+                            .parse::<u16>()
+                            .map_err(|_| format!("{name}: invalid -C size: {raw}"))?,
+                        height
+                            .parse::<u16>()
+                            .map_err(|_| format!("{name}: invalid -C size: {raw}"))?,
+                    );
+                    if width == 0 || height == 0 {
+                        return Err(format!("{name}: -C size must be positive: {raw}"));
+                    }
+                    Some(dims)
+                }
+                None => None,
+            };
+            Ok(MuxCommand::RefreshClient { pane, size })
+        }
         "send-keys" => {
             let rest = line
                 .strip_prefix(name)
@@ -443,27 +516,35 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         }),
         "resize-pane" => {
             let pane = target_pane("-t")?;
+            // The absolute form: -x COLS and/or -y ROWS, at least one.
+            let cols = parse_size_flag(&flag("-x"), "-x", name)?;
+            let rows = parse_size_flag(&flag("-y"), "-y", name)?;
             // tmux takes one direction flag; the first of the four wins.
-            let Some((flag_name, direction)) = [
+            let direction_flag = [
                 ("-L", ResizeDirection::Left),
                 ("-R", ResizeDirection::Right),
                 ("-U", ResizeDirection::Up),
                 ("-D", ResizeDirection::Down),
             ]
             .into_iter()
-            .find(|(flag, _)| has_flag(flag)) else {
-                return Err("resize-pane requires one of -L -R -U -D".to_string());
+            .find(|(flag, _)| has_flag(flag));
+            if (cols.is_some() || rows.is_some()) && direction_flag.is_some() {
+                return Err("resize-pane: -x/-y cannot combine with -L -R -U -D".to_string());
+            }
+            let adjustment = if cols.is_some() || rows.is_some() {
+                ResizeAdjustment::Absolute { cols, rows }
+            } else {
+                let Some((flag_name, direction)) = direction_flag else {
+                    return Err("resize-pane requires one of -L -R -U -D, or -x/-y".to_string());
+                };
+                // The cell count is the flag's value when present and
+                // numeric; tmux's default adjustment is 5 cells.
+                let cells = flag(flag_name)
+                    .and_then(|raw| raw.parse::<u32>().ok())
+                    .unwrap_or(5);
+                ResizeAdjustment::Relative { direction, cells }
             };
-            // The cell count is the flag's value when present and numeric;
-            // tmux's default adjustment is 5 cells.
-            let cells = flag(flag_name)
-                .and_then(|raw| raw.parse::<u32>().ok())
-                .unwrap_or(5);
-            Ok(MuxCommand::ResizePane {
-                pane,
-                direction,
-                cells,
-            })
+            Ok(MuxCommand::ResizePane { pane, adjustment })
         }
         "swap-pane" => Ok(MuxCommand::SwapPanes {
             target: target_pane("-t")?,
@@ -826,19 +907,96 @@ mod tests {
             parse_command("resize-pane -t %0 -R").unwrap(),
             MuxCommand::ResizePane {
                 pane: PaneId(0),
-                direction: ResizeDirection::Right,
-                cells: 5
+                adjustment: ResizeAdjustment::Relative {
+                    direction: ResizeDirection::Right,
+                    cells: 5
+                }
             }
         );
         assert_eq!(
             parse_command("resize-pane -t %0 -U 12").unwrap(),
             MuxCommand::ResizePane {
                 pane: PaneId(0),
-                direction: ResizeDirection::Up,
-                cells: 12
+                adjustment: ResizeAdjustment::Relative {
+                    direction: ResizeDirection::Up,
+                    cells: 12
+                }
             }
         );
         assert!(parse_command("resize-pane -t %0").is_err());
+    }
+
+    #[test]
+    fn parses_resize_pane_absolute_extents() {
+        // The renderer-driven form par-term's gateway sends on drag-resize.
+        assert_eq!(
+            parse_command("resize-pane -t %0 -x 120 -y 40").unwrap(),
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                adjustment: ResizeAdjustment::Absolute {
+                    cols: Some(120),
+                    rows: Some(40)
+                }
+            }
+        );
+        // Either axis alone is valid.
+        assert_eq!(
+            parse_command("resize-pane -t %0 -x 25").unwrap(),
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                adjustment: ResizeAdjustment::Absolute {
+                    cols: Some(25),
+                    rows: None
+                }
+            }
+        );
+        assert_eq!(
+            parse_command("resize-pane -t %0 -y 30").unwrap(),
+            MuxCommand::ResizePane {
+                pane: PaneId(0),
+                adjustment: ResizeAdjustment::Absolute {
+                    cols: None,
+                    rows: Some(30)
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn resize_pane_absolute_rejects_zero_and_mixed_forms() {
+        assert!(parse_command("resize-pane -t %0 -x 0").is_err());
+        assert!(parse_command("resize-pane -t %0 -y 0").is_err());
+        assert!(parse_command("resize-pane -t %0 -x abc").is_err());
+        assert!(
+            parse_command("resize-pane -t %0 -x 120 -R").is_err(),
+            "absolute and relative forms cannot combine"
+        );
+    }
+
+    #[test]
+    fn parses_refresh_client_with_and_without_a_size_report() {
+        assert_eq!(
+            parse_command("refresh-client -t %0").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: PaneId(0),
+                size: None
+            }
+        );
+        assert_eq!(
+            parse_command("refresh-client -t %0 -C 120x40").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: PaneId(0),
+                size: Some((120, 40))
+            }
+        );
+    }
+
+    #[test]
+    fn refresh_client_size_report_rejects_malformed_values() {
+        assert!(parse_command("refresh-client -t %0 -C 120").is_err());
+        assert!(parse_command("refresh-client -t %0 -C 0x40").is_err());
+        assert!(parse_command("refresh-client -t %0 -C 120x0").is_err());
+        assert!(parse_command("refresh-client -t %0 -C ax40").is_err());
     }
 
     #[test]

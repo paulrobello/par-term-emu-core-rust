@@ -77,6 +77,16 @@ pub struct PaneGeometry {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NoSuchLeaf(pub PaneId);
 
+/// The outcome of an absolute extent request ([`LayoutTree::set_leaf_extent`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExtentOutcome {
+    /// An enclosing split's divider moved; the target's geometry changed.
+    Adjusted,
+    /// The target spans the axis outright — no divider of that orientation
+    /// encloses it, so its extent is the window's, not the pane's to set.
+    SpansAxis,
+}
+
 impl std::fmt::Display for NoSuchLeaf {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "no such pane in layout: {}", self.0)
@@ -243,16 +253,16 @@ impl LayoutTree {
         }
     }
 
-    /// Adjust the ratio of the split whose `first` child is the leaf holding
-    /// `target`, clamping to `[0.0, 1.0]`.
+    /// Set the fraction of its bordering split's extent that `target`
+    /// receives, clamping to `[0.0, 1.0]`; the sibling keeps the complement.
     ///
-    /// tmux's `resize-pane` resizes the split a pane participates in;
-    /// finding that split by one of its two sides (rather than requiring a
-    /// split-identifying id the tree has no concept of) is the natural
-    /// mapping onto this binary shape. Returns [`NoSuchLeaf`] if `target`
-    /// does not directly border a split as its `first` child.
-    pub fn resize_pane(&mut self, target: PaneId, new_ratio: f32) -> Result<(), NoSuchLeaf> {
-        let clamped = new_ratio.clamp(0.0, 1.0);
+    /// The replacement for a first-child-only ratio setter: a pane on
+    /// either side of its bordering split can be resized, and the share is
+    /// stated from the TARGET's perspective regardless of which side it
+    /// occupies. Returns [`NoSuchLeaf`] if `target` is absent or borders no
+    /// split directly (a single-pane tree).
+    pub fn set_bordering_share(&mut self, target: PaneId, share: f32) -> Result<(), NoSuchLeaf> {
+        let clamped = share.clamp(0.0, 1.0);
         match self {
             LayoutTree::Pane(_) => Err(NoSuchLeaf(target)),
             LayoutTree::Split {
@@ -264,23 +274,28 @@ impl LayoutTree {
                 if matches!(first.as_ref(), LayoutTree::Pane(id) if *id == target) {
                     *ratio = clamped;
                     Ok(())
+                } else if matches!(second.as_ref(), LayoutTree::Pane(id) if *id == target) {
+                    *ratio = 1.0 - clamped;
+                    Ok(())
                 } else {
                     first
-                        .resize_pane(target, new_ratio)
-                        .or_else(|_| second.resize_pane(target, new_ratio))
+                        .set_bordering_share(target, share)
+                        .or_else(|_| second.set_bordering_share(target, share))
                 }
             }
         }
     }
 
-    /// The orientation and current ratio of the split whose `first` child
-    /// is the leaf holding `target` — the split [`Self::resize_pane`]
+    /// The orientation, current ratio, and side of the split the leaf
+    /// `target` directly borders — the split [`Self::set_bordering_share`]
     /// adjusts.
     ///
-    /// `None` when `target` does not border a split as its `first` child
-    /// (including a single-pane tree), so a caller can distinguish "nothing
-    /// to resize" before computing a new ratio.
-    pub fn bordering_split(&self, target: PaneId) -> Option<(SplitDirection, f32)> {
+    /// The third tuple element is `true` when the target is the split's
+    /// `first` child, `false` when it is the `second`. `None` when `target`
+    /// does not border a split directly (including a single-pane tree), so
+    /// a caller can distinguish "nothing to resize" before computing a new
+    /// share.
+    pub fn bordering_split(&self, target: PaneId) -> Option<(SplitDirection, f32, bool)> {
         match self {
             LayoutTree::Pane(_) => None,
             LayoutTree::Split {
@@ -290,11 +305,98 @@ impl LayoutTree {
                 second,
             } => {
                 if matches!(first.as_ref(), LayoutTree::Pane(id) if *id == target) {
-                    Some((*direction, *ratio))
+                    Some((*direction, *ratio, true))
+                } else if matches!(second.as_ref(), LayoutTree::Pane(id) if *id == target) {
+                    Some((*direction, *ratio, false))
                 } else {
                     first
                         .bordering_split(target)
                         .or_else(|| second.bordering_split(target))
+                }
+            }
+        }
+    }
+
+    /// Set the leaf `target`'s extent along `axis` (width for
+    /// [`SplitDirection::Vertical`], height for
+    /// [`SplitDirection::Horizontal`]) to `cells`, by adjusting its
+    /// innermost enclosing split of that orientation.
+    ///
+    /// `axis_extent` is the whole layout's extent along `axis` (the
+    /// window's width or height — the caller owns that fact, the tree
+    /// does not), used both to locate shares and to convert `cells` to a
+    /// ratio. Nested cross-orientation layouts are handled: a pane whose
+    /// direct parent splits the other way still has its width set by the
+    /// nearest same-axis ancestor. Returns [`NoSuchLeaf`] when `target` is
+    /// absent; [`ExtentOutcome::SpansAxis`] when no ancestor split of the
+    /// axis encloses the target — a pane that already spans that axis has
+    /// no divider to move.
+    pub fn set_leaf_extent(
+        &mut self,
+        target: PaneId,
+        axis: SplitDirection,
+        cells: u16,
+        axis_extent: usize,
+    ) -> Result<ExtentOutcome, NoSuchLeaf> {
+        match self {
+            LayoutTree::Pane(id) => {
+                if *id == target {
+                    Ok(ExtentOutcome::SpansAxis)
+                } else {
+                    Err(NoSuchLeaf(target))
+                }
+            }
+            LayoutTree::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                // Each child's extent along `axis`: divided when this split
+                // runs along the axis, inherited unchanged otherwise.
+                let split_ratio = *ratio;
+                let (first_extent, second_extent) = match direction {
+                    SplitDirection::Vertical => {
+                        let first_width = (((axis_extent as f32) * split_ratio).round() as usize)
+                            .min(axis_extent);
+                        if axis == SplitDirection::Vertical {
+                            (first_width, axis_extent - first_width)
+                        } else {
+                            (axis_extent, axis_extent)
+                        }
+                    }
+                    SplitDirection::Horizontal => {
+                        let first_height = (((axis_extent as f32) * split_ratio).round() as usize)
+                            .min(axis_extent);
+                        if axis == SplitDirection::Horizontal {
+                            (first_height, axis_extent - first_height)
+                        } else {
+                            (axis_extent, axis_extent)
+                        }
+                    }
+                };
+                if !first.contains(target) && !second.contains(target) {
+                    return Err(NoSuchLeaf(target));
+                }
+                let (child, child_extent, target_is_first) = if first.contains(target) {
+                    (first, first_extent, true)
+                } else {
+                    (second, second_extent, false)
+                };
+                match child.set_leaf_extent(target, axis, cells, child_extent)? {
+                    ExtentOutcome::Adjusted => Ok(ExtentOutcome::Adjusted),
+                    ExtentOutcome::SpansAxis => {
+                        if *direction == axis {
+                            let share = (cells as f32 / axis_extent as f32).clamp(0.0, 1.0);
+                            *ratio = if target_is_first { share } else { 1.0 - share };
+                            Ok(ExtentOutcome::Adjusted)
+                        } else {
+                            // This split divides the other axis; keep
+                            // bubbling until a same-axis ancestor — or the
+                            // root — answers.
+                            Ok(ExtentOutcome::SpansAxis)
+                        }
+                    }
                 }
             }
         }
@@ -592,12 +694,21 @@ mod tests {
     }
 
     #[test]
-    fn resize_pane_adjusts_the_bordering_splits_ratio() {
+    fn set_bordering_share_adjusts_the_split_from_either_side() {
         let mut tree = LayoutTree::leaf(PaneId(0));
         tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
             .unwrap();
-        tree.resize_pane(PaneId(0), 0.75)
+        // The `first` child's share is the split's ratio directly.
+        tree.set_bordering_share(PaneId(0), 0.75)
             .expect("0 borders a split");
+        match &tree {
+            LayoutTree::Split { ratio, .. } => assert_eq!(*ratio, 0.75),
+            other => panic!("expected Split, got {other:?}"),
+        }
+        // The `second` child's share is the complement — 0.25 means the
+        // ratio keeps 0.75 for the first child.
+        tree.set_bordering_share(PaneId(1), 0.25)
+            .expect("1 borders the same split");
         match &tree {
             LayoutTree::Split { ratio, .. } => assert_eq!(*ratio, 0.75),
             other => panic!("expected Split, got {other:?}"),
@@ -605,11 +716,11 @@ mod tests {
     }
 
     #[test]
-    fn resize_pane_clamps_out_of_range_ratios() {
+    fn set_bordering_share_clamps_out_of_range_shares() {
         let mut tree = LayoutTree::leaf(PaneId(0));
         tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
             .unwrap();
-        tree.resize_pane(PaneId(0), 5.0).unwrap();
+        tree.set_bordering_share(PaneId(0), 5.0).unwrap();
         match &tree {
             LayoutTree::Split { ratio, .. } => assert_eq!(*ratio, 1.0),
             other => panic!("expected Split, got {other:?}"),
@@ -617,31 +728,112 @@ mod tests {
     }
 
     #[test]
-    fn resize_pane_on_a_pane_not_bordering_a_split_is_an_error() {
-        // 0 borders the split as `first`; resizing via `1` (the `second`
-        // child) is not supported by this mapping — tmux identifies the
-        // split by either border in practice, but the simplest binary
-        // mapping picks one side deliberately; verify it fails rather than
-        // silently doing nothing.
+    fn set_bordering_share_on_an_absent_or_lone_pane_is_an_error() {
         let mut tree = LayoutTree::leaf(PaneId(0));
         tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
             .unwrap();
-        assert!(tree.resize_pane(PaneId(1), 0.75).is_err());
+        assert_eq!(
+            tree.set_bordering_share(PaneId(9), 0.75),
+            Err(NoSuchLeaf(PaneId(9)))
+        );
+        assert_eq!(
+            LayoutTree::leaf(PaneId(0)).set_bordering_share(PaneId(0), 0.75),
+            Err(NoSuchLeaf(PaneId(0)))
+        );
     }
 
     #[test]
-    fn bordering_split_reports_the_split_the_target_borders() {
+    fn bordering_split_reports_the_split_and_side_the_target_borders() {
         let mut tree = LayoutTree::leaf(PaneId(0));
         tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Horizontal, 0.25)
             .unwrap();
         assert_eq!(
             tree.bordering_split(PaneId(0)),
-            Some((SplitDirection::Horizontal, 0.25))
+            Some((SplitDirection::Horizontal, 0.25, true))
         );
-        // The second child, an absent pane, and a lone leaf border nothing.
-        assert_eq!(tree.bordering_split(PaneId(1)), None);
+        assert_eq!(
+            tree.bordering_split(PaneId(1)),
+            Some((SplitDirection::Horizontal, 0.25, false))
+        );
+        // An absent pane and a lone leaf border nothing.
         assert_eq!(tree.bordering_split(PaneId(9)), None);
         assert_eq!(LayoutTree::leaf(PaneId(0)).bordering_split(PaneId(0)), None);
+    }
+
+    #[test]
+    fn set_leaf_extent_sets_a_direct_childs_width() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent(PaneId(0), SplitDirection::Vertical, 20, 80),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        assert_eq!(geo[0].width, 20);
+        assert_eq!(geo[1].width, 60);
+    }
+
+    #[test]
+    fn set_leaf_extent_works_for_the_second_child() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent(PaneId(1), SplitDirection::Vertical, 30, 80),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        assert_eq!(geo[1].width, 30);
+        assert_eq!(geo[0].width, 50);
+    }
+
+    #[test]
+    fn set_leaf_extent_reaches_a_cross_orientation_ancestor() {
+        // Split(V){0, Split(H){1,2}}: pane 1's width is governed by the
+        // outer vertical split even though its direct parent is horizontal.
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        tree.split_pane(PaneId(0), PaneId(1), SplitDirection::Vertical, 0.5)
+            .unwrap();
+        tree.split_pane(PaneId(1), PaneId(2), SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        assert_eq!(
+            tree.set_leaf_extent(PaneId(1), SplitDirection::Vertical, 20, 80),
+            Ok(ExtentOutcome::Adjusted)
+        );
+        let geo = tree.geometry(0, 0, 80, 24);
+        let width_of = |pane| geo.iter().find(|g| g.pane == pane).unwrap().width;
+        assert_eq!(width_of(PaneId(0)), 60);
+        assert_eq!(width_of(PaneId(1)), 20);
+        assert_eq!(width_of(PaneId(2)), 20);
+    }
+
+    #[test]
+    fn set_leaf_extent_on_a_spanning_pane_reports_no_divider() {
+        // A lone pane spans both axes; a stacked pane spans the width.
+        let mut lone = LayoutTree::leaf(PaneId(0));
+        assert_eq!(
+            lone.set_leaf_extent(PaneId(0), SplitDirection::Vertical, 40, 80),
+            Ok(ExtentOutcome::SpansAxis)
+        );
+        let mut stacked = LayoutTree::leaf(PaneId(0));
+        stacked
+            .split_pane(PaneId(0), PaneId(1), SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        assert_eq!(
+            stacked.set_leaf_extent(PaneId(0), SplitDirection::Vertical, 40, 80),
+            Ok(ExtentOutcome::SpansAxis),
+            "a horizontal split leaves the width undivided"
+        );
+    }
+
+    #[test]
+    fn set_leaf_extent_on_an_absent_pane_is_an_error() {
+        let mut tree = LayoutTree::leaf(PaneId(0));
+        assert_eq!(
+            tree.set_leaf_extent(PaneId(9), SplitDirection::Vertical, 40, 80),
+            Err(NoSuchLeaf(PaneId(9)))
+        );
     }
 
     #[test]
