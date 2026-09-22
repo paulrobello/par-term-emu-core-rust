@@ -16,7 +16,22 @@ fn main() -> std::io::Result<()> {
     // bind refuses a path a live server already owns, so a racing auto-spawn
     // loses cleanly instead of stealing the socket.
     let server = par_term_emu_core_rust::mux::MuxServer::bind(&path)?;
+
+    // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
+    // aside and the daemon starts fresh — unreadable state never blocks
+    // startup. A readable state is logged for now; rebuilding from it ships
+    // with Task 3.4.
+    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
+    match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
+        par_term_emu_core_rust::mux::persist::Loaded::Fresh => {}
+        par_term_emu_core_rust::mux::persist::Loaded::State(_) => eprintln!(
+            "par-mux: found existing state at {} (automatic rebuild ships with Task 3.4)",
+            state_path.display()
+        ),
+        par_term_emu_core_rust::mux::persist::Loaded::Quarantined { .. } => {}
+    }
+
     eprintln!("par-mux listening on {}", path.display());
-    server.run();
+    server.run_persisting(state_path);
     Ok(())
 }

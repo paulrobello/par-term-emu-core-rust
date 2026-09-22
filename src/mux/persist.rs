@@ -13,14 +13,16 @@ use crate::mux::pane::{MuxError, PaneFactory};
 use crate::mux::tree::{MuxSession, MuxTree, MuxWindow};
 use crate::terminal::replay_snapshot::TerminalSnapshot;
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The envelope version this build writes, and the only one it accepts.
 /// A file carrying any other version is quarantined at the load site and the
-/// server starts fresh (D3.2 — Task 3.3 wires that path).
+/// server starts fresh (D3.2).
 pub const FORMAT_VERSION: u32 = 1;
 
-/// Errors raised while rebuilding a [`MuxTree`] from persisted state.
+/// Errors raised while saving or rebuilding persisted mux state.
 #[derive(Debug)]
 pub enum PersistError {
     /// The state was written under a `format_version` this build does not
@@ -28,6 +30,10 @@ pub enum PersistError {
     UnsupportedVersion { found: u32, supported: u32 },
     /// Spawning a restored pane's replacement process failed.
     Mux(MuxError),
+    /// Writing the state file failed.
+    Io(std::io::Error),
+    /// Encoding the state failed.
+    Serialize(serde_json::Error),
 }
 
 impl std::fmt::Display for PersistError {
@@ -40,6 +46,8 @@ impl std::fmt::Display for PersistError {
                 )
             }
             PersistError::Mux(err) => write!(f, "restore failed: {err}"),
+            PersistError::Io(err) => write!(f, "state file I/O failed: {err}"),
+            PersistError::Serialize(err) => write!(f, "state encoding failed: {err}"),
         }
     }
 }
@@ -50,6 +58,27 @@ impl From<MuxError> for PersistError {
     fn from(err: MuxError) -> Self {
         PersistError::Mux(err)
     }
+}
+
+impl From<std::io::Error> for PersistError {
+    fn from(err: std::io::Error) -> Self {
+        PersistError::Io(err)
+    }
+}
+
+impl From<serde_json::Error> for PersistError {
+    fn from(err: serde_json::Error) -> Self {
+        PersistError::Serialize(err)
+    }
+}
+
+/// Current wall clock in Unix milliseconds; `0` if the clock reads before
+/// the epoch.
+fn unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// The whole server's persisted state — the file's top level.
@@ -141,10 +170,7 @@ impl MuxTree {
 
         PersistState {
             format_version: FORMAT_VERSION,
-            saved_at_unix_ms: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0),
+            saved_at_unix_ms: unix_ms(),
             next_ids: self.ids.next_ids(),
             sessions,
             buffers: self.buffers.clone(),
@@ -258,11 +284,143 @@ impl MuxTree {
     }
 }
 
+/// The state file for a server listening on `socket_path` (D3.4):
+/// `<state_dir>/par-mux/<socket-stem>.state.json`. The socket itself lives
+/// in the ephemeral temp dir by design; state must not — pane content is as
+/// private as the terminal it came from.
+pub fn state_file_path(socket_path: &Path) -> PathBuf {
+    state_file_in(&platform_state_dir(), socket_path)
+}
+
+/// The platform state dir, falling back to the data dir on platforms
+/// without a distinct one (D3.4: macOS has no XDG state dir, so state lives
+/// under `~/Library/Application Support` there).
+fn platform_state_dir() -> PathBuf {
+    dirs::state_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// The pure half of [`state_file_path`]: a socket at
+/// `<any>/par-mux-<stem>.sock` maps to `<base>/par-mux/<stem>.state.json`,
+/// so two servers on different sockets never share state.
+fn state_file_in(base: &Path, socket_path: &Path) -> PathBuf {
+    let stem = socket_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("default");
+    base.join("par-mux").join(format!("{stem}.state.json"))
+}
+
+/// Atomically persist `tree` to `target` (D3.3): serialize to
+/// `<target>.tmp`, fsync, then rename over the target — a crash mid-save
+/// leaves either the complete previous state or a leftover tmp the next
+/// save overwrites, never a torn file. On Unix the file is created `0600`,
+/// the same owner-only posture as the socket (D3.4).
+pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
+    let state = tree.to_persist_state();
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut tmp = target.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+
+    let mut file = fs::File::create(&tmp)?;
+    serde_json::to_writer(&mut file, &state)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.sync_all()?;
+    drop(file);
+
+    fs::rename(&tmp, target)?;
+    Ok(())
+}
+
+/// What daemon startup found in the state file.
+#[derive(Debug)]
+pub enum Loaded {
+    /// No state file exists — a fresh start.
+    Fresh,
+    /// A readable, current-version state a rebuild can start from.
+    State(Box<PersistState>),
+    /// A file existed but was corrupt or carried an unknown version; it has
+    /// been renamed aside and the daemon starts fresh (D3.2: unreadable
+    /// state never blocks startup — match tmux).
+    Quarantined { from: PathBuf, to: PathBuf },
+}
+
+/// Read the state file at `target`, quarantining a corrupt or
+/// unknown-version file aside so the next save cannot overwrite the
+/// evidence (D3.2). Every failure degrades to a fresh start; nothing here
+/// can block daemon startup.
+pub fn load_or_quarantine(target: &Path) -> Loaded {
+    let bytes = match fs::read(target) {
+        Ok(bytes) => bytes,
+        Err(_) => return Loaded::Fresh,
+    };
+
+    let reason = match serde_json::from_slice::<PersistState>(&bytes) {
+        Ok(state) if state.format_version == FORMAT_VERSION => {
+            return Loaded::State(Box::new(state));
+        }
+        Ok(state) => PersistError::UnsupportedVersion {
+            found: state.format_version,
+            supported: FORMAT_VERSION,
+        },
+        Err(err) => PersistError::Serialize(err),
+    };
+
+    let mut name = target.as_os_str().to_os_string();
+    name.push(format!(".quarantine-{}", unix_ms()));
+    let to = PathBuf::from(name);
+    match fs::rename(target, &to) {
+        Ok(()) => {
+            eprintln!(
+                "par-mux: state {} was unreadable ({reason}); quarantined as {}",
+                target.display(),
+                to.display()
+            );
+            Loaded::Quarantined {
+                from: target.to_path_buf(),
+                to,
+            }
+        }
+        Err(err) => {
+            eprintln!(
+                "par-mux: state {} was unreadable ({reason}) and could not be quarantined: {err}",
+                target.display()
+            );
+            Loaded::Fresh
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::mux::layout::SplitDirection;
     use crate::mux::pane::ShellPaneFactory;
+    use std::path::PathBuf;
+
+    /// A per-test target path under a unique temp dir; `save_to` creates the
+    /// parent, so parallel tests never share a directory either.
+    fn temp_target(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join(format!("par-mux-persist-{name}-{}", std::process::id()))
+            .join("state.json")
+    }
+
+    /// The tmp sibling `save_to` must never leave behind.
+    fn tmp_sibling(target: &Path) -> PathBuf {
+        let mut name = target.as_os_str().to_os_string();
+        name.push(".tmp");
+        PathBuf::from(name)
+    }
 
     fn tree() -> MuxTree {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
@@ -448,6 +606,93 @@ mod tests {
             "the restored pane's process is new, but running"
         );
         assert_eq!(pane.spawn_command(), Some("sleep 60"));
+    }
+
+    #[test]
+    fn save_lands_at_the_target_with_no_tmp_leftover_and_round_trips() {
+        let target = temp_target("save");
+        let original = populated_tree();
+
+        save_to(&original, &target).expect("save succeeds");
+
+        // Rename semantics (D3.3): the complete state is AT the target and
+        // the tmp sibling is gone — a crash mid-save can only leave the old
+        // state or this tmp, never a torn target.
+        assert!(target.exists(), "state lands at the target");
+        assert!(
+            !tmp_sibling(&target).exists(),
+            "no .tmp sibling survives a completed save"
+        );
+
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => {
+                assert_eq!(state.format_version, FORMAT_VERSION);
+                assert_eq!(state.sessions.len(), 2);
+                let restored =
+                    MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+                        .expect("saved state restores");
+                assert_same_shape(&restored, &original);
+            }
+            other => panic!("expected a readable state file, got {other:?}"),
+        }
+    }
+
+    /// Write bytes straight to `target`, creating the parent — the shape a
+    /// torn or foreign write leaves on disk (no save_to on the path).
+    fn write_raw(target: &Path, bytes: &[u8]) {
+        std::fs::create_dir_all(target.parent().expect("temp targets have a parent")).unwrap();
+        std::fs::write(target, bytes).unwrap();
+    }
+
+    #[test]
+    fn torn_write_is_quarantined_and_starts_fresh() {
+        let target = temp_target("torn");
+        let full = serde_json::to_string(&populated_tree().to_persist_state()).unwrap();
+        // Half the bytes made it to "disk" — exactly what a torn
+        // non-atomic write leaves behind.
+        write_raw(&target, &full.as_bytes()[..full.len() / 2]);
+
+        match load_or_quarantine(&target) {
+            Loaded::Quarantined { from, to } => {
+                assert_eq!(from, target);
+                assert!(to.exists(), "the torn file is preserved aside, not deleted");
+                assert!(!target.exists(), "the load path is clear for the next save");
+            }
+            other => panic!("expected quarantine, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unknown_version_state_is_quarantined() {
+        let target = temp_target("version");
+        let mut state = populated_tree().to_persist_state();
+        state.format_version = FORMAT_VERSION + 7;
+        write_raw(&target, serde_json::to_string(&state).unwrap().as_bytes());
+
+        assert!(matches!(
+            load_or_quarantine(&target),
+            Loaded::Quarantined { .. }
+        ));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn missing_state_file_is_a_quiet_fresh_start() {
+        let target = temp_target("missing");
+        assert!(matches!(load_or_quarantine(&target), Loaded::Fresh));
+        assert!(!target.exists(), "a fresh start must not create anything");
+    }
+
+    #[test]
+    fn state_files_are_keyed_by_socket_stem_under_the_par_mux_dir() {
+        // default_socket_path produces `<base>/par-mux-<name>.sock`, so the
+        // stem that keys the state file is `par-mux-<name>` in full.
+        let base = Path::new("/base");
+        let a = state_file_in(base, Path::new("/tmp/par-mux-alpha.sock"));
+        let b = state_file_in(base, Path::new("/tmp/par-mux-beta.sock"));
+        assert!(a.ends_with("par-mux/par-mux-alpha.state.json"));
+        assert!(b.ends_with("par-mux/par-mux-beta.state.json"));
+        assert_ne!(a, b, "two servers on different sockets never share state");
     }
 }
 

@@ -73,15 +73,30 @@ impl MuxServer {
         &self.path
     }
 
-    /// Accept connections until the listener is closed.
+    /// Accept connections until the listener is closed, with no on-disk
+    /// persistence — the embedding choice for tests and in-process use.
+    /// The daemon binary runs [`Self::run_persisting`] instead (D3.3).
     pub fn run(self) {
+        self.run_with_state_path(None)
+    }
+
+    /// [`Self::run`] with the whole state atomically saved to `state_path`
+    /// after every mutating dispatch — the mode the `par-mux` daemon runs
+    /// in. Callers resolve the path with
+    /// [`crate::mux::persist::state_file_path`].
+    pub fn run_persisting(self, state_path: PathBuf) {
+        self.run_with_state_path(Some(state_path))
+    }
+
+    fn run_with_state_path(self, state_path: Option<PathBuf>) {
         loop {
             let Ok(stream) = self.listener.accept() else {
                 break;
             };
             let tree = Arc::clone(&self.tree);
             let clients = Arc::clone(&self.clients);
-            std::thread::spawn(move || handle_client(stream, tree, clients));
+            let state_path = state_path.clone();
+            std::thread::spawn(move || handle_client(stream, tree, clients, state_path));
         }
     }
 }
@@ -89,7 +104,12 @@ impl MuxServer {
 /// Serve one connected client: a writer thread draining a channel, and this
 /// thread reading commands. On disconnect, only this client's broadcast
 /// sender is removed — the accept loop and the tree are untouched.
-fn handle_client(stream: LocalStream, tree: Arc<Mutex<MuxTree>>, clients: Clients) {
+fn handle_client(
+    stream: LocalStream,
+    tree: Arc<Mutex<MuxTree>>,
+    clients: Clients,
+    state_path: Option<PathBuf>,
+) {
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel::<String>();
     clients.lock().push((client_id, tx.clone()));
@@ -117,7 +137,13 @@ fn handle_client(stream: LocalStream, tree: Arc<Mutex<MuxTree>>, clients: Client
             continue;
         }
         command_number += 1;
-        let reply = dispatch(&line, command_number, &tree, &clients);
+        let reply = dispatch(
+            &line,
+            command_number,
+            &tree,
+            &clients,
+            state_path.as_deref(),
+        );
         if tx.send(reply).is_err() {
             break;
         }
@@ -126,23 +152,32 @@ fn handle_client(stream: LocalStream, tree: Arc<Mutex<MuxTree>>, clients: Client
 }
 
 /// Execute one command and render its reply block.
+///
+/// `state_path` (the daemon always passes one): when a command mutated the
+/// tree or its buffers, the whole state is atomically saved to this file
+/// before the reply is sent (par-mux.md D3.3). Content-only commands
+/// (`send-keys`, `paste-buffer`) do not save — their staleness window is
+/// bounded by the next structural save and the clean shutdown save.
 fn dispatch(
     line: &str,
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
+    state_path: Option<&Path>,
 ) -> String {
     let command = match parse_command(line) {
         Ok(command) => command,
         Err(err) => return emit_block(command_number, &err, false),
     };
 
-    match command {
+    let mut mutated = false;
+    let reply = match command {
         MuxCommand::NewSession { name } => {
             let name = name.unwrap_or_else(|| "0".to_string());
             let mut guard = tree.lock();
             match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
                 Ok(session_id) => {
+                    mutated = true;
                     // Wire every pane in the new session to push its output.
                     let window_ids = guard
                         .session(session_id)
@@ -218,7 +253,10 @@ fn dispatch(
         MuxCommand::KillPane { pane } => {
             let mut guard = tree.lock();
             match guard.kill_pane(pane) {
-                Ok(()) => emit_block(command_number, "", true),
+                Ok(()) => {
+                    mutated = true;
+                    emit_block(command_number, "", true)
+                }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
@@ -240,6 +278,7 @@ fn dispatch(
             };
             match outcome {
                 Ok((new_pane, window_id)) => {
+                    mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
                     emit_block(command_number, &new_pane.to_string(), true)
                 }
@@ -257,6 +296,7 @@ fn dispatch(
             };
             match outcome {
                 Ok(window_id) => {
+                    mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
                     emit_block(command_number, "", true)
                 }
@@ -278,6 +318,7 @@ fn dispatch(
             };
             match outcome {
                 Ok(window_id) => {
+                    mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
                     emit_block(command_number, "", true)
                 }
@@ -295,6 +336,7 @@ fn dispatch(
             };
             match outcome {
                 Ok(window_id) => {
+                    mutated = true;
                     broadcast_layout_change(tree, clients, window_id);
                     emit_block(command_number, "", true)
                 }
@@ -306,6 +348,7 @@ fn dispatch(
             let mut guard = tree.lock();
             match guard.new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS) {
                 Ok(window_id) => {
+                    mutated = true;
                     // Wire the new window's pane the same way NewSession does.
                     let pane_ids = guard
                         .window(window_id)
@@ -331,21 +374,30 @@ fn dispatch(
         MuxCommand::SelectWindow { window } => {
             let mut guard = tree.lock();
             match guard.select_window(window) {
-                Ok(()) => emit_block(command_number, "", true),
+                Ok(()) => {
+                    mutated = true;
+                    emit_block(command_number, "", true)
+                }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
         MuxCommand::KillWindow { window } => {
             let mut guard = tree.lock();
             match guard.kill_window(window) {
-                Ok(()) => emit_block(command_number, "", true),
+                Ok(()) => {
+                    mutated = true;
+                    emit_block(command_number, "", true)
+                }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
         MuxCommand::RenameWindow { window, name } => {
             let mut guard = tree.lock();
             match guard.rename_window(window, &name) {
-                Ok(()) => emit_block(command_number, "", true),
+                Ok(()) => {
+                    mutated = true;
+                    emit_block(command_number, "", true)
+                }
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
@@ -405,6 +457,7 @@ fn dispatch(
         }
         MuxCommand::SetBuffer { content } => {
             tree.lock().set_buffer(DEFAULT_BUFFER, content);
+            mutated = true;
             emit_block(command_number, "", true)
         }
         MuxCommand::ShowBuffer => {
@@ -427,7 +480,16 @@ fn dispatch(
                 None => emit_block(command_number, &format!("no such pane: {pane}"), false),
             }
         }
+    };
+
+    if mutated {
+        if let Some(path) = state_path {
+            if let Err(err) = crate::mux::persist::save_to(&tree.lock(), path) {
+                eprintln!("par-mux: saving state to {} failed: {err}", path.display());
+            }
+        }
     }
+    reply
 }
 
 /// Push a `%layout-change` for `window_id` to every connected client.
@@ -570,11 +632,17 @@ mod tests {
     #[test]
     fn new_window_dispatch_creates_a_window_and_wires_its_pane() {
         let (tree, clients) = harness();
-        let session_reply = dispatch("new-session -s main", 1, &tree, &clients);
+        let session_reply = dispatch("new-session -s main", 1, &tree, &clients, None);
         assert!(session_reply.contains("%end"), "new-session succeeds");
 
         let session_id = tree.lock().sessions()[0];
-        let reply = dispatch(&format!("new-window -t {session_id}"), 2, &tree, &clients);
+        let reply = dispatch(
+            &format!("new-window -t {session_id}"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(reply.contains("%end"), "new-window succeeds: {reply}");
 
         let session = tree.lock().session(session_id).unwrap().windows.clone();
@@ -584,12 +652,24 @@ mod tests {
     #[test]
     fn window_lifecycle_dispatch_round_trips() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
-        dispatch(&format!("new-window -t {session_id}"), 2, &tree, &clients);
+        dispatch(
+            &format!("new-window -t {session_id}"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
         let window_id = tree.lock().session(session_id).unwrap().windows[1];
 
-        let select = dispatch(&format!("select-window -t {window_id}"), 3, &tree, &clients);
+        let select = dispatch(
+            &format!("select-window -t {window_id}"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(select.contains("%end"), "select-window succeeds");
         assert_eq!(tree.lock().session(session_id).unwrap().active, 1);
 
@@ -598,17 +678,24 @@ mod tests {
             4,
             &tree,
             &clients,
+            None,
         );
         assert!(rename.contains("%end"), "rename-window succeeds");
         assert_eq!(tree.lock().window(window_id).unwrap().name, "scratch");
 
-        let list_windows = dispatch("list-windows", 5, &tree, &clients);
+        let list_windows = dispatch("list-windows", 5, &tree, &clients, None);
         assert!(list_windows.contains("scratch"));
 
-        let list_sessions = dispatch("list-sessions", 6, &tree, &clients);
+        let list_sessions = dispatch("list-sessions", 6, &tree, &clients, None);
         assert!(list_sessions.contains("main"));
 
-        let kill = dispatch(&format!("kill-window -t {window_id}"), 7, &tree, &clients);
+        let kill = dispatch(
+            &format!("kill-window -t {window_id}"),
+            7,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(kill.contains("%end"), "kill-window succeeds");
         assert!(tree.lock().window(window_id).is_none());
     }
@@ -616,7 +703,7 @@ mod tests {
     #[test]
     fn window_commands_report_an_error_block_for_an_unknown_target() {
         let (tree, clients) = harness();
-        let reply = dispatch("select-window -t @999", 1, &tree, &clients);
+        let reply = dispatch("select-window -t @999", 1, &tree, &clients, None);
         assert!(
             reply.contains("%error"),
             "unknown window is an error: {reply}"
@@ -626,7 +713,7 @@ mod tests {
     #[test]
     fn split_window_dispatch_splits_and_broadcasts_a_layout_change() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
@@ -640,6 +727,7 @@ mod tests {
             2,
             &tree,
             &clients,
+            None,
         );
         assert!(reply.contains("%end"), "split-window succeeds: {reply}");
 
@@ -677,13 +765,19 @@ mod tests {
     #[test]
     fn pane_commands_dispatch_through_the_tree() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let first = tree.lock().window(window_id).unwrap().panes()[0];
 
         // Side by side, so the -R resize below moves the shared divider.
-        let split = dispatch(&format!("split-window -t {first} -h"), 2, &tree, &clients);
+        let split = dispatch(
+            &format!("split-window -t {first} -h"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(split.contains("%end"), "split-window succeeds: {split}");
         // The reply body carries the new pane id — a client needs it to
         // address the pane it just created.
@@ -693,11 +787,17 @@ mod tests {
             "reply names the new pane: {split}"
         );
 
-        let select = dispatch(&format!("select-pane -t {first}"), 3, &tree, &clients);
+        let select = dispatch(&format!("select-pane -t {first}"), 3, &tree, &clients, None);
         assert!(select.contains("%end"), "select-pane succeeds: {select}");
         assert_eq!(tree.lock().window(window_id).unwrap().active, first);
 
-        let resize = dispatch(&format!("resize-pane -t {first} -R 10"), 4, &tree, &clients);
+        let resize = dispatch(
+            &format!("resize-pane -t {first} -R 10"),
+            4,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(resize.contains("%end"), "resize-pane succeeds: {resize}");
 
         let swap = dispatch(
@@ -705,6 +805,7 @@ mod tests {
             5,
             &tree,
             &clients,
+            None,
         );
         assert!(swap.contains("%end"), "swap-pane succeeds: {swap}");
         assert_eq!(
@@ -723,7 +824,7 @@ mod tests {
             "resize-pane -t %999 -R",
             "swap-pane -t %999 -s %998",
         ] {
-            let reply = dispatch(command, 1, &tree, &clients);
+            let reply = dispatch(command, 1, &tree, &clients, None);
             assert!(reply.contains("%error"), "{command} is an error: {reply}");
         }
     }
@@ -731,21 +832,27 @@ mod tests {
     #[test]
     fn capture_pane_reports_the_pane_screen() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
         // A freshly spawned pane's screen is empty until the shell writes a
         // prompt; assert the reply is well-formed rather than racing that.
-        let reply = dispatch(&format!("capture-pane -t {pane_id} -p"), 2, &tree, &clients);
+        let reply = dispatch(
+            &format!("capture-pane -t {pane_id} -p"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(reply.contains("%end"), "capture-pane succeeds: {reply}");
     }
 
     #[test]
     fn capture_pane_rejects_an_unknown_pane() {
         let (tree, clients) = harness();
-        let reply = dispatch("capture-pane -t %999 -p", 1, &tree, &clients);
+        let reply = dispatch("capture-pane -t %999 -p", 1, &tree, &clients, None);
         assert!(reply.contains("%error"));
     }
 
@@ -790,7 +897,7 @@ mod tests {
     #[test]
     fn capture_pane_s_and_e_return_the_requested_line_range() {
         let (tree, clients) = quiet_harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
@@ -814,6 +921,7 @@ mod tests {
             2,
             &tree,
             &clients,
+            None,
         );
         assert!(reply.contains("%end"), "capture succeeds: {reply}");
         assert!(
@@ -834,46 +942,84 @@ mod tests {
     #[test]
     fn buffer_round_trips_through_set_and_show() {
         let (tree, clients) = harness();
-        let empty = dispatch("show-buffer", 1, &tree, &clients);
+        let empty = dispatch("show-buffer", 1, &tree, &clients, None);
         assert!(empty.contains("%error"), "no buffer yet: {empty}");
 
-        let set = dispatch("set-buffer hello world", 2, &tree, &clients);
+        let set = dispatch("set-buffer hello world", 2, &tree, &clients, None);
         assert!(set.contains("%end"), "set-buffer succeeds");
 
-        let show = dispatch("show-buffer", 3, &tree, &clients);
+        let show = dispatch("show-buffer", 3, &tree, &clients, None);
         assert!(show.contains("hello world"), "show-buffer: {show}");
     }
 
     #[test]
     fn paste_buffer_writes_the_buffer_to_the_target_pane() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let pane_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(pane_id).unwrap().panes()[0];
 
-        dispatch("set-buffer echo par-mux-paste", 2, &tree, &clients);
-        let reply = dispatch(&format!("paste-buffer -t {pane_id}"), 3, &tree, &clients);
+        dispatch("set-buffer echo par-mux-paste", 2, &tree, &clients, None);
+        let reply = dispatch(
+            &format!("paste-buffer -t {pane_id}"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(reply.contains("%end"), "paste-buffer succeeds: {reply}");
     }
 
     #[test]
     fn paste_buffer_rejects_an_unknown_pane() {
         let (tree, clients) = harness();
-        dispatch("set-buffer hi", 1, &tree, &clients);
-        let reply = dispatch("paste-buffer -t %999", 2, &tree, &clients);
+        dispatch("set-buffer hi", 1, &tree, &clients, None);
+        let reply = dispatch("paste-buffer -t %999", 2, &tree, &clients, None);
         assert!(reply.contains("%error"));
     }
 
     #[test]
     fn paste_buffer_with_no_stored_buffer_is_an_error() {
         let (tree, clients) = harness();
-        dispatch("new-session -s main", 1, &tree, &clients);
+        dispatch("new-session -s main", 1, &tree, &clients, None);
         let session_id = tree.lock().sessions()[0];
         let pane_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(pane_id).unwrap().panes()[0];
 
-        let reply = dispatch(&format!("paste-buffer -t {pane_id}"), 2, &tree, &clients);
+        let reply = dispatch(
+            &format!("paste-buffer -t {pane_id}"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
         assert!(reply.contains("%error"), "no buffer set: {reply}");
+    }
+
+    #[test]
+    fn mutating_dispatch_saves_state_and_read_only_dispatch_does_not() {
+        let (tree, clients) = quiet_harness();
+        let target = std::env::temp_dir()
+            .join(format!("par-mux-server-state-{}", std::process::id()))
+            .join("state.json");
+
+        dispatch("list-sessions", 1, &tree, &clients, Some(&target));
+        assert!(
+            !target.exists(),
+            "a read-only dispatch must not touch the state file"
+        );
+
+        dispatch("new-session -s main", 2, &tree, &clients, Some(&target));
+        assert!(target.exists(), "a mutating dispatch saves the state file");
+
+        match crate::mux::persist::load_or_quarantine(&target) {
+            crate::mux::persist::Loaded::State(state) => {
+                assert_eq!(state.format_version, crate::mux::persist::FORMAT_VERSION);
+                assert_eq!(state.sessions.len(), 1);
+                assert_eq!(state.sessions[0].name, "main");
+            }
+            other => panic!("expected a readable state file, got {other:?}"),
+        }
     }
 }

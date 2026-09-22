@@ -89,4 +89,8 @@ fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
         .kill_spawned_daemon()
         .expect("the spawned daemon is cleaned up");
     let _ = std::fs::remove_file(&path);
+    // The spawned daemon persisted its tree (D3.3) next to the test's socket
+    // stem in the real platform state dir — remove that too, or every test
+    // run leaves a stray state file behind.
+    let _ = std::fs::remove_file(par_term_emu_core_rust::mux::persist::state_file_path(&path));
 }

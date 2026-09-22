@@ -83,6 +83,11 @@ futures-util = { version = "0.3.32", optional = true }
 # the par-mux control socket (see par-mux.md D4).
 interprocess = { version = "2.4.2", optional = true }
 
+# Platform state-dir resolution for the par-mux persistence path (par-mux.md
+# D3.4: state lives in the platform state dir, never the ephemeral temp dir
+# the socket lives in).
+dirs = { version = "6.0", optional = true }
+
 # CLI dependencies (for streaming server binary)
 clap = { version = "4.6.1", features = ["derive", "env"], optional = true }
 anyhow = { version = "1.0.102", optional = true }
@@ -205,8 +210,10 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # control-mode socket. Needs real PTYs and an async runtime, so it is
 # deliberately absent from `default` and `sim` — see par-mux.md D1.
 # `widestring` exists only under [target.'cfg(windows)'.dependencies], so it is
-# pulled in on Windows builds only.
-mux = ["pty_session", "tokio", "interprocess", "widestring"]
+# pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
+# are intrinsic to the daemon now that it persists its tree on disk — a mux
+# build that cannot save is not a configuration the daemon supports.
+mux = ["pty_session", "tokio", "interprocess", "widestring", "serde", "dirs"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
