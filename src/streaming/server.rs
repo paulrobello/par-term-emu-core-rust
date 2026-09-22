@@ -706,16 +706,18 @@ impl StreamingServer {
         }
     }
 
-    /// Start server with HTTP static file serving using Axum
+    /// Build the full HTTP application (API routes + static frontend)
+    /// shared by the plain and TLS listeners.
+    ///
+    /// API routes get the auth middleware when any auth method is
+    /// configured; static file serving stays unprotected so the browser can
+    /// load the page before authenticating the WebSocket. Every response —
+    /// API and static alike — carries the anti-framing headers (SEC-010)
+    /// and the CORS layer.
     #[cfg(feature = "streaming")]
-    async fn start_with_http(self: Arc<Self>) -> Result<()> {
+    fn build_http_app(self: &Arc<Self>) -> axum::Router {
         use axum::{routing::get, Router};
         use tower_http::services::ServeDir;
-
-        crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
-
-        self.spawn_default_broadcaster();
-        self.spawn_idle_reaper();
 
         // Build API routes (protected by auth)
         let api_routes = Router::new()
@@ -739,10 +741,22 @@ impl StreamingServer {
         };
 
         // Merge API routes with unprotected static file serving
-        let app = api_routes
+        api_routes
             .fallback_service(ServeDir::new(&self.config.web_root))
             .with_state(self.clone())
-            .layer(build_cors_layer(&self.config.allowed_origins));
+            .layer(build_cors_layer(&self.config.allowed_origins))
+            .layer(axum::middleware::from_fn(add_security_headers))
+    }
+
+    /// Start server with HTTP static file serving using Axum
+    #[cfg(feature = "streaming")]
+    async fn start_with_http(self: Arc<Self>) -> Result<()> {
+        crate::debug_info!("STREAMING", "Server with HTTP listening on {}", self.addr);
+
+        self.spawn_default_broadcaster();
+        self.spawn_idle_reaper();
+
+        let app = self.build_http_app();
 
         // Start server
         let listener = tokio::net::TcpListener::bind(&self.addr)
@@ -759,9 +773,7 @@ impl StreamingServer {
     /// Start server with HTTPS/TLS static file serving using Axum
     #[cfg(feature = "streaming")]
     async fn start_with_https(self: Arc<Self>) -> Result<()> {
-        use axum::{routing::get, Router};
         use axum_server::tls_rustls::RustlsConfig;
-        use tower_http::services::ServeDir;
 
         let tls_config = self
             .config
@@ -778,32 +790,7 @@ impl StreamingServer {
         self.spawn_default_broadcaster();
         self.spawn_idle_reaper();
 
-        // Build API routes (protected by auth)
-        let api_routes = Router::new()
-            .route("/ws", get(ws_handler))
-            .route("/sessions", get(sessions_handler))
-            .route("/stats", get(stats_ws_handler));
-
-        // Apply auth middleware to API routes only if configured
-        let auth_config = ApiAuthConfig {
-            api_key: self.config.api_key.clone(),
-            http_basic_auth: self.config.http_basic_auth.clone(),
-            allow_api_key_in_query: self.config.allow_api_key_in_query,
-        };
-        let api_routes = if auth_config.is_configured() {
-            api_routes.layer(axum::middleware::from_fn(move |req, next| {
-                let auth_config = auth_config.clone();
-                api_auth_middleware(req, next, auth_config)
-            }))
-        } else {
-            api_routes
-        };
-
-        // Merge API routes with unprotected static file serving
-        let app = api_routes
-            .fallback_service(ServeDir::new(&self.config.web_root))
-            .with_state(self.clone())
-            .layer(build_cors_layer(&self.config.allowed_origins));
+        let app = self.build_http_app();
 
         // Build TLS config for axum-server
         let rustls_config = RustlsConfig::from_der(
@@ -2351,6 +2338,30 @@ fn build_cors_layer(allowed_origins: &Option<Vec<String>>) -> tower_http::cors::
     }
 }
 
+/// Anti-framing headers on every response (SEC-010). The served web
+/// frontend drives a live shell; without `X-Frame-Options: DENY` and a
+/// `frame-ancestors 'none'` CSP, a transparent iframe on an attacker page
+/// plus cached Basic credentials lets the attacker clickjack keystrokes
+/// into the terminal. Applied at the outermost router so static files and
+/// API responses both carry it.
+async fn add_security_headers(
+    req: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::http::{HeaderName, HeaderValue};
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    res
+}
+
 #[cfg(test)]
 mod origin_tests {
     use super::{
@@ -2577,6 +2588,72 @@ mod origin_tests {
             .await
             .unwrap();
         assert_eq!(res.status(), 403);
+    }
+
+    /// SEC-010: every response from the HTTP app — static frontend files
+    /// (ServeDir fallback) and API routes alike — must carry the
+    /// anti-framing headers, or a transparent iframe plus cached Basic
+    /// credentials can clickjack keystrokes into the live shell.
+    #[tokio::test]
+    async fn http_app_responses_carry_anti_framing_headers() {
+        let web_root =
+            std::env::temp_dir().join(format!("par-term-webroot-headers-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&web_root);
+        std::fs::create_dir_all(&web_root).unwrap();
+        std::fs::write(web_root.join("index.html"), "<html></html>").unwrap();
+
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let config = StreamingConfig {
+            web_root: web_root.to_string_lossy().into_owned(),
+            ..StreamingConfig::default()
+        };
+        let server = Arc::new(StreamingServer::with_config(
+            terminal,
+            "127.0.0.1:0".to_string(),
+            config,
+        ));
+        let app = server.build_http_app();
+
+        // Static frontend file via the ServeDir fallback.
+        let res = app
+            .clone()
+            .oneshot(origin_request("GET", "/", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("x-frame-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("frame-ancestors 'none'")
+        );
+
+        // API route response too.
+        let res = app
+            .oneshot(origin_request("GET", "/sessions", None))
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 200);
+        assert_eq!(
+            res.headers()
+                .get("x-frame-options")
+                .and_then(|v| v.to_str().ok()),
+            Some("DENY")
+        );
+        assert_eq!(
+            res.headers()
+                .get("content-security-policy")
+                .and_then(|v| v.to_str().ok()),
+            Some("frame-ancestors 'none'")
+        );
+
+        let _ = std::fs::remove_dir_all(&web_root);
     }
 }
 
