@@ -246,31 +246,34 @@ impl From<crate::terminal::RecordingSession> for PyRecordingSession {
 #[pyclass(name = "MacroEvent", from_py_object)]
 #[derive(Clone)]
 pub struct PyMacroEvent {
-    /// Event kind: "KeyPress", "Delay", or "Screenshot"
+    /// Event kind: "key", "delay", or "screenshot"
     pub event_type: String,
     /// Milliseconds since macro start
     pub timestamp: u64,
-    /// Key name for KeyPress events (e.g. "enter", "ctrl+c")
+    /// Key name for "key" events (e.g. "enter", "ctrl+c")
     pub key: Option<String>,
-    /// Delay duration in milliseconds for Delay events
+    /// Delay duration in milliseconds for "delay" events
     pub duration: Option<u64>,
-    /// Label for Screenshot events
+    /// Label for "screenshot" events
     pub label: Option<String>,
 }
 
 #[pymethods]
 impl PyMacroEvent {
     fn __repr__(&self) -> String {
+        // `{:?}` on every Option field rather than `.unwrap()`: this type is
+        // `from_py_object`, so a caller can construct a PyMacroEvent whose
+        // event_type/field combination doesn't match this crate's own
+        // producer (the `From<&MacroEvent>` impl below) — repr must not
+        // panic on that mismatch.
         match self.event_type.as_str() {
             "key" => format!(
-                "MacroEvent(key={}, timestamp={}ms)",
-                self.key.as_ref().unwrap(),
-                self.timestamp
+                "MacroEvent(key={:?}, timestamp={}ms)",
+                self.key, self.timestamp
             ),
             "delay" => format!(
-                "MacroEvent(delay={}ms, timestamp={}ms)",
-                self.duration.unwrap(),
-                self.timestamp
+                "MacroEvent(delay={:?}ms, timestamp={}ms)",
+                self.duration, self.timestamp
             ),
             "screenshot" => format!(
                 "MacroEvent(screenshot, label={:?}, timestamp={}ms)",
