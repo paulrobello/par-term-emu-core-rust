@@ -407,6 +407,7 @@ pub fn log_pty_read(bytes_read: usize) {
     }
 }
 
+/// Log PTY input bytes as a hex string when debug logging is enabled.
 pub fn log_pty_write(bytes: &[u8]) {
     if is_enabled(DebugLevel::Debug) {
         let hex: String = bytes

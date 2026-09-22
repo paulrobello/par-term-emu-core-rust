@@ -322,6 +322,8 @@ pub struct BinarySessionFactory {
 }
 
 impl BinarySessionFactory {
+    /// Create a session factory carrying the server's shell, scrollback,
+    /// theme, restart, and system-stats defaults.
     pub fn new(
         default_shell: Option<String>,
         scrollback: usize,

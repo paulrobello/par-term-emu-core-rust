@@ -1021,6 +1021,8 @@ impl PyStreamingServer {
 }
 
 // For non-streaming builds, provide stub classes
+/// Placeholder `StreamingServer` for builds without the `streaming` feature;
+/// its constructor always raises `RuntimeError`.
 #[cfg(not(feature = "streaming"))]
 #[pyclass(name = "StreamingServer")]
 pub struct PyStreamingServer;
@@ -1039,6 +1041,8 @@ impl PyStreamingServer {
     }
 }
 
+/// Placeholder `StreamingConfig` for builds without the `streaming` feature;
+/// its constructor always raises `RuntimeError`.
 #[cfg(not(feature = "streaming"))]
 #[pyclass(name = "StreamingConfig")]
 pub struct PyStreamingConfig;
@@ -1205,6 +1209,7 @@ pub fn decode_client_message<'py>(
 
 // Stub functions for non-streaming builds
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 #[pyo3(signature = (_message_type, **_kwargs))]
 pub fn encode_server_message<'py>(
@@ -1218,6 +1223,7 @@ pub fn encode_server_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 pub fn decode_server_message<'py>(
     _py: Python<'py>,
@@ -1229,6 +1235,7 @@ pub fn decode_server_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 #[pyo3(signature = (_message_type, **_kwargs))]
 pub fn encode_client_message<'py>(
@@ -1242,6 +1249,7 @@ pub fn encode_client_message<'py>(
 }
 
 #[cfg(not(feature = "streaming"))]
+/// Stub for non-streaming builds; always raises `RuntimeError`.
 #[pyfunction]
 pub fn decode_client_message<'py>(
     _py: Python<'py>,

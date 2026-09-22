@@ -60,6 +60,7 @@ impl Color {
 }
 
 impl NamedColor {
+    /// Convert a basic-color index (0-15) to its named color.
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => NamedColor::Black,

@@ -13,6 +13,8 @@ use tokio_rustls::rustls::pki_types::pem::PemObject;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::ServerConfig as RustlsServerConfig;
 
+/// TLS certificate chain and private key for the WebSocket/HTTPS server,
+/// loaded from PEM files.
 #[derive(Debug)]
 pub struct TlsConfig {
     /// Certificate chain in DER format

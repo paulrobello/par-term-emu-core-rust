@@ -151,6 +151,7 @@ const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// Hard upper limit for clipboard content (10 MB), regardless of configured max_bytes
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
 
+/// Current Unix timestamp in milliseconds since the epoch.
 #[inline]
 pub fn unix_millis() -> u64 {
     std::time::SystemTime::now()
@@ -159,6 +160,8 @@ pub fn unix_millis() -> u64 {
         .as_millis() as u64
 }
 
+/// Truncate clipboard content in place to `max_bytes` (0 clears it), enforcing
+/// the 10 MB hard cap and appending a truncation marker when cut.
 pub fn sanitize_clipboard_content(content: &mut String, max_bytes: usize) {
     if max_bytes == 0 {
         content.clear();
@@ -1070,7 +1073,13 @@ impl ObserverDispatchBatch {
     }
 }
 
-// Terminal struct definition
+/// A terminal emulator covering VT100/VT220/VT320/VT420/VT520 sequences with
+/// iTerm2 feature parity: scrollback, true color, Sixel/iTerm2/Kitty graphics,
+/// mouse reporting, and shell integration.
+///
+/// State is grouped into `pub(crate)` sub-structs by feature area (ARC-001).
+/// Feed input bytes through [`Terminal::process`] and query grid/cursor state
+/// through the accessor methods.
 pub struct Terminal {
     /// The primary terminal grid
     pub(crate) grid: Grid,
@@ -1236,6 +1245,7 @@ impl std::fmt::Debug for Terminal {
 }
 
 impl Terminal {
+    /// Create a new terminal with the default 10,000-line scrollback.
     pub fn new(cols: usize, rows: usize) -> Self {
         Self::with_scrollback(cols, rows, 10000)
     }

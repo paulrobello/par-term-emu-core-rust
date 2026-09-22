@@ -420,6 +420,8 @@ impl Terminal {
     }
 }
 
+/// Snapshot of terminal buffer statistics: dimensions, content density,
+/// graphics count, and estimated memory usage.
 pub struct TerminalStats {
     /// Number of columns
     pub cols: usize,
