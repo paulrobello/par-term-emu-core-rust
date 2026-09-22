@@ -39,6 +39,8 @@ pub enum MuxCommand {
     },
     /// List every live pane.
     ListPanes,
+    /// List every pane a hook has claimed — the agent roster.
+    ListAgents,
     /// Send keys to a pane.
     SendKeys {
         /// Target pane.
@@ -483,6 +485,7 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         }
         "list-windows" => Ok(MuxCommand::ListWindows),
         "list-sessions" => Ok(MuxCommand::ListSessions),
+        "list-agents" => Ok(MuxCommand::ListAgents),
         "split-window" => {
             let pane = target_pane("-t")?;
             // tmux's flags name the arrangement, not the divider: `-h`
@@ -811,6 +814,14 @@ mod tests {
         assert_eq!(
             parse_command("list-sessions").unwrap(),
             MuxCommand::ListSessions
+        );
+    }
+
+    #[test]
+    fn parses_list_agents() {
+        assert_eq!(
+            parse_command("list-agents").unwrap(),
+            MuxCommand::ListAgents
         );
     }
 

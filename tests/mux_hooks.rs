@@ -239,6 +239,69 @@ fn hook_report_replies_in_place_and_broadcasts_to_control_clients() {
     sigterm_clean(&mut stage.daemon);
 }
 
+/// T5.4: the roster query agrees with what hooks reported — and a hookless
+/// pane never appears in it.
+#[test]
+fn list_agents_agrees_with_hook_reports_and_omits_hookless_panes() {
+    let mut stage = stage("roster");
+
+    // A second, hookless pane alongside the claimed one.
+    stage
+        .control
+        .command(&format!("split-window -t {} -h", stage.pane));
+    let claimed = stage.pane.clone();
+    let hookless = "%1".to_string();
+
+    // The reply block's body lines, with protocol framing and interleaved
+    // %output pushes stripped.
+    fn body_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|l| {
+                !l.starts_with("%output")
+                    && !l.starts_with("%begin")
+                    && !l.starts_with("%end")
+                    && !l.starts_with("%error")
+            })
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect()
+    }
+
+    // No reports yet: the roster body is empty.
+    let empty = stage.control.command("list-agents").join("");
+    assert!(
+        body_lines(&empty).is_empty(),
+        "before any report the roster carries no lines: {:?}",
+        body_lines(&empty)
+    );
+
+    // Claim the first pane through the hook path, exactly as a ported
+    // script would.
+    let reply = hook_round_trip(&stage.path, &report(&claimed, "blocked", 2_000));
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "claim accepted: {reply}"
+    );
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the claim's broadcast",
+    );
+
+    let roster = stage.control.command("list-agents").join("");
+    let lines = body_lines(&roster);
+    assert!(
+        lines.contains(&format!("{claimed} kimi blocked").as_str()),
+        "the roster line matches the hook's claim: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.starts_with(&hookless)),
+        "the hookless pane is absent: {lines:?}"
+    );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
 #[test]
 fn stale_report_over_the_wire_writes_and_broadcasts_nothing() {
     let mut stage = stage("stale");

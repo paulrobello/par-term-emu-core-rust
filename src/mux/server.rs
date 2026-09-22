@@ -334,6 +334,35 @@ fn dispatch_issued(
                 .join("\n");
             emit_block(command_number, &body, true)
         }
+        // Wire contract: list-agents is the roster — one line per pane a
+        // hook has CLAIMED, `%N <agent> <state>` (T5.4). Panes without a
+        // claim are absent outright: `unknown` means no hook ever reported,
+        // never "idle", so a hookless agent simply does not appear (the
+        // Phase 5 ruling). Fixed shape, no -F — the T4.E decision.
+        MuxCommand::ListAgents => {
+            let guard = tree.lock();
+            let mut roster: Vec<(PaneId, String)> = guard
+                .sessions()
+                .iter()
+                .filter_map(|s| guard.session(*s))
+                .flat_map(|s| s.windows.clone())
+                .filter_map(|w| guard.window(w))
+                .flat_map(|w| w.panes())
+                .filter_map(|p| {
+                    let pane = guard.pane(p)?;
+                    let state = pane.metadata().get("agent_state")?;
+                    let agent = pane.metadata().get("agent")?;
+                    Some((p, format!("{agent} {state}")))
+                })
+                .collect();
+            roster.sort_by_key(|(pane, _)| *pane);
+            let body = roster
+                .iter()
+                .map(|(pane, entry)| format!("{pane} {entry}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            emit_block(command_number, &body, true)
+        }
         MuxCommand::SendKeys { pane, keys } => {
             let mut guard = tree.lock();
             match guard.pane_mut(pane) {
