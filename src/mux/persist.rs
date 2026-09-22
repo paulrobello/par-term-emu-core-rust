@@ -518,12 +518,20 @@ mod tests {
     use crate::mux::pane::{MuxPane, PaneFactory, ShellPaneFactory};
     use std::path::PathBuf;
 
-    /// A per-test target path under a unique temp dir; `save_to` creates the
-    /// parent, so parallel tests never share a directory either.
-    fn temp_target(name: &str) -> PathBuf {
-        std::env::temp_dir()
-            .join(format!("par-mux-persist-{name}-{}", std::process::id()))
-            .join("state.json")
+    /// A per-test target path inside a fresh `TempDir`. The directory name
+    /// carries OS-provided randomness, so neither parallel tests nor a later
+    /// run can share it (a `process::id()`-derived name repeats once the OS
+    /// recycles the pid, and a stale state file would then be loaded). The
+    /// returned guard removes the directory — target, `.tmp` sibling, and any
+    /// quarantined copy — on drop, even when the test panics; bind it to a
+    /// name, since `let _` would drop it at once.
+    fn temp_target(name: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("par-mux-persist-{name}-"))
+            .tempdir()
+            .expect("create persist temp dir");
+        let target = dir.path().join("state.json");
+        (dir, target)
     }
 
     /// The tmp sibling `save_to` must never leave behind.
@@ -761,7 +769,7 @@ mod tests {
 
     #[test]
     fn save_lands_at_the_target_with_no_tmp_leftover_and_round_trips() {
-        let target = temp_target("save");
+        let (_dir, target) = temp_target("save");
         let original = populated_tree();
 
         save_to(&original, &target).expect("save succeeds");
@@ -797,7 +805,7 @@ mod tests {
 
     #[test]
     fn torn_write_is_quarantined_and_starts_fresh() {
-        let target = temp_target("torn");
+        let (_dir, target) = temp_target("torn");
         let full = serde_json::to_string(&populated_tree().to_persist_state()).unwrap();
         // Half the bytes made it to "disk" — exactly what a torn
         // non-atomic write leaves behind.
@@ -815,7 +823,7 @@ mod tests {
 
     #[test]
     fn unknown_version_state_is_quarantined() {
-        let target = temp_target("version");
+        let (_dir, target) = temp_target("version");
         let mut state = populated_tree().to_persist_state();
         state.format_version = FORMAT_VERSION + 7;
         write_raw(&target, serde_json::to_string(&state).unwrap().as_bytes());
@@ -829,7 +837,7 @@ mod tests {
 
     #[test]
     fn missing_state_file_is_a_quiet_fresh_start() {
-        let target = temp_target("missing");
+        let (_dir, target) = temp_target("missing");
         assert!(matches!(load_or_quarantine(&target), Loaded::Fresh));
         assert!(!target.exists(), "a fresh start must not create anything");
     }
