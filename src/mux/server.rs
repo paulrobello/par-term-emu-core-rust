@@ -118,7 +118,7 @@ impl MuxServer {
         self.run_with_state_path(Some(state_path.clone()));
         if self.shutdown.load(Ordering::Relaxed) {
             if let Err(err) = crate::mux::persist::save_to(&self.tree.lock(), &state_path) {
-                eprintln!("par-mux: final state save failed: {err}");
+                log::error!("par-mux: final state save failed: {err}");
             }
         }
     }

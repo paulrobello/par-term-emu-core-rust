@@ -4,6 +4,13 @@
 //! until killed: clients come and go, panes do not (see par-mux.md D5).
 
 fn main() -> std::io::Result<()> {
+    // The mux library logs through `log` (ARC-010); without a logger
+    // installed those records vanish, so wire the minimal stderr sink up
+    // before anything can emit.
+    log::set_logger(&STDERR_LOG)
+        .map(|_| log::set_max_level(log::LevelFilter::Info))
+        .ok();
+
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
     // binds an explicit path (what MuxClient::connect_or_spawn_at spawns).
     let mut args = std::env::args().skip(1);
@@ -34,7 +41,7 @@ fn main() -> std::io::Result<()> {
             ) {
                 Ok(tree) => Some(tree),
                 Err(err) => {
-                    eprintln!("par-mux: state restore failed ({err}); starting fresh");
+                    log::warn!("par-mux: state restore failed ({err}); starting fresh");
                     None
                 }
             }
@@ -48,7 +55,7 @@ fn main() -> std::io::Result<()> {
         Some(tree) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
         None => par_term_emu_core_rust::mux::MuxServer::bind(&path)?,
     };
-    eprintln!("par-mux listening on {}", path.display());
+    log::info!("par-mux listening on {}", path.display());
 
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
     // shutdown with one atomic store (async-signal-safe), the accept loop
@@ -95,3 +102,24 @@ fn install_sigterm_handler() -> std::io::Result<()> {
     unsafe { signal::sigaction(signal::SIGTERM, &action) }.map_err(std::io::Error::other)?;
     Ok(())
 }
+
+/// The daemon's stderr logger (ARC-010): the mux library emits through
+/// `log`, and the daemon has no tracing subscriber, so this minimal sink is
+/// what makes those records visible. Level-prefixed, info and above.
+struct StderrLog;
+
+impl log::Log for StderrLog {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("{}: {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+static STDERR_LOG: StderrLog = StderrLog;

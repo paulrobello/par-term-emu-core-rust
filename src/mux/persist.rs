@@ -489,7 +489,7 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
     let to = PathBuf::from(name);
     match fs::rename(target, &to) {
         Ok(()) => {
-            eprintln!(
+            log::warn!(
                 "par-mux: state {} was unreadable ({reason}); quarantined as {}",
                 target.display(),
                 to.display()
@@ -500,7 +500,7 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
             }
         }
         Err(err) => {
-            eprintln!(
+            log::warn!(
                 "par-mux: state {} was unreadable ({reason}) and could not be quarantined: {err}",
                 target.display()
             );
