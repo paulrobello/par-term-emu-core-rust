@@ -8,6 +8,7 @@
 //! parses. That parser is the format reference and the conformance oracle for
 //! everything here; see `par-mux.md`.
 
+pub mod agent_resume;
 pub mod client;
 pub mod command;
 pub mod emit;
