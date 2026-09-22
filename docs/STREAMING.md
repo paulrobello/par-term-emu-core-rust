@@ -10,6 +10,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [WebSocket Protocol](#websocket-protocol)
 - [Server Implementation](#server-implementation)
   - [Rust Standalone Server](#rust-standalone-server)
+  - [Command-Line Options and Environment Variables](#command-line-options-and-environment-variables)
   - [Python Integration](#python-integration)
   - [Configuration](#configuration)
 - [Web Frontend](#web-frontend)
@@ -242,6 +243,10 @@ par-term-streamer --enable-http --api-key my-secret-key
 # Combined: API key + HTTP Basic Auth (either satisfies auth)
 par-term-streamer --enable-http --http-user admin --http-password secret --api-key my-secret-key
 ```
+
+### Command-Line Options and Environment Variables
+
+Every CLI option has an environment-variable equivalent with the `PAR_TERM_` prefix. The table below is the complete option reference:
 
 **Environment Variables:**
 
@@ -1593,7 +1598,7 @@ The streaming protocol tracks environment changes and remote host transitions.
 
 The streaming server supports TLS/SSL for secure HTTPS and WSS (WebSocket Secure) connections.
 
-### CLI Options
+### TLS CLI Options
 
 **Using Separate Certificate and Key Files:**
 ```bash
