@@ -30,6 +30,28 @@ impl Clone for TlsConfig {
     }
 }
 
+/// Reject private-key material readable by group/other (SEC-006).
+///
+/// Shared by both TLS loading paths — `from_files` (separate key file) and
+/// `from_pem` (combined PEM, which contains the key too) — so neither can
+/// bypass the 0600/0400 discipline the other enforces.
+#[cfg(unix)]
+fn reject_world_readable(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            return Err(StreamingError::ServerError(format!(
+                "Private key file '{}' has overly permissive permissions (mode {:o}). \
+                 Set to 600 or 400 for security.",
+                path.display(),
+                mode & 0o777
+            )));
+        }
+    }
+    Ok(())
+}
+
 impl TlsConfig {
     /// Create TLS config from separate certificate and private key PEM files
     ///
@@ -80,20 +102,7 @@ impl TlsConfig {
 
         // Validate private key file permissions on Unix
         #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            if let Ok(metadata) = std::fs::metadata(key_path) {
-                let mode = metadata.permissions().mode();
-                if mode & 0o077 != 0 {
-                    return Err(StreamingError::ServerError(format!(
-                        "Private key file '{}' has overly permissive permissions (mode {:o}). \
-                         Set to 600 or 400 for security.",
-                        key_path.display(),
-                        mode & 0o777
-                    )));
-                }
-            }
-        }
+        reject_world_readable(key_path)?;
 
         let mut key_reader = BufReader::new(key_file);
         let key = match PrivateKeyDer::pem_reader_iter(&mut key_reader).next() {
@@ -125,6 +134,11 @@ impl TlsConfig {
     /// Returns error if file cannot be read or parsed
     pub fn from_pem<P: AsRef<Path>>(pem_path: P) -> Result<Self> {
         let pem_path = pem_path.as_ref();
+
+        // The combined PEM contains the private key, so it is held to the
+        // same permission discipline as a standalone key file (SEC-006).
+        #[cfg(unix)]
+        reject_world_readable(pem_path)?;
 
         let pem_bytes = std::fs::read(pem_path).map_err(|e| {
             StreamingError::ServerError(format!(
@@ -368,6 +382,100 @@ impl ApiAuthConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a parseable PEM block around `der` bytes. Block headers are
+    /// assembled from parts so the committed source contains no key-shaped
+    /// literal that secret scanners would flag. The payloads used with it
+    /// are structurally valid but cryptographically meaningless test data.
+    fn pem_block(kind: &str, der: &[u8]) -> String {
+        use base64::Engine;
+        format!(
+            "-----BEGIN {kind}-----\n{}\n-----END {kind}-----\n",
+            base64::engine::general_purpose::STANDARD.encode(der)
+        )
+    }
+
+    /// A combined PEM that `from_pem` accepts: one throwaway certificate
+    /// block plus one structural (fixed-seed) PKCS#8 Ed25519-style key
+    /// block. No real key material is involved.
+    fn test_combined_pem() -> String {
+        let cert_der: &[u8] = &[0x30, 0x03, 0x02, 0x01, 0x2a];
+        let pkcs8_der: &[u8] = &[
+            0x30, 0x51, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22,
+            0x04, 0x20, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+            0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+            0x42, 0x42, 0x42, 0x42, 0x42, 0x42,
+        ];
+        format!(
+            "{}{}",
+            pem_block("CERTIFICATE", cert_der),
+            pem_block("PRIVATE KEY", pkcs8_der)
+        )
+    }
+
+    /// Write `contents` to a uniquely named temp file with the given (Unix)
+    /// permission mode and return its path. `label` keeps concurrent tests
+    /// from colliding on the same filename.
+    #[cfg(unix)]
+    fn write_temp_pem(label: &str, mode: u32, contents: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "par-term-tls-{}-{}-{:o}.pem",
+            label,
+            std::process::id(),
+            mode
+        ));
+        std::fs::write(&path, contents).expect("write temp PEM");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+            .expect("chmod temp PEM");
+        path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_pem_rejects_world_readable_combined_pem() {
+        let path = write_temp_pem("pem-combined", 0o644, &test_combined_pem());
+        let err = TlsConfig::from_pem(&path).expect_err("0644 combined PEM must be rejected");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("overly permissive permissions"),
+            "expected permissions error, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_pem_accepts_owner_only_combined_pem() {
+        let path = write_temp_pem("pem-combined", 0o600, &test_combined_pem());
+        let tls = TlsConfig::from_pem(&path).expect("0600 combined PEM must load");
+        assert_eq!(tls.certs.len(), 1);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn from_files_rejects_world_readable_key() {
+        let combined = test_combined_pem();
+        // The key block is the second half (after the certificate block).
+        let split_at = combined
+            .find(&format!("-----BEGIN {}", "PRIVATE KEY"))
+            .expect("test PEM contains a key block");
+        let (cert_pem, key_pem) = combined.split_at(split_at);
+        let cert_path = write_temp_pem("files-cert", 0o600, cert_pem);
+        let key_path = write_temp_pem("files-key", 0o644, key_pem);
+        let err =
+            TlsConfig::from_files(&cert_path, &key_path).expect_err("0644 key must be rejected");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("overly permissive permissions"),
+            "expected permissions error, got: {}",
+            msg
+        );
+        let _ = std::fs::remove_file(&cert_path);
+        let _ = std::fs::remove_file(&key_path);
+    }
 
     #[tokio::test]
     async fn test_streaming_config_default() {
