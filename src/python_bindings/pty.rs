@@ -20,10 +20,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::color::Color;
 use crate::pty_session;
-
-use super::types::{PyAttributes, PyScreenSnapshot};
 
 /// Python wrapper for PtySession - a terminal with PTY support
 #[pyclass(name = "PtyTerminal", unsendable)]
@@ -165,11 +162,11 @@ impl PyPtyTerminal {
     /// Args:
     ///     cols: New number of columns
     ///     rows: New number of rows
-    fn resize(&mut self, cols: u16, rows: u16) -> PyResult<()> {
+    fn resize(&mut self, cols: usize, rows: usize) -> PyResult<()> {
         if cols == 0 || rows == 0 {
             return Err(PyValueError::new_err("Dimensions must be greater than 0"));
         }
-        self.inner.resize(cols, rows)?;
+        self.inner.resize(cols as u16, rows as u16)?;
         Ok(())
     }
 
@@ -183,16 +180,20 @@ impl PyPtyTerminal {
     #[pyo3(signature = (cols, rows, pixel_width, pixel_height))]
     fn resize_pixels(
         &mut self,
-        cols: u16,
-        rows: u16,
-        pixel_width: u16,
-        pixel_height: u16,
+        cols: usize,
+        rows: usize,
+        pixel_width: usize,
+        pixel_height: usize,
     ) -> PyResult<()> {
         if cols == 0 || rows == 0 {
             return Err(PyValueError::new_err("Dimensions must be greater than 0"));
         }
-        self.inner
-            .resize_with_pixels(cols, rows, pixel_width, pixel_height)?;
+        self.inner.resize_with_pixels(
+            cols as u16,
+            rows as u16,
+            pixel_width as u16,
+            pixel_height as u16,
+        )?;
         Ok(())
     }
 
@@ -270,167 +271,18 @@ impl PyPtyTerminal {
 
     // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get the number of scrollback lines
-    ///
-    /// Returns:
-    ///     Number of lines in scrollback buffer
-    fn scrollback_len(&self) -> PyResult<usize> {
-        Ok(self.inner.scrollback_len())
-    }
+    // scrollback_len: provided by impl_terminal_exports! (ARC-007)
 
     // scrollback_line: provided by impl_terminal_search_select! (ARC-003/QA-001)
 
-    /// Get a specific line from the terminal buffer
-    ///
-    /// Args:
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     String content of the specified row, or None if row is out of bounds
-    fn get_line(&self, row: usize) -> PyResult<Option<String>> {
-        Ok(self.inner.get_line(row))
-    }
+    // get_line: provided by impl_terminal_exports! (ARC-007)
 
-    /// Get a cell's character at the specified position
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Character at the position, or None if out of bounds
-    fn get_char(&self, col: usize, row: usize) -> PyResult<Option<char>> {
-        let terminal = self.inner.terminal();
-        let result = if let Ok(term) = Ok::<_, ()>(terminal.write()) {
-            term.active_grid().get(col, row).map(|cell| cell.c)
-        } else {
-            None
-        };
-        Ok(result)
-    }
+    // get_char: provided by impl_terminal_exports! (ARC-007)
 
     // is_line_wrapped, get_fg_color, get_bg_color, get_underline_color, get_attributes,
     // get_hyperlink, get_line_cells: provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
-    /// Create atomic snapshot of current screen state
-    ///
-    /// Captures all lines, cursor state, and screen identity atomically.
-    /// The snapshot is immutable and will not change even if the terminal
-    /// state changes (e.g., alternate screen switches).
-    ///
-    /// Returns:
-    ///     ScreenSnapshot with all terminal state
-    fn create_snapshot(&self) -> PyResult<PyScreenSnapshot> {
-        let terminal = self.inner.terminal();
-        let term = terminal.write();
-
-        // Get current grid (will be either primary or alternate)
-        let grid = term.active_grid();
-        let rows = grid.rows();
-        let cols = grid.cols();
-
-        // Get bold brightening setting
-        let bold_brightening = term.bold_brightening();
-
-        // Get ANSI palette for color resolution
-        let ansi_palette = term.get_ansi_palette();
-
-        // Helper function to resolve foreground color using the palette
-        let resolve_fg_color = |color: crate::color::Color| -> (u8, u8, u8) {
-            match color {
-                crate::color::Color::Named(named) => {
-                    // Use palette color instead of hardcoded ANSI color
-                    let palette_idx = named as usize;
-                    if palette_idx < 16 {
-                        ansi_palette[palette_idx].to_rgb()
-                    } else {
-                        color.to_rgb() // Fallback to hardcoded (shouldn't happen)
-                    }
-                }
-                crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
-                    // Indexed colors 0-15 also use palette
-                    ansi_palette[idx as usize].to_rgb()
-                }
-                _ => color.to_rgb(), // RGB and indexed 16-255 use their own values
-            }
-        };
-
-        // Helper function to resolve background color using the palette
-        let resolve_bg_color = |color: crate::color::Color| -> (u8, u8, u8) {
-            match color {
-                crate::color::Color::Named(named) => {
-                    // Use palette color instead of hardcoded ANSI color
-                    let palette_idx = named as usize;
-                    if palette_idx < 16 {
-                        ansi_palette[palette_idx].to_rgb()
-                    } else {
-                        color.to_rgb() // Fallback to hardcoded (shouldn't happen)
-                    }
-                }
-                crate::color::Color::Indexed(idx) if (idx as usize) < 16 => {
-                    // Indexed colors 0-15 also use palette
-                    ansi_palette[idx as usize].to_rgb()
-                }
-                _ => color.to_rgb(), // RGB and indexed 16-255 use their own values
-            }
-        };
-
-        // Capture all lines while holding terminal lock
-        let mut lines = Vec::with_capacity(rows);
-        let mut wrapped_lines = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut line = Vec::with_capacity(cols);
-            for col in 0..cols {
-                if let Some(cell) = grid.get(col, row) {
-                    // Apply bold brightening: if bold and color is ANSI 0-7, use bright variant 8-15
-                    let mut fg = cell.fg;
-                    if bold_brightening && cell.flags.bold() {
-                        if let crate::color::Color::Named(named) = fg {
-                            if (named as u8) < 8 {
-                                // Convert normal ANSI color (0-7) to bright variant (8-15)
-                                fg = crate::color::Color::Named(crate::color::NamedColor::from_u8(
-                                    named as u8 + 8,
-                                ));
-                            }
-                        }
-                    }
-
-                    line.push((
-                        cell.get_grapheme(),
-                        resolve_fg_color(fg),
-                        resolve_bg_color(cell.bg),
-                        PyAttributes::from(cell),
-                    ));
-                } else {
-                    // Empty cell
-                    line.push((
-                        " ".to_string(),
-                        (0, 0, 0),
-                        (0, 0, 0),
-                        PyAttributes::default(),
-                    ));
-                }
-            }
-            lines.push(line);
-            wrapped_lines.push(grid.is_line_wrapped(row));
-        }
-
-        let cursor = term.cursor();
-
-        // Get generation before releasing lock
-        let generation = self.inner.update_generation();
-
-        Ok(PyScreenSnapshot {
-            lines,
-            wrapped_lines,
-            cursor_pos: (cursor.col, cursor.row),
-            cursor_visible: cursor.visible,
-            cursor_style: cursor.style.into(),
-            is_alt_screen: term.is_alt_screen_active(),
-            generation,
-            size: (cols, rows),
-        })
-    }
+    // create_snapshot: provided by impl_terminal_exports! (ARC-007)
 
     /// Get the default shell for the current platform
     ///
@@ -574,57 +426,17 @@ impl PyPtyTerminal {
 
     // keyboard_flags: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set Kitty Keyboard Protocol flags
-    ///
-    /// Args:
-    ///     flags: Flags to set (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
-    ///     mode: 0=disable all, 1=set flags, 2=lock flags (default: 1)
-    ///
-    /// Sends: CSI = flags ; mode u
-    #[pyo3(signature = (flags, mode=1))]
-    fn set_keyboard_flags(&mut self, flags: u16, mode: u8) -> PyResult<()> {
-        let sequence = format!("\x1b[={};{}u", flags, mode);
-        self.write(sequence.as_bytes())?;
-        Ok(())
-    }
+    // set_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
-    /// Query Kitty Keyboard Protocol flags (sends CSI ? u)
-    ///
-    /// Returns:
-    ///     Query sequence sent to terminal (response will be in terminal responses)
-    fn query_keyboard_flags(&mut self) -> PyResult<()> {
-        self.write(b"\x1b[?u")?;
-        Ok(())
-    }
+    // query_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
     // insert_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // line_feed_new_line_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Push current keyboard flags to stack and set new flags
-    ///
-    /// Args:
-    ///     flags: New flags to set
-    ///
-    /// Sends: CSI > flags u
-    fn push_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
-        let sequence = format!("\x1b[>{}u", flags);
-        self.write(sequence.as_bytes())?;
-        Ok(())
-    }
+    // push_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
-    /// Pop keyboard flags from stack
-    ///
-    /// Args:
-    ///     count: Number of flags to pop from stack (default: 1)
-    ///
-    /// Sends: CSI < count u
-    #[pyo3(signature = (count=1))]
-    fn pop_keyboard_flags(&mut self, count: usize) -> PyResult<()> {
-        let sequence = format!("\x1b[<{}u", count);
-        self.write(sequence.as_bytes())?;
-        Ok(())
-    }
+    // pop_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
     /// Force set keyboard protocol flags directly (bypasses protocol sequences)
     ///
@@ -657,59 +469,21 @@ impl PyPtyTerminal {
 
     // set_default_fg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query default foreground color (OSC 10)
-    ///
-    /// Sends OSC 10 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 10 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_default_fg(&mut self) -> PyResult<()> {
-        self.write(b"\x1b]10;?\x1b\\")?;
-        Ok(())
-    }
+    // query_default_fg: provided by impl_terminal_exports! (ARC-007)
 
     // default_bg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // set_default_bg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query default background color (OSC 11)
-    ///
-    /// Sends OSC 11 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 11 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_default_bg(&mut self) -> PyResult<()> {
-        self.write(b"\x1b]11;?\x1b\\")?;
-        Ok(())
-    }
+    // query_default_bg: provided by impl_terminal_exports! (ARC-007)
 
     // Get cursor color: provided by impl_terminal_simple_getters! (ARC-003/QA-001)
 
     // set_cursor_color: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query cursor color (OSC 12)
-    ///
-    /// Sends OSC 12 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 12 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_cursor_color(&mut self) -> PyResult<()> {
-        self.write(b"\x1b]12;?\x1b\\")?;
-        Ok(())
-    }
+    // query_cursor_color: provided by impl_terminal_exports! (ARC-007)
 
-    /// Set ANSI palette color (0-15)
-    ///
-    /// Args:
-    ///     index: Palette index (0-15)
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    ///
-    /// Raises:
-    ///     ValueError: If index is not in range 0-15
-    fn set_ansi_palette_color(&mut self, index: usize, r: u8, g: u8, b: u8) -> PyResult<()> {
-        let terminal = self.inner.terminal();
-        if let Ok(mut term) = Ok::<_, ()>(terminal.write()) {
-            term.set_ansi_palette_color(index, Color::Rgb(r, g, b))
-                .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        }
-        Ok(())
-    }
+    // set_ansi_palette_color: provided by impl_terminal_exports! (ARC-007)
 
     // set_link_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
@@ -758,7 +532,8 @@ impl PyPtyTerminal {
     ///     content: String content to paste
     fn paste(&mut self, content: &str) -> PyResult<()> {
         let terminal = self.inner.terminal();
-        if let Ok(term) = Ok::<_, ()>(terminal.write()) {
+        {
+            let term = terminal.write();
             // Get the paste sequences (handles bracketed paste mode)
             let start = term.bracketed_paste_start();
             let end = term.bracketed_paste_end();
@@ -905,43 +680,11 @@ impl PyPtyTerminal {
 
     // ========== Buffer Statistics ==========
 
-    /// Get terminal statistics
-    ///
-    /// Returns:
-    ///     Dictionary with statistics: cols, rows, scrollback_lines, total_cells,
-    ///     non_whitespace_lines, graphics_count, estimated_memory_bytes
-    fn get_stats(&self) -> PyResult<HashMap<String, usize>> {
-        let terminal = self.inner.terminal();
-        let term = terminal.write();
-        let stats = term.get_stats();
-        let mut result = HashMap::new();
-        result.insert("cols".to_string(), stats.cols);
-        result.insert("rows".to_string(), stats.rows);
-        result.insert("scrollback_lines".to_string(), stats.scrollback_lines);
-        result.insert("total_cells".to_string(), stats.total_cells);
-        result.insert(
-            "non_whitespace_lines".to_string(),
-            stats.non_whitespace_lines,
-        );
-        result.insert("graphics_count".to_string(), stats.graphics_count);
-        result.insert(
-            "estimated_memory_bytes".to_string(),
-            stats.estimated_memory_bytes,
-        );
-        Ok(result)
-    }
+    // get_stats: provided by impl_terminal_exports! (ARC-007)
 
     // count_non_whitespace_lines: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get scrollback usage
-    ///
-    /// Returns:
-    ///     Tuple of (used_lines, max_capacity)
-    fn get_scrollback_usage(&self) -> PyResult<(usize, usize)> {
-        let terminal = self.inner.terminal();
-        let term = terminal.write();
-        Ok((term.get_scrollback_usage(), term.grid().max_scrollback()))
-    }
+    // get_scrollback_usage: provided by impl_terminal_exports! (ARC-007)
 
     // find_matching_bracket, select_semantic_region:
     //   provided by impl_terminal_search_select! (ARC-003/QA-001)
@@ -956,95 +699,11 @@ impl PyPtyTerminal {
     // record_resize, record_marker, get_recording_session:
     //   provided by impl_terminal_recording! (ARC-003/QA-001)
 
-    /// Export recording to asciicast v2 format
-    ///
-    /// Args:
-    ///     session: RecordingSession from stop_recording()
-    ///
-    /// Returns:
-    ///     Asciicast format string
-    fn export_asciicast(
-        &self,
-        session: Option<&super::types::PyRecordingSession>,
-        _py: Python,
-    ) -> PyResult<String> {
-        if let Some(session) = session {
-            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-                Ok(term.export_asciicast(&session.inner))
-            } else {
-                Err(PyRuntimeError::new_err("Failed to lock terminal"))
-            }
-        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            if let Some(active) = term.get_recording_session() {
-                Ok(term.export_asciicast(active))
-            } else {
-                Err(PyValueError::new_err(
-                    "No active recording session (pass session=stop_recording())",
-                ))
-            }
-        } else {
-            Err(PyRuntimeError::new_err("Failed to lock terminal"))
-        }
-    }
+    // export_asciicast: provided by impl_terminal_exports! (ARC-007)
 
-    /// Export recording to asciicast v3 format
-    ///
-    /// Args:
-    ///     session: RecordingSession from stop_recording()
-    ///
-    /// Returns:
-    ///     Asciicast v3 format string
-    fn export_asciicast_v3(
-        &self,
-        session: Option<&super::types::PyRecordingSession>,
-        _py: Python,
-    ) -> PyResult<String> {
-        if let Some(session) = session {
-            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-                Ok(term.export_asciicast_v3(&session.inner))
-            } else {
-                Err(PyRuntimeError::new_err("Failed to lock terminal"))
-            }
-        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            if let Some(active) = term.get_recording_session() {
-                Ok(term.export_asciicast_v3(active))
-            } else {
-                Err(PyValueError::new_err(
-                    "No active recording (pass session=stop_recording())",
-                ))
-            }
-        } else {
-            Err(PyRuntimeError::new_err("Failed to lock terminal"))
-        }
-    }
+    // export_asciicast_v3: provided by impl_terminal_exports! (ARC-007)
 
-    /// Export recording to JSON format
-    ///
-    /// Returns:
-    ///     JSON format string
-    fn export_json(
-        &self,
-        session: Option<&super::types::PyRecordingSession>,
-        _py: Python,
-    ) -> PyResult<String> {
-        if let Some(session) = session {
-            if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-                Ok(term.export_json(&session.inner))
-            } else {
-                Err(PyRuntimeError::new_err("Failed to lock terminal"))
-            }
-        } else if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            if let Some(active) = term.get_recording_session() {
-                Ok(term.export_json(active))
-            } else {
-                Err(PyValueError::new_err(
-                    "No active recording session (pass session=stop_recording())",
-                ))
-            }
-        } else {
-            Err(PyRuntimeError::new_err("Failed to lock terminal"))
-        }
-    }
+    // export_json: provided by impl_terminal_exports! (ARC-007)
 
     // === Macro Recording and Playback ===
 
@@ -1054,7 +713,9 @@ impl PyPtyTerminal {
     ///     name: Name to store the macro under
     ///     macro: Macro object to load
     fn load_macro(&self, name: String, macro_obj: &super::types::PyMacro) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.load_macro(name, macro_obj.inner.clone());
         }
         Ok(())
@@ -1068,14 +729,12 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro object if found, None otherwise
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term
-                .get_macro(&name)
-                .cloned()
-                .map(super::types::PyMacro::from))
-        } else {
-            Ok(None)
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term
+            .get_macro(&name)
+            .cloned()
+            .map(super::types::PyMacro::from))
     }
 
     /// Remove a macro from the library
@@ -1086,11 +745,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Removed Macro object if found, None otherwise
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
-        } else {
-            Ok(None)
-        }
+        let terminal = self.inner.terminal();
+        let mut term = terminal.write();
+        Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
     }
 
     /// List all macro names
@@ -1098,11 +755,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of macro names
     fn list_macros(&self) -> PyResult<Vec<String>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.list_macros())
-        } else {
-            Ok(Vec::new())
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term.list_macros())
     }
 
     /// Start playing a macro
@@ -1112,20 +767,20 @@ impl PyPtyTerminal {
     ///     speed: Playback speed multiplier (1.0 = normal, 2.0 = double speed)
     #[pyo3(signature = (name, speed=None))]
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            term.play_macro(&name).map_err(PyValueError::new_err)?;
-            if let Some(s) = speed {
-                term.set_macro_speed(s);
-            }
-            Ok(())
-        } else {
-            Err(PyRuntimeError::new_err("Failed to lock terminal"))
+        let terminal = self.inner.terminal();
+        let mut term = terminal.write();
+        term.play_macro(&name).map_err(PyValueError::new_err)?;
+        if let Some(s) = speed {
+            term.set_macro_speed(s);
         }
+        Ok(())
     }
 
     /// Stop macro playback
     fn stop_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.stop_macro();
         }
         Ok(())
@@ -1133,7 +788,9 @@ impl PyPtyTerminal {
 
     /// Pause macro playback
     fn pause_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.pause_macro();
         }
         Ok(())
@@ -1141,7 +798,9 @@ impl PyPtyTerminal {
 
     /// Resume macro playback
     fn resume_macro(&self) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.resume_macro();
         }
         Ok(())
@@ -1152,7 +811,9 @@ impl PyPtyTerminal {
     /// Args:
     ///     speed: Speed multiplier (0.1 to 10.0)
     fn set_macro_speed(&self, speed: f64) -> PyResult<()> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.set_macro_speed(speed);
         }
         Ok(())
@@ -1163,11 +824,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if a macro is playing, False otherwise
     fn is_macro_playing(&self) -> PyResult<bool> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.is_macro_playing())
-        } else {
-            Ok(false)
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term.is_macro_playing())
     }
 
     /// Check if macro playback is paused
@@ -1175,11 +834,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if paused, False otherwise
     fn is_macro_paused(&self) -> PyResult<bool> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.is_macro_paused())
-        } else {
-            Ok(false)
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term.is_macro_paused())
     }
 
     /// Get macro playback progress
@@ -1187,11 +844,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Tuple of (current_event, total_events) if playing, None otherwise
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.get_macro_progress())
-        } else {
-            Ok(None)
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term.get_macro_progress())
     }
 
     /// Get the name of the currently playing macro
@@ -1199,11 +854,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     Macro name if playing, None otherwise
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.get_current_macro_name())
-        } else {
-            Ok(None)
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(term.get_current_macro_name())
     }
 
     /// Tick macro playback and send events to PTY
@@ -1213,10 +866,10 @@ impl PyPtyTerminal {
     /// Returns:
     ///     True if an event was processed, False otherwise
     fn tick_macro(&mut self) -> PyResult<bool> {
-        let bytes = if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
+        let bytes = {
+            let terminal = self.inner.terminal();
+            let mut term = terminal.write();
             term.tick_macro()
-        } else {
-            None
         };
 
         if let Some(bytes) = bytes {
@@ -1232,11 +885,9 @@ impl PyPtyTerminal {
     /// Returns:
     ///     List of screenshot labels
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
-        if let Ok(mut term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(term.get_macro_screenshot_triggers())
-        } else {
-            Ok(Vec::new())
-        }
+        let terminal = self.inner.terminal();
+        let mut term = terminal.write();
+        Ok(term.get_macro_screenshot_triggers())
     }
 
     /// Convert a recording session to a macro
@@ -1252,13 +903,11 @@ impl PyPtyTerminal {
         session: &super::types::PyRecordingSession,
         name: String,
     ) -> PyResult<super::types::PyMacro> {
-        if let Ok(term) = Ok::<_, ()>(self.inner.terminal().write()) {
-            Ok(super::types::PyMacro::from(
-                term.recording_to_macro(&session.inner, name),
-            ))
-        } else {
-            Err(PyRuntimeError::new_err("Failed to lock terminal"))
-        }
+        let terminal = self.inner.terminal();
+        let term = terminal.write();
+        Ok(super::types::PyMacro::from(
+            term.recording_to_macro(&session.inner, name),
+        ))
     }
 
     // ========== Badge Format Support (OSC 1337 SetBadgeFormat) ==========
@@ -1294,7 +943,7 @@ impl PyPtyTerminal {
 
     /// Get the PTY writer for streaming server input handling
     ///
-    /// Returns a thread-safe writer that can be used to send input to the PTY
+    /// Returns: A thread-safe writer that can be used to send input to the PTY
     pub(crate) fn get_pty_writer(
         &self,
     ) -> Option<std::sync::Arc<parking_lot::Mutex<Box<dyn std::io::Write + Send>>>> {
@@ -1470,7 +1119,9 @@ mod tests {
     #[test]
     fn test_terminal_process_direct() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             term.process(b"Hello, World!");
             let content = term.content();
             assert!(content.contains("Hello, World!"));
@@ -1515,7 +1166,9 @@ mod tests {
     #[test]
     fn test_bell_count_after_bell() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             term.process(b"\x07"); // BEL character
         }
         assert_eq!(session.bell_count(), 1);
@@ -1545,7 +1198,9 @@ mod tests {
     #[test]
     fn test_get_line_valid() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             term.process(b"Line0\nLine1\nLine2");
         }
         let line = session.get_line(0);
@@ -1574,7 +1229,9 @@ mod tests {
     #[test]
     fn test_export_text_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             term.process(b"Test content here");
         }
         let text = session.export_text();
@@ -1584,7 +1241,9 @@ mod tests {
     #[test]
     fn test_export_styled_with_content() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             // Add colored text
             term.process(b"\x1b[31mRed text\x1b[0m");
         }
@@ -1711,7 +1370,9 @@ mod tests {
     #[test]
     fn test_cursor_position_after_write() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             term.process(b"Hello");
             let cursor = term.cursor();
             assert_eq!(cursor.col, 5);
@@ -1726,7 +1387,9 @@ mod tests {
     #[test]
     fn test_terminal_process_escape_sequences() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             // Test cursor movement
             term.process(b"\x1b[5;10H"); // Move to row 5, col 10
             let cursor = term.cursor();
@@ -1738,7 +1401,9 @@ mod tests {
     #[test]
     fn test_terminal_alt_screen() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             assert!(!term.is_alt_screen_active());
 
             // Enter alt screen
@@ -1754,7 +1419,9 @@ mod tests {
     #[test]
     fn test_terminal_colors() {
         let session = pty_session::PtySession::new(80, 24, 1000);
-        if let Ok(mut term) = Ok::<_, ()>(session.terminal().write()) {
+        {
+            let terminal = session.terminal();
+            let mut term = terminal.write();
             // Set red foreground
             term.process(b"\x1b[31mRed\x1b[0m");
             let cell = term.active_grid().get(0, 0);

@@ -90,6 +90,9 @@ jobs:
     - name: Run Rust tests
       run: cargo test --lib --no-default-features --features pyo3/auto-initialize
 
+    - name: Run Rust streaming tests
+      run: cargo test --no-default-features --features pyo3/auto-initialize,streaming
+
     - name: Run python_bindings unit tests (python-test)
       run: cargo test --lib --no-default-features --features python-test
 
@@ -133,12 +136,12 @@ jobs:
       # fails to link.
       run: cargo build --no-default-features --features sim
 
-    - name: Assert sim pulls neither tokio nor portable-pty (D1)
+    - name: Assert sim pulls no runtime/auth/proto deps (D1)
       shell: bash
       # cargo tree resolves without linking, so the git-bash PATH is harmless.
       run: |
-        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty'; then
-          echo "D1 violation: sim pulled tokio or portable-pty"
+        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum'; then
+          echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, or axum"
           exit 1
         fi
 
@@ -177,7 +180,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --features python,streaming -- -D warnings
+      run: cargo clippy --all-targets --features python,streaming,mux,serde -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .

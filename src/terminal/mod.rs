@@ -78,7 +78,7 @@ use crate::color::{Color, NamedColor};
 use crate::cursor::{Cursor, CursorStyle};
 use crate::debug;
 use crate::graphics::kitty::KittyParser;
-use crate::graphics::{GraphicsLimits, GraphicsStore};
+use crate::graphics::GraphicsStore;
 use crate::grid::Grid;
 use crate::mouse::{MouseEncoding, MouseEvent, MouseEventRecord, MouseMode, MousePosition};
 use crate::shell_integration::ShellIntegration;
@@ -258,6 +258,19 @@ pub(crate) struct ClipboardSyncState {
     pub(crate) remote_session_id: Option<String>,
 }
 
+impl Default for ClipboardSyncState {
+    fn default() -> Self {
+        Self {
+            events: Vec::new(),
+            history: HashMap::new(),
+            max_history: 50,
+            max_events: DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS,
+            max_event_bytes: DEFAULT_MAX_CLIPBOARD_EVENT_BYTES,
+            remote_session_id: None,
+        }
+    }
+}
+
 /// Performance metrics and profiling state.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
@@ -274,6 +287,18 @@ pub(crate) struct ProfilingState {
     pub(crate) enabled: bool,
 }
 
+impl Default for ProfilingState {
+    fn default() -> Self {
+        Self {
+            metrics: PerformanceMetrics::default(),
+            frame_timings: Vec::new(),
+            max_frame_timings: 100, // Keep last 100 frames
+            data: None,
+            enabled: false,
+        }
+    }
+}
+
 /// Mouse event/position history.
 pub(crate) struct MouseHistoryState {
     pub(crate) mouse_events: Vec<MouseEventRecord>,
@@ -281,7 +306,18 @@ pub(crate) struct MouseHistoryState {
     pub(crate) max_mouse_history: usize,
 }
 
+impl Default for MouseHistoryState {
+    fn default() -> Self {
+        Self {
+            mouse_events: Vec::new(),
+            mouse_positions: Vec::new(),
+            max_mouse_history: 100,
+        }
+    }
+}
+
 /// Regex search matches and current pattern.
+#[derive(Default)]
 pub(crate) struct SearchState {
     pub(crate) regex_matches: Vec<RegexMatch>,
     pub(crate) current_regex_pattern: Option<String>,
@@ -293,13 +329,24 @@ pub(crate) struct InlineImageState {
     pub(crate) max_inline_images: usize,
 }
 
+impl Default for InlineImageState {
+    fn default() -> Self {
+        Self {
+            inline_images: Vec::new(),
+            max_inline_images: 100,
+        }
+    }
+}
+
 /// Rendering hints and accumulated damage regions.
+#[derive(Default)]
 pub(crate) struct RenderingState {
     pub(crate) rendering_hints: Vec<RenderingHint>,
     pub(crate) damage_regions: Vec<DamageRegion>,
 }
 
 /// Macro library and playback state (Feature 38).
+#[derive(Default)]
 pub(crate) struct MacroState {
     pub(crate) macro_library: HashMap<String, crate::macros::Macro>,
     pub(crate) macro_playback: Option<crate::macros::MacroPlayback>,
@@ -312,6 +359,16 @@ pub(crate) struct TmuxState {
     pub(crate) tmux_notifications: Vec<crate::tmux_control::TmuxNotification>,
 }
 
+impl Default for TmuxState {
+    fn default() -> Self {
+        // Control mode disabled — the default the tmux passthrough gates on.
+        Self {
+            tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
+            tmux_notifications: Vec::new(),
+        }
+    }
+}
+
 /// Trigger registry, highlights, action results, and pending scan rows
 /// (Feature 18: Triggers & Automation).
 pub(crate) struct TriggerState {
@@ -320,6 +377,18 @@ pub(crate) struct TriggerState {
     pub(crate) trigger_action_results: Vec<trigger::ActionResult>,
     pub(crate) max_action_results: usize,
     pub(crate) pending_trigger_rows: HashSet<usize>,
+}
+
+impl Default for TriggerState {
+    fn default() -> Self {
+        Self {
+            trigger_registry: trigger::TriggerRegistry::default(),
+            trigger_highlights: Vec::new(),
+            trigger_action_results: Vec::new(),
+            max_action_results: 100,
+            pending_trigger_rows: HashSet::new(),
+        }
+    }
 }
 
 /// Terminal notification state.
@@ -347,9 +416,26 @@ pub(crate) struct NotificationState {
     pub(crate) osc99_pending: HashMap<String, notification::PartialNotification>,
 }
 
+impl Default for NotificationState {
+    fn default() -> Self {
+        let now = unix_millis();
+        Self {
+            notifications: Vec::new(),
+            notification_config: NotificationConfig::default(),
+            notification_events: Vec::new(),
+            last_activity_time: now,
+            last_silence_check: now,
+            max_notifications: DEFAULT_MAX_NOTIFICATIONS,
+            custom_triggers: HashMap::new(),
+            osc99_pending: HashMap::new(),
+        }
+    }
+}
+
 /// Terminal replay/recording state (Feature 24).
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct RecordingState {
     /// Current recording session
     pub(crate) recording_session: Option<RecordingSession>,
@@ -362,6 +448,7 @@ pub(crate) struct RecordingState {
 /// Keyboard protocol state: Kitty flags, per-screen stacks, and modifyOtherKeys mode.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct KeyboardState {
     /// Kitty keyboard protocol flags (progressive enhancement)
     pub(crate) keyboard_flags: u16,
@@ -378,6 +465,7 @@ pub(crate) struct KeyboardState {
 ///
 /// Holds the active flag, batched update buffer, and the "explicitly disabled
 /// during flush" tracking flag. Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct SyncState {
     /// Synchronized update mode (DEC 2026)
     pub(crate) synchronized_updates: bool,
@@ -390,6 +478,7 @@ pub(crate) struct SyncState {
 /// Window title, title stack, and answerback string.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct TitleState {
     /// Terminal title
     pub(crate) title: String,
@@ -405,6 +494,7 @@ pub(crate) struct TitleState {
 /// and command-output flag.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct ShellState {
     /// Shell integration state
     pub(crate) shell_integration: ShellIntegration,
@@ -421,6 +511,7 @@ pub(crate) struct ShellState {
 /// Bookmark registry for quick navigation.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
+#[derive(Default)]
 pub(crate) struct BookmarksState {
     /// Bookmarks for quick navigation
     pub(crate) bookmarks: Vec<Bookmark>,
@@ -440,6 +531,16 @@ pub(crate) struct CharsetState {
     pub(crate) active_g: u8,
 }
 
+impl Default for CharsetState {
+    fn default() -> Self {
+        Self {
+            g0_charset: Charset::Ascii,
+            g1_charset: Charset::Ascii,
+            active_g: 0,
+        }
+    }
+}
+
 /// Hyperlink storage (OSC 8): ID→URL map, current ID being written, next free ID.
 ///
 /// Extracted from `Terminal` for cohesion (ARC-001).
@@ -450,6 +551,18 @@ pub(crate) struct HyperlinkState {
     pub(crate) current_hyperlink_id: Option<NonZeroU32>,
     /// Next available hyperlink ID
     pub(crate) next_hyperlink_id: u32,
+}
+
+impl Default for HyperlinkState {
+    fn default() -> Self {
+        Self {
+            hyperlinks: HashMap::new(),
+            current_hyperlink_id: None,
+            // Start at 1: hyperlink IDs are `NonZeroU32` on cells (ARC-010
+            // niche optimization), so 0 is reserved for "no link" (None).
+            next_hyperlink_id: 1,
+        }
+    }
 }
 
 /// OSC 52 clipboard core: current content, read-permission flag, per-slot
@@ -466,6 +579,17 @@ pub(crate) struct ClipboardState {
     pub(crate) clipboard_history: HashMap<ClipboardSlot, Vec<ClipboardEntry>>,
     /// Maximum clipboard history entries per slot
     pub(crate) max_clipboard_history: usize,
+}
+
+impl Default for ClipboardState {
+    fn default() -> Self {
+        Self {
+            clipboard_content: None,
+            allow_clipboard_read: false,
+            clipboard_history: HashMap::new(),
+            max_clipboard_history: 10,
+        }
+    }
 }
 
 /// DCS / Sixel graphics-decode state.
@@ -489,6 +613,19 @@ pub(crate) struct DcsState {
     pub(crate) dcs_overflow: bool,
 }
 
+impl Default for DcsState {
+    fn default() -> Self {
+        Self {
+            sixel_parser: None,
+            dcs_buffer: Vec::new(),
+            dcs_active: false,
+            dcs_action: None,
+            dcs_kind: DcsKind::Other,
+            dcs_overflow: false,
+        }
+    }
+}
+
 /// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
 pub(crate) struct MarginState {
     /// Scroll region top (0-indexed)
@@ -501,6 +638,20 @@ pub(crate) struct MarginState {
     pub(crate) left_margin: usize,
     /// Right column margin (0-indexed, inclusive)
     pub(crate) right_margin: usize,
+}
+
+impl MarginState {
+    /// Full-screen margins for a `cols`×`rows` terminal — the geometry the
+    /// constructor and every margin reset return to.
+    pub(crate) fn new(cols: usize, rows: usize) -> Self {
+        Self {
+            scroll_region_top: 0,
+            scroll_region_bottom: rows.saturating_sub(1),
+            use_lr_margins: false,
+            left_margin: 0,
+            right_margin: cols.saturating_sub(1),
+        }
+    }
 }
 
 /// Saved dynamic- and ANSI-palette colors for one XTPUSHCOLORS stack entry (ENH-003)
@@ -561,6 +712,35 @@ pub(crate) struct ColorThemeState {
     pub(crate) faint_text_alpha: f32,
 }
 
+impl Default for ColorThemeState {
+    fn default() -> Self {
+        Self {
+            default_fg: Color::Named(NamedColor::White),
+            default_bg: Color::Named(NamedColor::Black),
+            cursor_color: Color::Named(NamedColor::White),
+            ansi_palette: Terminal::default_ansi_palette(),
+            color_stack: Vec::new(),
+            palette_stack: Vec::new(),
+            palette_stack_last: 0,
+            // iTerm2 default colors (matching Python implementation)
+            link_color: Color::Rgb(0x06, 0x45, 0xad), // RGB(0.023, 0.270, 0.678)
+            bold_color: Color::Rgb(0xff, 0xff, 0xff), // RGB(1.0, 1.0, 1.0)
+            cursor_guide_color: Color::Rgb(0xa6, 0xe8, 0xff), // RGB(0.650, 0.910, 1.000)
+            badge_color: Color::Rgb(0xff, 0x00, 0x00), // RGB(1.0, 0.0, 0.0)
+            match_color: Color::Rgb(0xff, 0xff, 0x00), // RGB(1.0, 1.0, 1.0)
+            selection_bg_color: Color::Rgb(0xb5, 0xd5, 0xff), // #b5d5ff
+            selection_fg_color: Color::Rgb(0x00, 0x00, 0x00), // #000000
+            // iTerm2 default rendering control options
+            use_bold_color: false,
+            use_underline_color: false,
+            use_cursor_guide: false,
+            use_selected_text_color: false,
+            smart_cursor_color: false,
+            faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
+        }
+    }
+}
+
 /// VT operational modes toggled by DECSET/DECRST-style sequences (ARC-001 sub-struct)
 /// DECSACE attribute-change extent: whether DECCARA/DECRARA change the
 /// rectangle or the stream between the two corners (VT420).
@@ -608,6 +788,27 @@ pub(crate) struct TerminalModes {
     pub(crate) sixel_display_mode: bool,
 }
 
+impl Default for TerminalModes {
+    fn default() -> Self {
+        Self {
+            auto_wrap: true,
+            origin_mode: false,
+            insert_mode: false,
+            line_feed_new_line_mode: false,
+            char_protected: false,
+            reverse_video: false,
+            bold_brightening: true, // iTerm2 default behavior
+            application_cursor: false,
+            bracketed_paste: false,
+            mouse_mode: MouseMode::Off,
+            mouse_encoding: MouseEncoding::Default,
+            focus_tracking: false,
+            attribute_change_extent: AttributeChangeExtent::Rectangle,
+            sixel_display_mode: false,
+        }
+    }
+}
+
 /// DECSC/DECRC saved terminal state: saved cursor + saved SGR colors/flags (ARC-001 sub-struct)
 pub(crate) struct SavedCursorState {
     /// Saved cursor position (for save/restore)
@@ -620,6 +821,19 @@ pub(crate) struct SavedCursorState {
     pub(crate) saved_underline_color: Option<Color>,
     /// Saved cell flags
     pub(crate) saved_flags: CellFlags,
+}
+
+impl Default for SavedCursorState {
+    fn default() -> Self {
+        Self {
+            saved_cursor: None,
+            // DECSC's saved SGR baseline mirrors the fresh-terminal colors.
+            saved_fg: Color::Named(NamedColor::White),
+            saved_bg: Color::Named(NamedColor::Black),
+            saved_underline_color: None,
+            saved_flags: CellFlags::default(),
+        }
+    }
 }
 
 /// Feature 31 command/CWD execution history (ARC-001 sub-struct)
@@ -636,7 +850,20 @@ pub(crate) struct CommandHistoryState {
     pub(crate) max_cwd_history: usize,
 }
 
+impl Default for CommandHistoryState {
+    fn default() -> Self {
+        Self {
+            command_history: Vec::new(),
+            current_command: None,
+            cwd_changes: Vec::new(),
+            max_command_history: 100,
+            max_cwd_history: 50,
+        }
+    }
+}
+
 /// Progress bars (OSC 9;4 + named OSC 934) + bell event counter (ARC-001 sub-struct)
+#[derive(Default)]
 pub(crate) struct ProgressBellState {
     /// Progress bar state from OSC 9;4 sequences (ConEmu/Windows Terminal style)
     pub(crate) progress_bar: ProgressBar,
@@ -647,6 +874,7 @@ pub(crate) struct ProgressBellState {
 }
 
 /// Unicode width configuration + normalization form (ARC-001 sub-struct)
+#[derive(Default)]
 pub(crate) struct UnicodeConfigState {
     /// Unicode width configuration for character width calculations
     pub(crate) width_config: crate::unicode_width_config::WidthConfig,
@@ -681,6 +909,20 @@ pub(crate) struct SecurityFlagsState {
     pub(crate) osc_discard_dispatch: bool,
 }
 
+impl Default for SecurityFlagsState {
+    fn default() -> Self {
+        Self {
+            accept_osc7: true,
+            disable_insecure_sequences: false,
+            max_osc_data_length: DEFAULT_MAX_OSC_DATA_LENGTH,
+            osc_seen_esc: false,
+            osc_in_osc: false,
+            osc_in_flight: 0,
+            osc_discard_dispatch: false,
+        }
+    }
+}
+
 /// Default max OSC data length: 1 MiB (SEC-003; was 128 MiB, which only
 /// checked at dispatch after vte had already buffered the payload).
 pub const DEFAULT_MAX_OSC_DATA_LENGTH: usize = 1024 * 1024;
@@ -712,6 +954,19 @@ pub(crate) struct GraphicsState {
     pub(crate) file_transfer_manager: FileTransferManager,
 }
 
+impl Default for GraphicsState {
+    fn default() -> Self {
+        Self {
+            // GraphicsStore::default() is with_limits(GraphicsLimits::default())
+            graphics_store: GraphicsStore::default(),
+            sixel_limits: sixel::SixelLimits::default(),
+            cell_dimensions: (1, 2), // Default for TUI half-block rendering
+            iterm_multipart_buffer: None,
+            file_transfer_manager: FileTransferManager::default(),
+        }
+    }
+}
+
 /// Event broker subsystem: terminal event buffer, bell event buffer, dispatch
 /// index, observer registry, and ID counters. The dispatch logic stays as
 /// methods on Terminal; only the STATE moves here. (ARC-001 sub-struct)
@@ -728,6 +983,19 @@ pub(crate) struct EventBrokerState {
     pub(crate) next_observer_id: crate::observer::ObserverId,
     /// Next zone ID to assign (monotonically increasing)
     pub(crate) next_zone_id: usize,
+}
+
+impl Default for EventBrokerState {
+    fn default() -> Self {
+        Self {
+            bell_events: Vec::new(),
+            terminal_events: Vec::new(),
+            events_dispatched_up_to: 0,
+            observers: Vec::new(),
+            next_observer_id: 1,
+            next_zone_id: 0,
+        }
+    }
 }
 
 /// A batch of terminal events plus a snapshot of the observers interested in
@@ -972,16 +1240,17 @@ impl Terminal {
         Self::with_scrollback(cols, rows, 10000)
     }
 
-    /// Get iTerm2 default ANSI color palette (0-15)
+    /// Create a new terminal with custom scrollback size.
     ///
-    /// Create a new terminal with custom scrollback size
+    /// Field defaults live with each sub-struct's `Default` impl (ARC-006);
+    /// this constructor states only the geometry-derived fields: the grids,
+    /// tab stops, margins, badge session variables, and pixel dimensions.
     pub fn with_scrollback(cols: usize, rows: usize, scrollback: usize) -> Self {
         // Initialize tab stops at every 8 columns
         let mut tab_stops = vec![false; cols];
         for i in (0..cols).step_by(8) {
             tab_stops[i] = true;
         }
-        let now = unix_millis();
 
         Self {
             grid: Grid::new(cols, rows, scrollback),
@@ -993,118 +1262,21 @@ impl Terminal {
             bg: Color::Named(NamedColor::Black),
             underline_color: None,
             flags: CellFlags::default(),
-            saved_state: SavedCursorState {
-                saved_cursor: None,
-                saved_fg: Color::Named(NamedColor::White),
-                saved_bg: Color::Named(NamedColor::Black),
-                saved_underline_color: None,
-                saved_flags: CellFlags::default(),
-            },
-            title_state: TitleState {
-                title: String::new(),
-                title_stack: Vec::new(),
-                answerback_string: None,
-            },
-            sync_state: SyncState {
-                synchronized_updates: false,
-                update_buffer: Vec::new(),
-                sync_update_explicitly_disabled: false,
-            },
-            shell_state: ShellState {
-                shell_integration: ShellIntegration::new(),
-                last_hostname: None,
-                last_username: None,
-                shell_depth: 0,
-                in_command_output: false,
-            },
-            margins: MarginState {
-                scroll_region_top: 0,
-                scroll_region_bottom: rows.saturating_sub(1),
-                use_lr_margins: false,
-                left_margin: 0,
-                right_margin: cols.saturating_sub(1),
-            },
-            modes: TerminalModes {
-                auto_wrap: true,
-                origin_mode: false,
-                insert_mode: false,
-                line_feed_new_line_mode: false,
-                char_protected: false,
-                reverse_video: false,
-                bold_brightening: true, // iTerm2 default behavior
-                application_cursor: false,
-                bracketed_paste: false,
-                mouse_mode: MouseMode::Off,
-                mouse_encoding: MouseEncoding::Default,
-                focus_tracking: false,
-                attribute_change_extent: AttributeChangeExtent::Rectangle,
-                sixel_display_mode: false,
-            },
+            saved_state: SavedCursorState::default(),
+            title_state: TitleState::default(),
+            sync_state: SyncState::default(),
+            shell_state: ShellState::default(),
+            margins: MarginState::new(cols, rows),
+            modes: TerminalModes::default(),
             tab_stops,
-            keyboard_state: KeyboardState {
-                keyboard_flags: 0,
-                keyboard_stack: Vec::new(),
-                keyboard_stack_alt: Vec::new(),
-                modify_other_keys_mode: 0,
-            },
+            keyboard_state: KeyboardState::default(),
             response_buffer: Vec::new(),
-            hyperlink_state: HyperlinkState {
-                hyperlinks: HashMap::new(),
-                current_hyperlink_id: None,
-                // Start at 1: hyperlink IDs are `NonZeroU32` on cells (ARC-010
-                // niche optimization), so 0 is reserved for "no link" (None).
-                next_hyperlink_id: 1,
-            },
-            graphics: GraphicsState {
-                graphics_store: GraphicsStore::with_limits(GraphicsLimits::default()),
-                sixel_limits: sixel::SixelLimits::default(),
-                cell_dimensions: (1, 2), // Default for TUI half-block rendering
-                iterm_multipart_buffer: None,
-                file_transfer_manager: FileTransferManager::default(),
-            },
-            dcs_state: DcsState {
-                sixel_parser: None,
-                dcs_buffer: Vec::new(),
-                dcs_active: false,
-                dcs_action: None,
-                dcs_kind: DcsKind::Other,
-                dcs_overflow: false,
-            },
-            clipboard_state: ClipboardState {
-                clipboard_content: None,
-                allow_clipboard_read: false,
-                clipboard_history: HashMap::new(),
-                max_clipboard_history: 10,
-            },
-            theme: ColorThemeState {
-                default_fg: Color::Named(NamedColor::White),
-                default_bg: Color::Named(NamedColor::Black),
-                cursor_color: Color::Named(NamedColor::White),
-                ansi_palette: Self::default_ansi_palette(),
-                color_stack: Vec::new(),
-                palette_stack: Vec::new(),
-                palette_stack_last: 0,
-                // iTerm2 default colors (matching Python implementation)
-                link_color: Color::Rgb(0x06, 0x45, 0xad), // RGB(0.023, 0.270, 0.678)
-                bold_color: Color::Rgb(0xff, 0xff, 0xff), // RGB(1.0, 1.0, 1.0)
-                cursor_guide_color: Color::Rgb(0xa6, 0xe8, 0xff), // RGB(0.650, 0.910, 1.000)
-                badge_color: Color::Rgb(0xff, 0x00, 0x00), // RGB(1.0, 0.0, 0.0)
-                match_color: Color::Rgb(0xff, 0xff, 0x00), // RGB(1.0, 1.0, 1.0)
-                selection_bg_color: Color::Rgb(0xb5, 0xd5, 0xff), // #b5d5ff
-                selection_fg_color: Color::Rgb(0x00, 0x00, 0x00), // #000000
-                // iTerm2 default rendering control options
-                use_bold_color: false,
-                use_underline_color: false,
-                use_cursor_guide: false,
-                use_selected_text_color: false,
-                smart_cursor_color: false,
-                faint_text_alpha: 0.5, // 50% dimming for SGR 2 (faint/dim) text
-            },
-            progress_state: ProgressBellState {
-                progress_bar: ProgressBar::default(),
-                named_progress_bars: HashMap::new(),
-                bell_count: 0,
-            },
+            hyperlink_state: HyperlinkState::default(),
+            graphics: GraphicsState::default(),
+            dcs_state: DcsState::default(),
+            clipboard_state: ClipboardState::default(),
+            theme: ColorThemeState::default(),
+            progress_state: ProgressBellState::default(),
             parser: vte::Parser::new(),
             apc_filter_state: ApcFilterState::default(),
             apc_buffer: Vec::new(),
@@ -1119,119 +1291,28 @@ impl Terminal {
             window_position_x: 0,
             window_position_y: 0,
             window_iconified: false,
-            security_state: SecurityFlagsState {
-                accept_osc7: true,
-                disable_insecure_sequences: false,
-                max_osc_data_length: DEFAULT_MAX_OSC_DATA_LENGTH,
-                osc_seen_esc: false,
-                osc_in_osc: false,
-                osc_in_flight: 0,
-                osc_discard_dispatch: false,
-            },
+            security_state: SecurityFlagsState::default(),
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
             // VT520 bell volume controls - default to moderate volume (4)
             warning_bell_volume: 4,
             margin_bell_volume: 4,
-            // Tmux control protocol - default to disabled
-            tmux: TmuxState {
-                tmux_parser: crate::tmux_control::TmuxControlParser::new(false),
-                tmux_notifications: Vec::new(),
-            },
-            // Event tracking
+            tmux: TmuxState::default(),
             dirty_rows: HashSet::new(),
-            events: EventBrokerState {
-                bell_events: Vec::new(),
-                terminal_events: Vec::new(),
-                events_dispatched_up_to: 0,
-                observers: Vec::new(),
-                next_observer_id: 1,
-                next_zone_id: 0,
-            },
-            // Selection and bookmarks
+            events: EventBrokerState::default(),
             selection: None,
-            bookmarks_state: BookmarksState {
-                bookmarks: Vec::new(),
-                next_bookmark_id: 0,
-            },
-            // Performance metrics
-            profiling: ProfilingState {
-                metrics: PerformanceMetrics::default(),
-                frame_timings: Vec::new(),
-                max_frame_timings: 100, // Keep last 100 frames
-                data: None,
-                enabled: false,
-            },
-            // Clipboard integration
-            // Mouse tracking
-            mouse_history: MouseHistoryState {
-                mouse_events: Vec::new(),
-                mouse_positions: Vec::new(),
-                max_mouse_history: 100,
-            },
-            // Rendering hints
-            rendering: RenderingState {
-                rendering_hints: Vec::new(),
-                damage_regions: Vec::new(),
-            },
-            // Regex search
-            search: SearchState {
-                regex_matches: Vec::new(),
-                current_regex_pattern: None,
-            },
-            // Inline images
-            inline_image_state: InlineImageState {
-                inline_images: Vec::new(),
-                max_inline_images: 100,
-            },
-            // OSC 52 Clipboard Sync
-            clipboard_sync: ClipboardSyncState {
-                events: Vec::new(),
-                history: HashMap::new(),
-                max_history: 50,
-                max_events: DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS,
-                max_event_bytes: DEFAULT_MAX_CLIPBOARD_EVENT_BYTES,
-                remote_session_id: None,
-            },
-            // Shell Integration++
-            command_history_state: CommandHistoryState {
-                command_history: Vec::new(),
-                current_command: None,
-                cwd_changes: Vec::new(),
-                max_command_history: 100,
-                max_cwd_history: 50,
-            },
-            // Notifications
-            notifications_state: NotificationState {
-                notifications: Vec::new(),
-                notification_config: NotificationConfig::default(),
-                notification_events: Vec::new(),
-                last_activity_time: now,
-                last_silence_check: now,
-                max_notifications: DEFAULT_MAX_NOTIFICATIONS,
-                custom_triggers: HashMap::new(),
-                osc99_pending: HashMap::new(),
-            },
-            // Replay/Recording
-            recording_state: RecordingState {
-                recording_session: None,
-                is_recording: false,
-                recording_start_time: 0,
-            },
-            // Macros
-            macros: MacroState {
-                macro_library: HashMap::new(),
-                macro_playback: None,
-                macro_screenshot_triggers: Vec::new(),
-            },
-            // Answerback
-            // Unicode
-            unicode_state: UnicodeConfigState {
-                width_config: crate::unicode_width_config::WidthConfig::default(),
-                normalization_form: crate::unicode_normalization_config::NormalizationForm::default(
-                ),
-            },
-            // Badge
+            bookmarks_state: BookmarksState::default(),
+            profiling: ProfilingState::default(),
+            mouse_history: MouseHistoryState::default(),
+            rendering: RenderingState::default(),
+            search: SearchState::default(),
+            inline_image_state: InlineImageState::default(),
+            clipboard_sync: ClipboardSyncState::default(),
+            command_history_state: CommandHistoryState::default(),
+            notifications_state: NotificationState::default(),
+            recording_state: RecordingState::default(),
+            macros: MacroState::default(),
+            unicode_state: UnicodeConfigState::default(),
             badge_state: BadgeState {
                 badge_format: None,
                 session_variables: crate::badge::SessionVariables::with_dimensions(
@@ -1240,19 +1321,8 @@ impl Terminal {
                 ),
             },
             event_subscription: None,
-            // Triggers
-            triggers: TriggerState {
-                trigger_registry: TriggerRegistry::default(),
-                trigger_highlights: Vec::new(),
-                trigger_action_results: Vec::new(),
-                max_action_results: 100,
-                pending_trigger_rows: HashSet::new(),
-            },
-            charset_state: CharsetState {
-                g0_charset: Charset::Ascii,
-                g1_charset: Charset::Ascii,
-                active_g: 0,
-            },
+            triggers: TriggerState::default(),
+            charset_state: CharsetState::default(),
         }
     }
 

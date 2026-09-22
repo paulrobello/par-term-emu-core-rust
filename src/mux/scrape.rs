@@ -361,7 +361,7 @@ impl ScrapeEngine {
             let Ok((mut set, mut id, mut aliases)) = CompiledSet::compile(text) else {
                 // A bundled set that fails to compile is a build bug; say
                 // so loudly and keep serving the other agents.
-                eprintln!("par-mux: bundled `{agent}` patterns failed to compile");
+                log::warn!("par-mux: bundled `{agent}` patterns failed to compile");
                 continue;
             };
             if let Some(dir) = override_dir {
@@ -370,7 +370,7 @@ impl ScrapeEngine {
                     match std::fs::read_to_string(&path) {
                         Ok(text) => match CompiledSet::compile(&text) {
                             Ok((shadow, shadow_id, shadow_aliases)) => {
-                                eprintln!(
+                                log::warn!(
                                     "par-mux: agent patterns for `{agent}` overridden by {} (v{} shadows bundled v{})",
                                     path.display(),
                                     shadow.version,
@@ -381,7 +381,7 @@ impl ScrapeEngine {
                                 aliases = shadow_aliases;
                             }
                             Err(err) => {
-                                eprintln!(
+                                log::warn!(
                                     "par-mux: override {} failed ({err}); using bundled v{}",
                                     path.display(),
                                     set.version
@@ -389,7 +389,7 @@ impl ScrapeEngine {
                             }
                         },
                         Err(err) => {
-                            eprintln!(
+                            log::warn!(
                                 "par-mux: override {} unreadable ({err}); using bundled",
                                 path.display()
                             );
@@ -420,13 +420,13 @@ impl ScrapeEngine {
                 }
                 if let Ok(text) = std::fs::read_to_string(&path) {
                     if let Ok((set, id, aliases)) = CompiledSet::compile(&text) {
-                        eprintln!(
+                        log::warn!(
                             "par-mux: agent patterns for `{agent}` loaded from {} (no bundled set)",
                             path.display()
                         );
                         engine.index(set, &id, &aliases);
                     } else {
-                        eprintln!(
+                        log::warn!(
                             "par-mux: pattern file {} failed to compile; ignored",
                             path.display()
                         );

@@ -213,3 +213,67 @@ fn test_decrqm_reports_mode_9() {
     term.process(b"\x1b[?9$p");
     assert_eq!(term.drain_responses(), b"\x1b[?9;1$y");
 }
+
+/// ARC-009: every DEC private mode the table implements can be set, reset,
+/// and reported by DECRQM — no arm exists on one side only. 1048 is a
+/// save/restore action rather than a persistent mode, so its label is None
+/// and DECRQM reports the pending-restore bit instead of the set/reset
+/// status.
+#[test]
+fn dec_private_modes_set_reset_and_report_symmetrically() {
+    use crate::terminal::sequences::csi::mode::DEC_PRIVATE_MODES;
+
+    let mut term = Terminal::new(80, 24);
+    assert_eq!(
+        term.dec_mode_label(9999),
+        None,
+        "an unknown mode labels None"
+    );
+    for &param in DEC_PRIVATE_MODES {
+        if param == 1048 {
+            assert_eq!(
+                term.dec_mode_label(param),
+                None,
+                "1048 is an action, not a persistent mode"
+            );
+            continue;
+        }
+        assert!(
+            term.dec_mode_label(param).is_some(),
+            "mode {param} must have a label"
+        );
+        // 2026 (synchronized updates) buffers every following sequence —
+        // including the DECRQM reply — until the reset flushes, so its
+        // symmetry is asserted through the label instead of the wire.
+        if param == 2026 {
+            term.process(b"\x1b[?2026h");
+            assert_eq!(
+                term.dec_mode_label(2026).as_deref(),
+                Some("sync_updates:true")
+            );
+            term.process(b"\x1b[?2026l");
+            assert_eq!(
+                term.dec_mode_label(2026).as_deref(),
+                Some("sync_updates:false")
+            );
+            term.drain_responses();
+            continue;
+        }
+        term.process(format!("\x1b[?{param}h").as_bytes());
+        term.process(format!("\x1b[?{param}$p").as_bytes());
+        let reply = term.drain_responses();
+        let expected_set = format!("\x1b[?{param};1$y").into_bytes();
+        assert_eq!(
+            reply, expected_set,
+            "DECRQM must report mode {param} as set after DECSET"
+        );
+        term.process(format!("\x1b[?{param}l").as_bytes());
+        term.process(format!("\x1b[?{param}$p").as_bytes());
+        let reply = term.drain_responses();
+        let expected_reset = format!("\x1b[?{param};2$y").into_bytes();
+        assert_eq!(
+            reply, expected_reset,
+            "DECRQM must report mode {param} as reset after DECRST"
+        );
+    }
+}

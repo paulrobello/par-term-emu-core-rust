@@ -5,7 +5,7 @@ mod cursor;
 mod edit;
 mod erase;
 mod keyboard;
-mod mode;
+pub(crate) mod mode;
 mod report;
 mod scroll;
 mod style;

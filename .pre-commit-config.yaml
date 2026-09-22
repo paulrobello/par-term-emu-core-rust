@@ -40,7 +40,7 @@ repos:
       - id: cargo-clippy
         name: cargo clippy
         description: Lint Rust code with clippy
-        entry: cargo clippy --all-targets --features python,streaming -- -D warnings
+        entry: cargo clippy --all-targets --features python,streaming,mux,serde -- -D warnings
         language: system
         types: [rust]
         pass_filenames: false

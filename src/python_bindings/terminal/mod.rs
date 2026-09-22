@@ -27,10 +27,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use std::collections::HashMap;
 
-use crate::color::Color;
-
 use super::enums::PyMouseEncoding;
-use super::types::{PyAttributes, PyScreenSnapshot};
 
 /// Python wrapper for the Terminal
 #[pyclass(name = "Terminal")]
@@ -179,19 +176,7 @@ impl PyTerminal {
 
     // keyboard_flags: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Set Kitty Keyboard Protocol flags
-    ///
-    /// Args:
-    ///     flags: Flags to set (1=disambiguate, 2=report events, 4=alternate keys, 8=report all, 16=associated text)
-    ///     mode: 0=disable all, 1=set flags, 2=lock flags (default: 1)
-    ///
-    /// Sends: CSI = flags ; mode u
-    #[pyo3(signature = (flags, mode=1))]
-    fn set_keyboard_flags(&mut self, flags: u16, mode: u8) -> PyResult<()> {
-        let sequence = format!("\x1b[={};{}u", flags, mode);
-        self.inner.process(sequence.as_bytes());
-        Ok(())
-    }
+    // set_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
     /// Get current terminal conformance level
     ///
@@ -286,43 +271,15 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Query Kitty Keyboard Protocol flags (sends CSI ? u)
-    ///
-    /// Returns:
-    ///     Query sequence sent to terminal (response will be in drain_responses())
-    fn query_keyboard_flags(&mut self) -> PyResult<()> {
-        self.inner.process(b"\x1b[?u");
-        Ok(())
-    }
+    // query_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
     // insert_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // line_feed_new_line_mode: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Push current keyboard flags to stack and set new flags
-    ///
-    /// Args:
-    ///     flags: New flags to set
-    ///
-    /// Sends: CSI > flags u
-    fn push_keyboard_flags(&mut self, flags: u16) -> PyResult<()> {
-        let sequence = format!("\x1b[>{}u", flags);
-        self.inner.process(sequence.as_bytes());
-        Ok(())
-    }
+    // push_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
-    /// Pop keyboard flags from stack
-    ///
-    /// Args:
-    ///     count: Number of flags to pop from stack (default: 1)
-    ///
-    /// Sends: CSI < count u
-    #[pyo3(signature = (count=1))]
-    fn pop_keyboard_flags(&mut self, count: usize) -> PyResult<()> {
-        let sequence = format!("\x1b[<{}u", count);
-        self.inner.process(sequence.as_bytes());
-        Ok(())
-    }
+    // pop_keyboard_flags: provided by impl_terminal_exports! (ARC-007)
 
     /// Get modifyOtherKeys mode (XTerm extension for enhanced keyboard input)
     ///
@@ -372,27 +329,13 @@ impl PyTerminal {
 
     // set_default_fg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query default foreground color (OSC 10)
-    ///
-    /// Sends OSC 10 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 10 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_default_fg(&mut self) -> PyResult<()> {
-        self.inner.process(b"\x1b]10;?\x1b\\");
-        Ok(())
-    }
+    // query_default_fg: provided by impl_terminal_exports! (ARC-007)
 
     // default_bg: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
     // set_default_bg: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query default background color (OSC 11)
-    ///
-    /// Sends OSC 11 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 11 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_default_bg(&mut self) -> PyResult<()> {
-        self.inner.process(b"\x1b]11;?\x1b\\");
-        Ok(())
-    }
+    // query_default_bg: provided by impl_terminal_exports! (ARC-007)
 
     /// Get cursor color (OSC 12)
     ///
@@ -406,31 +349,9 @@ impl PyTerminal {
 
     // set_cursor_color: provided by impl_terminal_state_setters! (ARC-003/QA-001)
 
-    /// Query cursor color (OSC 12)
-    ///
-    /// Sends OSC 12 ; ? ST query and returns response in drain_responses().
-    /// Response format: ESC ] 12 ; rgb:rrrr/gggg/bbbb ESC \
-    fn query_cursor_color(&mut self) -> PyResult<()> {
-        self.inner.process(b"\x1b]12;?\x1b\\");
-        Ok(())
-    }
+    // query_cursor_color: provided by impl_terminal_exports! (ARC-007)
 
-    /// Set ANSI palette color (0-15)
-    ///
-    /// Args:
-    ///     index: Palette index (0-15)
-    ///     r: Red component (0-255)
-    ///     g: Green component (0-255)
-    ///     b: Blue component (0-255)
-    ///
-    /// Raises:
-    ///     ValueError: If index is not in range 0-15
-    fn set_ansi_palette_color(&mut self, index: usize, r: u8, g: u8, b: u8) -> PyResult<()> {
-        self.inner
-            .set_ansi_palette_color(index, Color::Rgb(r, g, b))
-            .map_err(PyErr::new::<pyo3::exceptions::PyValueError, _>)?;
-        Ok(())
-    }
+    // set_ansi_palette_color: provided by impl_terminal_exports! (ARC-007)
 
     // set_link_color: provided by impl_terminal_color_setters! (ARC-003/QA-001)
 
@@ -544,110 +465,18 @@ impl PyTerminal {
 
     // scrollback: provided by impl_terminal_query_getters! (ARC-003/QA-001)
 
-    /// Get the number of scrollback lines
-    ///
-    /// Returns:
-    ///     Number of lines in scrollback buffer
-    fn scrollback_len(&self) -> PyResult<usize> {
-        Ok(self.inner.grid().scrollback_len())
-    }
+    // scrollback_len: provided by impl_terminal_exports! (ARC-007)
 
     // scrollback_line: provided by impl_terminal_search_select! (ARC-003/QA-001)
 
-    /// Get a specific line from the terminal buffer
-    ///
-    /// Args:
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     String content of the specified row, or None if row is out of bounds
-    fn get_line(&self, row: usize) -> PyResult<Option<String>> {
-        if let Some(line) = self.inner.grid().row(row) {
-            Ok(Some(
-                line.iter()
-                    .filter(|cell| !cell.flags.wide_char_spacer())
-                    .map(|cell| cell.get_grapheme())
-                    .collect::<Vec<String>>()
-                    .join(""),
-            ))
-        } else {
-            Ok(None)
-        }
-    }
+    // get_line: provided by impl_terminal_exports! (ARC-007)
 
-    /// Get a cell's character at the specified position (includes combining characters/modifiers)
-    ///
-    /// Args:
-    ///     col: Column index (0-based)
-    ///     row: Row index (0-based)
-    ///
-    /// Returns:
-    ///     Character (grapheme cluster) at the position, or None if out of bounds
-    fn get_char(&self, col: usize, row: usize) -> PyResult<Option<String>> {
-        if let Some(cell) = self.inner.active_grid().get(col, row) {
-            Ok(Some(cell.get_grapheme()))
-        } else {
-            Ok(None)
-        }
-    }
+    // get_char: provided by impl_terminal_exports! (ARC-007)
 
     // is_line_wrapped, get_fg_color, get_bg_color, get_underline_color, get_attributes,
     // get_hyperlink, get_line_cells: provided by impl_terminal_cell_line_queries! (ARC-003/QA-001)
 
-    /// Create atomic snapshot of current screen state
-    ///
-    /// Captures all lines, cursor state, and screen identity atomically.
-    /// The snapshot is immutable and will not change even if the terminal
-    /// state changes (e.g., alternate screen switches).
-    ///
-    /// Returns:
-    ///     ScreenSnapshot with all terminal state
-    fn create_snapshot(&self) -> PyResult<PyScreenSnapshot> {
-        // Get current grid (will be either primary or alternate)
-        let grid = self.inner.active_grid();
-        let rows = grid.rows();
-        let cols = grid.cols();
-
-        // Capture all lines while holding terminal reference
-        let mut lines = Vec::with_capacity(rows);
-        let mut wrapped_lines = Vec::with_capacity(rows);
-        for row in 0..rows {
-            let mut line = Vec::with_capacity(cols);
-            for col in 0..cols {
-                if let Some(cell) = grid.get(col, row) {
-                    line.push((
-                        cell.get_grapheme(),
-                        cell.fg.to_rgb(),
-                        cell.bg.to_rgb(),
-                        PyAttributes::from(cell),
-                    ));
-                } else {
-                    // Empty cell
-                    line.push((
-                        " ".to_string(),
-                        (0, 0, 0),
-                        (0, 0, 0),
-                        PyAttributes::default(),
-                    ));
-                }
-            }
-            lines.push(line);
-            wrapped_lines.push(grid.is_line_wrapped(row));
-        }
-
-        let cursor = self.inner.cursor();
-
-        Ok(PyScreenSnapshot {
-            lines,
-            wrapped_lines,
-            cursor_pos: (cursor.col, cursor.row),
-            cursor_visible: cursor.visible,
-            cursor_style: cursor.style.into(),
-            is_alt_screen: self.inner.is_alt_screen_active(),
-            generation: 0, // Terminal doesn't have generation tracking
-            size: (cols, rows),
-        })
-    }
+    // create_snapshot: provided by impl_terminal_exports! (ARC-007)
 
     fn __repr__(&self) -> PyResult<String> {
         let (cols, rows) = self.inner.size();

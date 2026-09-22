@@ -18,14 +18,14 @@ use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::MuxError;
+use crate::mux::persist::PersistState;
 use crate::mux::server::{
     broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink, Clients,
 };
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
-use std::path::Path;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::Arc;
 
 /// Default pane size for sessions and windows created without an explicit
@@ -40,6 +40,12 @@ const DEFAULT_ROWS: u16 = 24;
 /// but Phase 2's client never sends one, so every buffer command targets
 /// this one slot under the hood.
 const DEFAULT_BUFFER: &str = "default";
+
+/// QA-113 test hook: when set, `dispatch_command` panics before running the
+/// command, so the containment tests can drive a guaranteed panic.
+#[cfg(test)]
+pub(crate) static PANIC_ON_COMMAND: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 /// The per-dispatch context every handler shares.
 pub(super) struct Ctx<'a> {
@@ -113,11 +119,14 @@ impl Outcome {
 
 /// Dispatch one parsed command: run its handler, then the shared tail.
 ///
-/// `state_path` (the daemon always passes one): when a mutating command
-/// succeeded, the whole state is atomically saved to this file before the
-/// reply is sent (par-mux.md D3.3). `issuer` is the channel of the client
-/// that sent the command, for notifications that concern that client
-/// specifically; lifecycle broadcasts go to everyone via `ctx.clients`.
+/// `persist` (the daemon always passes one): when a mutating command
+/// succeeded, the state is captured under the tree lock and handed to the
+/// server's persist worker, which writes it off the lock (ARC-003;
+/// par-mux.md D3.3 — D3.3 accepts losing the last window on `kill -9`, so
+/// per-command synchronous durability is not required). `issuer` is the
+/// channel of the client that sent the command, for notifications that
+/// concern that client specifically; lifecycle broadcasts go to everyone
+/// via `ctx.clients`.
 ///
 /// The tail emits in the pre-decomposition wire order — `%layout-change`
 /// first (it carries the geometry the pane-changed notification is read
@@ -125,9 +134,15 @@ impl Outcome {
 pub(super) fn dispatch_command(
     command: MuxCommand,
     ctx: &Ctx<'_>,
-    state_path: Option<&Path>,
-    issuer: Option<&Sender<String>>,
+    persist: Option<&Sender<PersistState>>,
+    issuer: Option<&SyncSender<String>>,
 ) -> String {
+    // QA-113 test hook: force a dispatcher panic to exercise the client
+    // thread's containment (see `dispatch_contained`).
+    #[cfg(test)]
+    if crate::mux::dispatch::PANIC_ON_COMMAND.load(std::sync::atomic::Ordering::Relaxed) {
+        panic!("injected dispatcher panic (QA-113)");
+    }
     let mutates = command.mutates();
     let outcome = match command {
         MuxCommand::NewSession { name } => cmd_new_session(ctx, name),
@@ -172,10 +187,13 @@ pub(super) fn dispatch_command(
         }
     }
     if mutates && outcome.succeeded {
-        if let Some(path) = state_path {
-            if let Err(err) = crate::mux::persist::save_to(&ctx.tree.lock(), path) {
-                eprintln!("par-mux: saving state to {} failed: {err}", path.display());
-            }
+        if let Some(tx) = persist {
+            // Capture under the lock (cheap clones of already-materialized
+            // state), then hand off — the worker serializes and fsyncs off
+            // the lock (ARC-003). A send fails only if the worker is gone;
+            // the shutdown save is the durability backstop.
+            let state = ctx.tree.lock().to_persist_state();
+            let _ = tx.send(state);
         }
     }
     outcome.reply
