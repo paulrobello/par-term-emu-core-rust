@@ -243,3 +243,102 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&state_path);
 }
+
+/// Task 6.4: a restart RESUMES an agent pane rather than respawning it
+/// fresh. The fake agent (`tests/assets/par-mux-fake-agent.sh`) is a pane
+/// process that reports its own session identity — with a resume
+/// invocation pointing back at itself — and announces its mode on stdout.
+/// The restarted pane must come back running that invocation: the screen
+/// shows the resume marker with the SAME session id, and the resumed
+/// process's mode-tagged report lands in the second save. A build that
+/// spawns fresh shows no resume marker at all and fails here.
+#[test]
+fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
+    let path = socket("resume");
+    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
+    let _ = std::fs::remove_file(&state_path);
+    let script =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/assets/par-mux-fake-agent.sh");
+
+    // First daemon: the fake agent runs inside the pane's default shell,
+    // reports identity + resume invocation, and announces startup.
+    let mut first = spawn_daemon(&path);
+    wait_listening(&path);
+    let mut control = Control::connect(&path);
+    control.command("new-session -s agents");
+    let pane = control
+        .body_lines("list-panes")
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+    control.command(&format!(
+        "send-keys -t {pane} 'sh {} fx-42' Enter",
+        script.display()
+    ));
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut startup_seen = false;
+    while Instant::now() < deadline {
+        let screen = control
+            .body_lines(&format!("capture-pane -t {pane}"))
+            .join("\n");
+        if screen.contains("FAKE-AGENT startup fx-42") {
+            startup_seen = true;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert!(
+        startup_seen,
+        "the fake agent's first instance announced itself (its report precedes the marker)"
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut first);
+
+    let saved = std::fs::read_to_string(&state_path).expect("the clean stop saved state");
+    assert!(
+        saved.contains("fx-42") && saved.contains("resume_argv"),
+        "identity + reported invocation travel in the save: {saved}"
+    );
+
+    // Second daemon: the pane must come back as the RESUME invocation —
+    // the marker's id comes from the argv the daemon built out of the
+    // PERSISTED identity, and only a --resume invocation prints it.
+    let mut second = spawn_daemon(&path);
+    wait_listening(&path);
+    let mut control = Control::connect(&path);
+    let mut resume_line = String::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let screen = control
+            .body_lines(&format!("capture-pane -t {pane}"))
+            .join("\n");
+        if let Some(line) = screen.lines().find(|l| l.contains("FAKE-AGENT resume")) {
+            resume_line = line.trim().to_string();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(
+        resume_line, "FAKE-AGENT resume fx-42",
+        "the restarted pane runs the resume invocation with the SAME session id"
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut second);
+
+    // The resumed process's own report was accepted: only the resumed
+    // instance tags its source par-mux:fx:resume (the identity restored
+    // from save #1 carried par-mux:fx:startup), so its presence in the
+    // second save is the same-id + start_source=resume report landing,
+    // not the restore echoing the old identity back.
+    let saved2 = std::fs::read_to_string(&state_path).expect("the second stop saved state");
+    assert!(
+        saved2.contains("par-mux:fx:resume"),
+        "the post-restart hook report (same id, start_source=resume) was accepted: {saved2}"
+    );
+
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&state_path);
+}
