@@ -179,6 +179,11 @@ fn handle_state_report(
 /// `pane.report_agent_session`: session identity for the resume path
 /// (Phase 6). Carries no state, so it broadcasts only what a prior state
 /// report already established.
+///
+/// A session is identified by EITHER its id or its transcript path: herdr's
+/// `session_ref_from_report` accepts both, and the shipped pi/omp assets
+/// prefer the path and drop the id when one exists — requiring the id
+/// error-replies every path-carrying session report those two send.
 fn handle_session_report(
     id: Option<serde_json::Value>,
     params: &serde_json::Value,
@@ -188,13 +193,25 @@ fn handle_session_report(
         Ok(header) => header,
         Err(message) => return (error_reply(id, &message), None),
     };
-    let Some(session_id) = params
+    let session_id = params
         .get("agent_session_id")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
-        return (error_reply(id, "missing agent_session_id"), None);
+        .filter(|value| !value.is_empty());
+    let session_path = params
+        .get("agent_session_path")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if session_id.is_none() && session_path.is_none() {
+        return (
+            error_reply(id, "missing agent_session_id or agent_session_path"),
+            None,
+        );
+    }
+    let resume_argv = match parse_resume_argv(params) {
+        Ok(argv) => argv,
+        Err(message) => return (error_reply(id, &message), None),
     };
 
     let notification = {
@@ -209,17 +226,22 @@ fn handle_session_report(
             return (ok_reply(id), None);
         }
 
+        // Prior identity, captured before the writes below replace it: a
+        // report that moves the pane to a DIFFERENT session without a fresh
+        // invocation must not leave the old session's argv behind.
+        let prior_session_id = pane.metadata().get("agent_session_id").cloned();
+        let prior_session_path = pane.metadata().get("agent_session_path").cloned();
+
         pane.set_metadata("agent", &header.agent);
-        pane.set_metadata("agent_session_id", session_id);
         pane.set_metadata("agent_seq", &header.seq.to_string());
         if let Some(source) = &header.source {
             pane.set_metadata("agent_source", source);
         }
-        if let Some(path) = params
-            .get("agent_session_path")
-            .and_then(serde_json::Value::as_str)
-        {
-            pane.set_metadata("agent_session_path", path);
+        if let Some(session_id) = &session_id {
+            pane.set_metadata("agent_session_id", session_id);
+        }
+        if let Some(session_path) = &session_path {
+            pane.set_metadata("agent_session_path", session_path);
         }
         // The resume path's provenance (startup vs resume), recorded now
         // because the wire carries it now — Phase 6 persists it.
@@ -228,6 +250,25 @@ fn handle_session_report(
             .and_then(serde_json::Value::as_str)
         {
             pane.set_metadata("agent_session_start_source", start);
+        }
+        // The agent's own resume invocation, stored as a JSON argv string:
+        // Phase 6 spawns it verbatim (hook-first; the per-agent table is the
+        // fallback for agents that cannot report one). Absent on a report
+        // that also moves to a different session means the stored argv is
+        // the OLD session's — clear it rather than resume the wrong session.
+        match &resume_argv {
+            Some(argv) => pane.set_metadata("agent_resume_argv", argv),
+            None => {
+                let changed = session_id
+                    .as_deref()
+                    .is_some_and(|value| prior_session_id.as_deref() != Some(value))
+                    || session_path
+                        .as_deref()
+                        .is_some_and(|value| prior_session_path.as_deref() != Some(value));
+                if changed {
+                    pane.clear_metadata(&["agent_resume_argv"]);
+                }
+            }
         }
 
         // The rebroadcast keeps the state's OWN provenance: a claude-shaped
@@ -248,6 +289,37 @@ fn handle_session_report(
             })
     };
     (ok_reply(id), notification)
+}
+
+/// `session_resume_argv`: the agent's own resume invocation as argv —
+/// `["pi","--session","<path>"]`, the shapes herdr's per-agent table encodes,
+/// reported by the agents that know theirs so par-mux needs no table entry
+/// for them (card 01a0c766bc567c30bc429c4e380554d3; the key this function
+/// settles is the one Phase 6 task 6.2 keys its override arm on). Absent is
+/// fine; present-but-malformed is an error so a broken script hears about
+/// it instead of silently losing its resume path.
+fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, String> {
+    let Some(value) = params.get("session_resume_argv") else {
+        return Ok(None);
+    };
+    let argv: Vec<String> = value
+        .as_array()
+        .ok_or("session_resume_argv must be an array of strings")?
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| "session_resume_argv must be an array of strings".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    if argv.is_empty() {
+        return Err("session_resume_argv must not be empty".to_string());
+    }
+    serde_json::to_string(&argv)
+        .map(Some)
+        .map_err(|err| format!("session_resume_argv: {err}"))
 }
 
 /// Whether `seq` is at or below the pane's last accepted report — the
@@ -553,6 +625,172 @@ mod tests {
                 state: "working".to_string(),
                 source: "hook".to_string()
             })
+        );
+    }
+
+    /// The pi/omp session-report shape: path-preferred, id dropped — what
+    /// the shipped par-term assets actually send (`currentSessionRef`).
+    fn session_report(
+        pane: PaneId,
+        agent: &str,
+        session_path: &str,
+        resume_argv: Option<&str>,
+        seq: u64,
+    ) -> String {
+        let argv = match resume_argv {
+            Some(argv) => format!(r#","session_resume_argv":{argv}"#),
+            None => String::new(),
+        };
+        format!(
+            r#"{{"id":"t-{seq}","method":"pane.report_agent_session","params":{{"pane_id":"{pane}","agent":"{agent}","seq":{seq},"source":"par-mux:test","session_start_source":"startup","agent_session_path":"{session_path}"{argv}}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_path_only_session_report_is_accepted() {
+        let (tree, pane_id) = tree_with_pane();
+
+        let (reply, _) = handle_report(
+            &session_report(pane_id, "pi", "/tmp/pi-session.jsonl", None, 1_000),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata()
+                .get("agent_session_path")
+                .map(String::as_str),
+            Some("/tmp/pi-session.jsonl")
+        );
+        assert_eq!(
+            pane.metadata()
+                .get("agent_session_start_source")
+                .map(String::as_str),
+            Some("startup"),
+            "the fields only a session report carries must land"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_session_id"),
+            "a path-only report writes no id: {:?}",
+            pane.metadata()
+        );
+    }
+
+    #[test]
+    fn a_session_report_with_neither_ref_errors() {
+        let (tree, pane_id) = tree_with_pane();
+        let (reply, _) = handle_report(
+            &format!(
+                r#"{{"id":"t-1","method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"pi","seq":1000}}}}"#
+            ),
+            &tree,
+        );
+        assert!(
+            reply.contains("missing agent_session_id or agent_session_path"),
+            "{reply}"
+        );
+    }
+
+    #[test]
+    fn resume_argv_is_stored_verbatim_and_held_while_the_session_holds() {
+        let (tree, pane_id) = tree_with_pane();
+
+        let (reply, _) = handle_report(
+            &session_report(
+                pane_id,
+                "pi",
+                "/tmp/pi-session.jsonl",
+                Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#),
+                1_000,
+            ),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert_eq!(
+                pane.metadata().get("agent_resume_argv").map(String::as_str),
+                Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#),
+                "stored verbatim as a JSON argv"
+            );
+        }
+
+        // A later report for the SAME session without one keeps the stored
+        // invocation — the asset resent everything it knows, minus this.
+        handle_report(
+            &session_report(pane_id, "pi", "/tmp/pi-session.jsonl", None, 2_000),
+            &tree,
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_resume_argv").map(String::as_str),
+            Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#),
+            "same session, no fresh invocation: the stored one holds"
+        );
+    }
+
+    #[test]
+    fn a_new_session_without_an_invocation_clears_the_stale_one() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(
+            &session_report(
+                pane_id,
+                "pi",
+                "/tmp/pi-old.jsonl",
+                Some(r#"["pi","--session","/tmp/pi-old.jsonl"]"#),
+                1_000,
+            ),
+            &tree,
+        );
+
+        // The pane moved to a different session and reported no invocation
+        // for it: resuming the OLD session's argv would resume the wrong
+        // session — the failure mode worse than no entry.
+        handle_report(
+            &session_report(pane_id, "pi", "/tmp/pi-new.jsonl", None, 2_000),
+            &tree,
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata()
+                .get("agent_session_path")
+                .map(String::as_str),
+            Some("/tmp/pi-new.jsonl")
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_resume_argv"),
+            "the old session's invocation left with the old session: {:?}",
+            pane.metadata()
+        );
+    }
+
+    #[test]
+    fn malformed_resume_argv_errors_without_writing() {
+        let (tree, pane_id) = tree_with_pane();
+        let (reply, _) = handle_report(
+            &session_report(
+                pane_id,
+                "pi",
+                "/tmp/pi-session.jsonl",
+                Some(r#""pi --session x""#),
+                1_000,
+            ),
+            &tree,
+        );
+        assert!(
+            reply.contains("session_resume_argv must be an array of strings"),
+            "{reply}"
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            !pane.metadata().contains_key("agent_resume_argv"),
+            "a rejected report writes nothing: {:?}",
+            pane.metadata()
         );
     }
 }

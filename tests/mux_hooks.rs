@@ -223,6 +223,16 @@ fn report_with_message(pane: &str, state: &str, message: &str, seq: u64) -> Stri
     )
 }
 
+/// The pi session-report shape the shipped par-term asset sends: path-only
+/// ref (`currentSessionRef` drops the id when a path exists) plus the
+/// resume invocation the extension reports so Phase 6 needs no table entry
+/// for it.
+fn session_report_with_resume(pane: &str, session_path: &str, seq: u64) -> String {
+    format!(
+        r#"{{"id":"probe-{seq}","method":"pane.report_agent_session","params":{{"pane_id":"{pane}","agent":"pi","seq":{seq},"source":"par-mux:test","session_start_source":"startup","agent_session_path":"{session_path}","session_resume_argv":["pi","--session","{session_path}"]}}}}"#
+    )
+}
+
 #[test]
 fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
     let mut stage = stage("reason");
@@ -287,6 +297,55 @@ fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
     assert!(
         lines.contains(&format!("{} pi working hook", stage.pane).as_str()),
         "no reason residue on a message-less state: {lines:?}"
+    );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
+#[test]
+fn a_pi_shaped_session_report_with_resume_argv_drives_the_daemon() {
+    let mut stage = stage("resume-argv");
+
+    // A state report first, so the session report has a state to
+    // rebroadcast — acceptance over the wire is observable only through
+    // the rebroadcast (error replies produce no notification).
+    let reply = hook_round_trip(&stage.path, &report(&stage.pane, "working", 1_000));
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the state broadcast",
+    );
+
+    // The exact shape the shipped pi asset sends: path-only ref plus its
+    // resume invocation. Before the id-or-path contract this report was
+    // error-replied (`missing agent_session_id`) — every path-carrying
+    // pi/omp session report was silently dropped.
+    let reply = hook_round_trip(
+        &stage.path,
+        &session_report_with_resume(&stage.pane, "/tmp/pi-session.jsonl", 1_001),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "the path-only shape is accepted: {reply}"
+    );
+    // The rebroadcast is the wire-level proof the session report landed:
+    // only an accepted session report re-announces the known state.
+    let rebroadcast = stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the session report's rebroadcast",
+    );
+    assert!(
+        rebroadcast.contains(format!("{} pi working source=hook", stage.pane).as_str()),
+        "the rebroadcast carries the known state: {rebroadcast}"
+    );
+
+    // The roster still reads the pane — the report changed identity, not
+    // state.
+    let roster = stage.control.command("list-agents").join("");
+    assert!(
+        roster.contains(&format!("{} pi working hook", stage.pane)),
+        "the roster still carries the pane: {roster}"
     );
 
     drop(stage.control.0.shutdown(Shutdown::Both));
