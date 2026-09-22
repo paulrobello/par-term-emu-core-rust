@@ -1177,32 +1177,36 @@ mod tests {
     }
 
     #[test]
-    fn test_render_background() {
-        let _config = create_test_config();
-        // Need actual font for renderer, but we can test if we mock it
-        // For now, test the helper functions that don't require fonts
-
-        // Create a small test image
-        let _image = RgbaImage::new(100, 100);
-
-        // We can't create a full Renderer without fonts, but we can test
-        // the logic by creating a mock renderer structure
-        // Skip this test for now as it requires FontCache
-    }
-
-    #[test]
     fn test_render_straight_underline_pixels() {
-        // Create a test image and config
-        let _config = create_test_config();
-        let _image = RgbaImage::from_pixel(100, 100, Rgba([0, 0, 0, 255]));
+        // Fonts are embedded, so a real Renderer exists; assert the pixels
+        // the straight-underline path must draw (QA-108).
+        let renderer = make_test_renderer();
+        let w = renderer.canvas_width;
+        let h = renderer.canvas_height;
+        let mut image = RgbaImage::from_pixel(w, h, Rgba([0, 0, 0, 255]));
+        let x = renderer.config.padding_px;
+        let y = renderer.config.padding_px;
+        let line_y = y + renderer.cell_height - 2;
+        renderer.render_straight_underline(&mut image, x, y, (255, 0, 0));
 
-        // We need a renderer to call the method, but it requires FontCache
-        // which needs actual fonts. Let's test the underline rendering logic
-        // by checking the expected pixel positions
-
-        // For a cell at (0, 0) with cell_height=20 and cell_width=10
-        // straight underline should be at y = cell_height - 2 = 18
-        // This would be tested if we had a way to create a Renderer without fonts
+        // The underline row is red across the whole cell width
+        for dx in 0..renderer.cell_width {
+            assert_eq!(
+                image.get_pixel(x + dx, line_y),
+                &Rgba([255, 0, 0, 255]),
+                "underline pixel at ({}, {}) is red",
+                x + dx,
+                line_y
+            );
+        }
+        // The row above stays untouched (black)
+        for dx in 0..renderer.cell_width {
+            assert_eq!(
+                image.get_pixel(x + dx, line_y - 1),
+                &Rgba([0, 0, 0, 255]),
+                "row above the underline is untouched"
+            );
+        }
     }
 
     #[test]
@@ -1246,6 +1250,14 @@ mod tests {
         use crate::cell::Cell;
         use crate::color::Color;
 
+        let mut config = create_test_config();
+        // Pin the transform inputs so the expected blend is exact: no P3
+        // boost, no contrast adjustment, and the default 0.5 faint alpha.
+        config.iterm2_color_boost = false;
+        config.minimum_contrast = 0.0;
+        config.faint_text_alpha = 0.5;
+        let renderer = Renderer::new(24, 80, config).expect("embedded fonts load");
+
         let mut cell = Cell {
             fg: Color::Rgb(200, 100, 50),
             bg: Color::Rgb(0, 0, 255),
@@ -1253,8 +1265,12 @@ mod tests {
         };
         cell.flags.set_dim(true);
 
-        // When dim is set, foreground should be at ~50% brightness
-        // Expected fg: (100, 50, 25)
+        let (fg, bg) = renderer.resolve_colors(&cell);
+        // Dim blends the foreground toward the background at alpha 0.5:
+        // r = 200*0.5 + 0*0.5 = 100, g = 100*0.5 + 0*0.5 = 50,
+        // b = 50*0.5 + 255*0.5 = 152.5 -> 153
+        assert_eq!(fg, (100, 50, 153), "dim blends fg toward bg at 0.5 alpha");
+        assert_eq!(bg, (0, 0, 255), "background passes through");
     }
 
     #[test]
@@ -1339,7 +1355,7 @@ mod tests {
         use crate::cell::UnderlineStyle;
 
         // Test all underline styles
-        let styles = vec![
+        let styles = [
             UnderlineStyle::None,
             UnderlineStyle::Straight,
             UnderlineStyle::Double,
@@ -1348,17 +1364,16 @@ mod tests {
             UnderlineStyle::Dashed,
         ];
 
-        for style in styles {
-            // Each style should be matchable
-            match style {
-                UnderlineStyle::None => {}
-                UnderlineStyle::Straight => {}
-                UnderlineStyle::Double => {}
-                UnderlineStyle::Curly => {}
-                UnderlineStyle::Dotted => {}
-                UnderlineStyle::Dashed => {}
-            }
-        }
+        // Each variant must stay distinguishable from the others.
+        let names: Vec<String> = styles.iter().map(|s| format!("{s:?}")).collect();
+        let mut unique = names.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            styles.len(),
+            "every underline style renders distinctly: {names:?}"
+        );
     }
 
     #[test]
@@ -1395,19 +1410,22 @@ mod tests {
     #[test]
     fn test_sixel_render_mode_matching() {
         // Test all sixel render modes
-        let modes = vec![
+        let modes = [
             SixelRenderMode::Disabled,
             SixelRenderMode::Pixels,
             SixelRenderMode::HalfBlocks,
         ];
 
-        for mode in modes {
-            match mode {
-                SixelRenderMode::Disabled => {}
-                SixelRenderMode::Pixels => {}
-                SixelRenderMode::HalfBlocks => {}
-            }
-        }
+        // Each mode must stay distinguishable from the others.
+        let names: Vec<String> = modes.iter().map(|m| format!("{m:?}")).collect();
+        let mut unique = names.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(
+            unique.len(),
+            modes.len(),
+            "every sixel render mode is distinct: {names:?}"
+        );
     }
 
     #[test]

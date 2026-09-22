@@ -83,22 +83,28 @@ class TestCursorOperations:
 
         # Show cursor (default)
         term.process_str("\x1b[?25h")
-        # Can't directly query visibility, but operation should not crash
+        assert term.cursor_visible() is True
 
         # Hide cursor
         term.process_str("\x1b[?25l")
+        assert term.cursor_visible() is False
 
     def test_cursor_style(self):
         """Test setting cursor style"""
         term = Terminal(80, 24)
 
-        # Set various cursor styles
         term.process_str("\x1b[1 q")  # Blinking block
+        assert str(term.cursor_style()) == "CursorStyle.BlinkingBlock"
         term.process_str("\x1b[2 q")  # Steady block
+        assert str(term.cursor_style()) == "CursorStyle.SteadyBlock"
         term.process_str("\x1b[3 q")  # Blinking underline
+        assert str(term.cursor_style()) == "CursorStyle.BlinkingUnderline"
         term.process_str("\x1b[4 q")  # Steady underline
+        assert str(term.cursor_style()) == "CursorStyle.SteadyUnderline"
         term.process_str("\x1b[5 q")  # Blinking bar
+        assert str(term.cursor_style()) == "CursorStyle.BlinkingBar"
         term.process_str("\x1b[6 q")  # Steady bar
+        assert str(term.cursor_style()) == "CursorStyle.SteadyBar"
 
 
 class TestContentOperations:
@@ -253,11 +259,19 @@ class TestColorOperations:
 
         # Set colors
         term.process_str("\x1b[31;42mColored")
+        fg, bg = term.get_fg_color(0, 0), term.get_bg_color(0, 0)
+        assert fg is not None and bg is not None, "colors applied"
 
         # Reset
         term.process_str("\x1b[0mReset")
 
-        # Colors should be back to defaults
+        # The reset cell is back to the terminal defaults
+        assert term.get_fg_color(7, 0) == term.get_fg_color(7, 1), (
+            "reset cell matches an untouched cell's default fg"
+        )
+        assert term.get_bg_color(7, 0) == term.get_bg_color(7, 1), (
+            "reset cell matches an untouched cell's default bg"
+        )
 
 
 class TestCellAttributes:
@@ -412,21 +426,26 @@ class TestModesAndModes:
 
         # Enable application cursor
         term.process_str("\x1b[?1h")
+        assert term.application_cursor() is True
 
         # Disable
         term.process_str("\x1b[?1l")
+        assert term.application_cursor() is False
 
     def test_mouse_tracking_mode(self):
         """Test mouse tracking modes"""
         term = Terminal(80, 24)
 
-        # Enable various mouse modes
         term.process_str("\x1b[?1000h")  # Normal tracking
+        assert term.mouse_mode() == "normal"
         term.process_str("\x1b[?1002h")  # Button event
+        assert term.mouse_mode() == "button"
         term.process_str("\x1b[?1003h")  # Any event
+        assert term.mouse_mode() == "any"
 
         # Disable
         term.process_str("\x1b[?1000l")
+        assert term.mouse_mode() == "off"
 
     def test_bracketed_paste_mode(self):
         """Test bracketed paste mode"""
@@ -434,9 +453,11 @@ class TestModesAndModes:
 
         # Enable bracketed paste
         term.process_str("\x1b[?2004h")
+        assert term.bracketed_paste() is True
 
         # Disable
         term.process_str("\x1b[?2004l")
+        assert term.bracketed_paste() is False
 
 
 class TestHyperlinks:

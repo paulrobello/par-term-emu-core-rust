@@ -389,13 +389,16 @@ def test_macro_playback_change_speed_during_playback() -> None:
     term.load_macro("test", macro)
     term.play_macro("test", speed=1.0)
 
+    # The macro has 10 keys + 10 delays at 1x, so it is still playing here
+    assert term.is_macro_playing()
+
     # Change speed multiple times (synchronous state mutations, no wait needed)
     speeds = [0.5, 2.0, 1.0, 5.0]
     for speed in speeds:
         term.set_macro_speed(speed)
 
-    # Should still be playing or finished
     term.stop_macro()
+    assert not term.is_macro_playing()
 
 
 def test_macro_playback_stop_while_paused() -> None:

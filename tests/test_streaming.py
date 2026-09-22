@@ -247,9 +247,11 @@ def test_server_client_count_no_clients(pty_terminal, streaming_port):
     """Test client count with no connected clients."""
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}")
     server.start()
-    assert wait_for(lambda: port_open(streaming_port))
 
-    assert server.client_count() == 0
+    # Readiness poll via a raw connect leaves a ghost connection the server
+    # reaps at its next EOF check, so wait for the count to settle at 0
+    # instead of asserting it the instant the port opens.
+    assert wait_for(lambda: port_open(streaming_port) and server.client_count() == 0)
 
     server.shutdown("test shutdown")
 
@@ -466,14 +468,41 @@ async def test_broadcast_to_all_clients(pty_terminal, streaming_port):
 # Configuration and Limits Tests
 
 
-def test_max_clients_limit(pty_terminal, streaming_port):
-    """Test maximum clients configuration."""
+@pytest.mark.asyncio
+async def test_max_clients_limit(pty_terminal, streaming_port):
+    """A third client is refused once max_clients are connected."""
     config = StreamingConfig(max_clients=2)
     server = StreamingServer(pty_terminal, f"127.0.0.1:{streaming_port}", config)
     server.start()
     wait_for(lambda: port_open(streaming_port))
 
-    server.shutdown("test shutdown")
+    uri = f"ws://127.0.0.1:{streaming_port}"
+    client1 = await websockets.connect(uri, close_timeout=1)
+    client2 = await websockets.connect(uri, close_timeout=1)
+    try:
+        assert client1.state.name == "OPEN"
+        assert client2.state.name == "OPEN"
+        wait_for(lambda: server.client_count() == 2)
+
+        # The third handshake must be refused: the server closes the TCP
+        # connection during the handshake (EOF before an HTTP response), or
+        # closes the stream right after it completes.
+        third_refused = False
+        try:
+            third = await websockets.connect(uri, close_timeout=1)
+        except (websockets.exceptions.WebSocketException, EOFError, OSError):
+            third_refused = True
+        else:
+            try:
+                await asyncio.wait_for(third.recv(), timeout=2.0)
+            except websockets.exceptions.ConnectionClosed:
+                third_refused = True
+        assert third_refused, "the third client is refused past max_clients=2"
+        assert server.client_count() == 2
+    finally:
+        await client1.close()
+        await client2.close()
+        server.shutdown("test shutdown")
 
 
 @pytest.mark.asyncio
@@ -555,25 +584,25 @@ def test_server_bind_error_duplicate_port(pty_terminal, streaming_port):
     server1.start()
     wait_for(lambda: port_open(streaming_port))
 
-    # Try to create another server on same port
-    # This should either fail immediately or when started
+    # Try to create another server on same port. A failed bind surfaces
+    # only on the server thread's log, so the observable is that the FIRST
+    # server keeps owning the port and serving clients afterwards.
+    pty_terminal2 = PtyTerminal(80, 24)
+    pty_terminal2.spawn_shell()
     try:
-        pty_terminal2 = PtyTerminal(80, 24)
-        pty_terminal2.spawn_shell()
         server2 = StreamingServer(pty_terminal2, f"127.0.0.1:{streaming_port}")
         server2.start()
-
-        # If we got here, check if both are actually running
-        # (some implementations may handle this gracefully)
-
         server2.shutdown("test shutdown")
     except RuntimeError:
-        # Expected to fail: PyStreamingServer's PyO3 bindings raise
-        # RuntimeError (PyRuntimeError) for all construction/lifecycle
+        # Also acceptable: PyStreamingServer's PyO3 bindings raise
+        # RuntimeError (PyRuntimeError) for construction/lifecycle
         # failures (see src/python_bindings/streaming.rs).
         pass
-    finally:
-        server1.shutdown("test shutdown")
+
+    assert port_open(streaming_port), "server1 still owns the port"
+    with socket.create_connection(("127.0.0.1", streaming_port), timeout=2.0):
+        pass
+    server1.shutdown("test shutdown")
 
 
 def test_server_operations_after_stop(pty_terminal, streaming_port):
