@@ -187,17 +187,47 @@ mod tests {
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{Read, Write};
 
-    fn temp_socket(tag: &str) -> std::path::PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!("par-mux-ipc-{}-{}", std::process::id(), tag));
-        let _ = std::fs::remove_file(&path);
-        path
+    /// A socket path that no other test run can ever name, cleaned up even
+    /// when the test panics.
+    ///
+    /// Two failure modes motivate this over a `process::id()`-derived path in
+    /// the shared temp dir. A path built from the pid alone is reproducible
+    /// across `cargo test` invocations once the OS recycles that pid, so a
+    /// remnant of an earlier run — or an orphaned listener still bound to it —
+    /// collides with the new run and surfaces as `AddrInUse`. And a trailing
+    /// `remove_file` never runs on an early return or a failed assertion, so
+    /// those remnants accumulate instead of self-healing.
+    ///
+    /// `TempDir` answers both: the directory name carries OS-provided
+    /// randomness, so no two runs collide, and its `Drop` removes the
+    /// directory (socket included) while the test unwinds.
+    struct TempSocket {
+        dir: tempfile::TempDir,
+        path: std::path::PathBuf,
+    }
+
+    impl TempSocket {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+
+    fn temp_socket(tag: &str) -> TempSocket {
+        // The `par-mux-ipc-` prefix keeps a leaked directory visible to the
+        // same `par-mux-ipc-*` glob used to audit leftovers by hand.
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-ipc-")
+            .tempdir()
+            .expect("create temp dir for socket");
+        let path = dir.path().join(tag);
+        TempSocket { dir, path }
     }
 
     #[test]
     fn bind_then_connect_round_trips_bytes() {
-        let path = temp_socket("round-trip");
-        let listener = bind_local_listener(&path).expect("bind succeeds");
+        let socket = temp_socket("round-trip");
+        let path = socket.path();
+        let listener = bind_local_listener(path).expect("bind succeeds");
 
         let server = std::thread::spawn(move || {
             let mut stream = listener.accept().expect("accept");
@@ -206,56 +236,100 @@ mod tests {
             stream.write_all(b"pong\n").expect("write");
         });
 
-        let mut client = connect_local_stream(&path).expect("connect succeeds");
+        let mut client = connect_local_stream(path).expect("connect succeeds");
         client.write_all(b"ping\n").expect("write");
         let mut reply = String::new();
         client.read_to_string(&mut reply).expect("read reply");
         assert_eq!(reply.trim(), "pong");
 
         server.join().expect("server thread");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn prepare_refuses_a_live_socket() {
-        let path = temp_socket("live");
-        let _listener = bind_local_listener(&path).expect("bind succeeds");
-        let err = prepare_socket_path(&path).expect_err("a live socket must not be reclaimed");
+        let socket = temp_socket("live");
+        let _listener = bind_local_listener(socket.path()).expect("bind succeeds");
+        let err =
+            prepare_socket_path(socket.path()).expect_err("a live socket must not be reclaimed");
         assert_eq!(
             err.kind(),
             std::io::ErrorKind::AddrInUse,
             "refusing a live socket is what stops two daemons owning one path"
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn prepare_reclaims_a_stale_path() {
-        let path = temp_socket("stale");
+        let socket = temp_socket("stale");
         {
-            let _listener = bind_local_listener(&path).expect("bind succeeds");
+            let _listener = bind_local_listener(socket.path()).expect("bind succeeds");
             // Listener drops here; on Unix the path file may survive it.
         }
-        prepare_socket_path(&path).expect("a stale path is reclaimable");
-        let _listener = bind_local_listener(&path).expect("rebind after reclaim");
-        let _ = std::fs::remove_file(&path);
+        prepare_socket_path(socket.path()).expect("a stale path is reclaimable");
+        let _listener = bind_local_listener(socket.path()).expect("rebind after reclaim");
     }
 
     #[test]
     fn prepare_reclaims_a_path_that_is_not_a_socket() {
         // A leftover regular file (a crashed write, a stale marker) must be
         // reclaimable too, or one junk file bricks the default path forever.
-        let path = temp_socket("junk");
-        std::fs::write(&path, b"not a socket").expect("write junk file");
-        prepare_socket_path(&path).expect("a non-socket file is reclaimable");
-        let _listener = bind_local_listener(&path).expect("rebind after reclaim");
-        let _ = std::fs::remove_file(&path);
+        let socket = temp_socket("junk");
+        std::fs::write(socket.path(), b"not a socket").expect("write junk file");
+        prepare_socket_path(socket.path()).expect("a non-socket file is reclaimable");
+        let _listener = bind_local_listener(socket.path()).expect("rebind after reclaim");
     }
 
     #[test]
     fn prepare_is_a_noop_when_nothing_exists() {
-        let path = temp_socket("absent");
-        prepare_socket_path(&path).expect("absent path is fine");
+        let socket = temp_socket("absent");
+        prepare_socket_path(socket.path()).expect("absent path is fine");
+    }
+
+    #[test]
+    fn temp_socket_paths_never_collide() {
+        // The regression this guards: paths built from `process::id()` alone
+        // repeat once the OS recycles a pid, so a remnant of an earlier
+        // `cargo test` invocation collides with a later one. Two fixtures
+        // sharing a tag must still land on distinct paths, and the socket the
+        // caller binds must sit inside its own fixture directory so a stale
+        // file from anywhere else cannot be named.
+        let first = temp_socket("same-tag");
+        let second = temp_socket("same-tag");
+        assert_ne!(
+            first.path(),
+            second.path(),
+            "two fixtures with one tag must not share a path"
+        );
+        for socket in [&first, &second] {
+            assert!(
+                socket.path().starts_with(socket.dir.path()),
+                "the socket lives inside its own fixture dir: {}",
+                socket.path().display()
+            );
+        }
+    }
+
+    #[test]
+    fn temp_socket_cleans_up_after_a_panic() {
+        // The other half of the regression: a trailing `remove_file` never
+        // runs when a test panics, so remnants accumulate. `Drop` runs while
+        // unwinding, so the directory goes even on an assertion failure.
+        let dir = std::panic::catch_unwind(|| {
+            let socket = temp_socket("panicking");
+            let dir = socket.dir.path().to_path_buf();
+            bind_local_listener(socket.path()).expect("bind succeeds");
+            panic!("{}", dir.display());
+        })
+        .expect_err("the closure panics");
+        let dir = std::path::PathBuf::from(
+            dir.downcast_ref::<String>()
+                .expect("panic payload is the dir path"),
+        );
+        assert!(
+            !dir.exists(),
+            "the fixture dir is removed while unwinding: {}",
+            dir.display()
+        );
     }
 
     #[test]
@@ -276,14 +350,16 @@ mod tests {
     #[test]
     fn unix_socket_is_owner_only() {
         use std::os::unix::fs::PermissionsExt;
-        let path = temp_socket("perms");
-        let _listener = bind_local_listener(&path).expect("bind succeeds");
-        let mode = std::fs::metadata(&path).expect("stat").permissions().mode();
+        let socket = temp_socket("perms");
+        let _listener = bind_local_listener(socket.path()).expect("bind succeeds");
+        let mode = std::fs::metadata(socket.path())
+            .expect("stat")
+            .permissions()
+            .mode();
         assert_eq!(
             mode & 0o077,
             0,
             "group and other must have no access: {mode:o}"
         );
-        let _ = std::fs::remove_file(&path);
     }
 }
