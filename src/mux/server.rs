@@ -346,9 +346,7 @@ fn dispatch_issued(
                         broadcast_layout_change(tree, clients, window_id);
                         // The tree refuses to kill a window's last pane, so a
                         // surviving window always has an active pane to name.
-                        if let Some(active) =
-                            tree.lock().window(window_id).map(|w| w.active)
-                        {
+                        if let Some(active) = tree.lock().window(window_id).map(|w| w.active) {
                             broadcast_notification(
                                 clients,
                                 &TmuxNotification::WindowPaneChanged {
@@ -473,7 +471,7 @@ fn dispatch_issued(
                 };
                 guard
                     .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
-                    .map(|window_id| {
+                    .inspect(|&window_id| {
                         // Wire the new window's pane the same way NewSession does.
                         let pane_ids = guard
                             .window(window_id)
@@ -484,7 +482,6 @@ fn dispatch_issued(
                                 pane.on_output(pane_output_sink(clients, pane_id));
                             }
                         }
-                        window_id
                     })
             };
             match outcome {
@@ -655,6 +652,7 @@ fn dispatch_issued(
 
 /// Execute one command with no issuer channel — the in-process shape tests
 /// and tooling use.
+#[cfg(test)]
 fn dispatch(
     line: &str,
     command_number: u32,
@@ -672,7 +670,9 @@ fn dispatch(
 /// affected, which is what a push-driven sync layer consumes.
 fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
     let line = emit(notification);
-    clients.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
+    clients
+        .lock()
+        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
 }
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
@@ -1037,8 +1037,7 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l.starts_with("%window-add")
-                    && l.contains(&second_window.to_string())),
+                .any(|l| l.starts_with("%window-add") && l.contains(&second_window.to_string())),
             "new-window must broadcast %window-add naming it: {lines:?}"
         );
 
@@ -1070,14 +1069,21 @@ mod tests {
         dispatch(&format!("select-pane -t {first}"), 5, &tree, &clients, None);
         let lines = drain_broadcasts(&rx);
         assert!(
-            lines.iter().any(|l| l.starts_with("%window-pane-changed")
-                && l.contains(&first.to_string())),
+            lines
+                .iter()
+                .any(|l| l.starts_with("%window-pane-changed") && l.contains(&first.to_string())),
             "select-pane must broadcast %window-pane-changed: {lines:?}"
         );
 
         // kill-pane changes geometry (and focus, since the active pane died).
         let second_pane = tree.lock().window(window_id).unwrap().panes()[1];
-        dispatch(&format!("kill-pane -t {second_pane}"), 6, &tree, &clients, None);
+        dispatch(
+            &format!("kill-pane -t {second_pane}"),
+            6,
+            &tree,
+            &clients,
+            None,
+        );
         let lines = drain_broadcasts(&rx);
         assert!(
             lines.iter().any(|l| l.starts_with("%layout-change")),
@@ -1098,8 +1104,9 @@ mod tests {
         );
         let lines = drain_broadcasts(&rx);
         assert!(
-            lines.iter().any(|l| l.starts_with("%window-close")
-                && l.contains(&second_window.to_string())),
+            lines
+                .iter()
+                .any(|l| l.starts_with("%window-close") && l.contains(&second_window.to_string())),
             "kill-window must broadcast %window-close naming it: {lines:?}"
         );
     }
@@ -1120,8 +1127,9 @@ mod tests {
         );
         let lines = drain_broadcasts(&issuer_rx);
         assert!(
-            lines.iter().any(|l| l.starts_with("%session-changed")
-                && l.contains("main")),
+            lines
+                .iter()
+                .any(|l| l.starts_with("%session-changed") && l.contains("main")),
             "the issuing client must be told %session-changed: {lines:?}"
         );
         // The broadcast set (no other clients here) separately receives

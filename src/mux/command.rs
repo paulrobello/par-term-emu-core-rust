@@ -293,8 +293,8 @@ fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
     if hex {
         for token in &tokens {
             let digits = token.strip_prefix("0x").unwrap_or(token);
-            let byte = u8::from_str_radix(digits, 16)
-                .map_err(|_| format!("invalid hex byte: {token}"))?;
+            let byte =
+                u8::from_str_radix(digits, 16).map_err(|_| format!("invalid hex byte: {token}"))?;
             out.push(byte);
         }
     } else if literal {
@@ -350,12 +350,6 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
         let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
         raw.parse::<WindowId>()
             .map_err(|_| format!("invalid window target: {raw}"))
-    };
-
-    let target_session = |flag_name: &str| -> Result<SessionId, String> {
-        let raw = flag(flag_name).ok_or_else(|| format!("{name} requires {flag_name}"))?;
-        raw.parse::<SessionId>()
-            .map_err(|_| format!("invalid session target: {raw}"))
     };
 
     // Everything after a `-t <target>` pair, joined back with spaces — the
@@ -743,7 +737,8 @@ mod tests {
     fn rejects_malformed_window_and_session_targets() {
         assert!(parse_command("new-window -t notasession").is_err());
         assert!(parse_command("select-window -t notawindow").is_err());
-        assert!(parse_command("new-window").is_err(), "needs -t");
+        // Bare new-window is valid (targets the newest session); the
+        // malformed-TARGET cases above are what this test guards.
     }
 
     #[test]
