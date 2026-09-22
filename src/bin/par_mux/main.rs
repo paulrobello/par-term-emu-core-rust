@@ -13,24 +13,36 @@ fn main() -> std::io::Result<()> {
         _ => par_term_emu_core_rust::mux::default_socket_path("default"),
     };
 
-    // bind refuses a path a live server already owns, so a racing auto-spawn
-    // loses cleanly instead of stealing the socket.
-    let server = par_term_emu_core_rust::mux::MuxServer::bind(&path)?;
-
     // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
     // aside and the daemon starts fresh — unreadable state never blocks
-    // startup. A readable state is logged for now; rebuilding from it ships
-    // with Task 3.4.
+    // startup. A readable state is REBUILT (D3.5): layout and content are
+    // restored, and every pane's process is new — the original processes
+    // died with the previous server, which is stated rather than papered
+    // over.
     let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
-    match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
-        par_term_emu_core_rust::mux::persist::Loaded::Fresh => {}
-        par_term_emu_core_rust::mux::persist::Loaded::State(_) => eprintln!(
-            "par-mux: found existing state at {} (automatic rebuild ships with Task 3.4)",
-            state_path.display()
-        ),
-        par_term_emu_core_rust::mux::persist::Loaded::Quarantined { .. } => {}
-    }
+    let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
+        par_term_emu_core_rust::mux::persist::Loaded::Fresh => None,
+        par_term_emu_core_rust::mux::persist::Loaded::State(state) => {
+            match par_term_emu_core_rust::mux::tree::MuxTree::from_persist_state(
+                &state,
+                Box::new(par_term_emu_core_rust::mux::pane::ShellPaneFactory::default()),
+            ) {
+                Ok(tree) => Some(tree),
+                Err(err) => {
+                    eprintln!("par-mux: state restore failed ({err}); starting fresh");
+                    None
+                }
+            }
+        }
+        par_term_emu_core_rust::mux::persist::Loaded::Quarantined { .. } => None,
+    };
 
+    // bind refuses a path a live server already owns, so a racing auto-spawn
+    // loses cleanly instead of stealing the socket.
+    let server = match restored {
+        Some(tree) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
+        None => par_term_emu_core_rust::mux::MuxServer::bind(&path)?,
+    };
     eprintln!("par-mux listening on {}", path.display());
     server.run_persisting(state_path);
     Ok(())

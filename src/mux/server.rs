@@ -7,7 +7,7 @@
 
 use crate::mux::command::{parse_command, MuxCommand};
 use crate::mux::emit::{emit, emit_block};
-use crate::mux::ids::WindowId;
+use crate::mux::ids::{PaneId, WindowId};
 use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::tree::MuxTree;
@@ -55,16 +55,27 @@ impl MuxServer {
     /// Access control is the transport's: mode `0600` on Unix, an owner-only
     /// security descriptor on Windows — see [`crate::mux::ipc`].
     pub fn bind(path: &Path) -> std::io::Result<Self> {
+        Self::bind_with_tree(path, MuxTree::new(Box::new(ShellPaneFactory::default())))
+    }
+
+    /// [`Self::bind`] serving an already-built `tree` — the restore path
+    /// (D3.5): the daemon startup rebuilt the tree from persisted state via
+    /// [`crate::mux::persist::PersistState`], and this server serves it
+    /// instead of a fresh one. Every restored pane is wired to push its
+    /// output to connected clients exactly as a newly created pane is.
+    pub fn bind_with_tree(path: &Path, tree: MuxTree) -> std::io::Result<Self> {
         prepare_socket_path(path)?;
         let listener = bind_local_listener(path)?;
+
+        let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+        let tree = Arc::new(Mutex::new(tree));
+        wire_all_pane_outputs(&tree, &clients);
 
         Ok(Self {
             listener,
             path: path.to_path_buf(),
-            tree: Arc::new(Mutex::new(MuxTree::new(Box::new(
-                ShellPaneFactory::default(),
-            )))),
-            clients: Arc::new(Mutex::new(Vec::new())),
+            tree,
+            clients,
         })
     }
 
@@ -189,15 +200,8 @@ fn dispatch(
                         .flat_map(|w| w.panes())
                         .collect();
                     for pane_id in pane_ids {
-                        let sinks = Arc::clone(clients);
                         if let Some(pane) = guard.pane_mut(pane_id) {
-                            pane.on_output(move |bytes: &[u8]| {
-                                let line = emit(&TmuxNotification::Output {
-                                    pane_id: pane_id.to_string(),
-                                    data: bytes.to_vec(),
-                                });
-                                sinks.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
-                            });
+                            pane.on_output(pane_output_sink(clients, pane_id));
                         }
                     }
                     emit_block(command_number, &session_id.to_string(), true)
@@ -355,15 +359,8 @@ fn dispatch(
                         .map(|w| w.panes())
                         .unwrap_or_default();
                     for pane_id in pane_ids {
-                        let sinks = Arc::clone(clients);
                         if let Some(pane) = guard.pane_mut(pane_id) {
-                            pane.on_output(move |bytes: &[u8]| {
-                                let line = emit(&TmuxNotification::Output {
-                                    pane_id: pane_id.to_string(),
-                                    data: bytes.to_vec(),
-                                });
-                                sinks.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
-                            });
+                            pane.on_output(pane_output_sink(clients, pane_id));
                         }
                     }
                     emit_block(command_number, &window_id.to_string(), true)
@@ -490,6 +487,45 @@ fn dispatch(
         }
     }
     reply
+}
+
+/// The per-pane output sink: PTY bytes become `%output` lines pushed to every
+/// connected client as they are produced.
+///
+/// Shared by pane creation (`new-session`/`new-window`/`split-window` wiring)
+/// and the restore path — a restored pane pushes output exactly like a
+/// freshly created one.
+fn pane_output_sink(clients: &Clients, pane_id: PaneId) -> impl Fn(&[u8]) + Send + Sync + 'static {
+    let sinks = Arc::clone(clients);
+    move |bytes: &[u8]| {
+        let line = emit(&TmuxNotification::Output {
+            pane_id: pane_id.to_string(),
+            data: bytes.to_vec(),
+        });
+        sinks.lock().retain(|(_, tx)| tx.send(line.clone()).is_ok());
+    }
+}
+
+/// Wire every pane in `tree` to push its output to `clients` — the restore
+/// path's counterpart of the per-pane wiring each creation command does.
+fn wire_all_pane_outputs(tree: &Arc<Mutex<MuxTree>>, clients: &Clients) {
+    let pane_ids: Vec<PaneId> = {
+        let guard = tree.lock();
+        guard
+            .sessions()
+            .iter()
+            .filter_map(|s| guard.session(*s))
+            .flat_map(|s| s.windows.clone())
+            .filter_map(|w| guard.window(w))
+            .flat_map(|w| w.panes())
+            .collect()
+    };
+    let mut guard = tree.lock();
+    for pane_id in pane_ids {
+        if let Some(pane) = guard.pane_mut(pane_id) {
+            pane.on_output(pane_output_sink(clients, pane_id));
+        }
+    }
 }
 
 /// Push a `%layout-change` for `window_id` to every connected client.
