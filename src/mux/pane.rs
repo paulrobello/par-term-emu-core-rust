@@ -159,6 +159,11 @@ pub trait PaneFactory: Send + Sync {
 pub struct ShellPaneFactory {
     /// Working directory for new panes; the process default when `None`.
     pub cwd: Option<std::path::PathBuf>,
+    /// Control-socket path exported as `PAR_MUX_SOCKET` (with
+    /// `PAR_MUX_ENV=1`) so hook scripts running inside a pane can report
+    /// agent state back to this server — the Phase 5 env contract.
+    /// `None` (tests, embedders without a socket) seeds nothing.
+    pub socket_path: Option<String>,
 }
 
 impl PaneFactory for ShellPaneFactory {
@@ -176,8 +181,14 @@ impl PaneFactory for ShellPaneFactory {
         }
         // The pane id is exported so hooks running inside the pane can identify
         // themselves back to the server — the mechanism seam S1's agent layer
-        // will rely on.
+        // relies on. The socket path and gate variable complete herdr's env
+        // contract (`HERDR_ENV`/`HERDR_SOCKET_PATH`, renamed): a ported hook
+        // script checks all three before reporting.
         session.set_env("PAR_MUX_PANE_ID", &id.to_string());
+        if let Some(socket) = &self.socket_path {
+            session.set_env("PAR_MUX_SOCKET", socket);
+            session.set_env("PAR_MUX_ENV", "1");
+        }
 
         match command {
             Some(cmd) => {

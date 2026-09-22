@@ -25,7 +25,12 @@ fn main() -> std::io::Result<()> {
         par_term_emu_core_rust::mux::persist::Loaded::State(state) => {
             match par_term_emu_core_rust::mux::tree::MuxTree::from_persist_state(
                 &state,
-                Box::new(par_term_emu_core_rust::mux::pane::ShellPaneFactory::default()),
+                Box::new(par_term_emu_core_rust::mux::pane::ShellPaneFactory {
+                    // Restored panes respawn through this factory too, so
+                    // they get the same hook env contract as fresh ones.
+                    socket_path: Some(path.to_string_lossy().into_owned()),
+                    ..Default::default()
+                }),
             ) {
                 Ok(tree) => Some(tree),
                 Err(err) => {

@@ -11,6 +11,7 @@
 pub mod client;
 pub mod command;
 pub mod emit;
+pub mod hooks;
 pub mod ids;
 pub mod ipc;
 pub mod layout;

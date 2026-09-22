@@ -56,7 +56,13 @@ impl MuxServer {
     /// Access control is the transport's: mode `0600` on Unix, an owner-only
     /// security descriptor on Windows — see [`crate::mux::ipc`].
     pub fn bind(path: &Path) -> std::io::Result<Self> {
-        Self::bind_with_tree(path, MuxTree::new(Box::new(ShellPaneFactory::default())))
+        // The factory exports the socket path so panes it spawns can run
+        // hook scripts that report back (the Phase 5 env contract).
+        let factory = ShellPaneFactory {
+            socket_path: Some(path.to_string_lossy().into_owned()),
+            ..ShellPaneFactory::default()
+        };
+        Self::bind_with_tree(path, MuxTree::new(Box::new(factory)))
     }
 
     /// [`Self::bind`] serving an already-built `tree` — the restore path
@@ -167,8 +173,14 @@ impl MuxServer {
 }
 
 /// Serve one connected client: a writer thread draining a channel, and this
-/// thread reading commands. On disconnect, only this client's broadcast
-/// sender is removed — the accept loop and the tree are untouched.
+/// thread reading lines. The socket carries two grammars (Phase 5): a line
+/// whose first non-whitespace byte is `{` is a JSON hook report answered in
+/// place; anything else is a tmux control command. Broadcast registration is
+/// deferred until the first CONTROL command, so a hook connection — the
+/// send-one-line/read-one-reply/close pattern herdr's integration scripts
+/// use — never receives pushed notifications. On disconnect, only this
+/// client's broadcast sender is removed — the accept loop and the tree are
+/// untouched.
 fn handle_client(
     stream: LocalStream,
     tree: Arc<Mutex<MuxTree>>,
@@ -177,14 +189,11 @@ fn handle_client(
 ) {
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = channel::<String>();
-    clients.lock().push((client_id, tx.clone()));
+    let mut registered = false;
 
     let mut writer = match stream.try_clone() {
         Ok(stream) => stream,
-        Err(_) => {
-            clients.lock().retain(|(id, _)| *id != client_id);
-            return;
-        }
+        Err(_) => return,
     };
     std::thread::spawn(move || {
         while let Ok(line) = rx.recv() {
@@ -201,6 +210,20 @@ fn handle_client(
         if line.trim().is_empty() {
             continue;
         }
+        if line.trim_start().starts_with('{') {
+            let (reply, broadcast) = crate::mux::hooks::handle_report(&line, &tree);
+            if let Some(notification) = broadcast {
+                broadcast_notification(&clients, &notification);
+            }
+            if tx.send(reply).is_err() {
+                break;
+            }
+            continue;
+        }
+        if !registered {
+            clients.lock().push((client_id, tx.clone()));
+            registered = true;
+        }
         command_number += 1;
         let reply = dispatch_issued(
             &line,
@@ -214,7 +237,9 @@ fn handle_client(
             break;
         }
     }
-    clients.lock().retain(|(id, _)| *id != client_id);
+    if registered {
+        clients.lock().retain(|(id, _)| *id != client_id);
+    }
 }
 
 /// Execute one command and render its reply block, with an issuer channel.
