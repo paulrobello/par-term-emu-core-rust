@@ -129,6 +129,28 @@ impl Terminal {
                                     2
                                 }
                             }
+                            69 => {
+                                if self.margins.use_lr_margins {
+                                    1
+                                } else {
+                                    2
+                                }
+                            }
+                            1004 => {
+                                if self.modes.focus_tracking {
+                                    1
+                                } else {
+                                    2
+                                }
+                            }
+                            1005 | 1006 | 1015 => {
+                                if self.modes.mouse_encoding != crate::mouse::MouseEncoding::Default
+                                {
+                                    1
+                                } else {
+                                    2
+                                }
+                            }
                             9 | 1000 | 1002 | 1003 => {
                                 if self.modes.mouse_mode != crate::mouse::MouseMode::Off {
                                     1
