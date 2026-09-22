@@ -2266,8 +2266,9 @@ impl Terminal {
     }
 
     /// Maximum total OSC data length in bytes before a sequence is rejected
-    /// (QA-012). Defaults to [`DEFAULT_MAX_OSC_DATA_LENGTH`] (128 MiB) so
-    /// inline images fit; lower it for tighter memory/security bounds.
+    /// (QA-012/SEC-003). Defaults to [`DEFAULT_MAX_OSC_DATA_LENGTH`] (1 MiB);
+    /// raise it for deployments pushing larger inline images, lower it for
+    /// tighter memory/security bounds.
     pub fn max_osc_data_length(&self) -> usize {
         self.security_state.max_osc_data_length
     }

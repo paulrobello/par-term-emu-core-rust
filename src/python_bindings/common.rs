@@ -1608,10 +1608,10 @@ macro_rules! impl_terminal_content_misc {
                 Ok(())
             }
 
-            /// Get the maximum total OSC data length in bytes (QA-012)
+            /// Get the maximum total OSC data length in bytes (QA-012/SEC-003)
             ///
             /// Sequences exceeding this cap are rejected as a memory-exhaustion
-            /// guard. Defaults to 128 MiB so inline images fit.
+            /// guard. Defaults to 1 MiB; raise it for larger inline images.
             ///
             /// Returns:
             ///     int: Current cap in bytes
