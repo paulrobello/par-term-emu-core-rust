@@ -17,6 +17,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 
+/// Shared handle to the PTY's write half, set once a PTY is attached to a
+/// streaming session (QA-114: named alias in place of the inline nested
+/// type, replacing its `#[allow(clippy::type_complexity)]`).
+type PtyWriterHandle = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
+
 /// Get current time as epoch milliseconds
 pub(crate) fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -76,8 +81,7 @@ pub struct StreamSessionState {
     /// Receiver end of the output channel (consumed by broadcaster loop)
     pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
-    #[allow(clippy::type_complexity)]
-    pub(crate) pty_writer: std::sync::RwLock<Option<Arc<Mutex<Box<dyn std::io::Write + Send>>>>>,
+    pub(crate) pty_writer: std::sync::RwLock<Option<PtyWriterHandle>>,
     /// Channel for sending resize requests
     pub(crate) resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Receiver for resize requests
@@ -286,7 +290,7 @@ impl StreamSessionState {
     }
 
     /// Set the PTY writer for handling client input
-    pub fn set_pty_writer(&self, writer: Arc<Mutex<Box<dyn std::io::Write + Send>>>) {
+    pub fn set_pty_writer(&self, writer: PtyWriterHandle) {
         if let Ok(mut guard) = self.pty_writer.write() {
             *guard = Some(writer);
         }

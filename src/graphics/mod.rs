@@ -316,9 +316,14 @@ pub(crate) fn pixel_at_in(
     ))
 }
 
+/// Top/bottom pixel pair sampled for half-block cell rendering (QA-114:
+/// named alias in place of the inline nested tuple type, replacing its
+/// `#[allow(clippy::type_complexity)]`).
+pub(crate) type HalfBlockColors = ((u8, u8, u8, u8), (u8, u8, u8, u8));
+
 /// Half-block sampling shared by `TerminalGraphic` and the Python
 /// `Graphic` binding (QA-009).
-#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn sample_half_block_in(
     pixels: &[u8],
     width: usize,
@@ -328,7 +333,7 @@ pub(crate) fn sample_half_block_in(
     cell_row: usize,
     cell_width: u32,
     cell_height: u32,
-) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
+) -> Option<HalfBlockColors> {
     let rel_col = cell_col.checked_sub(position.0)?;
     let rel_row = cell_row.checked_sub(position.1)?;
 
@@ -511,14 +516,13 @@ impl TerminalGraphic {
 
     /// Sample color for half-block cell rendering
     /// Returns (top_half_rgba, bottom_half_rgba) for the cell at (col, row)
-    #[allow(clippy::type_complexity)]
     pub fn sample_half_block(
         &self,
         cell_col: usize,
         cell_row: usize,
         cell_width: u32,
         cell_height: u32,
-    ) -> Option<((u8, u8, u8, u8), (u8, u8, u8, u8))> {
+    ) -> Option<HalfBlockColors> {
         sample_half_block_in(
             &self.pixels,
             self.width,

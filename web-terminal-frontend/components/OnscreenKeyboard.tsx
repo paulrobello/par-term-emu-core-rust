@@ -24,17 +24,11 @@ import {
   getAltCode,
   getCtrlCode,
 } from '@/lib/keyboard-layouts';
-import type { CtrlShortcut, KeyDefinition } from '@/lib/keyboard-layouts';
+import type { KeyDefinition } from '@/lib/keyboard-layouts';
+import { useStoredMacros, type Macro } from '@/lib/use-stored-macros';
+import { MacroEditor } from '@/components/MacroEditor';
+import { MacroList } from '@/components/MacroList';
 
-interface Macro {
-  id: string;
-  name: string;
-  script: string;
-  sendEnter?: boolean; // Whether to send Enter after each line (default: true)
-  isBuiltIn?: boolean; // Built-in macros cannot be edited/deleted
-}
-
-const MACROS_STORAGE_KEY = 'par-term-macros';
 const MACRO_LINE_DELAY_MS = 200;
 
 
@@ -54,7 +48,7 @@ export function OnscreenKeyboard({
   const [shiftActive, setShiftActive] = useState(false);
   const [showFunctionKeys, setShowFunctionKeys] = useState(false);
   const [showMacros, setShowMacros] = useState(false);
-  const [macros, setMacros] = useState<Macro[]>([]);
+  const { macros, saveMacros } = useStoredMacros();
   const [showMacroEditor, setShowMacroEditor] = useState(false);
   const [editingMacro, setEditingMacro] = useState<Macro | null>(null);
   const [macroName, setMacroName] = useState('');
@@ -63,30 +57,6 @@ export function OnscreenKeyboard({
   const [playingMacro, setPlayingMacro] = useState<string | null>(null);
   const keyboardRef = useRef<HTMLDivElement>(null);
   const macroAbortRef = useRef<boolean>(false);
-
-  // Load macros from localStorage after mount. See app/page.tsx for the
-  // rationale on preferring post-mount hydration over lazy initializers in
-  // a Next.js SSR context.
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(MACROS_STORAGE_KEY);
-      if (stored) {
-        setMacros(JSON.parse(stored));
-      }
-    } catch (e) {
-      console.error('Failed to load macros:', e);
-    }
-  }, []);
-
-  // Save macros to localStorage when changed
-  const saveMacros = useCallback((newMacros: Macro[]) => {
-    setMacros(newMacros);
-    try {
-      localStorage.setItem(MACROS_STORAGE_KEY, JSON.stringify(newMacros));
-    } catch (e) {
-      console.error('Failed to save macros:', e);
-    }
-  }, []);
 
   // Process macro template commands in a line
   // Returns the processed text (with templates replaced) and any delay to apply
@@ -671,176 +641,33 @@ export function OnscreenKeyboard({
           <div className="space-y-3">
             {/* Macro Editor */}
             {showMacroEditor ? (
-              <div className="flex gap-3">
-                {/* Editor panel */}
-                <div className="flex-1 space-y-2 p-3 bg-[#1f1f1f]/80 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={macroName}
-                      onChange={(e) => setMacroName(e.target.value)}
-                      placeholder="Macro name..."
-                      className="flex-1 px-2 py-1.5 rounded text-sm bg-[#2a2a2a] text-[#e0e0e0]
-                        border border-[#3a3a3a] focus:border-amber-500/50 focus:outline-none
-                        placeholder-[#606060]"
-                      maxLength={30}
-                    />
-                  </div>
-                  <textarea
-                    value={macroScript}
-                    onChange={(e) => setMacroScript(e.target.value)}
-                    placeholder="Enter commands (one per line)..."
-                    className="w-full px-2 py-1.5 rounded text-sm bg-[#2a2a2a] text-[#e0e0e0]
-                      border border-[#3a3a3a] focus:border-amber-500/50 focus:outline-none
-                      placeholder-[#606060] resize-none font-mono"
-                    rows={5}
-                  />
-                  <div className="flex items-center justify-between">
-                    <label className="flex items-center gap-2 text-xs text-[#a0a0a0] cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={macroSendEnter}
-                        onChange={(e) => setMacroSendEnter(e.target.checked)}
-                        className="w-4 h-4 rounded border-[#3a3a3a] bg-[#2a2a2a] text-amber-500
-                          focus:ring-amber-500/50 focus:ring-offset-0"
-                      />
-                      Send Enter after each line
-                    </label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => {
-                          setShowMacroEditor(false);
-                          setEditingMacro(null);
-                          setMacroName('');
-                          setMacroScript('');
-                          setMacroSendEnter(true);
-                        }}
-                        tabIndex={-1}
-                        className="px-3 py-1.5 rounded text-xs font-medium
-                          bg-[#2a2a2a]/80 text-[#a0a0a0] hover:bg-[#3a3a3a]/80 hover:text-[#e0e0e0]
-                          transition-colors"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        onClick={saveMacro}
-                        tabIndex={-1}
-                        disabled={!macroName.trim() || !macroScript.trim()}
-                        className="px-3 py-1.5 rounded text-xs font-medium
-                          bg-amber-600/80 text-white hover:bg-amber-500/80
-                          disabled:opacity-50 disabled:cursor-not-allowed
-                          transition-colors"
-                      >
-                        {editingMacro ? 'Update' : 'Save'}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Help panel */}
-                <div className="w-56 p-2 bg-[#1a1a1a]/80 rounded-lg border border-[#2a2a2a] text-[10px] text-[#808080]">
-                  <div className="text-[11px] text-[#a0a0a0] font-medium mb-1.5">Template Commands</div>
-                  <div className="space-y-0.5">
-                    <div><code className="text-amber-400">[[delay:N]]</code> Wait N seconds</div>
-                    <div><code className="text-amber-400">[[enter]]</code> Send Enter key</div>
-                    <div><code className="text-amber-400">[[tab]]</code> Send Tab key</div>
-                    <div><code className="text-amber-400">[[esc]]</code> Send Escape key</div>
-                    <div><code className="text-amber-400">[[space]]</code> Send Space</div>
-                    <div><code className="text-amber-400">[[ctrl+X]]</code> Send Ctrl+X</div>
-                    <div><code className="text-amber-400">[[shift+X]]</code> Send Shift+X</div>
-                    <div><code className="text-amber-400">[[ctrl+shift+X]]</code> Ctrl+Shift+X</div>
-                    <div><code className="text-amber-400">[[shift+tab]]</code> Reverse Tab</div>
-                    <div><code className="text-amber-400">[[shift+enter]]</code> Shift+Enter</div>
-                  </div>
-                </div>
-              </div>
+              <MacroEditor
+                macroName={macroName}
+                onMacroNameChange={setMacroName}
+                macroScript={macroScript}
+                onMacroScriptChange={setMacroScript}
+                macroSendEnter={macroSendEnter}
+                onMacroSendEnterChange={setMacroSendEnter}
+                isEditing={editingMacro !== null}
+                onCancel={() => {
+                  setShowMacroEditor(false);
+                  setEditingMacro(null);
+                  setMacroName('');
+                  setMacroScript('');
+                  setMacroSendEnter(true);
+                }}
+                onSave={saveMacro}
+              />
             ) : (
-              <>
-                {/* User macros */}
-                <div>
-                  <div className="flex flex-wrap gap-1.5 justify-center items-center">
-                    {/* New macro button */}
-                    <button
-                      onClick={newMacro}
-                      tabIndex={-1}
-                      className="h-9 px-3 rounded-md text-xs sm:text-sm font-medium
-                        select-none touch-manipulation transition-all duration-100
-                        bg-amber-600/20 text-amber-400 border border-amber-500/50
-                        hover:bg-amber-600/30 active:scale-95"
-                      title="Create new macro"
-                    >
-                      + New
-                    </button>
-
-                    {/* Existing user macro buttons */}
-                    {macros.map((macro) => (
-                      <div key={macro.id} className="relative group">
-                        <button
-                          onClick={() => playingMacro === macro.id ? stopMacro() : playMacro(macro)}
-                          tabIndex={-1}
-                          className={`h-9 px-3 rounded-md text-xs sm:text-sm font-medium
-                            select-none touch-manipulation transition-all duration-100
-                            ${playingMacro === macro.id
-                              ? 'bg-red-600/80 text-white border-red-400/50 animate-pulse'
-                              : 'bg-[#252525]/90 text-amber-400 border-amber-500/30 hover:bg-[#353535]/90'
-                            }
-                            border active:scale-95`}
-                          title={playingMacro === macro.id ? 'Stop macro' : `Run: ${macro.script.split('\n')[0]}${macro.sendEnter === false ? '' : '...'}${macro.sendEnter === false ? ' (no enter)' : ''}`}
-                        >
-                          {playingMacro === macro.id ? (
-                            <span className="flex items-center gap-1">
-                              <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                                <rect x="6" y="6" width="12" height="12" />
-                              </svg>
-                              Stop
-                            </span>
-                          ) : (
-                            <span className="flex items-center gap-1">
-                              {macro.sendEnter !== false && (
-                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24">
-                                  <polygon points="5,3 19,12 5,21" />
-                                </svg>
-                              )}
-                              {macro.name}
-                            </span>
-                          )}
-                        </button>
-
-                        {/* Edit/Delete dropdown on hover */}
-                        {playingMacro !== macro.id && (
-                          <div className="absolute right-0 bottom-full pb-1 hidden group-hover:flex z-10">
-                            {/* Invisible bridge to prevent hover gap */}
-                            <div className="flex bg-[#2a2a2a] rounded shadow-lg border border-[#3a3a3a] overflow-hidden">
-                              <button
-                                onClick={(e) => { e.stopPropagation(); editMacro(macro); }}
-                                tabIndex={-1}
-                                className="px-2 py-1 text-xs text-[#a0a0a0] hover:bg-[#3a3a3a] hover:text-[#e0e0e0]"
-                                title="Edit macro"
-                              >
-                                Edit
-                              </button>
-                              <button
-                                onClick={(e) => { e.stopPropagation(); deleteMacro(macro.id); }}
-                                tabIndex={-1}
-                                className="px-2 py-1 text-xs text-red-400 hover:bg-red-500/20"
-                                title="Delete macro"
-                              >
-                                Del
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-
-                    {macros.length === 0 && (
-                      <span className="text-[10px] text-[#606060]">
-                        No macros yet. Click &quot;+ New&quot; to create one.
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </>
+              <MacroList
+                macros={macros}
+                playingMacro={playingMacro}
+                onPlay={playMacro}
+                onStop={stopMacro}
+                onEdit={editMacro}
+                onDelete={deleteMacro}
+                onNew={newMacro}
+              />
             )}
           </div>
         ) : (

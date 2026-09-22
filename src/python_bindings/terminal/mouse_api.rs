@@ -42,7 +42,7 @@ impl PyTerminal {
     ///     term = Terminal(80, 24)
     ///     term.record_mouse_event("press", "left", 10, 5, None, None, 0, 0)
     ///     ```
-    #[allow(clippy::too_many_arguments, unused_variables)]
+    #[allow(clippy::too_many_arguments)]
     fn record_mouse_event(
         &mut self,
         event_type: &str,
@@ -54,6 +54,15 @@ impl PyTerminal {
         modifiers: u8,
         timestamp: u64,
     ) -> PyResult<()> {
+        // pixel_x/pixel_y/timestamp are accepted for API compatibility
+        // (see the docstring) but not yet stored — Terminal::record_mouse_event
+        // in src/mouse.rs has no pixel-coordinate or caller-timestamp fields
+        // to forward them into. Discard explicitly rather than renaming the
+        // parameters (an underscore prefix would change these from public
+        // Python keyword-argument names to `_pixel_x`/`_pixel_y`/`_timestamp`,
+        // a breaking change for any caller using kwarg syntax).
+        let _ = (pixel_x, pixel_y, timestamp);
+
         use crate::mouse::{MouseButton, MouseEventType};
 
         let event_type = match event_type.to_lowercase().as_str() {

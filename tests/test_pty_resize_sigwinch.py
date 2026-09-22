@@ -55,7 +55,7 @@ def get_size():
         result = fcntl.ioctl(sys.stdout.fileno(), termios.TIOCGWINSZ, b'\\x00' * 8)
         rows, cols, _, _ = struct.unpack('HHHH', result)
         return (cols, rows)
-    except:
+    except OSError:
         return (0, 0)
 
 def sigwinch_handler(signum, frame):
