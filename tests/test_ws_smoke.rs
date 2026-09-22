@@ -103,6 +103,110 @@ async fn ws_smoke_ping_pong_round_trip() {
     server_handle.abort();
 }
 
+/// PTY writer stub whose writes stall for a fixed time, simulating a
+/// non-reading foreground process with a full kernel buffer (SEC-005).
+struct StallingWriter {
+    stall: Duration,
+    captured: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for StallingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(self.stall);
+        self.captured.lock().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// SEC-005: a stalled PTY write must not block the session loop. The write
+/// runs on the blocking pool, so a Ping sent right after an Input whose PTY
+/// write stalls for 3 seconds must still round-trip promptly — with the old
+/// synchronous write inside the select loop, the Pong could only arrive
+/// after the stall.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stalled_pty_write_does_not_block_ping_round_trip() {
+    let port = ephemeral_port();
+    let addr = format!("127.0.0.1:{}", port);
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let server = Arc::new(StreamingServer::new(terminal, addr.clone()));
+    server.set_pty_writer(Arc::new(Mutex::new(Box::new(StallingWriter {
+        stall: Duration::from_secs(3),
+        captured: Arc::clone(&captured),
+    }) as Box<dyn Write + Send>)));
+
+    let server_handle = tokio::spawn(async move { server.start().await });
+
+    // Wait briefly for the listener to come up.
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let url = format!("ws://{}", addr);
+    let (mut ws, _response) = connect_async(url).await.expect("WS handshake");
+
+    // Drain the initial Connected message.
+    let first = ws.next().await.expect("server sent a message").unwrap();
+    match first {
+        Message::Binary(data) => {
+            let msg = decode_server_message(&data).expect("decode Connected");
+            assert!(matches!(msg, ServerMessage::Connected { .. }));
+        }
+        other => panic!("expected Binary Connected, got {:?}", other),
+    }
+
+    // An Input whose PTY write stalls for 3s, then an immediate Ping.
+    let input = ClientMessage::Input {
+        data: "x".repeat(16),
+    };
+    ws.send(Message::Binary(
+        encode_client_message(&input).unwrap().into(),
+    ))
+    .await
+    .expect("send Input");
+
+    let ping_bytes = encode_client_message(&ClientMessage::Ping).unwrap();
+    ws.send(Message::Binary(ping_bytes.into()))
+        .await
+        .expect("send Ping");
+
+    // The Pong must arrive well before the 3s write stall elapses.
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    let mut saw_pong = false;
+    loop {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or_default();
+        match tokio::time::timeout(remaining, ws.next()).await {
+            Ok(Some(Ok(Message::Binary(data)))) => {
+                let msg = decode_server_message(&data).expect("decode reply");
+                if matches!(msg, ServerMessage::Pong) {
+                    saw_pong = true;
+                    break;
+                }
+            }
+            Ok(Some(Ok(other))) => eprintln!("ignoring non-binary frame: {:?}", other),
+            Ok(Some(Err(e))) => panic!("ws error waiting for pong: {}", e),
+            Ok(None) => panic!("stream closed before pong arrived"),
+            Err(_) => break, // deadline hit
+        }
+    }
+    assert!(
+        saw_pong,
+        "Pong did not arrive within 1.5s — the stalled PTY write is blocking the session loop"
+    );
+
+    server_handle.abort();
+}
+
 /// PTY writer stub that records every byte written through it.
 struct CapturingWriter {
     captured: Arc<Mutex<Vec<u8>>>,

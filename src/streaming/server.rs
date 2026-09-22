@@ -45,6 +45,14 @@ use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
 const WS_MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 
+/// Maximum accepted `Input` message payload (SEC-005). Larger payloads are
+/// logged and dropped — the WS frame cap (16 MiB) bounds transport memory,
+/// this bounds how much a single message can push at the PTY.
+const MAX_INPUT_PAYLOAD_BYTES: usize = 64 * 1024;
+/// Maximum accepted `Paste` message payload (SEC-005). Pastes are bulk
+/// transfers, so the cap is higher than single keystroke Input.
+const MAX_PASTE_PAYLOAD_BYTES: usize = 256 * 1024;
+
 /// Request/response types for the tungstenite WS handshake header callback,
 /// aliased for readability (the `Callback` trait fixes these exactly).
 type WsHandshakeRequest = tokio_tungstenite::tungstenite::http::Request<()>;
@@ -1147,6 +1155,17 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
+                if data.len() > MAX_INPUT_PAYLOAD_BYTES {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Dropping oversize Input from {} {} ({} bytes > {} cap)",
+                        transport_label,
+                        client_id,
+                        data.len(),
+                        MAX_INPUT_PAYLOAD_BYTES
+                    );
+                    return replies;
+                }
                 if let Some(ref mut limiter) = rate_limiter {
                     if !limiter.try_consume(data.len()) {
                         crate::debug_error!(
@@ -1163,17 +1182,27 @@ impl StreamingServer {
                         .metrics
                         .input_bytes
                         .fetch_add(data.len(), Ordering::Relaxed);
-                    let mut w = writer.lock();
-                    use std::io::Write;
-                    if let Err(e) = w.write_all(data.as_bytes()).and_then(|_| w.flush()) {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "PTY write error for session {}: {}",
-                            session.id,
-                            e
-                        );
-                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                    // SEC-005: never block the async runtime on a PTY write.
+                    // A non-reading foreground process with a full kernel
+                    // buffer would stall `write_all` and, on the tokio worker,
+                    // freeze every session sharing that worker. The payload
+                    // and writer handle move to the blocking pool; no lock is
+                    // held across an await.
+                    let payload = data.into_bytes();
+                    let session = Arc::clone(session);
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::Write;
+                        let mut w = writer.lock();
+                        if let Err(e) = w.write_all(&payload).and_then(|_| w.flush()) {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    });
                 }
             }
             crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
@@ -1291,6 +1320,17 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
+                if content.len() > MAX_PASTE_PAYLOAD_BYTES {
+                    crate::debug_error!(
+                        "STREAMING",
+                        "Dropping oversize Paste from {} {} ({} bytes > {} cap)",
+                        transport_label,
+                        client_id,
+                        content.len(),
+                        MAX_PASTE_PAYLOAD_BYTES
+                    );
+                    return replies;
+                }
                 if let Some(ref mut limiter) = rate_limiter {
                     if !limiter.try_consume(content.len()) {
                         crate::debug_error!(
@@ -1303,30 +1343,47 @@ impl StreamingServer {
                     }
                 }
                 if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
-                    let terminal = session.terminal.write();
+                    // Copy the bracketed-paste markers and payload out under
+                    // the terminal guard, then drop the guard before the
+                    // (blocking) PTY write (SEC-005).
+                    let (start, end, payload) = {
+                        let terminal = session.terminal.write();
+                        if terminal.bracketed_paste() {
+                            (
+                                terminal.bracketed_paste_start().to_vec(),
+                                terminal.bracketed_paste_end().to_vec(),
+                                content.into_bytes(),
+                            )
+                        } else {
+                            (Vec::new(), Vec::new(), content.into_bytes())
+                        }
+                    };
                     session
                         .metrics
                         .input_bytes
-                        .fetch_add(content.len(), Ordering::Relaxed);
-                    let mut w = writer.lock();
-                    use std::io::Write;
-                    let result = if terminal.bracketed_paste() {
-                        w.write_all(terminal.bracketed_paste_start())
-                            .and_then(|_| w.write_all(content.as_bytes()))
-                            .and_then(|_| w.write_all(terminal.bracketed_paste_end()))
-                            .and_then(|_| w.flush())
-                    } else {
-                        w.write_all(content.as_bytes()).and_then(|_| w.flush())
-                    };
-                    if let Err(e) = result {
-                        crate::debug_error!(
-                            "STREAMING",
-                            "PTY paste write error for session {}: {}",
-                            session.id,
-                            e
-                        );
-                        session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                    }
+                        .fetch_add(payload.len(), Ordering::Relaxed);
+                    let session = Arc::clone(session);
+                    tokio::task::spawn_blocking(move || {
+                        use std::io::Write;
+                        let mut w = writer.lock();
+                        let result = if !start.is_empty() {
+                            w.write_all(&start)
+                                .and_then(|_| w.write_all(&payload))
+                                .and_then(|_| w.write_all(&end))
+                                .and_then(|_| w.flush())
+                        } else {
+                            w.write_all(&payload).and_then(|_| w.flush())
+                        };
+                        if let Err(e) = result {
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY paste write error for session {}: {}",
+                                session.id,
+                                e
+                            );
+                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                        }
+                    });
                 }
             }
             crate::streaming::protocol::ClientMessage::SelectionRequest {
