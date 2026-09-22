@@ -242,13 +242,13 @@ These settings control potentially sensitive or insecure terminal features at th
 | `allow_clipboard_read` | `bool` | `false` | Allow OSC 52 clipboard queries (security risk) |
 | `accept_osc7` | `bool` | `true` | Accept OSC 7 directory tracking |
 | `disable_insecure_sequences` | `bool` | `false` | Block OSC 8, 52, 9, 777, and Sixel graphics |
-| `max_osc_data_length` | `usize` | `134217728` (128 MiB) | Cap on buffered OSC sequence data (`DEFAULT_MAX_OSC_DATA_LENGTH`, QA-012); sequences exceeding it are aborted |
+| `max_osc_data_length` | `usize` | `1048576` (1 MiB) | Cap on a single OSC sequence's payload (`DEFAULT_MAX_OSC_DATA_LENGTH`, QA-012/SEC-003); enforced incrementally — bytes past the cap never reach the parser and the sequence is dropped at dispatch |
 | `answerback_string` | `Option<String>` | `None` | Optional ENQ answerback payload returned via response buffer |
 
 **Python API for max_osc_data_length:**
 ```python
-limit = term.max_osc_data_length()  # Current cap in bytes (default: 128 MiB)
-term.set_max_osc_data_length(16 * 1024 * 1024)  # Tighten to 16 MiB
+limit = term.max_osc_data_length()  # Current cap in bytes (default: 1 MiB)
+term.set_max_osc_data_length(16 * 1024 * 1024)  # 16 MiB, for large inline images
 ```
 
 **Python API for answerback_string:**

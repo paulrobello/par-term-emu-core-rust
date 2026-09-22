@@ -365,6 +365,8 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 - `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
 - `answerback_string() -> str | None`: Get the configured ENQ answerback payload (None if disabled)
 - `set_answerback_string(answerback: str | None)`: Configure ENQ answerback string (None disables; default)
+- `max_osc_data_length() -> int`: Current cap, in bytes, on a single OSC sequence's payload (memory-exhaustion guard; default 1 MiB, `DEFAULT_MAX_OSC_DATA_LENGTH`). Enforced incrementally — payload bytes past the cap are never fed to the parser and the sequence is dropped whole at dispatch. See [CONFIG_REFERENCE.md](CONFIG_REFERENCE.md) → Core Security Settings
+- `set_max_osc_data_length(max: int)`: Raise/lower the OSC payload cap. Raise it if you push larger inline images (iTerm2 OSC 1337 / Kitty base64 in OSC); lower it for tighter memory bounds
 
 #### Paste Operations
 - `get_paste_start() -> tuple[int, int] | None`: Get bracketed paste start position
