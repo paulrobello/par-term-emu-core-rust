@@ -1208,6 +1208,7 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                    if read_only { continue; }
                                     if let Err(e) = validate_terminal_size(cols, rows) {
                                         crate::debug_error!("STREAMING", "{} {} sent invalid resize: {}", transport_label, client_id, e);
                                     } else {
@@ -1262,6 +1263,7 @@ impl StreamingServer {
                                     }
                                 }
                                 crate::streaming::protocol::ClientMessage::FocusChange { focused } => {
+                                    if read_only { continue; }
                                     if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
                                         let bytes = {
                                             let terminal = session.terminal.write();
@@ -1317,6 +1319,7 @@ impl StreamingServer {
                                 crate::streaming::protocol::ClientMessage::SelectionRequest {
                                     start_col, start_row, end_col, end_row, mode,
                                 } => {
+                                    if read_only { continue; }
                                     let selection_msg = {
                                         let mut terminal = session.terminal.write();
                                         if mode == "clear" {
@@ -1384,6 +1387,7 @@ impl StreamingServer {
                                 crate::streaming::protocol::ClientMessage::ClipboardRequest {
                                     operation, content, target,
                                 } => {
+                                    if read_only { continue; }
                                     match operation.as_str() {
                                         "set" => {
                                             if let Some(ref text) = content {
@@ -1402,8 +1406,14 @@ impl StreamingServer {
                                         "get" => {
                                             let clipboard = {
                                                 let terminal = session.terminal.write();
-                                                terminal.clipboard().unwrap_or_default().to_string()
+                                                if !terminal.allow_clipboard_read() {
+                                                    crate::debug_error!("STREAMING", "Clipboard read denied for {} {}: allow_clipboard_read is off", transport_label, client_id);
+                                                    None
+                                                } else {
+                                                    Some(terminal.clipboard().unwrap_or_default().to_string())
+                                                }
                                             };
+                                            let Some(clipboard) = clipboard else { continue; };
                                             let response = ServerMessage::clipboard_sync(
                                                 "get_response".to_string(),
                                                 clipboard,
@@ -1743,6 +1753,9 @@ impl StreamingServer {
                                             }
                                         }
                                         crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
+                                            if read_only {
+                                                continue;
+                                            }
                                             if let Err(e) = validate_terminal_size(cols, rows) {
                                                 crate::debug_error!("STREAMING", "Axum client {} sent invalid resize: {}", client_id, e);
                                             } else {
