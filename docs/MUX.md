@@ -87,7 +87,7 @@ A failed command closes with `%error` instead of `%end`, the body carrying the e
 
 ## Command Reference
 
-The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (quoting, `--`, per-command option tables) is not implemented. The one exception is `send-keys`, which carries its own bounded quoting grammar. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in exactly three places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, and the `new-session -s NAME` / `new-window -n NAME` names, so a name may contain spaces. Every other flag is whitespace-split — the `-t`/`-s` targets elsewhere are typed `$N`/`@N`/`%N` ids that cannot contain whitespace, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|

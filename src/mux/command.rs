@@ -238,6 +238,51 @@ impl Args<'_> {
             .map(|v| (*v).to_string())
     }
 
+    /// The value following `flag`, read through [`shell_split`] so a quoted
+    /// value survives as one word.
+    ///
+    /// [`Self::flag`] reads the pre-split `args`, so it takes only the first
+    /// whitespace-delimited token of a value — for a target that is a typed
+    /// `$N`/`@N`/`%N` id that is exactly right, but a NAME may legitimately
+    /// contain spaces. This re-splits the whole line with the same bounded
+    /// quoting grammar `send-keys` payloads use, so `-s 'Par Mux Test'`
+    /// yields `Par Mux Test` rather than `'Par` (par-term filed this against
+    /// `new-session`: a spaced name silently created a session called `Par`).
+    ///
+    /// A value that does not open a quote keeps [`Self::flag`]'s verbatim
+    /// result, so an unquoted name is byte-identical to what it parsed to
+    /// before — a bare `a\b` stays `a\b` rather than becoming `ab`.
+    ///
+    /// An explicitly empty value (`-s ''`) is an error rather than a silent
+    /// default: quoting is what makes it expressible at all, and tmux admits
+    /// any session name except an empty one.
+    fn quoted_flag(&self, flag: &str) -> Result<Option<String>, String> {
+        // The flat scan already answers every unquoted name, and answers it
+        // byte-for-byte: only re-split when the value actually opens a
+        // quote. A bare `a\b` is a name containing a backslash, not an
+        // escape — re-splitting unconditionally would silently eat it.
+        let flat = self.flag(flag);
+        let opens_quote = flat
+            .as_deref()
+            .is_some_and(|v| v.starts_with('\'') || v.starts_with('"'));
+        let value = if opens_quote {
+            let words = shell_split(self.line);
+            let at = words.iter().position(|w| w == flag);
+            at.and_then(|i| words.get(i + 1)).cloned()
+        } else {
+            flat
+        };
+        match value {
+            // An empty name is reachable only through quoting, and `""` is
+            // not a tmux name; a client that sent one has a bug worth
+            // surfacing rather than defaulting away.
+            Some(v) if v.is_empty() => {
+                Err(format!("{}: {flag} requires a non-empty name", self.name))
+            }
+            other => Ok(other),
+        }
+    }
+
     /// Presence check for valueless flags (`-h`, `-R`, …) — [`Self::flag`]
     /// cannot distinguish "absent" from "present with no following token".
     fn has_flag(&self, flag: &str) -> bool {
@@ -558,12 +603,26 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 
 /// Parse one command line from a client.
 ///
-/// Deliberately minimal: whitespace-split with a `-t`/`-s` flag scan. tmux's
-/// real argument grammar (quoting, `--`, per-command option tables) is not a
-/// goal here, and pretending to implement it would hide that. The one
-/// exception is `send-keys`, which carries its own bounded quoting grammar
-/// (see [`parse_send_keys_payload`]) because key names, `-l` and `-H` cannot
-/// survive a whitespace split.
+/// Deliberately minimal: whitespace-split with a flag scan. tmux's real
+/// argument grammar (`--`, per-command option tables, command sequences) is
+/// not a goal here, and pretending to implement it would hide that.
+///
+/// Quoting is honored in exactly three places, all of them values that may
+/// legitimately contain a space, and all sharing the one bounded grammar in
+/// [`shell_split`] (single or double quotes, backslash escapes outside
+/// quotes, the `'\''` close-escape-reopen idiom; no interpolation):
+/// - the `send-keys` payload (see [`parse_send_keys_payload`]), because key
+///   names, `-l` and `-H` cannot survive a whitespace split;
+/// - `new-session -s NAME` and `new-window -n NAME` (see
+///   [`Args::quoted_flag`]) — tmux admits any non-empty session or window
+///   name, spaces included.
+///
+/// Every other flag stays whitespace-split, which is correct rather than
+/// merely cheap: the `-t`/`-s` targets everywhere else parse as typed
+/// `$N`/`@N`/`%N` identifiers, which cannot contain whitespace. The two
+/// trailing-text commands need no quoting either, taking the rest of the
+/// line verbatim — `rename-window` (via [`Args::trailing_after`]) and
+/// `set-buffer`.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
@@ -578,7 +637,9 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
 }
 
 fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::NewSession { name: a.flag("-s") })
+    Ok(MuxCommand::NewSession {
+        name: a.quoted_flag("-s")?,
+    })
 }
 
 fn parse_list_panes(_a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -619,7 +680,7 @@ fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
 fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::NewWindow {
         session: a.session("-t")?,
-        name: a.flag("-n"),
+        name: a.quoted_flag("-n")?,
     })
 }
 
@@ -780,6 +841,119 @@ mod tests {
     fn parses_new_session_without_a_name() {
         let cmd = parse_command("new-session").expect("parses");
         assert_eq!(cmd, MuxCommand::NewSession { name: None });
+    }
+
+    /// A quoted session name survives as one name. Before the fix the flag
+    /// scan read the pre-split tokens, so `-s 'Par Mux Test'` created a
+    /// session literally called `'Par` — the bug par-term filed.
+    #[test]
+    fn new_session_keeps_a_quoted_name_whole() {
+        for line in [
+            "new-session -s 'Par Mux Test'",
+            "new-session -s \"Par Mux Test\"",
+        ] {
+            assert_eq!(
+                parse_command(line).expect("parses"),
+                MuxCommand::NewSession {
+                    name: Some("Par Mux Test".into())
+                },
+                "line: {line}"
+            );
+        }
+    }
+
+    /// The `'\''` close-escape-reopen idiom yields a real single quote —
+    /// the same escaping `send-keys` payloads already round-trip.
+    #[test]
+    fn new_session_resolves_the_embedded_quote_idiom() {
+        let cmd = parse_command(r"new-session -s 'Paul'\''s box'").expect("parses");
+        assert_eq!(
+            cmd,
+            MuxCommand::NewSession {
+                name: Some("Paul's box".into())
+            }
+        );
+    }
+
+    /// Quoting changes nothing for a name that never needed it: an
+    /// unquoted name, a trailing flag after it, and a bare `-s` with no
+    /// value all behave exactly as they did under the flat split.
+    #[test]
+    fn new_session_flat_names_are_unchanged() {
+        assert_eq!(
+            parse_command("new-session -s work").expect("parses"),
+            MuxCommand::NewSession {
+                name: Some("work".into())
+            }
+        );
+        assert_eq!(
+            parse_command("new-session   -s   work  ").expect("parses"),
+            MuxCommand::NewSession {
+                name: Some("work".into())
+            }
+        );
+        assert_eq!(
+            parse_command("new-session -s").expect("parses"),
+            MuxCommand::NewSession { name: None }
+        );
+        // An unquoted value keeps the flat scan's verbatim bytes: a bare
+        // backslash is part of the name, not an escape.
+        assert_eq!(
+            parse_command(r"new-session -s a\b").expect("parses"),
+            MuxCommand::NewSession {
+                name: Some(r"a\b".into())
+            }
+        );
+    }
+
+    /// The flag scan finds the name flag itself, not a same-looking value
+    /// of an earlier flag, and works with the name flag in any slot.
+    #[test]
+    fn quoted_names_may_look_like_flags() {
+        assert_eq!(
+            parse_command("new-session -s '-n'").expect("parses"),
+            MuxCommand::NewSession {
+                name: Some("-n".into())
+            }
+        );
+        assert_eq!(
+            parse_command("new-window -t $0 -n '-s'").expect("parses"),
+            MuxCommand::NewWindow {
+                session: Some(SessionId(0)),
+                name: Some("-s".into())
+            }
+        );
+        // The name flag need not come first.
+        assert_eq!(
+            parse_command("new-window -n 'two words' -t $0").expect("parses"),
+            MuxCommand::NewWindow {
+                session: Some(SessionId(0)),
+                name: Some("two words".into())
+            }
+        );
+    }
+
+    /// An empty name is only expressible through quoting, so the quoted
+    /// path is where it has to be rejected — `""` is not a tmux name, and
+    /// silently falling back to the default would hide a client bug.
+    #[test]
+    fn new_session_rejects_an_explicitly_empty_name() {
+        let err = parse_command("new-session -s ''").expect_err("empty name is an error");
+        assert!(err.contains("-s"), "error names the flag: {err}");
+    }
+
+    /// `new-window -n` is the same flag shape as `new-session -s` and got
+    /// the same fix; its target stays a typed `$N` id.
+    #[test]
+    fn new_window_keeps_a_quoted_name_whole() {
+        assert_eq!(
+            parse_command("new-window -t $0 -n 'build and test'").expect("parses"),
+            MuxCommand::NewWindow {
+                session: Some(SessionId(0)),
+                name: Some("build and test".into())
+            }
+        );
+        assert!(parse_command("new-window -t $0 -n ''").is_err());
     }
 
     #[test]
