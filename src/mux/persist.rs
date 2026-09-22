@@ -525,6 +525,9 @@ mod tests {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
     }
 
+    /// Commands restores handed the factory, in spawn order.
+    type RecordedCommands = Vec<(PaneId, Option<String>)>;
+
     /// Records the command each restore computed, delegating the actual
     /// spawn to a bounded sleeper: restoring an agent pane must not launch a
     /// real agent CLI from a unit test, and the recorded value is the
@@ -532,7 +535,7 @@ mod tests {
     /// factory.
     #[derive(Clone, Default)]
     struct RecordingFactory {
-        received: std::sync::Arc<std::sync::Mutex<Vec<(PaneId, Option<String>)>>>,
+        received: std::sync::Arc<std::sync::Mutex<RecordedCommands>>,
     }
 
     impl RecordingFactory {
