@@ -107,9 +107,9 @@ Also update:
 
 - `src/python_bindings/streaming.rs` (dict conversion + event type matching)
 - `tests/test_streaming.rs` (use `..` in destructuring for forward compatibility)
-- `src/streaming/server.rs` (`build_connect_message()` helper when extending `Connected`)
+- `src/streaming/session.rs` (`SessionRegistry::build_connect_message()`)
 
-When extending the `Connected` message, update every existing constructor, add `connected_full()`, and update `build_connect_message()` in `server.rs`.
+When extending the `Connected` message, add one method on `ConnectedBuilder` plus the field in `Connected`/builder/`build()` — the single edit site — then update `build_connect_message()` in `session.rs`. Do not add partial constructors.
 
 ## Pull Request Workflow
 
