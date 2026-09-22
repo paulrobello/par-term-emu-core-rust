@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.50.0] - 2026-09-21
+
+### Removed
+- **The dead terminal multiplexing module is removed — breaking Python API change** (`src/terminal/multiplexing.rs`, `src/python_bindings/types/session.rs`, `src/python_bindings/terminal/multiplexing_api.rs`). `PaneState`, `WindowLayout`, `SessionState`, and the `Terminal` pane-state methods (`capture_pane_state`, `restore_pane_state`, `set_pane_state`, `get_pane_state`, `clear_pane_state`, `create_window_layout`, `create_session_state`, `serialize_session`, `deserialize_session`) are gone from both the Rust API and the Python bindings (`_native.pyi` regenerated). The module had zero callers, its capture was lossy by type (`Vec<String>` content — no colors, attributes, scrollback, or alternate screen), and `restore_pane_state` restored only size/title/cursor by its own comment. The removal was decided against adoption because `replay_snapshot.rs`'s `TerminalSnapshot` already captures what a real persistence format needs (both grids, cursors, colors, modes, scrollback); par-mux Phase 3's on-disk format starts from that type instead. Migration: nothing to migrate to — no consumer of these types existed in this codebase; if external code used them, keep the capture/restore semantics you need via `TerminalSnapshot`-shaped data.
+
+### Added
+- **par-mux Phase 2 command set (Rust `mux` feature)** (`src/mux/`). Pane commands — `split-window` (`-h`/`-v` orientation, `-p` percent for the new pane, reply carries the new pane id), `select-pane`, `resize-pane` (`-L`/`-R`/`-U`/`-D` with cell count, default 5), and `swap-pane` (`-t`/`-s`) — each mutating the window's binary `LayoutTree` and broadcasting a `%layout-change` notification to every connected client, rendered by the Task 2.2 layout-string emitter. `capture-pane -S`/`-E` now select an exact line range under tmux's offset convention (`0` = first visible line, negative = history lines back from the screen top) instead of a tail count, and `MuxClient` keeps — and can `kill_spawned_daemon()` — the daemon child it spawns.
+
 ## [0.49.0] - 2026-09-19
 
 ### Added

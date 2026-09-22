@@ -176,7 +176,6 @@ The main terminal emulator that ties everything together, organized into submodu
 - `image.rs` - Inline image handling
 - `macros.rs` - Macro recording and playback
 - `metrics.rs` - Performance metrics and benchmarking
-- `multiplexing.rs` - Pane and session management
 - `notification.rs` - Notification types from OSC sequences
 - `perform.rs` - VTE Perform trait implementation
 - `progress.rs` - OSC 9;4 progress bar support
@@ -494,7 +493,6 @@ The Python bindings live in `src/python_bindings/`. **As of ARC-002, `terminal.r
 - `image_api.rs` - Inline image queries
 - `metrics_api.rs` - Performance metrics, frame timings
 - `mouse_api.rs` - Mouse event recording and history
-- `multiplexing_api.rs` - Pane state capture/restore
 - `notification_api.rs` - OSC 9/777 notifications
 - `recording_api.rs` - Session recording export (asciicast/JSON)
 - `scrollback_api.rs` - Scrollback export and stats
