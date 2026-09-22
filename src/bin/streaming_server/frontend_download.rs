@@ -28,8 +28,59 @@ struct GitHubAsset {
 const GITHUB_REPO: &str = "paulrobello/par-term-emu-core-rust";
 const FRONTEND_ARCHIVE_PREFIX: &str = "par-term-web-frontend-v";
 
+/// Hard cap on the downloaded archive (SEC-007). The real bundle is a few
+/// MiB; anything larger is a misdirected URL or a malicious response and
+/// must not be buffered in memory, let alone extracted.
+const MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
+
+/// Read a response body up to `max_bytes`, failing as soon as the cap is
+/// exceeded instead of buffering an unbounded stream (SEC-007).
+async fn read_body_capped(response: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>> {
+    if let Some(len) = response.content_length() {
+        if len as usize > max_bytes {
+            anyhow::bail!(
+                "Frontend archive is {} bytes, over the {} MiB download cap",
+                len,
+                max_bytes / (1024 * 1024)
+            );
+        }
+    }
+    let mut response = response;
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .context("Failed to read archive content")?
+    {
+        if body.len() + chunk.len() > max_bytes {
+            anyhow::bail!(
+                "Frontend archive exceeded the {} MiB download cap mid-stream",
+                max_bytes / (1024 * 1024)
+            );
+        }
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
+}
+
+/// Guard the destructive web-root replacement (SEC-007): an existing
+/// directory is only cleared when it looks like a previously extracted
+/// frontend bundle (has `index.html`) or `force` was passed explicitly.
+/// A stray `--web-root` pointing at an unrelated directory is refused.
+fn check_web_root_replaceable(web_root: &Path, force: bool) -> Result<()> {
+    if web_root.exists() && !force && !web_root.join("index.html").exists() {
+        anyhow::bail!(
+            "Refusing to replace web root '{}': it exists but has no index.html, so it does not \
+             look like a previously extracted frontend bundle. Re-run with --force-web-download \
+             to overwrite it anyway.",
+            web_root.display()
+        );
+    }
+    Ok(())
+}
+
 /// Download and extract the web frontend from GitHub releases
-pub async fn download_frontend(version: &str, web_root: &str) -> Result<()> {
+pub async fn download_frontend(version: &str, web_root: &str, force: bool) -> Result<()> {
     let client = reqwest::Client::builder()
         .user_agent("par-term-streamer")
         .timeout(Duration::from_secs(60))
@@ -116,15 +167,17 @@ pub async fn download_frontend(version: &str, web_root: &str) -> Result<()> {
         println!("Download size: {} bytes", len);
     }
 
-    let archive_bytes = response
-        .bytes()
-        .await
-        .context("Failed to read archive content")?;
+    // SEC-007: stream the body with a hard size cap instead of buffering
+    // whatever the URL serves.
+    let archive_bytes = read_body_capped(response, MAX_ARCHIVE_BYTES).await?;
 
     println!("Downloaded {} bytes", archive_bytes.len());
 
     // Create web root directory if it doesn't exist
     let web_root_path = Path::new(web_root);
+    // SEC-007: refuse to clear a directory that does not look like a
+    // previously extracted frontend unless --force-web-download was passed.
+    check_web_root_replaceable(web_root_path, force)?;
     if web_root_path.exists() {
         println!("Clearing existing web root: {}", web_root);
         fs::remove_dir_all(web_root_path)
@@ -135,7 +188,7 @@ pub async fn download_frontend(version: &str, web_root: &str) -> Result<()> {
 
     // Extract the tar.gz archive
     println!("Extracting to: {}", web_root);
-    let tar_gz = GzDecoder::new(archive_bytes.as_ref());
+    let tar_gz = GzDecoder::new(archive_bytes.as_slice());
     let mut archive = Archive::new(tar_gz);
 
     archive
@@ -175,4 +228,101 @@ fn count_files(path: &Path) -> Result<usize> {
         }
     }
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal single-shot HTTP server: accepts one connection, serves
+    /// `body` with the given Content-Length, closes.
+    fn spawn_stub_server(body: Vec<u8>) -> String {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut conn, _)) = listener.accept() {
+                let mut buf = [0u8; 1024];
+                // Drain the request head (best-effort).
+                let _ = conn.read(&mut buf);
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = conn.write_all(head.as_bytes());
+                let _ = conn.write_all(&body);
+            }
+        });
+        format!("http://{}", addr)
+    }
+
+    #[tokio::test]
+    async fn oversized_body_is_rejected_before_extraction() {
+        // Serve 4 KiB with a 1 KiB cap — the same failure mode as the 50 MiB
+        // production cap against an oversized archive, without moving 50 MiB
+        // through the test.
+        let body = vec![0x41u8; 4 * 1024];
+        let url = spawn_stub_server(body);
+        let client = reqwest::Client::new();
+        let response = client.get(url).send().await.unwrap();
+        let err = read_body_capped(response, 1024)
+            .await
+            .expect_err("oversized body must be rejected");
+        let msg = format!("{:#}", err);
+        assert!(
+            msg.contains("download cap"),
+            "expected size-cap error, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn content_length_over_cap_is_rejected_immediately() {
+        let url = spawn_stub_server(vec![0x41u8; 64]);
+        let client = reqwest::Client::new();
+        let response = client.get(url).send().await.unwrap();
+        let err = read_body_capped(response, 32)
+            .await
+            .expect_err("oversized Content-Length must be rejected");
+        assert!(format!("{:#}", err).contains("download cap"));
+    }
+
+    #[tokio::test]
+    async fn body_under_cap_is_returned_intact() {
+        let body = vec![0x42u8; 512];
+        let url = spawn_stub_server(body.clone());
+        let client = reqwest::Client::new();
+        let response = client.get(url).send().await.unwrap();
+        let got = read_body_capped(response, 1024).await.unwrap();
+        assert_eq!(got, body);
+    }
+
+    #[test]
+    fn web_root_without_index_html_is_refused_unless_forced() {
+        let base =
+            std::env::temp_dir().join(format!("par-term-webroot-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+
+        // Directory without index.html → refused.
+        let stray = base.join("stray");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("important.txt"), "data").unwrap();
+        let err =
+            check_web_root_replaceable(&stray, false).expect_err("stray directory must be refused");
+        assert!(format!("{:#}", err).contains("Refusing to replace web root"));
+        // With force → allowed.
+        check_web_root_replaceable(&stray, true).expect("force must allow replacement");
+
+        // Directory with index.html (a previously extracted bundle) → allowed.
+        let bundle = base.join("bundle");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(bundle.join("index.html"), "<html></html>").unwrap();
+        check_web_root_replaceable(&bundle, false).expect("bundle directory must be replaceable");
+
+        // Nonexistent path → allowed (fresh install).
+        check_web_root_replaceable(&base.join("fresh"), false)
+            .expect("nonexistent web root must be allowed");
+
+        let _ = fs::remove_dir_all(&base);
+    }
 }

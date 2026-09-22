@@ -196,6 +196,12 @@ pub struct Args {
     #[arg(long, default_value = "latest", env = "PAR_TERM_FRONTEND_VERSION")]
     pub frontend_version: String,
 
+    /// Allow --download-frontend to replace a web root that has no
+    /// index.html (i.e. does not look like a previously extracted frontend
+    /// bundle). Without this flag such directories are left alone (SEC-007).
+    #[arg(long, env = "PAR_TERM_FORCE_WEB_DOWNLOAD")]
+    pub force_web_download: bool,
+
     /// TLS certificate file (PEM format)
     /// Use with --tls-key for separate cert/key files
     #[arg(long, requires = "tls_key", env = "PAR_TERM_TLS_CERT")]
