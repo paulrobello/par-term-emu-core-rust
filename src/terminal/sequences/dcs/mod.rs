@@ -39,6 +39,13 @@ fn classify_dcs(action: char, intermediates: &[u8]) -> DcsKind {
     }
 }
 
+/// SEC-003: cap on `dcs_buffer` accumulation. Non-Sixel DCS kinds buffer
+/// every payload byte with no other bound; 64 KiB comfortably exceeds any
+/// legitimate XTGETTCAP/DECRQSS reply or Sixel command fragment (sixel pixel
+/// data streams to the parser, not this buffer). Past the cap the sequence is
+/// dropped whole at unhook.
+const MAX_DCS_BUFFER: usize = 64 * 1024;
+
 impl Terminal {
     /// VTE hook - start of DCS sequence
     pub(in crate::terminal) fn dcs_hook(
@@ -63,6 +70,7 @@ impl Terminal {
         self.dcs_state.dcs_action = Some(action);
         self.dcs_state.dcs_kind = kind;
         self.dcs_state.dcs_buffer.clear();
+        self.dcs_state.dcs_overflow = false;
 
         if kind == DcsKind::Sixel {
             self.handle_sixel_hook(params);
@@ -72,6 +80,25 @@ impl Terminal {
     /// VTE put - data for DCS sequence
     pub(in crate::terminal) fn dcs_put(&mut self, byte: u8) {
         if !self.dcs_state.dcs_active {
+            return;
+        }
+
+        // SEC-003: bound accumulation. Once tripped, stop buffering (and stop
+        // feeding the Sixel parser — a sequence this size is hostile) and let
+        // unhook drop the whole sequence.
+        if self.dcs_state.dcs_overflow {
+            return;
+        }
+        if self.dcs_state.dcs_buffer.len() >= MAX_DCS_BUFFER {
+            self.dcs_state.dcs_overflow = true;
+            debug::log(
+                debug::DebugLevel::Debug,
+                "SECURITY",
+                &format!(
+                    "DCS payload exceeds {} bytes, dropping sequence",
+                    MAX_DCS_BUFFER
+                ),
+            );
             return;
         }
 
@@ -134,6 +161,21 @@ impl Terminal {
     /// VTE unhook - end of DCS sequence
     pub(in crate::terminal) fn dcs_unhook(&mut self) {
         if !self.dcs_state.dcs_active {
+            return;
+        }
+
+        // SEC-003: an overflowed sequence is dropped whole — processing a
+        // truncated payload would decode garbage.
+        if self.dcs_state.dcs_overflow {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "SECURITY",
+                "Dropping overflowed DCS sequence at unhook",
+            );
+            self.dcs_state.dcs_overflow = false;
+            self.dcs_state.dcs_active = false;
+            self.dcs_state.dcs_buffer.clear();
+            self.dcs_state.sixel_parser = None;
             return;
         }
 

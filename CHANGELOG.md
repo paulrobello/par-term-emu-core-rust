@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **OSC/DCS parser accumulation is now capped incrementally — behavior-affecting default change** (`src/terminal/mod.rs`, `src/terminal/sequences/osc/mod.rs`, `src/terminal/sequences/dcs/mod.rs`; SEC-003). `DEFAULT_MAX_OSC_DATA_LENGTH` drops from 128 MiB to 1 MiB: the old value only bounded the *dispatch*-time check, while vte 0.15's internal OSC buffer (which has no per-byte hook) grew unbounded until that check fired. The cap is now enforced in `Terminal::advance_parser` — payload bytes past `max_osc_data_length` are never fed to vte, terminators always are (so the parser never desyncs), and the truncated dispatch is dropped whole. The non-Sixel DCS accumulation buffer is capped at 64 KiB with the overflowed sequence dropped at unhook. Deployments pushing larger inline images (iTerm2/Kitty base64 in OSC 1337) can raise the limit with `set_max_osc_data_length`.
+
 ## [0.50.0] - 2026-09-21
 
 ### Removed

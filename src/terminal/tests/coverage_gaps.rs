@@ -525,3 +525,93 @@ fn get_rectangle_returns_cells_cloned_not_references() {
     assert_eq!(after[0][0].c, 'Q');
     assert_eq!(mutated[0][0].c, 'Z');
 }
+
+// =============================================================================
+// SEC-003: incremental OSC/DCS accumulation caps.
+// vte 0.15 buffers the whole OSC payload internally (no per-byte hook), so
+// the guard lives in Terminal::advance_parser; these tests pin both the cap
+// and parser resynchronization after a dropped sequence.
+// =============================================================================
+
+#[test]
+fn osc_payload_over_cap_is_dropped_and_parser_stays_in_sync() {
+    let mut term = Terminal::new(80, 24);
+    term.set_max_osc_data_length(64);
+
+    let payload = "A".repeat(200);
+    term.process(format!("\x1b]0;{}\x07", payload).as_bytes());
+    assert_eq!(term.title(), "", "over-cap OSC must not dispatch");
+
+    // The parser must stay in sync after the dropped sequence.
+    term.process(b"\x1b]0;ok\x07visible");
+    assert_eq!(term.title(), "ok");
+    assert!(term.content().contains("visible"));
+}
+
+#[test]
+fn osc_payload_split_across_chunks_over_cap_is_dropped() {
+    let mut term = Terminal::new(80, 24);
+    term.set_max_osc_data_length(64);
+
+    let payload = "B".repeat(200);
+    let seq = format!("\x1b]0;{}\x07after", payload).into_bytes();
+    let split = seq.len() / 2;
+    term.process(&seq[..split]);
+    term.process(&seq[split..]);
+
+    assert_eq!(term.title(), "");
+    assert!(term.content().contains("after"));
+}
+
+#[test]
+fn osc_in_flight_counter_caps_at_max() {
+    let mut term = Terminal::new(80, 24);
+    term.set_max_osc_data_length(64);
+
+    // No terminator yet: the guard state must show a capped in-flight count.
+    term.process(b"\x1b]0;");
+    term.process(&[b'A'; 200]);
+    assert!(term.security_state.osc_in_osc);
+    assert_eq!(term.security_state.osc_in_flight, 64);
+
+    term.process(b"\x07");
+    assert_eq!(term.title(), "");
+    assert!(!term.security_state.osc_in_osc);
+}
+
+#[test]
+fn osc_payload_exactly_at_cap_still_dispatches() {
+    let mut term = Terminal::new(80, 24);
+    term.set_max_osc_data_length(200);
+
+    let payload = "C".repeat(192); // "0;" prefix + payload stays <= 200
+    term.process(format!("\x1b]0;{}\x07", payload).as_bytes());
+    assert_eq!(term.title(), payload);
+}
+
+#[test]
+fn oversized_dcs_buffer_is_capped_and_sequence_dropped() {
+    let mut term = Terminal::new(80, 24);
+
+    // XTGETTCAP-shaped DCS with a >64 KiB payload, terminator withheld so
+    // the buffer bound is directly observable.
+    let mut seq = Vec::new();
+    seq.extend_from_slice(b"\x1bP+q");
+    seq.extend(std::iter::repeat_n(b'A', 100 * 1024));
+    term.process(&seq);
+    assert!(
+        term.dcs_state.dcs_buffer.len() <= 65 * 1024,
+        "dcs_buffer must be capped, got {}",
+        term.dcs_state.dcs_buffer.len()
+    );
+
+    term.process(b"\x1b\\");
+    assert!(
+        !term.has_pending_responses(),
+        "overflowed DCS must not produce a reply"
+    );
+
+    // Guard resets for the next sequence.
+    term.process(b"Z");
+    assert!(term.content().contains('Z'));
+}

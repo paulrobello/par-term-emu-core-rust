@@ -28,6 +28,12 @@ impl Terminal {
         _bell_terminated: bool,
     ) {
         debug::log_osc_dispatch(params);
+        // SEC-003: the incremental guard in `advance_parser` already dropped
+        // the over-cap payload bytes; drop the truncated dispatch whole.
+        if self.security_state.osc_discard_dispatch {
+            self.security_state.osc_discard_dispatch = false;
+            return;
+        }
         if params.is_empty() {
             return;
         }

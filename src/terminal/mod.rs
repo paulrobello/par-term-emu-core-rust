@@ -484,6 +484,9 @@ pub(crate) struct DcsState {
     /// Which DCS sub-protocol is active (disambiguates Sixel/XTGETTCAP/DECRQSS,
     /// which all share action 'q' but differ by intermediate bytes)
     pub(crate) dcs_kind: DcsKind,
+    /// SEC-003: the in-flight DCS exceeded `MAX_DCS_BUFFER`; drop the whole
+    /// sequence at unhook instead of processing a truncated payload.
+    pub(crate) dcs_overflow: bool,
 }
 
 /// DECSTBM/DECSLRM scroll + left/right margins (ARC-001 sub-struct)
@@ -658,14 +661,29 @@ pub(crate) struct SecurityFlagsState {
     /// Disable potentially insecure escape sequences
     pub(crate) disable_insecure_sequences: bool,
     /// Maximum total OSC data length in bytes before a sequence is rejected as
-    /// a memory-exhaustion guard (QA-012). Defaults to 128 MiB so inline
-    /// images (iTerm2/Kitty base64) fit; security-conscious deployments can
-    /// tighten it via [`Terminal::set_max_osc_data_length`].
+    /// a memory-exhaustion guard (QA-012/SEC-003). Defaults to 1 MiB; the
+    /// pre-SEC-003 default of 128 MiB only bounded the *dispatch* check while
+    /// vte's internal buffer grew unbounded. Enforced incrementally by the
+    /// guard in [`Terminal::advance_parser`], which stops feeding payload
+    /// bytes to vte once the in-flight OSC exceeds this. Deployments pushing
+    /// larger inline images (iTerm2/Kitty base64) can raise it via
+    /// [`Terminal::set_max_osc_data_length`].
     pub(crate) max_osc_data_length: usize,
+    /// SEC-003 incremental OSC guard: previous byte was ESC (candidate OSC
+    /// start).
+    pub(crate) osc_seen_esc: bool,
+    /// SEC-003 incremental OSC guard: inside an OSC payload.
+    pub(crate) osc_in_osc: bool,
+    /// SEC-003 incremental OSC guard: payload bytes fed for the in-flight OSC.
+    pub(crate) osc_in_flight: usize,
+    /// SEC-003 incremental OSC guard: set when the in-flight OSC exceeded
+    /// `max_osc_data_length`; the next `osc_dispatch` is dropped whole.
+    pub(crate) osc_discard_dispatch: bool,
 }
 
-/// Default max OSC data length: 128 MiB (room for inline images).
-pub const DEFAULT_MAX_OSC_DATA_LENGTH: usize = 128 * 1024 * 1024;
+/// Default max OSC data length: 1 MiB (SEC-003; was 128 MiB, which only
+/// checked at dispatch after vte had already buffered the payload).
+pub const DEFAULT_MAX_OSC_DATA_LENGTH: usize = 1024 * 1024;
 
 /// OSC 1337 badge format string + session variables for evaluation (ARC-001 sub-struct)
 pub(crate) struct BadgeState {
@@ -849,6 +867,10 @@ pub struct Terminal {
     /// (ARC-008). Capacity is reused across `process()` calls instead of
     /// reallocating a fresh `Vec` on every call.
     pub(crate) apc_passthrough: Vec<u8>,
+    /// SEC-003: scratch buffer reused by the incremental OSC guard in
+    /// [`Terminal::advance_parser`] so guarded chunks (those containing ESC or
+    /// mid-OSC state) do not allocate per call.
+    pub(crate) osc_scratch: Vec<u8>,
     /// Long-lived Kitty TGP parser; reset between unrelated transmissions.
     pub(crate) kitty_parser: KittyParser,
     /// DECAWM delayed wrap: set after printing in last column
@@ -1046,6 +1068,7 @@ impl Terminal {
                 dcs_active: false,
                 dcs_action: None,
                 dcs_kind: DcsKind::Other,
+                dcs_overflow: false,
             },
             clipboard_state: ClipboardState {
                 clipboard_content: None,
@@ -1086,6 +1109,7 @@ impl Terminal {
             apc_filter_state: ApcFilterState::default(),
             apc_buffer: Vec::new(),
             apc_passthrough: Vec::new(),
+            osc_scratch: Vec::new(),
             kitty_parser: KittyParser::new(),
             pending_wrap: false,
             // Initialize pixel dimensions with reasonable defaults (10x20 per cell)
@@ -1099,6 +1123,10 @@ impl Terminal {
                 accept_osc7: true,
                 disable_insecure_sequences: false,
                 max_osc_data_length: DEFAULT_MAX_OSC_DATA_LENGTH,
+                osc_seen_esc: false,
+                osc_in_osc: false,
+                osc_in_flight: 0,
+                osc_discard_dispatch: false,
             },
             // VT520 conformance level - default to VT520 for maximum compatibility
             conformance_level: crate::conformance_level::ConformanceLevel::default(),
@@ -2808,13 +2836,95 @@ impl Terminal {
     /// Feed bytes to the vte parser. `vte::Parser::advance` needs `&mut self`
     /// (as the `Perform` impl) and `&mut parser`, but `parser` is a field of
     /// `self` — temporarily move it out to satisfy the borrow checker.
+    ///
+    /// SEC-003: enforces `max_osc_data_length` incrementally. vte 0.15 has no
+    /// per-byte OSC hook (its internal `osc_raw` Vec grows unbounded under
+    /// the `std` feature), so the guard lives here, at the only layer we
+    /// control: payload bytes past the cap are never fed to vte, terminators
+    /// always are (so vte's own state machine never desyncs), and the
+    /// resulting truncated dispatch is dropped whole via
+    /// `osc_discard_dispatch` in `osc_dispatch_impl`.
     fn advance_parser(&mut self, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
+        let needs_guard = self.security_state.osc_in_osc
+            || self.security_state.osc_seen_esc
+            || bytes.contains(&0x1b);
+        if !needs_guard {
+            let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
+            parser.advance(self, bytes);
+            self.parser = parser;
+            return;
+        }
+
+        let mut kept = std::mem::take(&mut self.osc_scratch);
+        kept.clear();
+        for &b in bytes {
+            if self.osc_guard_step(b) {
+                kept.push(b);
+            }
+        }
         let mut parser = std::mem::replace(&mut self.parser, vte::Parser::new());
-        parser.advance(self, bytes);
+        parser.advance(self, &kept);
         self.parser = parser;
+        self.osc_scratch = kept;
+    }
+
+    /// One step of the SEC-003 incremental OSC guard. Updates the tracking
+    /// state and returns `false` when the byte is an over-cap OSC payload
+    /// byte that must not reach vte. Mirrors vte's OSC state transitions: the
+    /// payload ends at BEL, ESC, CAN, or SUB.
+    fn osc_guard_step(&mut self, b: u8) -> bool {
+        let s = &mut self.security_state;
+        if s.osc_seen_esc {
+            if b == 0x1b {
+                // Consecutive ESC: vte restarts the escape; stay armed.
+                return true;
+            }
+            s.osc_seen_esc = false;
+            if b == b']' {
+                s.osc_in_osc = true;
+                s.osc_in_flight = 0;
+            }
+            return true;
+        }
+        if s.osc_in_osc {
+            match b {
+                0x1b | 0x07 | 0x18 | 0x1a => {
+                    // BEL/ESC terminate (vte dispatches), CAN/SUB abort
+                    // (no dispatch): either way the tracked sequence ends.
+                    s.osc_in_osc = false;
+                    s.osc_in_flight = 0;
+                    if b == 0x18 || b == 0x1a {
+                        s.osc_discard_dispatch = false;
+                    }
+                    return true;
+                }
+                _ => {
+                    if s.osc_in_flight >= s.max_osc_data_length {
+                        if !s.osc_discard_dispatch {
+                            s.osc_discard_dispatch = true;
+                            debug::log(
+                                debug::DebugLevel::Debug,
+                                "SECURITY",
+                                &format!(
+                                    "OSC payload exceeds max_osc_data_length ({} bytes), dropping sequence",
+                                    s.max_osc_data_length
+                                ),
+                            );
+                        }
+                        return false;
+                    }
+                    s.osc_in_flight += 1;
+                    return true;
+                }
+            }
+        }
+        if b == 0x1b {
+            s.osc_seen_esc = true;
+        }
+        true
     }
 
     /// Process incoming data from the PTY
