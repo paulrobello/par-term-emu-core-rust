@@ -1,5 +1,6 @@
 /// Cursor shape/style (DECSCUSR)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CursorStyle {
     /// Blinking block (default)
     #[default]
@@ -18,6 +19,7 @@ pub enum CursorStyle {
 
 /// Cursor state and position
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cursor {
     /// Current column (x position)
     pub col: usize,

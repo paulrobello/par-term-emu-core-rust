@@ -208,6 +208,13 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only.
 mux = ["pty_session", "tokio", "interprocess", "widestring"]
 
+# Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
+# their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
+# D3.1). serde itself is already a required dependency, so this feature only
+# gates whether the derives are compiled in; the smallvec/bitflags serde
+# integrations are pulled in only while this feature is enabled.
+serde = ["smallvec/serde", "bitflags/serde"]
+
 # jemalloc for better server performance (5-15% throughput improvement)
 # Automatically included with streaming on non-Windows platforms
 jemalloc = ["tikv-jemallocator"]

@@ -6,6 +6,7 @@ use std::num::NonZeroU32;
 
 /// Underline style for text decoration (SGR 4:x)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum UnderlineStyle {
     /// No underline
     #[default]
@@ -25,6 +26,7 @@ pub enum UnderlineStyle {
 bitflags! {
     /// Bitflags for cell text attributes
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
     pub struct CellBitflags: u16 {
         const BOLD = 1 << 0;
         const DIM = 1 << 1;
@@ -43,6 +45,7 @@ bitflags! {
 
 /// Flags for cell attributes (optimized with bitflags)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CellFlags {
     /// Bitflags for boolean attributes
     bits: CellBitflags,
@@ -205,6 +208,7 @@ impl CellFlags {
 /// sequences spill to the heap. Use `.clone()` explicitly when you need to copy
 /// a cell.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Cell {
     /// The character stored in this cell
     pub(crate) c: char,

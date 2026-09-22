@@ -1,5 +1,6 @@
 /// Color representation supporting various color modes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum Color {
     /// Named ANSI colors (0-15)
@@ -12,6 +13,7 @@ pub enum Color {
 
 /// Named ANSI colors
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum NamedColor {
     Black = 0,

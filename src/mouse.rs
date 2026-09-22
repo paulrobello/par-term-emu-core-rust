@@ -1,5 +1,6 @@
 /// Mouse tracking mode
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MouseMode {
     /// No mouse tracking
     Off,
@@ -15,6 +16,7 @@ pub enum MouseMode {
 
 /// Mouse encoding format
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MouseEncoding {
     /// Default X11 encoding
     Default,
