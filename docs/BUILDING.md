@@ -350,21 +350,20 @@ uv run python examples/pty_shell.py
 
 The streaming feature uses Protocol Buffers for efficient binary message encoding. Protocol buffer code generation is handled automatically:
 
-### Automatic Generation
+### Rust (checked in, checksum-verified)
 
-**Rust:** Generated during `cargo build` when the `streaming` feature is enabled via `build.rs`:
+The Rust protobuf code is **not** generated at build time: `src/streaming/terminal.pb.rs` is checked in and is the build-time source of truth (included by `src/streaming/proto.rs` via a `#[path]` attribute). When the `streaming` feature is enabled, `build.rs` compares an FNV-1a checksum of `proto/terminal.proto` against the `// proto-fnv1a:` stamp on the generated file's first line and fails the build on mismatch — so a stale generated file cannot ship silently:
 
-```bash
-# Rust protobuf code is generated automatically when building with streaming
-cargo build --features streaming
-
-# To explicitly regenerate (requires protoc installed)
-cargo build --features streaming,regenerate-proto --no-default-features
+```text
+error: proto/terminal.proto changed but src/streaming/terminal.pb.rs was not
+regenerated (checksum mismatch). Run `make proto-rust` ...
 ```
 
-The generated Rust code is placed in the build output directory and included via `include!` in `src/streaming/proto.rs`.
+To regenerate after editing the proto (requires `protoc` installed):
 
-> **📝 Note:** The `regenerate-proto` feature requires `protoc` (Protocol Buffers compiler) to be installed. For most development work, the pre-generated code in `src/streaming/terminal.pb.rs` is sufficient.
+```bash
+make proto-rust
+```
 
 **TypeScript:** For the web frontend, generate TypeScript protobuf code:
 
@@ -394,7 +393,7 @@ make proto-clean
 
 **Protocol Definition:**
 - Source: `proto/terminal.proto`
-- Rust output: `OUT_DIR/terminal.rs` (via `build.rs`)
+- Rust output: `src/streaming/terminal.pb.rs` (checked in; `build.rs` verifies its checksum, `make proto-rust` regenerates)
 - TypeScript output: `web-terminal-frontend/lib/proto/`
 
 > **📝 Note:** The Protocol Buffers implementation replaces JSON encoding for ~80% smaller message sizes. See [STREAMING.md](STREAMING.md) for protocol details.

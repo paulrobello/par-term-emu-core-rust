@@ -623,11 +623,11 @@ npm run proto:generate
 
 **Component Overview:**
 
-- `app/page.tsx`: Main application UI with connection controls and status indicator
-- `components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
-- `lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
-- `lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
-- `next.config.js`: Configures Next.js for static export (`output: 'export'`)
+- `web-terminal-frontend/app/page.tsx`: Main application UI with connection controls and status indicator
+- `web-terminal-frontend/components/Terminal.tsx`: xterm.js integration with binary WebSocket handling, mouse/focus/paste forwarding
+- `web-terminal-frontend/lib/protocol.ts`: Message encoding/decoding with helper factories (`createInputMessage`, `createResizeMessage`, `createMouseMessage`, `createFocusMessage`, `createPasteMessage`, `createSubscribeMessage`, `createSnapshotRequestMessage`, etc.)
+- `web-terminal-frontend/lib/proto/terminal_pb.ts`: Generated Protocol Buffers types (from `proto/terminal.proto`)
+- `web-terminal-frontend/next.config.js`: Configures Next.js for static export (`output: 'export'`)
 
 ### Mobile Support
 
