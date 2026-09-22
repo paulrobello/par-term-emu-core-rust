@@ -25,7 +25,7 @@ use crate::mux::server::{
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::Arc;
 
 /// Default pane size for sessions and windows created without an explicit
@@ -129,7 +129,7 @@ pub(super) fn dispatch_command(
     command: MuxCommand,
     ctx: &Ctx<'_>,
     persist: Option<&Sender<PersistState>>,
-    issuer: Option<&Sender<String>>,
+    issuer: Option<&SyncSender<String>>,
 ) -> String {
     let mutates = command.mutates();
     let outcome = match command {

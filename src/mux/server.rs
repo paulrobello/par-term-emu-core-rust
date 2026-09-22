@@ -25,7 +25,7 @@ use std::io::{BufRead, BufReader, Write};
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -39,12 +39,18 @@ const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
 
+/// Per-client broadcast queue depth in lines (ARC-011). A `%output` line is
+/// at most ~4 KiB, so the worst case a stalled client can pin is ~16 MiB;
+/// past that it is evicted rather than allowed to grow the daemon without
+/// bound (tmux's own policy for a control client that stops draining).
+const CLIENT_QUEUE_DEPTH: usize = 4096;
+
 /// Monotonic client ids, so a disconnecting client's broadcast sender can be
 /// removed eagerly rather than waiting for the next broadcast to fail.
 static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
-pub(crate) type Clients = Arc<Mutex<Vec<(u64, Sender<String>)>>>;
+pub(crate) type Clients = Arc<Mutex<Vec<(u64, SyncSender<String>)>>>;
 
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
@@ -290,7 +296,10 @@ fn handle_client(
     persist: Option<Sender<PersistState>>,
 ) {
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = channel::<String>();
+    // Bounded per ARC-011: a client that stops draining is evicted by
+    // [`push_to_clients`] once its queue fills, rather than buffering every
+    // `%output` line forever.
+    let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
     let mut registered = false;
 
     let mut writer = match stream.try_clone() {
@@ -369,7 +378,7 @@ fn dispatch_issued(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
     persist: Option<&Sender<PersistState>>,
-    issuer: Option<&Sender<String>>,
+    issuer: Option<&SyncSender<String>>,
 ) -> String {
     match parse_command(line) {
         Ok(command) => {
@@ -399,10 +408,23 @@ fn dispatch(
 
 /// Push one line to every connected client, dropping the senders whose
 /// client has gone — the single fan-out every broadcast and sink shares.
+///
+/// ARC-011: the queues are bounded at [`CLIENT_QUEUE_DEPTH`]; a client
+/// whose queue is full (it stopped reading the socket) is EVICTED here,
+/// tmux's policy for a control client that stops draining. Dropping the
+/// sender closes the writer thread's channel, its `recv` errors, the
+/// thread exits, and the client observes a clean disconnect.
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
     clients
         .lock()
-        .retain(|(_, tx)| tx.send(line.clone()).is_ok());
+        .retain(|(id, tx)| match tx.try_send(line.clone()) {
+            Ok(()) => true,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                log::warn!("par-mux: client {id} is not draining; evicting");
+                false
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
+        });
 }
 
 /// Push one notification line to every connected client.
@@ -771,7 +793,7 @@ mod tests {
         let first = tree.lock().window(window_id).unwrap().panes()[0];
 
         // A second, non-issuing client: everything it sees is a broadcast.
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         clients.lock().push((u64::MAX, tx));
 
         // new-window broadcasts %window-add naming the new window.
@@ -866,7 +888,7 @@ mod tests {
         let (tree, clients) = harness();
         // The issuing client is NOT in the broadcast set: its channel receives
         // only what dispatch directs to it specifically.
-        let (issuer_tx, issuer_rx) = channel();
+        let (issuer_tx, issuer_rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         dispatch_issued(
             "new-session -s main",
             1,
@@ -906,7 +928,7 @@ mod tests {
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
         // A second client observes the broadcast.
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         clients.lock().push((u64::MAX, tx));
 
         let reply = dispatch(
@@ -1035,7 +1057,7 @@ mod tests {
         let second = tree.lock().window(window_id).unwrap().panes()[1];
 
         // A second client observes the size-driven re-layout.
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         clients.lock().push((u64::MAX, tx));
 
         let reply = dispatch(
@@ -1072,7 +1094,7 @@ mod tests {
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
-        let (tx, rx) = channel();
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         clients.lock().push((u64::MAX, tx));
 
         let reply = dispatch(
@@ -1366,5 +1388,45 @@ mod tests {
             Some(burst),
             "the newest state is the one written"
         );
+    }
+
+    /// ARC-011: a client whose queue fills (it stopped reading the socket)
+    /// is evicted from the broadcast set, while a draining sibling still
+    /// receives every line pushed past the eviction.
+    #[test]
+    fn a_stalled_client_is_evicted_and_a_draining_sibling_keeps_every_line() {
+        let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+
+        // The stalled client: registered, never drained.
+        let (stalled_tx, _stalled_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((1, stalled_tx));
+        // The sibling: drains as lines arrive, like a healthy reader thread.
+        let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((2, sibling_tx));
+
+        let mut received = Vec::new();
+        for n in 0..=CLIENT_QUEUE_DEPTH {
+            push_to_clients(&clients, format!("line-{n}"));
+            while let Ok(line) = sibling_rx.try_recv() {
+                received.push(line);
+            }
+        }
+
+        assert_eq!(
+            clients.lock().len(),
+            1,
+            "the stalled client was evicted; the draining sibling remains"
+        );
+        while let Ok(line) = sibling_rx.try_recv() {
+            received.push(line);
+        }
+        assert_eq!(
+            received.len(),
+            CLIENT_QUEUE_DEPTH + 1,
+            "the sibling saw every line, including the one that evicted the stalled client"
+        );
+        assert_eq!(received.first().map(String::as_str), Some("line-0"));
+        let last = format!("line-{CLIENT_QUEUE_DEPTH}");
+        assert_eq!(received.last().map(String::as_str), Some(last.as_str()));
     }
 }
