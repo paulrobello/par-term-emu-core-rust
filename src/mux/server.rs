@@ -52,6 +52,9 @@ pub struct MuxServer {
     path: PathBuf,
     tree: Arc<Mutex<MuxTree>>,
     clients: Clients,
+    /// Per-instance shutdown flag (ARC-016): the accept loop polls it, the
+    /// binary's signal handler reaches it through [`Self::shutdown_handle`].
+    shutdown: Arc<AtomicBool>,
 }
 
 impl MuxServer {
@@ -88,6 +91,7 @@ impl MuxServer {
             path: path.to_path_buf(),
             tree,
             clients,
+            shutdown: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -112,11 +116,19 @@ impl MuxServer {
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
         self.run_with_state_path(Some(state_path.clone()));
-        if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
+        if self.shutdown.load(Ordering::Relaxed) {
             if let Err(err) = crate::mux::persist::save_to(&self.tree.lock(), &state_path) {
                 eprintln!("par-mux: final state save failed: {err}");
             }
         }
+    }
+
+    /// A shareable handle to this server's shutdown flag (ARC-016): storing
+    /// `true` stops this instance's accept loop on its next tick. One atomic
+    /// store, so a signal handler may write it directly. Instances are
+    /// independent — a handle cannot stop another server in the same process.
+    pub fn shutdown_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.shutdown)
     }
 
     fn run_with_state_path(&self, state_path: Option<PathBuf>) {
@@ -130,10 +142,6 @@ impl MuxServer {
         self.listener
             .set_nonblocking(ListenerNonblockingMode::Accept)
             .expect("the listener was just bound");
-
-        // A previous server in this process may have been shut down; each
-        // run starts clean.
-        SHUTDOWN_REQUESTED.store(false, Ordering::Relaxed);
 
         // The scrape tier rides this loop as its heartbeat: pattern
         // overrides live beside the state file when there is one, and the
@@ -149,7 +157,7 @@ impl MuxServer {
         let mut last_scrape = std::time::Instant::now();
 
         loop {
-            if SHUTDOWN_REQUESTED.load(Ordering::Relaxed) {
+            if self.shutdown.load(Ordering::Relaxed) {
                 // Tell the clients the daemon is ending deliberately, so
                 // they do not have to infer death from a dropped socket.
                 broadcast_notification(&self.clients, &TmuxNotification::Exit);
@@ -181,18 +189,6 @@ impl MuxServer {
                 Err(_) => break,
             }
         }
-    }
-}
-
-/// Set by [`MuxServer::request_shutdown`] and checked between accepts.
-static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
-
-impl MuxServer {
-    /// Ask a running server to stop: its accept loop notices on its next
-    /// tick and `run`/`run_persisting` return. One atomic store, so a
-    /// signal handler may call this directly.
-    pub fn request_shutdown() {
-        SHUTDOWN_REQUESTED.store(true, Ordering::Relaxed);
     }
 }
 
@@ -936,6 +932,7 @@ mod tests {
         ));
         let _ = std::fs::remove_file(&path);
         let server = MuxServer::bind(&path).expect("bind");
+        let shutdown = server.shutdown_handle();
         std::thread::spawn(move || server.run());
 
         let stream = connect_local_stream(&path).expect("connect");
@@ -971,7 +968,7 @@ mod tests {
         reply_seen_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("command reply arrives first");
-        MuxServer::request_shutdown();
+        shutdown.store(true, Ordering::Relaxed);
 
         let line = rx
             .recv_timeout(std::time::Duration::from_secs(5))

@@ -54,18 +54,32 @@ fn main() -> std::io::Result<()> {
     // shutdown with one atomic store (async-signal-safe), the accept loop
     // notices, and run_persisting's final save captures every completed
     // mutation. kill -9 skips all of this and simply loses the last window
-    // (D3.3 covers why that is acceptable).
+    // (D3.3 covers why that is acceptable). The handle is per-instance
+    // (ARC-016) and published to the handler via OnceLock.
     #[cfg(unix)]
-    install_sigterm_handler()?;
+    {
+        SHUTDOWN_HANDLE.set(server.shutdown_handle()).ok();
+        install_sigterm_handler()?;
+    }
 
     server.run_persisting(state_path);
     Ok(())
 }
 
+/// The running server's per-instance shutdown flag (ARC-016), published for
+/// the signal handler. `OnceLock::get` is async-signal-safe enough for this
+/// use: it is only read after `main` set it, and the store it performs is
+/// one atomic write.
+#[cfg(unix)]
+static SHUTDOWN_HANDLE: std::sync::OnceLock<std::sync::Arc<std::sync::atomic::AtomicBool>> =
+    std::sync::OnceLock::new();
+
 /// Minimal async-signal-safe handler: request shutdown and return.
 #[cfg(unix)]
 extern "C" fn on_sigterm(_signum: i32) {
-    par_term_emu_core_rust::mux::MuxServer::request_shutdown();
+    if let Some(flag) = SHUTDOWN_HANDLE.get() {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Install the SIGTERM handler. The accept loop notices the shutdown flag on
