@@ -20,7 +20,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The envelope version this build writes, and the only one it accepts.
 /// A file carrying any other version is quarantined at the load site and the
 /// server starts fresh (D3.2).
-pub const FORMAT_VERSION: u32 = 1;
+///
+/// v2 (Phase 6, task 6.1): `PersistPane` gained the optional
+/// `agent_session` — a compatible serde read, but the bump keeps the
+/// boundary explicit instead of silently partial-reading a v1 file.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// Errors raised while saving or rebuilding persisted mux state.
 #[derive(Debug)]
@@ -144,6 +148,58 @@ pub struct PersistPane {
     pub terminal: TerminalSnapshot,
     /// The command the pane ran (`None` = the default shell).
     pub spawn_command: Option<String>,
+    /// Agent session identity, when a hook claimed this pane (Phase 6,
+    /// task 6.1). Skipped when absent so a non-agent pane serializes
+    /// byte-identically to the pre-change format.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub agent_session: Option<PersistAgentSession>,
+}
+
+/// The agent-session identity hooks write into pane metadata, persisted so
+/// the resume path (Phase 6 tasks 6.2/6.3) survives a restart — live
+/// metadata dies with the process. The wire contract is id-OR-path (the
+/// shipped pi/omp extensions send path-only refs), so neither field alone
+/// gates the capture: whichever the metadata holds travels. `resume_argv`
+/// is the agent's own reported invocation, stored verbatim as a JSON argv
+/// string — the hook-first override the per-agent table falls back from.
+///
+/// Deliberately absent: `agent_session_start_source` (stale and misleading
+/// after a restart; task 6.4 reads it from the post-restore report instead)
+/// and everything state-shaped (`agent_state`, `agent_state_source`,
+/// `agent_seq`) — a restored pane holds no state until its agent reports
+/// again, which is why the post-restart roster is empty by design.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PersistAgentSession {
+    /// The agent label (`metadata["agent"]`).
+    pub agent: String,
+    /// The session id, when the metadata holds one.
+    pub session_id: Option<String>,
+    /// The transcript path, when the metadata holds one.
+    pub session_path: Option<String>,
+    /// The reporting script's own source tag.
+    pub source: Option<String>,
+    /// The reported resume invocation, verbatim JSON argv.
+    pub resume_argv: Option<String>,
+}
+
+/// Capture one pane's agent-session identity from its metadata, or `None`
+/// when nothing the resume path can use is there: identity requires an id,
+/// a path, or a reported invocation — an agent label alone is a pane
+/// hook-claimed for state but carrying no session worth resuming.
+fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<PersistAgentSession> {
+    let agent = metadata.get("agent")?;
+    let session = PersistAgentSession {
+        agent: agent.clone(),
+        session_id: metadata.get("agent_session_id").cloned(),
+        session_path: metadata.get("agent_session_path").cloned(),
+        source: metadata.get("agent_source").cloned(),
+        resume_argv: metadata.get("agent_resume_argv").cloned(),
+    };
+    (session.session_id.is_some()
+        || session.session_path.is_some()
+        || session.resume_argv.is_some())
+    .then_some(session)
 }
 
 impl MuxTree {
@@ -195,6 +251,7 @@ impl MuxTree {
                     id: pane_id.0,
                     terminal: pane.terminal().read().capture_snapshot(),
                     spawn_command: pane.spawn_command().map(str::to_string),
+                    agent_session: agent_session_from_metadata(pane.metadata()),
                 }
             })
             .collect();
@@ -234,12 +291,32 @@ impl MuxTree {
             let mut window_ids = Vec::with_capacity(session.windows.len());
             for window in &session.windows {
                 for pane in &window.panes {
-                    let created = factory.create_pane(
+                    let mut created = factory.create_pane(
                         PaneId(pane.id),
                         window.cols,
                         window.rows,
                         pane.spawn_command.as_deref(),
                     )?;
+                    // Identity comes back as metadata so the format
+                    // round-trips and task 6.3's hook-first lookup reads it
+                    // from the same place it reads a live pane's. Only the
+                    // identity keys — no state, no seq, no start source (a
+                    // restored pane reports those anew or holds none).
+                    if let Some(agent_session) = &pane.agent_session {
+                        created.set_metadata("agent", &agent_session.agent);
+                        if let Some(id) = &agent_session.session_id {
+                            created.set_metadata("agent_session_id", id);
+                        }
+                        if let Some(path) = &agent_session.session_path {
+                            created.set_metadata("agent_session_path", path);
+                        }
+                        if let Some(source) = &agent_session.source {
+                            created.set_metadata("agent_source", source);
+                        }
+                        if let Some(argv) = &agent_session.resume_argv {
+                            created.set_metadata("agent_resume_argv", argv);
+                        }
+                    }
                     panes.insert(PaneId(pane.id), created);
                 }
                 for pane in &window.panes {
@@ -429,7 +506,7 @@ mod tests {
         PathBuf::from(name)
     }
 
-    fn tree() -> MuxTree {
+    pub(super) fn tree() -> MuxTree {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
     }
 
@@ -701,13 +778,195 @@ mod tests {
         assert!(b.ends_with("par-mux/par-mux-beta.state.json"));
         assert_ne!(a, b, "two servers on different sockets never share state");
     }
+
+    /// One pane whose metadata carries the full hook-reported identity.
+    fn tree_with_agent_pane() -> (MuxTree, PaneId) {
+        let mut tree = tree();
+        let session = tree.new_session("agents", 80, 24).unwrap();
+        let pane_id = tree
+            .session(session)
+            .unwrap()
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .unwrap();
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.set_metadata("agent", "pi");
+        pane.set_metadata("agent_session_id", "s-1");
+        pane.set_metadata("agent_session_path", "/tmp/pi-session.jsonl");
+        pane.set_metadata("agent_source", "par-mux:pi");
+        pane.set_metadata(
+            "agent_resume_argv",
+            r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
+        );
+        // Keys that must NOT travel: state-shaped and provenance-of-start.
+        pane.set_metadata("agent_state", "working");
+        pane.set_metadata("agent_state_source", "hook");
+        pane.set_metadata("agent_seq", "1000");
+        pane.set_metadata("agent_session_start_source", "startup");
+        (tree, pane_id)
+    }
+
+    #[test]
+    fn agent_session_identity_round_trips() {
+        let (original, pane_id) = tree_with_agent_pane();
+        let state = original.to_persist_state();
+        let persisted = state.sessions[0].windows[0].panes[0]
+            .agent_session
+            .as_ref()
+            .expect("the agent pane carries its identity");
+        assert_eq!(
+            persisted,
+            &PersistAgentSession {
+                agent: "pi".to_string(),
+                session_id: Some("s-1".to_string()),
+                session_path: Some("/tmp/pi-session.jsonl".to_string()),
+                source: Some("par-mux:pi".to_string()),
+                resume_argv: Some(r#"["pi","--session","/tmp/pi-session.jsonl"]"#.to_string()),
+            },
+            "capture reads exactly the identity keys, nothing state-shaped"
+        );
+
+        // Restore writes the identity back as metadata, so a re-capture of
+        // the restored tree holds the same identity — the format round-trip.
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        let recaptured = restored.to_persist_state();
+        assert_eq!(
+            recaptured.sessions[0].windows[0].panes[0].agent_session,
+            state.sessions[0].windows[0].panes[0].agent_session,
+            "identity survives tree -> format -> tree -> format"
+        );
+
+        // The restored pane holds identity metadata and none of the
+        // state-shaped keys — the post-restart roster stays empty until
+        // the agent reports again.
+        let pane = restored.pane(pane_id).unwrap();
+        assert_eq!(pane.metadata().get("agent").map(String::as_str), Some("pi"));
+        assert!(!pane.metadata().contains_key("agent_state"));
+        assert!(!pane.metadata().contains_key("agent_seq"));
+        assert!(
+            !pane.metadata().contains_key("agent_session_start_source"),
+            "start source describes the PREVIOUS process's start — stale after a restart"
+        );
+    }
+
+    /// The pi/omp shape on the wire today: path-only identity plus the
+    /// reported invocation, no session id at all.
+    #[test]
+    fn pi_shaped_path_only_identity_round_trips() {
+        let mut tree = tree();
+        let session = tree.new_session("agents", 80, 24).unwrap();
+        let pane_id = tree
+            .session(session)
+            .unwrap()
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .unwrap();
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.set_metadata("agent", "omp");
+        pane.set_metadata("agent_session_path", "/tmp/omp-session.jsonl");
+        pane.set_metadata(
+            "agent_resume_argv",
+            r#"["omp","--resume=/tmp/omp-session.jsonl"]"#,
+        );
+
+        let state = tree.to_persist_state();
+        assert_eq!(
+            state.sessions[0].windows[0].panes[0].agent_session,
+            Some(PersistAgentSession {
+                agent: "omp".to_string(),
+                session_id: None,
+                session_path: Some("/tmp/omp-session.jsonl".to_string()),
+                source: None,
+                resume_argv: Some(r#"["omp","--resume=/tmp/omp-session.jsonl"]"#.to_string()),
+            }),
+            "a path-only ref is identity enough — the id-OR-path wire contract"
+        );
+
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert!(
+            restored
+                .pane(pane_id)
+                .unwrap()
+                .metadata()
+                .contains_key("agent_resume_argv"),
+            "the override 6.2 reads survives the restart"
+        );
+    }
+
+    #[test]
+    fn panes_without_resumable_identity_serialize_agent_session_none() {
+        // A non-agent pane…
+        let bare = populated_tree();
+        let state = bare.to_persist_state();
+        let persisted_panes: Vec<&PersistPane> = state
+            .sessions
+            .iter()
+            .flat_map(|s| s.windows.iter().flat_map(|w| w.panes.iter()))
+            .collect();
+        assert!(!persisted_panes.is_empty());
+        assert!(
+            persisted_panes
+                .iter()
+                .all(|pane| pane.agent_session.is_none()),
+            "no metadata, no agent_session"
+        );
+
+        // …and a pane hook-claimed for STATE but carrying no session —
+        // an agent label alone is nothing the resume path can use.
+        let mut tree = tree();
+        let session = tree.new_session("agents", 80, 24).unwrap();
+        let pane_id = tree
+            .session(session)
+            .unwrap()
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .unwrap();
+        tree.pane_mut(pane_id)
+            .unwrap()
+            .set_metadata("agent", "kimi");
+        let state = tree.to_persist_state();
+        assert_eq!(
+            state.sessions[0].windows[0].panes[0].agent_session, None,
+            "label-only panes carry nothing to resume"
+        );
+    }
+
+    /// The version this build just superseded is refused exactly like any
+    /// unknown one — the bump must be a boundary, not a silent partial read.
+    #[test]
+    fn previous_format_version_is_refused() {
+        let original = populated_tree();
+        let mut state = original.to_persist_state();
+        state.format_version = FORMAT_VERSION - 1;
+
+        let result = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()));
+        assert!(
+            matches!(
+                result,
+                Err(PersistError::UnsupportedVersion { found, supported })
+                    if found == FORMAT_VERSION - 1 && supported == FORMAT_VERSION
+            ),
+            "a v1 file must be refused, not partially read as v2"
+        );
+    }
 }
 
 /// The envelope must survive serialize → deserialize whole — LayoutTree and
 /// the id newtypes serialize inside it (D3.2), which no other test exercises.
 #[cfg(all(test, feature = "serde"))]
 mod serde_tests {
-    use super::tests::{assert_same_shape, populated_tree};
+    use super::tests::{assert_same_shape, populated_tree, tree};
     use super::*;
     use crate::mux::pane::ShellPaneFactory;
 
@@ -731,6 +990,51 @@ mod serde_tests {
         assert_eq!(
             via_json.get_buffer("default").map(str::to_string),
             Some("hello".to_string())
+        );
+    }
+
+    /// The skip-when-absent rule that keeps non-agent panes byte-identical
+    /// to the pre-6.1 format: the serialized envelope of a metadata-less
+    /// tree never contains the new key.
+    #[test]
+    fn non_agent_envelope_carries_no_agent_session_key() {
+        let json = serde_json::to_string(&populated_tree().to_persist_state())
+            .expect("envelope serializes");
+        assert!(
+            !json.contains("agent_session"),
+            "the new field must skip when absent: {json}"
+        );
+
+        // And when present, it round-trips through the JSON itself — the
+        // wire form of the identity, not just the in-memory struct.
+        let mut tree = tree();
+        let session = tree.new_session("agents", 80, 24).unwrap();
+        let pane_id = tree
+            .session(session)
+            .unwrap()
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .unwrap();
+        let pane = tree.pane_mut(pane_id).unwrap();
+        pane.set_metadata("agent", "pi");
+        pane.set_metadata("agent_session_path", "/tmp/pi.jsonl");
+        pane.set_metadata("agent_resume_argv", r#"["pi","--session","/tmp/pi.jsonl"]"#);
+
+        let json = serde_json::to_string(&tree.to_persist_state()).expect("serializes");
+        let revived: PersistState = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(
+            revived.sessions[0].windows[0].panes[0].agent_session,
+            Some(PersistAgentSession {
+                agent: "pi".to_string(),
+                session_id: None,
+                session_path: Some("/tmp/pi.jsonl".to_string()),
+                source: None,
+                resume_argv: Some(r#"["pi","--session","/tmp/pi.jsonl"]"#.to_string()),
+            }),
+            "identity survives the JSON wire form"
         );
     }
 }

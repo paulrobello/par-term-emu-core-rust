@@ -2,9 +2,10 @@
 //! a pane exists, herdr's own integration script (env-renamed) drives it
 //! working then blocked, a second client observes both
 //! `%agent-state-changed` broadcasts, `list-agents` agrees — and a restart
-//! keeps NONE of it, because metadata is deliberately absent from the save
-//! format (seam S2's assigned persist gap, Phase 6's entry criterion).
-//! This file exists to keep that deferral tested, not assumed.
+//! keeps the IDENTITY but none of the state: task 6.1 persists the
+//! hook-reported agent session (id/path/argv) while state, its provenance,
+//! seq, message, and start source stay deliberately out of the save
+//! format. This file exists to keep that boundary tested, not assumed.
 //!
 //! Unix-only: the daemon is stopped with SIGTERM and the ported script is
 //! POSIX sh + python3.
@@ -116,30 +117,54 @@ impl Control {
     }
 }
 
-/// Run the env-renamed herdr kimi script for one action.
-fn script_reports(path: &std::path::Path, pane: &str, action: &str) {
+/// Run the env-renamed herdr kimi script for one action, optionally
+/// feeding it a session id the way the real host would (stdin payload).
+fn script_reports(path: &std::path::Path, pane: &str, action: &str, session_id: Option<&str>) {
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/assets/par-mux-agent-state.sh");
+    let payload = session_id
+        .map(|id| format!("{{\"session_id\":\"{id}\"}}"))
+        .unwrap_or_default();
     let out = std::process::Command::new("sh")
         .arg(&script)
         .arg(action)
         .env("PAR_MUX_ENV", "1")
         .env("PAR_MUX_SOCKET", path)
         .env("PAR_MUX_PANE_ID", pane)
-        .stdin(std::process::Stdio::null())
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write as _;
+            child
+                .stdin
+                .as_mut()
+                .expect("piped stdin")
+                .write_all(payload.as_bytes())?;
+            child.wait_with_output()
+        })
         .expect("script runs");
     assert!(out.status.success(), "the ported script exits 0: {out:?}");
 }
 
-/// Whether any object in `value` carries a `metadata` key — the save
-/// format's deliberate agent-state gap, proven on the actual bytes written.
-fn any_metadata_key(value: &serde_json::Value) -> bool {
+/// Whether any object in `value` carries one of the state-shaped keys the
+/// save format still deliberately omits: task 6.1 persists agent-session
+/// IDENTITY only — state, its provenance, the ordering seq, the blocked
+/// reason, and the start source all stay out (a restored pane reports them
+/// anew or holds none). Proven on the actual bytes written.
+fn any_state_key(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
-            map.keys().any(|key| key == "metadata") || map.values().any(any_metadata_key)
+            map.keys().any(|key| {
+                key == "agent_state"
+                    || key == "agent_state_source"
+                    || key == "agent_seq"
+                    || key == "agent_message"
+                    || key == "agent_session_start_source"
+            }) || map.values().any(any_state_key)
         }
-        serde_json::Value::Array(items) => items.iter().any(any_metadata_key),
+        serde_json::Value::Array(items) => items.iter().any(any_state_key),
         _ => false,
     }
 }
@@ -161,8 +186,8 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
         .expect("new-session created a pane")
         .clone();
 
-    for action in ["working", "blocked"] {
-        script_reports(&path, &pane, action);
+    for (action, session_id) in [("working", Some("kimi-arc-1")), ("blocked", None)] {
+        script_reports(&path, &pane, action, session_id);
         let broadcast = control.line_until(
             |line| line.starts_with("%agent-state-changed"),
             &format!("the {action} broadcast"),
@@ -184,14 +209,18 @@ fn the_agent_arc_lives_and_dies_with_the_daemon() {
     drop(control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut first);
 
-    // The deferral, tested: the save format carries NO metadata — seam S2's
-    // persist gap is Phase 6's entry criterion, and this asserts the actual
-    // bytes on disk rather than trusting the struct definition.
+    // The deferral after task 6.1: the save carries the pane's agent-session
+    // IDENTITY — the resume path's data — but still nothing state-shaped.
+    // Asserted on the actual bytes on disk, not the struct definition.
     let saved = std::fs::read_to_string(&state_path).expect("the clean stop saved state");
     let parsed: serde_json::Value = serde_json::from_str(&saved).expect("the save is JSON");
     assert!(
-        !any_metadata_key(&parsed),
-        "the save format must not carry metadata yet (Phase 6 adds it)"
+        saved.contains(r#""agent_session""#) && saved.contains(r#""kimi-arc-1""#),
+        "the reported session identity travels in the save (task 6.1): {saved}"
+    );
+    assert!(
+        !any_state_key(&parsed),
+        "state, provenance, seq, message and start source must not travel: {saved}"
     );
 
     // The second daemon serves the layout back but an EMPTY roster.
