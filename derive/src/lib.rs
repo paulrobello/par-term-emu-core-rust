@@ -99,8 +99,7 @@ fn expand_py_dict_convert(input: proc_macro2::TokenStream) -> proc_macro2::Token
         syn::Data::Enum(data) => &data.variants,
         _ => {
             return syn::Error::new_spanned(&input, "PyDictConvert only supports enums")
-                .to_compile_error()
-                .into();
+                .to_compile_error();
         }
     };
 

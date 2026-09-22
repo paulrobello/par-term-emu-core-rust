@@ -3,7 +3,38 @@
 //! Owns PTYs and serves the control-mode protocol over a local socket. Runs
 //! until killed: clients come and go, panes do not (see par-mux.md D5).
 
+use clap::Parser;
+
+/// par-mux: a tmux-control-mode-compatible multiplexer daemon.
+///
+/// Binds one control socket and serves it until killed. `MuxClient::connect_or_spawn_at`
+/// (par_term_emu_core_rust::mux::client) spawns this binary with `--socket <path>`; the
+/// positional `NAME` form is the equivalent default-path shorthand for manual runs.
+#[derive(Parser, Debug)]
+#[command(
+    name = "par-mux",
+    version,
+    about = "tmux-control-mode-compatible multiplexer daemon",
+    long_about = None
+)]
+struct Cli {
+    /// Named default socket path (par-mux::default_socket_path). Ignored if --socket is set.
+    #[arg(default_value = "default")]
+    name: String,
+
+    /// Bind an explicit socket path instead of the named default.
+    #[arg(long, value_name = "PATH")]
+    socket: Option<std::path::PathBuf>,
+
+    /// Override the platform state directory (D3.4) that persisted session
+    /// trees are written under, instead of the OS-standard state/data dir.
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<std::path::PathBuf>,
+}
+
 fn main() -> std::io::Result<()> {
+    let cli = Cli::parse();
+
     // The mux library logs through `log` (ARC-010); without a logger
     // installed those records vanish, so wire the minimal stderr sink up
     // before anything can emit.
@@ -13,11 +44,9 @@ fn main() -> std::io::Result<()> {
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
     // binds an explicit path (what MuxClient::connect_or_spawn_at spawns).
-    let mut args = std::env::args().skip(1);
-    let path = match (args.next(), args.next()) {
-        (Some(flag), Some(p)) if flag == "--socket" => std::path::PathBuf::from(p),
-        (Some(name), _) => par_term_emu_core_rust::mux::default_socket_path(&name),
-        _ => par_term_emu_core_rust::mux::default_socket_path("default"),
+    let path = match cli.socket {
+        Some(p) => p,
+        None => par_term_emu_core_rust::mux::default_socket_path(&cli.name),
     };
 
     // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
@@ -26,7 +55,10 @@ fn main() -> std::io::Result<()> {
     // restored, and every pane's process is new — the original processes
     // died with the previous server, which is stated rather than papered
     // over.
-    let state_path = par_term_emu_core_rust::mux::persist::state_file_path(&path);
+    let state_path = match cli.state_dir {
+        Some(dir) => par_term_emu_core_rust::mux::persist::state_file_in(&dir, &path),
+        None => par_term_emu_core_rust::mux::persist::state_file_path(&path),
+    };
     let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
         par_term_emu_core_rust::mux::persist::Loaded::Fresh => None,
         par_term_emu_core_rust::mux::persist::Loaded::State(state) => {

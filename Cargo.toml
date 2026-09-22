@@ -1,3 +1,6 @@
+[workspace]
+members = [".", "derive"]
+
 [package]
 name = "par-term-emu-core-rust"
 version = "0.50.0"
@@ -24,6 +27,7 @@ exclude = [
     "examples/",
     "tests/",
     "web-terminal-frontend/",
+    "web_term/",
     "terminfo/",
     "shell_integration/",
     ".github/",
@@ -219,7 +223,7 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "interprocess", "widestring", "serde", "dirs", "dep:toml"]
+mux = ["pty_session", "interprocess", "widestring", "serde", "dirs", "dep:toml", "clap"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
