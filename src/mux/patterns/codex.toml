@@ -58,7 +58,9 @@ regex = ['Skip\s+until\s+next\s+version', 'Press enter to continue\s*\z']
 # Upstream region: whole_recent_without_current_prompt_marker. The first
 # `not` is upstream's (a live, sparkled prompt marker makes any earlier
 # prompt stale); the second is the port's guard for a bare trailing prompt
-# line, so "[y/n]" typed into the composer cannot match.
+# line, so "[y/n]" typed into the composer cannot match. The trailing
+# newline alternation exists because the emulator's screen export
+# terminates every row.
 [[rules]]
 id = "weak_blocker"
 state = "blocked"
@@ -66,7 +68,7 @@ priority = 600
 region = "whole"
 not = [
   { regex = ['(?m)^›[⠁⠂⠄⠈⠐⠠⡀⢀][^\n]*(?:\n(?:[^•■✗✓\n][^\n]*)?)*\z'] },
-  { regex = ['(?m)^›[^\n]*\z'] },
+  { regex = ['(?m)^›[^\n]*\n?\z'] },
 ]
 any = [
   { contains = ["[y/n]"] },

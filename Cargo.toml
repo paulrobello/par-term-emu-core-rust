@@ -67,6 +67,9 @@ bitflags = "2.13.0"
 regex = "1.12.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+# par-mux agent scrape patterns (bundled + local override) — comments in the
+# override files are the point, so the format is TOML not JSON.
+toml = { version = "0.9", optional = true }
 serde_yaml_ng = "0.10.0"
 percent-encoding = "2.3.2"
 url = "2.5.8"
@@ -213,7 +216,7 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "tokio", "interprocess", "widestring", "serde", "dirs"]
+mux = ["pty_session", "tokio", "interprocess", "widestring", "serde", "dirs", "dep:toml"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md

@@ -107,6 +107,15 @@ impl MuxPane {
         self.metadata.insert(key.to_string(), value.to_string());
     }
 
+    /// Remove metadata entries (seam S2). The scrape tier's honesty rule:
+    /// a pattern that stops matching must clear its earlier guess rather
+    /// than leave a stale state on the pane.
+    pub fn clear_metadata(&mut self, keys: &[&str]) {
+        for key in keys {
+            self.metadata.remove(*key);
+        }
+    }
+
     /// Install the sink that receives raw PTY output for this pane.
     ///
     /// The server wires this to the control-mode emitter so bytes become
