@@ -70,6 +70,8 @@ term.spawn(
 - [Summary of Best Practices](#summary-of-best-practices)
   - [Context Manager Pattern](#context-manager-pattern)
 - [Security Checklist](#security-checklist)
+- [Streaming Server Security (Network Attack Surface)](#streaming-server-security-network-attack-surface)
+- [Multiplexer Daemon Security (par-mux, Local Attack Surface)](#multiplexer-daemon-security-par-mux-local-attack-surface)
 - [Reporting Security Issues](#reporting-security-issues)
 
 ## Security Architecture
@@ -982,6 +984,85 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - [STREAMING.md](STREAMING.md#security-considerations) — detailed security
   considerations for the streaming protocol.
 - `cargo audit` — 0 vulnerabilities (all Security items resolved).
+
+## Multiplexer Daemon Security (par-mux, Local Attack Surface)
+
+The `par-mux` daemon owns PTYs running as the invoking user and serves the
+tmux control-mode protocol over a local socket. This section describes the
+daemon's security posture as it stands today.
+
+> **Note:** No dedicated security audit of the mux daemon has run yet. The
+> statements below describe current implementation behavior, verified
+> against `src/mux/ipc.rs`, `src/mux/persist.rs`, `src/mux/hooks.rs`, and
+> `src/mux/server.rs` — not audited-and-remediated guarantees.
+
+### Threat Model
+
+The daemon's power is the same as tmux's: any process that can connect to
+the control socket can create and kill panes, send keystrokes to them
+(arbitrary command execution as the daemon's user), and read every pane's
+full content via `capture-pane`. The socket's own access permissions are
+the only trust boundary — there is no per-connection authentication on the
+control protocol, and none is claimed. This is the same single-boundary
+model tmux control mode has: **any connection the socket accepts is
+trusted completely.**
+
+### Socket Permissions
+
+- **Unix:** the socket file is created with mode `0600` (owner only). The
+  default path lives under `$XDG_RUNTIME_DIR` (per-user by definition) or
+  the user's temp directory. A second daemon on a path a live server owns
+  is refused (`AddrInUse`); stale remnants are reclaimed.
+- **Windows:** named pipes are reachable by other users on the machine
+  unless restricted, so the pipe is created with an owner-only security
+  descriptor (system and creating user only, nothing for anyone else), and
+  a marker file is written at the socket path.
+
+### On-Disk State
+
+The state file (`<state_dir>/par-mux/<socket-stem>.state.json`) contains
+everything needed to rebuild the session tree: each pane's screen and full
+scrollback content, the paste buffer, and agent session identity (agent
+label, session id/transcript path, and the hook-reported resume argv).
+Treat the file as private as the terminal sessions it came from:
+
+- Written `0600` on Unix through an atomic tmp-file + fsync + rename.
+- A corrupt or unknown-version state file is **quarantined** — renamed
+  aside with a timestamp suffix rather than deleted or overwritten — so
+  startup never blocks on unreadable state and the evidence survives.
+- Scrape-pattern override files (`<state_dir>/par-mux/agent-patterns/*.toml`)
+  are read from the same owner-only directory; one that fails to parse or
+  validate falls back to the bundled patterns with a warning.
+
+### Hook Reports
+
+A pane's process can report agent state over the socket (one JSON line,
+one JSON reply). Validation today: the report must parse as JSON, carry a
+well-formed `pane_id`, `agent`, and integer `seq`; `session_resume_argv`
+must be an array of non-empty strings or the report is error-replied;
+reports at or below the pane's last accepted `seq` are dropped; the state
+value `unknown` is never written. The values themselves are unvalidated
+free text from the reporting process — which is acceptable only because
+the reporter is by construction the same user (the socket accepted it). A
+hook can claim **any** pane id, not just its own; that is same-user
+trust, a recorded design decision, not an oversight.
+
+### Spawn Quoting on Restore
+
+Restored agent panes respawn through `sh -c`, so the stored/table resume
+argv crosses from a validated structure into a string a shell re-parses.
+`render_argv` single-quotes every argument unconditionally (embedded
+single quotes escaped POSIX-style as `'\''`), so a stored argv element
+cannot break out of its quoting. The argv's provenance is the same-user
+hook report or the table compiled into the binary — a hostile value
+requires already having the user's privileges.
+
+### See Also
+
+- [MUX.md](MUX.md) — the daemon's operational reference (paths, protocol,
+  persistence).
+- [ARCHITECTURE.md](ARCHITECTURE.md) — the mux subsystem's place in the
+  crate.
 
 ## Reporting Security Issues
 
