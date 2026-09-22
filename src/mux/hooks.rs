@@ -260,10 +260,8 @@ fn handle_session_report(
             Some(argv) => pane.set_metadata("agent_resume_argv", argv),
             None => {
                 let changed = session_id
-                    .as_deref()
                     .is_some_and(|value| prior_session_id.as_deref() != Some(value))
                     || session_path
-                        .as_deref()
                         .is_some_and(|value| prior_session_path.as_deref() != Some(value));
                 if changed {
                     pane.clear_metadata(&["agent_resume_argv"]);
