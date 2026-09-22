@@ -1729,6 +1729,7 @@ When TLS is enabled, clients must use secure URLs:
    - Use read-only mode for viewers
    - Implement session-based permissions
    - Log all client connections
+   - The API key / Basic credential is a single trust boundary — any authenticated client may attach to any session
 
 **Example with Authentication:**
 ```bash

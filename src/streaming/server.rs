@@ -232,6 +232,17 @@ pub struct ConnectionParams {
     pub preset: Option<String>,
 }
 
+/// Session ids must match `[A-Za-z0-9_-]{1,64}` (SEC-011): they are used as
+/// registry keys and passed to the session factory, so both charset and
+/// length are bounded to keep malformed ids out of the session machinery.
+fn is_valid_session_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
 impl ConnectionParams {
     /// Parse connection parameters from a query string map
     pub fn from_query(params: &HashMap<String, String>) -> Self {
@@ -239,6 +250,21 @@ impl ConnectionParams {
             .get("session")
             .cloned()
             .unwrap_or_else(|| "default".to_string());
+        // SEC-011: session ids are registry keys and factory arguments —
+        // restrict them to a bounded `[A-Za-z0-9_-]` charset so malformed
+        // ids (path-ish strings, oversized values) never reach the session
+        // registry or the spawn factory. Invalid ids fall back to the
+        // default session.
+        let session_id = if is_valid_session_id(&session_id) {
+            session_id
+        } else {
+            crate::debug_error!(
+                "STREAMING",
+                "Rejecting invalid session id {:?} (must match [A-Za-z0-9_-]{{1,64}}); using default",
+                session_id
+            );
+            "default".to_string()
+        };
         let readonly = params
             .get("readonly")
             .map(|v| v == "true" || v == "1")
@@ -1926,24 +1952,15 @@ impl StreamingServer {
         use axum::extract::ws::Message as AxumMessage;
         use futures_util::{SinkExt, StreamExt};
 
-        // Resolve session first
-        let session = self.resolve_session(&params)?;
-
-        // Try to reserve a global client slot
+        // Reserve the global client slot BEFORE resolving or creating a
+        // session, so max_clients bounds session spawns too (SEC-011). The
+        // guard releases on any early return below (guard → resolve →
+        // per-session slot, dropped in reverse order).
         if !self.try_add_client() {
             return Err(StreamingError::MaxClientsReached);
         }
-        let _global_guard = GlobalClientGuard { server: self };
-
-        // Try to add client to session
-        if !session.try_add_client(self.config.max_clients_per_session) {
-            return Err(StreamingError::MaxClientsReached);
-        }
-        let _session_guard = SessionClientGuard {
-            session: Arc::clone(&session),
-        };
-
-        let read_only = params.readonly || self.config.default_read_only;
+        let (session, _global_guard, _session_guard, read_only) =
+            self.prepare_ws_session(&params, GlobalClientGuard { server: self })?;
 
         let client_id = uuid::Uuid::new_v4();
 
@@ -2985,6 +3002,112 @@ mod tests {
         assert_eq!(params.session_id, "default");
         assert!(params.readonly);
         assert!(params.preset.is_none());
+    }
+
+    /// SEC-011: session ids that do not match `[A-Za-z0-9_-]{1,64}` are
+    /// rejected (never reach the session registry or factory) and the
+    /// connection falls back to the default session.
+    #[tokio::test]
+    async fn test_connection_params_rejects_invalid_session_id() {
+        for query in [
+            "session=../x",
+            "session=has%20space",
+            "session=../etc/passwd",
+            "session=a/b",
+            "session=..",
+            "session=.",
+        ] {
+            let params = ConnectionParams::from_uri_query(Some(query));
+            assert_eq!(
+                params.session_id, "default",
+                "session id from {:?} must be rejected",
+                query
+            );
+        }
+        // Over-length id (65+ chars) is rejected.
+        let long_id = "a".repeat(65);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", long_id)));
+        assert_eq!(params.session_id, "default");
+
+        // Legal ids still pass: dashes, underscores, mixed case, 64 chars.
+        let params = ConnectionParams::from_uri_query(Some("session=my-Sess_ion-42"));
+        assert_eq!(params.session_id, "my-Sess_ion-42");
+        let ok_id = "a".repeat(64);
+        let params = ConnectionParams::from_uri_query(Some(&format!("session={}", ok_id)));
+        assert_eq!(params.session_id, ok_id);
+    }
+
+    /// Session factory stub that counts spawns (SEC-011 test).
+    struct CountingFactory {
+        spawns: Arc<AtomicUsize>,
+    }
+
+    impl SessionFactory for CountingFactory {
+        fn create_session(
+            &self,
+            _session_id: &str,
+            _cols: u16,
+            _rows: u16,
+            _shell_command: Option<&str>,
+        ) -> std::result::Result<SessionFactoryResult, StreamingError> {
+            self.spawns.fetch_add(1, Ordering::Relaxed);
+            Ok(SessionFactoryResult {
+                terminal: Arc::new(RwLock::new(Terminal::new(80, 24))),
+                pty_writer: None,
+            })
+        }
+        fn setup_session(
+            &self,
+            _session_id: &str,
+            _session: &Arc<StreamSessionState>,
+        ) -> std::result::Result<(), StreamingError> {
+            Ok(())
+        }
+        fn teardown_session(&self, _session_id: &str) {}
+    }
+
+    /// SEC-011: the global client slot must be reserved before the session
+    /// is resolved/created, so a server at max_clients rejects a new
+    /// connection with a fresh session id without ever invoking the
+    /// session factory (no PTY spawn for a connection that will be
+    /// refused anyway).
+    #[tokio::test]
+    async fn max_clients_reached_rejects_before_session_spawn() {
+        let config = StreamingConfig {
+            max_clients: 1,
+            ..StreamingConfig::default()
+        };
+        let spawns = Arc::new(AtomicUsize::new(0));
+        let factory = Arc::new(CountingFactory {
+            spawns: Arc::clone(&spawns),
+        });
+        let server = Arc::new(StreamingServer::with_factory(
+            "127.0.0.1:0".to_string(),
+            config,
+            factory,
+        ));
+
+        // First client takes the only slot.
+        assert!(server.try_add_client());
+        let _held = GlobalClientGuard { server: &server };
+
+        // A second client with a fresh session id is rejected by the slot
+        // reservation — the factory never spawns.
+        assert!(!server.try_add_client());
+        assert_eq!(spawns.load(Ordering::Relaxed), 0);
+
+        // Positive control: with the slot released, resolving a fresh
+        // session id does spawn exactly one session through prepare.
+        drop(_held);
+        let params = ConnectionParams {
+            session_id: "fresh-session".to_string(),
+            readonly: false,
+            preset: None,
+        };
+        let (_session, _g, _s, _ro) = server
+            .prepare_ws_session(&params, GlobalClientGuard { server: &server })
+            .expect("fresh session resolves once a slot is free");
+        assert_eq!(spawns.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
