@@ -173,6 +173,7 @@ is documented there (older README release notes were merged into the changelog).
 
 ## Documentation
 
+- **[Quick Start Guide](QUICKSTART.md)** - Get running in minutes
 - **[API Reference](docs/API_REFERENCE.md)** - Complete Python API documentation
 - **[VT Sequences](docs/VT_SEQUENCES.md)** - Comprehensive ANSI/VT sequence reference
 - **[Advanced Features](docs/ADVANCED_FEATURES.md)** - Detailed feature guides
@@ -674,7 +675,7 @@ All contributions must pass:
 
 **TIP:** Use `make pre-commit-install` to automate all checks on every commit!
 
-See [CLAUDE.md](CLAUDE.md) for detailed development instructions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution workflow, and [CLAUDE.md](CLAUDE.md) for detailed development instructions.
 
 ## License
 
