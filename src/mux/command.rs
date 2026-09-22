@@ -37,8 +37,11 @@ pub enum MuxCommand {
     },
     /// Add a window to a session, optionally named.
     NewWindow {
-        /// Target session.
-        session: SessionId,
+        /// Target session; `None` means the most-recently-created one (the
+        /// bare `new-window` tmux clients issue, which tmux resolves against
+        /// the client's attached session — par-mux has no client-session
+        /// attachment, so "newest" is the documented stand-in).
+        session: Option<SessionId>,
         /// Window name; a default is chosen when absent.
         name: Option<String>,
     },
@@ -315,8 +318,11 @@ fn parse_send_keys_payload(raw: &str) -> Result<Vec<u8>, String> {
 /// Parse one command line from a client.
 ///
 /// Deliberately minimal: whitespace-split with a `-t`/`-s` flag scan. tmux's
-/// real argument grammar (quoting, `--`, per-command option tables) is Phase 2
-/// work, and pretending to implement it here would hide that.
+/// real argument grammar (quoting, `--`, per-command option tables) is not a
+/// goal here, and pretending to implement it would hide that. The one
+/// exception is `send-keys`, which carries its own bounded quoting grammar
+/// (see [`parse_send_keys_payload`]) because key names, `-l` and `-H` cannot
+/// survive a whitespace split.
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
@@ -385,7 +391,13 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
             Ok(MuxCommand::SendKeys { pane, keys })
         }
         "new-window" => Ok(MuxCommand::NewWindow {
-            session: target_session("-t")?,
+            session: match flag("-t") {
+                Some(raw) => Some(
+                    raw.parse()
+                        .map_err(|_| format!("invalid session target: {raw}"))?,
+                ),
+                None => None,
+            },
             name: flag("-n"),
         }),
         "select-window" => Ok(MuxCommand::SelectWindow {
@@ -662,14 +674,23 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n build").unwrap(),
             MuxCommand::NewWindow {
-                session: SessionId(0),
+                session: Some(SessionId(0)),
                 name: Some("build".into())
             }
         );
         assert_eq!(
             parse_command("new-window -t $0").unwrap(),
             MuxCommand::NewWindow {
-                session: SessionId(0),
+                session: Some(SessionId(0)),
+                name: None
+            }
+        );
+        // Bare new-window — the form tmux clients issue — targets the
+        // most-recently-created session, resolved server-side.
+        assert_eq!(
+            parse_command("new-window").unwrap(),
+            MuxCommand::NewWindow {
+                session: None,
                 name: None
             }
         );

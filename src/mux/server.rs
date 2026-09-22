@@ -290,6 +290,10 @@ fn dispatch_issued(
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
+        // Wire contract: list-panes replies one line per pane, globally, each
+        // just the pane id (`%N`). Geometry arrives via %layout-change
+        // pushes; there is no -F (Phase 4 T4.E decision — push covers what
+        // the -F polling fallback existed for).
         MuxCommand::ListPanes => {
             let guard = tree.lock();
             let body = guard
@@ -461,6 +465,12 @@ fn dispatch_issued(
             let name = name.unwrap_or_else(|| "0".to_string());
             let outcome = {
                 let mut guard = tree.lock();
+                // Bare `new-window` targets the most-recently-created
+                // session — ids are monotonic and the registry keeps
+                // insertion order, so the last entry is the newest.
+                let Some(session) = session.or_else(|| guard.sessions().last().copied()) else {
+                    return emit_block(command_number, "no sessions exist", false);
+                };
                 guard
                     .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
                     .map(|window_id| {
@@ -548,6 +558,8 @@ fn dispatch_issued(
                 Err(err) => emit_block(command_number, &err.to_string(), false),
             }
         }
+        // Wire contract: list-windows replies one line per window,
+        // globally, as `@N: name`.
         MuxCommand::ListWindows => {
             let guard = tree.lock();
             let body = guard
@@ -561,6 +573,8 @@ fn dispatch_issued(
                 .join("\n");
             emit_block(command_number, &body, true)
         }
+        // Wire contract: list-sessions replies one line per session as
+        // `$N: name`.
         MuxCommand::ListSessions => {
             let guard = tree.lock();
             let body = guard
@@ -893,6 +907,27 @@ mod tests {
         let tree = Arc::new(Mutex::new(MuxTree::new(Box::new(SilentPaneFactory))));
         let clients = Arc::new(Mutex::new(Vec::new()));
         (tree, clients)
+    }
+
+    #[test]
+    fn bare_new_window_targets_the_newest_session_and_errors_without_one() {
+        let (tree, clients) = harness();
+        // No sessions yet: bare new-window is an error, like tmux's
+        // "no current client" refusal.
+        let reply = dispatch("new-window", 1, &tree, &clients, None);
+        assert!(reply.contains("%error"), "no sessions: {reply}");
+
+        dispatch("new-session -s first", 2, &tree, &clients, None);
+        dispatch("new-session -s second", 3, &tree, &clients, None);
+        let second = tree.lock().sessions()[1];
+        let first = tree.lock().sessions()[0];
+
+        let reply = dispatch("new-window -n bare", 4, &tree, &clients, None);
+        assert!(reply.contains("%end"), "bare new-window succeeds: {reply}");
+        // The window landed in the most-recently-created session, not the
+        // first one.
+        assert_eq!(tree.lock().session(second).unwrap().windows.len(), 2);
+        assert_eq!(tree.lock().session(first).unwrap().windows.len(), 1);
     }
 
     #[test]
