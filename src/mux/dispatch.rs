@@ -342,14 +342,18 @@ fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> 
                 Err(err) => Outcome::err(ctx, &err.to_string()),
             }
         }
-        // Resync (D5.4): replay the pane's current screen by reusing
-        // the Terminal's existing visible-screen snapshot, so a
-        // reattached client renders content, not a blank pane.
+        // Resync (D5.4): replay the pane's current screen as a styled,
+        // cursor-addressed snapshot so a reattached client's emulator
+        // reproduces the screen exactly — row positions via `\x1b[R;1H`
+        // (a `\n`-joined reply would staircase: LF preserves the column),
+        // attributes via SGR (a plain reply loses every color), and
+        // trailing background-styled cells (plain text trims them). The
+        // active grid means an alt-screen TUI replays its TUI screen.
         None => {
             let guard = ctx.tree.lock();
             match guard.pane(pane) {
                 Some(target) => {
-                    let screen = target.terminal().read().content();
+                    let screen = target.terminal().read().export_visible_screen_styled();
                     Outcome::ok(ctx, &screen)
                 }
                 None => Outcome::err(ctx, &format!("no such pane: {pane}")),

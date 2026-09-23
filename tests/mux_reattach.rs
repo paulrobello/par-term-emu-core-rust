@@ -6,6 +6,7 @@ mod common;
 
 use common::{wait_listening, MuxFixture};
 use par_term_emu_core_rust::mux::{MuxClient, MuxServer};
+use par_term_emu_core_rust::terminal::Terminal;
 use par_term_emu_core_rust::tmux_control::TmuxNotification;
 use std::time::{Duration, Instant};
 
@@ -20,11 +21,16 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
     {
         let mut client = MuxClient::connect(path).expect("first connect");
         client.send("new-session -s resync").expect("new-session");
+        // The output marker must be a CASE-FOLDED transformation of the
+        // command: the kernel echo of the typed text arrives long before a
+        // login shell finishes init, and an echo that contains the marker
+        // satisfies the wait before any output exists (measured: the
+        // marker containment passed on the echoed command line alone).
         client
-            .send("send-keys -t %0 'echo par-mux-resync-marker' Enter")
+            .send("send-keys -t %0 'echo PAR-MUX-RESYNC-MARKER | tr A-Z a-z' Enter")
             .expect("send-keys");
 
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(15);
         let mut saw = false;
         while Instant::now() < deadline && !saw {
             // Debug of Output renders the payload as byte numbers, so match
@@ -58,6 +64,29 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         replay.contains("par-mux-resync-marker"),
         "a reattached client must receive the pane's CURRENT SCREEN, not a blank \
          pane — otherwise par-term reattaches to empty panes. Got: {replay}"
+    );
+
+    // The replay must RENDER the pane's screen in a client emulator — the
+    // output line at column 0 of its row. A `\n`-joined plain-text reply
+    // staircases (LF preserves the cursor column), which is the
+    // blank/partial reattach render this contract forbids; plain text also
+    // loses attributes. The styled, cursor-addressed reply (`\x1b[H` +
+    // per-row CUP + SGR) renders exactly.
+    let mut term = Terminal::with_scrollback(80, 24, 1000);
+    term.process(replay.as_bytes());
+    let rendered = term.content();
+    let rendered_lines: Vec<&str> = rendered.lines().collect();
+    assert!(
+        replay.starts_with("\x1b[H"),
+        "the replay must be styled and cursor-addressed (an anchor CUP first), \
+         not plain text: {replay:?}"
+    );
+    assert!(
+        rendered_lines
+            .iter()
+            .any(|l| l.starts_with("par-mux-resync-marker")),
+        "the replayed screen must render the marker at column 0 of its row \
+         (a staircase render here is the blank/partial reattach bug): {rendered_lines:?}"
     );
 }
 
