@@ -464,3 +464,52 @@ fn kill_server_stops_the_daemon_after_a_final_save() {
         .sum();
     assert_eq!(panes, 2, "the final save captured both panes: {saved:.200}");
 }
+
+/// A split's new pane must push `%output` like every other pane. The
+/// split handler once created the pane without wiring its output sink: the
+/// daemon grid filled (capture-pane showed it) but no `%output` line ever
+/// left, so every client rendered the new split pane blank.
+#[test]
+fn a_split_pane_pushes_its_output_to_clients() {
+    let fixture = MuxFixture::new("splitout");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = par_term_emu_core_rust::mux::MuxClient::connect(path).expect("connect");
+    client.send("new-session -s splitout").expect("new-session");
+    let reply = client
+        .send("split-window -h -t %0")
+        .expect("split")
+        .join("");
+    let new_pane = reply.trim().to_string();
+    assert!(
+        new_pane.starts_with('%'),
+        "split replies the new pane id: {reply}"
+    );
+
+    // Case-folded marker: the typed command's echo carries the uppercase
+    // form only, so only real output satisfies the wait.
+    client
+        .send(&format!(
+            "send-keys -t {new_pane} 'echo SPLIT-OUT | tr A-Z a-z' Enter"
+        ))
+        .expect("send-keys");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let mut saw = false;
+    while Instant::now() < deadline && !saw {
+        if let Ok(par_term_emu_core_rust::tmux_control::TmuxNotification::Output {
+            pane_id,
+            data,
+        }) = client
+            .notifications()
+            .recv_timeout(Duration::from_millis(250))
+        {
+            saw = pane_id == new_pane && String::from_utf8_lossy(&data).contains("split-out");
+        }
+    }
+    assert!(
+        saw,
+        "the split's new pane {new_pane} must push its output as %output"
+    );
+}

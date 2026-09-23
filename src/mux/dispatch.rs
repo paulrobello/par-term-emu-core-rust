@@ -400,10 +400,20 @@ fn cmd_split_window(
     direction: SplitDirection,
     percent: u32,
 ) -> Outcome {
-    let outcome =
-        ctx.tree
-            .lock()
-            .split_pane_in_window(pane, direction, percent as f32 / 100.0, None);
+    let outcome = {
+        let mut guard = ctx.tree.lock();
+        let split = guard.split_pane_in_window(pane, direction, percent as f32 / 100.0, None);
+        // Wire the new pane's output to the clients, as new-session and
+        // new-window do for theirs. Without it the pane's PTY still feeds
+        // the daemon grid (capture-pane shows it) but no %output line ever
+        // leaves, so every client renders a blank split pane.
+        if let Ok((new_pane, _)) = split {
+            if let Some(created) = guard.pane_mut(new_pane) {
+                created.on_output(pane_output_sink(ctx.clients, new_pane));
+            }
+        }
+        split
+    };
     match outcome {
         Ok((new_pane, window_id)) => {
             // split-window focuses the new pane (tmux semantics).
