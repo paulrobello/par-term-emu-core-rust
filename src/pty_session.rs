@@ -1855,7 +1855,10 @@ mod tests {
         #[cfg(windows)]
         let result = session.spawn("cmd.exe", &["/C", "echo wait-until-marker"]);
         assert!(result.is_ok());
-        assert!(session.wait_until(std::time::Duration::from_secs(5), |t| {
+        // 30 s budget: the marker arrives in milliseconds unloaded, but the
+        // echo child can be starved past 5 s under gate load (observed
+        // 2026-09-23 alongside the generation-poll flakes).
+        assert!(session.wait_until(std::time::Duration::from_secs(30), |t| {
             t.content().contains("wait-until-marker")
         }));
     }
@@ -2226,9 +2229,13 @@ mod tests {
 
         // The reader thread bumps the generation as PTY bytes arrive; under
         // load that can trail the spawn by more than any fixed window (the
-        // flake this poll replaced: "was 0, now 0" after 200 ms). Wait on
-        // the counter itself with a deadline instead.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // flake this poll replaced: "was 0, now 0" after 200 ms — and the
+        // 5 s deadline here still expired under back-to-back gate load,
+        // 2026-09-23). Wait on the counter itself with a deadline instead.
+        // The deadline is a starvation bound, not a timing assertion —
+        // green runs finish in milliseconds — so allow the same 30 s the
+        // wait_for_update EOF test budgets above.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let gen_after = loop {
             let gen = session.update_generation();
             if gen > gen_before || std::time::Instant::now() > deadline {
@@ -2289,8 +2296,11 @@ mod tests {
         // the post-write bump must land after it. A fixed sleep flakes
         // under load — the reader thread can lag the wait (observed locally
         // 2026-09-22 under back-to-back gate runs) — so poll with a
-        // deadline for both conditions before asserting.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        // deadline for both conditions before asserting. 30 s, not 5 s:
+        // this deadline is a starvation bound, and the 5 s bound still
+        // expired under back-to-back gate load (2026-09-23) while green
+        // runs finish in milliseconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         let (observed, final_gen) = loop {
             let observed = observed_in_window.load(Ordering::SeqCst);
             let final_gen = session.update_generation();
