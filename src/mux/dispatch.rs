@@ -56,6 +56,9 @@ pub(super) struct Ctx<'a> {
     /// The issuing client's per-connection command counter — the `%begin`/
     /// `%end` number the reply block carries.
     pub(super) command_number: u32,
+    /// The server's shutdown flag, for `kill-server`. `None` for embedders
+    /// and tests that dispatch without a running accept loop.
+    pub(super) shutdown: Option<&'a std::sync::atomic::AtomicBool>,
 }
 
 /// What one handler produced: the reply block plus everything the shared
@@ -166,6 +169,7 @@ pub(super) fn dispatch_command(
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
         MuxCommand::ListWindows => cmd_list_windows(ctx),
         MuxCommand::ListSessions => cmd_list_sessions(ctx),
+        MuxCommand::KillServer => cmd_kill_server(ctx),
         MuxCommand::CapturePane {
             pane,
             start_line,
@@ -576,6 +580,19 @@ fn cmd_list_windows(ctx: &Ctx<'_>) -> Outcome {
         .collect::<Vec<_>>()
         .join("\n");
     Outcome::ok(ctx, &body)
+}
+
+fn cmd_kill_server(ctx: &Ctx<'_>) -> Outcome {
+    // The same path SIGTERM takes: raise the flag and let the accept loop
+    // notice on its next tick, which runs the final state save and sends
+    // `%exit` to every client. The reply goes out before the loop exits.
+    match ctx.shutdown {
+        Some(flag) => {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            Outcome::ok(ctx, "")
+        }
+        None => Outcome::err(ctx, "kill-server: no running server to stop"),
+    }
 }
 
 fn cmd_list_sessions(ctx: &Ctx<'_>) -> Outcome {

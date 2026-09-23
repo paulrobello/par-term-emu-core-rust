@@ -417,3 +417,50 @@ fn a_pane_whose_child_exits_is_reaped_and_broadcast() {
         "the window must close when its last pane's child exits — panes:          {final_panes:?}, windows: {final_windows:?}"
     );
 }
+
+/// `kill-server` stops the daemon through the same path SIGTERM takes: the
+/// reply block answers first, the accept loop exits, and the final state
+/// save captures the tree — which is what `par-mux --stop` / `--restart`
+/// rely on (restart restores exactly what the stop saved).
+#[test]
+fn kill_server_stops_the_daemon_after_a_final_save() {
+    let fixture = MuxFixture::new("killsrv");
+    let path = fixture.socket().to_path_buf();
+    let state_dir = tempfile::Builder::new()
+        .prefix("par-mux-killsrv-")
+        .tempdir()
+        .expect("state dir");
+    let state_path = par_term_emu_core_rust::mux::persist::state_file_in(state_dir.path(), &path);
+    let server = MuxServer::bind(&path).expect("bind");
+    let run_state = state_path.clone();
+    let handle = std::thread::spawn(move || server.run_persisting(run_state));
+
+    let stream = connect_local_stream(&path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s killsrv");
+    command(&mut writer, &mut reader, "split-window -h -t %0");
+    let reply = command(&mut writer, &mut reader, "kill-server").join(" ");
+    assert!(
+        !reply.contains("%error"),
+        "kill-server must succeed on a running server: {reply}"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !handle.is_finished() {
+        assert!(Instant::now() < deadline, "the server never stopped");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    handle.join().expect("server thread");
+
+    let saved = std::fs::read_to_string(&state_path).expect("final save written");
+    let state: serde_json::Value = serde_json::from_str(&saved).expect("valid state json");
+    let panes: usize = state["sessions"]
+        .as_array()
+        .expect("sessions")
+        .iter()
+        .flat_map(|s| s["windows"].as_array().cloned().unwrap_or_default())
+        .map(|w| w["panes"].as_array().map_or(0, Vec::len))
+        .sum();
+    assert_eq!(panes, 2, "the final save captured both panes: {saved:.200}");
+}

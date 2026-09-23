@@ -211,7 +211,10 @@ impl MuxServer {
                     let tree = Arc::clone(&self.tree);
                     let clients = Arc::clone(&self.clients);
                     let persist = persist_tx.clone();
-                    std::thread::spawn(move || handle_client(stream, tree, clients, persist));
+                    let shutdown = Arc::clone(&self.shutdown);
+                    std::thread::spawn(move || {
+                        handle_client(stream, tree, clients, persist, Some(shutdown))
+                    });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -319,6 +322,7 @@ fn handle_client(
     tree: Arc<Mutex<MuxTree>>,
     clients: Clients,
     persist: Option<Sender<PersistState>>,
+    shutdown: Option<Arc<AtomicBool>>,
 ) {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -418,6 +422,7 @@ fn handle_client(
                     tree: &tree,
                     clients: &clients,
                     command_number,
+                    shutdown: shutdown.as_deref(),
                 };
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
                 if tx.send(reply).is_err() {
@@ -500,6 +505,7 @@ fn dispatch_issued(
                 tree,
                 clients,
                 command_number,
+                shutdown: None,
             };
             dispatch_command(command, &ctx, persist, issuer)
         }
@@ -1773,7 +1779,7 @@ mod tests {
         let (tree, _) = harness();
         std::thread::spawn(move || {
             if let Ok(stream) = listener.accept() {
-                handle_client(stream, tree, registry, None);
+                handle_client(stream, tree, registry, None, None);
             }
         });
 
@@ -1842,6 +1848,7 @@ mod tests {
             tree: &tree,
             clients: &clients,
             command_number: 1,
+            shutdown: None,
         };
         let poisoned = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(poisoned, &ctx, None, None);
@@ -1857,6 +1864,7 @@ mod tests {
             tree: &tree,
             clients: &clients,
             command_number: 2,
+            shutdown: None,
         };
         let healthy = parse_command("list-sessions").expect("parses");
         let reply = dispatch_contained(healthy, &ctx, None, None);

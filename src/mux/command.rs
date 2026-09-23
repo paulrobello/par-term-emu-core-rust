@@ -99,6 +99,9 @@ pub enum MuxCommand {
     ListWindows,
     /// List every session.
     ListSessions,
+    /// Shut the daemon down cleanly: the accept loop stops, the final state
+    /// save runs, and clients receive `%exit` — the same path SIGTERM takes.
+    KillServer,
     /// Split a pane's area in two, creating and focusing a new pane.
     SplitWindow {
         /// Target pane to split.
@@ -199,6 +202,7 @@ impl MuxCommand {
             | MuxCommand::ListAgents
             | MuxCommand::ListWindows
             | MuxCommand::ListSessions
+            | MuxCommand::KillServer
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
             | MuxCommand::PaneTitle { .. }
@@ -615,6 +619,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("rename-window", parse_rename_window),
     ("list-windows", parse_list_windows),
     ("list-sessions", parse_list_sessions),
+    ("kill-server", parse_kill_server),
     ("split-window", parse_split_window),
     ("select-pane", parse_select_pane),
     ("pane-title", parse_pane_title),
@@ -736,6 +741,10 @@ fn parse_list_windows(_a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_list_sessions(_a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::ListSessions)
+}
+
+fn parse_kill_server(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::KillServer)
 }
 
 fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {

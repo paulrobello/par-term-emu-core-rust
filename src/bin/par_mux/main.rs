@@ -30,6 +30,69 @@ struct Cli {
     /// trees are written under, instead of the OS-standard state/data dir.
     #[arg(long, value_name = "DIR")]
     state_dir: Option<std::path::PathBuf>,
+
+    /// Stop the daemon serving this socket cleanly (final state save,
+    /// `%exit` to clients) and wait for it to exit. Flags rather than
+    /// subcommands: the positional NAME would otherwise be ambiguous with a
+    /// session named `stop`.
+    #[arg(long, conflicts_with = "restart")]
+    stop: bool,
+
+    /// Stop the running daemon (as --stop), then start a fresh one on the
+    /// same socket — it restores the tree the stop just saved. Use after
+    /// rebuilding par-mux: clients attach to whatever daemon owns the
+    /// socket, so an old daemon keeps serving old code until restarted.
+    #[arg(long)]
+    restart: bool,
+}
+
+/// How long --stop/--restart wait for the old daemon to release its socket.
+const STOP_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Ask the daemon on `path` to shut down (`kill-server`), then wait until
+/// the socket stops accepting. `Ok(false)` means nothing was running.
+fn stop_daemon(path: &std::path::Path) -> std::io::Result<bool> {
+    use std::io::{BufRead, BufReader, Write};
+    let stream = match par_term_emu_core_rust::mux::connect_local_stream(path) {
+        Ok(stream) => stream,
+        Err(_) => return Ok(false),
+    };
+    let mut writer = interprocess::TryClone::try_clone(&stream)?;
+    writeln!(writer, "kill-server")?;
+    writer.flush()?;
+    // Read through the reply block so a refusal surfaces as an error
+    // instead of a silent wait for a daemon that will never exit.
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        if line.starts_with("%error") {
+            return Err(std::io::Error::other("the daemon refused kill-server"));
+        }
+        if line.starts_with("%end") {
+            break;
+        }
+    }
+    drop(reader);
+    drop(writer);
+    let deadline = std::time::Instant::now() + STOP_DEADLINE;
+    while par_term_emu_core_rust::mux::connect_local_stream(path).is_ok() {
+        if std::time::Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                    "the daemon on {} did not exit within {}s",
+                    path.display(),
+                    STOP_DEADLINE.as_secs()
+                ),
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Ok(true)
 }
 
 fn main() -> std::io::Result<()> {
@@ -48,6 +111,20 @@ fn main() -> std::io::Result<()> {
         Some(p) => p,
         None => par_term_emu_core_rust::mux::default_socket_path(&cli.name),
     };
+
+    if cli.stop || cli.restart {
+        if stop_daemon(&path)? {
+            eprintln!("par-mux: stopped the daemon on {}", path.display());
+        } else {
+            eprintln!("par-mux: no daemon running on {}", path.display());
+        }
+        if cli.stop {
+            return Ok(());
+        }
+        // --restart falls through and serves the socket in this process —
+        // the state save the stop just completed is what it restores. Run
+        // it detached (e.g. `par-mux --restart NAME &`) to keep a shell.
+    }
 
     // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
     // aside and the daemon starts fresh — unreadable state never blocks
