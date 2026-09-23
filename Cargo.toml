@@ -1,5 +1,9 @@
 [workspace]
 members = [".", "derive"]
+# The cargo-fuzz crate is deliberately outside the workspace: its sanitizer
+# instrumented builds must not share feature unification or target dirs with
+# the library or derive crates.
+exclude = ["fuzz"]
 
 [package]
 name = "par-term-emu-core-rust"
@@ -28,6 +32,7 @@ exclude = [
     "tests/",
     "web-terminal-frontend/",
     "web_term/",
+    "fuzz/",
     "terminfo/",
     "shell_integration/",
     ".github/",

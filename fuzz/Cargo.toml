@@ -1,0 +1,53 @@
+[package]
+name = "par-term-emu-core-rust-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Own workspace root: the parent repo's workspace excludes this crate, and an
+# explicit (empty) table here makes that independence unconditional — the
+# sanitizer-instrumented build must never unify features with the library.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.par-term-emu-core-rust]
+path = ".."
+default-features = false
+features = ["rust-only"]
+
+# rust-only: no Python toolchain in the fuzzer — see docs/fable/ENH-014-parser-fuzz-targets.md.
+# The four targets mirror the untrusted-byte entry points: the whole VTE pipeline,
+# the Sixel state machine, the Kitty APC parser, and the tmux control parser.
+
+[[bin]]
+name = "terminal_process"
+path = "fuzz_targets/terminal_process.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sixel"
+path = "fuzz_targets/sixel.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "kitty"
+path = "fuzz_targets/kitty.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tmux_control"
+path = "fuzz_targets/tmux_control.rs"
+test = false
+doc = false
+bench = false

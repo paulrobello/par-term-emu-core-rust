@@ -1,0 +1,7 @@
+target
+artifacts
+coverage
+# The corpus grows at runtime; only the curated seed files are tracked.
+corpus/**
+!corpus/**/
+!corpus/**/*.seed
