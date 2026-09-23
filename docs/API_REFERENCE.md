@@ -1134,6 +1134,8 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 #### Update Tracking
 - `update_generation() -> int`: Get current update generation counter
 - `has_updates_since(generation: int) -> bool`: Check if terminal updated since generation
+- `wait_for_update(since: int, timeout: float = 5.0) -> int | None`: Block until the generation advances past `since` (condvar-signalled by the reader thread; the GIL is released while blocking). Returns the new generation, or `None` on timeout or child exit with no new output
+- `wait_for_text(needle: str, timeout: float = 5.0, scrollback: bool = False) -> bool`: Block until `needle` appears in the visible content (or also scrollback with `scrollback=True`), re-checking after every applied update. The GIL is released while blocking
 - `send_resize_pulse()`: Send SIGWINCH to child process after resize
 - `bell_count() -> int`: Get bell event count (increments on BEL/\\x07)
 

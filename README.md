@@ -325,7 +325,6 @@ print(f"Cursor at: ({col}, {row})")
 
 ```python
 from par_term_emu_core_rust import PtyTerminal
-import time
 
 # Create PTY terminal and spawn shell
 with PtyTerminal(80, 24) as term:
@@ -333,7 +332,8 @@ with PtyTerminal(80, 24) as term:
 
     # Send commands
     term.write_str("echo 'Hello from shell!'\n")
-    time.sleep(0.2)
+    # Block until the output actually lands — no sleep guessing
+    term.wait_for_text("Hello from shell!", timeout=3.0)
 
     # Get output
     print(term.content())
