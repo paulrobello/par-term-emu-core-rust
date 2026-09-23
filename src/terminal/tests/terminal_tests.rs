@@ -3209,6 +3209,7 @@ fn screen_restore_sequence_round_trips_state() {
     src.process(b"\x1b[7;1H\x1b[44m   \x1b[0m");
     src.process(b"\x1b[?25l\x1b[4 q");
     src.process(b"\x1b[?1h\x1b[?2004h\x1b[?1004h");
+    src.process(b"\x1b=");
     src.process(b"\x1b[?1000h\x1b[?1006h");
     src.process(b"\x1b[?6h");
     src.process(b"\x1b[3;5H");
@@ -3232,6 +3233,11 @@ fn screen_restore_sequence_round_trips_state() {
     assert!(!dst.cursor.visible, "hidden cursor must be restored");
     assert_eq!(src.cursor.style, dst.cursor.style);
     assert_eq!(src.modes.application_cursor, dst.modes.application_cursor);
+    assert_eq!(src.modes.application_keypad, dst.modes.application_keypad);
+    assert!(
+        dst.modes.application_keypad,
+        "application keypad mode must be restored"
+    );
     assert_eq!(src.modes.bracketed_paste, dst.modes.bracketed_paste);
     assert_eq!(src.modes.mouse_mode, dst.modes.mouse_mode);
     assert_eq!(src.modes.mouse_encoding, dst.modes.mouse_encoding);
@@ -3242,6 +3248,19 @@ fn screen_restore_sequence_round_trips_state() {
         src.margins.scroll_region_bottom,
         dst.margins.scroll_region_bottom
     );
+}
+
+#[test]
+fn screen_restore_sequence_omits_keypad_when_off() {
+    // Keypad-off (the default, or an explicit ESC >) is the replay target's
+    // own initial state, so the restore stream must not carry ESC =.
+    let mut src = Terminal::new(80, 24);
+    src.process(b"\x1b="); // set, then explicitly clear
+    src.process(b"\x1b>");
+    assert!(!src.modes.application_keypad);
+
+    let restore = src.export_screen_restore_sequence();
+    assert!(!restore.contains("\x1b="), "off keypad must not be emitted");
 }
 
 #[test]

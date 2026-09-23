@@ -710,13 +710,13 @@ impl Terminal {
     /// into a fresh `Terminal` of the same size, reproduces the visible
     /// screen cell-for-cell plus the state a full-screen app depends on:
     /// alt-screen, scroll region, cursor position/visibility/style, and the
-    /// input modes (DECCKM, bracketed paste, focus tracking, mouse tracking
-    /// and encoding, origin mode).
+    /// input modes (DECCKM, application keypad, bracketed paste, focus
+    /// tracking, mouse tracking and encoding, origin mode).
     ///
     /// Content uses absolute cursor addressing, so origin mode is restored
     /// last with a region-relative re-position (enabling it homes the
-    /// cursor). Keypad mode and pending-wrap state are not modeled as
-    /// replayable sequences and are not encoded.
+    /// cursor). Pending-wrap state is not modeled as a replayable sequence
+    /// and is not encoded.
     pub fn export_screen_restore_sequence(&self) -> String {
         let mut out = String::new();
 
@@ -780,6 +780,11 @@ impl Terminal {
             MouseEncoding::Utf8 => out.push_str("\x1b[?1005h"),
             MouseEncoding::Sgr => out.push_str("\x1b[?1006h"),
             MouseEncoding::Urxvt => out.push_str("\x1b[?1015h"),
+        }
+        // Application keypad (DECPAM). Off is a fresh terminal's default, so
+        // only the set side is emitted — same shape as DECCKM above.
+        if self.modes.application_keypad {
+            out.push_str("\x1b=");
         }
 
         // Origin mode homes the cursor, so it is restored last, with a

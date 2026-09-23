@@ -1291,6 +1291,14 @@ impl PyTerminal {
         Ok(self.inner.application_cursor())
     }
 
+    /// Get application keypad mode (DECPAM/DECPNM)
+    ///
+    /// Returns:
+    ///     bool: True if the keypad sends application-mode sequences
+    fn application_keypad(&self) -> PyResult<bool> {
+        Ok(self.inner.application_keypad())
+    }
+
     /// Get current scroll region
     ///
     /// Returns:
