@@ -209,5 +209,4 @@ mod tests {
             assert_eq!(&bytes[0..8], b"\x89PNG\r\n\x1a\n");
         }
     }
-
 }
