@@ -1378,6 +1378,17 @@ impl PtySession {
         self.update_generation.load(Ordering::SeqCst)
     }
 
+    /// Mark the session's content as updated from OUTSIDE the PTY reader
+    /// thread — the generation bump + waiter wake the reader performs on
+    /// every read. For a session with no child (par-mux panes fed via
+    /// `process_data`), nothing else ever advances the generation, so a
+    /// generation-keyed render cache would serve stale cells forever.
+    pub fn mark_updated(&self) {
+        self.update_generation.fetch_add(1, Ordering::SeqCst);
+        let _guard = self.update_signal.0.lock();
+        self.update_signal.1.notify_all();
+    }
+
     /// Check if the terminal has been updated since a given generation
     ///
     /// # Arguments
@@ -1633,6 +1644,21 @@ mod tests {
         let session = PtySession::new(80, 24, 1000);
         assert_eq!(session.size(), (80, 24));
         assert!(!session.is_running());
+    }
+
+    /// A session with no child (par-mux panes) advances its generation only
+    /// through `mark_updated` — the reader-thread bump does not exist, and a
+    /// generation-keyed render cache (par-term's pane cells) depends on the
+    /// generation advancing to ever re-read fed content.
+    #[test]
+    fn mark_updated_advances_generation_for_childless_sessions() {
+        let session = PtySession::new(80, 24, 1000);
+        assert!(!session.is_running());
+        let before = session.update_generation();
+
+        session.mark_updated();
+        assert!(session.update_generation() > before);
+        assert!(session.has_updates_since(before));
     }
 
     #[test]
