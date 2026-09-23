@@ -51,11 +51,12 @@ impl Grid {
         self.push_rows_to_scrollback(0, n);
 
         for i in n..self.rows {
-            let src_start = i * self.cols;
+            // Per-row split: dst row [i-n] and src row [i] are disjoint by
+            // construction, so clone_from_slice needs no per-cell bounds
+            // checks on the hot one-line-per-feed path.
+            let (head, tail) = self.cells.split_at_mut(i * self.cols);
             let dst_start = (i - n) * self.cols;
-            for j in 0..self.cols {
-                self.cells[dst_start + j] = self.cells[src_start + j].clone();
-            }
+            head[dst_start..dst_start + self.cols].clone_from_slice(&tail[..self.cols]);
             if i < self.wrapped.len() && (i - n) < self.wrapped.len() {
                 self.wrapped[i - n] = self.wrapped[i];
             }
@@ -124,11 +125,9 @@ impl Grid {
         }
 
         for i in top..=(effective_bottom - n) {
-            let src_start = (i + n) * self.cols;
+            let (head, tail) = self.cells.split_at_mut((i + n) * self.cols);
             let dst_start = i * self.cols;
-            for j in 0..self.cols {
-                self.cells[dst_start + j] = self.cells[src_start + j].clone();
-            }
+            head[dst_start..dst_start + self.cols].clone_from_slice(&tail[..self.cols]);
         }
 
         for i in (effective_bottom - n + 1)..=effective_bottom {

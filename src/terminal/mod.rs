@@ -1175,8 +1175,10 @@ pub struct Terminal {
     pub(crate) margin_bell_volume: u8,
     /// tmux control-protocol state (ARC-001 sub-struct)
     pub(crate) tmux: TmuxState,
-    /// Dirty rows tracking (0-indexed row numbers that have changed)
-    pub(crate) dirty_rows: HashSet<usize>,
+    /// Dirty rows tracking (0-indexed row numbers that have changed), one bit
+    /// per visible row — the print path sets a bit per character, so this is
+    /// a plain mask OR rather than a hash insert
+    pub(crate) dirty_rows: Vec<u64>,
     /// Event buffer + observer registry + dispatch index + ID counters (ARC-001 sub-struct)
     pub(crate) events: EventBrokerState,
     /// Current selection state
@@ -1308,7 +1310,7 @@ impl Terminal {
             warning_bell_volume: 4,
             margin_bell_volume: 4,
             tmux: TmuxState::default(),
-            dirty_rows: HashSet::new(),
+            dirty_rows: vec![0u64; rows.div_ceil(64)],
             events: EventBrokerState::default(),
             selection: None,
             bookmarks_state: BookmarksState::default(),
@@ -1477,6 +1479,9 @@ impl Terminal {
 
         self.grid.resize(cols, rows);
         self.alt_grid.resize(cols, rows);
+        // Keep the dirty-row mask sized to the visible rows; a shrink drops
+        // stale bits for rows that no longer exist.
+        self.dirty_rows.resize(rows.div_ceil(64), 0);
 
         // Update pixel dimensions proportionally (10x20 per cell if not explicitly set)
         // This ensures CSI 14 t queries return valid pixel dimensions after resize
@@ -3167,7 +3172,10 @@ impl Terminal {
 
     /// Mark a row as dirty (needs redrawing)
     pub fn mark_row_dirty(&mut self, row: usize) {
-        self.dirty_rows.insert(row);
+        let word = row / 64;
+        if word < self.dirty_rows.len() {
+            self.dirty_rows[word] |= 1u64 << (row % 64);
+        }
 
         // If we have triggers, also add to pending trigger rows
         if self.triggers.trigger_registry.has_active_triggers() {
@@ -3177,26 +3185,32 @@ impl Terminal {
 
     /// Mark the entire screen as clean
     pub fn mark_clean(&mut self) {
-        self.dirty_rows.clear();
+        self.dirty_rows.fill(0);
     }
 
-    /// Get all dirty rows
+    /// Iterate the dirty row numbers in ascending order
+    fn dirty_row_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.dirty_rows
+            .iter()
+            .enumerate()
+            .flat_map(|(word_idx, &word)| {
+                let base = word_idx * 64;
+                (0..64usize)
+                    .filter_map(move |bit| (word & (1u64 << bit) != 0).then_some(base + bit))
+            })
+    }
+
+    /// Get all dirty rows (ascending)
     pub fn get_dirty_rows(&self) -> Vec<usize> {
-        let mut rows: Vec<usize> = self.dirty_rows.iter().copied().collect();
-        rows.sort_unstable();
-        rows
+        self.dirty_row_indices().collect()
     }
 
     /// Get the bounding box of the dirty region
     pub fn get_dirty_region(&self) -> Option<(usize, usize, usize, usize)> {
-        // Single pass: fold into (min, max), return None for empty.
-        let (first_row, last_row) = self.dirty_rows.iter().copied().fold(
-            None,
-            |acc: Option<(usize, usize)>, row| match acc {
-                None => Some((row, row)),
-                Some((min, max)) => Some((min.min(row), max.max(row))),
-            },
-        )?;
+        // Ascending iteration: the first dirty row is the min, the last is the max.
+        let mut indices = self.dirty_row_indices();
+        let first_row = indices.next()?;
+        let last_row = indices.last().unwrap_or(first_row);
         let cols = self.grid.cols();
 
         Some((first_row, 0, last_row, cols.saturating_sub(1)))

@@ -84,20 +84,24 @@ impl Terminal {
             .graphics_store
             .adjust_for_scroll_up_with_scrollback(n, top, bottom, old_scrollback_len);
 
-        debug::log(
-            debug::DebugLevel::Debug,
-            "GRAPHICS",
-            &format!(
-                "Adjusted graphics for scroll_up: n={}, top={}, bottom={}, remaining graphics={}, scrollback={}, old_scrollback_len={} (current={})",
-                n,
-                top,
-                bottom,
-                self.graphics.graphics_store.graphics_count(),
-                self.graphics.graphics_store.scrollback_count(),
-                old_scrollback_len,
-                scrollback_len
-            ),
-        );
+        // Guard before formatting: this runs on every scrolled line feed, and
+        // `debug::log` would otherwise format + lock the logger per scroll.
+        if debug::is_enabled(debug::DebugLevel::Debug) {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "GRAPHICS",
+                &format!(
+                    "Adjusted graphics for scroll_up: n={}, top={}, bottom={}, remaining graphics={}, scrollback={}, old_scrollback_len={} (current={})",
+                    n,
+                    top,
+                    bottom,
+                    self.graphics.graphics_store.graphics_count(),
+                    self.graphics.graphics_store.scrollback_count(),
+                    old_scrollback_len,
+                    scrollback_len
+                ),
+            );
+        }
     }
 
     /// Adjust graphics positions when scrolling down within a region
@@ -113,14 +117,16 @@ impl Terminal {
             .graphics_store
             .adjust_for_scroll_down(n, top, bottom);
 
-        debug::log(
-            debug::DebugLevel::Debug,
-            "GRAPHICS",
-            &format!(
-                "Adjusted graphics for scroll_down: n={}, top={}, bottom={}",
-                n, top, bottom
-            ),
-        );
+        if debug::is_enabled(debug::DebugLevel::Debug) {
+            debug::log(
+                debug::DebugLevel::Debug,
+                "GRAPHICS",
+                &format!(
+                    "Adjusted graphics for scroll_down: n={}, top={}, bottom={}",
+                    n, top, bottom
+                ),
+            );
+        }
     }
 
     /// Handle iTerm2 inline image (OSC 1337)
