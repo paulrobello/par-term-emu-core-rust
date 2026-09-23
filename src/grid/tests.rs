@@ -1469,3 +1469,50 @@ fn scroll_up_by_full_screen_moves_every_row_to_scrollback() {
         assert_eq!(grid.get(0, row).unwrap().c, ' ');
     }
 }
+
+#[test]
+fn insert_lines_with_n_past_region_size_empties_region_not_panics() {
+    // Found by the ENH-014 terminal_process fuzz target: the copy range was
+    // `row..=effective_bottom - n`, and n was clamped against the *unclamped*
+    // scroll_bottom — so CSI 24 L (n = region size + 1) at row 0 underflowed.
+    let mut grid = Grid::new(10, 5, 100);
+    for i in 0..5 {
+        grid.set(0, i, Cell::new((b'A' + i as u8) as char));
+    }
+
+    grid.insert_lines(6, 0, 4);
+
+    for i in 0..5 {
+        assert_eq!(grid.get(0, i).unwrap().c, ' ');
+    }
+}
+
+#[test]
+fn insert_lines_with_runaway_scroll_bottom_stays_on_screen() {
+    // A scroll_bottom past rows - 1 must clamp before n is clamped, or the
+    // same underflow fires with any large n.
+    let mut grid = Grid::new(10, 5, 100);
+    grid.set(0, 2, Cell::new('X'));
+
+    grid.insert_lines(usize::MAX / 2, 0, 999);
+
+    for i in 0..5 {
+        assert_eq!(grid.get(0, i).unwrap().c, ' ');
+    }
+}
+
+#[test]
+fn delete_lines_with_n_past_region_size_empties_region_not_panics() {
+    // Twin of the insert underflow: the shift read i + n one row past the
+    // region when n = region size + 1 at row 0.
+    let mut grid = Grid::new(10, 5, 100);
+    for i in 0..5 {
+        grid.set(0, i, Cell::new((b'A' + i as u8) as char));
+    }
+
+    grid.delete_lines(9, 0, 4);
+
+    for i in 0..5 {
+        assert_eq!(grid.get(0, i).unwrap().c, ' ');
+    }
+}

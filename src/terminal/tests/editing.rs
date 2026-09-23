@@ -84,3 +84,18 @@ fn test_erase_characters() {
     let text: String = line0.iter().take(8).map(|c| c.c).collect();
     assert!(text.starts_with("AB   FGH"));
 }
+
+#[test]
+fn huge_il_and_dl_counts_do_not_panic() {
+    // Regression for the ENH-014 fuzz crash: CSI <region+1> L at row 0
+    // underflowed Grid::insert_lines' copy range (clamp used the unclamped
+    // scroll_bottom). The whole region blanks instead.
+    let mut term = Terminal::new(80, 24);
+    term.process(b"ABCD");
+    term.process(b"\x1b[65535L");
+    term.process(b"\x1b[65535M");
+
+    let line0 = term.grid().row(0).unwrap();
+    let text: String = line0.iter().take(4).map(|c| c.c).collect();
+    assert_eq!(text.trim(), "");
+}
