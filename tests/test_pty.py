@@ -633,11 +633,15 @@ def test_wait_for_text_finds_and_times_out():
     term.spawn("/bin/echo", args=["wait-text-marker"])
     assert term.wait_for_text("wait-text-marker", timeout=3.0)
 
-    # Nothing further arrives: the timeout path returns False promptly.
+    # A LIVE child that stays silent: the timeout path takes the full
+    # window. (An exited child returns early by design — the child-gone
+    # fast path skips waiting out the deadline.)
     import time as _time
 
+    term2 = PtyTerminal(80, 24)
+    term2.spawn("/bin/cat", [])
     start = _time.monotonic()
-    assert not term.wait_for_text("never-appears", timeout=0.3)
+    assert not term2.wait_for_text("never-appears", timeout=0.3)
     assert 0.25 <= _time.monotonic() - start < 2.0
 
 
