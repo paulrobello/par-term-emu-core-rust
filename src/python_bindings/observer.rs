@@ -7,103 +7,140 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyDict};
 
 use crate::observer::TerminalObserver;
 use crate::terminal::{TerminalEvent, TerminalEventKind};
 
-/// Convert a `TerminalEvent` to a Python-friendly dictionary.
+/// A field value in an event dictionary, before it is rendered to Python.
 ///
-/// This is the single source of truth for event-to-dict conversion, shared by
-/// `poll_events()`, `poll_subscribed_events()`, and observer dispatch.
-pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
-    let mut map = HashMap::new();
+/// `event_fields` is the single source of truth for event-to-dict conversion,
+/// shared by `poll_events()`, `poll_subscribed_events()`, and observer
+/// dispatch. Numeric, boolean, and optional Rust fields map to `Int`/`Bool`/
+/// `None` so the Python-facing dicts carry native types; the legacy renderer
+/// stringifies them back to the pre-0.51 shape.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum EventField {
+    Str(String),
+    Int(i64),
+    Bool(bool),
+    None,
+}
+
+/// Collect an event's dictionary fields with native Rust types.
+///
+/// Optional fields are always present, as `EventField::None` when unset — the
+/// legacy renderer omits them instead.
+pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
+    let mut fields: Vec<(String, EventField)> = Vec::new();
+    macro_rules! put {
+        ($key:expr, $val:expr) => {
+            fields.push(($key.to_string(), $val))
+        };
+    }
     match event {
         TerminalEvent::BellRang(bell) => {
-            map.insert("type".to_string(), "bell".to_string());
+            put!("type", EventField::Str("bell".to_string()));
             match bell {
                 crate::terminal::BellEvent::VisualBell => {
-                    map.insert("bell_type".to_string(), "visual".to_string());
+                    put!("bell_type", EventField::Str("visual".to_string()));
                 }
                 crate::terminal::BellEvent::WarningBell(vol) => {
-                    map.insert("bell_type".to_string(), "warning".to_string());
-                    map.insert("volume".to_string(), vol.to_string());
+                    put!("bell_type", EventField::Str("warning".to_string()));
+                    put!("volume", EventField::Int(*vol as i64));
                 }
                 crate::terminal::BellEvent::MarginBell(vol) => {
-                    map.insert("bell_type".to_string(), "margin".to_string());
-                    map.insert("volume".to_string(), vol.to_string());
+                    put!("bell_type", EventField::Str("margin".to_string()));
+                    put!("volume", EventField::Int(*vol as i64));
                 }
             }
         }
         TerminalEvent::TitleChanged(title) => {
-            map.insert("type".to_string(), "title_changed".to_string());
-            map.insert("title".to_string(), title.clone());
+            put!("type", EventField::Str("title_changed".to_string()));
+            put!("title", EventField::Str(title.clone()));
         }
         TerminalEvent::SizeChanged(cols, rows) => {
-            map.insert("type".to_string(), "size_changed".to_string());
-            map.insert("cols".to_string(), cols.to_string());
-            map.insert("rows".to_string(), rows.to_string());
+            put!("type", EventField::Str("size_changed".to_string()));
+            put!("cols", EventField::Int(*cols as i64));
+            put!("rows", EventField::Int(*rows as i64));
         }
         TerminalEvent::ModeChanged(mode, enabled) => {
-            map.insert("type".to_string(), "mode_changed".to_string());
-            map.insert("mode".to_string(), mode.clone());
-            map.insert("enabled".to_string(), enabled.to_string());
+            put!("type", EventField::Str("mode_changed".to_string()));
+            put!("mode", EventField::Str(mode.clone()));
+            put!("enabled", EventField::Bool(*enabled));
         }
         TerminalEvent::GraphicsAdded(row) => {
-            map.insert("type".to_string(), "graphics_added".to_string());
-            map.insert("row".to_string(), row.to_string());
+            put!("type", EventField::Str("graphics_added".to_string()));
+            put!("row", EventField::Int(*row as i64));
         }
         TerminalEvent::HyperlinkAdded { url, row, col, id } => {
-            map.insert("type".to_string(), "hyperlink_added".to_string());
-            map.insert("url".to_string(), url.clone());
-            map.insert("row".to_string(), row.to_string());
-            map.insert("col".to_string(), col.to_string());
-            if let Some(id) = id {
-                map.insert("id".to_string(), id.to_string());
-            }
+            put!("type", EventField::Str("hyperlink_added".to_string()));
+            put!("url", EventField::Str(url.clone()));
+            put!("row", EventField::Int(*row as i64));
+            put!("col", EventField::Int(*col as i64));
+            put!(
+                "id",
+                id.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
         }
         TerminalEvent::DirtyRegion(first, last) => {
-            map.insert("type".to_string(), "dirty_region".to_string());
-            map.insert("first_row".to_string(), first.to_string());
-            map.insert("last_row".to_string(), last.to_string());
+            put!("type", EventField::Str("dirty_region".to_string()));
+            put!("first_row", EventField::Int(*first as i64));
+            put!("last_row", EventField::Int(*last as i64));
         }
         TerminalEvent::CwdChanged(change) => {
-            map.insert("type".to_string(), "cwd_changed".to_string());
-            if let Some(old) = &change.old_cwd {
-                map.insert("old_cwd".to_string(), old.clone());
-            }
-            map.insert("new_cwd".to_string(), change.new_cwd.clone());
-            if let Some(host) = &change.hostname {
-                map.insert("hostname".to_string(), host.clone());
-            }
-            if let Some(user) = &change.username {
-                map.insert("username".to_string(), user.clone());
-            }
-            map.insert("timestamp".to_string(), change.timestamp.to_string());
+            put!("type", EventField::Str("cwd_changed".to_string()));
+            put!(
+                "old_cwd",
+                change
+                    .old_cwd
+                    .clone()
+                    .map_or(EventField::None, EventField::Str)
+            );
+            put!("new_cwd", EventField::Str(change.new_cwd.clone()));
+            put!(
+                "hostname",
+                change
+                    .hostname
+                    .clone()
+                    .map_or(EventField::None, EventField::Str)
+            );
+            put!(
+                "username",
+                change
+                    .username
+                    .clone()
+                    .map_or(EventField::None, EventField::Str)
+            );
+            put!("timestamp", EventField::Int(change.timestamp as i64));
         }
         TerminalEvent::TriggerMatched(trigger_match) => {
-            map.insert("type".to_string(), "trigger_matched".to_string());
-            map.insert(
-                "trigger_id".to_string(),
-                trigger_match.trigger_id.to_string(),
+            put!("type", EventField::Str("trigger_matched".to_string()));
+            put!(
+                "trigger_id",
+                EventField::Int(trigger_match.trigger_id as i64)
             );
-            map.insert("row".to_string(), trigger_match.row.to_string());
-            map.insert("col".to_string(), trigger_match.col.to_string());
-            map.insert("end_col".to_string(), trigger_match.end_col.to_string());
-            map.insert("text".to_string(), trigger_match.text.clone());
-            map.insert("timestamp".to_string(), trigger_match.timestamp.to_string());
+            put!("row", EventField::Int(trigger_match.row as i64));
+            put!("col", EventField::Int(trigger_match.col as i64));
+            put!("end_col", EventField::Int(trigger_match.end_col as i64));
+            put!("text", EventField::Str(trigger_match.text.clone()));
+            put!(
+                "timestamp",
+                EventField::Int(trigger_match.timestamp as i64)
+            );
         }
         TerminalEvent::UserVarChanged {
             name,
             value,
             old_value,
         } => {
-            map.insert("type".to_string(), "user_var_changed".to_string());
-            map.insert("name".to_string(), name.clone());
-            map.insert("value".to_string(), value.clone());
-            if let Some(old) = old_value {
-                map.insert("old_value".to_string(), old.clone());
-            }
+            put!("type", EventField::Str("user_var_changed".to_string()));
+            put!("name", EventField::Str(name.clone()));
+            put!("value", EventField::Str(value.clone()));
+            put!(
+                "old_value",
+                old_value.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::ProgressBarChanged {
             action,
@@ -112,29 +149,36 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             percent,
             label,
         } => {
-            map.insert("type".to_string(), "progress_bar_changed".to_string());
+            put!("type", EventField::Str("progress_bar_changed".to_string()));
             let action_str = match action {
                 crate::terminal::ProgressBarAction::Set => "set",
                 crate::terminal::ProgressBarAction::Remove => "remove",
                 crate::terminal::ProgressBarAction::RemoveAll => "remove_all",
             };
-            map.insert("action".to_string(), action_str.to_string());
-            map.insert("id".to_string(), id.clone());
-            if let Some(s) = state {
-                map.insert("state".to_string(), s.description().to_string());
-            }
-            if let Some(p) = percent {
-                map.insert("percent".to_string(), p.to_string());
-            }
-            if let Some(l) = label {
-                map.insert("label".to_string(), l.clone());
-            }
+            put!("action", EventField::Str(action_str.to_string()));
+            put!("id", EventField::Str(id.clone()));
+            put!(
+                "state",
+                state
+                    .as_ref()
+                    .map(|s| EventField::Str(s.description().to_string()))
+                    .unwrap_or(EventField::None)
+            );
+            put!(
+                "percent",
+                percent.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
+            put!(
+                "label",
+                label.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::BadgeChanged(badge) => {
-            map.insert("type".to_string(), "badge_changed".to_string());
-            if let Some(b) = badge {
-                map.insert("badge".to_string(), b.clone());
-            }
+            put!("type", EventField::Str("badge_changed".to_string()));
+            put!(
+                "badge",
+                badge.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::ShellIntegrationEvent {
             event_type,
@@ -143,30 +187,34 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             timestamp,
             cursor_line,
         } => {
-            map.insert("type".to_string(), "shell_integration".to_string());
-            map.insert("event_type".to_string(), event_type.clone());
-            if let Some(cmd) = command {
-                map.insert("command".to_string(), cmd.clone());
-            }
-            if let Some(code) = exit_code {
-                map.insert("exit_code".to_string(), code.to_string());
-            }
-            if let Some(line) = cursor_line {
-                map.insert("cursor_line".to_string(), line.to_string());
-            }
-            if let Some(ts) = timestamp {
-                map.insert("timestamp".to_string(), ts.to_string());
-            }
+            put!("type", EventField::Str("shell_integration".to_string()));
+            put!("event_type", EventField::Str(event_type.clone()));
+            put!(
+                "command",
+                command.clone().map_or(EventField::None, EventField::Str)
+            );
+            put!(
+                "exit_code",
+                exit_code.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
+            put!(
+                "cursor_line",
+                cursor_line.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
+            put!(
+                "timestamp",
+                timestamp.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
         }
         TerminalEvent::ZoneOpened {
             zone_id,
             zone_type,
             abs_row_start,
         } => {
-            map.insert("type".to_string(), "zone_opened".to_string());
-            map.insert("zone_id".to_string(), zone_id.to_string());
-            map.insert("zone_type".to_string(), zone_type.to_string());
-            map.insert("abs_row_start".to_string(), abs_row_start.to_string());
+            put!("type", EventField::Str("zone_opened".to_string()));
+            put!("zone_id", EventField::Int(*zone_id as i64));
+            put!("zone_type", EventField::Str(zone_type.to_string()));
+            put!("abs_row_start", EventField::Int(*abs_row_start as i64));
         }
         TerminalEvent::ZoneClosed {
             zone_id,
@@ -175,31 +223,33 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             abs_row_end,
             exit_code,
         } => {
-            map.insert("type".to_string(), "zone_closed".to_string());
-            map.insert("zone_id".to_string(), zone_id.to_string());
-            map.insert("zone_type".to_string(), zone_type.to_string());
-            map.insert("abs_row_start".to_string(), abs_row_start.to_string());
-            map.insert("abs_row_end".to_string(), abs_row_end.to_string());
-            if let Some(code) = exit_code {
-                map.insert("exit_code".to_string(), code.to_string());
-            }
+            put!("type", EventField::Str("zone_closed".to_string()));
+            put!("zone_id", EventField::Int(*zone_id as i64));
+            put!("zone_type", EventField::Str(zone_type.to_string()));
+            put!("abs_row_start", EventField::Int(*abs_row_start as i64));
+            put!("abs_row_end", EventField::Int(*abs_row_end as i64));
+            put!(
+                "exit_code",
+                exit_code.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
         }
         TerminalEvent::ZoneScrolledOut { zone_id, zone_type } => {
-            map.insert("type".to_string(), "zone_scrolled_out".to_string());
-            map.insert("zone_id".to_string(), zone_id.to_string());
-            map.insert("zone_type".to_string(), zone_type.to_string());
+            put!("type", EventField::Str("zone_scrolled_out".to_string()));
+            put!("zone_id", EventField::Int(*zone_id as i64));
+            put!("zone_type", EventField::Str(zone_type.to_string()));
         }
         TerminalEvent::EnvironmentChanged {
             key,
             value,
             old_value,
         } => {
-            map.insert("type".to_string(), "environment_changed".to_string());
-            map.insert("key".to_string(), key.clone());
-            map.insert("value".to_string(), value.clone());
-            if let Some(old) = old_value {
-                map.insert("old_value".to_string(), old.clone());
-            }
+            put!("type", EventField::Str("environment_changed".to_string()));
+            put!("key", EventField::Str(key.clone()));
+            put!("value", EventField::Str(value.clone()));
+            put!(
+                "old_value",
+                old_value.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::RemoteHostTransition {
             hostname,
@@ -207,24 +257,31 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             old_hostname,
             old_username,
         } => {
-            map.insert("type".to_string(), "remote_host_transition".to_string());
-            map.insert("hostname".to_string(), hostname.clone());
-            if let Some(u) = username {
-                map.insert("username".to_string(), u.clone());
-            }
-            if let Some(oh) = old_hostname {
-                map.insert("old_hostname".to_string(), oh.clone());
-            }
-            if let Some(ou) = old_username {
-                map.insert("old_username".to_string(), ou.clone());
-            }
+            put!(
+                "type",
+                EventField::Str("remote_host_transition".to_string())
+            );
+            put!("hostname", EventField::Str(hostname.clone()));
+            put!(
+                "username",
+                username.clone().map_or(EventField::None, EventField::Str)
+            );
+            put!(
+                "old_hostname",
+                old_hostname.clone().map_or(EventField::None, EventField::Str)
+            );
+            put!(
+                "old_username",
+                old_username.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::SubShellDetected { depth, shell_type } => {
-            map.insert("type".to_string(), "sub_shell_detected".to_string());
-            map.insert("depth".to_string(), depth.to_string());
-            if let Some(st) = shell_type {
-                map.insert("shell_type".to_string(), st.clone());
-            }
+            put!("type", EventField::Str("sub_shell_detected".to_string()));
+            put!("depth", EventField::Int(*depth as i64));
+            put!(
+                "shell_type",
+                shell_type.clone().map_or(EventField::None, EventField::Str)
+            );
         }
         TerminalEvent::FileTransferStarted {
             id,
@@ -232,65 +289,112 @@ pub(crate) fn event_to_dict(event: &TerminalEvent) -> HashMap<String, String> {
             filename,
             total_bytes,
         } => {
-            map.insert("type".to_string(), "file_transfer_started".to_string());
-            map.insert("id".to_string(), id.to_string());
+            put!("type", EventField::Str("file_transfer_started".to_string()));
+            put!("id", EventField::Int(*id as i64));
             let dir_str = match direction {
                 crate::terminal::TransferDirection::Download => "download",
                 crate::terminal::TransferDirection::Upload => "upload",
             };
-            map.insert("direction".to_string(), dir_str.to_string());
-            if let Some(name) = filename {
-                map.insert("filename".to_string(), name.clone());
-            }
-            if let Some(total) = total_bytes {
-                map.insert("total_bytes".to_string(), total.to_string());
-            }
+            put!("direction", EventField::Str(dir_str.to_string()));
+            put!(
+                "filename",
+                filename.clone().map_or(EventField::None, EventField::Str)
+            );
+            put!(
+                "total_bytes",
+                total_bytes.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
         }
         TerminalEvent::FileTransferProgress {
             id,
             bytes_transferred,
             total_bytes,
         } => {
-            map.insert("type".to_string(), "file_transfer_progress".to_string());
-            map.insert("id".to_string(), id.to_string());
-            map.insert(
-                "bytes_transferred".to_string(),
-                bytes_transferred.to_string(),
+            put!(
+                "type",
+                EventField::Str("file_transfer_progress".to_string())
             );
-            if let Some(total) = total_bytes {
-                map.insert("total_bytes".to_string(), total.to_string());
-            }
+            put!("id", EventField::Int(*id as i64));
+            put!(
+                "bytes_transferred",
+                EventField::Int(*bytes_transferred as i64)
+            );
+            put!(
+                "total_bytes",
+                total_bytes.map_or(EventField::None, |v| EventField::Int(v as i64))
+            );
         }
         TerminalEvent::FileTransferCompleted { id, filename, size } => {
-            map.insert("type".to_string(), "file_transfer_completed".to_string());
-            map.insert("id".to_string(), id.to_string());
-            if let Some(name) = filename {
-                map.insert("filename".to_string(), name.clone());
-            }
-            map.insert("size".to_string(), size.to_string());
+            put!(
+                "type",
+                EventField::Str("file_transfer_completed".to_string())
+            );
+            put!("id", EventField::Int(*id as i64));
+            put!(
+                "filename",
+                filename.clone().map_or(EventField::None, EventField::Str)
+            );
+            put!("size", EventField::Int(*size as i64));
         }
         TerminalEvent::FileTransferFailed { id, reason } => {
-            map.insert("type".to_string(), "file_transfer_failed".to_string());
-            map.insert("id".to_string(), id.to_string());
-            map.insert("reason".to_string(), reason.clone());
+            put!(
+                "type",
+                EventField::Str("file_transfer_failed".to_string())
+            );
+            put!("id", EventField::Int(*id as i64));
+            put!("reason", EventField::Str(reason.clone()));
         }
         TerminalEvent::UploadRequested { format } => {
-            map.insert("type".to_string(), "upload_requested".to_string());
-            map.insert("format".to_string(), format.clone());
+            put!("type", EventField::Str("upload_requested".to_string()));
+            put!("format", EventField::Str(format.clone()));
         }
         TerminalEvent::ScreenCleared { include_scrollback } => {
-            map.insert("type".to_string(), "screen_cleared".to_string());
-            map.insert(
-                "include_scrollback".to_string(),
-                include_scrollback.to_string(),
-            );
+            put!("type", EventField::Str("screen_cleared".to_string()));
+            put!("include_scrollback", EventField::Bool(*include_scrollback));
         }
         TerminalEvent::InlineImageDropped { reason } => {
-            map.insert("type".to_string(), "inline_image_dropped".to_string());
-            map.insert("reason".to_string(), reason.clone());
+            put!("type", EventField::Str("inline_image_dropped".to_string()));
+            put!("reason", EventField::Str(reason.clone()));
         }
     }
-    map
+    fields
+}
+
+/// Convert a `TerminalEvent` to a Python dictionary with native value types
+/// (`int` for numeric fields, `bool` for flags, `None` for unset optional
+/// fields, `str` for text). Shared by `poll_events()`,
+/// `poll_subscribed_events()`, and observer dispatch.
+pub(crate) fn event_to_dict<'py>(py: Python<'py>, event: &TerminalEvent) -> Bound<'py, PyDict> {
+    let dict = PyDict::new(py);
+    for (key, field) in event_fields(event) {
+        match field {
+            EventField::Str(s) => dict.set_item(key, s),
+            EventField::Int(i) => dict.set_item(key, i),
+            EventField::Bool(b) => dict.set_item(key, b),
+            EventField::None => dict.set_item(key, py.None()),
+        }
+        .expect("PyDict::set_item with a str key and a native value cannot fail");
+    }
+    dict
+}
+
+/// Convert a `TerminalEvent` to the legacy stringly-typed dictionary — every
+/// value a `str`, optional fields omitted when unset — that `poll_events()`
+/// returned before 0.51. Kept for one release behind `poll_events_legacy()`
+/// and `poll_subscribed_events_legacy()`.
+pub(crate) fn event_to_dict_legacy(event: &TerminalEvent) -> HashMap<String, String> {
+    event_fields(event)
+        .into_iter()
+        .filter_map(|(key, field)| {
+            let value = match field {
+                EventField::Str(s) => s,
+                EventField::Int(i) => i.to_string(),
+                EventField::Bool(b) => b.to_string(),
+                EventField::None => return None,
+            };
+            Some((key, value))
+        })
+        .collect()
 }
 
 thread_local! {
@@ -347,12 +451,12 @@ unsafe impl Sync for PyCallbackObserver {}
 
 impl TerminalObserver for PyCallbackObserver {
     fn on_event(&self, event: &TerminalEvent) {
-        let dict = event_to_dict(event);
         // Guard against reentrant dispatch deadlocking on the Terminal mutex
         // (ARC-016): drop the event if this thread is already inside a Python
         // observer callback.
         let _ = with_py_callback_reentrancy_guard(|| {
             Python::attach(|py| {
+                let dict = event_to_dict(py, event);
                 if let Err(e) = self.callback.call1(py, (dict,)) {
                     log::error!("Observer callback error: {e}");
                 }
@@ -387,10 +491,10 @@ unsafe impl Sync for PyQueueObserver {}
 
 impl TerminalObserver for PyQueueObserver {
     fn on_event(&self, event: &TerminalEvent) {
-        let dict = event_to_dict(event);
         // Same reentrancy guard as the sync callback (ARC-016).
         let _ = with_py_callback_reentrancy_guard(|| {
             Python::attach(|py| {
+                let dict = event_to_dict(py, event);
                 if let Err(e) = self.queue.call_method1(py, "put_nowait", (dict,)) {
                     log::error!("Observer queue.put_nowait error: {e}");
                 }
@@ -433,5 +537,42 @@ mod tests {
             !IN_PY_OBSERVER_CALLBACK.with(Cell::get),
             "flag must be cleared once the callback returns"
         );
+    }
+
+    #[test]
+    fn legacy_renderer_reproduces_pre_051_stringly_shape() {
+        // Numeric fields stringify, bools render lowercase like Rust's
+        // bool::to_string always did.
+        let legacy = event_to_dict_legacy(&TerminalEvent::ModeChanged(
+            "insert".to_string(),
+            false,
+        ));
+        assert_eq!(legacy.get("enabled").map(String::as_str), Some("false"));
+
+        let legacy = event_to_dict_legacy(&TerminalEvent::SizeChanged(80, 24));
+        assert_eq!(legacy.get("cols").map(String::as_str), Some("80"));
+        assert_eq!(legacy.get("rows").map(String::as_str), Some("24"));
+
+        // Optional fields are omitted when unset (the native renderer keeps
+        // the key with None instead).
+        let legacy = event_to_dict_legacy(&TerminalEvent::HyperlinkAdded {
+            url: "https://example.com".to_string(),
+            row: 1,
+            col: 2,
+            id: None,
+        });
+        assert!(!legacy.contains_key("id"));
+
+        let fields = event_fields(&TerminalEvent::HyperlinkAdded {
+            url: "https://example.com".to_string(),
+            row: 1,
+            col: 2,
+            id: None,
+        });
+        let id_field = fields
+            .iter()
+            .find(|(key, _)| key == "id")
+            .map(|(_, value)| value);
+        assert_eq!(id_field, Some(&EventField::None));
     }
 }

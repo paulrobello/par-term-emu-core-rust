@@ -916,12 +916,14 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 
 - `use_alt_screen()`: Switch to alternate screen buffer (programmatic, not via escape codes)
 - `use_primary_screen()`: Switch to primary screen buffer (programmatic)
-- `poll_events() -> list[str]`: Poll for pending terminal events
+- `poll_events() -> list[dict]`: Drain all pending terminal events. Each dict has a `type` key plus event-specific fields with **native value types**: `int` for numeric fields (rows, cols, ids, timestamps, exit codes, volumes, byte counts), `bool` for flags (`enabled`, `include_scrollback`), `None` for unset optional fields, `str` for text
+- `poll_events_legacy() -> list[dict]`: Same events as `poll_events()`, but with the pre-0.51 stringly-typed shape: every value is a `str` and unset optional fields are omitted entirely. Migration bridge, kept for one release
 - `drain_bell_events() -> list[str]`: Drain pending bell events
 - `set_event_subscription(kinds: list[str] | None)`: Filter which terminal events are returned by `poll_subscribed_events()` (None clears filter)
 - `clear_event_subscription()`: Clear event filter (all events are returned)
-- `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter
-- `poll_cwd_events() -> list[dict]`: Drain only CWD change events (fields: new_cwd, old_cwd?, hostname?, username?, timestamp)
+- `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter (same native-typed shape as `poll_events()`)
+- `poll_subscribed_events_legacy() -> list[dict]`: Same events as `poll_subscribed_events()`, in the pre-0.51 stringly-typed shape (see `poll_events_legacy()`)
+- `poll_cwd_events() -> list[dict]`: Drain only CWD change events (fields: new_cwd, old_cwd?, hostname?, username?, timestamp — still stringly-typed)
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (fields: event_type, command?, exit_code?, timestamp?, cursor_line?)
 - `poll_upload_requests() -> list[str]`: Drain only upload request events, returning format strings from pending `UploadRequested` events
 - `poll_screen_cleared_events() -> list[bool]`: Drain pending `ScreenCleared` events. Each `bool` is `True` if the scrollback was also cleared (ED 3J), `False` for screen-only clears (ED 2J). Use this to invalidate scrollback zone/mark metadata on the frontend.
@@ -929,7 +931,7 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 **Event types returned by `poll_events()` / `poll_subscribed_events()`:**
 `bell`, `title_changed`, `size_changed`, `mode_changed`, `graphics_added`, `hyperlink_added`, `dirty_region`, `cwd_changed`, `trigger_matched`, `user_var_changed`
 
-The `user_var_changed` event dict contains: `name`, `value`, and optionally `old_value` (when updating an existing variable).
+The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`None` when the variable is first set; absent from `poll_events_legacy()` output when unset).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
 - `debug_info() -> str`: Get debug information string
 - `detect_urls(text: str) -> list[DetectedItem]`: Detect URLs in text
