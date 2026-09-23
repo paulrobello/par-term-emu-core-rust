@@ -3180,7 +3180,68 @@ fn test_export_scrollback_ansi_format() {
     }
 
     let export = term.export_scrollback(ExportFormat::Ansi, None);
-    assert!(export.contains("\x1b[") || export.contains("Red"));
+    // Ansi must preserve SGR (the old stub fell through to Plain)
+    assert!(
+        export.contains("\x1b[0;31"),
+        "SGR missing from Ansi export: {export:?}"
+    );
+    assert_ne!(
+        export,
+        term.export_scrollback(ExportFormat::Plain, None),
+        "Ansi export must not be identical to Plain"
+    );
+}
+
+#[test]
+fn screen_restore_sequence_round_trips_state() {
+    // A full-screen-TUI-shaped stream: alt screen, scroll region, 256-color
+    // and truecolor SGR, an attribute mix, wide chars, a combining char,
+    // styled trailing blanks, then the input modes and a hidden, styled
+    // cursor placed while origin mode is on.
+    let mut src = Terminal::new(80, 24);
+    src.process(b"\x1b[?1049h\x1b[2;6r");
+    src.process(b"\x1b[1;5H\x1b[1;31mbold-red\x1b[0m");
+    src.process(b"\x1b[3;1H\x1b[38;5;196midx-fg\x1b[0m");
+    src.process(b"\x1b[3;10H\x1b[48;2;10;20;30mtrue-bg\x1b[0m");
+    src.process(b"\x1b[4;1H\x1b[1;3;4;7;9mattrs\x1b[0m");
+    src.process(b"\x1b[5;1H\xe5\xae\x89\xe5\xba\xb7");
+    src.process(b"\x1b[6;1He\xcc\x81");
+    src.process(b"\x1b[7;1H\x1b[44m   \x1b[0m");
+    src.process(b"\x1b[?25l\x1b[4 q");
+    src.process(b"\x1b[?1h\x1b[?2004h\x1b[?1004h");
+    src.process(b"\x1b[?1000h\x1b[?1006h");
+    src.process(b"\x1b[?6h");
+    src.process(b"\x1b[3;5H");
+
+    let restore = src.export_screen_restore_sequence();
+    let mut dst = Terminal::new(80, 24);
+    dst.process(restore.as_bytes());
+
+    assert_eq!(src.alt_screen_active, dst.alt_screen_active);
+    assert!(dst.alt_screen_active, "alt screen must be restored");
+    for row in 0..24 {
+        assert_eq!(
+            src.active_grid().row(row),
+            dst.active_grid().row(row),
+            "grid row {row} differs after replay"
+        );
+    }
+    assert_eq!(src.cursor.row, dst.cursor.row);
+    assert_eq!(src.cursor.col, dst.cursor.col);
+    assert_eq!(src.cursor.visible, dst.cursor.visible);
+    assert!(!dst.cursor.visible, "hidden cursor must be restored");
+    assert_eq!(src.cursor.style, dst.cursor.style);
+    assert_eq!(src.modes.application_cursor, dst.modes.application_cursor);
+    assert_eq!(src.modes.bracketed_paste, dst.modes.bracketed_paste);
+    assert_eq!(src.modes.mouse_mode, dst.modes.mouse_mode);
+    assert_eq!(src.modes.mouse_encoding, dst.modes.mouse_encoding);
+    assert_eq!(src.modes.origin_mode, dst.modes.origin_mode);
+    assert!(dst.modes.origin_mode, "origin mode must be restored");
+    assert_eq!(src.margins.scroll_region_top, dst.margins.scroll_region_top);
+    assert_eq!(
+        src.margins.scroll_region_bottom,
+        dst.margins.scroll_region_bottom
+    );
 }
 
 #[test]

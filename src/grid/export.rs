@@ -293,6 +293,54 @@ impl Grid {
         result
     }
 
+    /// Export scrollback lines only, with ANSI styling
+    ///
+    /// The styled counterpart of the plain scrollback export: the same line
+    /// selection and order (`max_lines` honored, same iteration as the Plain
+    /// path), with per-run SGR so colors and attributes survive the export.
+    pub fn export_scrollback_styled(&self, max_lines: Option<usize>) -> String {
+        let lines_to_export = max_lines
+            .unwrap_or(self.scrollback_lines)
+            .min(self.scrollback_lines);
+        let mut result = String::new();
+        let mut current_fg = Color::Named(NamedColor::White);
+        let mut current_bg = Color::Named(NamedColor::Black);
+        let mut current_flags = crate::cell::CellFlags::default();
+
+        for i in (0..lines_to_export).rev() {
+            if let Some(line) = self.scrollback_line(i) {
+                let last_sig = self.find_last_significant(line);
+                for (col, cell) in line.iter().enumerate() {
+                    if cell.flags.wide_char_spacer() {
+                        continue;
+                    }
+                    if col >= last_sig {
+                        break;
+                    }
+                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
+                    {
+                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                        current_fg = cell.fg;
+                        current_bg = cell.bg;
+                        current_flags = cell.flags;
+                    }
+                    result.push(cell.c);
+                    for &combining in &cell.combining {
+                        result.push(combining);
+                    }
+                }
+                if !self.is_scrollback_wrapped(i) {
+                    result.push_str("\x1b[0m\n");
+                    current_fg = Color::Named(NamedColor::White);
+                    current_bg = Color::Named(NamedColor::Black);
+                    current_flags = crate::cell::CellFlags::default();
+                }
+            }
+        }
+
+        result
+    }
+
     /// Generate a debug snapshot of the grid
     pub fn debug_snapshot(&self) -> String {
         use std::fmt::Write;

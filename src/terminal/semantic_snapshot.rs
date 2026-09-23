@@ -661,6 +661,8 @@ pub fn diff_snapshots(old: &SemanticSnapshot, new: &SemanticSnapshot) -> Snapsho
 }
 
 use crate::cell::Cell;
+use crate::cursor::CursorStyle;
+use crate::mouse::{MouseEncoding, MouseMode};
 use crate::terminal::Terminal;
 
 impl Terminal {
@@ -700,12 +702,101 @@ impl Terminal {
                 output.push_str("</pre>");
                 output
             }
-            ExportFormat::Ansi => {
-                // For ANSI export, we'd need to preserve colors/attributes
-                // For now, just export as plain text
-                self.export_scrollback(ExportFormat::Plain, max_lines)
-            }
+            ExportFormat::Ansi => self.grid.export_scrollback_styled(max_lines),
         }
+    }
+
+    /// Encode the current terminal state as a VT byte stream that, replayed
+    /// into a fresh `Terminal` of the same size, reproduces the visible
+    /// screen cell-for-cell plus the state a full-screen app depends on:
+    /// alt-screen, scroll region, cursor position/visibility/style, and the
+    /// input modes (DECCKM, bracketed paste, focus tracking, mouse tracking
+    /// and encoding, origin mode).
+    ///
+    /// Content uses absolute cursor addressing, so origin mode is restored
+    /// last with a region-relative re-position (enabling it homes the
+    /// cursor). Keypad mode and pending-wrap state are not modeled as
+    /// replayable sequences and are not encoded.
+    pub fn export_screen_restore_sequence(&self) -> String {
+        let mut out = String::new();
+
+        // Buffer selection first, so the replayed content lands on the
+        // screen the source is showing.
+        if self.alt_screen_active {
+            out.push_str("\x1b[?1049h");
+        }
+
+        // Scroll region next: DECSTBM homes the cursor, and the content
+        // block positions every row absolutely anyway.
+        let region_top = self.margins.scroll_region_top;
+        let region_bottom = self.margins.scroll_region_bottom;
+        if region_top != 0 || region_bottom != self.grid.rows().saturating_sub(1) {
+            out.push_str(&format!("\x1b[{};{}r", region_top + 1, region_bottom + 1));
+        }
+
+        // Screen content: ESC[H anchor, per-row absolute CUP, SGR-diffed cells.
+        out.push_str(&self.active_grid().export_visible_screen_styled());
+
+        // Cursor position is addressed absolutely while origin mode is off.
+        out.push_str(&format!(
+            "\x1b[{};{}H",
+            self.cursor.row + 1,
+            self.cursor.col + 1
+        ));
+        if !self.cursor.visible {
+            out.push_str("\x1b[?25l");
+        }
+        if self.cursor.style != CursorStyle::default() {
+            let style = match self.cursor.style {
+                CursorStyle::SteadyBlock => 2,
+                CursorStyle::BlinkingUnderline => 3,
+                CursorStyle::SteadyUnderline => 4,
+                CursorStyle::BlinkingBar => 5,
+                CursorStyle::SteadyBar => 6,
+                CursorStyle::BlinkingBlock => 1,
+            };
+            out.push_str(&format!("\x1b[{style} q"));
+        }
+
+        // Input modes.
+        if self.modes.application_cursor {
+            out.push_str("\x1b[?1h");
+        }
+        if self.modes.bracketed_paste {
+            out.push_str("\x1b[?2004h");
+        }
+        if self.modes.focus_tracking {
+            out.push_str("\x1b[?1004h");
+        }
+        match self.modes.mouse_mode {
+            MouseMode::Off => {}
+            MouseMode::X10 => out.push_str("\x1b[?9h"),
+            MouseMode::Normal => out.push_str("\x1b[?1000h"),
+            MouseMode::ButtonEvent => out.push_str("\x1b[?1002h"),
+            MouseMode::AnyEvent => out.push_str("\x1b[?1003h"),
+        }
+        match self.modes.mouse_encoding {
+            MouseEncoding::Default => {}
+            MouseEncoding::Utf8 => out.push_str("\x1b[?1005h"),
+            MouseEncoding::Sgr => out.push_str("\x1b[?1006h"),
+            MouseEncoding::Urxvt => out.push_str("\x1b[?1015h"),
+        }
+
+        // Origin mode homes the cursor, so it is restored last, with a
+        // region-relative re-position (CUP is region-relative under origin
+        // mode).
+        if self.modes.origin_mode {
+            out.push_str("\x1b[?6h");
+            out.push_str(&format!(
+                "\x1b[{};{}H",
+                self.cursor.row.saturating_sub(region_top) + 1,
+                self.cursor.col + 1
+            ));
+        }
+
+        // Leave the replayed pen at defaults.
+        out.push_str("\x1b[0m");
+        out
     }
 
     /// Get scrollback statistics

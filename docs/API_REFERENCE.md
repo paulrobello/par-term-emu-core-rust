@@ -441,7 +441,7 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `export_text() -> str`: Export entire buffer as plain text without styling
 - `export_styled() -> str`: Export entire buffer with ANSI styling
 - `export_html(include_styles: bool = True) -> str`: Export as HTML (full document or content only)
-- `export_scrollback(format: str = "plain", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "plain", "html", or "ansi". Raises `ValueError` for any other format. If max_lines is None, exports all scrollback.
+- `export_scrollback(format: str = "plain", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "plain", "html", or "ansi" ("ansi" preserves SGR colors/attributes per run). Raises `ValueError` for any other format. If max_lines is None, exports all scrollback.
 
 #### Screenshots
 - `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast) -> bytes`: Take screenshot and return image bytes
