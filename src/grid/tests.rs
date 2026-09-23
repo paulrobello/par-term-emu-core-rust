@@ -1471,6 +1471,67 @@ fn scroll_up_by_full_screen_moves_every_row_to_scrollback() {
 }
 
 #[test]
+fn scroll_down_preserves_inline_and_spilled_combining() {
+    let mut grid = Grid::new(10, 4, 100);
+    let inline_grapheme = "e\u{0301}\u{0302}";
+    // Six combining marks exceeds SmallVec<[char; 4]>'s inline capacity, so
+    // this cell's cluster lives on the heap and exercises move-not-clone.
+    let spilled_grapheme = "f\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 0, Cell::from_grapheme(inline_grapheme));
+    grid.set(1, 1, Cell::from_grapheme(spilled_grapheme));
+    grid.set_line_wrapped(0, true);
+    grid.set_line_wrapped(2, true);
+
+    grid.scroll_down(1);
+
+    assert_eq!(grid.get(0, 0).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 1).unwrap().get_grapheme(), inline_grapheme);
+    assert_eq!(grid.get(1, 2).unwrap().get_grapheme(), spilled_grapheme);
+    // Wrapped flags shift down with the rows; the vacated top row is false.
+    assert!(!grid.is_line_wrapped(0));
+    assert!(grid.is_line_wrapped(1));
+    assert!(grid.is_line_wrapped(3));
+    // Scrolling down never feeds scrollback.
+    assert_eq!(grid.scrollback_len(), 0);
+}
+
+#[test]
+fn scroll_down_by_full_screen_clears_every_row() {
+    let mut grid = Grid::new(10, 3, 10);
+    let spilled_grapheme = "z\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 0, Cell::from_grapheme(spilled_grapheme));
+    grid.set(1, 1, Cell::new('b'));
+
+    grid.scroll_down(3);
+
+    for row in 0..3 {
+        assert_eq!(grid.get(0, row).unwrap().c, ' ');
+        assert_eq!(grid.get(1, row).unwrap().c, ' ');
+    }
+    assert_eq!(grid.scrollback_len(), 0);
+}
+
+#[test]
+fn scroll_region_down_rotate_preserves_spilled_combining() {
+    let mut grid = Grid::new(10, 8, 100);
+    let spilled_grapheme = "c\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 1, Cell::new('W')); // above the region — must not move
+    grid.set(0, 2, Cell::from_grapheme(spilled_grapheme));
+    grid.set(0, 3, Cell::from_grapheme("a\u{0301}"));
+    grid.set(0, 5, Cell::new('d')); // falls off the region bottom
+    grid.set(0, 7, Cell::new('X')); // below the region — must not move
+
+    assert!(grid.scroll_region_down(2, 2, 5));
+
+    assert_eq!(grid.get(0, 1).unwrap().c, 'W');
+    assert_eq!(grid.get(0, 2).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 3).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 4).unwrap().get_grapheme(), spilled_grapheme);
+    assert_eq!(grid.get(0, 5).unwrap().get_grapheme(), "a\u{0301}");
+    assert_eq!(grid.get(0, 7).unwrap().c, 'X');
+}
+
+#[test]
 fn insert_lines_with_n_past_region_size_empties_region_not_panics() {
     // Found by the ENH-014 terminal_process fuzz target: the copy range was
     // `row..=effective_bottom - n`, and n was clamped against the *unclamped*

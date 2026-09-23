@@ -126,17 +126,16 @@ impl Grid {
     /// Scroll down by n lines
     pub fn scroll_down(&mut self, n: usize) {
         let n = n.min(self.rows);
-
-        for i in (n..self.rows).rev() {
-            let src_start = (i - n) * self.cols;
-            let dst_start = i * self.cols;
-            for j in 0..self.cols {
-                self.cells[dst_start + j] = self.cells[src_start + j].clone();
-            }
-            if (i - n) < self.wrapped.len() && i < self.wrapped.len() {
-                self.wrapped[i] = self.wrapped[i - n];
-            }
+        if n == 0 {
+            return;
         }
+
+        // One rotation of the whole grid replaces the reverse per-cell clone
+        // loop: rotate_right relocates rows n places down without cloning
+        // the SmallVec in every cell (down-mirror of the scroll_up drain
+        // fix; rows [0, n) land on stale bottom content and are cleared).
+        self.cells.rotate_right(n * self.cols);
+        self.wrapped.rotate_right(n);
 
         for i in 0..n {
             self.clear_row(i);
@@ -213,13 +212,11 @@ impl Grid {
             return true;
         }
 
-        for i in ((top + n)..=effective_bottom).rev() {
-            let src_start = (i - n) * self.cols;
-            let dst_start = i * self.cols;
-            for j in 0..self.cols {
-                self.cells[dst_start + j] = self.cells[src_start + j].clone();
-            }
-        }
+        // One rotation of the contiguous region replaces the reverse per-row
+        // clone loop — down-mirror of scroll_region_up's rotate_left.
+        let region_start = top * self.cols;
+        let region_end = (effective_bottom + 1) * self.cols;
+        self.cells[region_start..region_end].rotate_right(n * self.cols);
 
         for i in top..(top + n).min(self.rows) {
             self.clear_row(i);
