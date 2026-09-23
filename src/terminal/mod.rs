@@ -1481,7 +1481,8 @@ impl Terminal {
         let old_rows = self.grid.rows().max(1);
 
         self.grid.resize(cols, rows);
-        self.alt_grid.resize(cols, rows);
+        // The alt screen never reflows (see Grid::resize_without_reflow).
+        self.alt_grid.resize_without_reflow(cols, rows);
         // Keep the dirty-row mask sized to the visible rows; a shrink drops
         // stale bits for rows that no longer exist.
         self.dirty_rows.resize(rows.div_ceil(64), 0);

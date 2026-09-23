@@ -225,6 +225,37 @@ impl Grid {
     }
 
     /// Resize the grid
+    /// Resize WITHOUT reflow: every row keeps its screen position and is
+    /// truncated or right-padded to the new width; wrap flags are cleared.
+    ///
+    /// The alternate screen must resize this way. A full-screen app draws
+    /// the alt screen cell by cell and redraws it on SIGWINCH — often only
+    /// the cells it believes changed (ratatui, curses). Reflowing joins or
+    /// splits its rows, so cells the app thinks are still in place move,
+    /// and the scramble persists (kanban-tui/top garbled after any
+    /// resize). xterm, tmux, and every other emulator leave the alt screen
+    /// un-reflowed for exactly this reason.
+    pub fn resize_without_reflow(&mut self, cols: usize, rows: usize) {
+        if self.cols == cols && self.rows == rows {
+            return;
+        }
+        if cols == 0 || rows == 0 {
+            return;
+        }
+        let mut cells = vec![Cell::default(); cols * rows];
+        let copy_rows = rows.min(self.rows);
+        let copy_cols = cols.min(self.cols);
+        for row in 0..copy_rows {
+            let src = row * self.cols;
+            let dst = row * cols;
+            cells[dst..dst + copy_cols].clone_from_slice(&self.cells[src..src + copy_cols]);
+        }
+        self.cells = cells;
+        self.wrapped = vec![false; rows];
+        self.cols = cols;
+        self.rows = rows;
+    }
+
     pub fn resize(&mut self, cols: usize, rows: usize) {
         if self.cols == cols && self.rows == rows {
             return;

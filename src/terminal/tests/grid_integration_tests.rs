@@ -462,3 +462,47 @@ fn test_erase_characters_grid() {
     assert_eq!(grid.get(6, 9).map(|c| c.c), Some(' '));
     assert_eq!(grid.get(7, 9).map(|c| c.c), Some('H'));
 }
+
+// ========== Alternate Screen Resize ==========
+
+/// The alt screen must NOT reflow on resize. A full-screen app redraws it
+/// on SIGWINCH, often only the cells it believes changed; reflowing joins
+/// or splits its rows, so those cells move and the scramble persists
+/// (kanban-tui and top garbled after any resize in par-term panes).
+/// Each full-width row below is its own row, written with absolute cursor
+/// positioning the way TUIs draw.
+#[test]
+fn test_alt_screen_resize_does_not_reflow() {
+    let mut term = Terminal::new(20, 6);
+    term.process(b"\x1b[?1049h");
+    for row in 0..6u8 {
+        let fill = (b'a' + row) as char;
+        let line: String = std::iter::repeat_n(fill, 20).collect();
+        term.process(format!("\x1b[{};1H{}", row + 1, line).as_bytes());
+    }
+
+    let assert_rows_in_place = |term: &Terminal, cols: usize, rows: usize, step: &str| {
+        let grid = term.active_grid();
+        for row in 0..rows {
+            assert!(
+                !grid.is_line_wrapped(row),
+                "{step}: alt row {row} must not be marked wrapped"
+            );
+            let first = grid.get(0, row).map(|c| c.c);
+            let expected = if row < 6 {
+                Some((b'a' + row as u8) as char)
+            } else {
+                Some(' ')
+            };
+            assert_eq!(first, expected, "{step}: alt row {row} must stay in place");
+        }
+        assert_eq!(term.size(), (cols, rows), "{step}: size");
+    };
+
+    term.resize(15, 6);
+    assert_rows_in_place(&term, 15, 6, "narrower");
+    term.resize(20, 6);
+    assert_rows_in_place(&term, 20, 6, "back to original width");
+    term.resize(25, 8);
+    assert_rows_in_place(&term, 25, 8, "wider and taller");
+}
