@@ -15,47 +15,29 @@ from __future__ import annotations
 
 import asyncio
 import socket
-from typing import TYPE_CHECKING, Any
 
 import pytest
 import pytest_asyncio
 from conftest import wait_for
 
-# Streaming is optional, so skip all tests if not available
+# Streaming is optional, so skip all tests if not available. websockets is a
+# separate optional dependency; par_term_emu_core_rust always exposes the
+# streaming classes but they raise RuntimeError at construction if the
+# `streaming` feature wasn't enabled at build time, so probe that too.
 pytest.importorskip("websockets")
 
-try:
-    import websockets  # type: ignore[import-not-found]
-    from par_term_emu_core_rust import (
-        PtyTerminal,
-        StreamingConfig,
-        StreamingServer,
-        decode_server_message,
-    )
+import websockets
+from par_term_emu_core_rust import (
+    PtyTerminal,
+    StreamingConfig,
+    StreamingServer,
+    decode_server_message,
+)
 
-    # Verify streaming feature is actually compiled (classes exist but raise
-    # RuntimeError at construction if the feature wasn't enabled at build time)
+try:
     StreamingConfig()
-    HAS_STREAMING = True
-except (ImportError, RuntimeError, TypeError):
-    HAS_STREAMING = False
-    pytestmark = pytest.mark.skip(reason="Streaming feature not built")
-    # Type checking stubs to avoid unbound errors
-    if TYPE_CHECKING:
-        import websockets  # type: ignore[assignment, import-not-found]
-        from par_term_emu_core_rust import (  # type: ignore[assignment]
-            PtyTerminal,
-            StreamingConfig,
-            StreamingServer,
-            decode_server_message,
-        )
-    else:
-        # Dummy classes to satisfy runtime when imports fail
-        PtyTerminal = Any  # type: ignore[misc, assignment]
-        StreamingConfig = Any  # type: ignore[misc, assignment]
-        StreamingServer = Any  # type: ignore[misc, assignment]
-        decode_server_message = Any  # type: ignore[misc, assignment]
-        websockets = Any  # type: ignore[misc, assignment]
+except (RuntimeError, TypeError):
+    pytest.skip("Streaming feature not built", allow_module_level=True)
 
 
 # Fixtures

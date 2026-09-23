@@ -41,6 +41,9 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
 
         {/* External theme file - editable without rebuild */}
+        {/* eslint-disable-next-line @next/next/no-css-tags -- intentionally
+            NOT a Next.js-bundled asset: /theme.css is served from public/ so
+            it can be edited on a deployed instance without a rebuild. */}
         <link rel="stylesheet" href="/theme.css" />
 
         {/* WebSocket preconnect hints - reduces initial connection latency by 100-200ms */}
@@ -52,12 +55,18 @@ export default function RootLayout({
           </>
         )}
 
-        {/* Preload terminal fonts to avoid layout shift and font flash */}
+        {/* Preload terminal fonts to avoid layout shift and font flash.
+            Loaded as a plain <link> rather than next/font: this is the app's
+            single, global root layout (no other page-specific layouts exist
+            in this tree), so the rule's "won't load on other pages" concern
+            does not apply here. */}
+        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link
           rel="preload"
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
           as="style"
         />
+        {/* eslint-disable-next-line @next/next/no-page-custom-font */}
         <link
           href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap"
           rel="stylesheet"

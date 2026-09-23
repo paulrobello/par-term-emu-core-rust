@@ -137,8 +137,8 @@ export default function Home() {
   const [sendInput, setSendInput] = useState<((data: string) => void) | null>(null);
   const [showKeyboard, setShowKeyboard] = useState(false);
   const [fontSize, setFontSize] = useState<number>(DEFAULT_FONT_SIZE);
-  const [hyperlinks, setHyperlinks] = useState<Array<{url: string; row: number; col: number; id?: string}>>([]);
-  const [userVars, setUserVars] = useState<Map<string, string>>(new Map());
+  const [, setHyperlinks] = useState<Array<{url: string; row: number; col: number; id?: string}>>([]);
+  const [, setUserVars] = useState<Map<string, string>>(new Map());
 
   // Load persisted UI state from localStorage after mount.
   //
@@ -152,6 +152,9 @@ export default function Home() {
   useEffect(() => {
     // Load showControls from localStorage (default: true)
     const storedShowControls = getStoredBoolean(STORAGE_KEY_SHOW_CONTROLS, true);
+    // SSR-safe localStorage hydration; see eslint.config.mjs for why this
+    // pattern is legitimate without the React Compiler.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setShowControls(storedShowControls);
 
     // Load showKeyboard from localStorage, defaulting to mobile detection if not set

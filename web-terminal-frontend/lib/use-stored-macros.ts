@@ -47,6 +47,9 @@ export function useStoredMacros() {
     try {
       const stored = localStorage.getItem(MACROS_STORAGE_KEY);
       if (stored) {
+        // SSR-safe localStorage hydration; see app/page.tsx / eslint.config.mjs
+        // for why this pattern is legitimate without the React Compiler.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setMacros(parseStoredMacros(stored));
       }
     } catch (e) {
