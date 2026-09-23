@@ -299,12 +299,18 @@ mod tests {
 
     #[test]
     fn web_root_without_index_html_is_refused_unless_forced() {
-        let base =
-            std::env::temp_dir().join(format!("par-term-webroot-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&base);
+        // A `TempDir` gives an OS-random, collision-proof base and removes
+        // itself via `Drop` on both normal return and panic unwinding,
+        // unlike the pid-derived path this replaced (a recycled pid could
+        // collide across `cargo test` invocations, and a trailing
+        // `remove_dir_all` never runs on a failed assertion).
+        let base = tempfile::Builder::new()
+            .prefix("par-term-webroot-test-")
+            .tempdir()
+            .expect("create temp dir for web root fixtures");
 
         // Directory without index.html → refused.
-        let stray = base.join("stray");
+        let stray = base.path().join("stray");
         fs::create_dir_all(&stray).unwrap();
         fs::write(stray.join("important.txt"), "data").unwrap();
         let err =
@@ -314,15 +320,13 @@ mod tests {
         check_web_root_replaceable(&stray, true).expect("force must allow replacement");
 
         // Directory with index.html (a previously extracted bundle) → allowed.
-        let bundle = base.join("bundle");
+        let bundle = base.path().join("bundle");
         fs::create_dir_all(&bundle).unwrap();
         fs::write(bundle.join("index.html"), "<html></html>").unwrap();
         check_web_root_replaceable(&bundle, false).expect("bundle directory must be replaceable");
 
         // Nonexistent path → allowed (fresh install).
-        check_web_root_replaceable(&base.join("fresh"), false)
+        check_web_root_replaceable(&base.path().join("fresh"), false)
             .expect("nonexistent web root must be allowed");
-
-        let _ = fs::remove_dir_all(&base);
     }
 }

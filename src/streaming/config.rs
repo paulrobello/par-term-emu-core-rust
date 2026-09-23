@@ -481,27 +481,34 @@ mod tests {
     }
 
     /// Write `contents` to a uniquely named temp file with the given (Unix)
-    /// permission mode and return its path. `label` keeps concurrent tests
-    /// from colliding on the same filename.
+    /// permission mode and return its owning `TempDir` guard plus the file
+    /// path. The caller must keep the guard alive for as long as the path
+    /// is used; its `Drop` removes the directory (and file) on both normal
+    /// return and panic unwinding, replacing a pid-derived shared-temp-dir
+    /// path that could collide across `cargo test` invocations once the OS
+    /// recycles a pid.
     #[cfg(unix)]
-    fn write_temp_pem(label: &str, mode: u32, contents: &str) -> std::path::PathBuf {
+    fn write_temp_pem(
+        label: &str,
+        mode: u32,
+        contents: &str,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
         use std::os::unix::fs::PermissionsExt;
-        let path = std::env::temp_dir().join(format!(
-            "par-term-tls-{}-{}-{:o}.pem",
-            label,
-            std::process::id(),
-            mode
-        ));
+        let dir = tempfile::Builder::new()
+            .prefix("par-term-tls-")
+            .tempdir()
+            .expect("create temp dir for PEM fixture");
+        let path = dir.path().join(format!("{label}-{mode:o}.pem"));
         std::fs::write(&path, contents).expect("write temp PEM");
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
             .expect("chmod temp PEM");
-        path
+        (dir, path)
     }
 
     #[cfg(unix)]
     #[test]
     fn from_pem_rejects_world_readable_combined_pem() {
-        let path = write_temp_pem("pem-combined", 0o644, &test_combined_pem());
+        let (_dir, path) = write_temp_pem("pem-combined", 0o644, &test_combined_pem());
         let err = TlsConfig::from_pem(&path).expect_err("0644 combined PEM must be rejected");
         let msg = format!("{}", err);
         assert!(
@@ -509,16 +516,14 @@ mod tests {
             "expected permissions error, got: {}",
             msg
         );
-        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(unix)]
     #[test]
     fn from_pem_accepts_owner_only_combined_pem() {
-        let path = write_temp_pem("pem-combined", 0o600, &test_combined_pem());
+        let (_dir, path) = write_temp_pem("pem-combined", 0o600, &test_combined_pem());
         let tls = TlsConfig::from_pem(&path).expect("0600 combined PEM must load");
         assert_eq!(tls.certs.len(), 1);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[cfg(unix)]
@@ -530,8 +535,8 @@ mod tests {
             .find(&format!("-----BEGIN {}", "PRIVATE KEY"))
             .expect("test PEM contains a key block");
         let (cert_pem, key_pem) = combined.split_at(split_at);
-        let cert_path = write_temp_pem("files-cert", 0o600, cert_pem);
-        let key_path = write_temp_pem("files-key", 0o644, key_pem);
+        let (_cert_dir, cert_path) = write_temp_pem("files-cert", 0o600, cert_pem);
+        let (_key_dir, key_path) = write_temp_pem("files-key", 0o644, key_pem);
         let err =
             TlsConfig::from_files(&cert_path, &key_path).expect_err("0644 key must be rejected");
         let msg = format!("{}", err);
@@ -540,8 +545,6 @@ mod tests {
             "expected permissions error, got: {}",
             msg
         );
-        let _ = std::fs::remove_file(&cert_path);
-        let _ = std::fs::remove_file(&key_path);
     }
 
     #[tokio::test]

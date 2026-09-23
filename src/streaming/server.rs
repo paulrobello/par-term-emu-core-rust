@@ -2613,15 +2613,19 @@ mod origin_tests {
     /// credentials can clickjack keystrokes into the live shell.
     #[tokio::test]
     async fn http_app_responses_carry_anti_framing_headers() {
-        let web_root =
-            std::env::temp_dir().join(format!("par-term-webroot-headers-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&web_root);
-        std::fs::create_dir_all(&web_root).unwrap();
-        std::fs::write(web_root.join("index.html"), "<html></html>").unwrap();
+        // `TempDir` (OS-random name, `Drop`-based cleanup) replaces the
+        // pid-derived path: a recycled pid could collide across `cargo
+        // test` invocations, and the trailing `remove_dir_all` never ran on
+        // a failed assertion.
+        let web_root = tempfile::Builder::new()
+            .prefix("par-term-webroot-headers-")
+            .tempdir()
+            .expect("create temp dir for web root fixture");
+        std::fs::write(web_root.path().join("index.html"), "<html></html>").unwrap();
 
         let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
         let config = StreamingConfig {
-            web_root: web_root.to_string_lossy().into_owned(),
+            web_root: web_root.path().to_string_lossy().into_owned(),
             ..StreamingConfig::default()
         };
         let server = Arc::new(StreamingServer::with_config(
@@ -2669,8 +2673,6 @@ mod origin_tests {
                 .and_then(|v| v.to_str().ok()),
             Some("frame-ancestors 'none'")
         );
-
-        let _ = std::fs::remove_dir_all(&web_root);
     }
 }
 
