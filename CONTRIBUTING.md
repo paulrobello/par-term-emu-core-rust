@@ -59,7 +59,7 @@ Criterion benchmarks for the VTE processing hot path live in `benches/terminal_t
 make bench         # cargo bench --no-default-features --features rust-only
 ```
 
-Benchmarks build without the Python feature, so no `make dev` / maturin step is needed. They are on-demand only and never run as part of `make checkall`. The committed baseline is `docs/fable/BENCH-BASELINE-2026-08.md` — compare your changes against it when touching the hot path:
+Benchmarks build without the Python feature, so no `make dev` / maturin step is needed. They are on-demand only and never run as part of `make checkall`. The committed baseline is `docs/fable/BENCH-BASELINE-2026-09.md` — compare your changes against it when touching the hot path (its methodology section explains why you must interleave A/B binaries rather than compare across sessions):
 
 ```bash
 cargo bench --no-default-features --features rust-only -- --save-baseline my-change

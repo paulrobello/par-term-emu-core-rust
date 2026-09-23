@@ -47,7 +47,7 @@ fn dirty_region_bounding_box_takes_min_max_row() {
     term.mark_row_dirty(1);
     term.mark_row_dirty(4);
 
-    // get_dirty_rows must return sorted (uses sort_unstable).
+    // get_dirty_rows must return sorted (bitset iteration is ascending).
     assert_eq!(term.get_dirty_rows(), vec![1, 4, 7]);
     assert_eq!(term.get_dirty_region(), Some((1, 0, 7, 39)));
 }
