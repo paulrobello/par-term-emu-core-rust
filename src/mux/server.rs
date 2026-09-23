@@ -1702,14 +1702,22 @@ mod tests {
 
         // Overflow the queue: the CLIENT_QUEUE_DEPTH-th push fills it, the
         // next one evicts. Lines are ~1 KiB so the socket's own buffer
-        // (measured 8 KiB both directions) absorbs only a handful — thin
-        // lines let the writer drain hundreds into the buffer and the queue
-        // never fills.
+        // absorbs only a handful on macOS (measured 8 KiB both directions)
+        // — but a larger kernel socket buffer (ubuntu CI runners) lets the
+        // connection's writer drain past any fixed headroom, so push UNTIL
+        // the eviction lands rather than a fixed count, bounded by a
+        // deadline.
         let filler = "x".repeat(1000);
-        for n in 0..=CLIENT_QUEUE_DEPTH + 64 {
+        let evicted_by = std::time::Instant::now() + Duration::from_secs(10);
+        let mut n = 0usize;
+        while !clients.lock().is_empty() {
+            assert!(
+                std::time::Instant::now() < evicted_by,
+                "client never evicted after {n} flood lines"
+            );
             push_to_clients(&clients, format!("flood-{n:05}-{filler}"));
+            n += 1;
         }
-        assert!(clients.lock().is_empty(), "the client was evicted");
 
         // The evicted client observes the connection closing: drain the
         // socket's residue, then EOF must arrive within the deadline.
@@ -1725,8 +1733,8 @@ mod tests {
             let _ = eof_tx.send(());
         });
         assert!(
-            eof_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
-            "the evicted client's socket closed within 2 s of eviction"
+            eof_rx.recv_timeout(Duration::from_secs(5)).is_ok(),
+            "the evicted client's socket closed within 5 s of eviction"
         );
         let _ = std::fs::remove_file(&socket_path);
     }

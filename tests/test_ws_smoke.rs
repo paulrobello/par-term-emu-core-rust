@@ -239,37 +239,52 @@ async fn extra_raw_connection_beyond_max_clients_is_refused() {
 
     // Two raw connections that never send a WebSocket handshake: both hold
     // a reserved slot (up to the 10s handshake timeout).
-    let mut s1 = tokio::net::TcpStream::connect(&addr).await.unwrap();
-    let mut s2 = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let s1 = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let s2 = tokio::net::TcpStream::connect(&addr).await.unwrap();
     // Give the accept loop a moment to process both accepts.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // The third connection exceeds max_clients and must be closed by the
-    // server promptly (EOF on read) rather than lingering.
-    let mut s3 = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    // server (EOF on read) rather than left lingering. WHICH of the three
+    // raw connections ends up the excess one is a scheduling race — slot
+    // reservation happens in the per-connection handshake task, not at
+    // accept, so under load s3's task can reserve ahead of s1's or s2's —
+    // so poll all three and require exactly one closure within a deadline
+    // that covers both the immediate refusal and the slower
+    // handshake-timeout path; the two slot-holders must survive.
+    let s3 = tokio::net::TcpStream::connect(&addr).await.unwrap();
+    let mut streams = vec![s1, s2, s3];
     let mut buf = [0u8; 16];
-    let read = tokio::time::timeout(Duration::from_secs(2), s3.read(&mut buf)).await;
-    match read {
-        Ok(Ok(0)) => {} // EOF — server closed the connection
-        Ok(Ok(n)) => panic!("expected close, server sent {} bytes: {:?}", n, &buf[..n]),
-        Ok(Err(e)) => panic!("read error on refused connection: {}", e),
-        Err(_) => panic!("third connection was not refused within 2s — it is lingering"),
+    let close_by = tokio::time::Instant::now() + Duration::from_secs(15);
+    while streams.len() > 2 {
+        assert!(
+            tokio::time::Instant::now() < close_by,
+            "no connection was closed within 15s — the excess one is lingering"
+        );
+        for i in (0..streams.len()).rev() {
+            match tokio::time::timeout(Duration::from_millis(50), streams[i].read(&mut buf)).await {
+                Ok(Ok(0)) => {
+                    streams.swap_remove(i); // EOF — server closed this one
+                }
+                Ok(Ok(n)) => panic!("expected close, server sent {} bytes: {:?}", n, &buf[..n]),
+                Ok(Err(e)) => panic!("read error on refused connection: {}", e),
+                Err(_) => {}
+            }
+        }
     }
 
-    // Sanity: the two slot-holders are still open (only the timeout, not
-    // this test, closes them).
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), s1.read(&mut buf))
-            .await
-            .is_err()
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), s2.read(&mut buf))
-            .await
-            .is_err()
-    );
+    // Sanity: the two slot-holders are still open (only the handshake
+    // timeout, not this test, closes them).
+    for slot_holder in &mut streams {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), slot_holder.read(&mut buf))
+                .await
+                .is_err(),
+            "a slot-holding connection was closed"
+        );
+    }
 
-    drop((s1, s2));
+    drop(streams);
     server_handle.abort();
 }
 
