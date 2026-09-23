@@ -113,6 +113,30 @@ impl Terminal {
                 // Disable character protection
                 self.modes.char_protected = false;
             }
+            (b'=', _) => {
+                // DECPAM - Application keypad mode
+                if !self.modes.application_keypad {
+                    self.modes.application_keypad = true;
+                    self.events
+                        .terminal_events
+                        .push(crate::terminal::TerminalEvent::ModeChanged(
+                            "application_keypad".to_string(),
+                            true,
+                        ));
+                }
+            }
+            (b'>', _) => {
+                // DECPNM - Numeric keypad mode
+                if self.modes.application_keypad {
+                    self.modes.application_keypad = false;
+                    self.events
+                        .terminal_events
+                        .push(crate::terminal::TerminalEvent::ModeChanged(
+                            "application_keypad".to_string(),
+                            false,
+                        ));
+                }
+            }
             // SCS — Select Character Set (G0 slot)
             // ESC ( 0  → G0 = DEC Special / Line Drawing
             (b'0', [b'(']) => self.charset_state.g0_charset = Charset::DecLineDrawing,
@@ -282,6 +306,53 @@ mod tests {
         // ESC W - End Protected Area (EPA)
         term.process(b"\x1bW");
         assert!(!term.modes.char_protected);
+    }
+
+    #[test]
+    fn test_decpam_decpnm_application_keypad() {
+        use crate::terminal::TerminalEvent;
+
+        let mut term = Terminal::new(80, 24);
+        assert!(!term.modes.application_keypad); // Default is false
+
+        // ESC = - Application keypad mode (DECPAM)
+        term.process(b"\x1b=");
+        assert!(term.modes.application_keypad);
+
+        // The set transition emits a ModeChanged event
+        let events = term.poll_events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            TerminalEvent::ModeChanged(name, true) if name == "application_keypad"
+        )));
+
+        // ESC > - Numeric keypad mode (DECPNM)
+        term.process(b"\x1b>");
+        assert!(!term.modes.application_keypad);
+        let events = term.poll_events();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            TerminalEvent::ModeChanged(name, false) if name == "application_keypad"
+        )));
+
+        // Re-sending the current mode is a no-op that emits nothing
+        term.process(b"\x1b>");
+        let events = term.poll_events();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| matches!(
+                    e,
+                    TerminalEvent::ModeChanged(name, _) if name == "application_keypad"
+                ))
+                .count(),
+            0
+        );
+
+        // RIS resets keypad mode to the default
+        term.process(b"\x1b=");
+        term.process(b"\x1bc");
+        assert!(!term.modes.application_keypad);
     }
 
     #[test]

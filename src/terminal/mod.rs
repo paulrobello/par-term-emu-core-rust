@@ -775,6 +775,8 @@ pub(crate) struct TerminalModes {
     pub(crate) bold_brightening: bool,
     /// Application cursor keys mode
     pub(crate) application_cursor: bool,
+    /// Application keypad mode (DECPAM/DECPNM, ESC = / ESC >)
+    pub(crate) application_keypad: bool,
     /// Bracketed paste mode
     pub(crate) bracketed_paste: bool,
     /// Mouse tracking mode
@@ -802,6 +804,7 @@ impl Default for TerminalModes {
             reverse_video: false,
             bold_brightening: true, // iTerm2 default behavior
             application_cursor: false,
+            application_keypad: false,
             bracketed_paste: false,
             mouse_mode: MouseMode::Off,
             mouse_encoding: MouseEncoding::Default,
@@ -1858,6 +1861,11 @@ impl Terminal {
     /// Get application cursor mode state
     pub fn application_cursor(&self) -> bool {
         self.modes.application_cursor
+    }
+
+    /// Get application keypad mode state (DECPAM/DECPNM)
+    pub fn application_keypad(&self) -> bool {
+        self.modes.application_keypad
     }
 
     /// Get current scroll region (top, bottom)

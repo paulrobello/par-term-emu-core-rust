@@ -99,6 +99,8 @@ pub struct TerminalSnapshot {
     pub line_feed_new_line_mode: bool,
     /// Application cursor keys mode
     pub application_cursor: bool,
+    /// Application keypad mode (DECPAM/DECPNM)
+    pub application_keypad: bool,
     /// Bracketed paste mode
     pub bracketed_paste: bool,
     /// Focus tracking mode
@@ -203,6 +205,7 @@ impl Terminal {
             reverse_video: self.modes.reverse_video,
             line_feed_new_line_mode: self.modes.line_feed_new_line_mode,
             application_cursor: self.modes.application_cursor,
+            application_keypad: self.modes.application_keypad,
             bracketed_paste: self.modes.bracketed_paste,
             focus_tracking: self.modes.focus_tracking,
             mouse_mode: self.modes.mouse_mode,
@@ -247,6 +250,7 @@ impl Terminal {
         self.modes.reverse_video = snap.reverse_video;
         self.modes.line_feed_new_line_mode = snap.line_feed_new_line_mode;
         self.modes.application_cursor = snap.application_cursor;
+        self.modes.application_keypad = snap.application_keypad;
         self.modes.bracketed_paste = snap.bracketed_paste;
         self.modes.focus_tracking = snap.focus_tracking;
         self.modes.mouse_mode = snap.mouse_mode;
@@ -317,6 +321,7 @@ mod tests {
             reverse_video: false,
             line_feed_new_line_mode: false,
             application_cursor: false,
+            application_keypad: false,
             bracketed_paste: false,
             focus_tracking: false,
             mouse_mode: MouseMode::Off,
@@ -411,6 +416,20 @@ mod tests {
         assert_eq!(cloned.grid.cells[1].c, 'B');
         assert_eq!(cloned.grid.cells[1].fg, Color::Indexed(196));
         assert_eq!(cloned.grid.cells[1].bg, Color::Named(NamedColor::Green));
+    }
+
+    #[test]
+    fn test_snapshot_round_trips_application_keypad() {
+        let mut src = Terminal::new(80, 24);
+        src.process(b"\x1b=");
+        assert!(src.modes.application_keypad);
+
+        let snap = src.capture_snapshot();
+        assert!(snap.application_keypad);
+
+        let mut dst = Terminal::new(80, 24);
+        dst.restore_from_snapshot(snap);
+        assert!(dst.modes.application_keypad);
     }
 
     #[test]
