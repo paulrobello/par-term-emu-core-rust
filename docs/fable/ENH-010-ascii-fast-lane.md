@@ -80,3 +80,21 @@ pending, and the pending-wrap / insert-mode / auto-wrap paths are handled by the
 
 Delete the fast-lane branch and the `_known_width` split; the wrapper form is
 behavior-identical so a partial rollback (keep the split, drop the branch) is also safe.
+
+## Outcome (2026-09-23, shipped at e564f92)
+
+Implemented as planned, plus three print-path hygiene wins found while
+measuring (bit-per-row dirty mask replacing the per-character HashSet insert;
+guarded GRAPHICS debug logs that formatted + locked the logger per scroll;
+bounds-free row moves via per-row `split_at_mut` + `clone_from_slice`).
+
+The ≥1.75× `plain_ascii` premise did not survive measurement: the plan was
+written against the 2026-08 baseline (3.44 MiB/s), which was thermally
+depressed — the unchanged pre-change binary measures ≈5.2 MiB/s interleaved on
+a calm machine. Interleaved A/B (see `BENCH-BASELINE-2026-09.md`): the write
+groups gain enormously (`cursor_addressing` 5.0×, `sgr_heavy` 2.49×,
+`unicode_wide` 1.44×) and `scroll` 1.68×, but `plain_ascii` only +0.5–1% —
+a symbolicated profile shows `scroll_region_up` at ~78% of its runtime, with
+`SmallVec<[char;4]>::clone` in the per-cell row move at ~50% of total runtime.
+The ≥6 MiB/s `plain_ascii` criterion needs that structural work (separate
+card), not more print-path pruning.
