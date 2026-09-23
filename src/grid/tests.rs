@@ -1381,3 +1381,91 @@ mod snapshot_tests {
         assert_eq!(grid.scrollback_len(), sb_lines);
     }
 }
+
+#[test]
+fn scroll_up_preserves_inline_and_spilled_combining() {
+    let mut grid = Grid::new(10, 4, 100);
+    let inline_grapheme = "e\u{0301}\u{0302}";
+    // Six combining marks exceeds SmallVec<[char; 4]>'s inline capacity, so
+    // this cell's cluster lives on the heap and exercises move-not-clone.
+    let spilled_grapheme = "f\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 0, Cell::from_grapheme(inline_grapheme));
+    grid.set(1, 1, Cell::from_grapheme(spilled_grapheme));
+    grid.set_line_wrapped(0, true);
+    grid.set_line_wrapped(2, true);
+
+    grid.scroll_up(1);
+
+    assert_eq!(grid.get(0, 0).unwrap().c, ' ');
+    assert_eq!(grid.get(1, 0).unwrap().get_grapheme(), spilled_grapheme);
+    assert_eq!(grid.get(0, 3).unwrap().c, ' ');
+    // Wrapped flags shift up with the rows; the vacated bottom row is false.
+    assert!(!grid.is_line_wrapped(0));
+    assert!(grid.is_line_wrapped(1));
+    assert!(!grid.is_line_wrapped(3));
+    // The drained row moved into scrollback with its wrapped flag intact.
+    assert_eq!(grid.scrollback_len(), 1);
+    assert_eq!(
+        grid.scrollback_line(0).unwrap()[0].get_grapheme(),
+        inline_grapheme
+    );
+    assert!(grid.is_scrollback_wrapped(0));
+}
+
+#[test]
+fn scroll_up_ring_scrollback_swaps_spilled_combining_intact() {
+    let mut grid = Grid::new(10, 4, 2); // scrollback full after 2 lines
+    let spilled_grapheme = "s\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 0, Cell::new('1'));
+    grid.scroll_up(1); // append: scrollback = [1]
+    grid.set(0, 0, Cell::new('2'));
+    grid.scroll_up(1); // append: scrollback = [1, 2], now full
+    grid.set(0, 0, Cell::from_grapheme(spilled_grapheme));
+    grid.scroll_up(1); // ring overwrite at the oldest slot
+
+    assert_eq!(grid.scrollback_len(), 2);
+    // Oldest surviving line is '2'; the spilled grapheme took the ring slot.
+    assert_eq!(grid.scrollback_line(0).unwrap()[0].c, '2');
+    assert_eq!(
+        grid.scrollback_line(1).unwrap()[0].get_grapheme(),
+        spilled_grapheme
+    );
+}
+
+#[test]
+fn scroll_region_up_rotate_preserves_spilled_combining() {
+    let mut grid = Grid::new(10, 8, 100);
+    let spilled_grapheme = "c\u{0301}\u{0302}\u{0303}\u{0304}\u{0305}\u{0306}";
+    grid.set(0, 1, Cell::new('W')); // above the region — must not move
+    grid.set(0, 2, Cell::from_grapheme("a\u{0301}"));
+    grid.set(0, 3, Cell::from_grapheme("b\u{0301}"));
+    grid.set(0, 4, Cell::from_grapheme(spilled_grapheme));
+    grid.set(0, 5, Cell::new('d'));
+    grid.set(0, 7, Cell::new('X')); // below the region — must not move
+
+    assert!(grid.scroll_region_up(2, 2, 5));
+
+    assert_eq!(grid.get(0, 1).unwrap().c, 'W');
+    assert_eq!(grid.get(0, 2).unwrap().get_grapheme(), spilled_grapheme);
+    assert_eq!(grid.get(0, 3).unwrap().c, 'd');
+    assert_eq!(grid.get(0, 4).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 5).unwrap().c, ' ');
+    assert_eq!(grid.get(0, 7).unwrap().c, 'X');
+}
+
+#[test]
+fn scroll_up_by_full_screen_moves_every_row_to_scrollback() {
+    let mut grid = Grid::new(10, 3, 10);
+    grid.set(0, 0, Cell::new('a'));
+    grid.set(0, 1, Cell::new('b'));
+    grid.set(0, 2, Cell::new('c'));
+
+    grid.scroll_up(3);
+
+    assert_eq!(grid.scrollback_len(), 3);
+    assert_eq!(grid.scrollback_line(0).unwrap()[0].c, 'a');
+    assert_eq!(grid.scrollback_line(2).unwrap()[0].c, 'c');
+    for row in 0..3 {
+        assert_eq!(grid.get(0, row).unwrap().c, ' ');
+    }
+}

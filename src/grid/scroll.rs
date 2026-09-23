@@ -47,25 +47,78 @@ impl Grid {
     /// Scroll up by n lines
     pub fn scroll_up(&mut self, n: usize) {
         let n = n.min(self.rows);
-
-        self.push_rows_to_scrollback(0, n);
-
-        for i in n..self.rows {
-            // Per-row split: dst row [i-n] and src row [i] are disjoint by
-            // construction, so clone_from_slice needs no per-cell bounds
-            // checks on the hot one-line-per-feed path.
-            let (head, tail) = self.cells.split_at_mut(i * self.cols);
-            let dst_start = (i - n) * self.cols;
-            head[dst_start..dst_start + self.cols].clone_from_slice(&tail[..self.cols]);
-            if i < self.wrapped.len() && (i - n) < self.wrapped.len() {
-                self.wrapped[i - n] = self.wrapped[i];
-            }
+        if n == 0 {
+            return;
         }
 
-        for i in (self.rows - n)..self.rows {
-            self.clear_row(i);
-            if i < self.wrapped.len() {
-                self.wrapped[i] = false;
+        // Drain the top n rows out in one shot: the remaining rows shift up
+        // via a single memmove inside drain, and the drained rows move into
+        // scrollback by ownership instead of being cloned cell by cell —
+        // the per-cell SmallVec clone here was ~50% of plain_ascii runtime.
+        let mut drained: Vec<Cell> = self.cells.drain(0..n * self.cols).collect();
+        let wrapped_len = self.wrapped.len();
+        let wrapped_n = n.min(wrapped_len);
+        let drained_wrapped: Vec<bool> = self.wrapped.drain(0..wrapped_n).collect();
+
+        self.absorb_rows_into_scrollback(&mut drained, &drained_wrapped);
+
+        // Cell::default() carries bg == DEFAULT_BG (Named Black), so the
+        // refill matches what clear_row wrote on these rows before.
+        self.cells.resize(self.rows * self.cols, Cell::default());
+        self.wrapped.resize(wrapped_len, false);
+    }
+
+    /// Absorb rows drained out of the main grid into the scrollback buffer.
+    ///
+    /// Takes ownership so the filling case is a single `Vec::append` (no
+    /// per-cell clone). Bookkeeping mirrors [`push_rows_to_scrollback`]:
+    /// the total-lines counter, zone eviction, and the ring overwrite once
+    /// scrollback is full.
+    fn absorb_rows_into_scrollback(&mut self, rows: &mut Vec<Cell>, wrapped_flags: &[bool]) {
+        let cols = self.cols;
+        if cols == 0 || self.max_scrollback == 0 {
+            return;
+        }
+        let count = (rows.len() / cols).min(wrapped_flags.len());
+        if count == 0 {
+            return;
+        }
+
+        self.total_lines_scrolled += count;
+        if self.scrollback_lines >= self.max_scrollback {
+            let floor = self
+                .total_lines_scrolled
+                .saturating_sub(self.max_scrollback);
+            self.evict_zones(floor);
+        }
+
+        // Whole batch fits while scrollback is still filling: one O(1)
+        // append moves every cell.
+        if self.scrollback_lines + count <= self.max_scrollback && rows.len() == count * cols {
+            self.scrollback_cells.append(rows);
+            self.scrollback_wrapped
+                .extend_from_slice(&wrapped_flags[..count]);
+            self.scrollback_lines += count;
+            return;
+        }
+
+        for i in 0..count {
+            let is_wrapped = wrapped_flags[i];
+            if self.scrollback_lines < self.max_scrollback {
+                self.scrollback_cells
+                    .extend_from_slice(&rows[i * cols..(i + 1) * cols]);
+                self.scrollback_wrapped.push(is_wrapped);
+                self.scrollback_lines += 1;
+            } else {
+                // Scrollback full: swap the drained row into the ring head —
+                // the displaced row lands in `rows` and is freed by its drop,
+                // so this path clones nothing either.
+                let write_idx = self.scrollback_start;
+                let dst_start = write_idx * cols;
+                self.scrollback_cells[dst_start..dst_start + cols]
+                    .swap_with_slice(&mut rows[i * cols..(i + 1) * cols]);
+                self.scrollback_wrapped[write_idx] = is_wrapped;
+                self.advance_scrollback_head();
             }
         }
     }
@@ -124,11 +177,12 @@ impl Grid {
             return true;
         }
 
-        for i in top..=(effective_bottom - n) {
-            let (head, tail) = self.cells.split_at_mut((i + n) * self.cols);
-            let dst_start = i * self.cols;
-            head[dst_start..dst_start + self.cols].clone_from_slice(&tail[..self.cols]);
-        }
+        // One rotation of the contiguous region replaces the per-row
+        // clone_from_slice moves: rotate_left relocates elements without
+        // cloning the SmallVec in every cell.
+        let region_start = top * self.cols;
+        let region_end = (effective_bottom + 1) * self.cols;
+        self.cells[region_start..region_end].rotate_left(n * self.cols);
 
         for i in (effective_bottom - n + 1)..=effective_bottom {
             if i < self.rows {
