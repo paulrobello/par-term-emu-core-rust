@@ -85,6 +85,10 @@ Every command reply is bracketed, and the command number ties the reply to the r
 
 A failed command closes with `%error` instead of `%end`, the body carrying the error message. Pushed pane output arrives as `%output %N <data>` lines, with every non-printable byte octal-escaped (`\033`) and the backslash itself escaped (`\134`) so decoding is unambiguous.
 
+### Client backpressure and eviction
+
+Each registered client has a bounded broadcast queue (4096 lines). A client that stops reading its socket long enough for its queue to fill — 4096 undelivered lines, worst case ~128 MiB when every line carries a full PTY read — is **evicted**: the daemon logs a warning, flags the connection, and its own reader/writer threads tear it down within a fraction of a second, closing the socket the client observes. This is tmux's policy for a control client that stops draining: a wedged client is disconnected rather than allowed to grow the daemon without bound. A client that keeps draining loses nothing. An evicted client simply reconnects and re-queries; pane output it missed is not replayed to it.
+
 ## Command Reference
 
 The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in exactly three places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, and the `new-session -s NAME` / `new-window -n NAME` names, so a name may contain spaces. Every other flag is whitespace-split — the `-t`/`-s` targets elsewhere are typed `$N`/`@N`/`%N` ids that cannot contain whitespace, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.

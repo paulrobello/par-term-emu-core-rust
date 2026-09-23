@@ -39,18 +39,32 @@ const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
 
-/// Per-client broadcast queue depth in lines (ARC-011). A `%output` line is
-/// at most ~4 KiB, so the worst case a stalled client can pin is ~16 MiB;
-/// past that it is evicted rather than allowed to grow the daemon without
-/// bound (tmux's own policy for a control client that stops draining).
+/// Per-client broadcast queue depth in lines (ARC-011). A `%output` line
+/// carries one PTY read (up to 16 KiB raw, roughly doubled by escape
+/// encoding), so a stalled client pins at most ~128 MiB before eviction;
+/// past that it is disconnected — and the disconnect frees the queue
+/// (ENH-012) — rather than growing the daemon without bound (tmux's own
+/// policy for a control client that stops draining).
 const CLIENT_QUEUE_DEPTH: usize = 4096;
+
+/// How often an evicted client's connection threads re-check the eviction
+/// flag. Both the writer and the reader of a connection run with
+/// send/recv timeouts of this length, so eviction tears a wedged client
+/// down within about two polls even though a blocked socket call cannot
+/// be interrupted from outside.
+const EVICTION_POLL: Duration = Duration::from_millis(200);
 
 /// Monotonic client ids, so a disconnecting client's broadcast sender can be
 /// removed eagerly rather than waiting for the next broadcast to fail.
 static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
-pub(crate) type Clients = Arc<Mutex<Vec<(u64, SyncSender<String>)>>>;
+/// One registered control client: its identity, its bounded queue sender
+/// (ARC-011), and the eviction flag [`push_to_clients`] sets when the
+/// queue overflows — the connection's own threads poll it to tear down
+/// (ENH-012).
+pub(crate) type ClientEntry = (u64, SyncSender<String>, Arc<AtomicBool>);
+pub(crate) type Clients = Arc<Mutex<Vec<ClientEntry>>>;
 
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
@@ -295,29 +309,76 @@ fn handle_client(
     clients: Clients,
     persist: Option<Sender<PersistState>>,
 ) {
+    use interprocess::local_socket::traits::Stream as _;
+
     let client_id = CLIENT_SEQ.fetch_add(1, Ordering::Relaxed);
     // Bounded per ARC-011: a client that stops draining is evicted by
     // [`push_to_clients`] once its queue fills, rather than buffering every
     // `%output` line forever.
     let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+    // Eviction's signal to this connection's threads (ENH-012). There is
+    // no way to abort a blocked socket call from outside the interprocess
+    // API, so both threads run with send/recv timeouts: a wedged writer
+    // wakes every poll, sees the flag, and exits — dropping the queue; the
+    // reader does the same, and its exit closes the connection the client
+    // observes. Without this, the writer stays blocked in a full socket
+    // buffer and the queued lines are retained forever (measured live).
+    let evicted = Arc::new(AtomicBool::new(false));
     let mut registered = false;
 
     let mut writer = match stream.try_clone() {
         Ok(stream) => stream,
         Err(_) => return,
     };
-    std::thread::spawn(move || {
-        while let Ok(line) = rx.recv() {
-            if writer.write_all(line.as_bytes()).is_err() || writer.flush().is_err() {
-                break;
+    let _ = writer.set_send_timeout(Some(EVICTION_POLL));
+    let writer_evicted = Arc::clone(&evicted);
+    std::thread::spawn(move || loop {
+        match rx.recv_timeout(EVICTION_POLL) {
+            Ok(line) => {
+                if write_line(&mut writer, &line, &writer_evicted).is_err() {
+                    break;
+                }
             }
+            Err(RecvTimeoutError::Timeout) => {
+                if writer_evicted.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
         }
     });
 
-    let reader = BufReader::new(stream);
+    let _ = stream.set_recv_timeout(Some(EVICTION_POLL));
+    let mut reader = BufReader::new(stream);
     let mut command_number = 0u32;
-    for line in reader.lines() {
-        let Ok(line) = line else { break };
+    'connection: loop {
+        // One line, accumulated across recv-timeout wakes: a wake mid-line
+        // retries with the partial preserved (`Lines` would drop it), so a
+        // healthy sender's pause must not cost bytes; only an evicted
+        // connection breaks out. An unterminated final line is processed
+        // before EOF, matching `Lines`' last-item behavior.
+        let mut line = String::new();
+        loop {
+            match reader.read_line(&mut line) {
+                Ok(0) => {
+                    if line.is_empty() {
+                        break 'connection;
+                    }
+                    break;
+                }
+                Ok(_) if line.ends_with('\n') => break,
+                Ok(_) => continue,
+                Err(err) if is_poll_wake(&err) => {
+                    if evicted.load(Ordering::Relaxed) {
+                        break 'connection;
+                    }
+                }
+                Err(_) => break 'connection,
+            }
+        }
+        while line.ends_with('\n') || line.ends_with('\r') {
+            line.pop();
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -331,12 +392,14 @@ fn handle_client(
                     broadcast_notification(&clients, &notification);
                 }
                 if tx.send(reply).is_err() {
-                    break;
+                    break 'connection;
                 }
             }
             Ok(Line::Control(command)) => {
                 if !registered {
-                    clients.lock().push((client_id, tx.clone()));
+                    clients
+                        .lock()
+                        .push((client_id, tx.clone(), Arc::clone(&evicted)));
                     registered = true;
                 }
                 command_number += 1;
@@ -347,24 +410,64 @@ fn handle_client(
                 };
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
                 if tx.send(reply).is_err() {
-                    break;
+                    break 'connection;
                 }
             }
             Err(err) => {
                 if !registered {
-                    clients.lock().push((client_id, tx.clone()));
+                    clients
+                        .lock()
+                        .push((client_id, tx.clone(), Arc::clone(&evicted)));
                     registered = true;
                 }
                 command_number += 1;
                 if tx.send(emit_block(command_number, &err, false)).is_err() {
-                    break;
+                    break 'connection;
                 }
             }
         }
     }
     if registered {
-        clients.lock().retain(|(id, _)| *id != client_id);
+        clients.lock().retain(|(id, _, _)| *id != client_id);
     }
+}
+
+/// Write one line, tolerating send-timeout wakes: a healthy slow consumer's
+/// buffer-full pause retries the remaining bytes, while an evicted client's
+/// pause abandons the line — the connection is being torn down.
+fn write_line(writer: &mut LocalStream, line: &str, evicted: &AtomicBool) -> std::io::Result<()> {
+    let mut buf = line.as_bytes();
+    loop {
+        match writer.write(buf) {
+            Ok(0) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::WriteZero,
+                    "the client socket wrote zero bytes",
+                ));
+            }
+            Ok(n) => {
+                buf = &buf[n..];
+                if buf.is_empty() {
+                    return writer.flush();
+                }
+            }
+            Err(err) if is_poll_wake(&err) => {
+                if evicted.load(Ordering::Relaxed) {
+                    return Err(err);
+                }
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+/// Whether an I/O error is a send/recv-timeout wake rather than a fault —
+/// the timeout-driven poll loop's transient, to be retried or examined.
+fn is_poll_wake(err: &std::io::Error) -> bool {
+    matches!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
 }
 
 /// Execute one parsed-or-not command line and render its reply block, with
@@ -411,16 +514,21 @@ fn dispatch(
 ///
 /// ARC-011: the queues are bounded at [`CLIENT_QUEUE_DEPTH`]; a client
 /// whose queue is full (it stopped reading the socket) is EVICTED here,
-/// tmux's policy for a control client that stops draining. Dropping the
-/// sender closes the writer thread's channel, its `recv` errors, the
-/// thread exits, and the client observes a clean disconnect.
+/// tmux's policy for a control client that stops draining. Eviction also
+/// raises the client's flag so its own connection threads tear it down:
+/// dropping the queue sender alone cannot free a wedged client — its
+/// writer stays blocked in a full socket buffer and its reader parked on
+/// input, retaining the queued lines (ENH-012, measured live). The flagged
+/// threads exit, the queue drops, and the client observes a clean
+/// disconnect within about two [`EVICTION_POLL`]s.
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
     clients
         .lock()
-        .retain(|(id, tx)| match tx.try_send(line.clone()) {
+        .retain(|(id, tx, evicted)| match tx.try_send(line.clone()) {
             Ok(()) => true,
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!("par-mux: client {id} is not draining; evicting");
+                evicted.store(true, Ordering::Relaxed);
                 false
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
@@ -826,7 +934,9 @@ mod tests {
 
         // A second, non-issuing client: everything it sees is a broadcast.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((u64::MAX, tx));
+        clients
+            .lock()
+            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
 
         // new-window broadcasts %window-add naming the new window.
         dispatch(
@@ -961,7 +1071,9 @@ mod tests {
 
         // A second client observes the broadcast.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((u64::MAX, tx));
+        clients
+            .lock()
+            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
 
         let reply = dispatch(
             &format!("split-window -t {pane_id} -h -p 25"),
@@ -1090,7 +1202,9 @@ mod tests {
 
         // A second client observes the size-driven re-layout.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((u64::MAX, tx));
+        clients
+            .lock()
+            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
 
         let reply = dispatch(
             &format!("resize-pane -t {first} -x 25"),
@@ -1127,7 +1241,9 @@ mod tests {
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((u64::MAX, tx));
+        clients
+            .lock()
+            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
 
         let reply = dispatch(
             &format!("refresh-client -t {pane_id} -C 120x40"),
@@ -1428,10 +1544,15 @@ mod tests {
 
         // The stalled client: registered, never drained.
         let (stalled_tx, _stalled_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((1, stalled_tx));
+        let stalled_flag = Arc::new(AtomicBool::new(false));
+        clients
+            .lock()
+            .push((1, stalled_tx, Arc::clone(&stalled_flag)));
         // The sibling: drains as lines arrive, like a healthy reader thread.
         let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
-        clients.lock().push((2, sibling_tx));
+        clients
+            .lock()
+            .push((2, sibling_tx, Arc::new(AtomicBool::new(false))));
 
         let mut received = Vec::new();
         for n in 0..=CLIENT_QUEUE_DEPTH {
@@ -1446,6 +1567,10 @@ mod tests {
             1,
             "the stalled client was evicted; the draining sibling remains"
         );
+        assert!(
+            stalled_flag.load(Ordering::Relaxed),
+            "eviction raised the flag the connection threads tear down on"
+        );
         while let Ok(line) = sibling_rx.try_recv() {
             received.push(line);
         }
@@ -1457,6 +1582,82 @@ mod tests {
         assert_eq!(received.first().map(String::as_str), Some("line-0"));
         let last = format!("line-{CLIENT_QUEUE_DEPTH}");
         assert_eq!(received.last().map(String::as_str), Some(last.as_str()));
+    }
+
+    /// ENH-012: eviction must CLOSE the evicted client's connection, not
+    /// just stop queueing to it. Dropping the queue sender alone leaves the
+    /// client's writer thread blocked in a full socket buffer and its
+    /// `handle_client` thread parked in `lines()`, so the queued lines stay
+    /// pinned and the client never learns it was evicted (measured live:
+    /// daemon RSS held ~70 MiB and the stalled socket never EOF'd while the
+    /// flood continued; the moment it started reading, the writer resumed
+    /// feeding it the retained queue).
+    #[test]
+    fn an_evicted_clients_connection_closes() {
+        use crate::mux::ipc::connect_local_stream;
+        use std::io::{Read, Write};
+
+        let socket_path = std::env::temp_dir().join(format!(
+            "par-mux-evict-close-{}-{}.sock",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = bind_local_listener(&socket_path).expect("binds the test listener");
+
+        let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+        let registry = Arc::clone(&clients);
+        let (tree, _) = harness();
+        std::thread::spawn(move || {
+            if let Ok(stream) = listener.accept() {
+                handle_client(stream, tree, registry, None);
+            }
+        });
+
+        let mut client = connect_local_stream(&socket_path).expect("connects");
+        client
+            .write_all(b"list-sessions\n")
+            .expect("sends a command");
+
+        // The first control command is what registers the client.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while clients.lock().is_empty() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "client never registered"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // Overflow the queue: the CLIENT_QUEUE_DEPTH-th push fills it, the
+        // next one evicts. Lines are ~1 KiB so the socket's own buffer
+        // (measured 8 KiB both directions) absorbs only a handful — thin
+        // lines let the writer drain hundreds into the buffer and the queue
+        // never fills.
+        let filler = "x".repeat(1000);
+        for n in 0..=CLIENT_QUEUE_DEPTH + 64 {
+            push_to_clients(&clients, format!("flood-{n:05}-{filler}"));
+        }
+        assert!(clients.lock().is_empty(), "the client was evicted");
+
+        // The evicted client observes the connection closing: drain the
+        // socket's residue, then EOF must arrive within the deadline.
+        let (eof_tx, eof_rx) = channel::<()>();
+        std::thread::spawn(move || {
+            let mut byte = [0u8; 1];
+            loop {
+                match client.read(&mut byte) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => continue,
+                }
+            }
+            let _ = eof_tx.send(());
+        });
+        assert!(
+            eof_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
+            "the evicted client's socket closed within 2 s of eviction"
+        );
+        let _ = std::fs::remove_file(&socket_path);
     }
 
     /// QA-113: a panicking dispatcher is contained — the issuer gets an
