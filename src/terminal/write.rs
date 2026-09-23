@@ -12,7 +12,7 @@
 use crate::cell::Cell;
 use crate::debug;
 use crate::grapheme;
-use crate::terminal::Terminal;
+use crate::terminal::{Charset, Terminal};
 use smallvec::SmallVec;
 
 impl Terminal {
@@ -28,6 +28,15 @@ impl Terminal {
         };
 
         let (cols, _rows) = self.size();
+
+        // ASCII fast lane: printable ASCII with the plain charset active needs
+        // none of the Unicode machinery below. Combining marks and regional
+        // indicators are never ASCII, so skipping those checks is exact, not
+        // approximate.
+        if matches!(c, ' '..='~') && self.active_charset() == Charset::Ascii {
+            self.write_normal_cell_known_width(c, 1, cols);
+            return;
+        }
 
         // Handle regional indicator pairs (flag emoji like 🇺🇸)
         // When the second regional indicator arrives, combine it with the first
@@ -139,16 +148,21 @@ impl Terminal {
         self.write_normal_cell(c, cols);
     }
 
-    /// Write a normal (printable, non-combining) character cell.
+    /// Write a normal (printable, non-combining) character cell,
+    /// computing its display width first.
+    fn write_normal_cell(&mut self, c: char, cols: usize) {
+        let char_width =
+            crate::unicode_width_config::char_width(c, &self.unicode_state.width_config);
+        self.write_normal_cell_known_width(c, char_width, cols);
+    }
+
+    /// Write a normal (printable, non-combining) character cell whose width
+    /// is already known (the ASCII fast lane knows it is 1).
     ///
     /// Handles pending-wrap resolution, wide-character wrapping, insert
     /// mode, the cell write itself (with wide-char spacer), and the
     /// delayed auto-wrap clamp at the right margin.
-    fn write_normal_cell(&mut self, c: char, cols: usize) {
-        // Handle wide characters (emoji, CJK, etc.)
-        let char_width =
-            crate::unicode_width_config::char_width(c, &self.unicode_state.width_config);
-
+    fn write_normal_cell_known_width(&mut self, c: char, char_width: usize, cols: usize) {
         // If a wrap is pending from a prior write at the right margin, perform the wrap now
         if self.pending_wrap {
             let (cols, rows) = self.size();
@@ -659,6 +673,49 @@ mod tests {
         assert_eq!(cell.c, 'A');
         assert_eq!(term.cursor.col, 1);
         assert_eq!(term.cursor.row, 0);
+    }
+
+    #[test]
+    fn test_write_char_ascii_fast_lane_pending_wrap() {
+        let mut term = create_test_terminal();
+        // Fill the first row to the last column; the ASCII fast lane must
+        // still run the delayed auto-wrap tail, not skip it.
+        for _ in 0..79 {
+            term.write_char('x');
+        }
+        assert_eq!(term.cursor.col, 79);
+        assert!(!term.pending_wrap);
+
+        term.write_char('y'); // 80th printable ASCII char
+        assert_eq!(term.cursor.col, 79);
+        assert!(term.pending_wrap);
+
+        term.write_char('z'); // resolves the pending wrap onto row 1
+        assert_eq!(term.cursor.col, 1);
+        assert_eq!(term.cursor.row, 1);
+        assert!(!term.pending_wrap);
+
+        let cell = term.active_grid().get(79, 0).unwrap();
+        assert_eq!(cell.c, 'y');
+        let cell = term.active_grid().get(0, 1).unwrap();
+        assert_eq!(cell.c, 'z');
+    }
+
+    #[test]
+    fn test_write_char_dec_line_drawing_bypasses_fast_lane() {
+        // The fast lane must not fire when a translating charset is active.
+        let mut term = create_test_terminal();
+        term.charset_state.g1_charset = Charset::DecLineDrawing;
+        term.charset_state.active_g = 1; // SO
+        term.write_char('q');
+        let cell = term.active_grid().get(0, 0).unwrap();
+        assert_eq!(cell.c, '─');
+
+        // With the plain charset active the same byte writes literally.
+        term.charset_state.active_g = 0; // SI
+        term.write_char('q');
+        let cell = term.active_grid().get(1, 0).unwrap();
+        assert_eq!(cell.c, 'q');
     }
 
     #[test]

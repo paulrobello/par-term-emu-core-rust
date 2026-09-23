@@ -21,6 +21,13 @@ impl Perform for Terminal {
             return;
         }
 
+        // ASCII is a fixed point of every Unicode normalization form, so
+        // plain ASCII can skip the normalization pass entirely.
+        if c.is_ascii() {
+            self.write_char(c);
+            return;
+        }
+
         // Apply Unicode normalization if configured
         if !self.unicode_state.normalization_form.is_none() {
             let normalized = self.unicode_state.normalization_form.normalize_char(c);
