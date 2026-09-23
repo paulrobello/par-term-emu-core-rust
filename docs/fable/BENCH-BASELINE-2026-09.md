@@ -79,5 +79,12 @@ cargo bench --bench terminal_throughput --no-default-features --features rust-on
 (The `--bench terminal_throughput` target selector is required — a bare
 `cargo bench -- --save-baseline` fails in the lib-unittest bench pass.)
 
+To interleave raw binaries without two checkouts, build with `cargo bench
+--no-run` per side and copy `target/release/deps/terminal_throughput-<hash>`
+aside — then run the copies directly. A criterion binary executed with no
+arguments runs in **test mode** ("Testing … Success", no numbers); pass
+`--bench` to get real measurements (`/tmp/bench-old --bench --noplot
+plain_ascii`).
+
 Treat changes within ±3% as noise. For decisions that matter, interleave the
 two binaries as above rather than trusting `--baseline` across sessions.
