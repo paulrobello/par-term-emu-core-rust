@@ -12,7 +12,7 @@ use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, PaneFactory};
 use crate::mux::tree::{MuxSession, MuxTree, MuxWindow};
-use crate::terminal::replay_snapshot::TerminalSnapshot;
+use crate::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -26,6 +26,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// `agent_session` — a compatible serde read, but the bump keeps the
 /// boundary explicit instead of silently partial-reading a v1 file.
 pub const FORMAT_VERSION: u32 = 2;
+
+/// Ceiling on the scrollback cells one pane contributes to the state file
+/// — a persistence bound only; the in-memory pane keeps its full history.
+/// Cells dominate the file (~170 serialized bytes each, measured
+/// 2026-09-22), so an uncapped 10 000-line pane at 80 cols serializes to a
+/// 136 MB state whose final shutdown save held SIGTERM exit for two
+/// minutes. 100 000 cells (~1 250 lines at 80 cols, ~17 MB) keeps the
+/// newest context while bounding the save far below the exit budget.
+const MAX_PERSISTED_SCROLLBACK_CELLS: usize = 100_000;
 
 /// Errors raised while saving or rebuilding persisted mux state.
 #[derive(Debug)]
@@ -250,7 +259,7 @@ impl MuxTree {
                     .expect("layout leaf ids are always live panes");
                 PersistPane {
                     id: pane_id.0,
-                    terminal: pane.persisted_snapshot(),
+                    terminal: cap_persisted_scrollback(pane.persisted_snapshot()),
                     spawn_command: pane.spawn_command().map(str::to_string),
                     agent_session: agent_session_from_metadata(pane.metadata()),
                 }
@@ -419,6 +428,82 @@ pub fn state_file_in(base: &Path, socket_path: &Path) -> PathBuf {
 /// save overwrites, never a torn file. On Unix the file is created `0600`,
 /// the same owner-only posture as the socket (D3.4).
 ///
+/// Cap one pane's persisted snapshot to [`MAX_PERSISTED_SCROLLBACK_CELLS`]
+/// scrollback cells, keeping the newest lines (see the const's note for why
+/// the bound exists). Both grids are capped; the alternate screen rarely
+/// holds scrollback, but uniformity costs nothing.
+fn cap_persisted_scrollback(mut snapshot: TerminalSnapshot) -> TerminalSnapshot {
+    snapshot.grid = cap_grid_scrollback(snapshot.grid);
+    snapshot.alt_grid = cap_grid_scrollback(snapshot.alt_grid);
+    snapshot
+}
+
+/// Keep only the newest `MAX_PERSISTED_SCROLLBACK_CELLS` scrollback cells
+/// of one grid snapshot, dropping the oldest lines. The result is shaped
+/// exactly like a younger grid that scrolled only the retained lines:
+/// contiguous ring (`scrollback_start == 0`, `cells.len() == lines * cols`)
+/// and the original `max_scrollback`, so a restored pane still grows to its
+/// configured depth. Zones are dropped and clamped at the new floor the
+/// same way live eviction does in `push_rows_to_scrollback` — absolute rows
+/// and `total_lines_scrolled` keep their frame.
+fn cap_grid_scrollback(mut grid: GridSnapshot) -> GridSnapshot {
+    let cols = grid.cols;
+    if cols == 0 || grid.scrollback_lines == 0 {
+        return grid;
+    }
+    let keep_lines = (MAX_PERSISTED_SCROLLBACK_CELLS / cols).min(grid.scrollback_lines);
+    if keep_lines == grid.scrollback_lines {
+        return grid;
+    }
+    // The extraction below indexes the ring through the live grid's
+    // invariants (`cells.len() == min(lines, max) * cols`, `wrapped` one
+    // entry per physical line). A snapshot violating that shape is passed
+    // through untrimmed rather than sliced on a guess.
+    let physical_lines = grid.scrollback_cells.len() / cols;
+    if physical_lines < grid.scrollback_lines || grid.scrollback_wrapped.len() != physical_lines {
+        return grid;
+    }
+    let ring_capacity = grid.max_scrollback.max(physical_lines);
+    let drop_lines = grid.scrollback_lines - keep_lines;
+    // Same logical→physical mapping as `scrollback_physical_index`,
+    // validated up front so a snapshot with an inconsistent ring is passed
+    // through rather than sliced out of range mid-extraction.
+    let physicals: Vec<usize> = (drop_lines..grid.scrollback_lines)
+        .map(|logical| (grid.scrollback_start + logical) % ring_capacity)
+        .collect();
+    if physicals.iter().any(|&physical| physical >= physical_lines) {
+        return grid;
+    }
+    let mut cells = Vec::with_capacity(keep_lines * cols);
+    let mut wrapped = Vec::with_capacity(keep_lines);
+    for physical in physicals {
+        let base = physical * cols;
+        cells.extend_from_slice(&grid.scrollback_cells[base..base + cols]);
+        wrapped.push(grid.scrollback_wrapped[physical]);
+    }
+    grid.scrollback_cells = cells;
+    grid.scrollback_wrapped = wrapped;
+    grid.scrollback_start = 0;
+    grid.scrollback_lines = keep_lines;
+    // Zone floor mirrors `evict_zones`: zones wholly below the retained
+    // window are gone (a snapshot carries no evicted-zone list), and a
+    // straddling zone clamps its start to the floor.
+    let floor = grid.total_lines_scrolled.saturating_sub(keep_lines);
+    grid.zones = grid
+        .zones
+        .iter()
+        .filter(|zone| zone.abs_row_end >= floor)
+        .cloned()
+        .map(|mut zone| {
+            if zone.abs_row_start < floor {
+                zone.abs_row_start = floor;
+            }
+            zone
+        })
+        .collect();
+    grid
+}
+
 /// The synchronous entry the shutdown save and tests use; the per-command
 /// path captures a [`PersistState`] under the tree lock and hands it to the
 /// server's persist worker, which writes through [`write_state`] off the
@@ -438,8 +523,16 @@ pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistErr
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
 
-    let mut file = fs::File::create(&tmp)?;
-    serde_json::to_writer(&mut file, &state)?;
+    let file = fs::File::create(&tmp)?;
+    // Buffer the encoder: `to_writer` into a bare File issues one write
+    // syscall per JSON fragment, and a scrollback-heavy state (hundreds of
+    // thousands of cells) spends minutes in those syscalls — measured
+    // 2026-09-22 as the whole of a 122 s final save of a 136 MB state.
+    let mut writer = std::io::BufWriter::new(file);
+    serde_json::to_writer(&mut writer, &state)?;
+    let file = writer
+        .into_inner()
+        .map_err(|err| PersistError::Io(err.into_error()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -1245,6 +1338,193 @@ mod serde_tests {
                 resume_argv: Some(r#"["pi","--session","/tmp/pi.jsonl"]"#.to_string()),
             }),
             "identity survives the JSON wire form"
+        );
+    }
+
+    /// A grid snapshot whose scrollback ring holds `lines` logical lines of
+    /// `cols` cells: logical line i is filled with the marker byte for i,
+    /// laid out through the live logical→physical mapping so a rotated
+    /// `start` exercises the extraction, and every 3rd logical line is
+    /// flagged wrapped.
+    fn ring_snapshot(lines: usize, cols: usize, start: usize, max: usize) -> GridSnapshot {
+        let physical_lines = lines.min(max);
+        let mut cells = vec![crate::cell::Cell::default(); physical_lines * cols];
+        let mut wrapped = vec![false; physical_lines];
+        for logical in 0..lines {
+            let physical = (start + logical) % max.max(physical_lines);
+            for c in 0..cols {
+                cells[physical * cols + c] = marker_cell(logical);
+            }
+            wrapped[physical] = logical % 3 == 0;
+        }
+        GridSnapshot {
+            cells: Vec::new(),
+            scrollback_cells: cells,
+            scrollback_start: start,
+            scrollback_lines: lines,
+            max_scrollback: max,
+            cols,
+            rows: 24,
+            wrapped: Vec::new(),
+            scrollback_wrapped: wrapped,
+            zones: Vec::new(),
+            total_lines_scrolled: lines,
+        }
+    }
+
+    /// A default cell carrying one marker character, so extracted rows are
+    /// identifiable by their logical line.
+    fn marker_cell(line: usize) -> crate::cell::Cell {
+        crate::cell::Cell {
+            c: char::from_u32((line % 10) as u32 + '0' as u32).unwrap_or('0'),
+            ..crate::cell::Cell::default()
+        }
+    }
+
+    /// The marker of the first logical line retained after capping
+    /// `lines` down to the const's line budget.
+    fn first_kept_marker(lines: usize, cols: usize) -> char {
+        let keep = (MAX_PERSISTED_SCROLLBACK_CELLS / cols).min(lines);
+        marker_cell(lines - keep).c
+    }
+
+    #[test]
+    fn cap_scrollback_drops_oldest_lines_from_a_linear_ring() {
+        let cols = 80;
+        let lines = MAX_PERSISTED_SCROLLBACK_CELLS / cols + 250;
+        let keep = MAX_PERSISTED_SCROLLBACK_CELLS / cols;
+        let grid = cap_grid_scrollback(ring_snapshot(lines, cols, 0, 10_000));
+
+        assert_eq!(grid.scrollback_lines, keep);
+        assert_eq!(grid.scrollback_start, 0);
+        assert_eq!(grid.scrollback_cells.len(), keep * cols);
+        assert_eq!(grid.scrollback_wrapped.len(), keep);
+        assert_eq!(grid.max_scrollback, 10_000, "restored pane keeps its depth");
+        assert_eq!(grid.total_lines_scrolled, lines, "absolute frame is kept");
+        assert_eq!(
+            grid.scrollback_cells[0].c,
+            first_kept_marker(lines, cols),
+            "the oldest retained line leads the ring"
+        );
+        // Wrapped flags follow their logical lines: the first retained
+        // logical line is `lines - keep`, flagged wrapped iff divisible by 3.
+        let first_retained = lines - keep;
+        assert_eq!(grid.scrollback_wrapped[0], first_retained.is_multiple_of(3));
+    }
+
+    #[test]
+    fn cap_scrollback_follows_a_rotated_ring() {
+        let cols = 80;
+        let keep = MAX_PERSISTED_SCROLLBACK_CELLS / cols;
+        let max = 2_000;
+        let start = 737;
+        let grid = cap_grid_scrollback(ring_snapshot(max, cols, start, max));
+
+        assert_eq!(grid.scrollback_lines, keep);
+        assert_eq!(grid.scrollback_start, 0, "the capped ring is contiguous");
+        // Every retained slot must carry the marker of its logical line:
+        // slot j holds logical line (max - keep + j).
+        for (slot, expected_logical) in (max - keep..max).enumerate() {
+            assert_eq!(
+                grid.scrollback_cells[slot * cols].c,
+                marker_cell(expected_logical).c,
+                "slot {slot} must hold logical line {expected_logical}"
+            );
+        }
+    }
+
+    #[test]
+    fn cap_scrollback_evicts_and_clamps_zones_at_the_new_floor() {
+        let cols = 80;
+        let keep = MAX_PERSISTED_SCROLLBACK_CELLS / cols;
+        let lines = keep + 750;
+        let mut snapshot = ring_snapshot(lines, cols, 0, 10_000);
+        let floor = lines - keep;
+        let mut old = crate::zone::Zone::new(1, crate::zone::ZoneType::Output, 0, None);
+        old.abs_row_end = floor.saturating_sub(1);
+        let mut straddling =
+            crate::zone::Zone::new(2, crate::zone::ZoneType::Output, floor - 10, None);
+        straddling.abs_row_end = floor + 10;
+        let mut recent = crate::zone::Zone::new(3, crate::zone::ZoneType::Output, floor + 5, None);
+        recent.abs_row_end = floor + 20;
+        snapshot.zones = vec![old, straddling, recent];
+
+        let grid = cap_grid_scrollback(snapshot);
+        let ids: Vec<usize> = grid.zones.iter().map(|z| z.id).collect();
+        assert_eq!(ids, vec![2, 3], "the zone wholly below the floor is gone");
+        assert_eq!(grid.zones[0].abs_row_start, floor, "straddler clamps");
+        assert_eq!(grid.zones[1].abs_row_start, floor + 5, "recent zone intact");
+    }
+
+    #[test]
+    fn cap_scrollback_leaves_a_small_ring_untouched() {
+        let cols = 80;
+        let lines = 40;
+        let snapshot = ring_snapshot(lines, cols, 0, 10_000);
+        let cells = snapshot.scrollback_cells.clone();
+        let grid = cap_grid_scrollback(snapshot);
+        assert_eq!(grid.scrollback_lines, lines);
+        assert_eq!(grid.scrollback_cells, cells, "under the cap, nothing moves");
+    }
+
+    /// The capture path applies the cap: a pane whose scrollback exceeds
+    /// the budget persists only the newest lines, while its in-memory
+    /// snapshot cache keeps the full history. The content pane runs
+    /// `sleep` so its process emits nothing beyond the fed lines.
+    #[cfg(unix)]
+    #[test]
+    fn persisted_state_caps_scrollback_to_the_newest_lines() {
+        use crate::mux::SplitDirection;
+
+        let mut tree = tree();
+        let session = tree.new_session("main", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+        let quiet = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("sleep 60"))
+            .unwrap();
+        let terminal = tree.pane(quiet).unwrap().terminal();
+        // The split pane's width is whatever the layout gave it; the line
+        // budget is derived from the actual pane, not assumed.
+        let (cols, _rows) = terminal.read().size();
+        let keep = MAX_PERSISTED_SCROLLBACK_CELLS / cols;
+        {
+            let mut guard = terminal.write();
+            for i in 0..keep + 100 {
+                guard.process(format!("L{i:06}\r\n").as_bytes());
+            }
+        }
+        let state = tree.to_persist_state();
+        // Panes serialize in layout order; the split pane is the second.
+        let pane = &state.sessions[0].windows[0].panes[1];
+        assert_eq!(
+            pane.terminal.grid.scrollback_lines, keep,
+            "persisted scrollback is capped to the budget"
+        );
+        let persisted_text: String = pane
+            .terminal
+            .grid
+            .scrollback_cells
+            .iter()
+            .map(|c| c.c)
+            .collect();
+        // The last `rows` fed lines sit on the visible screen; keep+50 is
+        // well inside the retained window, L000000 well below it.
+        assert!(
+            persisted_text.contains(&format!("L{:06}", keep + 50)),
+            "the retained window is the newest content"
+        );
+        assert!(
+            !persisted_text.contains("L000000"),
+            "the oldest lines are dropped from the persisted form"
+        );
+        // The pane's in-memory cache is uncapped: the next capture still
+        // sees the full history.
+        let full = tree.pane(quiet).unwrap().persisted_snapshot();
+        assert!(
+            full.grid.scrollback_lines > keep,
+            "the in-memory snapshot keeps the pane's full history ({})",
+            full.grid.scrollback_lines
         );
     }
 }
