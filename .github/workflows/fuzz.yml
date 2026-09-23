@@ -1,0 +1,36 @@
+name: Fuzz
+
+# Coverage-guided fuzzing of the four untrusted-byte parsers (ENH-014).
+# Manual-dispatch like every other workflow in this repo, plus a nightly
+# schedule — the cron keeps looking when nobody remembers to.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [terminal_process, sixel, kitty, tmux_control]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Fuzz ${{ matrix.target }} (10 min bounded)
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+
+      - name: Upload crash artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

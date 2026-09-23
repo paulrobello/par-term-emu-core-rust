@@ -8,6 +8,7 @@ This guide covers the development workflow, sync rules, and review expectations 
 - [Build Rules](#build-rules)
 - [Verification](#verification)
 - [Benchmarks](#benchmarks)
+- [Fuzzing](#fuzzing)
 - [Version Sync](#version-sync)
 - [Rust to Python Binding Sync](#rust-to-python-binding-sync)
 - [Streaming Protocol Changes](#streaming-protocol-changes)
@@ -68,6 +69,22 @@ cargo bench --no-default-features --features rust-only -- --baseline my-change
 ```
 
 A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only -- --test`.
+
+## Fuzzing
+
+Coverage-guided fuzz targets for the code that consumes bytes from untrusted programs live in `fuzz/` (a cargo-fuzz crate, deliberately outside the workspace). Four targets, one per untrusted-byte entry point: `terminal_process` (the whole VTE pipeline plus the export walkers), `sixel` (the Sixel state machine, asserting `SixelLimits` holds), `kitty` (the Kitty graphics APC parser, mirroring the real caller's continuation/final-chunk semantics), and `tmux_control` (notification parsing, including re-parsed split points for partial-line buffering).
+
+```bash
+make fuzz-all                    # each target for FUZZ_SECONDS (default 60)
+make fuzz-kitty                  # one target
+cargo +nightly fuzz run kitty -- -max_total_time=600   # directly
+```
+
+Requirements: a nightly toolchain (`rustup toolchain add nightly`) and `cargo install cargo-fuzz --locked`. Fuzzing is never part of `make checkall`; the nightly CI job (`.github/workflows/fuzz.yml`) runs each target for 10 minutes on a schedule and on manual dispatch.
+
+**Crash-to-regression policy:** a crash artifact (`fuzz/artifacts/<target>/crash-*`) is never just deleted. Reproduce it locally, minimize it (`cargo +nightly fuzz fmt <target> <artifact>`), copy the minimized input into the parser's normal test module, and add a `#[test]` asserting the panic is gone — the artifact's bytes become a permanent regression test. Only then is the artifact file itself deletable. A crash found by fuzzing is a defect card, not a blocker for whatever change is in flight.
+
+Seeds live in `fuzz/corpus/<target>/*.seed` and are committed; everything else the fuzzer writes under `fuzz/corpus/` is ignored.
 
 ## Version Sync
 

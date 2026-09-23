@@ -833,3 +833,24 @@ grind-clean-logs: ## Delete all but the newest 2 grind run dirs (latest symlink,
 	echo "$$old" | sed 's/^/  removing /'; \
 	echo "$$old" | xargs rm -rf; \
 	echo "grind-clean-logs: $$(ls -d .grind-logs/2*/ 2>/dev/null | wc -l | tr -d ' ') run dir(s) remain"
+
+# --- Fuzzing (ENH-014) ---------------------------------------------------------
+# cargo-fuzz targets over the untrusted-byte parsers; see
+# docs/fable/ENH-014-parser-fuzz-targets.md and CONTRIBUTING.md "Fuzzing".
+# Needs nightly + cargo-fuzz (cargo install cargo-fuzz --locked).
+# Not part of checkall: fuzzing is open-ended, the gate is bounded.
+FUZZ_SECONDS ?= 60
+
+fuzz-terminal_process: ## Fuzz the whole VTE pipeline (Terminal::process)
+	cargo +nightly fuzz run terminal_process -- -max_total_time=$(FUZZ_SECONDS)
+
+fuzz-sixel: ## Fuzz the Sixel state machine
+	cargo +nightly fuzz run sixel -- -max_total_time=$(FUZZ_SECONDS)
+
+fuzz-kitty: ## Fuzz the Kitty graphics APC parser
+	cargo +nightly fuzz run kitty -- -max_total_time=$(FUZZ_SECONDS)
+
+fuzz-tmux_control: ## Fuzz the tmux control-mode parser
+	cargo +nightly fuzz run tmux_control -- -max_total_time=$(FUZZ_SECONDS)
+
+fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-tmux_control ## Run all four fuzz targets for FUZZ_SECONDS each (default 60)
