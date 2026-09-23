@@ -210,25 +210,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_regional_indicator_detection() {
-        // Test that we correctly detect Regional Indicator characters
-        use super::renderer::Renderer;
-
-        // US flag is composed of U+1F1FA and U+1F1F8
-        let us_flag = "🇺🇸";
-        assert!(Renderer::contains_regional_indicators(us_flag));
-
-        // Regular text should not contain Regional Indicators
-        let regular_text = "Hello World";
-        assert!(!Renderer::contains_regional_indicators(regular_text));
-
-        // Regular emoji should not contain Regional Indicators
-        let regular_emoji = "🚀 ❤️ ✨";
-        assert!(!Renderer::contains_regional_indicators(regular_emoji));
-
-        // Mixed content with flags should be detected
-        let mixed = "Hello 🇺🇸 World";
-        assert!(Renderer::contains_regional_indicators(mixed));
-    }
 }

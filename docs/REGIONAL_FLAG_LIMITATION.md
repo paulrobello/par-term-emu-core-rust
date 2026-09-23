@@ -245,8 +245,9 @@ The screenshot renderer includes special detection for regional indicators to en
 
 ```rust
 // From src/screenshot/renderer.rs
-pub(crate) fn contains_regional_indicators(text: &str) -> bool {
-    text.chars().any(|c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
+fn row_has_regional_indicators(grid: &Grid, row: usize) -> bool {
+    // scans cells (and their combining chars) directly for U+1F1E6..=U+1F1FF,
+    // avoiding a per-row String allocation
 }
 ```
 

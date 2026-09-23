@@ -384,15 +384,6 @@ impl MacroPlayback {
         (self.current_index, self.macro_data.events.len())
     }
 
-    /// Reset playback to the beginning
-    pub fn reset(&mut self) {
-        self.current_index = 0;
-        self.start_time = Self::current_time_ms();
-        self.paused_time = 0;
-        self.pause_start = None;
-        self.paused = false;
-    }
-
     /// Get the macro name
     pub fn name(&self) -> &str {
         &self.macro_data.name

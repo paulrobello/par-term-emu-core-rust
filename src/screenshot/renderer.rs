@@ -536,18 +536,9 @@ impl Renderer {
         Ok(())
     }
 
-    /// Check if a string contains Regional Indicator characters (flag emojis).
-    /// `render_grid` now uses `row_has_regional_indicators` (scans cells
-    /// directly, no `String` allocation); this string-based variant is kept
-    /// for tests.
-    #[allow(dead_code)]
-    pub(crate) fn contains_regional_indicators(text: &str) -> bool {
-        text.chars().any(|c| matches!(c as u32, 0x1F1E6..=0x1F1FF))
-    }
-
     /// Check if a grid row contains Regional Indicator characters (flag emojis)
     /// by scanning cells directly, avoiding the per-row `String` allocation
-    /// that `row_text` + `contains_regional_indicators` would require.
+    /// that a `row_text`-based check would require.
     fn row_has_regional_indicators(grid: &Grid, row: usize) -> bool {
         match grid.row(row) {
             Some(cells) => cells.iter().any(|cell| {
@@ -1142,38 +1133,6 @@ mod tests {
             quality: 90,
             format: crate::screenshot::config::ImageFormat::Png,
         }
-    }
-
-    #[test]
-    fn test_contains_regional_indicators_with_flag() {
-        // US flag: 🇺🇸 (U+1F1FA U+1F1F8)
-        let text = "Hello 🇺🇸 World";
-        assert!(Renderer::contains_regional_indicators(text));
-    }
-
-    #[test]
-    fn test_contains_regional_indicators_without_flag() {
-        let text = "Hello World";
-        assert!(!Renderer::contains_regional_indicators(text));
-    }
-
-    #[test]
-    fn test_contains_regional_indicators_with_emoji_no_flag() {
-        // Regular emoji, not a flag
-        let text = "Hello 😀 World";
-        assert!(!Renderer::contains_regional_indicators(text));
-    }
-
-    #[test]
-    fn test_contains_regional_indicators_multiple_flags() {
-        // Multiple flags: 🇺🇸 🇬🇧 🇯🇵
-        let text = "🇺🇸 🇬🇧 🇯🇵";
-        assert!(Renderer::contains_regional_indicators(text));
-    }
-
-    #[test]
-    fn test_contains_regional_indicators_empty_string() {
-        assert!(!Renderer::contains_regional_indicators(""));
     }
 
     #[test]

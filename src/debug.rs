@@ -193,32 +193,6 @@ macro_rules! debug_trace {
     };
 }
 
-/// VT sequence logging
-pub fn log_vt_input(bytes: &[u8]) {
-    if is_enabled(DebugLevel::Debug) {
-        let hex: String = bytes
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<Vec<_>>()
-            .join(" ");
-        let printable: String = bytes
-            .iter()
-            .map(|&b| {
-                if (32..127).contains(&b) {
-                    b as char
-                } else {
-                    '.'
-                }
-            })
-            .collect();
-        log(
-            DebugLevel::Debug,
-            "VT_INPUT",
-            &format!("len={} hex=[{}] ascii=[{}]", bytes.len(), hex, printable),
-        );
-    }
-}
-
 /// Screen switch logging
 pub fn log_screen_switch(to_alt: bool, reason: &str) {
     if is_enabled(DebugLevel::Info) {
@@ -353,26 +327,6 @@ pub fn log_execute(byte: u8) {
     }
 }
 
-/// Cursor movement logging
-pub fn log_cursor_move(
-    from_col: usize,
-    from_row: usize,
-    to_col: usize,
-    to_row: usize,
-    reason: &str,
-) {
-    if is_enabled(DebugLevel::Trace) {
-        log(
-            DebugLevel::Trace,
-            "CURSOR",
-            &format!(
-                "moved ({},{}) -> ({},{}) [{}]",
-                from_col, from_row, to_col, to_row, reason
-            ),
-        );
-    }
-}
-
 /// Scroll operation logging
 pub fn log_scroll(direction: &str, region_top: usize, region_bottom: usize, lines: usize) {
     if is_enabled(DebugLevel::Debug) {
@@ -383,17 +337,6 @@ pub fn log_scroll(direction: &str, region_top: usize, region_bottom: usize, line
                 "{} {} lines in region [{}..{}]",
                 direction, lines, region_top, region_bottom
             ),
-        );
-    }
-}
-
-/// Grid operation logging
-pub fn log_grid_op(operation: &str, details: &str) {
-    if is_enabled(DebugLevel::Debug) {
-        log(
-            DebugLevel::Debug,
-            "GRID_OP",
-            &format!("{}: {}", operation, details),
         );
     }
 }
@@ -421,17 +364,6 @@ pub fn log_pty_write(bytes: &[u8]) {
             DebugLevel::Debug,
             "PTY_WRITE",
             &format!("wrote {} bytes: [{}]", bytes.len(), hex),
-        );
-    }
-}
-
-/// Mode change logging
-pub fn log_mode_change(mode: &str, enabled: bool) {
-    if is_enabled(DebugLevel::Info) {
-        log(
-            DebugLevel::Info,
-            "MODE",
-            &format!("{} {}", mode, if enabled { "enabled" } else { "disabled" }),
         );
     }
 }
