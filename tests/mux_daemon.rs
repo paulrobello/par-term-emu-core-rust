@@ -361,3 +361,59 @@ fn sigterm_saves_state_on_the_way_out() {
         other => panic!("expected the shutdown save, got {other:?}"),
     }
 }
+
+/// A pane whose child exits is reaped daemon-side (tmux semantics: a pane
+/// dies with its process) and clients are told — `%layout-change` for a
+/// surviving window, `%window-close` when the dead pane was the last one.
+/// Before the reaper, the pane sat dead in the tree forever and clients
+/// stared at a frozen pane (`exit` in par-term stuck exactly there).
+#[test]
+fn a_pane_whose_child_exits_is_reaped_and_broadcast() {
+    let fixture = MuxFixture::new("reap");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s reap");
+    command(&mut writer, &mut reader, "split-window -h -t %0");
+
+    // Exit the FIRST pane's shell; the reaper must close it within a bound.
+    command(&mut writer, &mut reader, "send-keys -t %0 'exit' Enter");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut reaped = false;
+    while Instant::now() < deadline && !reaped {
+        let listed = command(&mut writer, &mut reader, "list-panes").join(" ");
+        reaped = pane_ids(&listed).len() == 1;
+        if !reaped {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    assert!(
+        reaped,
+        "the dead pane must leave the tree within 10s of its child exiting"
+    );
+
+    // The LAST pane exiting closes the window instead.
+    command(&mut writer, &mut reader, "send-keys -t %1 'exit' Enter");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut closed = false;
+    while Instant::now() < deadline && !closed {
+        let windows = command(&mut writer, &mut reader, "list-windows").join(" ");
+        // The reply block itself always carries %begin/%end lines — the
+        // window set is empty when no @N id appears in it.
+        closed = !windows.contains('@');
+        if !closed {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let final_panes = command(&mut writer, &mut reader, "list-panes").join(" ");
+    let final_windows = command(&mut writer, &mut reader, "list-windows").join(" ");
+    assert!(
+        closed,
+        "the window must close when its last pane's child exits — panes:          {final_panes:?}, windows: {final_windows:?}"
+    );
+}

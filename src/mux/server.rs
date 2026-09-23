@@ -35,6 +35,12 @@ use std::time::Duration;
 /// (par-mux.md Phase 5 scrape tier).
 const SCRAPE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// How often the accept loop's idle poll runs the pane reaper — the pass
+/// that closes panes whose child exited (tmux semantics: a pane dies with
+/// its process). The PTY reader flips `is_running` on EOF within
+/// milliseconds of the exit; this poll bounds the close latency.
+const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// How often the persist worker re-checks the shutdown flag while idle.
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
@@ -186,6 +192,7 @@ impl MuxServer {
                 .as_deref(),
         );
         let mut last_scrape = std::time::Instant::now();
+        let mut last_reap = std::time::Instant::now();
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
@@ -213,6 +220,10 @@ impl MuxServer {
                             broadcast_notification(&self.clients, &notification);
                         }
                         last_scrape = std::time::Instant::now();
+                    }
+                    if last_reap.elapsed() >= REAP_INTERVAL {
+                        reap_dead_panes(&self.tree, &self.clients, persist_tx.as_ref());
+                        last_reap = std::time::Instant::now();
                     }
                 }
                 // A signal may land mid-accept; that is not a listener fault.
@@ -574,6 +585,87 @@ fn dispatch_contained(
 /// affected, which is what a push-driven sync layer consumes.
 pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotification) {
     push_to_clients(clients, emit(notification));
+}
+
+/// Close panes whose child exited, with tmux's semantics — a pane dies with
+/// its process. The PTY reader flips `is_running` on EOF; this pass (the
+/// accept loop's idle tick, [`REAP_INTERVAL`]) then removes the pane and
+/// broadcasts what clients need to drop it: `%layout-change` +
+/// `%window-pane-changed` for a surviving window, `%window-close` when the
+/// dead pane was the window's last. An emptied session is left in place —
+/// create-or-attach refills it; killing the session is a later decision.
+///
+/// A `kill_pane` on the last pane is refused by the tree, so that case must
+/// resolve to `kill_window` BEFORE the pane is gone from the layout's point
+/// of view. Collections and mutations interleave on purpose: parking_lot is
+/// not reentrant, so every kill re-locks the tree itself.
+fn reap_dead_panes(
+    tree: &Arc<Mutex<MuxTree>>,
+    clients: &Clients,
+    persist: Option<&Sender<PersistState>>,
+) {
+    let dead: Vec<PaneId> = {
+        let guard = tree.lock();
+        guard
+            .sessions()
+            .iter()
+            .filter_map(|s| guard.session(*s))
+            .flat_map(|s| s.windows.clone())
+            .filter_map(|w| guard.window(w))
+            .flat_map(|w| w.panes())
+            .filter(|p| guard.pane(*p).is_some_and(|pane| !pane.is_running()))
+            .collect()
+    };
+    if dead.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    for pane in dead {
+        let Some(window) = tree.lock().window_of_pane(pane) else {
+            continue;
+        };
+        let last_pane = tree
+            .lock()
+            .window(window)
+            .is_some_and(|w| w.panes().len() <= 1);
+        let outcome = if last_pane {
+            tree.lock().kill_window(window)
+        } else {
+            tree.lock().kill_pane(pane).map(|_| ())
+        };
+        match outcome {
+            Ok(()) => {
+                changed = true;
+                if last_pane {
+                    broadcast_notification(
+                        clients,
+                        &TmuxNotification::WindowClose {
+                            window_id: window.to_string(),
+                        },
+                    );
+                } else {
+                    broadcast_layout_change(tree, clients, window);
+                    if let Some(active) = tree.lock().window(window).map(|w| w.active) {
+                        broadcast_notification(
+                            clients,
+                            &TmuxNotification::WindowPaneChanged {
+                                window_id: window.to_string(),
+                                pane_id: active.to_string(),
+                            },
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                log::warn!("par-mux: reaping pane {pane} failed: {err}");
+            }
+        }
+    }
+    if changed {
+        if let Some(tx) = persist {
+            let _ = tx.send(tree.lock().to_persist_state());
+        }
+    }
 }
 
 /// The per-pane output sink: PTY bytes become `%output` lines pushed to every
