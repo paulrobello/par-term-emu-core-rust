@@ -66,7 +66,7 @@ def test_user_var_changed_event():
     assert len(user_var_events) == 1
     assert user_var_events[0]["name"] == "myvar"
     assert user_var_events[0]["value"] == "myval"
-    assert "old_value" not in user_var_events[0]
+    assert user_var_events[0].get("old_value") is None
 
 
 def test_user_var_changed_event_with_old_value():

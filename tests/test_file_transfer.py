@@ -102,12 +102,12 @@ class TestFileDownload:
         started = next(e for e in events if e["type"] == "file_transfer_started")
         assert started["direction"] == "download"
         assert started["filename"] == "test.pdf"
-        assert started["total_bytes"] == str(len(file_data))
+        assert started["total_bytes"] == len(file_data)
 
         # Check completed event details
         completed = next(e for e in events if e["type"] == "file_transfer_completed")
         assert completed["filename"] == "test.pdf"
-        assert completed["size"] == str(len(file_data))
+        assert completed["size"] == len(file_data)
 
     def test_take_completed_transfer(self) -> None:
         """take_completed_transfer should return data and remove from buffer."""
@@ -166,8 +166,8 @@ class TestFileDownload:
         events = term.poll_events()
         started = [e for e in events if e["type"] == "file_transfer_started"]
         assert len(started) == 1
-        # When no filename is provided, the key should be absent
-        assert "filename" not in started[0] or started[0].get("filename") == ""
+        # When no filename is provided, the field is None (or empty)
+        assert started[0].get("filename") in (None, "")
 
 
 # ---------------------------------------------------------------------------

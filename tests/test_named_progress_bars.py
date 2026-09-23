@@ -103,7 +103,7 @@ def test_progress_bar_changed_event_on_set():
     assert pb_events[0]["action"] == "set"
     assert pb_events[0]["id"] == "dl-1"
     assert pb_events[0]["state"] == "normal"
-    assert pb_events[0]["percent"] == "42"
+    assert pb_events[0]["percent"] == 42
     assert pb_events[0]["label"] == "Test"
 
 

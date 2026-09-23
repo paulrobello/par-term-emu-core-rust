@@ -39,7 +39,7 @@ def test_zone_closed_with_exit_code() -> None:
     zone_closed = [e for e in events if e["type"] == "zone_closed"]
     output_closes = [e for e in zone_closed if e["zone_type"] == "output"]
     assert len(output_closes) >= 1
-    assert output_closes[0].get("exit_code") == "0"
+    assert output_closes[0].get("exit_code") == 0
 
 
 def test_zone_ids_monotonic() -> None:
