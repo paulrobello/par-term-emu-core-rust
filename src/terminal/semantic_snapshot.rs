@@ -918,6 +918,12 @@ impl Terminal {
         self.active_grid().export_visible_screen_styled()
     }
 
+    /// Export the visible screen as newline-framed styled rows — the
+    /// `capture-pane -e` shape (one line per grid row, SGR inline).
+    pub fn export_visible_screen_styled_lines(&self) -> String {
+        self.active_grid().export_visible_screen_styled_lines()
+    }
+
     /// Export entire buffer (scrollback + current screen) as plain text
     pub fn export_text(&self) -> String {
         let mut output = self.export_scrollback(ExportFormat::Plain, None);

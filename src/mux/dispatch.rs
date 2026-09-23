@@ -169,7 +169,8 @@ pub(super) fn dispatch_command(
             pane,
             start_line,
             end_line,
-        } => cmd_capture_pane(ctx, pane, start_line, end_line),
+            escape,
+        } => cmd_capture_pane(ctx, pane, start_line, end_line, escape),
         MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
         MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
@@ -342,18 +343,21 @@ fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> 
                 Err(err) => Outcome::err(ctx, &err.to_string()),
             }
         }
-        // Resync (D5.4): replay the pane's current screen as a styled,
-        // cursor-addressed snapshot so a reattached client's emulator
-        // reproduces the screen exactly — row positions via `\x1b[R;1H`
-        // (a `\n`-joined reply would staircase: LF preserves the column),
-        // attributes via SGR (a plain reply loses every color), and
-        // trailing background-styled cells (plain text trims them). The
-        // active grid means an alt-screen TUI replays its TUI screen.
+        // Resync (D5.4): replay the pane's state as the screen-restore
+        // encoder's byte stream so a reattached client's emulator
+        // reproduces it exactly — alt-screen selection first (a TUI
+        // replays its TUI screen), then the styled content with
+        // absolute row addressing (`\x1b[R;1H`; a `\n`-joined reply
+        // staircases: LF preserves the column), attributes via SGR
+        // (a plain reply loses every color), trailing background-styled
+        // cells (plain text trims them), and finally the cursor
+        // position/visibility/style and the input modes a full-screen
+        // app's next %output deltas assume.
         None => {
             let guard = ctx.tree.lock();
             match guard.pane(pane) {
                 Some(target) => {
-                    let screen = target.terminal().read().export_visible_screen_styled();
+                    let screen = target.terminal().read().export_screen_restore_sequence();
                     Outcome::ok(ctx, &screen)
                 }
                 None => Outcome::err(ctx, &format!("no such pane: {pane}")),
@@ -557,6 +561,7 @@ fn cmd_capture_pane(
     pane: PaneId,
     start_line: Option<i64>,
     end_line: Option<i64>,
+    escape: bool,
 ) -> Outcome {
     let guard = ctx.tree.lock();
     match guard.pane(pane) {
@@ -564,17 +569,31 @@ fn cmd_capture_pane(
             let terminal = target.terminal();
             let term = terminal.read();
             let body = match (start_line, end_line) {
-                // Decision 2: no new Terminal API — the default
-                // capture is the same visible-screen read
-                // refresh-client already does.
-                (None, None) => term.content(),
+                // Decision 2 stands: no new Terminal API — the default
+                // capture reads the pane's visible screen (the active
+                // grid, so an alt-screen TUI captures its TUI screen).
+                (None, None) => {
+                    if escape {
+                        term.export_visible_screen_styled_lines()
+                    } else {
+                        term.content()
+                    }
+                }
                 (start, end) => {
                     // export_scrollback only takes a tail count, so
                     // the tmux -S/-E range trim happens here on the
                     // composed buffer, not in Terminal.
-                    let scrollback =
-                        term.export_scrollback(crate::terminal::ExportFormat::Plain, None);
-                    let screen = term.content();
+                    let format = if escape {
+                        crate::terminal::ExportFormat::Ansi
+                    } else {
+                        crate::terminal::ExportFormat::Plain
+                    };
+                    let scrollback = term.export_scrollback(format, None);
+                    let screen = if escape {
+                        term.export_visible_screen_styled_lines()
+                    } else {
+                        term.content()
+                    };
                     capture_range(&scrollback, &screen, start, end)
                 }
             };

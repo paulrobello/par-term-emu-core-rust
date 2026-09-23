@@ -1390,6 +1390,77 @@ mod tests {
     }
 
     #[test]
+    fn capture_pane_e_returns_sgr_rows_and_plain_stays_plain() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        // Styled content at a known position: a bold, blue-background tag
+        // on row 2 and plain text on row 4.
+        let payload = b"\x1b[2;3H\x1b[1;44mTAG\x1b[0m\x1b[4;1Hplain";
+        tree.lock()
+            .pane_mut(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(payload);
+
+        let plain = dispatch(
+            &format!("capture-pane -t {pane_id} -p"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        let escaped = dispatch(
+            &format!("capture-pane -t {pane_id} -p -e"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
+        assert!(plain.contains("%end"), "plain capture succeeds: {plain}");
+        assert!(escaped.contains("%end"), "-e capture succeeds: {escaped}");
+
+        // Without -e the reply stays the pre--e capture: the pane's
+        // logical lines, no ESC byte.
+        let expected = tree
+            .lock()
+            .pane(pane_id)
+            .unwrap()
+            .terminal()
+            .read()
+            .content();
+        assert!(
+            plain.contains("TAG") && plain.contains("plain"),
+            "plain capture carries the text: {plain}"
+        );
+        assert!(
+            plain.contains(&expected),
+            "plain capture is content(): {plain:?} vs {expected:?}"
+        );
+        assert!(
+            !plain.contains('\x1b'),
+            "plain capture carries no ESC byte: {plain:?}"
+        );
+
+        // With -e the styled row carries its SGR run inline (reset, fg,
+        // bg — push_sgr_style's fixed order) and a reset before the
+        // line break; the unstyled row stays plain text.
+        assert!(
+            escaped.contains("\x1b[0;37;44") && escaped.contains("TAG\x1b[0m\n"),
+            "-e capture carries the styled run inline, reset before the \
+             line break: {escaped:?}"
+        );
+        assert!(
+            escaped.contains("plain\n"),
+            "-e capture keeps the unstyled row plain: {escaped:?}"
+        );
+    }
+
+    #[test]
     fn buffer_round_trips_through_set_and_show() {
         let (tree, clients) = harness();
         let empty = dispatch("show-buffer", 1, &tree, &clients, None);

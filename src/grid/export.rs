@@ -293,6 +293,53 @@ impl Grid {
         result
     }
 
+    /// Export the visible screen as newline-framed rows with inline SGR —
+    /// the `capture-pane -e` shape (tmux's `-e` precedent: one line per
+    /// grid row, escape bytes inline, no cursor addressing).
+    ///
+    /// Unlike [`Self::export_visible_screen_styled`] (cursor-addressed,
+    /// for replay into an emulator), every row becomes exactly one
+    /// `\n`-terminated line, empty rows included. A row that emitted no
+    /// SGR run is plain text; a row that did is terminated with
+    /// `\x1b[0m` before its newline.
+    pub fn export_visible_screen_styled_lines(&self) -> String {
+        let mut result = String::new();
+        for row in 0..self.rows {
+            let mut current_fg = Color::Named(NamedColor::White);
+            let mut current_bg = Color::Named(NamedColor::Black);
+            let mut current_flags = crate::cell::CellFlags::default();
+            let mut emitted_sgr = false;
+            if let Some(row_cells) = self.row(row) {
+                let last_sig = self.find_last_significant(row_cells);
+                for (col, cell) in row_cells.iter().enumerate() {
+                    if cell.flags.wide_char_spacer() {
+                        continue;
+                    }
+                    if col >= last_sig {
+                        break;
+                    }
+                    if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags
+                    {
+                        push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                        current_fg = cell.fg;
+                        current_bg = cell.bg;
+                        current_flags = cell.flags;
+                        emitted_sgr = true;
+                    }
+                    result.push(cell.c);
+                    for &combining in &cell.combining {
+                        result.push(combining);
+                    }
+                }
+            }
+            if emitted_sgr {
+                result.push_str("\x1b[0m");
+            }
+            result.push('\n');
+        }
+        result
+    }
+
     /// Export scrollback lines only, with ANSI styling
     ///
     /// The styled counterpart of the plain scrollback export: the same line

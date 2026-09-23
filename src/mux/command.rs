@@ -142,6 +142,10 @@ pub enum MuxCommand {
         /// `-E`: last line to capture, inclusive, same offset convention.
         /// `None` keeps tmux's default: the bottom of the visible screen.
         end_line: Option<i64>,
+        /// `-e`: include SGR escape sequences inline, one line per grid row
+        /// (tmux's `-e` contract). `false` keeps the plain-text capture
+        /// byte-identical to the pre-`-e` reply.
+        escape: bool,
     },
     /// Store text in the paste buffer.
     SetBuffer {
@@ -797,10 +801,13 @@ fn parse_capture_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
     // the combined scrollback+screen buffer.
     let start_line = a.flag("-S").and_then(|raw| raw.parse::<i64>().ok());
     let end_line = a.flag("-E").and_then(|raw| raw.parse::<i64>().ok());
+    // `-e` is valueless (tmux's "include escape sequences").
+    let escape = a.has_flag("-e");
     Ok(MuxCommand::CapturePane {
         pane,
         start_line,
         end_line,
+        escape,
     })
 }
 
@@ -1193,7 +1200,8 @@ mod tests {
             MuxCommand::CapturePane {
                 pane: PaneId(3),
                 start_line: None,
-                end_line: None
+                end_line: None,
+                escape: false
             }
         );
         assert_eq!(
@@ -1201,7 +1209,8 @@ mod tests {
             MuxCommand::CapturePane {
                 pane: PaneId(3),
                 start_line: Some(50),
-                end_line: Some(-1)
+                end_line: Some(-1),
+                escape: false
             }
         );
         assert_eq!(
@@ -1209,7 +1218,17 @@ mod tests {
             MuxCommand::CapturePane {
                 pane: PaneId(3),
                 start_line: Some(-20),
-                end_line: Some(-11)
+                end_line: Some(-11),
+                escape: false
+            }
+        );
+        assert_eq!(
+            parse_command("capture-pane -t %3 -p -e -S -20 -E -11").unwrap(),
+            MuxCommand::CapturePane {
+                pane: PaneId(3),
+                start_line: Some(-20),
+                end_line: Some(-11),
+                escape: true
             }
         );
     }
@@ -1456,6 +1475,7 @@ mod tests {
                 pane: PaneId(0),
                 start_line: None,
                 end_line: None,
+                escape: false,
             },
             MuxCommand::ShowBuffer,
             MuxCommand::PasteBuffer { pane: PaneId(0) },
