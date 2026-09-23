@@ -35,7 +35,7 @@ class TestNativeEventDicts:
     def test_unset_optional_field_is_none(self) -> None:
         term = Terminal(80, 24, scrollback=100)
         # First SetUserVar has no previous value: old_value must be None.
-        term.process(b"\x1b]1337;SetUserVar=qa119var=cXV1Zg==\x07")  # "quux"
+        term.process(b"\x1b]1337;SetUserVar=qa119var=cXV1eA==\x07")  # "quux"
         events = term.poll_events()
         var = next(e for e in events if e["type"] == "user_var_changed")
         assert var["value"] == "quux"
@@ -53,7 +53,7 @@ class TestNativeEventDicts:
 
     def test_legacy_poll_omits_unset_optional_fields(self) -> None:
         term = Terminal(80, 24, scrollback=100)
-        term.process(b"\x1b]1337;SetUserVar=qa119var=cXV1Zg==\x07")
+        term.process(b"\x1b]1337;SetUserVar=qa119var=cXV1eA==\x07")
         events = term.poll_events_legacy()
         var = next(e for e in events if e["type"] == "user_var_changed")
         assert var["value"] == "quux"
@@ -62,7 +62,7 @@ class TestNativeEventDicts:
     def test_poll_subscribed_events_native_and_legacy(self) -> None:
         term = Terminal(80, 24, scrollback=100)
         term.set_event_subscription(["user_var_changed"])
-        term.process(b"\x1b]1337;SetUserVar=qa119sub=cXV1Zg==\x07")
+        term.process(b"\x1b]1337;SetUserVar=qa119sub=cXV1eA==\x07")
         term.process(b"\x1b[4h")  # not subscribed: must be filtered out
         native = term.poll_subscribed_events()
         assert [e["type"] for e in native] == ["user_var_changed"]
