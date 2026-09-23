@@ -124,10 +124,7 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             put!("col", EventField::Int(trigger_match.col as i64));
             put!("end_col", EventField::Int(trigger_match.end_col as i64));
             put!("text", EventField::Str(trigger_match.text.clone()));
-            put!(
-                "timestamp",
-                EventField::Int(trigger_match.timestamp as i64)
-            );
+            put!("timestamp", EventField::Int(trigger_match.timestamp as i64));
         }
         TerminalEvent::UserVarChanged {
             name,
@@ -268,11 +265,15 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             );
             put!(
                 "old_hostname",
-                old_hostname.clone().map_or(EventField::None, EventField::Str)
+                old_hostname
+                    .clone()
+                    .map_or(EventField::None, EventField::Str)
             );
             put!(
                 "old_username",
-                old_username.clone().map_or(EventField::None, EventField::Str)
+                old_username
+                    .clone()
+                    .map_or(EventField::None, EventField::Str)
             );
         }
         TerminalEvent::SubShellDetected { depth, shell_type } => {
@@ -337,10 +338,7 @@ pub(crate) fn event_fields(event: &TerminalEvent) -> Vec<(String, EventField)> {
             put!("size", EventField::Int(*size as i64));
         }
         TerminalEvent::FileTransferFailed { id, reason } => {
-            put!(
-                "type",
-                EventField::Str("file_transfer_failed".to_string())
-            );
+            put!("type", EventField::Str("file_transfer_failed".to_string()));
             put!("id", EventField::Int(*id as i64));
             put!("reason", EventField::Str(reason.clone()));
         }
@@ -543,10 +541,7 @@ mod tests {
     fn legacy_renderer_reproduces_pre_051_stringly_shape() {
         // Numeric fields stringify, bools render lowercase like Rust's
         // bool::to_string always did.
-        let legacy = event_to_dict_legacy(&TerminalEvent::ModeChanged(
-            "insert".to_string(),
-            false,
-        ));
+        let legacy = event_to_dict_legacy(&TerminalEvent::ModeChanged("insert".to_string(), false));
         assert_eq!(legacy.get("enabled").map(String::as_str), Some("false"));
 
         let legacy = event_to_dict_legacy(&TerminalEvent::SizeChanged(80, 24));
