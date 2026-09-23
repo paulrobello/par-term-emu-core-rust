@@ -402,7 +402,15 @@ mod tests {
 
     #[test]
     fn agent_factory_seeds_the_hook_env_contract() {
-        let socket = format!("/tmp/par-mux-agent-env-{}", std::process::id());
+        // Nothing ever binds or writes to this path — the pane only echoes
+        // it back via $PAR_MUX_SOCKET — but a `process::id()`-derived path
+        // in the shared temp dir still repeats once the OS recycles a pid,
+        // so a `TempDir` keeps this consistent with the sibling fixtures.
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-agent-env-")
+            .tempdir()
+            .expect("create temp dir for socket path");
+        let socket = dir.path().join("socket").display().to_string();
         let factory = AgentPaneFactory {
             agent: "kimi".to_string(),
             cwd: None,

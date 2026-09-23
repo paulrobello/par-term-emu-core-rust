@@ -246,11 +246,25 @@ mod tests {
     /// second means the retry loop was entered anyway.
     const FAST_FAIL_BUDGET: Duration = Duration::from_millis(1000);
 
-    fn temp_socket(tag: &str) -> PathBuf {
-        let mut path = std::env::temp_dir();
-        path.push(format!("par-mux-client-{}-{tag}", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-        path
+    /// A socket path that no other test run can ever name, cleaned up even
+    /// when the test panics.
+    ///
+    /// A `process::id()`-derived path in the shared temp dir repeats once the
+    /// OS recycles that pid, so a remnant of an earlier run collides with a
+    /// later one, and a trailing `remove_file` never runs on a panic — see
+    /// `mux::ipc`'s `TempSocket`, which this mirrors. The guard is returned
+    /// alongside the path (not just held internally) so callers can keep it
+    /// alive for as long as the socket must exist — a binder thread spawned
+    /// after this call still needs the directory to be there when it binds.
+    fn temp_socket(tag: &str) -> (tempfile::TempDir, PathBuf) {
+        // Short prefix and tag: a slow-bind test binds a real socket here,
+        // and macOS caps a Unix socket path at 104 bytes.
+        let dir = tempfile::Builder::new()
+            .prefix("par-mux-cli-")
+            .tempdir()
+            .expect("create temp dir for socket");
+        let path = dir.path().join(tag);
+        (dir, path)
     }
 
     /// A binary path guaranteed not to exist, so `spawn` must fail.
@@ -258,11 +272,11 @@ mod tests {
     /// The parent directory is absent too: a bare missing file next to the
     /// test binary would start existing the moment a full `cargo test` built
     /// the real `par-mux`, and the test would silently stop testing anything.
-    fn missing_binary(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "par-mux-absent-{}-{tag}/par-mux",
-            std::process::id()
-        ))
+    /// Built inside a `TempDir` (removed on drop) rather than a
+    /// `process::id()`-derived name in the shared temp dir, so a leftover
+    /// from an earlier run can never collide with this one.
+    fn missing_binary(dir: &tempfile::TempDir) -> PathBuf {
+        dir.path().join("absent").join("par-mux")
     }
 
     /// A binary that exists and spawns cleanly: this test process itself.
@@ -276,8 +290,8 @@ mod tests {
 
     #[test]
     fn an_unspawnable_daemon_binary_fails_fast_and_names_the_path() {
-        let socket = temp_socket("nospawn");
-        let bin = missing_binary("nospawn");
+        let (dir, socket) = temp_socket("nospawn");
+        let bin = missing_binary(&dir);
 
         let started = Instant::now();
         let err = MuxClient::spawn_and_connect(&bin, &socket)
@@ -308,7 +322,7 @@ mod tests {
 
     #[test]
     fn a_spawned_daemon_slow_to_bind_still_gets_the_retry_deadline() {
-        let socket = temp_socket("slowbind");
+        let (dir, socket) = temp_socket("slowbind");
         let bind_at = socket.clone();
 
         // The daemon that binds late. The retry loop must outlast this.
@@ -345,7 +359,7 @@ mod tests {
 
         drop(client);
         binder.join().expect("binder thread");
-        let _ = std::fs::remove_file(&socket);
+        drop(dir);
     }
 
     #[test]
