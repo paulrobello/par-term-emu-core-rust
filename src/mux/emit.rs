@@ -105,6 +105,17 @@ pub fn emit(notification: &TmuxNotification) -> String {
             };
             format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
         }
+        TmuxNotification::PaneTitleChanged { pane_id, title } => {
+            // The separator is omitted for an empty title (the clear
+            // operation) so the wire never carries a trailing space; the
+            // parser reads a missing title token as empty.
+            let tail = if title.is_empty() {
+                String::new()
+            } else {
+                format!(" {title}")
+            };
+            format!("%pane-title-changed {pane_id}{tail}\n")
+        }
         // Seam S3: `TmuxNotification` carries 29 variants; Phase 1 emits the
         // 9 the spine needs and the rest fall through here, producing nothing
         // rather than panicking. Adding a notification is therefore one new
@@ -349,6 +360,37 @@ mod tests {
         // Seam S3: the catch-all arm. Adding a notification later is one new
         // arm here, never a change at call sites; until then it emits nothing.
         assert_eq!(emit(&TmuxNotification::SessionsChanged), "");
+    }
+
+    #[test]
+    fn pane_title_changed_round_trips_with_spaces() {
+        // A title legitimately contains spaces; the parser must take the
+        // rest of the line rather than one token.
+        let original = TmuxNotification::PaneTitleChanged {
+            pane_id: "%3".to_string(),
+            title: "My build pane".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    #[test]
+    fn pane_title_changed_clear_round_trips_as_a_missing_token() {
+        // Clear emits no separator; the parser reads the missing token as
+        // an empty title, so the round trip is exact.
+        let original = TmuxNotification::PaneTitleChanged {
+            pane_id: "%3".to_string(),
+            title: String::new(),
+        };
+        let line = emit(&original);
+        assert_eq!(
+            line, "%pane-title-changed %3\n",
+            "no trailing space: {line:?}"
+        );
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
     }
 
     #[test]

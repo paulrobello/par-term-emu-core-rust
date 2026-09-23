@@ -156,7 +156,8 @@ pub(super) fn dispatch_command(
             direction,
             percent,
         } => cmd_split_window(ctx, pane, direction, percent),
-        MuxCommand::SelectPane { pane } => cmd_select_pane(ctx, pane),
+        MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
+        MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
         MuxCommand::NewWindow { session, name } => cmd_new_window(ctx, session, name),
@@ -413,15 +414,50 @@ fn cmd_split_window(
     }
 }
 
-fn cmd_select_pane(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
-    match ctx.tree.lock().select_pane(pane) {
-        Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id).notifying(
-            TmuxNotification::WindowPaneChanged {
-                window_id: window_id.to_string(),
+fn cmd_select_pane(ctx: &Ctx<'_>, pane: PaneId, title: Option<String>) -> Outcome {
+    let mut guard = ctx.tree.lock();
+    // The title lands first under the same lock: a failed select reports
+    // the pane error and nothing else changed.
+    let mut title_notification = None;
+    if let Some(title) = title {
+        let pane_mut = match guard.pane_mut(pane) {
+            Some(p) => p,
+            None => return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string()),
+        };
+        if pane_mut.set_user_title(&title) {
+            // The notification carries the new USER title (empty = cleared);
+            // the display title remains user-or-OSC per the precedence rule.
+            title_notification = Some(TmuxNotification::PaneTitleChanged {
                 pane_id: pane.to_string(),
-            },
-        ),
+                title,
+            });
+        }
+    }
+    match guard.select_pane(pane) {
+        Ok(window_id) => {
+            let mut outcome = Outcome::ok(ctx, "").with_layout(window_id).notifying(
+                TmuxNotification::WindowPaneChanged {
+                    window_id: window_id.to_string(),
+                    pane_id: pane.to_string(),
+                },
+            );
+            if let Some(notification) = title_notification {
+                outcome = outcome.notifying(notification);
+            }
+            outcome
+        }
         Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+fn cmd_pane_title(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    // Wire contract: the reply body is exactly one line — the effective
+    // title (user `-T` title when set, else the pane terminal's current
+    // OSC 0/2 title). An empty body means neither is set.
+    let guard = ctx.tree.lock();
+    match guard.pane(pane) {
+        Some(pane) => Outcome::ok(ctx, &pane.effective_title()),
+        None => Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string()),
     }
 }
 

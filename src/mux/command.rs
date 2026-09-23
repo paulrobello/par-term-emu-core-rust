@@ -114,6 +114,17 @@ pub enum MuxCommand {
     SelectPane {
         /// Target pane.
         pane: PaneId,
+        /// `-T`: the user title to set on the pane. `None` = flag absent
+        /// (a pure focus change); `Some("")` = clear; any other value is
+        /// the sticky user title, which the pane program's OSC 0/2 title
+        /// never overwrites (the documented divergence from tmux).
+        title: Option<String>,
+    },
+    /// Read a pane's effective title: the user `-T` title when one is set,
+    /// else the pane terminal's current OSC 0/2 title.
+    PaneTitle {
+        /// Target pane.
+        pane: PaneId,
     },
     /// Grow or shrink a pane by moving its bordering divider, or set its
     /// absolute extents.
@@ -190,6 +201,7 @@ impl MuxCommand {
             | MuxCommand::ListSessions
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
+            | MuxCommand::PaneTitle { .. }
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. } => false,
         }
@@ -261,6 +273,22 @@ impl Args<'_> {
     /// default: quoting is what makes it expressible at all, and tmux admits
     /// any session name except an empty one.
     fn quoted_flag(&self, flag: &str) -> Result<Option<String>, String> {
+        match self.quoted_flag_allowing_empty(flag)? {
+            // An empty name is reachable only through quoting, and `""` is
+            // not a tmux name; a client that sent one has a bug worth
+            // surfacing rather than defaulting away.
+            Some(v) if v.is_empty() => {
+                Err(format!("{}: {flag} requires a non-empty name", self.name))
+            }
+            other => Ok(other),
+        }
+    }
+
+    /// [`Self::quoted_flag`] without the non-empty guard: an explicitly
+    /// quoted empty value survives as `Some("")`, the shape a CLEAR
+    /// operation needs (`select-pane -T ''`, where empty is meaningful
+    /// rather than a client bug).
+    fn quoted_flag_allowing_empty(&self, flag: &str) -> Result<Option<String>, String> {
         // The flat scan already answers every unquoted name, and answers it
         // byte-for-byte: only re-split when the value actually opens a
         // quote. A bare `a\b` is a name containing a backslash, not an
@@ -276,15 +304,7 @@ impl Args<'_> {
         } else {
             flat
         };
-        match value {
-            // An empty name is reachable only through quoting, and `""` is
-            // not a tmux name; a client that sent one has a bug worth
-            // surfacing rather than defaulting away.
-            Some(v) if v.is_empty() => {
-                Err(format!("{}: {flag} requires a non-empty name", self.name))
-            }
-            other => Ok(other),
-        }
+        Ok(value)
     }
 
     /// Presence check for valueless flags (`-h`, `-R`, …) — [`Self::flag`]
@@ -597,6 +617,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("list-sessions", parse_list_sessions),
     ("split-window", parse_split_window),
     ("select-pane", parse_select_pane),
+    ("pane-title", parse_pane_title),
     ("resize-pane", parse_resize_pane),
     ("swap-pane", parse_swap_pane),
     ("capture-pane", parse_capture_pane),
@@ -747,7 +768,25 @@ fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_select_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
-    Ok(MuxCommand::SelectPane {
+    let pane = a.pane("-t")?;
+    // `-T` carries the user title. Unlike a NAME flag, an explicitly empty
+    // value is meaningful — `-T ''` is the clear operation — so the value
+    // is read through the quoting grammar without `quoted_flag`'s
+    // non-empty guard.
+    let title = if a.has_flag("-T") {
+        match a.quoted_flag_allowing_empty("-T")? {
+            Some(value) => Some(value),
+            // `-T` present with nothing after it cannot mean anything.
+            None => return Err(format!("{}: -T requires a value", a.name)),
+        }
+    } else {
+        None
+    };
+    Ok(MuxCommand::SelectPane { pane, title })
+}
+
+fn parse_pane_title(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::PaneTitle {
         pane: a.pane("-t")?,
     })
 }
@@ -1273,7 +1312,10 @@ mod tests {
     fn parses_select_and_swap_pane() {
         assert_eq!(
             parse_command("select-pane -t %2").unwrap(),
-            MuxCommand::SelectPane { pane: PaneId(2) }
+            MuxCommand::SelectPane {
+                pane: PaneId(2),
+                title: None,
+            }
         );
         assert_eq!(
             parse_command("swap-pane -t %2 -s %5").unwrap(),
@@ -1282,6 +1324,46 @@ mod tests {
                 source: PaneId(5)
             }
         );
+    }
+
+    #[test]
+    fn parses_select_pane_title_flag() {
+        // Quoted title with spaces stays one value (the same grammar
+        // new-session -s uses for names).
+        assert_eq!(
+            parse_command("select-pane -t %0 -T 'My build pane'").unwrap(),
+            MuxCommand::SelectPane {
+                pane: PaneId(0),
+                title: Some("My build pane".to_string()),
+            }
+        );
+        // An explicitly empty -T is the CLEAR operation, not an error.
+        assert_eq!(
+            parse_command("select-pane -t %0 -T ''").unwrap(),
+            MuxCommand::SelectPane {
+                pane: PaneId(0),
+                title: Some(String::new()),
+            }
+        );
+        // Unquoted single word, and no -T at all.
+        assert_eq!(
+            parse_command("select-pane -t %0 -T logs").unwrap(),
+            MuxCommand::SelectPane {
+                pane: PaneId(0),
+                title: Some("logs".to_string()),
+            }
+        );
+        // -T with nothing following it is malformed, not "clear".
+        assert!(parse_command("select-pane -t %0 -T").is_err());
+    }
+
+    #[test]
+    fn parses_pane_title_query() {
+        assert_eq!(
+            parse_command("pane-title -t %3").unwrap(),
+            MuxCommand::PaneTitle { pane: PaneId(3) }
+        );
+        assert!(parse_command("pane-title").is_err());
     }
 
     #[test]
@@ -1436,7 +1518,10 @@ mod tests {
                 direction: SplitDirection::Horizontal,
                 percent: 50,
             },
-            MuxCommand::SelectPane { pane: PaneId(0) },
+            MuxCommand::SelectPane {
+                pane: PaneId(0),
+                title: None,
+            },
             MuxCommand::ResizePane {
                 pane: PaneId(0),
                 adjustment: ResizeAdjustment::Relative {

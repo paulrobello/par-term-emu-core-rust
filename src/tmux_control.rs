@@ -160,6 +160,11 @@ pub enum TmuxNotification {
         source: String,
     },
 
+    /// A pane's user title changed (`select-pane -T`; par-mux pane-title
+    /// extension — real tmux never emits this).
+    /// Arguments: pane_id, new_title (empty = cleared)
+    PaneTitleChanged { pane_id: String, title: String },
+
     /// Unknown or unrecognized notification
     /// Arguments: notification_line
     Unknown { line: String },
@@ -200,6 +205,7 @@ impl TmuxNotification {
             Self::PasteBufferChanged { .. } => "paste-buffer-changed",
             Self::PasteBufferDeleted { .. } => "paste-buffer-deleted",
             Self::AgentStateChanged { .. } => "agent-state-changed",
+            Self::PaneTitleChanged { .. } => "pane-title-changed",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
         }
@@ -413,6 +419,7 @@ impl TmuxControlParser {
             "paste-buffer-changed" => Self::parse_paste_buffer_changed(args),
             "paste-buffer-deleted" => Self::parse_paste_buffer_deleted(args),
             "agent-state-changed" => Self::parse_agent_state_changed(args),
+            "pane-title-changed" => Self::parse_pane_title_changed(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
             }),
@@ -577,6 +584,23 @@ impl TmuxControlParser {
         Some(TmuxNotification::UnlinkedWindowRenamed {
             window_id: parts[0].to_string(),
             name: parts[1].to_string(),
+        })
+    }
+
+    fn parse_pane_title_changed(args: &str) -> Option<TmuxNotification> {
+        // The title is the rest of the line — it may contain spaces — and a
+        // MISSING second token is the explicit clear (the emitter omits the
+        // separator for an empty title rather than trailing-space it).
+        let (pane_id, title) = match args.split_once(' ') {
+            Some((id, rest)) => (id, rest),
+            None => (args, ""),
+        };
+        if pane_id.is_empty() {
+            return None;
+        }
+        Some(TmuxNotification::PaneTitleChanged {
+            pane_id: pane_id.to_string(),
+            title: title.to_string(),
         })
     }
 

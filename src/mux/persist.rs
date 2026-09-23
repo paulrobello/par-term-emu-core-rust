@@ -158,6 +158,15 @@ pub struct PersistPane {
     pub terminal: TerminalSnapshot,
     /// The command the pane ran (`None` = the default shell).
     pub spawn_command: Option<String>,
+    /// The pane's user title (`select-pane -T`), when set. Skipped when
+    /// absent (an untitled pane serializes byte-identically to the older
+    /// format) and defaulted on load, so pre-title save files still
+    /// restore.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub user_title: Option<String>,
     /// Agent session identity, when a hook claimed this pane (Phase 6,
     /// task 6.1). Skipped when absent so a non-agent pane serializes
     /// byte-identically to the pre-change format.
@@ -261,6 +270,7 @@ impl MuxTree {
                     id: pane_id.0,
                     terminal: cap_persisted_scrollback(pane.persisted_snapshot()),
                     spawn_command: pane.spawn_command().map(str::to_string),
+                    user_title: pane.user_title().map(str::to_string),
                     agent_session: agent_session_from_metadata(pane.metadata()),
                 }
             })
@@ -340,6 +350,9 @@ impl MuxTree {
                         if let Some(argv) = &agent_session.resume_argv {
                             created.set_metadata("agent_resume_argv", argv);
                         }
+                    }
+                    if let Some(title) = &pane.user_title {
+                        created.set_user_title(title);
                     }
                     panes.insert(PaneId(pane.id), created);
                 }
@@ -753,6 +766,61 @@ mod tests {
             restored.get_buffer("default").map(str::to_string),
             Some("hello".to_string()),
             "named buffers survive the round trip"
+        );
+    }
+
+    #[test]
+    fn round_trip_preserves_user_titles() {
+        let mut tree = tree();
+        let session = tree.new_session("titled", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        tree.pane_mut(pane_id)
+            .expect("the session's pane exists")
+            .set_user_title("keep me");
+
+        let state = tree.to_persist_state();
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_eq!(
+            restored.pane(pane_id).and_then(|p| p.user_title()),
+            Some("keep me"),
+            "the user title survives the round trip"
+        );
+    }
+
+    #[test]
+    fn a_save_file_without_the_title_field_still_loads() {
+        // serde(default): a save file written before user titles existed
+        // carries no `user_title` key and must decode with no title rather
+        // than fail — the strip below simulates exactly that older file.
+        let mut tree = tree();
+        let session = tree.new_session("old", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        tree.pane_mut(pane_id)
+            .unwrap()
+            .set_user_title("dropped by the strip");
+
+        let json = serde_json::to_string(&tree.to_persist_state()).unwrap();
+        assert!(
+            json.contains("user_title"),
+            "positive control: the field is on the wire"
+        );
+        let old_format = json.replace(",\"user_title\":\"dropped by the strip\"", "");
+        assert!(
+            !old_format.contains("user_title"),
+            "the strip removed the only occurrence"
+        );
+
+        let state: PersistState =
+            serde_json::from_str(&old_format).expect("a pre-title save file decodes");
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        assert_eq!(
+            restored.pane(pane_id).and_then(|p| p.user_title()),
+            None,
+            "a missing field decodes as no title, not an error"
         );
     }
 

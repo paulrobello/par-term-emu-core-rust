@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::{command, wait_listening, MuxFixture};
+use common::{command, pane_ids, wait_listening, MuxFixture};
 use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::{connect_local_stream, prepare_socket_path, MuxServer};
 use std::io::BufReader;
@@ -49,6 +49,115 @@ fn panes_survive_every_client_disconnecting() {
     );
 
     drop(writer);
+    let _ = handle;
+}
+
+/// Pane titles: `select-pane -T` sets a user title, every connected client
+/// is told via `%pane-title-changed`, a client that attaches AFTER the set
+/// reads it back through the `pane-title` query, and `-T ''` clears with
+/// the same broadcast.
+#[test]
+fn pane_titles_broadcast_query_and_clear() {
+    let fixture = MuxFixture::new("titles");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    // Client A creates the session; client B attaches BEFORE any title
+    // change (a push is never replayed to a late client — that is what
+    // the query below is for); then A sets a quoted, spaced title.
+    let stream_a = connect_local_stream(path).expect("client A connects");
+    let mut writer_a = stream_a.try_clone().expect("clone");
+    let mut reader_a = BufReader::new(stream_a);
+    command(&mut writer_a, &mut reader_a, "new-session -s titles");
+    let pane = pane_ids(&command(&mut writer_a, &mut reader_a, "list-panes").join(""))
+        .first()
+        .expect("a pane exists")
+        .clone();
+
+    let stream_b = connect_local_stream(path).expect("client B connects");
+    let mut writer_b = stream_b.try_clone().expect("clone");
+    let mut reader_b = BufReader::new(stream_b);
+    // A connection joins the broadcast set on its FIRST control command
+    // (the registration model in handle_client), so B establishes itself
+    // before the change it must observe.
+    command(&mut writer_b, &mut reader_b, "list-panes");
+
+    command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("select-pane -t {pane} -T 'My build pane'"),
+    );
+
+    // Client B polls a benign command and scans everything it reads for
+    // the broadcast: pushed lines sit in the socket buffer and drain ahead
+    // of the next reply block, so a poll loop with no sleep-ordering
+    // assumption is the honest shape.
+    let set_line = format!("%pane-title-changed {pane} My build pane");
+    let mut seen = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        seen.push_str(&command(&mut writer_b, &mut reader_b, "list-panes").join(""));
+        if seen.lines().any(|l| l == set_line) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "client B never saw {set_line:?}; read so far: {seen}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    // A client attaching AFTER the set reads the title through the query.
+    let stream_c = connect_local_stream(path).expect("client C connects");
+    let mut writer_c = stream_c.try_clone().expect("clone");
+    let mut reader_c = BufReader::new(stream_c);
+    let queried = command(
+        &mut writer_c,
+        &mut reader_c,
+        &format!("pane-title -t {pane}"),
+    )
+    .join("");
+    assert!(
+        queried.lines().any(|l| l.trim() == "My build pane"),
+        "the query returns the user title: {queried}"
+    );
+
+    // Clearing broadcasts the empty-title form of the same line.
+    command(
+        &mut writer_a,
+        &mut reader_a,
+        &format!("select-pane -t {pane} -T ''"),
+    );
+    let clear_line = format!("%pane-title-changed {pane}");
+    let mut seen = String::new();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        seen.push_str(&command(&mut writer_b, &mut reader_b, "list-panes").join(""));
+        if seen.lines().any(|l| l == clear_line) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "client B never saw the clear line {clear_line:?}; read: {seen}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let after = command(
+        &mut writer_c,
+        &mut reader_c,
+        &format!("pane-title -t {pane}"),
+    )
+    .join("");
+    assert!(
+        !after.contains("My build pane"),
+        "the cleared title no longer reports: {after}"
+    );
+
+    drop(writer_a);
+    drop(writer_b);
+    drop(writer_c);
     let _ = handle;
 }
 

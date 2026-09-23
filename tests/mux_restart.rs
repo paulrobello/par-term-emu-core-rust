@@ -17,6 +17,58 @@ use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::connect_local_stream;
 use std::io::BufReader;
 
+/// Pane titles survive a restart: the save carries the user title, and the
+/// next daemon on the same socket reports it through the `pane-title`
+/// query without waiting for a change to push.
+#[test]
+fn a_restart_restores_pane_titles() {
+    let fixture = MuxFixture::new("title");
+    let path = fixture.socket();
+
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("first daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        command(&mut writer, &mut reader, "new-session -s titled");
+        let pane = pane_ids(&command(&mut writer, &mut reader, "list-panes").join(""))
+            .first()
+            .expect("new-session created a pane")
+            .clone();
+        command(
+            &mut writer,
+            &mut reader,
+            &format!("select-pane -t {pane} -T 'survives restarts'"),
+        );
+        let before = command(&mut writer, &mut reader, &format!("pane-title -t {pane}")).join("");
+        assert!(
+            before.lines().any(|l| l.trim() == "survives restarts"),
+            "title set before the restart: {before}"
+        );
+    }
+    sigterm_clean(&mut first);
+
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("second daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let listed = command(&mut writer, &mut reader, "list-panes").join("");
+        let pane = pane_ids(&listed)
+            .first()
+            .expect("the pane survived the restart")
+            .clone();
+        let after = command(&mut writer, &mut reader, &format!("pane-title -t {pane}")).join("");
+        assert!(
+            after.lines().any(|l| l.trim() == "survives restarts"),
+            "the user title survives the restart: {after}"
+        );
+    }
+    sigterm_clean(&mut second);
+}
+
 /// Task 3.6: one daemon builds a session with a split, screen content and
 /// scrollback; a SIGTERM stops it; a second daemon on the SAME socket must
 /// serve the saved tree back — same session, same pane ids, same screen and

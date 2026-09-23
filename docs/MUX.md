@@ -91,7 +91,7 @@ Each registered client has a bounded broadcast queue (4096 lines). A client that
 
 ## Command Reference
 
-The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in exactly three places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, and the `new-session -s NAME` / `new-window -n NAME` names, so a name may contain spaces. Every other flag is whitespace-split — the `-t`/`-s` targets elsewhere are typed `$N`/`@N`/`%N` ids that cannot contain whitespace, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in exactly four places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, and the `select-pane -T TITLE` title, so a name or title may contain spaces. Every other flag is whitespace-split — the `-t`/`-s` targets elsewhere are typed `$N`/`@N`/`%N` ids that cannot contain whitespace, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|
@@ -101,7 +101,8 @@ The parser is deliberately minimal: whitespace-split with a flag scan. tmux's fu
 | `kill-window` | `-t @N` | empty | `%window-close` |
 | `rename-window` | `-t @N <name>` | empty | `%window-renamed` |
 | `split-window` | `-t %N [-h\|-v] [-p 1-99]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
-| `select-pane` | `-t %N` | empty | `%layout-change`, `%window-pane-changed` |
+| `select-pane` | `-t %N [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
+| `pane-title` | `-t %N` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
 | `resize-pane` | `-t %N (-L\|-R\|-U\|-D [cells] \| -x COLS [-y ROWS])` | empty | `%layout-change` |
 | `swap-pane` | `-t %N -s %N` | empty | `%layout-change` |
 | `kill-pane` | `-t %N` | empty | `%layout-change`, `%window-pane-changed` |
@@ -128,6 +129,7 @@ Details worth knowing:
 - **Buffers** are a single slot named `default` — no numbered stack, and `-b` is not implemented.
 - **`kill-pane`** is refused for a window's last pane.
 - **`list-agents`** returns one line per pane a hook has claimed or a scrape pattern has matched, sorted by pane id: `%N <agent> <state> <source>` with `source` `hook` or `scrape`, plus the blocked reason as the rest of the line when the agent reported one. Panes without state are absent — `unknown` is never reported, and `idle` is never guessed.
+- **Pane titles (`select-pane -T`)** set a user title on the pane; `-T ''` clears it (quoting is what makes an empty value expressible). Precedence is a deliberate divergence from tmux: a user title is **sticky** — the pane program's OSC 0/2 title never overwrites it — while with no user title the pane reports the program's live OSC title. The effective title (user when set, else OSC) is what `pane-title -t %N` replies — an empty reply body means neither is set; a broadcast carries only the *user* title's changes, so a client composing a display title falls back to its own OSC tracking on the empty form. Setting the same title again is a no-op and broadcasts nothing.
 
 ## Notifications
 
@@ -143,6 +145,7 @@ Broadcast lines every connected (registered) client receives, emitted in this or
 | `%window-pane-changed @N %N` | A window's active pane changed |
 | `%session-changed $N <name>` | Sent to the issuing client after `new-session` |
 | `%agent-state-changed %N <agent> <state> [source=hook\|scrape]` | An agent's state changed, with provenance |
+| `%pane-title-changed %N [title]` | A pane's user title changed — `select-pane -T` set it (title follows the pane id, spaces included) or cleared it (no title token). The user title is sticky over the program's OSC title; the notification carries the user title only |
 | `%exit` | Graceful shutdown — the daemon is ending deliberately, not dying |
 
 tmux control-mode clients ignore `%` lines they do not recognize, so a client that never learned `%agent-state-changed` (or any future variant) still sees the raw line rather than an error.
@@ -207,7 +210,7 @@ An override that fails to parse or validate falls back to the bundled set with a
 
 State saving is crash-safe by construction (`src/mux/persist.rs`): serialize to `<file>.tmp`, fsync, rename over the target. The file is created `0600` on Unix — the same owner-only posture as the socket.
 
-- **What persists:** the full tree (sessions, windows, panes, layout), each pane's screen and scrollback content, the paste buffer, and each agent pane's session identity (`agent_session`: agent label, session id and/or transcript path, source tag, and the hook-reported resume argv). Format version is **2**. Persisted scrollback is capped per pane to the newest 100 000 cells (~1 250 lines at 80 cols) — a persistence bound only: the running pane keeps its full in-memory history, and the cap is what keeps a scrollback-maxed shutdown save from stalling daemon exit (measured 2026-09-22: uncapped, one flooded pane's final save was a 136 MB write holding SIGTERM exit for two minutes).
+- **What persists:** the full tree (sessions, windows, panes, layout), each pane's screen and scrollback content, the paste buffer, each pane's user title (`user_title`, from `select-pane -T` — a save file written before the field existed loads with no title), and each agent pane's session identity (`agent_session`: agent label, session id and/or transcript path, source tag, and the hook-reported resume argv). Format version is **2**. Persisted scrollback is capped per pane to the newest 100 000 cells (~1 250 lines at 80 cols) — a persistence bound only: the running pane keeps its full in-memory history, and the cap is what keeps a scrollback-maxed shutdown save from stalling daemon exit (measured 2026-09-22: uncapped, one flooded pane's final save was a 136 MB write holding SIGTERM exit for two minutes).
 - **What deliberately does not persist:** agent *state*, its provenance, the ordering `seq`, the blocked reason, and `session_start_source`. A restored pane reports state anew or holds none, so the roster is empty after a restart by design.
 - **When it saves:** after every *successful mutating* command (the structural set: `new-session`, `new-window`, `kill-window`, `rename-window`, `select-window`, `split-window`, `select-pane`, `resize-pane`, `swap-pane`, `kill-pane`, `set-buffer`, and `refresh-client -C`). Content commands (`send-keys`, `capture-pane`, `paste-buffer`, the lists) do not save — their staleness window is bounded by the next structural save and the clean-shutdown save.
 - **Quarantine:** a corrupt or unknown-version state file is renamed aside (`<file>.quarantine-<timestamp>`) and the daemon starts fresh — unreadable state never blocks startup, and the evidence survives for inspection. A v1 state file is quarantined rather than partially read.

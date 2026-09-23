@@ -68,6 +68,12 @@ pub struct MuxPane {
     /// shell), recorded at spawn so a save/restore cycle (par-mux.md D3.5)
     /// can respawn the same program.
     spawn_command: Option<String>,
+    /// The user-set pane title (`select-pane -T`): sticky — the program's
+    /// OSC 0/2 title never overwrites it, the documented divergence from
+    /// tmux recorded in par-mux.md. `None` = no user title;
+    /// [`MuxPane::effective_title`] falls back to the terminal's live OSC
+    /// title instead.
+    user_title: Option<String>,
     metadata: HashMap<String, String>,
     /// Last persistence snapshot, valid while the terminal has not changed
     /// since it was taken — see [`MuxPane::persisted_snapshot`].
@@ -100,6 +106,37 @@ impl MuxPane {
     /// respawns.
     pub fn spawn_command(&self) -> Option<&str> {
         self.spawn_command.as_deref()
+    }
+
+    /// The user-set title (`select-pane -T`), when one is set.
+    pub fn user_title(&self) -> Option<&str> {
+        self.user_title.as_deref()
+    }
+
+    /// Set or clear the user title (empty string = clear). Returns whether
+    /// the stored value changed, so the dispatcher can skip broadcasting a
+    /// no-op `%pane-title-changed`.
+    pub fn set_user_title(&mut self, title: &str) -> bool {
+        let new = if title.is_empty() {
+            None
+        } else {
+            Some(title.to_string())
+        };
+        if self.user_title == new {
+            false
+        } else {
+            self.user_title = new;
+            true
+        }
+    }
+
+    /// The title clients should display for this pane: the user title when
+    /// one is set, else the pane terminal's current OSC 0/2 title (empty
+    /// when the program set neither).
+    pub fn effective_title(&self) -> String {
+        self.user_title
+            .clone()
+            .unwrap_or_else(|| self.session.terminal().read().title().to_string())
     }
 
     /// The terminal emulator backing this pane.
@@ -262,6 +299,7 @@ impl PaneFactory for ShellPaneFactory {
             id,
             session,
             spawn_command: command.map(str::to_string),
+            user_title: None,
             metadata: HashMap::new(),
             snapshot_cache: Mutex::new(None),
         })
@@ -453,5 +491,58 @@ mod tests {
         let terminal = pane.terminal();
         let guard = terminal.read();
         assert_eq!(guard.size(), (100, 30));
+    }
+
+    /// Drive the pane terminal's OSC title directly (the same bytes the
+    /// pane's program would emit) so the precedence tests do not depend on
+    /// PTY scheduling.
+    fn set_osc_title(pane: &MuxPane, title: &str) {
+        pane.terminal()
+            .write()
+            .process(format!("\x1b]2;{title}\x07").as_bytes());
+    }
+
+    #[test]
+    fn without_a_user_title_the_osc_title_is_reported() {
+        let factory = ShellPaneFactory::default();
+        let pane = factory.create_pane(PaneId(7), 80, 24, None).unwrap();
+        set_osc_title(&pane, "prog title");
+        assert_eq!(pane.effective_title(), "prog title");
+        assert!(
+            pane.user_title().is_none(),
+            "an OSC title is not a user title"
+        );
+    }
+
+    #[test]
+    fn a_user_title_survives_a_later_osc_title() {
+        // The documented divergence from tmux: -T is sticky; the program
+        // cannot overwrite it.
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory.create_pane(PaneId(8), 80, 24, None).unwrap();
+        assert!(pane.set_user_title("user title"));
+        set_osc_title(&pane, "later prog title");
+        assert_eq!(pane.effective_title(), "user title");
+
+        // And clearing the user title falls back to the OSC title again.
+        assert!(pane.set_user_title(""));
+        assert_eq!(pane.effective_title(), "later prog title");
+        assert!(pane.user_title().is_none());
+    }
+
+    #[test]
+    fn setting_the_same_title_twice_reports_no_change() {
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory.create_pane(PaneId(9), 80, 24, None).unwrap();
+        assert!(pane.set_user_title("same"));
+        assert!(
+            !pane.set_user_title("same"),
+            "an identical title is not a change"
+        );
+        assert!(pane.set_user_title(""), "clearing a set title is a change");
+        assert!(
+            !pane.set_user_title(""),
+            "clearing an already-clear pane is not a change"
+        );
     }
 }
