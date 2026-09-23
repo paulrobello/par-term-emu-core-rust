@@ -50,6 +50,24 @@ addressed (candidate levers: move `combining` out of `Cell` into a side table,
 row-ring rotation, or a scan-guarded bulk move that skips the element-wise
 clone when no cell in the range has a spilled (heap) SmallVec).
 
+## Scroll-path A/B (2026-09-23, interleaved, median) — superseded by commit a7ac1c7
+
+The structural scroll cost above was fixed the same day: `scroll_up` now
+drains the top rows out with `Vec::drain` (std shifts the remaining rows with
+a single memmove) and moves them into scrollback by ownership (`Vec::append`
+while filling, ring-head `swap_with_slice` once full); partial
+`scroll_region_up` regions `rotate_left` the region slice. No per-cell
+`SmallVec` clone remains on the scroll-up path, with no `unsafe`.
+
+| Benchmark | Pre-change | Post-change | Change |
+|---|---:|---:|---:|
+| `plain_ascii/1MiB_lorem_80x24` | 198.7–199.3 ms (≈5.0 MiB/s) | 63.8–64.0 ms (≈15.7 MiB/s) | **3.1× faster** |
+| `scroll/1MiB_lines_80x24_scrollback10k` | 197.6–200.4 ms (≈5.0 MiB/s) | 64.3–64.4 ms (≈15.5 MiB/s) | **3.1× faster** |
+
+Both groups now clear the ENH-010 ≥6 MiB/s bar. `plain_ascii` is no longer
+scroll-bound; treat the post-change columns as the current reference numbers
+for future comparisons, measured with the same interleaved method.
+
 ## Comparing after a change
 
 ```bash
