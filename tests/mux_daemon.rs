@@ -169,13 +169,7 @@ fn sigterm_saves_state_on_the_way_out() {
     let path = fixture.socket();
     let state_path = fixture.state_path();
 
-    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
-        .arg("--socket")
-        .arg(path)
-        .arg("--state-dir")
-        .arg(fixture.state_dir())
-        .spawn()
-        .expect("daemon binary spawns");
+    let mut child = common::spawn_daemon(&fixture);
 
     // Wait for the listener, then drive two structural mutations.
     wait_listening(path);

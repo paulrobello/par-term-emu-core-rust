@@ -132,7 +132,7 @@ fn pane_ids(text: &str) -> Vec<String> {
 /// One daemon plus a registered control client and the id of its first
 /// pane — the stage every hook test plays on.
 struct Stage {
-    daemon: std::process::Child,
+    daemon: common::DaemonGuard,
     path: std::path::PathBuf,
     control: Control,
     pane: String,

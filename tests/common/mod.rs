@@ -129,13 +129,52 @@ pub fn pid_after(marker: &str, text: &str) -> Option<u32> {
     None
 }
 
+/// Owns a spawned daemon `Child` and guarantees it is not left running.
+///
+/// The happy path reaps it explicitly (via [`sigterm_clean`], which takes
+/// `&mut Child` and receives this through deref coercion). `Drop` is the
+/// panic backstop: if a test panics between spawning the daemon and
+/// reaching that cleanup, the daemon would otherwise be orphaned —
+/// reparented to init and left running, exactly how the 7 orphaned
+/// daemons found during the sibling-helpers fix were created. `try_wait`
+/// first, because a child already reaped by the happy path's `wait()` may
+/// have had its pid recycled by the OS; killing a *stale* pid rather than
+/// this one's would be a different bug than the one this guards against.
+/// `std::process::Child::kill` (not a raw signal by pid) is deliberately
+/// used: it is a documented no-op once the child has already been waited
+/// on, and unlike a SIGTERM-then-wait it cannot hang `Drop` during a panic
+/// unwind if the daemon is wedged.
+pub struct DaemonGuard(std::process::Child);
+
+impl std::ops::Deref for DaemonGuard {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for DaemonGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for DaemonGuard {
+    fn drop(&mut self) {
+        if let Ok(None) = self.0.try_wait() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
+
 /// Spawn the daemon binary on the fixture's socket, persisting into the
 /// fixture's state dir, with null stdio: a daemon that outlives a failed
 /// assertion must not hold the test harness's output pipe open, or
 /// `cargo test` hangs at exit instead of reporting the failure.
-pub fn spawn_daemon(fixture: &MuxFixture) -> std::process::Child {
+pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
     use std::process::Stdio;
-    std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
+    let child = std::process::Command::new(env!("CARGO_BIN_EXE_par-mux"))
         .arg("--socket")
         .arg(fixture.socket())
         .arg("--state-dir")
@@ -143,7 +182,8 @@ pub fn spawn_daemon(fixture: &MuxFixture) -> std::process::Child {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("daemon binary spawns")
+        .expect("daemon binary spawns");
+    DaemonGuard(child)
 }
 
 /// Poll until the daemon's socket accepts connections (its listener is up).

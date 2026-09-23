@@ -61,19 +61,38 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
     );
 }
 
+/// Kills the client's spawned daemon on drop — the panic backstop.
+///
+/// `MuxClient::kill_spawned_daemon` is deliberately not a `Drop` impl on
+/// `MuxClient` itself (a disconnecting client must not kill a daemon other
+/// clients are using); this test owns the daemon it spawned, so it needs
+/// its own guard. The call is idempotent after an explicit one, so calling
+/// it again from `Drop` on the happy path (where the test already called
+/// it) is harmless.
+struct SpawnedClient(MuxClient);
+
+impl Drop for SpawnedClient {
+    fn drop(&mut self) {
+        let _ = self.0.kill_spawned_daemon();
+    }
+}
+
 #[test]
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     let fixture = MuxFixture::new("spawn");
     let path = fixture.socket();
     // Nothing is listening. The client must start one.
-    let mut client =
-        MuxClient::connect_or_spawn_at(path).expect("connect_or_spawn starts a daemon");
+    let mut client = SpawnedClient(
+        MuxClient::connect_or_spawn_at(path).expect("connect_or_spawn starts a daemon"),
+    );
     // A session first: an empty daemon's list-panes block has no body lines,
     // so prove liveness by creating a pane and listing it.
     client
+        .0
         .send("new-session -s spawn")
         .expect("the spawned daemon answers");
     let panes = client
+        .0
         .send("list-panes")
         .expect("list on spawned daemon")
         .join("");
@@ -85,6 +104,7 @@ fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     // explicitly — dropping the client (or removing only the socket file)
     // leaves a live process behind, one leak per test run.
     client
+        .0
         .kill_spawned_daemon()
         .expect("the spawned daemon is cleaned up");
     // The spawned daemon persisted its tree (D3.3) under the test socket's
