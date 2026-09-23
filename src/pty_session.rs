@@ -76,6 +76,10 @@ pub struct PtySession {
     cell_pixel_width: u16,
     cell_pixel_height: u16,
     update_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Signalled by the reader thread once applied content is visible (the
+    /// post-write-guard generation bump) and on EOF — what
+    /// [`PtySession::wait_for_update`] blocks on instead of sleep-polling.
+    update_signal: Arc<(parking_lot::Mutex<()>, parking_lot::Condvar)>,
     /// Whether to reply to XTWINOPS queries (cached from env var PAR_TERM_REPLY_XTWINOPS)
     reply_xtwinops: Arc<AtomicBool>,
     /// Optional callback for raw PTY output (for streaming, logging, etc.)
@@ -119,6 +123,7 @@ impl PtySession {
             cell_pixel_width: 10,
             cell_pixel_height: 20,
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            update_signal: Arc::new((parking_lot::Mutex::new(()), parking_lot::Condvar::new())),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
             output_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
@@ -642,6 +647,7 @@ impl PtySession {
         let terminal = Arc::clone(&self.terminal);
         let running = Arc::clone(&self.running);
         let update_generation = Arc::clone(&self.update_generation);
+        let update_signal = Arc::clone(&self.update_signal);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
         let output_callback = Arc::clone(&self.output_callback);
         let coprocess_manager = Arc::clone(&self.coprocess_manager);
@@ -654,6 +660,10 @@ impl PtySession {
                     Ok(0) => {
                         // EOF - process has exited
                         running.store(false, Ordering::SeqCst);
+                        // `running` is part of wait_for_update's exit
+                        // condition, so a blocked waiter must not sit out
+                        // its timeout after the child is gone.
+                        update_signal.1.notify_all();
                         break;
                     }
                     Ok(n) => {
@@ -832,6 +842,12 @@ impl PtySession {
 
                             batch
                         }; // write guard (`term`) dropped here
+
+                        // Applied content is now visible to read locks.
+                        // Wake wait_for_update callers here — after the
+                        // guard drop — so a woken reader takes the terminal
+                        // lock without contending with this thread.
+                        update_signal.1.notify_all();
 
                         // ARC-027: write staged device-query responses back to the
                         // PTY master now that the write guard is released, so the
@@ -1373,6 +1389,38 @@ impl PtySession {
         self.update_generation() > last_generation
     }
 
+    /// A shareable handle to the session's wait primitives (ENH-011).
+    ///
+    /// `PtySession` itself is not `Sync` (its master PTY handle is
+    /// `Send`-only), so a Python binding that releases the GIL cannot hold
+    /// `&PtySession` across the wait. This handle carries only the `Arc`s
+    /// the wait needs and is `Send + Sync + Clone`.
+    pub fn update_waiter(&self) -> UpdateWaiter {
+        UpdateWaiter {
+            terminal: Arc::clone(&self.terminal),
+            signal: Arc::clone(&self.update_signal),
+            generation: Arc::clone(&self.update_generation),
+            running: Arc::clone(&self.running),
+        }
+    }
+
+    /// Block until the update generation advances past `since` or `timeout`
+    /// elapses — see [`UpdateWaiter::wait_for_update`].
+    pub fn wait_for_update(&self, since: u64, timeout: std::time::Duration) -> Option<u64> {
+        self.update_waiter().wait_for_update(since, timeout)
+    }
+
+    /// Block until `predicate` holds on the terminal, re-checking after
+    /// every applied update, or until `timeout` elapses — see
+    /// [`UpdateWaiter::wait_until`].
+    pub fn wait_until(
+        &self,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Terminal) -> bool,
+    ) -> bool {
+        self.update_waiter().wait_until(timeout, predicate)
+    }
+
     /// Get the current bell event count
     ///
     /// This counter increments each time the terminal receives a bell character (BEL/\x07).
@@ -1491,6 +1539,88 @@ impl Drop for PtySession {
         }
 
         debug_log!("PTY_SHUTDOWN", "PtySession dropped");
+    }
+}
+
+/// The shareable half of a [`PtySession`]'s wait primitives (ENH-011):
+/// the update condvar, the generation counter, the running flag, and the
+/// terminal — everything [`UpdateWaiter::wait_for_update`] blocks on, none
+/// of it needing `&PtySession` (which is not `Sync`).
+#[derive(Clone)]
+pub struct UpdateWaiter {
+    terminal: Arc<RwLock<Terminal>>,
+    signal: Arc<(parking_lot::Mutex<()>, parking_lot::Condvar)>,
+    generation: Arc<std::sync::atomic::AtomicU64>,
+    running: Arc<AtomicBool>,
+}
+
+impl UpdateWaiter {
+    /// Block until the update generation advances past `since` or `timeout`
+    /// elapses.
+    ///
+    /// Signalled by the reader thread's content-applied generation bump, so
+    /// wakeups are immediate against a sleep poll — and race-free: the
+    /// signal fires only after the terminal write guard has dropped, so a
+    /// woken caller sees applied content, not in-flight bytes.
+    ///
+    /// # Arguments
+    /// * `since` - The generation to wait past (from `update_generation()`)
+    /// * `timeout` - Maximum time to block
+    ///
+    /// # Returns
+    /// The new generation, or `None` on timeout or child exit with no new
+    /// content (nothing further can arrive, so waiting would just hang).
+    pub fn wait_for_update(&self, since: u64, timeout: std::time::Duration) -> Option<u64> {
+        let deadline = std::time::Instant::now() + timeout;
+        let (lock, signal) = &*self.signal;
+        let mut guard = lock.lock();
+        loop {
+            let now = self.generation.load(Ordering::SeqCst);
+            if now > since {
+                return Some(now);
+            }
+            if !self.running.load(Ordering::SeqCst) && now == since {
+                return None;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            signal.wait_for(&mut guard, remaining);
+        }
+    }
+
+    /// Block until `predicate` holds on the terminal, re-checking after
+    /// every applied update, or until `timeout` elapses.
+    ///
+    /// # Arguments
+    /// * `timeout` - Maximum time to block
+    /// * `predicate` - Checked against a read-locked terminal; must not block
+    ///
+    /// # Returns
+    /// `true` if the predicate held within the timeout.
+    pub fn wait_until(
+        &self,
+        timeout: std::time::Duration,
+        predicate: impl Fn(&Terminal) -> bool,
+    ) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut gen = self.generation.load(Ordering::SeqCst);
+        loop {
+            if predicate(&self.terminal.read()) {
+                return true;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            match self.wait_for_update(gen, remaining) {
+                Some(next) => gen = next,
+                // Timed out or the child exited: either way, content that
+                // raced the final generation check deserves one last look.
+                None => return predicate(&self.terminal.read()),
+            }
+        }
     }
 }
 
@@ -1663,6 +1793,71 @@ mod tests {
         let gen1 = session.update_generation();
         let gen2 = session.update_generation();
         assert_eq!(gen1, gen2); // Should be same if no updates
+    }
+
+    #[test]
+    fn test_wait_for_update_some_after_output() {
+        let mut session = PtySession::new(80, 24, 1000);
+        let since = session.update_generation();
+        #[cfg(unix)]
+        let result = session.spawn("/bin/echo", &["wait-marker"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo wait-marker"]);
+        assert!(result.is_ok());
+        let waited = session.wait_for_update(since, std::time::Duration::from_secs(5));
+        assert!(waited.is_some(), "output should advance the generation");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_wait_for_update_none_on_idle_timeout() {
+        let mut session = PtySession::new(80, 24, 1000);
+        assert!(session.spawn("sleep", &["5"]).is_ok());
+        // Drain whatever the spawn itself produced before timing the idle wait.
+        let _ = session.wait_for_update(
+            session.update_generation(),
+            std::time::Duration::from_millis(200),
+        );
+        let since = session.update_generation();
+        let start = std::time::Instant::now();
+        let waited = session.wait_for_update(since, std::time::Duration::from_secs(1));
+        assert!(waited.is_none(), "idle session must time out");
+        assert!(start.elapsed() >= std::time::Duration::from_secs(1));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_wait_for_update_none_promptly_when_child_exits() {
+        let mut session = PtySession::new(80, 24, 1000);
+        assert!(session.spawn("/usr/bin/true", &[]).is_ok());
+        // Wait out the child's lifetime (no output; EOF is the only signal).
+        let _ = session.wait_for_update(
+            session.update_generation(),
+            std::time::Duration::from_secs(5),
+        );
+        // A wait past the current generation must return on the EOF wake,
+        // not sit out the 30 s deadline: the child is gone, nothing coming.
+        let since = session.update_generation();
+        let start = std::time::Instant::now();
+        let waited = session.wait_for_update(since, std::time::Duration::from_secs(30));
+        assert!(waited.is_none());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "EOF must wake the waiter, not the deadline"
+        );
+    }
+
+    #[test]
+    fn test_wait_until_predicate_on_content() {
+        let mut session = PtySession::new(80, 24, 1000);
+        #[cfg(unix)]
+        let result = session.spawn("/bin/echo", &["wait-until-marker"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo wait-until-marker"]);
+        assert!(result.is_ok());
+        assert!(session.wait_until(std::time::Duration::from_secs(5), |t| {
+            t.content().contains("wait-until-marker")
+        }));
     }
 
     #[test]

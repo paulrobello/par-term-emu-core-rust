@@ -321,6 +321,82 @@ impl PyPtyTerminal {
         Ok(self.inner.has_updates_since(last_generation))
     }
 
+    /// Block until the terminal updates past a given generation
+    ///
+    /// A condition-variable wait signalled by the reader thread the moment
+    /// applied content is visible — sub-millisecond wakeups where a
+    /// ``time.sleep`` poll would miss or wait long. The GIL is released
+    /// while blocking, so other Python threads (observers included) keep
+    /// running.
+    ///
+    /// Args:
+    ///     since: Generation number from a previous call to
+    ///         :meth:`update_generation`
+    ///     timeout: Maximum seconds to block (default 5.0)
+    ///
+    /// Returns:
+    ///     The new generation number, or ``None`` on timeout or when the
+    ///     child has exited with no new output (nothing further can arrive).
+    ///
+    /// Example:
+    ///     gen = term.update_generation()
+    ///     term.write_to_pty(b"ls\\r")
+    ///     assert term.wait_for_update(gen, timeout=2.0) is not None
+    #[pyo3(signature = (since, timeout = 5.0))]
+    fn wait_for_update(
+        &self,
+        py: pyo3::Python<'_>,
+        since: u64,
+        timeout: f64,
+    ) -> PyResult<Option<u64>> {
+        // PtySession is not Sync (Send-only PTY handle), so the detached
+        // wait runs on a cloned waiter instead of a &self borrow.
+        let waiter = self.inner.update_waiter();
+        Ok(py.detach(move || {
+            waiter.wait_for_update(since, std::time::Duration::from_secs_f64(timeout))
+        }))
+    }
+
+    /// Block until a string appears in the terminal content
+    ///
+    /// Re-checks after every applied update (same signal as
+    /// :meth:`wait_for_update`), so it wakes the moment the text lands
+    /// rather than on a sleep cadence. The GIL is released while blocking.
+    ///
+    /// Args:
+    ///     needle: The text to wait for
+    ///     timeout: Maximum seconds to block (default 5.0)
+    ///     scrollback: Also search scrollback history (default ``False`` —
+    ///         only the visible screen is searched)
+    ///
+    /// Returns:
+    ///     ``True`` if the text appeared within the timeout.
+    ///
+    /// Example:
+    ///     term.spawn("/bin/sh", ["-i"])
+    ///     assert term.wait_for_text("$ ", timeout=3.0)
+    #[pyo3(signature = (needle, timeout = 5.0, scrollback = false))]
+    fn wait_for_text(
+        &self,
+        py: pyo3::Python<'_>,
+        needle: String,
+        timeout: f64,
+        scrollback: bool,
+    ) -> PyResult<bool> {
+        let waiter = self.inner.update_waiter();
+        Ok(py.detach(move || {
+            waiter.wait_until(std::time::Duration::from_secs_f64(timeout), move |t| {
+                if scrollback {
+                    use crate::terminal::ExportFormat;
+                    t.export_scrollback(ExportFormat::Plain, None)
+                        .contains(&needle)
+                } else {
+                    t.content().contains(&needle)
+                }
+            })
+        }))
+    }
+
     /// Get the current bell event count
     ///
     /// This counter increments each time the terminal receives a bell character (BEL/\\x07).

@@ -613,5 +613,72 @@ def test_spawn_with_env_dict():
     assert unique_var not in os.environ
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_wait_for_update_advances_on_output():
+    """wait_for_update blocks until the reader applies new output (ENH-011)"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    gen = term.update_generation()
+    term.spawn("/bin/echo", args=["wait-marker"])
+    assert term.wait_for_update(gen, timeout=3.0) is not None
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_wait_for_text_finds_and_times_out():
+    """wait_for_text wakes on the content and honors the timeout (ENH-011)"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/echo", args=["wait-text-marker"])
+    assert term.wait_for_text("wait-text-marker", timeout=3.0)
+
+    # Nothing further arrives: the timeout path returns False promptly.
+    import time as _time
+
+    start = _time.monotonic()
+    assert not term.wait_for_text("never-appears", timeout=0.3)
+    assert 0.25 <= _time.monotonic() - start < 2.0
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
+def test_wait_for_text_releases_the_gil():
+    """A blocking wait must not starve other Python threads (ENH-011).
+
+    The wait times out on absent text, so the whole window is spent blocked:
+    if the GIL were held, the spinner thread would be starved for the full
+    0.5 s instead of ticking every ~1 ms.
+    """
+    import threading
+    import time as _time
+
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    term.spawn("/bin/cat", [])
+    ticks = {"n": 0}
+    stop = threading.Event()
+
+    def spin():
+        while not stop.is_set():
+            ticks["n"] += 1
+            _time.sleep(0.001)
+
+    spinner = threading.Thread(target=spin)
+    spinner.start()
+    try:
+        start = _time.monotonic()
+        assert not term.wait_for_text("never-appears", timeout=0.5)
+        assert _time.monotonic() - start >= 0.45
+    finally:
+        stop.set()
+        spinner.join()
+
+    assert ticks["n"] > 50, (
+        f"wait_for_text starved a concurrent thread ({ticks['n']} ticks in 0.5 s); "
+        "the GIL must be released while blocking"
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
