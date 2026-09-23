@@ -247,6 +247,14 @@ impl StreamSessionState {
             ));
         }
 
+        // Application keypad mode (DECPAM, ESC =)
+        if terminal.application_keypad() {
+            messages.push(ServerMessage::mode_changed(
+                "application_keypad".to_string(),
+                true,
+            ));
+        }
+
         // Focus tracking (DECSET 1004)
         if terminal.focus_tracking() {
             messages.push(ServerMessage::mode_changed(

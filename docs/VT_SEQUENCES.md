@@ -229,6 +229,8 @@ DEC Private Mode sequences.
 
 - `CSI ? <n> h` - Set mode
 - `CSI ? <n> l` - Reset mode
+- `ESC =` - Application keypad mode (DECPAM)
+- `ESC >` - Numeric keypad mode (DECPNM)
 
 ### Common Modes
 

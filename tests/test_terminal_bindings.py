@@ -432,6 +432,18 @@ class TestModesAndModes:
         term.process_str("\x1b[?1l")
         assert term.application_cursor() is False
 
+    def test_application_keypad_mode(self):
+        """Test application keypad mode (DECPAM/DECPNM)"""
+        term = Terminal(80, 24)
+
+        # Enable application keypad (ESC =)
+        term.process_str("\x1b=")
+        assert term.application_keypad() is True
+
+        # Disable (ESC >)
+        term.process_str("\x1b>")
+        assert term.application_keypad() is False
+
     def test_mouse_tracking_mode(self):
         """Test mouse tracking modes"""
         term = Terminal(80, 24)

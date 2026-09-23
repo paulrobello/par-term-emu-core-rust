@@ -296,6 +296,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 - `auto_wrap_mode() -> bool`: Check if auto-wrap mode is enabled
 - `origin_mode() -> bool`: Check if origin mode (DECOM) is enabled
 - `application_cursor() -> bool`: Check if application cursor key mode is enabled
+- `application_keypad() -> bool`: Check if application keypad mode (DECPAM/DECPNM) is enabled
 
 #### VT Conformance Level
 - `conformance_level() -> int`: Get current conformance level (1-5 for VT100-VT520)
@@ -2307,7 +2308,7 @@ Complete capture of terminal state at a point in time. Defined in `src/terminal/
 - `flags` (`CellFlags`): Current cell attribute flags
 - `saved_fg` / `saved_bg` / `saved_underline_color` / `saved_flags`: Saved drawing state
 - `title` (`String`): Terminal title
-- Terminal modes: `auto_wrap`, `origin_mode`, `insert_mode`, `reverse_video`, `line_feed_new_line_mode`, `application_cursor`, `bracketed_paste`, `focus_tracking`, `mouse_mode`, `mouse_encoding`, `use_lr_margins`, `left_margin`, `right_margin`, `keyboard_flags`, `modify_other_keys_mode`, `char_protected`, `bold_brightening`
+- Terminal modes: `auto_wrap`, `origin_mode`, `insert_mode`, `reverse_video`, `line_feed_new_line_mode`, `application_cursor`, `application_keypad`, `bracketed_paste`, `focus_tracking`, `mouse_mode`, `mouse_encoding`, `use_lr_margins`, `left_margin`, `right_margin`, `keyboard_flags`, `modify_other_keys_mode`, `char_protected`, `bold_brightening`
 - `scroll_region_top` / `scroll_region_bottom` (`usize`): Scroll region bounds
 - `tab_stops` (`Vec<bool>`): Tab stop positions
 - `pending_wrap` (`bool`): Delayed wrap flag
