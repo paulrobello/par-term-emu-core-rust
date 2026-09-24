@@ -50,7 +50,10 @@ jobs:
           echo "Checking if version $VERSION exists on crates.io..."
 
           # Search for the exact version
-          if cargo search par-term-emu-core-rust --limit 1 | grep -q "par-term-emu-core-rust = \"$VERSION\""; then
+          # Exact version lookup: `cargo search` ranks results and its output
+          # shape varies across cargo versions, so grepping it misreports.
+          if curl -fsS -o /dev/null -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" \
+              "https://crates.io/api/v1/crates/par-term-emu-core-rust/$VERSION"; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
             echo "⚠️  Version $VERSION already exists on crates.io"
           else
@@ -73,7 +76,7 @@ jobs:
           DERIVE_VERSION=$(grep -m1 '^version = ' derive/Cargo.toml | sed 's/version = "\(.*\)"/\1/')
           echo "Derive crate version: $DERIVE_VERSION"
 
-          if cargo search par-term-emu-derive --limit 1 | grep -q 'par-term-emu-derive = "'"$DERIVE_VERSION"'"'; then
+          if curl -fsS -o /dev/null -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://crates.io/api/v1/crates/par-term-emu-derive/$DERIVE_VERSION"; then
             echo "::notice::par-term-emu-derive $DERIVE_VERSION already on crates.io"
             exit 0
           fi
@@ -83,7 +86,7 @@ jobs:
 
           # Wait for index propagation so the main publish can resolve the dep
           for i in $(seq 1 12); do
-            if cargo search par-term-emu-derive --limit 1 | grep -q 'par-term-emu-derive = "'"$DERIVE_VERSION"'"'; then
+            if curl -fsS -o /dev/null -A "par-term-emu-core-rust-ci (github.com/paulrobello/par-term-emu-core-rust)" "https://crates.io/api/v1/crates/par-term-emu-derive/$DERIVE_VERSION"; then
               echo "Index propagation confirmed"
               exit 0
             fi
