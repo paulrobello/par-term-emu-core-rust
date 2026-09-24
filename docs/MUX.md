@@ -17,6 +17,7 @@ The daemon is feature-gated (Rust `mux` feature), optional, and independent of t
 - [Agent Hook Reports](#agent-hook-reports)
 - [Agent Scrape Tier](#agent-scrape-tier)
 - [Persistence and Restart](#persistence-and-restart)
+- [Pane Reaping](#pane-reaping)
 - [Shutdown Semantics](#shutdown-semantics)
 - [Embedding from Rust](#embedding-from-rust)
 - [Testing](#testing)
@@ -40,15 +41,20 @@ The Python wheel and the default `make dev` build do not include the daemon.
 
 ## Command Line
 
-The daemon hand-parses its arguments (there is no `--help`):
+The daemon parses its arguments with `clap` (`--help` and `--version` both work):
 
 ```text
-par-mux <name>            Bind the default socket path for <name>
-par-mux --socket <path>   Bind an explicit socket path
-par-mux                   Same as par-mux default
+par-mux <name>              Bind the default socket path for <name>
+par-mux --socket <path>     Bind an explicit socket path
+par-mux                     Same as par-mux default
+par-mux --state-dir <dir>   Override the platform state directory the tree is persisted under
+par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
+par-mux [<name>] --restart  Stop, then serve the same socket in this process
 ```
 
 `--socket <path>` is what `MuxClient::connect_or_spawn_at` passes when it starts a daemon. A second daemon on a path a live server already owns is refused with "another server owns <path>"; a stale socket remnant (dead socket file, Windows marker file, or a stray regular file at the path) is reclaimed.
+
+`--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket in this process — the state save the stop just completed is what it restores. Run it detached (e.g. `par-mux --restart NAME &`) to keep a shell; this is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
 
 ## Socket and State Paths
 
@@ -117,6 +123,7 @@ The parser is deliberately minimal: whitespace-split with a flag scan. tmux's fu
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t %N` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (`+unknown` when built outside a repository) | — |
+| `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:
 
@@ -127,9 +134,10 @@ Details worth knowing:
 - **`capture-pane -S/-E`** use tmux's offset convention: `0` is the first visible line, negative numbers count history lines back from the screen top. Without flags, the visible screen is returned.
 - **`capture-pane -e`** returns the pane's visible screen (the active grid — an alt-screen TUI captures its TUI screen) as one line per grid row with SGR escape bytes inline, tmux's `-e` contract: a styled run is emitted as `\x1b[0;<fg>;<bg>[;<attrs>]m` before its text (the export walker's fixed reset-fg-bg order), a row that used any SGR ends with `\x1b[0m` before its newline, and a row that used none is plain text. Empty rows are empty lines, so the reply always holds exactly one line per grid row. Styled trailing blanks survive (plain text trims them). Without `-e` the reply stays the plain logical-lines capture, byte-identical to the pre-`-e` reply; `-e` composes with `-S/-E`, which then trim the styled scrollback+screen composition. The framing is line-per-row, not cursor addressing — replaying it into an emulator requires per-row addressing on the consumer side (a bare LF staircases).
 - **`send-keys`** speaks the tmux contract: key names (`C-a`…`C-z`, `C-Space`, `Escape`, `BSpace`, `Space`, arrows, `Enter`), `-l` literal payloads, `-H` hex bytes, and bare `0xNN` tokens. No trailing newline is appended — `Enter` is an expressible key.
-- **`refresh-client -C WxH`** reports the client's renderer size; the window resizes to it (latest report wins) and every pane re-fits. Without `-C`, the command replays the pane's state to the requesting client — the reattach resync. The reply is `Terminal::export_screen_restore_sequence()`: alt-screen selection first (`\x1b[?1049h` when active), the scroll region, then the styled screen content with absolute row addressing (`\x1b[H` anchor, per-row `\x1b[R;1H`, SGR-diffed runs, reset per row), then the cursor position (`\x1b[R;CH`), visibility (`\x1b[?25l`) and style (DECSCUSR), the input modes (DECCKM, bracketed paste, focus tracking, mouse tracking/encoding), origin mode restored last with a region-relative re-position, and a final `\x1b[0m`. The reply body contains no `\n` (row placement is CUP-addressed), so raw ESC bytes survive the `%begin`/`%end` line framing untouched; a client feeds the bytes verbatim into its pane emulator and the pane's subsequent `%output` deltas land on the restored state.
+- **`refresh-client -C WxH`** reports the client's renderer size; the window resizes to it (latest report wins) and every pane re-fits. Without `-C`, the command replays the pane's state to the requesting client — the reattach resync. The reply is `Terminal::export_screen_restore_sequence()`: the main screen's scrollback first when the pane has any (`\x1b[H` anchor, each history line CR-led and LF-terminated so it replays into the client emulator's own scrollback in order, then the still-on-screen lines pushed off the bottom row with plain line feeds), alt-screen selection next (`\x1b[?1049h` when active), the scroll region, then the styled screen content with absolute row addressing (`\x1b[H` anchor, per-row `\x1b[R;1H`, SGR-diffed runs, reset per row), then the cursor position (`\x1b[R;CH`), visibility (`\x1b[?25l`) and style (DECSCUSR), the input modes (DECCKM, bracketed paste, focus tracking, mouse tracking/encoding), origin mode restored last with a region-relative re-position, and a final `\x1b[0m`. The scrollback block does carry `\n` bytes (one per replayed history line) — despite that, raw ESC bytes still survive the `%begin`/`%end` line framing untouched, since the reader consumes the reply as an ordinary sequence of framed lines regardless of how many lines the body spans; a client feeds the whole body verbatim into its pane emulator and the pane's subsequent `%output` deltas land on the restored state. A pane with no scrollback yields the pre-scrollback-fix shape: no `\n` at all, purely CUP-addressed.
 - **Buffers** are a single slot named `default` — no numbered stack, and `-b` is not implemented.
-- **`kill-pane`** is refused for a window's last pane.
+- **`kill-pane`** is refused for a window's last pane. A pane whose child process exits on its own (rather than via `kill-pane`) is instead reaped automatically — see [Pane Reaping](#pane-reaping) below.
+- **`kill-server`** raises the same shutdown flag SIGTERM does: the reply goes out, the accept loop notices on its next tick, `%exit` reaches every client, and the final state save runs before the process exits — see [Shutdown Semantics](#shutdown-semantics). Refused with an error for an embedded `MuxServer` that has no shutdown handle (`ctx.shutdown` is `None`). `par-mux --stop`/`--restart` send this command under the hood.
 - **`list-agents`** returns one line per pane a hook has claimed or a scrape pattern has matched, sorted by pane id: `%N <agent> <state> <source>` with `source` `hook` or `scrape`, plus the blocked reason as the rest of the line when the agent reported one. Panes without state are absent — `unknown` is never reported, and `idle` is never guessed.
 - **Pane titles (`select-pane -T`)** set a user title on the pane; `-T ''` clears it (quoting is what makes an empty value expressible). Precedence is a deliberate divergence from tmux: a user title is **sticky** — the pane program's OSC 0/2 title never overwrites it — while with no user title the pane reports the program's live OSC title. The effective title (user when set, else OSC) is what `pane-title -t %N` replies — an empty reply body means neither is set; a broadcast carries only the *user* title's changes, so a client composing a display title falls back to its own OSC tracking on the empty form. Setting the same title again is a no-op and broadcasts nothing.
 
@@ -216,11 +224,16 @@ State saving is crash-safe by construction (`src/mux/persist.rs`): serialize to 
 - **What deliberately does not persist:** agent *state*, its provenance, the ordering `seq`, the blocked reason, and `session_start_source`. A restored pane reports state anew or holds none, so the roster is empty after a restart by design.
 - **When it saves:** after every *successful mutating* command (the structural set: `new-session`, `new-window`, `kill-window`, `rename-window`, `select-window`, `split-window`, `select-pane`, `resize-pane`, `swap-pane`, `kill-pane`, `set-buffer`, and `refresh-client -C`). Content commands (`send-keys`, `capture-pane`, `paste-buffer`, the lists) do not save — their staleness window is bounded by the next structural save and the clean-shutdown save.
 - **Quarantine:** a corrupt or unknown-version state file is renamed aside (`<file>.quarantine-<timestamp>`) and the daemon starts fresh — unreadable state never blocks startup, and the evidence survives for inspection. A v1 state file is quarantined rather than partially read.
-- **Restore:** layout and content are rebuilt, and every pane's process is new — the original processes died with the previous server. Agent panes respawn through their resume invocation when one can be built: the hook-reported `session_resume_argv` verbatim, else a per-agent table shipped in the binary (claude/codex/grok/pi/omp, each in its own CLI's argument shape — `claude --resume <id>`, `codex resume <id>`, `grok --resume <id>`, `pi --session <id-or-path>`, `omp --resume=<id-or-path>`). The resume invocation is never persisted — a stored argv would freeze a vendor CLI shape into a state file newer code later restores. Every failure mode of the chain falls back structurally to the pane's original spawn command: a missing table entry or an uninstalled binary just spawns the pane as it was.
+- **Restore:** layout and content are rebuilt, and every pane's process is new — the original processes died with the previous server. A pane's terminal is rebuilt via `restore_for_new_process`, which keeps the saved screen content and scrollback but drops the state the *old* process left behind — as if the new process inherited a bare terminal, not the old one's TUI mode: it lands on the main screen (alternate grid cleared) regardless of what was active at save time, the scroll region and margins are reset, and cursor-key/keypad/mouse/focus/keyboard-protocol modes are off. This matters for a pane saved mid full-screen-app (htop, top): the pane returns to the shell's screen with its history intact, instead of resuming on a frozen, history-less alternate screen under a shell that never asked for it. Agent panes respawn through their resume invocation when one can be built: the hook-reported `session_resume_argv` verbatim, else a per-agent table shipped in the binary (claude/codex/grok/pi/omp, each in its own CLI's argument shape — `claude --resume <id>`, `codex resume <id>`, `grok --resume <id>`, `pi --session <id-or-path>`, `omp --resume=<id-or-path>`). The resume invocation is never persisted — a stored argv would freeze a vendor CLI shape into a state file newer code later restores. Every failure mode of the chain falls back structurally to the pane's original spawn command: a missing table entry or an uninstalled binary just spawns the pane as it was.
+
+## Pane Reaping
+
+A pane whose child process exits on its own (as opposed to via `kill-pane`) is detected and cleaned up automatically rather than left frozen in the tree. The accept loop's idle tick runs a reaper every 250 ms (`REAP_INTERVAL`, `src/mux/server.rs`): a dead pane (the PTY reader's `is_running` flipped false on EOF) is removed from its window with `%layout-change` + `%window-pane-changed` broadcasts, or the window itself is closed with `%window-close` when the dead pane was its last one — the same notifications a structural `kill-pane`/`kill-window` sends, so existing tmux consumers need no new handling. An emptied session is left in place rather than removed; create-or-attach refills it. Before this existed, a pane whose shell exited (typing `exit` at the prompt, for example) sat dead in the tree indefinitely and clients saw a permanently frozen pane.
 
 ## Shutdown Semantics
 
 - **SIGTERM**: the handler makes one atomic store on the server's per-instance shutdown flag. The accept loop notices on its idle tick, broadcasts `%exit` to every client, and a final save captures content that arrived since the last structural save.
+- **`kill-server`**: the client-initiated equivalent of SIGTERM — raises the same shutdown flag, so it takes the identical path (reply out, accept loop exits, final save, `%exit` to clients). `par-mux --stop`/`--restart` (see [Command Line](#command-line)) send this and wait for the socket to stop accepting.
 - **SIGKILL**: skips all of this and loses the last window's worth of unsaved content — an accepted trade (the design's D3.3), not a bug.
 - Each `MuxServer` instance has its own shutdown flag; stopping one does not affect another server in the same process.
 

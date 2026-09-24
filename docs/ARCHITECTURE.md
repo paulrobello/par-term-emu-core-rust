@@ -132,13 +132,14 @@ Manages the 2D terminal buffer with modular organization:
 - Semantic zone tracking (Prompt, Command, Output)
 
 **Resize Behavior:**
-When terminal width changes, the scrollback buffer is automatically reflowed:
+When terminal width changes, the main screen's scrollback buffer is automatically reflowed:
 - **Width increase**: Previously soft-wrapped lines are unwrapped into longer lines
 - **Width decrease**: Lines are re-wrapped to fit the new width
 - All cell attributes (colors, bold, italic, etc.) are preserved during reflow
 - Wide characters (CJK, emoji) are handled correctly at line boundaries
 - The circular buffer is rebuilt after reflow for simpler indexing
 - Height-only changes do not trigger scrollback reflow (optimization)
+- **The alternate screen is never reflowed** (`Grid::resize_without_reflow`): each row is truncated or padded in place and row positions are kept, matching xterm/tmux. A full-screen TUI (ratatui, curses) redraws the alt screen itself on SIGWINCH, often only the cells it believes changed — reflowing those cells would leave them unrepainted and the layout scrambled.
 
 The grid uses a flat Vec for efficient storage and access:
 

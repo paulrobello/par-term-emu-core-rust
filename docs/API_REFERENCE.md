@@ -176,7 +176,7 @@ Create a new terminal with specified dimensions.
 #### Terminal State
 - `content() -> str`: Get terminal content as a string
 - `size() -> tuple[int, int]`: Get terminal dimensions (cols, rows)
-- `resize(cols: int, rows: int)`: Resize the terminal. When width changes, scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved.
+- `resize(cols: int, rows: int)`: Resize the terminal. When width changes, main-screen scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved. The alternate screen (if active) is never reflowed — each row is truncated or padded in place instead, matching xterm/tmux behavior, since full-screen apps redraw the alt screen themselves on resize.
 - `reset()`: Reset terminal to default state
 - `title() -> str`: Get terminal title
 - `set_title(title: str)`: Set terminal title programmatically
