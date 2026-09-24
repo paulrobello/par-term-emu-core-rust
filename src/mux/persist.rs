@@ -362,7 +362,7 @@ impl MuxTree {
                         .expect("just inserted above")
                         .terminal()
                         .write()
-                        .restore_from_snapshot(pane.terminal.clone());
+                        .restore_for_new_process(pane.terminal.clone());
                 }
                 window_ids.push(WindowId(window.id));
                 windows.insert(
@@ -859,6 +859,63 @@ mod tests {
                     if found == FORMAT_VERSION + 1 && supported == FORMAT_VERSION
             ),
             "an unknown envelope version must refuse, not guess"
+        );
+    }
+
+    /// A pane saved while a full-screen app held the alternate screen is
+    /// respawned with a fresh shell, which must write to the main screen:
+    /// left on the old app's alternate screen, its output never scrolls
+    /// into history, so the pane has no scrollback after a restart.
+    #[cfg(unix)]
+    #[test]
+    fn restore_returns_a_full_screen_pane_to_the_main_screen() {
+        let mut tree = tree();
+        let session = tree.new_session("main", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+        let quiet = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, Some("sleep 60"))
+            .unwrap();
+        {
+            let terminal = tree.pane(quiet).unwrap().terminal();
+            let mut guard = terminal.write();
+            guard.process(b"shell line\r\n\x1b[?1049h\x1b[?1h\x1b=\x1b[?1000h\x1b[3;10rtui");
+            assert!(guard.is_alt_screen_active(), "setup: app on the alt screen");
+        }
+
+        let state = tree.to_persist_state();
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        let terminal = restored.pane(quiet).unwrap().terminal();
+        let mut guard = terminal.write();
+        assert!(
+            !guard.is_alt_screen_active(),
+            "the new shell writes to the main screen"
+        );
+        let after = guard.capture_snapshot();
+        assert!(
+            !after.application_cursor,
+            "the app's cursor-key mode is gone"
+        );
+        assert!(!after.application_keypad, "the app's keypad mode is gone");
+        assert_eq!(after.mouse_mode, crate::mouse::MouseMode::Off);
+        assert_eq!(
+            (after.scroll_region_top, after.scroll_region_bottom),
+            (0, after.rows - 1),
+            "the app's scroll region is gone"
+        );
+        let screen_text: String = after.grid.cells.iter().map(|c| c.c).collect();
+        assert!(
+            screen_text.contains("shell line"),
+            "the main screen's content survives"
+        );
+
+        for i in 0..40 {
+            guard.process(format!("new line {i:02}\r\n").as_bytes());
+        }
+        assert!(
+            guard.capture_snapshot().grid.scrollback_lines > 0,
+            "new output scrolls into the main screen's history"
         );
     }
 

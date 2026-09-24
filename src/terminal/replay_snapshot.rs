@@ -267,6 +267,32 @@ impl Terminal {
         self.tab_stops = snap.tab_stops;
         self.pending_wrap = snap.pending_wrap;
     }
+
+    /// Restore a snapshot under a process that did not produce it (a pane
+    /// respawned after a daemon restart): the screen content and scrollback
+    /// come back, but the state the old process set up for itself does not.
+    /// A full-screen app's alternate screen and input modes would otherwise
+    /// capture the new shell, whose output then never reaches the main
+    /// screen's scrollback.
+    pub fn restore_for_new_process(&mut self, snap: TerminalSnapshot) {
+        self.restore_from_snapshot(snap);
+        self.use_primary_screen();
+        self.alt_grid.clear();
+        self.margins.scroll_region_top = 0;
+        self.margins.scroll_region_bottom = self.grid.rows().saturating_sub(1);
+        self.margins.use_lr_margins = false;
+        self.modes.origin_mode = false;
+        self.modes.insert_mode = false;
+        self.modes.application_cursor = false;
+        self.modes.application_keypad = false;
+        self.modes.focus_tracking = false;
+        self.modes.mouse_mode = crate::mouse::MouseMode::Off;
+        self.modes.mouse_encoding = crate::mouse::MouseEncoding::Default;
+        self.keyboard_state.keyboard_flags = 0;
+        self.keyboard_state.modify_other_keys_mode = 0;
+        self.cursor.visible = true;
+        self.pending_wrap = false;
+    }
 }
 
 #[cfg(test)]
