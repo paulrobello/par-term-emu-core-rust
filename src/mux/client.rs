@@ -49,7 +49,7 @@ impl MuxClient {
     /// path, and connecting to the winner is the correct outcome.
     ///
     /// A daemon that cannot be STARTED at all — a missing or unrunnable
-    /// `par-mux` binary — fails immediately, naming the path that was tried.
+    /// `par-mux` binary — fails immediately, naming the paths that were tried.
     /// Only a daemon that really was spawned earns `SPAWN_CONNECT_DEADLINE`:
     /// retrying a socket nothing will ever bind buries the real cause under
     /// ten seconds of generic connect errors.
@@ -57,7 +57,46 @@ impl MuxClient {
         if let Ok(client) = Self::connect(path) {
             return Ok(client);
         }
-        Self::spawn_and_connect(&daemon_binary_path()?, path)
+        let candidates = daemon_binary_candidates()?;
+        let mut last_err = io::Error::new(
+            io::ErrorKind::NotFound,
+            "cannot locate the par-mux daemon binary",
+        );
+        for bin in &candidates {
+            match Self::spawn_and_connect(bin, path) {
+                Ok(client) => return Ok(client),
+                // A candidate that could not even be STARTED (missing,
+                // unrunnable) moves the search on to the next one; only
+                // when every candidate failed is the error surfaced, naming
+                // them all. A spawn that started but never bound its socket
+                // already consumed its own deadline inside spawn_and_connect
+                // — trying further candidates would multiply the wait.
+                Err(err) if err.kind() == io::ErrorKind::NotFound => last_err = err,
+                Err(err) => {
+                    return Err(io::Error::new(
+                        err.kind(),
+                        format!(
+                            "the par-mux daemon binary at {} started but failed to serve {}: {err}",
+                            bin.display(),
+                            path.display()
+                        ),
+                    ));
+                }
+            }
+        }
+        Err(io::Error::new(
+            last_err.kind(),
+            format!(
+                "no par-mux daemon binary could be started (tried {}): {} — build it, \
+                 place it next to the executable, or install it on PATH",
+                candidates
+                    .iter()
+                    .map(|c| c.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                last_err
+            ),
+        ))
     }
 
     /// Start `bin` as the daemon for `socket`, then wait for it to bind.
@@ -174,8 +213,34 @@ fn reader_loop(
     }
 }
 
-/// Where the par-mux daemon binary should sit: next to our own executable.
-fn daemon_binary_path() -> io::Result<PathBuf> {
+/// Where the par-mux daemon binary is looked up, in order: next to our own
+/// executable first, then on `PATH` — the bundled daemon (shipped beside the
+/// par-term binary in releases) wins over whatever an older install left on
+/// `PATH`, while a `cargo install par-term-emu-core-rust --bin par-mux`-style
+/// standalone install stays reachable when no sibling exists.
+///
+/// Returns a list; the caller tries each in order and the combined error
+/// names every path tried, so the resolution order stays visible at the
+/// failure where it mattered.
+fn daemon_binary_candidates() -> io::Result<Vec<PathBuf>> {
+    #[cfg(unix)]
+    let file_name = "par-mux";
+    #[cfg(windows)]
+    let file_name = "par-mux.exe";
+
+    let mut candidates = vec![exe_sibling_daemon(file_name)?];
+    // PATH lookup second. `which`-style search via the PATH env var: skip
+    // empty segments (embedded `::`), and only propose entries that exist,
+    // so the spawn error names real candidates rather than every PATH miss.
+    if let Some(path_var) = std::env::var_os("PATH") {
+        candidates.extend(path_daemon_candidates(&path_var, file_name));
+    }
+    Ok(candidates)
+}
+
+/// The exe-relative half of [`daemon_binary_candidates`]: the daemon bin
+/// sitting next to our own executable.
+fn exe_sibling_daemon(file_name: &str) -> io::Result<PathBuf> {
     let exe = std::env::current_exe()?;
     let Some(mut dir) = exe.parent().map(Path::to_path_buf) else {
         return Err(io::Error::new(
@@ -193,11 +258,19 @@ fn daemon_binary_path() -> io::Result<PathBuf> {
             dir = parent.to_path_buf();
         }
     }
-    #[cfg(unix)]
-    let bin: PathBuf = dir.join("par-mux");
-    #[cfg(windows)]
-    let bin: PathBuf = dir.join("par-mux.exe");
-    Ok(bin)
+    Ok(dir.join(file_name))
+}
+
+/// The PATH half of [`daemon_binary_candidates`]: every PATH entry that
+/// actually holds the daemon binary. Split out as a pure function of the
+/// PATH value so tests can drive it with a synthetic PATH instead of
+/// mutating the process environment.
+fn path_daemon_candidates(path_var: &std::ffi::OsStr, file_name: &str) -> Vec<PathBuf> {
+    std::env::split_paths(path_var)
+        .filter(|entry| !entry.as_os_str().is_empty())
+        .map(|entry| entry.join(file_name))
+        .filter(|candidate| candidate.is_file())
+        .collect()
 }
 
 /// Start `bin` as a par-mux daemon owning `socket`.
@@ -363,15 +436,18 @@ mod tests {
     }
 
     #[test]
-    fn the_daemon_binary_resolves_next_to_the_current_executable() {
-        let bin = daemon_binary_path().expect("the current exe has a directory");
+    fn the_daemon_binary_resolves_next_to_the_current_executable_first() {
+        let candidates = daemon_binary_candidates().expect("the current exe has a directory");
+        let bin = candidates
+            .first()
+            .expect("the exe-relative candidate is always present");
         let name = bin
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .expect("a binary file name");
         assert!(
             name.starts_with("par-mux"),
-            "the resolved daemon binary is par-mux: {}",
+            "the first daemon-binary candidate is par-mux: {}",
             bin.display()
         );
         // Test binaries live in <target>/<profile>/deps while the daemon is
@@ -382,5 +458,54 @@ mod tests {
             "the deps walk-out did not happen: {}",
             bin.display()
         );
+    }
+
+    /// The PATH fallback half of the resolution order, driven through the
+    /// pure [`path_daemon_candidates`]: a PATH entry holding par-mux
+    /// contributes that candidate, and a PATH with no par-mux anywhere
+    /// contributes nothing.
+    #[test]
+    fn a_daemon_on_path_is_a_candidate_and_a_path_without_one_adds_none() {
+        let (dir, _socket) = temp_socket("pathlookup");
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).expect("create the PATH entry");
+        #[cfg(unix)]
+        let daemon = bin_dir.join("par-mux");
+        #[cfg(windows)]
+        let daemon = bin_dir.join("par-mux.exe");
+        std::fs::write(&daemon, b"").expect("write the daemon stub");
+
+        // A PATH with only the stub's directory in it yields exactly the
+        // stub, as its own entry — nothing more, nothing less.
+        let path_with = std::env::join_paths([&bin_dir]).expect("join a single PATH entry");
+        let with = path_daemon_candidates(&path_with, file_name());
+        assert_eq!(
+            with,
+            vec![daemon.clone()],
+            "a PATH entry holding par-mux contributes exactly that candidate"
+        );
+
+        // A PATH pointing at a directory with no par-mux in it yields none.
+        let empty = dir.path().join("no-bin-here");
+        std::fs::create_dir_all(&empty).expect("create the empty PATH entry");
+        let path_without = std::env::join_paths([&empty]).expect("join a single PATH entry");
+        let without = path_daemon_candidates(&path_without, file_name());
+        assert!(
+            without.is_empty(),
+            "a PATH entry without par-mux must not contribute candidates: {:?}",
+            without
+        );
+    }
+
+    /// The platform daemon file name, shared by the tests above.
+    fn file_name() -> &'static str {
+        #[cfg(unix)]
+        {
+            "par-mux"
+        }
+        #[cfg(windows)]
+        {
+            "par-mux.exe"
+        }
     }
 }
