@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.50.0] - 2026-09-21
+## [0.50.0] - 2026-09-23
 
 ### Removed
 - **The dead terminal multiplexing module is removed — breaking Python API change** (`src/terminal/multiplexing.rs`, `src/python_bindings/types/session.rs`, `src/python_bindings/terminal/multiplexing_api.rs`). `PaneState`, `WindowLayout`, `SessionState`, and the `Terminal` pane-state methods (`capture_pane_state`, `restore_pane_state`, `set_pane_state`, `get_pane_state`, `clear_pane_state`, `create_window_layout`, `create_session_state`, `serialize_session`, `deserialize_session`) are gone from both the Rust API and the Python bindings (`_native.pyi` regenerated). The module had zero callers, its capture was lossy by type (`Vec<String>` content — no colors, attributes, scrollback, or alternate screen), and `restore_pane_state` restored only size/title/cursor by its own comment. The removal was decided against adoption because `replay_snapshot.rs`'s `TerminalSnapshot` already captures what a real persistence format needs (both grids, cursors, colors, modes, scrollback); par-mux Phase 3's on-disk format starts from that type instead. Migration: nothing to migrate to — no consumer of these types existed in this codebase; if external code used them, keep the capture/restore semantics you need via `TerminalSnapshot`-shaped data.
