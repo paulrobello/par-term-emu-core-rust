@@ -513,3 +513,37 @@ fn a_split_pane_pushes_its_output_to_clients() {
         "the split's new pane {new_pane} must push its output as %output"
     );
 }
+
+/// The `version` command: a daemon answers with its build stamp — one line,
+/// exactly `mux::build_stamp()`, with no session state involved — so a
+/// client can compare the daemon's core build against its own and surface a
+/// stale daemon instead of silently missing daemon-side fixes.
+#[test]
+fn version_reports_the_daemon_build_stamp() {
+    let fixture = MuxFixture::new("version");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    let stream = connect_local_stream(path).expect("connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let reply = command(&mut writer, &mut reader, "version").join("");
+
+    let expected = par_term_emu_core_rust::mux::build_stamp();
+    assert!(
+        reply.contains(expected),
+        "the daemon must answer `version` with its build stamp {expected:?}: {reply}"
+    );
+    // One body line, not a block of diagnostics — clients parse it as the
+    // whole identity.
+    let body = reply
+        .lines()
+        .filter(|l| !l.starts_with("%begin") && !l.starts_with("%end"))
+        .count();
+    assert_eq!(body, 1, "the stamp is exactly one line: {reply}");
+
+    drop(writer);
+    let _ = handle;
+}

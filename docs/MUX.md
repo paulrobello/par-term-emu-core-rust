@@ -116,10 +116,12 @@ The parser is deliberately minimal: whitespace-split with a flag scan. tmux's fu
 | `set-buffer` | `<content>` | empty | — |
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t %N` | empty | — |
+| `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (`+unknown` when built outside a repository) | — |
 
 Details worth knowing:
 
 - **Bare `new-window`** targets the most-recently-created session (ids are monotonic). par-mux has no client-session attachment, so "newest" is the documented stand-in for tmux's attached-session resolution.
+- **`version` exists for stale-daemon detection**: the daemon outlives its clients, so an old daemon silently serves new clients. A client compares the reply against its own linked core's `mux::build_stamp()`; differing stamps mean the daemon predates the client's build. When either side's sha is `unknown` (crates.io builds), only the version prefix is comparable — a same-version mismatch is then unprovable and clients stay quiet rather than cry wolf.
 - **`split-window` flags name the arrangement, not the divider**: `-h` puts the new pane beside the target, `-v`/default below it. `-p` is the percent of the split area given to the **new** pane (default 50; the target keeps the remainder).
 - **`resize-pane` relative form** moves the bordering divider; the first of `-L -R -U -D` wins, and a flag without a number means 5 cells (tmux's default). The absolute form `-x COLS` and/or `-y ROWS` sets exact extents and cannot combine with the direction flags. Both forms re-fit the affected panes' terminals and PTYs to the layout geometry.
 - **`capture-pane -S/-E`** use tmux's offset convention: `0` is the first visible line, negative numbers count history lines back from the screen top. Without flags, the visible screen is returned.
