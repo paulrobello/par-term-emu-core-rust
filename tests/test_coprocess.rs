@@ -1,6 +1,30 @@
 // Integration tests for coprocess system (Feature 18)
 use par_term_emu_core_rust::coprocess::{CoprocessConfig, CoprocessManager};
 
+/// The test commands must exist on every platform the suite runs on. `cat`
+/// and `true` resolve on Windows runners (git-bash ships them in PATH) but
+/// hang there with piped stdio — the streaming-tests CI step first exposed
+/// this on run 36048176346 (spawn succeeds, no output, no exit). Use an OS
+/// echo/exit that is a native OS component instead:
+/// - echo stdin to stdout: `cat` / `findstr ".*"` (System32, matches every
+///   non-empty line)
+/// - exit 0 immediately: `true` / `cmd /c exit 0`
+fn echo_command() -> (&'static str, Vec<&'static str>) {
+    if cfg!(windows) {
+        ("findstr", vec![".*"])
+    } else {
+        ("cat", vec![])
+    }
+}
+
+fn exit_command() -> (&'static str, Vec<&'static str>) {
+    if cfg!(windows) {
+        ("cmd", vec!["/c", "exit", "0"])
+    } else {
+        ("true", vec![])
+    }
+}
+
 /// Poll `f` until it returns `true` or the timeout elapses. Uses a short
 /// sleep between attempts so tests stay responsive even under heavy CPU
 /// contention (avoids the "fixed N ms sleep races the OS scheduler" class
@@ -20,8 +44,10 @@ fn poll_until<F: FnMut() -> bool>(timeout_ms: u64, mut f: F) -> bool {
 #[test]
 fn test_coprocess_spawn_cat() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let config = CoprocessConfig {
-        command: "cat".to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
     let id = mgr.start(config).unwrap();
@@ -33,8 +59,10 @@ fn test_coprocess_spawn_cat() {
 #[test]
 fn test_coprocess_write_read() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let config = CoprocessConfig {
-        command: "cat".to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
     let id = mgr.start(config).unwrap();
@@ -57,8 +85,10 @@ fn test_coprocess_write_read() {
 #[test]
 fn test_coprocess_stop() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let config = CoprocessConfig {
-        command: "cat".to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
     let id = mgr.start(config).unwrap();
@@ -69,15 +99,18 @@ fn test_coprocess_stop() {
 #[test]
 fn test_coprocess_manager_list() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let id1 = mgr
         .start(CoprocessConfig {
-            command: "cat".to_string(),
+            command: command.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         })
         .unwrap();
     let id2 = mgr
         .start(CoprocessConfig {
-            command: "cat".to_string(),
+            command: command.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
             ..Default::default()
         })
         .unwrap();
@@ -94,8 +127,10 @@ fn test_coprocess_manager_list() {
 #[test]
 fn test_coprocess_feed_output() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let config = CoprocessConfig {
-        command: "cat".to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         copy_terminal_output: true,
         ..Default::default()
     };
@@ -116,13 +151,15 @@ fn test_coprocess_feed_output() {
 #[test]
 fn test_coprocess_dead_process() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = exit_command();
     let config = CoprocessConfig {
-        command: "true".to_string(), // exits immediately
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         ..Default::default()
     };
     let id = mgr.start(config).unwrap();
 
-    // `true` exits immediately, but the reaper thread needs a moment to
+    // The exit command exits immediately, but the reader thread needs a moment to
     // observe the exit. Poll instead of banking on a fixed 200ms window —
     // on a loaded CI box that window can easily slip.
     let ok = poll_until(2000, || mgr.status(id) == Some(false));
@@ -146,8 +183,10 @@ fn test_coprocess_nonexistent() {
 #[test]
 fn test_coprocess_no_copy_output() {
     let mut mgr = CoprocessManager::new();
+    let (command, args) = echo_command();
     let config = CoprocessConfig {
-        command: "cat".to_string(),
+        command: command.to_string(),
+        args: args.iter().map(|s| s.to_string()).collect(),
         copy_terminal_output: false,
         ..Default::default()
     };
