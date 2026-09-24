@@ -76,7 +76,7 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```
 
-Caveats: the VM is **aarch64** (Windows-on-ARM), not x86_64 like CI — it catches Windows-only source issues (paths, `cfg(windows)`, named pipes, shell differences) but not x86_64-specific codegen. Toolchain lives in the VM (rustup stable; refresh with `prlctl exec "Windows 11" cmd /c "rustup update"`).
+Caveats: the VM is **aarch64** (Windows-on-ARM), not x86_64 like CI — it catches Windows-only source issues (paths, `cfg(windows)`, named pipes, shell differences) but not x86_64-specific codegen. Toolchain lives in the VM (rustup stable; refresh with `prlctl exec "Windows 11" cmd /c "rustup update"`). The extract in step 3 overwrites source but keeps `target/`, so re-checks after the first (1m38s cold, measured 2026-09-24) finish in seconds.
 
 ### Streaming Server & Web Frontend
 

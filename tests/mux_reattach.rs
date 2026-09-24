@@ -99,6 +99,13 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
 /// REATTACHED side. A plain-`content()` seed fails every assertion group:
 /// it carries no `\x1b[?1049h`/`\x1b[?25l`, replays the TUI onto the main
 /// screen, and loses every attribute.
+///
+/// Unix-only: the TUI script is POSIX shell syntax (`;` command
+/// separators, the `read` builtin); a Windows pane's cmd.exe cannot
+/// execute it. The seed mechanism itself is platform-agnostic, and its
+/// Windows coverage is `a_reconnecting_client_resyncs_the_pane_screen`
+/// (same wire path, marker via a cmd.exe-runnable pipeline).
+#[cfg(unix)]
 #[test]
 fn a_reattached_client_receives_a_seed_that_replays_state_and_survives_output() {
     let fixture = MuxFixture::new("seeded");
