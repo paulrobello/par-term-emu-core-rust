@@ -157,7 +157,7 @@ def test_macro_playback_simple() -> None:
             executed = True
         return not term.is_macro_playing()
 
-    assert wait_for(_advance)
+    assert wait_for(_advance, interval=0.0)
 
     assert executed
     assert not term.is_macro_playing()  # Should be finished

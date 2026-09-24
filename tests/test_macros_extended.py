@@ -326,7 +326,7 @@ def test_macro_playback_very_fast_speed() -> None:
         return not term.is_macro_playing()
 
     start_time = time.monotonic()
-    assert wait_for(_advance, timeout=2.0)
+    assert wait_for(_advance, timeout=2.0, interval=0.0)
     elapsed = time.monotonic() - start_time
 
     # Should finish quickly
@@ -442,7 +442,7 @@ def test_macro_playback_progress_tracking() -> None:
         term.tick_macro()
         return not term.is_macro_playing()
 
-    assert wait_for(_advance)
+    assert wait_for(_advance, interval=0.0)
 
     # Should have tracked some progress
     assert len(progress_points) > 0
@@ -552,7 +552,7 @@ def test_screenshot_triggers_multiple_in_sequence() -> None:
         all_triggers.extend(term.get_macro_screenshot_triggers())
         return len(all_triggers) >= 10
 
-    assert wait_for(_advance)
+    assert wait_for(_advance, interval=0.0)
 
     # Should have collected all 10 triggers
     assert len(all_triggers) == 10
@@ -683,7 +683,7 @@ def test_macro_chained_execution() -> None:
             term.tick_macro()
             return not term.is_macro_playing()
 
-        assert wait_for(_advance)
+        assert wait_for(_advance, interval=0.0)
 
 
 @pytest.mark.slow
