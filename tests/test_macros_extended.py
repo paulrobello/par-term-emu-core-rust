@@ -704,13 +704,15 @@ def test_macro_very_long_playback() -> None:
     term.load_macro("long_test", macro)
     term.play_macro("long_test", speed=10.0)
 
-    # Play through; each tick advances one event and delay events need real
-    # wall time to elapse, so the poll interval provides it
+    # Play through; each tick advances at most one event, so poll back-to-back
+    # (interval=0): the default 20 ms poll interval made the 550-event macro an
+    # ~11 s floor against the 20 s timeout, which macOS CI load pushed over.
+    # The macro's own gated time (~50 ms at speed 10) elapses between spins.
     def _advance() -> bool:
         term.tick_macro()
         return not term.is_macro_playing()
 
-    assert wait_for(_advance, timeout=20.0)
+    assert wait_for(_advance, timeout=20.0, interval=0.0)
 
 
 if __name__ == "__main__":
