@@ -290,7 +290,14 @@ impl PaneFactory for ShellPaneFactory {
         match command {
             Some(cmd) => {
                 let shell = PtySession::get_default_shell();
-                session.spawn(&shell, &["-c", cmd])?;
+                // POSIX shells take `-c <cmd>`; cmd.exe takes `/C <cmd>` —
+                // with `-c` it ignores the flag and drops to an interactive
+                // prompt, so the pane's command never runs on Windows.
+                #[cfg(windows)]
+                let run_flag = "/C";
+                #[cfg(not(windows))]
+                let run_flag = "-c";
+                session.spawn(&shell, &[run_flag, cmd])?;
             }
             None => session.spawn_shell()?,
         }
@@ -454,13 +461,15 @@ mod tests {
             cwd: None,
             socket_path: Some(socket.clone()),
         };
+        // Variable expansion syntax is the shell's: $VAR under POSIX sh,
+        // %VAR% under cmd.exe (the pane command runs via the platform's
+        // default shell — see ShellPaneFactory::create_pane).
+        #[cfg(windows)]
+        let echo_env = "echo AGENV=%PAR_MUX_ENV%/%PAR_MUX_PANE_ID%/%PAR_MUX_SOCKET%";
+        #[cfg(not(windows))]
+        let echo_env = "echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET";
         let mut pane = factory
-            .create_pane(
-                PaneId(6),
-                80,
-                24,
-                Some("echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET"),
-            )
+            .create_pane(PaneId(6), 80, 24, Some(echo_env))
             .expect("agent pane should spawn");
 
         // Collect the pane's output until the env line lands — the child

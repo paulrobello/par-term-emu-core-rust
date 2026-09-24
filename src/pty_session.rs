@@ -1972,6 +1972,12 @@ mod tests {
     fn test_set_env_with_empty_values() {
         let mut session = PtySession::new(80, 24, 1000);
         session.set_env("EMPTY_VAR", "");
+        // An empty NAME cannot round-trip on Windows: portable-pty builds the
+        // CreateProcessW environment block as raw `name=value\0` strings, and
+        // `=value` makes the whole spawn fail — the OS rejects nameless env
+        // entries by design, so this edge case is only poison-checkable where
+        // execve tolerates it.
+        #[cfg(unix)]
         session.set_env("", "value");
         // The edge-case entries must not poison the next spawn: echo a
         // marker through and assert it lands.

@@ -1182,9 +1182,23 @@ mod tests {
         );
         assert!(reply.contains("%end"), "split-window succeeds: {reply}");
 
-        let notification = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("a %layout-change is broadcast");
+        // The pane behind new-session is an interactive shell (harness uses
+        // ShellPaneFactory, not SilentPaneFactory), so its banner can
+        // broadcast a %output before the %layout-change lands — poll for the
+        // layout change instead of asserting the FIRST notification is it
+        // (single-shot recv raced cmd.exe's banner on Windows, run 36051903299).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut notification = String::from("<no notification>");
+        loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok(msg) if msg.contains("%layout-change") => {
+                    notification = msg;
+                    break;
+                }
+                Ok(msg) => notification = msg,
+                Err(_) => break,
+            }
+        }
         assert!(
             notification.contains("%layout-change"),
             "notification: {notification}"
