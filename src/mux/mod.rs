@@ -41,6 +41,24 @@ pub use scrape::{scrape_tick, ScrapeEngine};
 pub use server::MuxServer;
 pub use tree::{MuxSession, MuxTree, MuxWindow};
 
+/// The build identity of THIS crate compilation: the crate version plus the
+/// git sha it was built from (`0.50.0+a02b2b3`, `-dirty` appended when the
+/// checkout had uncommitted tracked changes; `+unknown` when built outside a
+/// repository, e.g. from a crates.io tarball).
+///
+/// Both sides of a daemon/client pair read this same function — the daemon
+/// serves it as the `version` command's reply, clients compare their own
+/// linked value against that reply — because the env var is baked into the
+/// rlib at compile time: a client's stamp is the stamp of the core IT
+/// linked, which is exactly what a daemon comparison needs to be against.
+pub fn build_stamp() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        "+",
+        env!("PAR_TERM_CORE_BUILD_SHA")
+    )
+}
+
 /// Marker type used by the feature-isolation test to prove this module is
 /// reachable exactly when the `mux` feature is enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -9,6 +9,8 @@
 //! verifies — see `check_proto_staleness`.
 
 fn main() {
+    emit_build_stamp();
+
     // Regenerate protobuf code only when explicitly requested
     #[cfg(feature = "regenerate-proto")]
     {
@@ -28,6 +30,67 @@ fn main() {
     // checkout and clone do not preserve mtime ordering, which made the
     // original mtime comparison fire on every build of an unmodified tree.
     check_proto_staleness();
+}
+
+/// Bake a build identity into the crate so a daemon and the clients linked
+/// against it can tell whether they were built from the same source.
+///
+/// The stamp is the short git sha of the checkout the crate was compiled
+/// from, plus `-dirty` when tracked files carry uncommitted changes. A
+/// crates.io source tarball has no `.git`, so the stamp degrades to
+/// `unknown` there — version-only comparison is the documented fallback for
+/// that case (see `mux::build_stamp`).
+///
+/// Rerun-on-`.git/HEAD` keeps the stamp moving with commits: without it the
+/// env would be frozen at the first build of the checkout and every later
+/// commit would silently keep the old identity. The reflog-style dance of
+/// branch switches also updates HEAD, which is exactly when a stale stamp
+/// would lie.
+fn emit_build_stamp() {
+    let head = std::path::Path::new(".git/HEAD");
+    if head.exists() {
+        println!("cargo:rerun-if-changed=.git/HEAD");
+        // HEAD is usually a symref; the ref it names changes without HEAD
+        // itself changing, so watch the resolved ref too when it is one.
+        if let Ok(content) = std::fs::read_to_string(head) {
+            if let Some(ref_path) = content.trim().strip_prefix("ref: ") {
+                let ref_file = std::path::Path::new(".git").join(ref_path);
+                if ref_file.exists() {
+                    println!("cargo:rerun-if-changed={}", ref_file.display());
+                }
+            }
+        }
+    }
+    let sha = git_short_sha().unwrap_or_else(|| "unknown".to_string());
+    println!("cargo:rustc-env=PAR_TERM_CORE_BUILD_SHA={sha}");
+}
+
+/// The checkout's short sha, with `-dirty` appended when tracked files have
+/// uncommitted changes. `None` when git is absent or the checkout is not a
+/// repository (crates.io tarballs) — never an error, the stamp degrades.
+fn git_short_sha() -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let sha = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if sha.is_empty() {
+        return None;
+    }
+    let status = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .output()
+        .ok()?;
+    let dirty = status.status.success()
+        && String::from_utf8(status.stdout)
+            // Any porcelain line that is not untracked (`??`) is a staged or
+            // unstaged change to a tracked file.
+            .map(|out| out.lines().any(|l| !l.starts_with("??")))
+            .unwrap_or(false);
+    Some(if dirty { format!("{sha}-dirty") } else { sha })
 }
 
 /// FNV-1a 64-bit checksum, matching the stamp written by `make proto-rust`.

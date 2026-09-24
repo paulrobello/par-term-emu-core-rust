@@ -179,6 +179,7 @@ pub(super) fn dispatch_command(
         MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
         MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
+        MuxCommand::Version => cmd_version(ctx),
     };
 
     if let Some(window_id) = outcome.layout_changed {
@@ -692,4 +693,12 @@ fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
         },
         None => Outcome::err(ctx, &format!("no such pane: {pane}")),
     }
+}
+
+/// Wire contract: the reply body is exactly one line — the daemon's
+/// [`build_stamp`](crate::mux::build_stamp). Tree-free by design; a stale
+/// daemon must still answer it, so nothing here may depend on session
+/// state that a long-lived daemon could have torn down.
+fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
+    Outcome::ok(ctx, crate::mux::build_stamp())
 }

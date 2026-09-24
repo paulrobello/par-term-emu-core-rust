@@ -173,6 +173,11 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
+    /// Report the daemon's build stamp — the `version` wire form of
+    /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
+    /// client can compare the daemon's core build against its own linked
+    /// one and surface a stale daemon instead of silently missing fixes.
+    Version,
 }
 
 impl MuxCommand {
@@ -207,7 +212,8 @@ impl MuxCommand {
             | MuxCommand::CapturePane { .. }
             | MuxCommand::PaneTitle { .. }
             | MuxCommand::ShowBuffer
-            | MuxCommand::PasteBuffer { .. } => false,
+            | MuxCommand::PasteBuffer { .. }
+            | MuxCommand::Version => false,
         }
     }
 }
@@ -629,6 +635,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("set-buffer", parse_set_buffer),
     ("show-buffer", parse_show_buffer),
     ("paste-buffer", parse_paste_buffer),
+    ("version", parse_version),
 ];
 
 /// Parse one command line from a client.
@@ -877,9 +884,20 @@ fn parse_paste_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
     })
 }
 
+fn parse_version(_a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::Version)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_version_and_marks_it_read_only() {
+        let cmd = parse_command("version").expect("parses");
+        assert_eq!(cmd, MuxCommand::Version);
+        assert!(!cmd.mutates(), "version must never trigger a state save");
+    }
 
     #[test]
     fn parses_new_session_with_a_name() {
