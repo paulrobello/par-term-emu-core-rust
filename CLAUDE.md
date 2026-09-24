@@ -54,6 +54,30 @@ make fmt                 # Rust format only
 make fmt-python          # Python format only
 ```
 
+### Local Windows VM (compile checks)
+
+A local Parallels **Windows 11** VM validates Windows-only compile issues locally instead of waiting on a GitHub Actions round trip. Use it before claiming a Windows fix lands (mux, PTY, `cfg(windows)` code) — CI remains the final gate. One command per `prlctl exec`; chained commands with redirects are unreliable through it (verified 2026-09-24).
+
+```bash
+# 1. Boot/resume (skip if `prlctl list -a` shows running)
+prlctl start "Windows 11"
+
+# 2. Tarball the source on the Mac (~6.6 MB) and serve it
+git archive HEAD --format=tar.gz -o /tmp/ptecr-src.tgz
+python3 -m http.server 8931 --bind 0.0.0.0 &   # from /tmp; host IP from the VM is 10.211.55.2
+
+# 3. Fetch + extract in the VM (separate exec calls)
+prlctl exec "Windows 11" cmd /c "curl -s -o C:\ptecr-test\src.tgz http://10.211.55.2:8931/ptecr-src.tgz"
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
+
+# 4. Compile gate (test code needs --all-targets on Windows; no --locked — Cargo.lock is not tracked, cargo resolves fresh)
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
+
+# 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
+```
+
+Caveats: the VM is **aarch64** (Windows-on-ARM), not x86_64 like CI — it catches Windows-only source issues (paths, `cfg(windows)`, named pipes, shell differences) but not x86_64-specific codegen. Toolchain lives in the VM (rustup stable; refresh with `prlctl exec "Windows 11" cmd /c "rustup update"`).
+
 ### Streaming Server & Web Frontend
 
 ```bash
