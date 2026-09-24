@@ -6,12 +6,14 @@ use par_term_emu_core_rust::coprocess::{CoprocessConfig, CoprocessManager};
 /// hang there with piped stdio — the streaming-tests CI step first exposed
 /// this on run 36048176346 (spawn succeeds, no output, no exit). Use an OS
 /// echo/exit that is a native OS component instead:
-/// - echo stdin to stdout: `cat` / `findstr ".*"` (System32, matches every
-///   non-empty line)
+/// - echo stdin to stdout, LIVE per line (the tests poll with stdin open):
+///   `cat` / `more.com` (findstr also matched but buffers its output until
+///   stdin EOF — probed on a Windows 11 box — so it can never satisfy a
+///   poll-before-EOF read)
 /// - exit 0 immediately: `true` / `cmd /c exit 0`
 fn echo_command() -> (&'static str, Vec<&'static str>) {
     if cfg!(windows) {
-        ("findstr", vec![".*"])
+        ("more.com", vec![])
     } else {
         ("cat", vec![])
     }
