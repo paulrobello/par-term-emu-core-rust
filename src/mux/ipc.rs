@@ -15,7 +15,15 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-pub use interprocess::local_socket::{Listener as LocalListener, Stream as LocalStream};
+pub use interprocess::local_socket::Stream as LocalStream;
+
+// Unix serves the interprocess listener as-is: its sockets honor send/recv
+// timeouts, which is what the eviction teardown's poll loop needs (ENH-012).
+// Windows must wrap the named-pipe listener instead — see `LocalListener`
+// below — because the generic listener type hides the pipe handles that
+// eviction needs to cancel blocked I/O through.
+#[cfg(unix)]
+pub use interprocess::local_socket::Listener as LocalListener;
 
 /// Bind a local listener at `path`, owned by the current user only.
 ///
@@ -45,6 +53,7 @@ pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
         use interprocess::local_socket::GenericNamespaced;
         use interprocess::local_socket::ListenerOptions;
         use interprocess::os::windows::local_socket::ListenerOptionsExt as _;
+        use interprocess::os::windows::named_pipe::local_socket::Listener as NpListener;
         use interprocess::os::windows::security_descriptor::SecurityDescriptor;
         use widestring::U16CString;
 
@@ -57,13 +66,191 @@ pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
             .to_string_lossy()
             .to_string()
             .to_ns_name::<GenericNamespaced>()?;
-        let listener = ListenerOptions::new()
-            .name(name)
-            .reclaim_name(false)
-            .security_descriptor(security_descriptor)
-            .create_sync()?;
+        let listener = NpListener::from_options(
+            ListenerOptions::new()
+                .name(name)
+                .reclaim_name(false)
+                .security_descriptor(security_descriptor),
+        )?;
         std::fs::write(path, windows_socket_marker())?;
-        Ok(listener)
+        Ok(LocalListener(listener))
+    }
+}
+
+/// Accept one connection, returning the stream to serve it on plus the
+/// [`ConnectionAbort`] the server's eviction path needs. Every accept goes
+/// through here so no platform can drift out of the pair contract.
+pub fn accept_connection(listener: &LocalListener) -> io::Result<(LocalStream, ConnectionAbort)> {
+    #[cfg(unix)]
+    {
+        use interprocess::local_socket::traits::Listener as _;
+        Ok((listener.accept()?, ConnectionAbort))
+    }
+    #[cfg(windows)]
+    {
+        listener.accept_with_abort()
+    }
+}
+
+/// What an evictor needs to tear this connection down (ENH-012).
+///
+/// Unix: the connection's threads run with send/recv timeouts, so setting
+/// the eviction flag is enough — they wake on their next poll and exit. This
+/// type is a no-op placeholder so callers share one shape.
+///
+/// Windows: named pipes reject I/O timeouts (interprocess 2.4 implements
+/// both setters as `Err(Unsupported)` stubs), so a flagged thread parked in
+/// `ReadFile`/`WriteFile` never wakes. [`ConnectionAbort::cancel_blocked_io`]
+/// aborts those calls through `CancelIoEx` on a duplicated pipe handle.
+/// Dropping every server-side handle — this duplicate included — is what
+/// the client observes as the disconnect, so the abort handle must not
+/// outlive the connection's registry entry.
+#[cfg(unix)]
+pub struct ConnectionAbort;
+
+#[cfg(unix)]
+impl ConnectionAbort {
+    /// Synthetic registry entries (tests) have no connection to abort.
+    #[cfg(test)]
+    pub fn none() -> Self {
+        ConnectionAbort
+    }
+
+    /// Unix sockets wake the flagged threads on their own timeouts.
+    pub fn cancel_blocked_io(&self) {}
+}
+
+#[cfg(windows)]
+pub struct ConnectionAbort {
+    handle: Option<std::os::windows::io::OwnedHandle>,
+}
+
+#[cfg(windows)]
+mod cancel_io_ex {
+    use std::os::windows::io::RawHandle;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CancelIoEx(hfile: *mut core::ffi::c_void, lpoverlapped: *mut core::ffi::c_void) -> i32;
+    }
+
+    /// Abort every pending I/O operation on the pipe behind `handle`.
+    /// Verified against interprocess 2.4 named pipes (2026-09-24): cancels a
+    /// blocked synchronous read AND write regardless of which handle clone
+    /// issued it — the blocked call fails with OS error 995
+    /// (ERROR_OPERATION_ABORTED) — and cancelling a handle with no pending
+    /// I/O is a harmless no-op. `false` only means the API call itself
+    /// failed, which leaves the pre-fix behavior unchanged.
+    pub(super) fn cancel(handle: RawHandle) -> bool {
+        // SAFETY: `handle` is borrowed from an OwnedHandle the caller keeps
+        // alive across the call; a NULL overlapped targets every pending
+        // operation on the handle rather than one specific request.
+        unsafe { CancelIoEx(handle as *mut _, std::ptr::null_mut()) != 0 }
+    }
+}
+
+#[cfg(windows)]
+impl ConnectionAbort {
+    pub(crate) fn new(handle: std::os::windows::io::OwnedHandle) -> Self {
+        Self {
+            handle: Some(handle),
+        }
+    }
+
+    /// Synthetic registry entries (tests) have no connection to abort.
+    #[cfg(test)]
+    pub fn none() -> Self {
+        Self { handle: None }
+    }
+
+    /// Abort this connection's blocked `ReadFile`/`WriteFile` calls so its
+    /// threads can observe the eviction flag and exit.
+    ///
+    /// The first cancel lands while the wedged threads are parked (the
+    /// normal eviction shape: a non-draining client). A thread that happened
+    /// to be mid-dispatch missed it and would park forever afterward — pipes
+    /// have no timeout to wake it later — so a short detached re-cancel
+    /// covers that window. The retry's handle clone keeps the pipe open only
+    /// until the last retry, holding the client's disconnect inside the same
+    /// fraction-of-a-second envelope the Unix poll loop delivers.
+    pub fn cancel_blocked_io(&self) {
+        use std::os::windows::io::{AsHandle as _, AsRawHandle as _};
+
+        let Some(handle) = &self.handle else {
+            return;
+        };
+        cancel_io_ex::cancel(handle.as_raw_handle());
+        let Ok(retry) = handle.as_handle().try_clone_to_owned() else {
+            return;
+        };
+        std::thread::spawn(move || {
+            for delay in [
+                std::time::Duration::from_millis(150),
+                std::time::Duration::from_millis(300),
+            ] {
+                std::thread::sleep(delay);
+                cancel_io_ex::cancel(retry.as_raw_handle());
+            }
+            // The clone drops here: if the connection's threads are already
+            // gone, this was the last server-side handle, and the client's
+            // blocking read now returns EOF.
+        });
+    }
+}
+
+/// The named-pipe-backed listener Windows serves from, wrapping
+/// interprocess's own named-pipe local-socket listener.
+///
+/// The generic `local_socket::Listener` cannot serve here: it accepts
+/// through a type-erasing enum that exposes no pipe handle, and eviction
+/// needs a handle duplicate taken from the very pipe instance that becomes
+/// the served connection (a duplicate of a different instance cancels
+/// nothing). Accepting on the underlying [`NpListener::inner`] pipe listener
+/// and rebuilding the generic stream from a handle clone keeps every
+/// existing `LocalStream` consumer unchanged.
+#[cfg(windows)]
+pub struct LocalListener(interprocess::os::windows::named_pipe::local_socket::Listener);
+
+#[cfg(windows)]
+impl LocalListener {
+    /// Accept, discarding the abort handle — for call sites that never
+    /// evict (tests, one-shot readers).
+    pub fn accept(&self) -> io::Result<LocalStream> {
+        self.accept_with_abort().map(|(stream, _)| stream)
+    }
+
+    /// Accept, producing the stream and its eviction abort handle. The
+    /// served stream is rebuilt from a duplicate of the accepted pipe
+    /// handle, so it refers to the exact instance the abort can cancel.
+    fn accept_with_abort(&self) -> io::Result<(LocalStream, ConnectionAbort)> {
+        use interprocess::os::windows::named_pipe::local_socket::Stream as NpStream;
+        use std::os::windows::io::AsHandle as _;
+
+        let pipe_stream = self.0.inner().accept()?;
+        let abort = pipe_stream
+            .as_handle()
+            .try_clone_to_owned()
+            .map_err(|err| io::Error::new(io::ErrorKind::ConnectionAborted, err))?;
+        // The served stream wraps the accepted pipe stream directly. The
+        // tempting alternative — converting a duplicated handle back
+        // through `TryFrom<OwnedHandle>` — re-opens the handle overlapped
+        // (`ReOpenFile`), and a synchronous `ReadFile` on an overlapped
+        // handle blocks forever (observed on the Windows VM 2026-09-24).
+        // This plain wrap is the same construction the generic listener's
+        // own accept path performs.
+        let stream = LocalStream::from(NpStream::from(pipe_stream));
+        Ok((stream, ConnectionAbort::new(abort)))
+    }
+
+    /// See `interprocess::local_socket::traits::Listener::set_nonblocking`.
+    /// An inherent method, because the interprocess trait is sealed and the
+    /// enum listener this replaces exposed it via that trait.
+    pub fn set_nonblocking(
+        &self,
+        nonblocking: interprocess::local_socket::ListenerNonblockingMode,
+    ) -> io::Result<()> {
+        use interprocess::local_socket::traits::Listener as _;
+        self.0.set_nonblocking(nonblocking)
     }
 }
 
@@ -184,6 +371,8 @@ fn windows_socket_marker() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Windows serves its wrapper listener, whose accept is inherent.
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
     use std::io::{Read, Write};
 

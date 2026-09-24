@@ -13,11 +13,18 @@ use crate::mux::command::{parse_line, Line};
 use crate::mux::dispatch::{dispatch_command, Ctx};
 use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, WindowId};
-use crate::mux::ipc::{bind_local_listener, prepare_socket_path, LocalListener, LocalStream};
+use crate::mux::ipc::{
+    accept_connection, bind_local_listener, prepare_socket_path, ConnectionAbort, LocalListener,
+    LocalStream,
+};
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::persist::{write_state, PersistState};
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
+// The Windows LocalListener wrapper exposes accept/set_nonblocking as
+// inherent methods, so the trait import is only reachable — and only used —
+// on Unix.
+#[cfg(unix)]
 use interprocess::local_socket::traits::Listener as _;
 use interprocess::TryClone as _;
 use parking_lot::Mutex;
@@ -66,10 +73,11 @@ static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Connected clients' broadcast senders, keyed by their monotonic id.
 /// One registered control client: its identity, its bounded queue sender
-/// (ARC-011), and the eviction flag [`push_to_clients`] sets when the
+/// (ARC-011), the eviction flag [`push_to_clients`] sets when the
 /// queue overflows — the connection's own threads poll it to tear down
-/// (ENH-012).
-pub(crate) type ClientEntry = (u64, SyncSender<String>, Arc<AtomicBool>);
+/// (ENH-012) — and the abort handle that unblocks those threads on
+/// Windows, where no timeout ever wakes them.
+pub(crate) type ClientEntry = (u64, SyncSender<String>, Arc<AtomicBool>, ConnectionAbort);
 pub(crate) type Clients = Arc<Mutex<Vec<ClientEntry>>>;
 
 /// A control-mode multiplexer server listening on a Unix socket.
@@ -201,8 +209,8 @@ impl MuxServer {
                 broadcast_notification(&self.clients, &TmuxNotification::Exit);
                 break;
             }
-            match self.listener.accept() {
-                Ok(stream) => {
+            match accept_connection(&self.listener) {
+                Ok((stream, abort)) => {
                     // BSD/macOS accepted sockets inherit O_NONBLOCK from the
                     // listening socket; the handler loop is written against
                     // blocking reads, so flip the stream back.
@@ -213,7 +221,7 @@ impl MuxServer {
                     let persist = persist_tx.clone();
                     let shutdown = Arc::clone(&self.shutdown);
                     std::thread::spawn(move || {
-                        handle_client(stream, tree, clients, persist, Some(shutdown))
+                        handle_client(stream, tree, clients, persist, Some(shutdown), abort)
                     });
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -323,6 +331,7 @@ fn handle_client(
     clients: Clients,
     persist: Option<Sender<PersistState>>,
     shutdown: Option<Arc<AtomicBool>>,
+    abort: ConnectionAbort,
 ) {
     use interprocess::local_socket::traits::Stream as _;
 
@@ -331,15 +340,21 @@ fn handle_client(
     // [`push_to_clients`] once its queue fills, rather than buffering every
     // `%output` line forever.
     let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
-    // Eviction's signal to this connection's threads (ENH-012). There is
-    // no way to abort a blocked socket call from outside the interprocess
-    // API, so both threads run with send/recv timeouts: a wedged writer
-    // wakes every poll, sees the flag, and exits — dropping the queue; the
-    // reader does the same, and its exit closes the connection the client
-    // observes. Without this, the writer stays blocked in a full socket
-    // buffer and the queued lines are retained forever (measured live).
+    // Eviction's signal to this connection's threads (ENH-012). Both run
+    // with send/recv timeouts where the transport supports them (Unix): a
+    // wedged writer wakes every poll, sees the flag, and exits — dropping
+    // the queue; the reader does the same, and its exit closes the
+    // connection the client observes. Named pipes reject I/O timeouts, so
+    // on Windows the evictor aborts the blocked calls through
+    // [`ConnectionAbort::cancel_blocked_io`] instead — the flag stays the
+    // exit signal either way. Without one of the two, the writer stays
+    // blocked in a full socket buffer and the queued lines are retained
+    // forever (measured live).
     let evicted = Arc::new(AtomicBool::new(false));
     let mut registered = false;
+    // Handed to the registry on first registration — hook connections never
+    // register and drop theirs with the frame.
+    let mut abort = Some(abort);
 
     let mut writer = match stream.try_clone() {
         Ok(stream) => stream,
@@ -412,9 +427,12 @@ fn handle_client(
             }
             Ok(Line::Control(command)) => {
                 if !registered {
-                    clients
-                        .lock()
-                        .push((client_id, tx.clone(), Arc::clone(&evicted)));
+                    clients.lock().push((
+                        client_id,
+                        tx.clone(),
+                        Arc::clone(&evicted),
+                        abort.take().expect("abort is registered once"),
+                    ));
                     registered = true;
                 }
                 command_number += 1;
@@ -431,9 +449,12 @@ fn handle_client(
             }
             Err(err) => {
                 if !registered {
-                    clients
-                        .lock()
-                        .push((client_id, tx.clone(), Arc::clone(&evicted)));
+                    clients.lock().push((
+                        client_id,
+                        tx.clone(),
+                        Arc::clone(&evicted),
+                        abort.take().expect("abort is registered once"),
+                    ));
                     registered = true;
                 }
                 command_number += 1;
@@ -444,7 +465,7 @@ fn handle_client(
         }
     }
     if registered {
-        clients.lock().retain(|(id, _, _)| *id != client_id);
+        clients.lock().retain(|(id, _, _, _)| *id != client_id);
     }
 }
 
@@ -537,15 +558,19 @@ fn dispatch(
 /// writer stays blocked in a full socket buffer and its reader parked on
 /// input, retaining the queued lines (ENH-012, measured live). The flagged
 /// threads exit, the queue drops, and the client observes a clean
-/// disconnect within about two [`EVICTION_POLL`]s.
+/// disconnect within about two [`EVICTION_POLL`]s. On Windows the flag
+/// alone is not enough — named pipes never wake a parked reader or writer
+/// on a timeout — so eviction also aborts the blocked I/O through the
+/// entry's [`ConnectionAbort`].
 pub(crate) fn push_to_clients(clients: &Clients, line: String) {
     clients
         .lock()
-        .retain(|(id, tx, evicted)| match tx.try_send(line.clone()) {
+        .retain(|(id, tx, evicted, abort)| match tx.try_send(line.clone()) {
             Ok(()) => true,
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 log::warn!("par-mux: client {id} is not draining; evicting");
                 evicted.store(true, Ordering::Relaxed);
+                abort.cancel_blocked_io();
                 false
             }
             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => false,
@@ -1039,9 +1064,12 @@ mod tests {
 
         // A second, non-issuing client: everything it sees is a broadcast.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients
-            .lock()
-            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
 
         // new-window broadcasts %window-add naming the new window.
         dispatch(
@@ -1176,9 +1204,12 @@ mod tests {
 
         // A second client observes the broadcast.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients
-            .lock()
-            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
 
         let reply = dispatch(
             &format!("split-window -t {pane_id} -h -p 25"),
@@ -1321,9 +1352,12 @@ mod tests {
 
         // A second client observes the size-driven re-layout.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients
-            .lock()
-            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
 
         let reply = dispatch(
             &format!("resize-pane -t {first} -x 25"),
@@ -1360,9 +1394,12 @@ mod tests {
         let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
 
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
-        clients
-            .lock()
-            .push((u64::MAX, tx, Arc::new(AtomicBool::new(false))));
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
 
         let reply = dispatch(
             &format!("refresh-client -t {pane_id} -C 120x40"),
@@ -1735,14 +1772,20 @@ mod tests {
         // The stalled client: registered, never drained.
         let (stalled_tx, _stalled_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
         let stalled_flag = Arc::new(AtomicBool::new(false));
-        clients
-            .lock()
-            .push((1, stalled_tx, Arc::clone(&stalled_flag)));
+        clients.lock().push((
+            1,
+            stalled_tx,
+            Arc::clone(&stalled_flag),
+            ConnectionAbort::none(),
+        ));
         // The sibling: drains as lines arrive, like a healthy reader thread.
         let (sibling_tx, sibling_rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
-        clients
-            .lock()
-            .push((2, sibling_tx, Arc::new(AtomicBool::new(false))));
+        clients.lock().push((
+            2,
+            sibling_tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
 
         let mut received = Vec::new();
         for n in 0..=CLIENT_QUEUE_DEPTH {
@@ -1798,11 +1841,12 @@ mod tests {
         let clients: Clients = Arc::new(Mutex::new(Vec::new()));
         let registry = Arc::clone(&clients);
         let (tree, _) = harness();
-        std::thread::spawn(move || {
-            if let Ok(stream) = listener.accept() {
-                handle_client(stream, tree, registry, None, None);
-            }
-        });
+        std::thread::spawn(
+            move || match crate::mux::ipc::accept_connection(&listener) {
+                Ok((stream, abort)) => handle_client(stream, tree, registry, None, None, abort),
+                Err(err) => panic!("accept_connection failed: {err}"),
+            },
+        );
 
         let mut client = connect_local_stream(&socket_path).expect("connects");
         client
@@ -1839,17 +1883,12 @@ mod tests {
         }
 
         // The evicted client observes the connection closing: drain the
-        // socket's residue, then EOF must arrive within the deadline.
-        // Unix-only: the close depends on the eviction poll (ENH-012) waking
-        // this connection's writer/reader on send/recv timeouts, and
-        // interprocess's Windows named-pipe stream does not support I/O
-        // timeouts at all (2.4.2 returns Err(Unsupported) from both setters,
-        // which the accept path ignores) — a wedged Windows thread stays in
-        // ReadFile/WriteFile holding its handle, so the pipe never closes.
-        // The eviction itself (flag + removal from the broadcast set, the
-        // loop above) is platform-independent and stays asserted everywhere;
-        // the Windows close gap is tracked as its own card.
-        #[cfg(unix)]
+        // socket's residue, then EOF must arrive within the deadline. On
+        // Unix the eviction poll (ENH-012) wakes this connection's
+        // writer/reader on send/recv timeouts; on Windows eviction aborts
+        // their blocked pipe I/O through the registry entry's
+        // ConnectionAbort, and every server-side handle drops — including
+        // the abort's and the re-canceller's — which is the EOF itself.
         {
             let (eof_tx, eof_rx) = channel::<()>();
             std::thread::spawn(move || {
@@ -1867,8 +1906,6 @@ mod tests {
                 "the evicted client's socket closed within 5 s of eviction"
             );
         }
-        #[cfg(windows)]
-        drop(client);
         let _ = std::fs::remove_file(&socket_path);
     }
 

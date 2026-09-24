@@ -308,6 +308,8 @@ fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
 mod tests {
     use super::*;
     use crate::mux::ipc::bind_local_listener;
+    // Windows serves its wrapper listener, whose accept is inherent.
+    #[cfg(unix)]
     use interprocess::local_socket::traits::Listener as _;
 
     /// How long the slow-bind daemon waits before binding its socket. Long
