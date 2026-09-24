@@ -3251,6 +3251,49 @@ fn screen_restore_sequence_round_trips_state() {
 }
 
 #[test]
+fn screen_restore_sequence_replays_main_screen_scrollback() {
+    // A reattached client pane starts empty; the restore stream must carry
+    // the main screen's history so the client can scroll back through it.
+    for lines in [8usize, 40] {
+        let mut src = Terminal::with_scrollback(20, 5, 100);
+        for i in 0..lines {
+            src.process(format!("\x1b[3{}mline {i}\x1b[0m\r\n", i % 7 + 1).as_bytes());
+        }
+        src.process(b"\x1b[?1049h\x1b[2;2Htui");
+        assert!(src.grid.scrollback_len() > 0, "{lines}: source has history");
+
+        let restore = src.export_screen_restore_sequence();
+        let mut dst = Terminal::with_scrollback(20, 5, 100);
+        dst.process(restore.as_bytes());
+
+        assert_eq!(
+            src.grid.scrollback_len(),
+            dst.grid.scrollback_len(),
+            "{lines}: scrollback length"
+        );
+        for index in 0..src.grid.scrollback_len() {
+            assert_eq!(
+                src.grid.scrollback_line(index),
+                dst.grid.scrollback_line(index),
+                "{lines}: scrollback line {index} differs after replay"
+            );
+        }
+        for row in 0..5 {
+            assert_eq!(
+                src.grid.row(row),
+                dst.grid.row(row),
+                "{lines}: main-screen row {row} differs after replay"
+            );
+            assert_eq!(
+                src.active_grid().row(row),
+                dst.active_grid().row(row),
+                "{lines}: active row {row} differs after replay"
+            );
+        }
+    }
+}
+
+#[test]
 fn screen_restore_sequence_omits_keypad_when_off() {
     // Keypad-off (the default, or an explicit ESC >) is the replay target's
     // own initial state, so the restore stream must not carry ESC =.

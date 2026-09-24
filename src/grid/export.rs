@@ -250,6 +250,39 @@ impl Grid {
         result
     }
 
+    /// One row's cells with ANSI styling: SGR-diffed text up to the last
+    /// significant cell, then a reset. No cursor movement or line ending.
+    pub(crate) fn export_row_styled(&self, row_cells: &[Cell]) -> String {
+        let mut result = String::new();
+        let last_sig = self.find_last_significant(row_cells);
+        if last_sig == 0 {
+            return result;
+        }
+        let mut current_fg = Color::Named(NamedColor::White);
+        let mut current_bg = Color::Named(NamedColor::Black);
+        let mut current_flags = crate::cell::CellFlags::default();
+        for (col, cell) in row_cells.iter().enumerate() {
+            if cell.flags.wide_char_spacer() {
+                continue;
+            }
+            if col >= last_sig {
+                break;
+            }
+            if cell.fg != current_fg || cell.bg != current_bg || cell.flags != current_flags {
+                push_sgr_style(&mut result, &cell.fg, &cell.bg, &cell.flags);
+                current_fg = cell.fg;
+                current_bg = cell.bg;
+                current_flags = cell.flags;
+            }
+            result.push(cell.c);
+            for &combining in &cell.combining {
+                result.push(combining);
+            }
+        }
+        result.push_str("\x1b[0m");
+        result
+    }
+
     /// Export only the visible screen with ANSI styling
     pub fn export_visible_screen_styled(&self) -> String {
         let mut result = String::new();

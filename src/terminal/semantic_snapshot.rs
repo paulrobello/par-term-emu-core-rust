@@ -720,9 +720,37 @@ impl Terminal {
     pub fn export_screen_restore_sequence(&self) -> String {
         let mut out = String::new();
 
+        // Main-screen scrollback first, on the main screen, top-down from
+        // the home position: each line is written and line-fed, so once the
+        // screen fills every line feed scrolls the oldest line into the
+        // replay target's scrollback. The lines still on screen are then
+        // pushed off from the bottom row, leaving the visible screen blank
+        // for the content block below. Each line starts with CR (line feed
+        // does not return the carriage) — which also keeps a line's text
+        // from starting a control-mode reply line with `%`.
+        let history = self.grid.scrollback_len();
+        if history > 0 {
+            let rows = self.grid.rows();
+            out.push_str("\x1b[H");
+            for index in 0..history {
+                out.push('\r');
+                if let Some(line) = self.grid.scrollback_line(index) {
+                    out.push_str(&self.grid.export_row_styled(line));
+                }
+                out.push('\n');
+            }
+            let on_screen = history.min(rows.saturating_sub(1));
+            out.push_str(&format!("\x1b[{rows};1H"));
+            for _ in 0..on_screen {
+                out.push('\n');
+            }
+        }
+
         // Buffer selection first, so the replayed content lands on the
-        // screen the source is showing.
+        // screen the source is showing. Under a full-screen app the main
+        // screen is written first, so quitting the app returns to it.
         if self.alt_screen_active {
+            out.push_str(&self.grid.export_visible_screen_styled());
             out.push_str("\x1b[?1049h");
         }
 

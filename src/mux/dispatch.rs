@@ -350,7 +350,8 @@ fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> 
         }
         // Resync (D5.4): replay the pane's state as the screen-restore
         // encoder's byte stream so a reattached client's emulator
-        // reproduces it exactly — alt-screen selection first (a TUI
+        // reproduces it exactly — the main screen's scrollback first (a
+        // reattached pane can scroll back), alt-screen selection (a TUI
         // replays its TUI screen), then the styled content with
         // absolute row addressing (`\x1b[R;1H`; a `\n`-joined reply
         // staircases: LF preserves the column), attributes via SGR

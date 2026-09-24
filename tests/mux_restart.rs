@@ -129,7 +129,9 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
     // the screen and inside the capture range, or the post-restart
     // assertion would prove nothing about the restart. The visible-screen
     // check reads the reply BODY — interleaved %output pushes replay the
-    // pane's whole byte stream and would trivially contain the marker.
+    // pane's whole byte stream and would trivially contain the marker. It
+    // uses capture-pane's default range (the visible screen): the
+    // refresh-client reseed also replays the scrollback.
     wait_for(
         &mut writer,
         &mut reader,
@@ -139,7 +141,7 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
     let visible = command(
         &mut writer,
         &mut reader,
-        &format!("refresh-client -t {first_pane}"),
+        &format!("capture-pane -t {first_pane} -p"),
     )
     .join("")
     .lines()
