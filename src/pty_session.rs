@@ -1133,6 +1133,24 @@ impl PtySession {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// Liveness for periodic pollers: the reader flag first, then the OS
+    /// child handle. On Windows ConPTY the pipe read stays blocked after the
+    /// child exits (conhost keeps its end open), so the reader thread never
+    /// flips `running` — measured: a cmd.exe pane exits in ~250 ms while the
+    /// flag stays true for 15+ s. A reaper that only trusts the flag never
+    /// reaps on Windows; this poll asks the OS when the flag claims alive.
+    pub fn poll_running(&mut self) -> bool {
+        if !self.running.load(Ordering::SeqCst) {
+            return false;
+        }
+        match self.try_wait() {
+            // Still waiting on the OS: alive. A poll error is not evidence
+            // of death — report alive and let the next pass retry.
+            Ok(Some(_)) => false,
+            Ok(None) | Err(_) => true,
+        }
+    }
+
     /// Return the PID of the spawned child process (shell or command).
     ///
     /// Returns `None` if no process has been spawned yet or if the platform
@@ -1708,6 +1726,41 @@ mod tests {
         // Try writing without spawning - should fail
         let result = session.write(b"test");
         assert!(result.is_err());
+    }
+
+    /// `poll_running` must report an exited child even when the reader flag
+    /// is stale — the Windows ConPTY condition, where the pipe read never
+    /// observes EOF (conhost keeps its end open) so `running` stays true
+    /// after the child is gone. The flag is forced back up after a real
+    /// child's exit to simulate that reader, and only the OS handle says
+    /// otherwise.
+    #[test]
+    fn poll_running_reports_exit_despite_a_stale_reader_flag() {
+        let mut session = PtySession::new(80, 24, 1000);
+        #[cfg(unix)]
+        session.spawn("/bin/echo", &["bye"]).expect("spawn");
+        #[cfg(windows)]
+        session
+            .spawn("cmd.exe", &["/C", "echo bye"])
+            .expect("spawn");
+
+        // Wait for the real exit, then simulate the ConPTY reader that never
+        // noticed: the flag goes back up while the OS holds exit status.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !matches!(session.try_wait(), Ok(Some(_))) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never exited for the stale-flag setup"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(!session.poll_running(), "the exited child is dead");
+
+        session.running.store(true, Ordering::SeqCst);
+        assert!(
+            !session.poll_running(),
+            "the OS exit must outweigh a stale reader flag"
+        );
     }
 
     #[test]

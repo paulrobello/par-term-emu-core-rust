@@ -611,15 +611,22 @@ fn reap_dead_panes(
     persist: Option<&Sender<PersistState>>,
 ) {
     let dead: Vec<PaneId> = {
-        let guard = tree.lock();
-        guard
+        let mut guard = tree.lock();
+        // Enumerate first, then poll mutably: poll_running consults the OS
+        // child handle when the reader flag still claims alive — on Windows
+        // ConPTY that flag never flips after an exit (conhost keeps the pipe
+        // open), so is_running alone would never reap there.
+        let panes: Vec<PaneId> = guard
             .sessions()
             .iter()
             .filter_map(|s| guard.session(*s))
             .flat_map(|s| s.windows.clone())
             .filter_map(|w| guard.window(w))
             .flat_map(|w| w.panes())
-            .filter(|p| guard.pane(*p).is_some_and(|pane| !pane.is_running()))
+            .collect();
+        panes
+            .into_iter()
+            .filter(|p| guard.pane_mut(*p).is_some_and(|pane| !pane.poll_running()))
             .collect()
     };
     if dead.is_empty() {

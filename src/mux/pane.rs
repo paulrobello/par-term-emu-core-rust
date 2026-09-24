@@ -180,6 +180,14 @@ impl MuxPane {
         self.session.is_running()
     }
 
+    /// Liveness for the reaper's periodic pass — the reader flag plus the OS
+    /// child handle. On Windows ConPTY the reader never observes EOF after
+    /// the child exits, so [`Self::is_running`] alone would leave an exited
+    /// pane in the tree forever; see [`PtySession::poll_running`].
+    pub fn poll_running(&mut self) -> bool {
+        self.session.poll_running()
+    }
+
     /// The pane's child process id, if it has been spawned.
     pub fn child_pid(&self) -> Option<u32> {
         self.session.child_pid()
