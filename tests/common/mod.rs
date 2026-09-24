@@ -196,6 +196,12 @@ pub fn wait_listening(path: &std::path::Path) {
 
 /// SIGTERM, then require the clean exit the handler guarantees (Task 3.5).
 /// The daemon never exits on its own — forgetting this is an infinite wait.
+///
+/// Unix-only like its sole consumer (mux_restart): SIGTERM has no Windows
+/// equivalent, and the ungated `nix` imports broke the mux_reattach build on
+/// Windows (run 36048176346) — mux_reattach compiles this module without
+/// using this helper.
+#[cfg(unix)]
 pub fn sigterm_clean(child: &mut std::process::Child) {
     use nix::sys::signal::{self, Signal};
     use nix::unistd::Pid;
