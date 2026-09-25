@@ -38,6 +38,11 @@ import type { TerminalConnectionCallbacks } from '@/lib/terminal-connection';
 // onSelectionChanged, ...) directly without a real WebSocket.
 const constructedCallbacks: TerminalConnectionCallbacks[] = [];
 
+// Every ClientMessage the component sends, oldest first.
+type SentMessage = { message: { case?: string; value?: unknown } };
+const sentMessages: SentMessage[] = [];
+const sentCases = (): (string | undefined)[] => sentMessages.map((m) => m.message.case);
+
 vi.mock('@/lib/terminal-connection', () => {
   class MockTerminalConnection {
     constructor(
@@ -50,10 +55,12 @@ vi.mock('@/lib/terminal-connection', () => {
       return this.url;
     }
     isOpen(): boolean {
-      return false;
+      return true;
     }
     connect(): void {}
-    send(): void {}
+    send(msg: SentMessage): void {
+      sentMessages.push(msg);
+    }
     cancelRetry(): void {}
     stopHeartbeat(): void {}
     dispose(): void {}
@@ -66,6 +73,7 @@ const { default: Terminal } = await import('@/components/Terminal');
 
 beforeEach(() => {
   constructedCallbacks.length = 0;
+  sentMessages.length = 0;
   vi.useFakeTimers();
 });
 
@@ -210,5 +218,70 @@ describe('Terminal', () => {
 
     expect(onStatusChangeFirst).not.toHaveBeenCalled();
     expect(onStatusChangeSecond).toHaveBeenCalledWith('connected');
+  });
+});
+
+// A phone viewing a mux pane must never resize it by just looking: the
+// pane has one size (latest resize wins), so only a deliberate action (the
+// Fit tap, or opening the keyboard) may send a Resize. A desktop viewer keeps
+// fitting the pane to its window. Nobody echoes a server-sent resize back.
+describe('Terminal resize policy', () => {
+  const connectedMsg = { sessionId: 's', cols: 120, rows: 40 } as never;
+  let savedWidth: number;
+
+  beforeEach(() => {
+    savedWidth = window.innerWidth;
+  });
+  afterEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: savedWidth });
+  });
+  const setWidth = (w: number) =>
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: w });
+
+  it('a phone does not send Resize on connect, only a refresh', () => {
+    setWidth(390);
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term' });
+    act(() => constructedCallbacks[0].onConnected?.(connectedMsg));
+    expect(sentCases()).not.toContain('resize');
+    expect(sentCases()).toContain('refresh');
+  });
+
+  it('a phone does not echo a server resize', () => {
+    setWidth(390);
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term' });
+    act(() => constructedCallbacks[0].onServerResize?.({ cols: 100, rows: 30 } as never));
+    expect(sentCases()).not.toContain('resize');
+  });
+
+  it('a phone sends Resize when the pane is deliberately fitted', () => {
+    setWidth(390);
+    let refit: ((opts?: { resizePane?: boolean }) => void) | undefined;
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term', onRefit: (fn) => { refit = fn; } });
+    act(() => {
+      refit?.();
+      vi.advanceTimersByTime(100);
+    });
+    expect(sentCases()).not.toContain('resize');
+    act(() => {
+      refit?.({ resizePane: true });
+      vi.advanceTimersByTime(100);
+    });
+    expect(sentCases()).toContain('resize');
+  });
+
+  it('a desktop still sends its size on connect', () => {
+    setWidth(1280);
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term' });
+    act(() => constructedCallbacks[0].onConnected?.(connectedMsg));
+    expect(sentCases()).toContain('resize');
+  });
+
+  it('a desktop does not echo a server resize', () => {
+    setWidth(1280);
+    renderAndConnect({ wsUrl: 'ws://localhost:9999/term' });
+    // A size no earlier test used: the StrictMode-preserved terminal can
+    // carry over between tests, and resizing to its current size is a no-op.
+    act(() => constructedCallbacks[0].onServerResize?.({ cols: 97, rows: 29 } as never));
+    expect(sentCases()).not.toContain('resize');
   });
 });

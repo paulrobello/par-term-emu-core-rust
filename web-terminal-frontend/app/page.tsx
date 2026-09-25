@@ -126,7 +126,7 @@ export default function Home() {
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [terminalBgColor, setTerminalBgColor] = useState('#000000');
   const [showControls, setShowControls] = useState(true);
-  const [refitTerminal, setRefitTerminal] = useState<(() => void) | null>(null);
+  const [refitTerminal, setRefitTerminal] = useState<((opts?: { resizePane?: boolean }) => void) | null>(null);
   const [focusTerminal, setFocusTerminal] = useState<(() => void) | null>(null);
   const [isRetrying, setIsRetrying] = useState(false);
   const [connectControl, setConnectControl] = useState<{
@@ -370,10 +370,12 @@ export default function Home() {
         onToggleVisibility={() => {
           const newShowKeyboard = !showKeyboard;
           setShowKeyboard(newShowKeyboard);
-          // Refit terminal after keyboard visibility changes
+          // Refit terminal after keyboard visibility changes. Opening the
+          // keyboard means the user is about to type here, so it is the one
+          // automatic moment a phone resizes the shared pane to its screen.
           requestAnimationFrame(() => {
             setTimeout(() => {
-              refitTerminal?.();
+              refitTerminal?.({ resizePane: newShowKeyboard });
               // Only focus terminal when hiding the on-screen keyboard
               // to avoid triggering native keyboard on mobile
               if (!newShowKeyboard) {
@@ -393,6 +395,7 @@ export default function Home() {
             }, 150);
           });
         }}
+        onFitPane={() => refitTerminal?.({ resizePane: true })}
         fontSize={fontSize}
         onFontSizeChange={(delta) => {
           setFontSize(Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, fontSize + delta)));

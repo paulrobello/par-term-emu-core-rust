@@ -24,7 +24,9 @@ interface TerminalProps {
   fontSize?: number;
   onStatusChange?: (status: ConnectionStatus) => void;
   onThemeChange?: (backgroundColor: string) => void;
-  onRefit?: (refitFn: () => void) => void;
+  // `resizePane: true` also sends the fitted size to the server. Phones only
+  // resize the shared pane on that deliberate request (see `sendsResizeOnFit`).
+  onRefit?: (refitFn: (opts?: { resizePane?: boolean }) => void) => void;
   onFocus?: (focusFn: () => void) => void;
   onRetryingChange?: (isRetrying: boolean) => void;
   onConnectControl?: (control: { connect: () => void; disconnect: () => void; cancelRetry: () => void }) => void;
@@ -43,6 +45,29 @@ let preservedFitAddon: FitAddon | null = null;
 const isMobile = (): boolean => {
   if (typeof window === 'undefined') return false;
   return window.innerWidth < 640 || /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+};
+
+// Whether fitting xterm to its container also resizes the server-side
+// terminal. A shared pane has one size and the latest resize wins, so a phone
+// that sent its size on every connect or rotation would steal the pane from
+// the desktop just by looking. Phones send a size only on a deliberate action
+// (the Fit button, or opening the keyboard: `onRefit` with `resizePane`).
+const sendsResizeOnFit = (): boolean => !isMobile();
+
+// Resize xterm to a size the server reported, without echoing it back.
+const applyServerSize = (
+  term: XTerm,
+  cols: number,
+  rows: number,
+  applying: { current: boolean },
+): void => {
+  if (cols <= 0 || rows <= 0 || (term.cols === cols && term.rows === rows)) return;
+  applying.current = true;
+  try {
+    term.resize(cols, rows);
+  } finally {
+    applying.current = false;
+  }
 };
 
 // Get responsive font size based on screen dimensions
@@ -104,6 +129,10 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
   // Reconnect/backoff and heartbeat/stale-pong state live inside
   // TerminalConnection (QA-008).
+
+  // Set while applying a server-sent size, so `term.onResize` does not echo
+  // it back (an echo can undo a newer resize from another client).
+  const applyingServerSizeRef = useRef<boolean>(false);
 
   // Terminal mode tracking (from server modeChanged messages)
   const mouseTrackingRef = useRef<boolean>(false);
@@ -346,7 +375,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     // destructured `onRefit` argument) so this mount-only effect doesn't
     // need `onRefit` in its dependency array.
     if (propsRef.current.onRefit) {
-      propsRef.current.onRefit(() => {
+      propsRef.current.onRefit((opts) => {
         setTimeout(() => {
           // Use explicit fontSize prop if set, otherwise use responsive sizing
           const newFontSize = fontSizeRef.current ?? getResponsiveFontSize();
@@ -360,6 +389,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           const container = terminalRef.current;
           if (container) {
             debugLog(`Refit: container size - ${container.clientWidth}x${container.clientHeight}`);
+          }
+
+          // A phone keeps the grid at the pane's size unless asked to resize it.
+          if (!opts?.resizePane && !sendsResizeOnFit()) {
+            term.refresh(0, term.rows - 1);
+            return;
           }
 
           fitAddon.fit();
@@ -406,7 +441,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             term.options.fontSize = newFontSize;
           }
         }
-        fitAddon.fit();
+        if (sendsResizeOnFit()) fitAddon.fit();
       }, 100);
     };
 
@@ -421,7 +456,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           const newFontSize = getResponsiveFontSize();
           term.options.fontSize = newFontSize;
         }
-        fitAddon.fit();
+        if (sendsResizeOnFit()) fitAddon.fit();
       }, 200);
     };
 
@@ -448,6 +483,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Handle terminal resize - goes through connectionRef so it works across reconnects
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
+      if (applyingServerSizeRef.current || !sendsResizeOnFit()) return;
       if (connectionRef.current?.isOpen()) {
         debugLog(`Client resized to: ${cols}x${rows}`);
         connectionRef.current.send(createResizeMessage(cols, rows));
@@ -609,8 +645,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           xtermRef.current?.write(`\r\n\x1b[1;31mInvalid WebSocket URL: ${url}\x1b[0m\r\n`);
         },
         onOpen: () => {
-          // Fit terminal to container
-          fitAddonRef.current?.fit();
+          // Fit terminal to container (a phone takes the pane's size instead)
+          if (sendsResizeOnFit()) fitAddonRef.current?.fit();
           // Note: resize and refresh are sent after receiving 'connected' message
         },
         onOutput: (data) => {
@@ -651,12 +687,16 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           hyperlinksRef.current.clear();
           userVarsRef.current.clear();
 
-          // Send our size to server, then request a fresh snapshot
+          // Send our size to server (desktop only), then request a fresh snapshot
           if (connectionRef.current?.isOpen()) {
-            const cols = term.cols;
-            const rows = term.rows;
-            debugLog(`Sending resize after connect: ${cols}x${rows}`);
-            connectionRef.current.send(createResizeMessage(cols, rows));
+            if (sendsResizeOnFit()) {
+              const cols = term.cols;
+              const rows = term.rows;
+              debugLog(`Sending resize after connect: ${cols}x${rows}`);
+              connectionRef.current.send(createResizeMessage(cols, rows));
+            } else {
+              applyServerSize(term, connected.cols, connected.rows, applyingServerSizeRef);
+            }
             // Request fresh snapshot
             debugLog('Requesting refresh after connect');
             connectionRef.current.send(createRefreshMessage());
@@ -666,7 +706,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         onServerResize: (resize) => {
           const term = xtermRef.current;
           if (!term) return;
-          term.resize(resize.cols, resize.rows);
+          applyServerSize(term, resize.cols, resize.rows, applyingServerSizeRef);
           debugLog(`Terminal resized: ${resize.cols}x${resize.rows}`);
           if (connectionRef.current?.isOpen()) {
             debugLog('Requesting screen refresh after resize');
@@ -692,6 +732,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             return;
           }
 
+          // The snapshot is laid out for the server's grid; match it first.
+          applyServerSize(term, refresh.cols, refresh.rows, applyingServerSizeRef);
           // Fully reset terminal state and clear all buffers
           term.reset();
           term.clear();
@@ -832,9 +874,10 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     if (term && fitAddon && fontSize !== undefined) {
       debugLog(`Font size changed to ${fontSize}px`);
       term.options.fontSize = fontSize;
-      fitAddon.fit();
-      // Send resize to server
-      connectionRef.current?.send(createResizeMessage(term.cols, term.rows));
+      if (sendsResizeOnFit()) {
+        fitAddon.fit();
+        connectionRef.current?.send(createResizeMessage(term.cols, term.rows));
+      }
     }
   }, [fontSize]);
 

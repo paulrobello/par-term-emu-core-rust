@@ -8,6 +8,8 @@ interface OnscreenKeyboardProps {
   onToggleVisibility: () => void;
   showControls?: boolean;
   onToggleControls?: () => void;
+  /** Resize the shared pane to this screen (the only resize a phone sends). */
+  onFitPane?: () => void;
   fontSize?: number;
   onFontSizeChange?: (delta: number) => void;
   minFontSize?: number;
@@ -38,6 +40,7 @@ export function OnscreenKeyboard({
   onToggleVisibility,
   showControls,
   onToggleControls,
+  onFitPane,
   fontSize,
   onFontSizeChange,
   minFontSize = 8,
@@ -596,6 +599,26 @@ export function OnscreenKeyboard({
         </div>
 
         <div className="flex items-center gap-1">
+          {/* Fit the shared pane to this screen */}
+          {onFitPane && (
+            <button
+              onClick={onFitPane}
+              tabIndex={-1}
+              className="p-1.5 rounded-md transition-colors hover:bg-[#2a2a2a]/80"
+              style={{ color: 'var(--terminal-primary, #ff9500)' }}
+              title="Fit pane to this screen"
+              aria-label="Fit pane to this screen"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                {/* Maximize/fit icon */}
+                <polyline points="15 3 21 3 21 9"/>
+                <polyline points="9 21 3 21 3 15"/>
+                <line x1="21" y1="3" x2="14" y2="10"/>
+                <line x1="3" y1="21" x2="10" y2="14"/>
+              </svg>
+            </button>
+          )}
+
           {/* Header/Footer toggle button */}
           {onToggleControls && (
             <button
