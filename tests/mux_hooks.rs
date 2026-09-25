@@ -291,8 +291,15 @@ fn a_pi_shaped_session_report_with_resume_argv_drives_the_daemon() {
 
     // A state report first, so the session report has a state to
     // rebroadcast — acceptance over the wire is observable only through
-    // the rebroadcast (error replies produce no notification).
-    let reply = hook_round_trip(&stage.path, &report(&stage.pane, "working", 1_000));
+    // the rebroadcast (error replies produce no notification). Same agent
+    // as the session report below: a session report from a DIFFERENT agent
+    // clears the previous claim instead of rebroadcasting it, so a
+    // mismatched pair would have nothing to announce.
+    let pi_state_report = format!(
+        r#"{{"id":"probe-1000","method":"pane.report_agent","params":{{"pane_id":"{}","agent":"pi","state":"working","seq":1000,"source":"par-mux:test"}}}}"#,
+        stage.pane
+    );
+    let reply = hook_round_trip(&stage.path, &pi_state_report);
     assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
     stage.control.line_until(
         |line| line.starts_with("%agent-state-changed"),
