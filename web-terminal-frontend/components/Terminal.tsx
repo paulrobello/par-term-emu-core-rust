@@ -399,7 +399,9 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true);
           debugLog('Suppressed xterm.js DA/DSR responses (handled by backend terminal)');
 
-          fitAddon.fit();
+          // Fonts can finish loading after connect; a phone's grid must stay
+          // at the pane's size.
+          if (sendsResizeOnFit()) fitAddon.fit();
         });
       } else {
         term.open(terminalRef.current);
@@ -411,7 +413,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         term.parser.registerCsiHandler({ final: 'n' }, () => true);
         term.parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true);
 
-        fitAddon.fit();
+        if (sendsResizeOnFit()) fitAddon.fit();
       }
     }
 
@@ -441,6 +443,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           return;
         }
         const content = { width: screen.offsetWidth, height: screen.offsetHeight };
+        // xterm snaps cell widths to device pixels, so the computed fit can
+        // overshoot the view; step the font down until the grid fits.
+        if (zoomFontRef.current === null && content.width > viewSize.width && font > MIN_ZOOM_FONT_SIZE && attempt < 8) {
+          term.options.fontSize = Math.max(MIN_ZOOM_FONT_SIZE, font * Math.min(0.97, viewSize.width / content.width));
+          layoutRaf = requestAnimationFrame(() => layoutViewport(attempt + 1));
+          return;
+        }
         panRef.current = clampPan(panRef.current, content, viewSize);
         host.style.position = 'absolute';
         host.style.left = '0';
