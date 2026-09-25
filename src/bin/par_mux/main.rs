@@ -189,9 +189,14 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         if cli.stop {
             return Ok(());
         }
-        // --restart falls through and serves the socket in this process —
-        // the state save the stop just completed is what it restores. Run
-        // it detached (e.g. `par-mux --restart NAME &`) to keep a shell.
+        // --restart falls through and serves the socket from a detached
+        // process — the state save the stop just completed is what it
+        // restores, and the daemon must outlive the terminal --restart was
+        // typed into (fork + setsid + stdio to /dev/null, tmux's
+        // daemon(1,0) shape), so the invocation returns immediately and no
+        // `&` is needed.
+        #[cfg(unix)]
+        daemonize()?;
     }
 
     // Nested-daemon guard, on the path that actually serves: a daemon
@@ -252,17 +257,61 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests
     // shutdown with one atomic store (async-signal-safe), the accept loop
     // notices, and run_persisting's final save captures every completed
-    // mutation. kill -9 skips all of this and simply loses the last window
-    // (D3.3 covers why that is acceptable). The handle is per-instance
-    // (ARC-016) and published to the handler via OnceLock.
+    // mutation. Terminal-generated signals that would stop a daemon whose
+    // panes outlive any one terminal are ignored instead (tmux does the
+    // same on its server). kill -9 skips all of this and simply loses the
+    // last window (D3.3 covers why that is acceptable). The handle is
+    // per-instance (ARC-016) and published to the handler via OnceLock.
     #[cfg(unix)]
     {
         SHUTDOWN_HANDLE.set(server.shutdown_handle()).ok();
-        install_sigterm_handler()?;
+        install_signal_handlers()?;
     }
 
     server.run_persisting(state_path);
     Ok(())
+}
+
+/// Detach the serving `--restart` process from the terminal it was typed
+/// into: fork, the parent reports success and exits, the child calls
+/// `setsid` and moves stdio to `/dev/null` before serving (tmux's
+/// `daemon(1,0)` shape). Unfixed, `par-mux --restart NAME &` stayed in the
+/// shell's job, so closing that terminal SIGHUP-killed the daemon and every
+/// pane with no save.
+///
+/// Must run while the process is still single-threaded (fork discipline);
+/// everything before serve mode — argument parsing, the `--stop` half of
+/// `--restart` — qualifies.
+#[cfg(unix)]
+fn daemonize() -> std::io::Result<()> {
+    use nix::unistd::{fork, setsid, ForkResult};
+    use std::io::Write as _;
+    use std::os::fd::AsRawFd as _;
+
+    // Flush the stop-phase report lines before the fork duplicates buffers.
+    let _ = std::io::stderr().flush();
+    match unsafe { fork() }.map_err(std::io::Error::from)? {
+        ForkResult::Parent { .. } => std::process::exit(0),
+        ForkResult::Child => {
+            // The daemon now leads its own session, no controlling tty. The
+            // old terminal may close at any moment; nothing the daemon
+            // prints is load-bearing (the state file is the durable
+            // record), so stdio lands on /dev/null as daemon() specifies.
+            setsid().map_err(std::io::Error::from)?;
+            let null = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open("/dev/null")?;
+            let fd = null.as_raw_fd();
+            for target in [0, 1, 2] {
+                // libc rather than nix::unistd: nix 0.31 no longer ships dup2.
+                if unsafe { libc::dup2(fd, target) } == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// The running server's per-instance shutdown flag (ARC-016), published for
@@ -281,17 +330,37 @@ extern "C" fn on_sigterm(_signum: i32) {
     }
 }
 
-/// Install the SIGTERM handler. The accept loop notices the shutdown flag on
-/// its own tick, so no SA_RESTART subtleties are involved.
+/// Install the daemon's signal dispositions. SIGTERM requests the clean
+/// shutdown (the accept loop notices the shutdown flag on its own tick, so
+/// no SA_RESTART subtleties are involved); the terminal-generated set is
+/// ignored, because a daemon whose clients and panes outlive any one
+/// terminal must survive that terminal's hangup and stray Ctrl-C/Ctrl-Z —
+/// tmux installs the same ignore set on its server. SIGHUP: closing
+/// terminal; SIGINT/SIGQUIT: Ctrl-C / Ctrl-\; SIGTSTP: Ctrl-Z; SIGPIPE: a
+/// client socket closing mid-write.
 #[cfg(unix)]
-fn install_sigterm_handler() -> std::io::Result<()> {
+fn install_signal_handlers() -> std::io::Result<()> {
     use nix::sys::signal::{self, SaFlags, SigAction, SigHandler};
-    let action = SigAction::new(
+    let shutdown = SigAction::new(
         SigHandler::Handler(on_sigterm),
         SaFlags::empty(),
         signal::SigSet::empty(),
     );
-    unsafe { signal::sigaction(signal::SIGTERM, &action) }.map_err(std::io::Error::other)?;
+    unsafe { signal::sigaction(signal::SIGTERM, &shutdown) }.map_err(std::io::Error::other)?;
+    let ignore = SigAction::new(
+        SigHandler::SigIgn,
+        SaFlags::empty(),
+        signal::SigSet::empty(),
+    );
+    for terminal_signal in [
+        signal::SIGHUP,
+        signal::SIGINT,
+        signal::SIGQUIT,
+        signal::SIGPIPE,
+        signal::SIGTSTP,
+    ] {
+        unsafe { signal::sigaction(terminal_signal, &ignore) }.map_err(std::io::Error::other)?;
+    }
     Ok(())
 }
 

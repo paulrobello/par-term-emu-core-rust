@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`par-mux --cmd` no longer echoes the full command on a transport failure**, only its name, since arguments can carry environment values.
 - **Breaking for embedders: `PaneFactory::create_pane` takes a `&SpawnContext`** (`src/mux/pane.rs`). The context carries the owning session and window and the session environment. `ShellPaneFactory` and `AgentPaneFactory` gain a `bin_path` field exported as `PAR_MUX_BIN`. Custom factories add the parameter and pass it through to `ShellPaneFactory::create_pane` when they delegate.
 
+### Fixed
+- **par-mux no longer dies with the terminal that started it** (`src/mux/client.rs`, `src/bin/par_mux/main.rs`). The auto-spawned daemon ran in the spawner's process group with a controlling tty, so a terminal hangup or Ctrl-C killed it — and every pane — with no final save; `par-mux --restart NAME &` stayed in the shell's job with the same failure. The auto-spawned daemon now `setsid`s into its own session before exec, `--restart` detaches before serving (fork + `setsid` + stdio to `/dev/null`, returning immediately — no `&` needed), and the serving daemon ignores SIGHUP, SIGINT, SIGQUIT, SIGTSTP, and SIGPIPE (tmux's server ignore set; SIGTERM remains the clean shutdown path). `MuxClient::spawned_daemon_pid` exposes the auto-spawned daemon's pid for session/process-group assertions. See [docs/MUX.md](docs/MUX.md#shutdown-semantics).
+
 ## [0.51.0] - 2026-09-24
 
 ### Added

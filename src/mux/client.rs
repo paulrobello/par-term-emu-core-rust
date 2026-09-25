@@ -191,6 +191,16 @@ impl MuxClient {
             None => Ok(()),
         }
     }
+
+    /// The pid of the daemon this client auto-spawned, if it started one.
+    ///
+    /// The exec preserves the pid, so this is the serving daemon's pid for
+    /// as long as it lives. Tests assert session/process-group facts about
+    /// the spawned daemon through it; `kill_spawned_daemon` remains the way
+    /// to end it.
+    pub fn spawned_daemon_pid(&self) -> Option<u32> {
+        self.spawned_daemon.as_ref().map(|child| child.id())
+    }
 }
 
 /// One command's reply block: its body lines, and whether the daemon closed
@@ -361,23 +371,40 @@ fn path_daemon_candidates(path_var: &std::ffi::OsStr, file_name: &str) -> Vec<Pa
 /// dropping it (as an earlier version did) orphans a live process, one leak
 /// per spawn.
 fn spawn_daemon(bin: &Path, socket: &Path) -> io::Result<std::process::Child> {
-    std::process::Command::new(bin)
+    let mut command = std::process::Command::new(bin);
+    command
         .arg("--socket")
         .arg(socket)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|err| {
-            io::Error::new(
-                err.kind(),
-                format!(
-                    "cannot start the par-mux daemon binary at {}: {err} — build it \
+        .stderr(std::process::Stdio::null());
+    // Detach into a fresh session (herdr's pre_exec setsid; tmux daemonizes
+    // its server for the same reason): a daemon left in the spawner's
+    // process group dies with that terminal's SIGHUP/SIGINT — taking every
+    // pane, unsaved — and Ctrl-Z stops it. After setsid it leads its own
+    // session with no controlling tty, so terminal-generated signals can
+    // never reach it. Between fork and exec the child's pid cannot equal any
+    // existing pgid, so the setsid cannot fail with EPERM.
+    #[cfg(unix)]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!(
+                "cannot start the par-mux daemon binary at {}: {err} — build it \
                      or place it next to the executable",
-                    bin.display()
-                ),
-            )
-        })
+                bin.display()
+            ),
+        )
+    })
 }
 
 #[cfg(test)]

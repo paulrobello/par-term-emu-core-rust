@@ -547,3 +547,230 @@ fn version_reports_the_daemon_build_stamp() {
     drop(writer);
     let _ = handle;
 }
+
+/// The auto-spawned daemon must leave the spawner's session (the gap audit
+/// behind card 01a0d9b2f53e killed real daemons this way: a SIGHUP to the
+/// spawner's process group took the daemon and every pane with it, no
+/// save). `setsid` in `spawn_daemon` puts it in a fresh session with no
+/// controlling tty, so terminal-generated signals can never reach it —
+/// asserted here as: the daemon leads its own session, that session is not
+/// the test's, and it still serves.
+#[cfg(unix)]
+#[test]
+fn the_auto_spawned_daemon_runs_in_its_own_session() {
+    use nix::unistd::{getpgid, getpgrp, getsid, Pid};
+    use par_term_emu_core_rust::mux::MuxClient;
+
+    let fixture = MuxFixture::new("setsid");
+    let mut client =
+        MuxClient::connect_or_spawn_at(fixture.socket()).expect("the daemon spawns and serves");
+    let daemon = client
+        .spawned_daemon_pid()
+        .expect("this client started its daemon");
+    let daemon = Pid::from_raw(daemon as i32);
+
+    let session = getsid(Some(daemon)).expect("the daemon's session");
+    let group = getpgid(Some(daemon)).expect("the daemon's process group");
+    assert_eq!(
+        session.as_raw(),
+        daemon.as_raw(),
+        "setsid ran: the daemon leads its own session"
+    );
+    assert_ne!(
+        session.as_raw(),
+        getsid(None).expect("the test's own session").as_raw(),
+        "the daemon left the spawner's session"
+    );
+    assert_ne!(
+        group.as_raw(),
+        getpgrp().as_raw(),
+        "the daemon left the spawner's process group"
+    );
+
+    let reply = client
+        .send_checked("list-sessions")
+        .expect("the detached daemon still serves");
+    assert!(reply.ok, "list-sessions succeeds: {:?}", reply.body);
+
+    client.kill_spawned_daemon().expect("teardown kill");
+}
+
+/// Terminal-generated signals must not stop a serving daemon (tmux ignores
+/// the same set on its server): SIGHUP from a closing terminal, SIGINT and
+/// SIGQUIT from Ctrl-C / Ctrl-\, SIGTSTP from Ctrl-Z, SIGPIPE from a client
+/// socket closing mid-write. SIGTERM stays the clean shutdown path, re-proven
+/// by the teardown.
+#[cfg(unix)]
+#[test]
+fn terminal_signals_leave_the_daemon_serving() {
+    use nix::sys::signal::{self, Signal};
+    use nix::unistd::Pid;
+
+    let fixture = MuxFixture::new("sigignore");
+    let mut child = common::spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let stream = connect_local_stream(fixture.socket()).expect("daemon accepts");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s live");
+
+    let daemon = Pid::from_raw(child.id() as i32);
+    for sig in [
+        Signal::SIGHUP,
+        Signal::SIGINT,
+        Signal::SIGQUIT,
+        Signal::SIGTSTP,
+        Signal::SIGPIPE,
+    ] {
+        signal::kill(daemon, sig).unwrap_or_else(|e| panic!("{sig:?} delivered: {e}"));
+        // A daemon that died sees EOF (command's own assert) or stops
+        // answering (the read blocks); either way this line is the failure.
+        let reply = command(&mut writer, &mut reader, "list-sessions").join("");
+        assert!(
+            reply.contains("live"),
+            "the daemon still serves after {sig:?}: {reply}"
+        );
+    }
+    drop((writer, reader));
+
+    common::sigterm_clean(&mut child);
+}
+
+/// `--restart` must leave a daemon that survives the terminal it was typed
+/// into: it detaches before serving (fork + setsid + stdio to /dev/null,
+/// tmux's daemon(1,0) shape), so the invocation itself returns immediately
+/// and the serving process leads its own session. Unfixed, `--restart &`
+/// stays in the shell's job and closing that terminal kills every pane.
+#[cfg(unix)]
+#[test]
+fn restart_detaches_before_serving() {
+    use nix::sys::signal::{self, Signal};
+    use nix::unistd::Pid;
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("restart-detach");
+
+    // The parent half: must exit promptly and successfully.
+    let mut restart = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .arg("--restart")
+        .env_remove("PAR_MUX_ENV")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("--restart spawns");
+    // Bounded: unfixed, --restart serves in this process forever, and a bare
+    // wait() would hang the suite instead of reporting the failure.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    let exited = loop {
+        match restart.try_wait().expect("--restart is waitable") {
+            Some(status) => break status,
+            None if Instant::now() > deadline => {
+                let _ = restart.kill();
+                panic!("--restart never returned; it must detach instead of serving in-process")
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+    assert!(
+        exited.success(),
+        "--restart reports success from its parent half: {exited:?}"
+    );
+
+    // The serving half: a detached grandchild owns the socket.
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while connect_local_stream(fixture.socket()).is_err() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let stream = connect_local_stream(fixture.socket()).expect("the detached daemon serves");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let reply = command(&mut writer, &mut reader, "list-sessions").join("");
+    assert!(!reply.contains("%error"), "fresh daemon serves: {reply}");
+    drop((writer, reader));
+
+    // Detach proof: find the serving process by its unique socket path (ps
+    // only locates the pid — macOS `ps -o sess` reports 0 for every process,
+    // so the session facts come from the getsid/getpgid syscalls instead),
+    // then assert it leads its own session and is neither the exited
+    // parent's pid nor the test's session.
+    let mut daemon_pid = None;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while daemon_pid.is_none() && Instant::now() < deadline {
+        let ps = Command::new("ps")
+            .args(["-ww", "-axo", "pid=,args="])
+            .output()
+            .expect("ps runs");
+        let needle = fixture.socket().to_string_lossy().to_string();
+        for line in String::from_utf8_lossy(&ps.stdout).lines() {
+            let Some(pid) = line.split_whitespace().next() else {
+                continue;
+            };
+            if !line.contains("par-mux") || !line.contains(&needle) {
+                continue;
+            }
+            let pid: i32 = pid.parse().unwrap();
+            assert_ne!(
+                pid,
+                restart.id() as i32,
+                "the server is not the exited --restart parent"
+            );
+            daemon_pid = Some(pid);
+            break;
+        }
+        if daemon_pid.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let Some(daemon_pid) = daemon_pid else {
+        panic!(
+            "no serving par-mux process found for {}",
+            fixture.socket().display()
+        );
+    };
+    let daemon_pid = Pid::from_raw(daemon_pid);
+    let session = nix::unistd::getsid(Some(daemon_pid)).expect("the serving process's session");
+    assert_eq!(
+        session.as_raw(),
+        daemon_pid.as_raw(),
+        "setsid ran: the serving process leads its own session"
+    );
+    assert_ne!(
+        session.as_raw(),
+        nix::unistd::getsid(None)
+            .expect("the test's session")
+            .as_raw(),
+        "the serving process left the invoker's session"
+    );
+    assert_ne!(
+        nix::unistd::getpgid(Some(daemon_pid))
+            .expect("the serving process's group")
+            .as_raw(),
+        nix::unistd::getpgrp().as_raw(),
+        "the serving process left the invoker's process group"
+    );
+
+    // Teardown: the documented stop path, which also waits for the exit.
+    let status = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--stop")
+        .env_remove("PAR_MUX_ENV")
+        .status()
+        .expect("--stop runs");
+    assert!(
+        status.success(),
+        "--stop reaps the detached daemon: {status:?}"
+    );
+    // The stopped pid must be gone (bounded probe; init reaps the orphan).
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if signal::kill(daemon_pid, Some(Signal::SIGCONT)).is_err() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}

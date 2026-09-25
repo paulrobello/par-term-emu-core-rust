@@ -51,13 +51,13 @@ par-mux --socket <path>     Bind an explicit socket path
 par-mux                     Same as par-mux default
 par-mux --state-dir <dir>   Override the platform state directory the tree is persisted under
 par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
-par-mux [<name>] --restart  Stop, then serve the same socket in this process
+par-mux [<name>] --restart  Stop, then serve the same socket from a detached process
 par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
 ```
 
 `--socket <path>` is what `MuxClient::connect_or_spawn_at` passes when it starts a daemon. A second daemon on a path a live server already owns is refused with "another server owns <path>"; a stale socket remnant (dead socket file, Windows marker file, or a stray regular file at the path) is reclaimed.
 
-`--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket in this process — the state save the stop just completed is what it restores. Run it detached (e.g. `par-mux --restart NAME &`) to keep a shell; this is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
+`--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket from a detached process — the state save the stop just completed is what it restores. The invocation returns as soon as the daemon detaches (fork + `setsid`, stdio to `/dev/null`), so no `&` is needed and closing the terminal it was typed into leaves the daemon and its panes running. This is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
 
 ### Nested daemons
 
@@ -296,6 +296,7 @@ A pane whose child process exits on its own (as opposed to via `kill-pane`) is d
 
 - **SIGTERM**: the handler makes one atomic store on the server's per-instance shutdown flag. The accept loop notices on its idle tick, broadcasts `%exit` to every client, and a final save captures content that arrived since the last structural save.
 - **`kill-server`**: the client-initiated equivalent of SIGTERM — raises the same shutdown flag, so it takes the identical path (reply out, accept loop exits, final save, `%exit` to clients). `par-mux --stop`/`--restart` (see [Command Line](#command-line)) send this and wait for the socket to stop accepting.
+- **Ignored signals** (Unix): SIGHUP, SIGINT, SIGQUIT, SIGTSTP, and SIGPIPE are installed as ignored while serving, so a terminal hangup or stray Ctrl-C/Ctrl-Z cannot stop a daemon whose panes outlive any one terminal (tmux's server does the same). The auto-spawned daemon additionally starts in its own session with no controlling tty (`setsid` in `spawn_daemon`), so terminal-generated signals never reach it in the first place.
 - **SIGKILL**: skips all of this and loses the last window's worth of unsaved content — an accepted trade (the design's D3.3), not a bug.
 - Each `MuxServer` instance has its own shutdown flag; stopping one does not affect another server in the same process.
 
@@ -360,4 +361,4 @@ The integration suites live in `tests/mux_*.rs` (`mux_daemon`, `mux_restart`, `m
 | `src/mux/agent_resume.rs` | The per-agent resume invocation table |
 | `src/mux/client.rs` | `MuxClient`: connect/attach, `send`, notifications, spawn/kill daemon |
 | `src/mux/patterns/` | Bundled scrape patterns: `claude.toml`, `codex.toml`, `grok.toml` |
-| `src/bin/par_mux/main.rs` | The daemon binary: CLI, state load/quarantine, SIGTERM handler |
+| `src/bin/par_mux/main.rs` | The daemon binary: CLI, state load/quarantine, signal handlers, `--restart` detach |
