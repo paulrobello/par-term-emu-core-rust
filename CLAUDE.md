@@ -73,6 +73,12 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 # 4. Compile gate (test code needs --all-targets on Windows; no --locked — Cargo.lock is not tracked, cargo resolves fresh)
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
 
+# 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
+#     As of 2026-09-25 the mux::persist filter has 7 known latent failures from
+#     unix-only assumptions (card 01a0dae97f437291b544a6db14564d5c) — control-run
+#     against a pre-change archive before blaming your diff.
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux::persist -- --test-threads=1"
+
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```
 
