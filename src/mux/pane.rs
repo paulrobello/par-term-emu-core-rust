@@ -1,5 +1,6 @@
 //! Panes: PTY ownership, output plumbing, and the factory seam.
 
+use crate::mux::agent_resume::render_surviving;
 use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::pty_error::PtyError;
 use crate::pty_session::PtySession;
@@ -338,6 +339,27 @@ pub trait PaneFactory: Send + Sync {
         command: Option<&str>,
         context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError>;
+
+    /// Create a pane from STRUCTURED argv — the restore path's agent-resume
+    /// seam. Windows cannot carry an argv through a cmd.exe string
+    /// re-parse (the spawn layer quotes for CreateProcess, which cmd then
+    /// re-tokenizes with its own rules), so implementors that can spawn
+    /// argv without a shell should override. The default renders through
+    /// [`agent_resume::render_surviving`] into the string path — exact on
+    /// POSIX `sh`, and the historical behavior every factory shipped with.
+    fn create_argv_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        argv: &[String],
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        if argv.is_empty() {
+            return self.create_pane(id, cols, rows, None, context);
+        }
+        self.create_pane(id, cols, rows, Some(&render_surviving(argv)), context)
+    }
 }
 
 /// The default factory: spawns the user's shell, or an explicit command.
@@ -357,15 +379,17 @@ pub struct ShellPaneFactory {
     pub bin_path: Option<String>,
 }
 
-impl PaneFactory for ShellPaneFactory {
-    fn create_pane(
+impl ShellPaneFactory {
+    /// A PTY session carrying the spawn's cwd and env contract — the shared
+    /// front half of every spawn path (shell command, structured argv,
+    /// default shell).
+    fn configured_session(
         &self,
         id: PaneId,
         cols: u16,
         rows: u16,
-        command: Option<&str>,
         context: &SpawnContext<'_>,
-    ) -> Result<MuxPane, MuxError> {
+    ) -> PtySession {
         let mut session = PtySession::new(cols as usize, rows as usize, DEFAULT_SCROLLBACK);
 
         // The per-spawn cwd (a restore re-landing a pane where it left off)
@@ -403,6 +427,32 @@ impl PaneFactory for ShellPaneFactory {
         if let Some(bin) = &self.bin_path {
             session.set_env("PAR_MUX_BIN", bin);
         }
+        session
+    }
+
+    /// The shared back half: wrap a spawned session as a pane.
+    fn finish_pane(id: PaneId, session: PtySession, spawn_command: Option<String>) -> MuxPane {
+        MuxPane {
+            id,
+            session,
+            spawn_command,
+            user_title: None,
+            metadata: HashMap::new(),
+            snapshot_cache: Mutex::new(None),
+        }
+    }
+}
+
+impl PaneFactory for ShellPaneFactory {
+    fn create_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        let mut session = self.configured_session(id, cols, rows, context);
 
         match command {
             Some(cmd) => {
@@ -419,14 +469,34 @@ impl PaneFactory for ShellPaneFactory {
             None => session.spawn_shell()?,
         }
 
-        Ok(MuxPane {
+        Ok(Self::finish_pane(id, session, command.map(str::to_string)))
+    }
+
+    /// Windows: the resume argv spawns without a shell when `argv[0]`
+    /// resolves to a PE image, and through a self-deleting cmd bridge for
+    /// the npm `.cmd` shims — the transport choice lives in
+    /// [`win_resume`]. The recorded `spawn_command` stays the POSIX
+    /// rendering: it round-trips identity through persistence and is
+    /// never read back for execution.
+    #[cfg(windows)]
+    fn create_argv_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        argv: &[String],
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        if argv.is_empty() {
+            return self.create_pane(id, cols, rows, None, context);
+        }
+        let mut session = self.configured_session(id, cols, rows, context);
+        super::win_resume::spawn_resume_argv(&mut session, argv)?;
+        Ok(Self::finish_pane(
             id,
             session,
-            spawn_command: command.map(str::to_string),
-            user_title: None,
-            metadata: HashMap::new(),
-            snapshot_cache: Mutex::new(None),
-        })
+            Some(crate::mux::agent_resume::render_argv(argv)),
+        ))
     }
 }
 
@@ -470,6 +540,27 @@ impl PaneFactory for AgentPaneFactory {
             bin_path: self.bin_path.clone(),
         };
         let mut pane = shell.create_pane(id, cols, rows, command, context)?;
+        pane.set_metadata("agent", &self.agent);
+        Ok(pane)
+    }
+
+    /// Delegates to [`ShellPaneFactory`]'s argv path so a Windows resume
+    /// keeps the shell-free transport, then tags the agent identity the
+    /// same way [`AgentPaneFactory::create_pane`] does.
+    fn create_argv_pane(
+        &self,
+        id: PaneId,
+        cols: u16,
+        rows: u16,
+        argv: &[String],
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        let shell = ShellPaneFactory {
+            cwd: self.cwd.clone(),
+            socket_path: self.socket_path.clone(),
+            bin_path: self.bin_path.clone(),
+        };
+        let mut pane = shell.create_argv_pane(id, cols, rows, argv, context)?;
         pane.set_metadata("agent", &self.agent);
         Ok(pane)
     }

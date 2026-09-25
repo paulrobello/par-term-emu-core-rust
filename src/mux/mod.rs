@@ -21,6 +21,7 @@ pub mod persist;
 pub mod scrape;
 pub mod server;
 pub mod tree;
+pub mod win_resume;
 
 /// Per-command dispatch — private, reached only through `server` (the
 /// socket loop) and its line-level test shims.

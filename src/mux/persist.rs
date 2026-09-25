@@ -7,7 +7,7 @@
 //! (D3.5: spawn first, restore second — startup bytes must not overwrite a
 //! restored screen).
 
-use crate::mux::agent_resume::{render_surviving, resume_invocation};
+use crate::mux::agent_resume::resume_invocation;
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
@@ -336,21 +336,20 @@ impl MuxTree {
                     // The effective command (D6.3): a resumable agent
                     // session rewrites what the pane respawns as — the
                     // hook-reported invocation first, the per-agent table
-                    // second. Every failure mode of that chain is an Option
-                    // degrading to the pane's original `spawn_command`,
-                    // exactly Phase 3 behavior; no retry and no probe (an
-                    // agent that accepts a resume flag and starts fresh is
-                    // 6.4's after-the-fact question, not spawn time's).
-                    // A chain that BUILDS but fails at runtime (uninstalled
-                    // binary, rejected session id) renders with a fallback
-                    // tail so the failure lands the pane on a live shell
-                    // rather than a reaper deletion.
-                    let effective = pane
-                        .agent_session
-                        .as_ref()
-                        .and_then(resume_invocation)
-                        .map(|argv| render_surviving(&argv))
-                        .or_else(|| pane.spawn_command.clone());
+                    // second, handed to the factory as STRUCTURED argv so
+                    // Windows can spawn without a cmd.exe string re-parse
+                    // (the factory's string path POSIX-quotes, which cmd
+                    // treats as literal characters). Every failure mode of
+                    // that chain is an Option degrading to the pane's
+                    // original `spawn_command`, exactly Phase 3 behavior;
+                    // no retry and no probe (an agent that accepts a resume
+                    // flag and starts fresh is 6.4's after-the-fact
+                    // question, not spawn time's). A chain that BUILDS but
+                    // fails at runtime (uninstalled binary, rejected
+                    // session id) renders with a fallback tail so the
+                    // failure lands the pane on a live shell rather than a
+                    // reaper deletion.
+                    let resume_argv = pane.agent_session.as_ref().and_then(resume_invocation);
                     // The persisted cwd re-lands the pane where it left off.
                     // A directory that vanished between save and restore
                     // would fail the spawn, so it degrades to home — the
@@ -379,13 +378,22 @@ impl MuxTree {
                         env: Some(&session.env),
                         cwd: cwd.as_deref(),
                     };
-                    let mut created = factory.create_pane(
-                        PaneId(pane.id),
-                        window.cols,
-                        window.rows,
-                        effective.as_deref(),
-                        &context,
-                    )?;
+                    let mut created = match resume_argv {
+                        Some(argv) => factory.create_argv_pane(
+                            PaneId(pane.id),
+                            window.cols,
+                            window.rows,
+                            &argv,
+                            &context,
+                        )?,
+                        None => factory.create_pane(
+                            PaneId(pane.id),
+                            window.cols,
+                            window.rows,
+                            pane.spawn_command.as_deref(),
+                            &context,
+                        )?,
+                    };
                     // Identity comes back as metadata so the format
                     // round-trips and task 6.3's hook-first lookup reads it
                     // from the same place it reads a live pane's. Only the
@@ -1956,6 +1964,74 @@ mod tests {
             session.resume_argv.as_deref(),
             Some(r#"["par-mux-test-no-such-binary","--resume","s-1"]"#)
         );
+    }
+
+    /// Card 01a0d9b38c98: a Windows restore hands the resume argv to the
+    /// process verbatim, with no cmd.exe string re-parse in between (the
+    /// POSIX single-quote rendering made cmd treat `'claude'` as the
+    /// program name, so every resume failed). The observer is
+    /// powershell.exe — a PE, so the direct transport — printing each
+    /// argument between markers; a session path carrying a space, an `&`,
+    /// and a quote must arrive byte-identical.
+    #[test]
+    #[cfg(windows)]
+    fn a_windows_resume_receives_the_exact_arguments() {
+        let script = std::env::temp_dir().join("par-mux-resume-observer.ps1");
+        std::fs::write(
+            &script,
+            "foreach ($a in $args) { Write-Output \"ARG<$a>\" }\r\n",
+        )
+        .unwrap();
+        let tricky = "C:\\my sessions\\s 1 & continue's.txt";
+        // Serialize with serde_json — hand-splicing Windows paths into a
+        // JSON literal produces invalid \-escapes, which the resume chain
+        // would (correctly) reject back to the table.
+        let argv = serde_json::to_string(&vec![
+            "powershell.exe".to_string(),
+            "-NoProfile".to_string(),
+            // The default policy on a stock Windows blocks .ps1 files.
+            "-ExecutionPolicy".to_string(),
+            "Bypass".to_string(),
+            "-File".to_string(),
+            script.display().to_string(),
+            tricky.to_string(),
+            "plain".to_string(),
+        ])
+        .unwrap();
+        let (tree, pane_id) = tree_with_metadata(&[
+            ("agent", "pi"),
+            ("agent_session_id", "s-1"),
+            ("agent_resume_argv", &argv),
+        ]);
+        let state = tree.to_persist_state();
+        let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+            .expect("restore completes");
+
+        // powershell's first start under a fresh ConPTY can take seconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        let text = loop {
+            let snapshot = restored
+                .pane(pane_id)
+                .unwrap()
+                .terminal()
+                .read()
+                .capture_snapshot();
+            let mut text: String = snapshot.grid.scrollback_cells.iter().map(|c| c.c).collect();
+            text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+            if text.contains("ARG<plain>") || std::time::Instant::now() >= deadline {
+                break text;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        };
+        assert!(
+            text.contains(&format!("ARG<{tricky}>")),
+            "the tricky argument arrived byte-identical, saw: {text:?}"
+        );
+        assert!(
+            text.contains("ARG<plain>"),
+            "every argument arrived, saw: {text:?}"
+        );
+        let _ = std::fs::remove_file(&script);
     }
 
     /// Task 6.3 criterion 3: a non-agent pane restores byte-identically to

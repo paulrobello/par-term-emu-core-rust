@@ -120,8 +120,9 @@ pub(crate) const SURVIVING_TAIL: &str = " || { printf 'par-mux: agent resume fai
 /// half-initialized pane"): the invocation runs; only on a non-zero exit
 /// does the pane drop into a live shell carrying the restored screen and
 /// scrollback. On Windows the tail's POSIX syntax would reach cmd.exe
-/// verbatim, so the invocation stays bare there — cmd.exe resume quoting
-/// is tracked as its own gap.
+/// verbatim, so the invocation stays bare there — the Windows spawn itself
+/// goes through [`crate::mux::win_resume`]'s structured-argv path, which
+/// never renders through this function.
 pub fn render_surviving(argv: &[String]) -> String {
     let rendered = render_argv(argv);
     if cfg!(windows) {
@@ -351,7 +352,8 @@ mod tests {
             .collect();
         if cfg!(windows) {
             // cmd.exe cannot parse the POSIX tail; the invocation stays
-            // bare there (its cmd.exe quoting is a separate open gap).
+            // bare here. Windows resume spawns never render through this
+            // function — they take win_resume's structured-argv path.
             assert_eq!(render_surviving(&argv), render_argv(&argv));
         } else {
             assert_eq!(
