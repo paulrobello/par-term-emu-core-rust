@@ -149,6 +149,60 @@ fn a_multi_line_reply_prints_one_line_per_reply_line_without_framing() {
     );
 }
 
+/// `split-window -c DIR` (card 01a0d9b2fb02): the new pane's shell actually
+/// runs in DIR — `pwd` names it — and a `-c` naming a directory that does
+/// not exist succeeds anyway, degrading to home with a visible note.
+#[test]
+#[cfg(unix)]
+fn split_window_c_starts_the_pane_in_the_directory() {
+    let fixture = MuxFixture::new("clicwd");
+    let _daemon = daemon_with_session(&fixture, "clicwd");
+    let socket = fixture.socket();
+    let first = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let target_dir = dir.path().canonicalize().unwrap();
+    let split = cmd_ok(
+        socket,
+        &format!("split-window -t {first} -c {}", dir.path().display()),
+    )
+    .trim()
+    .to_string();
+    cmd_ok(socket, &format!("send-keys -t {split} 'pwd' Enter"));
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {split}"));
+        if screen
+            .lines()
+            .any(|l| l.trim() == target_dir.to_str().unwrap())
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the split pane never reported the -c cwd; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    // A gone directory degrades to home rather than failing the command;
+    // the note is on the new pane's screen.
+    let gone = cmd_ok(
+        socket,
+        &format!("split-window -t {first} -c /nonexistent-par-mux-c"),
+    )
+    .trim()
+    .to_string();
+    let noted = cmd_ok(socket, &format!("capture-pane -t {gone}"));
+    assert!(
+        noted.contains("is gone; pane started in"),
+        "the fallback note is visible; screen:\n{noted}"
+    );
+}
+
 #[test]
 fn an_error_reply_exits_non_zero_with_the_message_on_stderr() {
     let fixture = MuxFixture::new("clierr");

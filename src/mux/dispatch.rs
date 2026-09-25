@@ -25,6 +25,7 @@ use crate::mux::server::{
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, SyncSender};
 use std::sync::Arc;
 
@@ -158,13 +159,18 @@ pub(super) fn dispatch_command(
             pane,
             direction,
             percent,
-        } => cmd_split_window(ctx, pane, direction, percent),
+            start_dir,
+        } => cmd_split_window(ctx, pane, direction, percent, start_dir.as_deref()),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
         MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
-        MuxCommand::NewWindow { session, name } => cmd_new_window(ctx, session, name),
+        MuxCommand::NewWindow {
+            session,
+            name,
+            start_dir,
+        } => cmd_new_window(ctx, session, name, start_dir.as_deref()),
         MuxCommand::SelectWindow { window } => cmd_select_window(ctx, window),
         MuxCommand::KillWindow { window } => cmd_kill_window(ctx, window),
         MuxCommand::RenameWindow { window, name } => cmd_rename_window(ctx, window, name),
@@ -432,26 +438,64 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     }
 }
 
+/// Resolve a `split-window -c` / `new-window -c` start directory: an
+/// existing directory is used as-is; one that does not exist degrades to
+/// home — the command's success may not depend on a directory this
+/// process does not control (the restore path's rule for a gone persisted
+/// cwd) — and the returned note names both so the pane says where it
+/// landed instead of silently starting elsewhere.
+fn resolve_start_dir(start_dir: Option<&str>) -> (Option<PathBuf>, Option<String>) {
+    let Some(raw) = start_dir else {
+        return (None, None);
+    };
+    let dir = Path::new(raw);
+    if dir.is_dir() {
+        return (Some(dir.to_path_buf()), None);
+    }
+    let home = dirs::home_dir().unwrap_or_default();
+    let note = home.is_dir().then(|| {
+        format!(
+            "\r\npar-mux: {raw} is gone; pane started in {}\r\n",
+            home.display()
+        )
+    });
+    (home.is_dir().then_some(home), note)
+}
+
 fn cmd_split_window(
     ctx: &Ctx<'_>,
     pane: Target<PaneId>,
     direction: SplitDirection,
     percent: u32,
+    start_dir: Option<&str>,
 ) -> Outcome {
+    let (cwd, note) = resolve_start_dir(start_dir);
     let outcome = {
         let mut guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        let split = guard.split_pane_in_window(pane, direction, percent as f32 / 100.0, None);
+        let split = guard.split_pane_in_window(
+            pane,
+            direction,
+            percent as f32 / 100.0,
+            None,
+            cwd.as_deref(),
+        );
         // Wire the new pane's output to the clients, as new-session and
         // new-window do for theirs. Without it the pane's PTY still feeds
         // the daemon grid (capture-pane shows it) but no %output line ever
         // leaves, so every client renders a blank split pane.
-        if let Ok((new_pane, _)) = split {
-            if let Some(created) = guard.pane_mut(new_pane) {
-                created.on_output(pane_output_sink(ctx.clients, new_pane));
+        if let Ok((new_pane, _)) = &split {
+            if let Some(created) = guard.pane_mut(*new_pane) {
+                created.on_output(pane_output_sink(ctx.clients, *new_pane));
+                if let Some(note) = &note {
+                    // Same visibility rule as a restore's gone cwd: the
+                    // pane says where it landed instead of silently
+                    // starting elsewhere.
+                    created.terminal().write().process(note.as_bytes());
+                }
             }
         }
         split
@@ -583,8 +627,10 @@ fn cmd_new_window(
     ctx: &Ctx<'_>,
     session: Option<Target<SessionId>>,
     name: Option<String>,
+    start_dir: Option<&str>,
 ) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
+    let (cwd, note) = resolve_start_dir(start_dir);
     let outcome = {
         let mut guard = ctx.tree.lock();
         // Bare `new-window` targets the most-recently-created
@@ -599,7 +645,7 @@ fn cmd_new_window(
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
         guard
-            .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
+            .new_window_with_cwd(session, &name, DEFAULT_COLS, DEFAULT_ROWS, cwd.as_deref())
             .inspect(|&window_id| {
                 // Wire the new window's pane the same way new-session does.
                 let pane_ids = guard
@@ -609,6 +655,10 @@ fn cmd_new_window(
                 for pane_id in pane_ids {
                     if let Some(pane) = guard.pane_mut(pane_id) {
                         pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                        if let Some(note) = &note {
+                            // Same visibility rule as a restore's gone cwd.
+                            pane.terminal().write().process(note.as_bytes());
+                        }
                     }
                 }
             })
@@ -833,4 +883,30 @@ fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
 /// state that a long-lived daemon could have torn down.
 fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, crate::mux::build_stamp())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_start_dir;
+
+    /// The `-c` degrade rule (card 01a0d9b2fb02): an existing directory
+    /// passes through untouched; a missing one falls back to home with a
+    /// note naming both — the command must not fail because a directory
+    /// this process does not control vanished.
+    #[test]
+    fn a_gone_start_directory_degrades_to_home_with_a_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cwd, note) = resolve_start_dir(dir.path().to_str());
+        assert_eq!(cwd.as_deref(), Some(dir.path()));
+        assert!(note.is_none(), "an existing dir needs no note");
+
+        let (cwd, note) = resolve_start_dir(Some("/par-mux-test-no-such-dir"));
+        let home = dirs::home_dir().unwrap();
+        assert_eq!(cwd.as_deref(), Some(home.as_path()));
+        let note = note.expect("the fallback is visible");
+        assert!(
+            note.contains("/par-mux-test-no-such-dir is gone") && note.contains("pane started in"),
+            "note names the gone dir and the landing dir: {note}"
+        );
+    }
 }

@@ -80,6 +80,10 @@ pub enum MuxCommand {
         session: Option<Target<SessionId>>,
         /// Window name; a default is chosen when absent.
         name: Option<String>,
+        /// `-c`: the new pane's start directory. Absent keeps the
+        /// factory-wide default; a directory that does not exist degrades
+        /// to home at dispatch rather than failing the command.
+        start_dir: Option<String>,
     },
     /// Set a session's active window.
     SelectWindow {
@@ -115,6 +119,9 @@ pub enum MuxCommand {
         /// `-p`: percent of the split area given to the NEW pane, 50 when
         /// absent (tmux semantics — the target keeps the remainder).
         percent: u32,
+        /// `-c`: the new pane's start directory, with the same
+        /// degrade-to-home rule as `new-window -c`.
+        start_dir: Option<String>,
     },
     /// Make a pane its window's active pane.
     SelectPane {
@@ -832,6 +839,7 @@ fn parse_new_window(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::NewWindow {
         session: a.session("-t")?,
         name: a.quoted_flag("-n")?,
+        start_dir: a.quoted_flag("-c")?,
     })
 }
 
@@ -894,6 +902,7 @@ fn parse_split_window(a: &Args<'_>) -> Result<MuxCommand, String> {
         pane,
         direction,
         percent,
+        start_dir: a.quoted_flag("-c")?,
     })
 }
 
@@ -1089,6 +1098,7 @@ mod tests {
             MuxCommand::NewWindow {
                 session: Some(Target::Name("alpha".to_string())),
                 name: Some("logs".into()),
+                start_dir: None,
             }
         );
     }
@@ -1299,7 +1309,8 @@ mod tests {
             parse_command("new-window -t $0 -n '-s'").expect("parses"),
             MuxCommand::NewWindow {
                 session: Some(Target::Id(SessionId(0))),
-                name: Some("-s".into())
+                name: Some("-s".into()),
+                start_dir: None,
             }
         );
         // The name flag need not come first.
@@ -1307,7 +1318,8 @@ mod tests {
             parse_command("new-window -n 'two words' -t $0").expect("parses"),
             MuxCommand::NewWindow {
                 session: Some(Target::Id(SessionId(0))),
-                name: Some("two words".into())
+                name: Some("two words".into()),
+                start_dir: None,
             }
         );
     }
@@ -1329,7 +1341,8 @@ mod tests {
             parse_command("new-window -t $0 -n 'build and test'").expect("parses"),
             MuxCommand::NewWindow {
                 session: Some(Target::Id(SessionId(0))),
-                name: Some("build and test".into())
+                name: Some("build and test".into()),
+                start_dir: None,
             }
         );
         assert!(parse_command("new-window -t $0 -n ''").is_err());
@@ -1489,14 +1502,16 @@ mod tests {
             parse_command("new-window -t $0 -n build").unwrap(),
             MuxCommand::NewWindow {
                 session: Some(Target::Id(SessionId(0))),
-                name: Some("build".into())
+                name: Some("build".into()),
+                start_dir: None,
             }
         );
         assert_eq!(
             parse_command("new-window -t $0").unwrap(),
             MuxCommand::NewWindow {
                 session: Some(Target::Id(SessionId(0))),
-                name: None
+                name: None,
+                start_dir: None,
             }
         );
         // Bare new-window — the form tmux clients issue — targets the
@@ -1505,7 +1520,8 @@ mod tests {
             parse_command("new-window").unwrap(),
             MuxCommand::NewWindow {
                 session: None,
-                name: None
+                name: None,
+                start_dir: None,
             }
         );
     }
@@ -1619,7 +1635,8 @@ mod tests {
             MuxCommand::SplitWindow {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
-                percent: 50
+                percent: 50,
+                start_dir: None,
             }
         );
         assert_eq!(
@@ -1627,7 +1644,8 @@ mod tests {
             MuxCommand::SplitWindow {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
-                percent: 50
+                percent: 50,
+                start_dir: None,
             }
         );
         // -h: side by side; -p: the NEW pane's share.
@@ -1636,7 +1654,8 @@ mod tests {
             MuxCommand::SplitWindow {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Vertical,
-                percent: 25
+                percent: 25,
+                start_dir: None,
             }
         );
     }
@@ -1645,6 +1664,33 @@ mod tests {
     fn split_window_rejects_out_of_range_percent() {
         assert!(parse_command("split-window -t %0 -p 0").is_err());
         assert!(parse_command("split-window -t %0 -p 100").is_err());
+    }
+
+    /// `-c` names the new pane's start directory on both commands, quoting
+    /// included — a path with spaces survives the whitespace split.
+    #[test]
+    fn split_window_and_new_window_parse_a_start_directory() {
+        assert_eq!(
+            parse_command("split-window -t %0 -c /tmp").unwrap(),
+            MuxCommand::SplitWindow {
+                pane: Target::Id(PaneId(0)),
+                direction: SplitDirection::Horizontal,
+                percent: 50,
+                start_dir: Some("/tmp".into())
+            }
+        );
+        assert_eq!(
+            parse_command("new-window -t $0 -n logs -c '/tmp/my dir'").unwrap(),
+            MuxCommand::NewWindow {
+                session: Some(Target::Id(SessionId(0))),
+                name: Some("logs".into()),
+                start_dir: Some("/tmp/my dir".into())
+            }
+        );
+        // An explicitly empty -c is a client bug, same rule as an empty
+        // name: only quoting can express it, and silently defaulting away
+        // would hide it.
+        assert!(parse_command("split-window -t %0 -c ''").is_err());
     }
 
     #[test]
@@ -1861,6 +1907,7 @@ mod tests {
             MuxCommand::NewWindow {
                 session: None,
                 name: None,
+                start_dir: None,
             },
             MuxCommand::SelectWindow {
                 window: Target::Id(WindowId(0)),
@@ -1876,6 +1923,7 @@ mod tests {
                 pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
+                start_dir: None,
             },
             MuxCommand::SelectPane {
                 pane: Target::Id(PaneId(0)),

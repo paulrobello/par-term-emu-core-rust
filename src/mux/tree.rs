@@ -4,6 +4,7 @@ use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
+use std::path::Path;
 
 /// Kill a pane the tree has already removed, off the tree lock: killing is
 /// signal-then-reap with a bounded wait (portable-pty polls its SIGHUP
@@ -255,6 +256,20 @@ impl MuxTree {
         cols: u16,
         rows: u16,
     ) -> Result<WindowId, MuxError> {
+        self.new_window_with_cwd(session_id, name, cols, rows, None)
+    }
+
+    /// [`Self::new_window`] with a start directory for the new pane — the
+    /// `new-window -c` path. `None` keeps the factory-wide default; the
+    /// caller (dispatch) owns the gone-directory degrade-to-home rule.
+    pub fn new_window_with_cwd(
+        &mut self,
+        session_id: SessionId,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+    ) -> Result<WindowId, MuxError> {
         let session = self
             .sessions
             .get(&session_id)
@@ -266,7 +281,7 @@ impl MuxTree {
             session: Some((session_id, &session.name)),
             window: Some(window_id),
             env: Some(&session.env),
-            cwd: None,
+            cwd,
         };
         let pane = self
             .factory
@@ -303,19 +318,22 @@ impl MuxTree {
         new_share: f32,
         command: Option<&str>,
     ) -> Result<PaneId, MuxError> {
-        self.split_pane_in_window(target, direction, new_share, command)
+        self.split_pane_in_window(target, direction, new_share, command, None)
             .map(|(pane_id, _)| pane_id)
     }
 
     /// [`Self::split_pane`] also reporting the window the new pane landed
     /// in — the dispatcher's form, so its `%layout-change` broadcast names
-    /// the window without re-deriving it after the fact.
+    /// the window without re-deriving it after the fact. `cwd` is the
+    /// `split-window -c` start directory; `None` keeps the factory-wide
+    /// default and the caller owns the gone-directory degrade.
     pub fn split_pane_in_window(
         &mut self,
         target: PaneId,
         direction: SplitDirection,
         new_share: f32,
         command: Option<&str>,
+        cwd: Option<&Path>,
     ) -> Result<(PaneId, WindowId), MuxError> {
         let window_id = self
             .window_of_pane(target)
@@ -332,7 +350,7 @@ impl MuxTree {
             session: session.map(|s| (s.id, s.name.as_str())),
             window: Some(window_id),
             env: session.map(|s| &s.env),
-            cwd: None,
+            cwd,
         };
         let pane = self
             .factory
@@ -824,6 +842,42 @@ mod tests {
         let spawn = factory.spawn_of(pane);
         assert_eq!(spawn.session, Some((session, "work".to_string())));
         assert_eq!(spawn.window, Some(window));
+    }
+
+    /// `split-window -c` / `new-window -c`: the start directory reaches the
+    /// factory's spawn context on both dispatcher forms (the plain wrappers
+    /// keep the factory-wide default).
+    #[test]
+    fn a_start_directory_reaches_the_spawn_on_split_and_new_window() {
+        let (mut tree, factory) = recording_tree();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let target = tree.window(window).unwrap().panes()[0];
+        let dir = tempfile::tempdir().unwrap();
+        let (split, _) = tree
+            .split_pane_in_window(
+                target,
+                SplitDirection::Horizontal,
+                0.5,
+                None,
+                Some(dir.path()),
+            )
+            .unwrap();
+        assert_eq!(
+            factory.spawn_of(split).cwd.as_deref(),
+            Some(dir.path()),
+            "the split pane spawns in the -c directory"
+        );
+
+        let second = tree
+            .new_window_with_cwd(session, "second", 80, 24, Some(dir.path()))
+            .unwrap();
+        let pane = tree.window(second).unwrap().panes()[0];
+        assert_eq!(
+            factory.spawn_of(pane).cwd.as_deref(),
+            Some(dir.path()),
+            "the new window's pane spawns in the -c directory"
+        );
     }
 
     #[test]
