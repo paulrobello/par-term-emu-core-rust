@@ -18,6 +18,17 @@ import {
   themeToXtermOptions,
 } from '@/lib/protocol';
 import { TerminalConnection } from '@/lib/terminal-connection';
+import {
+  clamp,
+  clampPan,
+  fitWidthFontSize,
+  pinchPan,
+  surplusStrips,
+  MAX_ZOOM_FONT_SIZE,
+  MIN_ZOOM_FONT_SIZE,
+  type Point,
+  type Rect,
+} from '@/lib/viewport';
 
 interface TerminalProps {
   wsUrl: string;
@@ -68,6 +79,33 @@ const applyServerSize = (
   } finally {
     applying.current = false;
   }
+};
+
+// xterm's scrollbar overlays the right edge of the viewport (FitAddon reserves
+// this width when scrollback is on), so it is not surplus to dot-fill.
+const SCROLLBAR_RESERVE_PX = 14;
+
+// Show a strip of dim dots (tmux's unused-area fill) aligned to the grid's
+// cells, or hide the element when there is no strip.
+const paintDots = (
+  el: HTMLDivElement | null,
+  strip: Rect | null,
+  grid: Rect,
+  cellW: number,
+  cellH: number,
+): void => {
+  if (!el) return;
+  if (!strip || cellW <= 0 || cellH <= 0) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  el.style.left = `${strip.left}px`;
+  el.style.top = `${strip.top}px`;
+  el.style.width = `${strip.width}px`;
+  el.style.height = `${strip.height}px`;
+  el.style.backgroundSize = `${cellW}px ${cellH}px`;
+  el.style.backgroundPosition = `${grid.left - strip.left}px ${grid.top - strip.top}px`;
 };
 
 // Get responsive font size based on screen dimensions
@@ -129,6 +167,16 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
   // Reconnect/backoff and heartbeat/stale-pong state live inside
   // TerminalConnection (QA-008).
+
+  // Viewport over a pane this viewer does not size (see lib/viewport.ts).
+  // On a phone, `zoomFontRef` is the committed zoom as a font size, or null
+  // to fit the pane's width; `panRef` offsets the grid inside the view.
+  const zoomFontRef = useRef<number | null>(null);
+  const panRef = useRef<Point>({ x: 0, y: 0 });
+  const connectedOnceRef = useRef<boolean>(false);
+  const scheduleLayoutRef = useRef<() => void>(() => {});
+  const rightDotsRef = useRef<HTMLDivElement>(null);
+  const bottomDotsRef = useRef<HTMLDivElement>(null);
 
   // Set while applying a server-sent size, so `term.onResize` does not echo
   // it back (an echo can undo a newer resize from another client).
@@ -371,6 +419,178 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     fitAddonRef.current = fitAddon;
     xtermRef.current = term;
 
+    // Lay the grid out in the view: a phone zooms (font size) and pans the
+    // full pane grid; everyone dot-fills the view's surplus beyond the grid.
+    let layoutRaf: number | null = null;
+    const layoutViewport = (attempt = 0): void => {
+      const view = containerRef.current;
+      const host = terminalRef.current;
+      const screen = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
+      if (!view || !host || !screen || term.cols <= 0 || term.rows <= 0) return;
+      const viewSize = { width: view.clientWidth, height: view.clientHeight };
+
+      if (isMobile()) {
+        const font = term.options.fontSize ?? 14;
+        const pxPerColPerFontPx = screen.offsetWidth / term.cols / font;
+        const target = zoomFontRef.current ?? fitWidthFontSize(viewSize.width, term.cols, pxPerColPerFontPx);
+        // Re-measure after the renderer picks up a new cell size; the bound
+        // stops a rounding oscillation from looping.
+        if (target !== null && Math.abs(target - font) > 0.05 && attempt < 3) {
+          term.options.fontSize = target;
+          layoutRaf = requestAnimationFrame(() => layoutViewport(attempt + 1));
+          return;
+        }
+        const content = { width: screen.offsetWidth, height: screen.offsetHeight };
+        panRef.current = clampPan(panRef.current, content, viewSize);
+        host.style.position = 'absolute';
+        host.style.left = '0';
+        host.style.top = '0';
+        host.style.width = `${content.width}px`;
+        host.style.height = `${content.height}px`;
+        host.style.transformOrigin = '0 0';
+        host.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px)`;
+      } else {
+        host.style.position = '';
+        host.style.width = '';
+        host.style.height = '';
+        host.style.transform = '';
+        panRef.current = { x: 0, y: 0 };
+      }
+
+      const viewRect = view.getBoundingClientRect();
+      const screenRect = screen.getBoundingClientRect();
+      const grid = {
+        left: screenRect.left - viewRect.left,
+        top: screenRect.top - viewRect.top,
+        width: screenRect.width,
+        height: screenRect.height,
+      };
+      const cellW = grid.width / term.cols;
+      const cellH = grid.height / term.rows;
+      const { right, bottom } = surplusStrips(grid, viewSize);
+      const rightStrip =
+        right && right.width - SCROLLBAR_RESERVE_PX >= cellW
+          ? { ...right, width: right.width - SCROLLBAR_RESERVE_PX }
+          : null;
+      paintDots(rightDotsRef.current, rightStrip, grid, cellW, cellH);
+      paintDots(bottomDotsRef.current, bottom && bottom.height >= cellH ? bottom : null, grid, cellW, cellH);
+    };
+    const scheduleLayout = (): void => {
+      if (layoutRaf !== null) cancelAnimationFrame(layoutRaf);
+      layoutRaf = requestAnimationFrame(() => {
+        layoutRaf = null;
+        layoutViewport();
+      });
+    };
+    scheduleLayoutRef.current = scheduleLayout;
+    const layoutOnRender = term.onRender(() => {
+      if (layoutRaf === null) scheduleLayout();
+    });
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => scheduleLayout())
+      : null;
+    if (containerRef.current) resizeObserver?.observe(containerRef.current);
+
+    // Phone gestures over the grid: two fingers pinch-zoom (previewed with a
+    // CSS scale, committed as a font size on release), one finger pans when
+    // the grid overflows the view and otherwise scrolls the scrollback. A tap
+    // is left alone so it still focuses the terminal.
+    type Gesture =
+      | { kind: 'pinch'; startPan: Point; startMid: Point; startDist: number; startFont: number; scale: number; mid: Point }
+      | { kind: 'touch'; start: Point; last: Point; startPan: Point; dragging: boolean };
+    let gesture: Gesture | null = null;
+    const touchPoint = (t: Touch, viewRect: DOMRect): Point => ({
+      x: t.clientX - viewRect.left,
+      y: t.clientY - viewRect.top,
+    });
+    const handleTouchStart = (e: TouchEvent) => {
+      const view = containerRef.current;
+      if (!isMobile() || !view) return;
+      const viewRect = view.getBoundingClientRect();
+      if (e.touches.length === 2) {
+        const a = touchPoint(e.touches[0], viewRect);
+        const b = touchPoint(e.touches[1], viewRect);
+        const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        gesture = {
+          kind: 'pinch',
+          startPan: { ...panRef.current },
+          startMid: mid,
+          startDist: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+          startFont: term.options.fontSize ?? 14,
+          scale: 1,
+          mid,
+        };
+        e.preventDefault();
+        e.stopPropagation();
+      } else if (e.touches.length === 1) {
+        const p = touchPoint(e.touches[0], viewRect);
+        gesture = { kind: 'touch', start: p, last: p, startPan: { ...panRef.current }, dragging: false };
+      }
+    };
+    const handleTouchMove = (e: TouchEvent) => {
+      const view = containerRef.current;
+      const host = terminalRef.current;
+      if (!gesture || !view || !host) return;
+      const viewRect = view.getBoundingClientRect();
+      if (gesture.kind === 'pinch' && e.touches.length >= 2) {
+        const a = touchPoint(e.touches[0], viewRect);
+        const b = touchPoint(e.touches[1], viewRect);
+        gesture.mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+        const font = clamp(
+          gesture.startFont * (Math.hypot(a.x - b.x, a.y - b.y) / gesture.startDist),
+          MIN_ZOOM_FONT_SIZE,
+          MAX_ZOOM_FONT_SIZE,
+        );
+        gesture.scale = font / gesture.startFont;
+        const pan = pinchPan(gesture.startPan, gesture.startMid, gesture.mid, gesture.scale);
+        host.style.transform = `translate(${pan.x}px, ${pan.y}px) scale(${gesture.scale})`;
+        e.preventDefault();
+        e.stopPropagation();
+      } else if (gesture.kind === 'touch' && e.touches.length === 1) {
+        const p = touchPoint(e.touches[0], viewRect);
+        if (!gesture.dragging && Math.hypot(p.x - gesture.start.x, p.y - gesture.start.y) < 8) return;
+        gesture.dragging = true;
+        const content = { width: host.offsetWidth, height: host.offsetHeight };
+        const overflowsY = content.height > view.clientHeight;
+        const desired = { x: gesture.startPan.x + p.x - gesture.start.x, y: gesture.startPan.y + p.y - gesture.start.y };
+        panRef.current = clampPan(desired, content, { width: view.clientWidth, height: view.clientHeight });
+        host.style.transform = `translate(${panRef.current.x}px, ${panRef.current.y}px)`;
+        if (!overflowsY && term.rows > 0) {
+          const lines = Math.trunc((gesture.last.y - p.y) / (content.height / term.rows));
+          if (lines !== 0) {
+            term.scrollLines(lines);
+            gesture.last = p;
+          }
+        } else {
+          gesture.last = p;
+        }
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    const handleTouchEnd = (e: TouchEvent) => {
+      if (!gesture) return;
+      if (gesture.kind === 'pinch') {
+        if (e.touches.length >= 2) return;
+        const font = gesture.startFont * gesture.scale;
+        zoomFontRef.current = font;
+        panRef.current = pinchPan(gesture.startPan, gesture.startMid, gesture.mid, gesture.scale);
+        term.options.fontSize = font;
+        gesture = null;
+        scheduleLayout();
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.touches.length === 0) gesture = null;
+    };
+    const touchOpts: AddEventListenerOptions = { capture: true, passive: false };
+    const gestureTarget = containerRef.current;
+    gestureTarget?.addEventListener('touchstart', handleTouchStart, touchOpts);
+    gestureTarget?.addEventListener('touchmove', handleTouchMove, touchOpts);
+    gestureTarget?.addEventListener('touchend', handleTouchEnd, touchOpts);
+    gestureTarget?.addEventListener('touchcancel', handleTouchEnd, touchOpts);
+
     // Expose refit function to parent. Reads props from propsRef (not the
     // destructured `onRefit` argument) so this mount-only effect doesn't
     // need `onRefit` in its dependency array.
@@ -394,9 +614,18 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           // A phone keeps the grid at the pane's size unless asked to resize it.
           if (!opts?.resizePane && !sendsResizeOnFit()) {
             term.refresh(0, term.rows - 1);
+            scheduleLayout();
             return;
           }
 
+          // Fit against the whole view, not the zoomed grid box.
+          const host = terminalRef.current;
+          if (host) {
+            host.style.position = '';
+            host.style.width = '';
+            host.style.height = '';
+            host.style.transform = '';
+          }
           fitAddon.fit();
           const newCols = term.cols;
           const newRows = term.rows;
@@ -410,6 +639,12 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             debugLog(`Refit: sending resize ${newCols}x${newRows}`);
             connectionRef.current.send(createResizeMessage(newCols, newRows));
           }
+          if (!sendsResizeOnFit()) {
+            // The pane now fits this screen at this font: keep it, unpanned.
+            zoomFontRef.current = term.options.fontSize ?? newFontSize;
+            panRef.current = { x: 0, y: 0 };
+          }
+          scheduleLayout();
         }, 50);
       });
     }
@@ -442,6 +677,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           }
         }
         if (sendsResizeOnFit()) fitAddon.fit();
+        scheduleLayout();
       }, 100);
     };
 
@@ -457,6 +693,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           term.options.fontSize = newFontSize;
         }
         if (sendsResizeOnFit()) fitAddon.fit();
+        scheduleLayout();
       }, 200);
     };
 
@@ -483,6 +720,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Handle terminal resize - goes through connectionRef so it works across reconnects
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
+      scheduleLayout();
       if (applyingServerSizeRef.current || !sendsResizeOnFit()) return;
       if (connectionRef.current?.isOpen()) {
         debugLog(`Client resized to: ${cols}x${rows}`);
@@ -587,6 +825,13 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       termElement?.removeEventListener('wheel', handleWheel);
       onDataDisposable.dispose();
       onResizeDisposable.dispose();
+      layoutOnRender.dispose();
+      resizeObserver?.disconnect();
+      if (layoutRaf !== null) cancelAnimationFrame(layoutRaf);
+      gestureTarget?.removeEventListener('touchstart', handleTouchStart, touchOpts);
+      gestureTarget?.removeEventListener('touchmove', handleTouchMove, touchOpts);
+      gestureTarget?.removeEventListener('touchend', handleTouchEnd, touchOpts);
+      gestureTarget?.removeEventListener('touchcancel', handleTouchEnd, touchOpts);
 
       // Cancel any pending RAF write flush
       if (rafIdRef.current) {
@@ -672,6 +917,11 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           if (connected.theme) {
             applyTheme(connected.theme);
           }
+
+          // A fresh connection starts fit-to-width and unpanned on a phone.
+          connectedOnceRef.current = true;
+          zoomFontRef.current = null;
+          panRef.current = { x: 0, y: 0 };
 
           // Reset and clear terminal on fresh connection
           term.reset();
@@ -873,6 +1123,15 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
     const fitAddon = fitAddonRef.current;
     if (term && fitAddon && fontSize !== undefined) {
       debugLog(`Font size changed to ${fontSize}px`);
+      if (!sendsResizeOnFit()) {
+        // On a phone the font is the zoom; before the first connect it only
+        // sets the base size a deliberate Fit uses.
+        if (connectedOnceRef.current) {
+          zoomFontRef.current = fontSize;
+          scheduleLayoutRef.current();
+        }
+        return;
+      }
       term.options.fontSize = fontSize;
       if (sendsResizeOnFit()) {
         fitAddon.fit();
@@ -904,6 +1163,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
   return (
     <div ref={containerRef} className="terminal-shell" onClick={handleTerminalClick}>
       <div ref={terminalRef} className="flex-1 terminal-scrollbar" />
+      <div ref={rightDotsRef} className="terminal-dead-space" aria-hidden="true" />
+      <div ref={bottomDotsRef} className="terminal-dead-space" aria-hidden="true" />
     </div>
   );
 }

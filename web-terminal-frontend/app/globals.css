@@ -91,6 +91,24 @@
   width: 100%;
   height: 100%;
   display: flex;
+  overflow: hidden;
+}
+
+/* Phones pinch-zoom and pan the grid themselves (Terminal.tsx). */
+@media (max-width: 639px), (pointer: coarse) {
+  .terminal-shell {
+    touch-action: none;
+  }
+}
+
+/* Viewport area beyond the pane's grid: dim dots, as tmux fills it. */
+.terminal-dead-space {
+  display: none;
+  position: absolute;
+  z-index: 1;
+  pointer-events: none;
+  background-image: radial-gradient(circle at 50% 75%, rgba(160, 160, 160, 0.4) 0 1px, transparent 1.5px);
+  background-repeat: repeat;
 }
 
 .terminal-shell .xterm {
