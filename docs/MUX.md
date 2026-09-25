@@ -268,6 +268,7 @@ Structural rules (`src/mux/scrape.rs`):
 - **Hooks stay primary.** A pane that has ever accepted a hook state report is hook-authoritative until it dies; the tick skips it outright, and a quiet hook agent holds its last claim.
 - **A scrape never invents state.** An unmatched scrape clears its own earlier guess and yields nothing — never `idle`.
 - **Provenance rides every surface**: the `source=` token on `%agent-state-changed`, the `<source>` column in `list-agents`, and the `agent_state_rule` metadata (which pattern fired).
+- **`contains` matches case-insensitively** (herdr parity): needles lowercase at compile and the region text at match, so real-cased agent chrome ("Do you want to proceed?") hits rules authored in lowercase. `regex`/`line_regex` stay case-sensitive as written — make them `(?i)` explicitly when they must fold.
 
 Patterns ship bundled (`include_str!` from `src/mux/patterns/{claude,codex,grok}.toml`). A local override file shadows the bundled set for its agent:
 

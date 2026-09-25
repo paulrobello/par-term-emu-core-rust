@@ -180,7 +180,16 @@ impl CompiledCond {
                 .collect()
         };
         let compiled = CompiledCond {
-            contains: cond.contains.clone(),
+            // herdr parity: contains needles lowercase at compile and the
+            // region text lowercases at match (herdr detect/manifest.rs
+            // compile_gate/compiled_rule_matches), so a real-cased agent
+            // screen ("Do you want to proceed?") hits rules authored in
+            // lowercase. regex/line_regex stay case-sensitive as written.
+            contains: cond
+                .contains
+                .iter()
+                .map(|needle| needle.to_lowercase())
+                .collect(),
             regex: build(&cond.regex)?,
             line_regex: build(&cond.line_regex)?,
             any: cond
@@ -221,8 +230,11 @@ impl CompiledCond {
     /// "no regex clause" — the difference between AND-of-present-clauses
     /// and a chain of vacuous-any failures.
     fn matches(&self, text: &str, lines: &[&str]) -> bool {
-        if !self.contains.is_empty() && !self.contains.iter().all(|n| text.contains(n)) {
-            return false;
+        if !self.contains.is_empty() {
+            let lower_text = text.to_lowercase();
+            if !self.contains.iter().all(|n| lower_text.contains(n)) {
+                return false;
+            }
         }
         if !self.regex.is_empty() && !self.regex.iter().any(|re| re.is_match(text)) {
             return false;
@@ -613,6 +625,83 @@ contains = ["Override Idle"]
             screen: String::new(),
         };
         assert_eq!(set.evaluate(&unknown), None, "no match is no state");
+    }
+
+    #[test]
+    fn claude_blocked_rules_match_mixed_case_prompts() {
+        // herdr parity: the ported needles are authored lowercase, but real
+        // claude chrome renders mixed case ("Bash command", "Do you want to
+        // proceed?"), so contains matching must fold case on both sides or
+        // the blocked rules never fire on a real screen (card
+        // 01a0d9b38b0c7780a67f3a14e73e4bcd).
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("claude").expect("claude bundled");
+        let snapshot = PaneSnapshot {
+            title: "✳ ready".to_string(),
+            screen: concat!(
+                "╭─ Bash command ──────────────────────────────╮\n",
+                "│ cat /etc/hosts                              │\n",
+                "╰─────────────────────────────────────────────╯\n",
+                "  Do you want to proceed?\n",
+                "  ❯ 1. Yes\n",
+                "    2. Yes, and don't ask again this session\n",
+                "    3. No, and tell Claude what to do differently\n",
+                "  Esc to cancel\n",
+            )
+            .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&snapshot)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("blocked".to_string(), "bash_permission_prompt".to_string()))
+        );
+    }
+
+    #[test]
+    fn claude_blocked_rules_match_a_captured_real_prompt() {
+        // Captured 2026-09-25 from a live Claude Code v2.1.282 session
+        // (PTY 100x30, /tmp/claude-capture, bash permission prompt for
+        // `cat /etc/hosts`) via this crate's own PtyTerminal — original
+        // casing preserved. Against the pre-fix case-sensitive contains,
+        // this screen matched no blocked rule and the pane read idle.
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("claude").expect("claude bundled");
+        let snapshot = PaneSnapshot {
+            title: "✳ ready".to_string(),
+            screen: concat!(
+                "\n",
+                " ▐▛███▛█   Claude Code v2.1.282\n",
+                "▝▜██████▀  GLM-5.3-flash with high effort · API Usage Billing\n",
+                " ▝▝   ▝▝   /private/tmp/claude-capture\n",
+                "\n",
+                "\n",
+                "❯ Run this exact bash command: cat /etc/hosts\n",
+                "\n",
+                "  Displaying contents of /etc/hosts\n",
+                "  ⎿  $ cat /etc/hosts\n",
+                "\n",
+                "────────────────────────────────────────────────────────────────────────────────────────────────────\n",
+                " Bash command\n",
+                " Tip: auto mode handles these prompts for you — choose \"switch to auto mode\" below\n",
+                "\n",
+                "   cat /etc/hosts\n",
+                "   Display contents of /etc/hosts\n",
+                "\n",
+                " Do you want to proceed?\n",
+                " ❯ 1. Yes\n",
+                "   2. Yes, allow reading from /private/etc from this project\n",
+                "   3. Yes, and switch to auto mode · auto mode handles these prompts for you\n",
+                "   4. No\n",
+                "\n",
+                " Esc to cancel · Tab to amend\n",
+            )
+            .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&snapshot)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("blocked".to_string(), "bash_permission_prompt".to_string()))
+        );
     }
 
     #[test]
