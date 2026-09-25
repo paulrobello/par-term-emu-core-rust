@@ -20,6 +20,7 @@ The daemon is feature-gated (Rust `mux` feature), optional, and independent of t
 - [Persistence and Restart](#persistence-and-restart)
 - [Pane Reaping](#pane-reaping)
 - [Shutdown Semantics](#shutdown-semantics)
+- [Streaming Panes to the Web](#streaming-panes-to-the-web)
 - [Embedding from Rust](#embedding-from-rust)
 - [Testing](#testing)
 - [Module Map](#module-map)
@@ -269,6 +270,10 @@ A pane whose child process exits on its own (as opposed to via `kill-pane`) is d
 - **`kill-server`**: the client-initiated equivalent of SIGTERM — raises the same shutdown flag, so it takes the identical path (reply out, accept loop exits, final save, `%exit` to clients). `par-mux --stop`/`--restart` (see [Command Line](#command-line)) send this and wait for the socket to stop accepting.
 - **SIGKILL**: skips all of this and loses the last window's worth of unsaved content — an accepted trade (the design's D3.3), not a bug.
 - Each `MuxServer` instance has its own shutdown flag; stopping one does not affect another server in the same process.
+
+## Streaming Panes to the Web
+
+`par-term-streamer --mux-socket <path>` (built with `--features streaming-bin,mux`) serves the daemon's panes to the web and mobile frontend: each streaming session mirrors one pane (`?session=pane-N`), keys and mouse reach it through `send-keys -H`, and a viewer's resize resizes the pane (latest resize wins; opening a viewer never resizes it). The library form is `streaming::MuxSessionFactory`. Full behavior: [STREAMING.md — Mux-Backed Sessions](STREAMING.md#mux-backed-sessions).
 
 ## Embedding from Rust
 

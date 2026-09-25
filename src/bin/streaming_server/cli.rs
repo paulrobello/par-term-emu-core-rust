@@ -176,9 +176,10 @@ pub struct Args {
     /// Mirror par-mux panes instead of spawning shells: every session
     /// streams a pane of the daemon on this socket (session id `pane-N`
     /// selects pane N; any other id the daemon's first pane). The daemon
-    /// owns the panes, so --shell, --command and restart do not apply.
+    /// owns the panes, so --shell, --command, --preset and restart do not
+    /// apply.
     /// Requires a build with the `mux` feature.
-    #[arg(long, value_name = "PATH", env = "PAR_TERM_MUX_SOCKET", conflicts_with_all = ["macro_file", "shell", "command"])]
+    #[arg(long, value_name = "PATH", env = "PAR_TERM_MUX_SOCKET", conflicts_with_all = ["macro_file", "shell", "command", "preset"])]
     pub mux_socket: Option<std::path::PathBuf>,
 
     /// Macro playback speed multiplier (1.0 = normal, 2.0 = 2x speed)

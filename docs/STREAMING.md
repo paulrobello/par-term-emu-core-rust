@@ -38,6 +38,7 @@ Real-time terminal streaming over WebSocket with browser-based frontend for remo
   - [Multiple Viewers](#multiple-viewers)
   - [Read-Only Mode](#read-only-mode)
   - [Macro Playback](#macro-playback)
+  - [Mux-Backed Sessions](#mux-backed-sessions)
   - [File Transfer Events](#file-transfer-events)
   - [Zone Events](#zone-events)
   - [Semantic Snapshots](#semantic-snapshots)
@@ -313,6 +314,7 @@ par-term-streamer --enable-http
 | `PAR_TERM_MACRO_FILE` | `--macro-file` | Macro file for playback |
 | `PAR_TERM_MACRO_SPEED` | `--macro-speed` | Macro playback speed multiplier |
 | `PAR_TERM_MACRO_LOOP` | `--macro-loop` | Loop macro playback |
+| `PAR_TERM_MUX_SOCKET` | `--mux-socket` | Mirror par-mux panes from the daemon on this socket instead of spawning shells (needs a build with the `mux` feature; see [Mux-Backed Sessions](#mux-backed-sessions)) |
 | `PAR_TERM_ALLOWED_ORIGINS` | `--allowed-origins` | Allowed browser origins (CORS/WS, SEC-005) |
 | *(none)* | `--preset` | Shell preset in `name=command` form (repeatable, e.g. `--preset python=python3`). Clients connect with `?preset=name` to get a session running that command |
 
@@ -1525,6 +1527,33 @@ par-term-streamer --macro-file demo.yaml --macro-speed 1.5 --macro-loop
 - Tutorial recordings
 - Automated testing
 - Presentation mode
+
+### Mux-Backed Sessions
+
+A streaming session can mirror a pane owned by the [par-mux daemon](MUX.md) instead of spawning its own shell. The pane keeps exactly one terminal, in the daemon; the streaming session holds a mirror fed by the daemon's screen replay and then its `%output` deltas. A mux-backed session is an ordinary session to the web and mobile frontend, with no new protocol messages.
+
+```bash
+# Build with both features, then point the server at a running daemon
+cargo build --bin par-term-streamer --no-default-features --features streaming-bin,mux
+par-mux --cmd 'new-session -s work'          # if the daemon has no session yet
+# The daemon's socket path: see MUX.md "Socket and State Paths" (par-mux logs it at startup)
+par-term-streamer --mux-socket /path/to/par-mux-default.sock --enable-http
+# Browse to http://127.0.0.1:8099/?session=pane-3 to view pane %3
+```
+
+The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirrors the daemon's first pane (`list-panes`). From Rust, build the server with `MuxSessionFactory::new(socket, MuxPaneSelector::FromSessionId)` (or `MuxPaneSelector::Pane(n)` for a fixed pane) through `StreamingServer::with_factory`; it needs the `streaming` and `mux` features together.
+
+| Concern | Behavior |
+|---------|----------|
+| Initial screen | Seeded from the daemon's `refresh-client -t %N` replay (scrollback, styled screen, cursor, input modes, alternate screen). Output produced after the seed arrives as deltas. |
+| Input | Keys, paste, focus, and mouse reports reach the pane as `send-keys -t %N -H <hex>` (1 KiB per command). Mouse encoding uses the pane's own mouse modes, which the seed carries. |
+| Terminal queries | The daemon's pane answers them; the mirror's own replies are discarded so nothing is answered twice. |
+| Size | **Latest resize wins.** The mirror starts at the pane's current size (`pane-info`), never the viewer's, so opening a viewer never resizes the pane. A viewer's `Resize` message becomes `refresh-client -t %N -C WxH` and resizes the pane for every client, par-term included. The mirror re-fits whenever the pane's layout changes, whoever caused it, and sends viewers a `resize`. |
+| Several viewers | Each streaming session has its own daemon connection; two viewers of one pane both stay live. |
+| Pane closes | A pane killed, reaped, or missing from its window's new layout, a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
+| Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
+
+Frontend handling of the size policy (dot-filling a viewport larger than the pane, a pinch-zoom viewport over a pane larger than the screen, and sending resizes only on deliberate actions) is not implemented yet. The server side already supports it, since connecting never resizes the pane.
 
 ### File Transfer Events
 
