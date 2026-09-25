@@ -105,6 +105,11 @@ pub fn emit(notification: &TmuxNotification) -> String {
             };
             format!("%agent-state-changed {pane_id} {agent} {state}{tail}\n")
         }
+        // No provenance token by construction: a release can only come from
+        // a hook report, never a scrape guess.
+        TmuxNotification::AgentReleased { pane_id, agent } => {
+            format!("%agent-released {pane_id} {agent}\n")
+        }
         TmuxNotification::PaneTitleChanged { pane_id, title } => {
             // The separator is omitted for an empty title (the clear
             // operation) so the wire never carries a trailing space; the
@@ -514,5 +519,18 @@ mod tests {
         };
         assert!(emit(&n).ends_with('\n'));
         assert!(emit_block(1, "x", true).ends_with('\n'));
+    }
+
+    #[test]
+    fn agent_released_round_trips() {
+        let original = TmuxNotification::AgentReleased {
+            pane_id: "%3".to_string(),
+            agent: "pi".to_string(),
+        };
+        let line = emit(&original);
+        assert_eq!(line, "%agent-released %3 pi\n", "the wire shape");
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
     }
 }

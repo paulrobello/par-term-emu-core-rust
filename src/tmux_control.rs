@@ -160,6 +160,12 @@ pub enum TmuxNotification {
         source: String,
     },
 
+    /// A pane's agent released its claim (`pane.release_agent`; the agent
+    /// exited and its hook announced it). The pane left the roster — there
+    /// is no state to report, only the removal.
+    /// Arguments: pane_id, agent_label
+    AgentReleased { pane_id: String, agent: String },
+
     /// A pane's user title changed (`select-pane -T`; par-mux pane-title
     /// extension — real tmux never emits this).
     /// Arguments: pane_id, new_title (empty = cleared)
@@ -205,6 +211,7 @@ impl TmuxNotification {
             Self::PasteBufferChanged { .. } => "paste-buffer-changed",
             Self::PasteBufferDeleted { .. } => "paste-buffer-deleted",
             Self::AgentStateChanged { .. } => "agent-state-changed",
+            Self::AgentReleased { .. } => "agent-released",
             Self::PaneTitleChanged { .. } => "pane-title-changed",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
@@ -419,6 +426,7 @@ impl TmuxControlParser {
             "paste-buffer-changed" => Self::parse_paste_buffer_changed(args),
             "paste-buffer-deleted" => Self::parse_paste_buffer_deleted(args),
             "agent-state-changed" => Self::parse_agent_state_changed(args),
+            "agent-released" => Self::parse_agent_released(args),
             "pane-title-changed" => Self::parse_pane_title_changed(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
@@ -750,6 +758,17 @@ impl TmuxControlParser {
             } else {
                 String::new()
             },
+        })
+    }
+
+    fn parse_agent_released(args: &str) -> Option<TmuxNotification> {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        Some(TmuxNotification::AgentReleased {
+            pane_id: parts[0].to_string(),
+            agent: parts[1].to_string(),
         })
     }
 
