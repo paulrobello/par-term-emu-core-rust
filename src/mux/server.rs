@@ -610,7 +610,10 @@ pub(crate) fn push_to_clients(clients: &Clients, line: String) {
         .retain(|(id, tx, evicted, abort)| match tx.try_send(line.clone()) {
             Ok(()) => true,
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                log::warn!("par-mux: client {id} is not draining; evicting");
+                log::warn!(
+                    "par-mux: evicting client {id}: {CLIENT_QUEUE_DEPTH} broadcast lines \
+                     undelivered (queue full — stalled, or draining slower than the burst)"
+                );
                 evicted.store(true, Ordering::Relaxed);
                 abort.cancel_blocked_io();
                 false
@@ -2127,6 +2130,55 @@ mod tests {
         assert_eq!(received.first().map(String::as_str), Some("line-0"));
         let last = format!("line-{CLIENT_QUEUE_DEPTH}");
         assert_eq!(received.last().map(String::as_str), Some(last.as_str()));
+    }
+
+    /// Card 01a0d9b47dae7751a6c7e5a4a900be6e: eviction is by queue depth
+    /// only — intended (ARC-011's memory bound; see MUX.md's broadcast
+    /// eviction paragraph), and deliberately unlike tmux, which evicts a
+    /// control client by output age (300 s) while buffering without bound.
+    /// This pins the consequence of the depth policy: a client draining
+    /// continuously but slower than the producer — healthy, just slow — is
+    /// evicted once its backlog passes the cap, losing the queued tail. An
+    /// age-based policy replaces this test with a drains-slowly-survives
+    /// one.
+    #[test]
+    fn a_slow_draining_client_is_evicted_once_its_backlog_passes_the_cap() {
+        let clients: Clients = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = sync_channel::<String>(CLIENT_QUEUE_DEPTH);
+        let flag = Arc::new(AtomicBool::new(false));
+        clients
+            .lock()
+            .push((7, tx, Arc::clone(&flag), ConnectionAbort::none()));
+
+        // Drains exactly one line per two pushes — continuously, but at
+        // half the producer's rate, so the backlog grows ~0.5 lines per
+        // push and passes the cap mid-burst.
+        let burst = CLIENT_QUEUE_DEPTH * 3;
+        let mut drained = 0;
+        for n in 0..burst {
+            push_to_clients(&clients, format!("line-{n}"));
+            if n % 2 == 0 && rx.try_recv().is_ok() {
+                drained += 1;
+            }
+        }
+        // After eviction the sender is gone; the queue's remaining backlog
+        // still drains, so `drained` settles just past the eviction point.
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the slow drainer was evicted once its backlog passed the cap"
+        );
+        assert!(
+            clients.lock().is_empty(),
+            "the evicted client is no longer registered"
+        );
+        assert!(
+            drained > CLIENT_QUEUE_DEPTH && drained < burst,
+            "drained {drained} of {burst} — continuous but half-rate, evicted mid-burst"
+        );
     }
 
     /// ENH-012: eviction must CLOSE the evicted client's connection, not
