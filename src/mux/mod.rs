@@ -26,7 +26,7 @@ pub mod tree;
 /// socket loop) and its line-level test shims.
 mod dispatch;
 
-pub use client::MuxClient;
+pub use client::{MuxClient, Reply};
 pub use command::{parse_command, MuxCommand};
 pub use emit::{emit, emit_block, escape_output};
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, WindowId};

@@ -22,7 +22,7 @@ const SPAWN_CONNECT_DEADLINE: Duration = Duration::from_secs(10);
 /// A control-mode client connected (or connectable) to a par-mux daemon.
 pub struct MuxClient {
     writer: LocalStream,
-    reply_rx: Receiver<Vec<String>>,
+    reply_rx: Receiver<Reply>,
     notifications_rx: Receiver<TmuxNotification>,
     /// The daemon this client spawned, when it started one. Held so the
     /// spawner can end what it created via [`MuxClient::kill_spawned_daemon`];
@@ -124,7 +124,7 @@ impl MuxClient {
 
     fn from_stream(stream: LocalStream) -> io::Result<Self> {
         let writer = stream.try_clone()?;
-        let (reply_tx, reply_rx) = channel::<Vec<String>>();
+        let (reply_tx, reply_rx) = channel::<Reply>();
         let (notification_tx, notifications_rx) = channel::<TmuxNotification>();
         std::thread::spawn(move || reader_loop(stream, reply_tx, notification_tx));
         Ok(Self {
@@ -136,11 +136,20 @@ impl MuxClient {
     }
 
     /// Run one command and return its reply block's body lines.
+    ///
+    /// A block closed by `%error` still returns its body (the error text) as
+    /// `Ok`; use [`Self::send_checked`] to tell the two closings apart.
     pub fn send(&mut self, command: &str) -> io::Result<Vec<String>> {
+        self.send_checked(command).map(|reply| reply.body)
+    }
+
+    /// Run one command and return its reply block, including whether the
+    /// daemon closed it with `%end` (success) or `%error` (failure).
+    pub fn send_checked(&mut self, command: &str) -> io::Result<Reply> {
         writeln!(self.writer, "{command}")?;
         self.writer.flush()?;
         match self.reply_rx.recv_timeout(REPLY_TIMEOUT) {
-            Ok(body) => Ok(body),
+            Ok(reply) => Ok(reply),
             Err(RecvTimeoutError::Timeout) => Err(io::Error::new(
                 io::ErrorKind::TimedOut,
                 format!("no reply block within {}s", REPLY_TIMEOUT.as_secs()),
@@ -175,10 +184,20 @@ impl MuxClient {
     }
 }
 
+/// One command's reply block: its body lines, and whether the daemon closed
+/// it with `%end` (`ok`) or `%error`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    /// The lines between `%begin` and the closing line.
+    pub body: Vec<String>,
+    /// `true` for `%end`, `false` for `%error`.
+    pub ok: bool,
+}
+
 /// Split one connection's byte stream into reply blocks and notifications.
 fn reader_loop(
     stream: LocalStream,
-    reply_tx: Sender<Vec<String>>,
+    reply_tx: Sender<Reply>,
     notification_tx: Sender<TmuxNotification>,
 ) {
     let reader = BufReader::new(stream);
@@ -189,8 +208,11 @@ fn reader_loop(
         if line.starts_with("%begin") {
             block_body = Some(Vec::new());
         } else if block_body.is_some() && (line.starts_with("%end") || line.starts_with("%error")) {
-            let body = block_body.take().unwrap_or_default();
-            if reply_tx.send(body).is_err() {
+            let reply = Reply {
+                body: block_body.take().unwrap_or_default(),
+                ok: line.starts_with("%end"),
+            };
+            if reply_tx.send(reply).is_err() {
                 break;
             }
         } else if let Some(body) = block_body.as_mut() {

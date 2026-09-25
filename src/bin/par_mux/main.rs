@@ -44,6 +44,55 @@ struct Cli {
     /// socket, so an old daemon keeps serving old code until restarted.
     #[arg(long)]
     restart: bool,
+
+    /// Client mode: send one control command to the daemon on this socket,
+    /// print its reply body to stdout (one line per reply line), and exit.
+    /// A `%error` reply prints to stderr and exits non-zero. Never starts a
+    /// daemon. A flag, like --stop, so the positional NAME stays unambiguous.
+    #[arg(
+        short = 'c',
+        long = "cmd",
+        value_name = "COMMAND",
+        conflicts_with_all = ["stop", "restart", "state_dir"]
+    )]
+    command: Option<String>,
+}
+
+/// Run one control command against the daemon on `path` (client mode).
+///
+/// Returns the process exit code: 0 on `%end`, 1 on `%error` or when no
+/// daemon owns the socket, 2 on a transport failure after connecting.
+fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode {
+    use std::io::Write;
+    use std::process::ExitCode;
+    let mut client = match par_term_emu_core_rust::mux::MuxClient::connect(path) {
+        Ok(client) => client,
+        Err(err) => {
+            eprintln!("par-mux: no daemon running on {} ({err})", path.display());
+            return ExitCode::from(1);
+        }
+    };
+    let reply = match client.send_checked(command) {
+        Ok(reply) => reply,
+        Err(err) => {
+            eprintln!("par-mux: {command:?} failed: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    if !reply.ok {
+        eprintln!("par-mux: {}", reply.body.join("\n"));
+        return ExitCode::from(1);
+    }
+    // A closed pipe (`par-mux -c ... | head -1`) ends the output quietly
+    // instead of panicking the way println! would.
+    let mut out = std::io::stdout().lock();
+    for line in &reply.body {
+        if writeln!(out, "{line}").is_err() {
+            break;
+        }
+    }
+    let _ = out.flush();
+    ExitCode::SUCCESS
 }
 
 /// How long --stop/--restart wait for the old daemon to release its socket.
@@ -95,7 +144,7 @@ fn stop_daemon(path: &std::path::Path) -> std::io::Result<bool> {
     Ok(true)
 }
 
-fn main() -> std::io::Result<()> {
+fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
 
     // The mux library logs through `log` (ARC-010); without a logger
@@ -107,11 +156,27 @@ fn main() -> std::io::Result<()> {
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
     // binds an explicit path (what MuxClient::connect_or_spawn_at spawns).
-    let path = match cli.socket {
+    // Client mode resolves its target through the same rule.
+    let path = match cli.socket.clone() {
         Some(p) => p,
         None => par_term_emu_core_rust::mux::default_socket_path(&cli.name),
     };
 
+    if let Some(command) = cli.command.as_deref() {
+        return run_command(&path, command);
+    }
+
+    match run_daemon(cli, path) {
+        Ok(()) => std::process::ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+/// The daemon modes: --stop, --restart, and serving the socket.
+fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
     if cli.stop || cli.restart {
         if stop_daemon(&path)? {
             eprintln!("par-mux: stopped the daemon on {}", path.display());
