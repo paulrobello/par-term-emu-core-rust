@@ -534,18 +534,47 @@ fn cap_grid_scrollback(mut grid: GridSnapshot) -> GridSnapshot {
     grid
 }
 
+/// What triggered a save — decides how the last-good snapshot is treated
+/// (see [`write_job`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaveOrigin {
+    /// A successful mutating command. The honest current state, whatever it
+    /// holds: pane-bearing updates the snapshot, deliberately empty (the
+    /// last pane `kill-pane`d) clears it so the next start is fresh.
+    Command,
+    /// The reaper noticed a pane's child exited on its own. Never touches
+    /// the snapshot — a burst of pane deaths (reboot/logout SIGHUPs the
+    /// panes before the daemon's own stop) must not degrade it.
+    Reap,
+    /// The final save on a requested shutdown. Pane-bearing updates the
+    /// snapshot; empty leaves it alone, because the emptiness may be the
+    /// race above rather than the user's intent.
+    Shutdown,
+}
+
 /// The synchronous entry the shutdown save and tests use; the per-command
 /// path captures a [`PersistState`] under the tree lock and hands it to the
-/// server's persist worker, which writes through [`write_state`] off the
+/// server's persist worker, which writes through [`write_job`] off the
 /// lock.
 pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
-    write_state(&tree.to_persist_state(), target)
+    write_job(SaveOrigin::Shutdown, &tree.to_persist_state(), target)
+}
+
+/// Serialize and atomically land one already-captured state with the
+/// default (command) snapshot semantics — the library-callers' entry.
+pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistError> {
+    write_job(SaveOrigin::Command, state, target)
 }
 
 /// Serialize and atomically land one already-captured state (D3.3): write to
-/// `<target>.tmp`, fsync, then rename over the target. No tree access —
-/// callable from a thread that holds no locks.
-pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistError> {
+/// `<target>.tmp`, fsync, then rename over the target, then maintain the
+/// last-good snapshot per `origin`. No tree access — callable from a thread
+/// that holds no locks.
+pub fn write_job(
+    origin: SaveOrigin,
+    state: &PersistState,
+    target: &Path,
+) -> Result<(), PersistError> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -585,7 +614,48 @@ pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistErr
     drop(file);
 
     fs::rename(&tmp, target)?;
+    maintain_lastgood(origin, state, target);
     Ok(())
+}
+
+/// The snapshot sibling a pane-bearing save keeps beside the state file.
+fn lastgood_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(".lastgood");
+    PathBuf::from(name)
+}
+
+/// Whether the state holds a pane anywhere — the difference between "the
+/// tree shrank" and "the tree is gone".
+fn state_has_panes(state: &PersistState) -> bool {
+    state
+        .sessions
+        .iter()
+        .any(|s| s.windows.iter().any(|w| !w.panes.is_empty()))
+}
+
+/// Keep `<target>.lastgood` at the newest state the user would want
+/// resurrected, per the [`SaveOrigin`] matrix. Best-effort: a failure here
+/// leaves the snapshot stale or absent, never the main save damaged.
+fn maintain_lastgood(origin: SaveOrigin, state: &PersistState, target: &Path) {
+    if origin == SaveOrigin::Reap {
+        return;
+    }
+    let lastgood = lastgood_path(target);
+    if state_has_panes(state) {
+        if let Err(err) = fs::copy(target, &lastgood) {
+            log::warn!(
+                "par-mux: last-good snapshot update to {} failed: {err}",
+                lastgood.display()
+            );
+        }
+    } else if origin == SaveOrigin::Command {
+        // Deliberately empty (kill-pane of the last pane): the next start
+        // must be fresh, not a resurrection.
+        let _ = fs::remove_file(&lastgood);
+    }
+    // An empty Shutdown save leaves the snapshot alone — the emptiness may
+    // be the reboot race, not the user's intent.
 }
 
 /// What daemon startup found in the state file.
@@ -605,6 +675,11 @@ pub enum Loaded {
 /// unknown-version file aside so the next save cannot overwrite the
 /// evidence (D3.2). Every failure degrades to a fresh start; nothing here
 /// can block daemon startup.
+///
+/// A readable but pane-less state falls back to the last-good snapshot
+/// when one holds panes: a reboot/logout race kills the panes before the
+/// daemon's stop, and the empty tree those deaths persisted is not the
+/// layout the user should lose.
 pub fn load_or_quarantine(target: &Path) -> Loaded {
     let bytes = match fs::read(target) {
         Ok(bytes) => bytes,
@@ -613,6 +688,15 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
 
     let reason = match serde_json::from_slice::<PersistState>(&bytes) {
         Ok(state) if state.format_version == FORMAT_VERSION => {
+            if !state_has_panes(&state) {
+                if let Some(good) = load_lastgood(target) {
+                    log::info!(
+                        "par-mux: state {} held no panes; restoring the last-good snapshot",
+                        target.display()
+                    );
+                    return Loaded::State(Box::new(good));
+                }
+            }
             return Loaded::State(Box::new(state));
         }
         Ok(state) => PersistError::UnsupportedVersion {
@@ -645,6 +729,15 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
             Loaded::Fresh
         }
     }
+}
+
+/// The pane-bearing snapshot beside `target`, if a usable one exists. A
+/// derived cache, not evidence: corrupt or missing degrades to `None`
+/// silently rather than quarantining.
+fn load_lastgood(target: &Path) -> Option<PersistState> {
+    let bytes = fs::read(lastgood_path(target)).ok()?;
+    let state = serde_json::from_slice::<PersistState>(&bytes).ok()?;
+    (state.format_version == FORMAT_VERSION && state_has_panes(&state)).then_some(state)
 }
 
 #[cfg(test)]
@@ -1167,6 +1260,87 @@ mod tests {
         assert!(!target.exists(), "a fresh start must not create anything");
     }
 
+    // --- the last-good snapshot: the shutdown race cannot wipe the layout ---
+
+    /// The reboot/logout race in three deterministic saves: a pane-bearing
+    /// structural save, then the reaper persisting a burst of pane deaths
+    /// (empty), then the daemon's own final save (still empty). The load
+    /// must resurrect the pre-exit layout, not the raced emptiness.
+    #[test]
+    fn reap_saves_cannot_degrade_the_last_good_snapshot() {
+        let (_dir, target) = temp_target("race");
+        let populated = populated_tree().to_persist_state();
+        let empty = tree().to_persist_state();
+        assert!(state_has_panes(&populated) && !state_has_panes(&empty));
+
+        write_job(SaveOrigin::Command, &populated, &target).unwrap();
+        write_job(SaveOrigin::Reap, &empty, &target).unwrap();
+        write_job(SaveOrigin::Shutdown, &empty, &target).unwrap();
+
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(
+                state_has_panes(&state),
+                "the pre-exit layout is restored, not the raced emptiness"
+            ),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+    }
+
+    /// A deliberately emptied tree (kill-pane of the last pane, a Command
+    /// save) clears the snapshot: the next start is fresh, not a
+    /// resurrection of panes the user closed on purpose.
+    #[test]
+    fn a_command_empty_save_clears_the_last_good_snapshot() {
+        let (_dir, target) = temp_target("deliberate");
+        write_job(
+            SaveOrigin::Command,
+            &populated_tree().to_persist_state(),
+            &target,
+        )
+        .unwrap();
+        write_job(SaveOrigin::Command, &tree().to_persist_state(), &target).unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(
+                !state_has_panes(&state),
+                "a deliberate empty is the honest state — no resurrection"
+            ),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+    }
+
+    /// Positive control for the fallback: an empty state with NO snapshot
+    /// behind it loads empty — the fallback cannot invent panes.
+    #[test]
+    fn an_empty_state_without_a_snapshot_loads_empty() {
+        let (_dir, target) = temp_target("no-snapshot");
+        write_job(SaveOrigin::Shutdown, &tree().to_persist_state(), &target).unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(!state_has_panes(&state)),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+    }
+
+    /// The snapshot is a cache, not evidence: a corrupt one is ignored
+    /// (not quarantined), and the empty main state loads as itself.
+    #[test]
+    fn a_corrupt_lastgood_is_ignored() {
+        let (_dir, target) = temp_target("corrupt-good");
+        write_job(
+            SaveOrigin::Command,
+            &populated_tree().to_persist_state(),
+            &target,
+        )
+        .unwrap();
+        let lastgood = lastgood_path(&target);
+        assert!(lastgood.exists(), "a pane-bearing save wrote the snapshot");
+        std::fs::write(&lastgood, b"not json").unwrap();
+        write_job(SaveOrigin::Reap, &tree().to_persist_state(), &target).unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(!state_has_panes(&state)),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+    }
+
     #[test]
     fn state_files_are_keyed_by_socket_stem_under_the_par_mux_dir() {
         // default_socket_path produces `<base>/par-mux-<name>.sock`, so the
@@ -1319,9 +1493,7 @@ mod tests {
         );
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some(
-                format!("'omp' '--resume=/tmp/omp-session.jsonl'{SURVIVING_TAIL}").as_str()
-            ),
+            Some(format!("'omp' '--resume=/tmp/omp-session.jsonl'{SURVIVING_TAIL}").as_str()),
             "restore spawns the reported invocation for the path-only shape too"
         );
     }
@@ -1433,7 +1605,7 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn a_failed_resume_leaves_a_live_pane_with_its_restored_history() {
-        let (mut tree, pane_id) = tree_with_metadata(&[
+        let (tree, pane_id) = tree_with_metadata(&[
             ("agent", "pi"),
             ("agent_session_id", "s-1"),
             (
@@ -1457,8 +1629,9 @@ mod tests {
         // Restore through the REAL factory: the pane's process is
         // `sh -c '<missing binary> ... || { ...; exec shell }'`. sh fails
         // near-instantly (127); the tail decides whether the pane survives.
-        let mut restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
-            .expect("restore completes");
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+                .expect("restore completes");
 
         // Give the failed exec far longer than `sh` needs to die, requiring
         // the pane running throughout — pre-fix, poll_running() flips false

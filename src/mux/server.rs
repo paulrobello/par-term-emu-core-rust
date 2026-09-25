@@ -18,7 +18,7 @@ use crate::mux::ipc::{
     LocalStream,
 };
 use crate::mux::pane::ShellPaneFactory;
-use crate::mux::persist::{write_state, PersistState};
+use crate::mux::persist::{write_job, PersistState, SaveOrigin};
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 // The Windows LocalListener wrapper exposes accept/set_nonblocking as
@@ -265,10 +265,10 @@ impl MuxServer {
 fn spawn_persist_worker(
     path: PathBuf,
     shutdown: Arc<AtomicBool>,
-) -> (Sender<PersistState>, JoinHandle<()>) {
-    let (tx, rx) = channel::<PersistState>();
+) -> (Sender<(SaveOrigin, PersistState)>, JoinHandle<()>) {
+    let (tx, rx) = channel::<(SaveOrigin, PersistState)>();
     let join = std::thread::spawn(move || {
-        persist_worker_loop(rx, &path, &shutdown, write_state);
+        persist_worker_loop(rx, &path, &shutdown, write_job);
     });
     (tx, join)
 }
@@ -280,20 +280,20 @@ fn spawn_persist_worker(
 /// [`PERSIST_POLL`], and the exit conditions are the channel disconnecting
 /// (no senders remain) or the shutdown flag observed while idle.
 fn persist_worker_loop<W>(
-    rx: Receiver<PersistState>,
+    rx: Receiver<(SaveOrigin, PersistState)>,
     path: &Path,
     shutdown: &AtomicBool,
     mut write: W,
 ) where
-    W: FnMut(&PersistState, &Path) -> Result<(), crate::mux::persist::PersistError>,
+    W: FnMut(SaveOrigin, &PersistState, &Path) -> Result<(), crate::mux::persist::PersistError>,
 {
-    let mut write_newest = |mut newest: PersistState| {
+    let mut write_newest = |mut newest: (SaveOrigin, PersistState)| {
         // Coalesce: everything queued behind the newest arrival is strictly
         // newer state; only the last needs writing.
         while let Ok(later) = rx.try_recv() {
             newest = later;
         }
-        if let Err(err) = write(&newest, path) {
+        if let Err(err) = write(newest.0, &newest.1, path) {
             log::error!("par-mux: state save to {} failed: {err}", path.display());
         }
     };
@@ -329,7 +329,7 @@ fn handle_client(
     stream: LocalStream,
     tree: Arc<Mutex<MuxTree>>,
     clients: Clients,
-    persist: Option<Sender<PersistState>>,
+    persist: Option<Sender<(SaveOrigin, PersistState)>>,
     shutdown: Option<Arc<AtomicBool>>,
     abort: ConnectionAbort,
 ) {
@@ -517,7 +517,7 @@ fn dispatch_issued(
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
-    persist: Option<&Sender<PersistState>>,
+    persist: Option<&Sender<(SaveOrigin, PersistState)>>,
     issuer: Option<&SyncSender<String>>,
 ) -> String {
     match parse_command(line) {
@@ -542,7 +542,7 @@ fn dispatch(
     command_number: u32,
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
-    persist: Option<&Sender<PersistState>>,
+    persist: Option<&Sender<(SaveOrigin, PersistState)>>,
 ) -> String {
     dispatch_issued(line, command_number, tree, clients, persist, None)
 }
@@ -585,7 +585,7 @@ pub(crate) fn push_to_clients(clients: &Clients, line: String) {
 fn dispatch_contained(
     command: crate::mux::command::MuxCommand,
     ctx: &Ctx<'_>,
-    persist: Option<&Sender<PersistState>>,
+    persist: Option<&Sender<(SaveOrigin, PersistState)>>,
     issuer: Option<&SyncSender<String>>,
 ) -> String {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -633,7 +633,7 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
 fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
-    persist: Option<&Sender<PersistState>>,
+    persist: Option<&Sender<(SaveOrigin, PersistState)>>,
 ) {
     let dead: Vec<PaneId> = {
         let mut guard = tree.lock();
@@ -701,7 +701,7 @@ fn reap_dead_panes(
     }
     if changed {
         if let Some(tx) = persist {
-            let _ = tx.send(tree.lock().to_persist_state());
+            let _ = tx.send((SaveOrigin::Reap, tree.lock().to_persist_state()));
         }
     }
 }
@@ -1788,7 +1788,7 @@ mod tests {
     /// and the last state written is the newest one sent.
     #[test]
     fn persist_worker_coalesces_a_burst_to_the_newest_state() {
-        let (tx, rx) = channel::<PersistState>();
+        let (tx, rx) = channel::<(SaveOrigin, PersistState)>();
         let writes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let last_seen = Arc::new(Mutex::new(None::<u64>));
         let stop = Arc::new(AtomicBool::new(false));
@@ -1800,7 +1800,7 @@ mod tests {
                 rx,
                 Path::new("/nonexistent-par-mux-coalescing-test"),
                 &stop,
-                |state: &PersistState, _path| {
+                |_origin: SaveOrigin, state: &PersistState, _path| {
                     write_count.fetch_add(1, Ordering::Relaxed);
                     *seen.lock() = Some(state.saved_at_unix_ms);
                     Ok(())
@@ -1819,7 +1819,8 @@ mod tests {
                 sessions: Vec::new(),
                 buffers: std::collections::HashMap::new(),
             };
-            tx.send(state).expect("worker owns the receiver");
+            tx.send((SaveOrigin::Command, state))
+                .expect("worker owns the receiver");
         }
         drop(tx);
         worker.join().expect("worker exits when the channel closes");

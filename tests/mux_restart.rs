@@ -11,7 +11,7 @@ mod common;
 
 use common::{
     command, pane_ids, sigterm_clean, spawn_daemon, wait_for, wait_for_pid, wait_listening,
-    MuxFixture,
+    wait_until, MuxFixture,
 };
 use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::connect_local_stream;
@@ -248,5 +248,83 @@ fn a_restart_serves_the_saved_tree_with_new_processes() {
     );
 
     drop((writer, reader));
+    sigterm_clean(&mut second);
+}
+
+/// The shutdown race: a burst of pane exits (children exiting with code 1,
+/// the shape a SIGHUP'd shell presents — not a signal the daemon could
+/// attribute), persisted by the reaper, with the daemon's SIGTERM landing
+/// after. The next daemon must serve the PRE-EXIT layout, restored from the
+/// last-good snapshot that reap saves never touch — not the raced
+/// emptiness the old final save would have locked in.
+#[test]
+fn a_shutdown_race_restores_the_pre_exit_layout() {
+    let fixture = MuxFixture::new("race");
+    let path = fixture.socket();
+
+    // Two panes — the structural saves put the 2-pane layout in the
+    // last-good snapshot.
+    let mut first = spawn_daemon(&fixture);
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("first daemon accepts");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    command(&mut writer, &mut reader, "new-session -s raced");
+    let left = pane_ids(&command(&mut writer, &mut reader, "list-panes").join(""))
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+    let right = pane_ids(
+        &command(
+            &mut writer,
+            &mut reader,
+            &format!("split-window -t {left} -h"),
+        )
+        .join(""),
+    )
+    .first()
+    .expect("split-window replies with the new pane id")
+    .clone();
+
+    // Both shells exit with code 1 — a non-signal exit.
+    command(
+        &mut writer,
+        &mut reader,
+        &format!("send-keys -t {left} 'exit 1' Enter"),
+    );
+    command(
+        &mut writer,
+        &mut reader,
+        &format!("send-keys -t {right} 'exit 1' Enter"),
+    );
+
+    // The race's losing branch starts only once the reaper has PERSISTED
+    // the deaths — wait for the tree to have no panes left.
+    wait_until(
+        &mut writer,
+        &mut reader,
+        "list-panes",
+        |text| pane_ids(text).is_empty(),
+        "an emptied tree after both panes exited",
+    );
+    drop((writer, reader));
+
+    // The raced stop: SIGTERM after the burst. Its final save is empty and
+    // must leave the last-good snapshot alone.
+    sigterm_clean(&mut first);
+
+    // The next daemon restores the pre-exit layout, both pane ids intact.
+    let mut second = spawn_daemon(&fixture);
+    wait_listening(path);
+    {
+        let stream = connect_local_stream(path).expect("second daemon accepts");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+        let panes = command(&mut writer, &mut reader, "list-panes").join("");
+        assert!(
+            panes.contains(&left) && panes.contains(&right),
+            "the pre-exit layout survived the raced shutdown: {panes}"
+        );
+    }
     sigterm_clean(&mut second);
 }

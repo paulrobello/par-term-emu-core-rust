@@ -18,7 +18,7 @@ use crate::mux::emit::{emit, emit_block};
 use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::MuxError;
-use crate::mux::persist::PersistState;
+use crate::mux::persist::{PersistState, SaveOrigin};
 use crate::mux::server::{
     broadcast_layout_change, broadcast_notification, capture_range, pane_output_sink, Clients,
 };
@@ -137,7 +137,7 @@ impl Outcome {
 pub(super) fn dispatch_command(
     command: MuxCommand,
     ctx: &Ctx<'_>,
-    persist: Option<&Sender<PersistState>>,
+    persist: Option<&Sender<(SaveOrigin, PersistState)>>,
     issuer: Option<&SyncSender<String>>,
 ) -> String {
     // QA-113 test hook: force a dispatcher panic to exercise the client
@@ -206,7 +206,7 @@ pub(super) fn dispatch_command(
             // the lock (ARC-003). A send fails only if the worker is gone;
             // the shutdown save is the durability backstop.
             let state = ctx.tree.lock().to_persist_state();
-            let _ = tx.send(state);
+            let _ = tx.send((SaveOrigin::Command, state));
         }
     }
     outcome.reply
