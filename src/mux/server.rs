@@ -1659,6 +1659,50 @@ mod tests {
     }
 
     #[test]
+    fn set_buffer_quoted_payload_round_trips() {
+        let (tree, clients) = harness();
+        let set = dispatch(
+            "set-buffer 'it'\\''s \"doubly\" quoted'",
+            1,
+            &tree,
+            &clients,
+            None,
+        );
+        assert!(set.contains("%end"), "quoted set-buffer succeeds: {set}");
+
+        let show = dispatch("show-buffer", 2, &tree, &clients, None);
+        assert!(
+            show.contains("it's \"doubly\" quoted"),
+            "quotes stripped, not stored: {show}"
+        );
+    }
+
+    #[test]
+    fn set_buffer_hex_payload_is_byte_exact() {
+        let (tree, clients) = harness();
+        // "a\nb\n" — the trailing newline is exactly what the reply-block
+        // format cannot express, so assert on the STORED content through
+        // the tree rather than show-buffer.
+        let set = dispatch("set-buffer -H 61 0a 62 0a", 1, &tree, &clients, None);
+        assert!(set.contains("%end"), "hex set-buffer succeeds: {set}");
+
+        let stored = tree.lock().get_buffer("default").map(str::to_string);
+        assert_eq!(stored.as_deref(), Some("a\nb\n"), "stored byte-exact");
+    }
+
+    #[test]
+    fn set_buffer_hex_payload_rejects_garbage() {
+        let (tree, clients) = harness();
+        let bad = dispatch("set-buffer -H zz", 1, &tree, &clients, None);
+        assert!(bad.contains("%error"), "invalid hex is an error: {bad}");
+        let none = dispatch("set-buffer -H", 1, &tree, &clients, None);
+        assert!(
+            none.contains("%error"),
+            "missing payload is an error: {none}"
+        );
+    }
+
+    #[test]
     fn paste_buffer_writes_the_buffer_to_the_target_pane() {
         let (tree, clients) = harness();
         dispatch("new-session -s main", 1, &tree, &clients, None);

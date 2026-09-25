@@ -693,14 +693,17 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 ///   [`Args::quoted_flag`]) — tmux admits any non-empty session or window
 ///   name, spaces included;
 /// - environment values: `new-session -e NAME=VALUE` (see
-///   [`Args::quoted_values`]) and the `set-environment` words.
+///   [`Args::quoted_values`]) and the `set-environment` words;
+/// - the `set-buffer` payload (see [`parse_set_buffer`]), because a
+///   clipboard copy may contain spaces, quotes and newlines — with `-H`
+///   as the hex escape hatch for anything the line-delimited wire cannot
+///   carry.
 ///
 /// Every other flag stays whitespace-split, which is correct rather than
 /// merely cheap: the `-t`/`-s` targets everywhere else parse as typed
-/// `$N`/`@N`/`%N` identifiers, which cannot contain whitespace. The two
-/// trailing-text commands need no quoting either, taking the rest of the
-/// line verbatim — `rename-window` (via [`Args::trailing_after`]) and
-/// `set-buffer`.
+/// `$N`/`@N`/`%N` identifiers, which cannot contain whitespace. The one
+/// trailing-text command left needs no quoting either, taking the rest of
+/// the line verbatim — `rename-window` (via [`Args::trailing_after`]).
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
@@ -974,7 +977,37 @@ fn parse_capture_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_set_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
-    let content = a.args.join(" ");
+    // `-H` carries the payload as hex bytes, one byte per token — the same
+    // form `send-keys -H` uses. The control wire is line-delimited, so
+    // content containing a newline cannot ride the positional form in ANY
+    // quoting; hex is the byte-exact escape hatch (clipboard sync).
+    if let Some(at) = a.args.iter().position(|t| *t == "-H") {
+        let tokens = &a.args[at + 1..];
+        if tokens.is_empty() {
+            return Err("set-buffer -H requires a payload".to_string());
+        }
+        let mut bytes = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            let digits = token.strip_prefix("0x").unwrap_or(token);
+            let byte =
+                u8::from_str_radix(digits, 16).map_err(|_| format!("invalid hex byte: {token}"))?;
+            bytes.push(byte);
+        }
+        let content = String::from_utf8(bytes)
+            .map_err(|_| "set-buffer -H payload is not UTF-8".to_string())?;
+        if content.is_empty() {
+            return Err("set-buffer requires content".to_string());
+        }
+        return Ok(MuxCommand::SetBuffer { content });
+    }
+    // Positional form: the payload is the rest of the line read through
+    // the quoting grammar (the same bounded `shell_split` send-keys
+    // payloads use), so `'a b'` and `a b` both store `a b` and an embedded
+    // quote rides the close-escape-reopen idiom. Previously the raw
+    // whitespace-split tokens were joined, which kept the quotes and could
+    // never carry a newline.
+    let words = shell_split(a.line);
+    let content = words[1..].join(" ");
     if content.is_empty() {
         return Err("set-buffer requires content".to_string());
     }
