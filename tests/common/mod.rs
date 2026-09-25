@@ -179,6 +179,10 @@ pub fn spawn_daemon(fixture: &MuxFixture) -> DaemonGuard {
         .arg(fixture.socket())
         .arg("--state-dir")
         .arg(fixture.state_dir())
+        // Test daemons are deliberate, not nested: strip the pane marker so
+        // the nesting guard does not refuse them when the suite itself runs
+        // inside a mux pane.
+        .env_remove("PAR_MUX_ENV")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

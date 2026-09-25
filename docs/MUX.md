@@ -59,6 +59,14 @@ par-mux [<name>] --cmd CMD  Send one control command to the running daemon and p
 
 `--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket in this process — the state save the stop just completed is what it restores. Run it detached (e.g. `par-mux --restart NAME &`) to keep a shell; this is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
 
+### Nested daemons
+
+Serve mode refuses to start inside a par-mux pane: when `PAR_MUX_ENV` is set (the pane env contract marks every pane), `par-mux <name>` / `par-mux --socket <path>` exits non-zero with `refusing to start a nested daemon: PAR_MUX_ENV is set … set PAR_MUX_ALLOW_NESTED=1 to override` and binds no socket — a nested daemon would shadow the outer server's identity for every PTY under it. `MuxClient::connect_or_spawn` applies the same rule: from inside a pane it attaches to a daemon that is already running but refuses to auto-spawn one, failing fast instead of retrying a socket the guard keeps unbound.
+
+Exempt from the guard, because a pane must keep operating on its own daemon: `--cmd` (client mode never starts a daemon), `--stop`, and `--restart` — tmux likewise allows `kill-server` from inside a session. `PAR_MUX_ALLOW_NESTED=1` (or unsetting `PAR_MUX_ENV`) starts a nested daemon anyway.
+
+Panes never inherit a stale outer identity: a PTY spawned by any process inside a mux pane drops every `PAR_MUX_*` variable from its inherited environment and re-adds only its own via the env contract below — so a par-term started in a pane gets clean local tabs instead of reporting its agents to the outer daemon under the wrong pane id.
+
 ## Client Mode
 
 `par-mux --cmd '<command>'` (short form `-c`) connects to the daemon that owns the socket, sends one control command, prints the reply, and exits. It drives panes from a shell or script without linking `MuxClient`. The target socket resolves exactly as the daemon's does: the positional `<name>` (default `default`) maps to the named default path, and `--socket <path>` overrides it. Like `--stop`, it is a flag rather than a subcommand so the positional name stays unambiguous.

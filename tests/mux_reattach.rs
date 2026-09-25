@@ -246,6 +246,10 @@ impl Drop for SpawnedClient {
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     let fixture = MuxFixture::new("spawn");
     let path = fixture.socket();
+    // This test DELIBERATELY starts a daemon, which the nesting guard
+    // refuses when the suite itself runs inside a mux pane — clear the
+    // pane marker so the spawn is judged on its own.
+    std::env::remove_var("PAR_MUX_ENV");
     // Nothing is listening. The client must start one.
     let mut client = SpawnedClient(
         MuxClient::connect_or_spawn_at(path).expect("connect_or_spawn starts a daemon"),
