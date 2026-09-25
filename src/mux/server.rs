@@ -413,6 +413,7 @@ fn handle_client(
         // connection breaks out. An unterminated final line is processed
         // before EOF, matching `Lines`' last-item behavior.
         let mut line = String::new();
+        let mut undecodable = false;
         loop {
             match reader.read_line(&mut line) {
                 Ok(0) => {
@@ -428,8 +429,36 @@ fn handle_client(
                         break 'connection;
                     }
                 }
+                // A non-UTF-8 line (e.g. send-keys -l carrying Latin-1
+                // bytes): read_line consumed it through the newline, so the
+                // stream stays line-framed, but the buffer's contents are
+                // unusable. Answer it like a parse error — a numbered
+                // %error block — instead of dropping the whole client.
+                Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
+                    undecodable = true;
+                    break;
+                }
                 Err(_) => break 'connection,
             }
+        }
+        if undecodable {
+            if !registered {
+                clients.lock().push((
+                    client_id,
+                    tx.clone(),
+                    Arc::clone(&evicted),
+                    abort.take().expect("abort is registered once"),
+                ));
+                registered = true;
+            }
+            command_number += 1;
+            if tx
+                .send(emit_block(command_number, "line is not valid UTF-8", false))
+                .is_err()
+            {
+                break 'connection;
+            }
+            continue;
         }
         while line.ends_with('\n') || line.ends_with('\r') {
             line.pop();

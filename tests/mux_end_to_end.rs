@@ -149,3 +149,58 @@ fn a_disconnecting_client_does_not_stop_the_server_or_touch_the_tree() {
 
     drop(handle);
 }
+
+/// Read one reply block, capturing whether it closed with `%error` (the
+/// shared helper panics on `%error`; the UTF-8 test asserts on it).
+fn read_block_verdict(
+    reader: &mut BufReader<interprocess::local_socket::Stream>,
+) -> (bool, Vec<String>) {
+    let mut saw_begin = false;
+    let mut body = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = reader.read_line(&mut line).expect("read reply");
+        assert!(n > 0, "server closed the connection mid-reply");
+        let trimmed = line.trim_end();
+        if trimmed.starts_with("%begin") {
+            saw_begin = true;
+        } else if trimmed.starts_with("%error") {
+            assert!(saw_begin, "error block began: {trimmed}");
+            return (false, body);
+        } else if trimmed.starts_with("%end") {
+            assert!(saw_begin, "reply block ended before it began");
+            return (true, body);
+        } else if saw_begin {
+            body.push(trimmed.to_string());
+        }
+    }
+}
+
+#[test]
+fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
+    let (_dir, path) = socket_path("utf8");
+    let _handle = spawn_server(&path);
+    let (mut writer, mut reader) = connect(&path);
+
+    // A line of non-UTF-8 bytes (the send-keys -l with a Latin-1 payload
+    // shape): read_line reports InvalidData for it, and the connection
+    // must answer %error rather than dropping the client.
+    writer
+        .write_all(b"\xff\xfe caf\xe9\n")
+        .expect("write non-UTF-8 line");
+    writer.flush().expect("flush");
+    let (ok, _) = read_block_verdict(&mut reader);
+    assert!(!ok, "the undecodable line is a %error block, not a success");
+
+    // The same connection serves the next, valid command.
+    writer.write_all(b"version\n").expect("write version");
+    writer.flush().expect("flush");
+    let (ok, body) = read_block_verdict(&mut reader);
+    assert!(ok, "version succeeds after the undecodable line");
+    assert_eq!(
+        body,
+        vec![par_term_emu_core_rust::mux::build_stamp().to_string()],
+        "the reply is version's own, on the same connection"
+    );
+}

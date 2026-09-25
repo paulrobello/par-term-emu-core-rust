@@ -130,7 +130,7 @@ Every command reply is bracketed, and the command number ties the reply to the r
 %end <timestamp> <command-number> 1
 ```
 
-A failed command closes with `%error` instead of `%end`, the body carrying the error message. Reply bodies are written raw, so a body line can itself start with `%end` (pane output captured verbatim) — a client therefore closes a block only on the `%end`/`%error` carrying the command number of its `%begin`, as tmux's own clients do. Pushed pane output arrives as `%output %N <data>` lines, with every non-printable byte octal-escaped (`\033`) and the backslash itself escaped (`\134`) so decoding is unambiguous.
+A failed command closes with `%error` instead of `%end`, the body carrying the error message. Reply bodies are written raw, so a body line can itself start with `%end` (pane output captured verbatim) — a client therefore closes a block only on the `%end`/`%error` carrying the command number of its `%begin`, as tmux's own clients do. Pushed pane output arrives as `%output %N <data>` lines, with every non-printable byte octal-escaped (`\033`) and the backslash itself escaped (`\134`) so decoding is unambiguous. A client line that is not valid UTF-8 is answered the same way — a numbered `%error` block ("line is not valid UTF-8") — and the connection stays open: the bytes through the newline were consumed, so the stream remains line-framed, and one bad `send-keys -l` payload must not cost the client its whole session.
 
 ### Client backpressure and eviction
 
