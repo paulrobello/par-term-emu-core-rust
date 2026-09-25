@@ -503,10 +503,29 @@ impl PtySession {
         //    daemon under the wrong pane id. Prefix-matched so identity vars added
         //    later are covered without editing this list; mux panes re-add their
         //    own values via set_env, which runs after this drop.
+        // 5. Outer agent session identity (herdr parity, pane.rs
+        //    apply_pane_launch_env): a spawned PTY is not a child agent of
+        //    whatever started this process. Nested-session detection keyed on
+        //    these vars (omp treats OMPCODE=1 as nested and never reports)
+        //    would hide the pane's own agents from rosters. set_env opts back
+        //    in for an intentional child session.
         // CommandBuilder::new() pre-loads the full parent environment via
         // get_base_env(), so we must explicitly remove unwanted vars with
         // env_remove() — simply skipping them in the loop below is not enough.
-        const DROP_VARS: &[&str] = &["COLUMNS", "LINES", "TMUX", "TMUX_PANE", "STY", "WINDOW"];
+        const DROP_VARS: &[&str] = &[
+            "COLUMNS",
+            "LINES",
+            "TMUX",
+            "TMUX_PANE",
+            "STY",
+            "WINDOW",
+            "CLAUDECODE",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "OMPCODE",
+            "CODEX_THREAD_ID",
+        ];
         fn dropped_by_name(name: &str) -> bool {
             DROP_VARS.contains(&name) || name.starts_with("PAR_MUX_")
         }
@@ -3135,5 +3154,84 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         std::env::remove_var("PAR_MUX_LEAK_PROBE");
+    }
+
+    /// A PTY spawned from an environment carrying the OUTER agent session's
+    /// identity vars gets none of them (herdr parity, pane.rs
+    /// apply_pane_launch_env): a pane is not a child agent of whatever
+    /// started the daemon, and nested-session detection keyed on these vars
+    /// (omp's OMPCODE check) would otherwise hide the pane's own agents
+    /// from rosters. set_env opts back in for an intentional child session.
+    #[test]
+    fn outer_agent_identity_env_does_not_leak_into_spawned_ptys() {
+        for (key, value) in [
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "outer-session"),
+            ("CLAUDE_CODE_CHILD_SESSION", "1"),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "outer-token"),
+            ("OMPCODE", "1"),
+            ("CODEX_THREAD_ID", "outer-thread"),
+        ] {
+            std::env::set_var(key, value);
+        }
+        let mut session = PtySession::new(80, 24, 1000);
+        // set_env runs after the drop, so an intentional child session can
+        // opt back in.
+        session.set_env("OMPCODE", "1");
+
+        #[cfg(unix)]
+        let (shell, flag, probe) = (
+            "/bin/sh",
+            "-c",
+            "echo CC=[$CLAUDECODE] CS=[$CLAUDE_CODE_SESSION_ID] CH=[$CLAUDE_CODE_CHILD_SESSION] CT=[$CLAUDE_CODE_MESSAGING_TOKEN] OC=[$OMPCODE] CX=[$CODEX_THREAD_ID]",
+        );
+        #[cfg(windows)]
+        let (shell, flag, probe) = (
+            "cmd.exe",
+            "/C",
+            "echo CC=[%CLAUDECODE%] CS=[%CLAUDE_CODE_SESSION_ID%] CH=[%CLAUDE_CODE_CHILD_SESSION%] CT=[%CLAUDE_CODE_MESSAGING_TOKEN%] OC=[%OMPCODE%] CX=[%CODEX_THREAD_ID%]",
+        );
+        session.spawn(shell, &[flag, probe]).expect("probe spawns");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let screen = session.with_terminal(|term| term.content());
+            if screen.contains("CC=[") {
+                assert!(screen.contains("CC=[]"), "CLAUDECODE leaked: {screen}");
+                assert!(
+                    screen.contains("CS=[]"),
+                    "CLAUDE_CODE_SESSION_ID leaked: {screen}"
+                );
+                assert!(
+                    screen.contains("CH=[]"),
+                    "CLAUDE_CODE_CHILD_SESSION leaked: {screen}"
+                );
+                assert!(
+                    screen.contains("CT=[]"),
+                    "CLAUDE_CODE_MESSAGING_TOKEN leaked: {screen}"
+                );
+                assert!(
+                    screen.contains("OC=[1]"),
+                    "set_env opt-back-in must survive the drop: {screen}"
+                );
+                assert!(screen.contains("CX=[]"), "CODEX_THREAD_ID leaked: {screen}");
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "probe never ran; screen so far: {screen}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        for key in [
+            "CLAUDECODE",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "OMPCODE",
+            "CODEX_THREAD_ID",
+        ] {
+            std::env::remove_var(key);
+        }
     }
 }

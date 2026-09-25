@@ -65,7 +65,7 @@ Serve mode refuses to start inside a par-mux pane: when `PAR_MUX_ENV` is set (th
 
 Exempt from the guard, because a pane must keep operating on its own daemon: `--cmd` (client mode never starts a daemon), `--stop`, and `--restart` — tmux likewise allows `kill-server` from inside a session. `PAR_MUX_ALLOW_NESTED=1` (or unsetting `PAR_MUX_ENV`) starts a nested daemon anyway.
 
-Panes never inherit a stale outer identity: a PTY spawned by any process inside a mux pane drops every `PAR_MUX_*` variable from its inherited environment and re-adds only its own via the env contract below — so a par-term started in a pane gets clean local tabs instead of reporting its agents to the outer daemon under the wrong pane id.
+Panes never inherit a stale outer identity: a PTY spawned by any process inside a mux pane drops every `PAR_MUX_*` variable from its inherited environment and re-adds only its own via the env contract below — so a par-term started in a pane gets clean local tabs instead of reporting its agents to the outer daemon under the wrong pane id. The same drop removes the outer agent session's identity vars (`CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_MESSAGING_TOKEN`, `OMPCODE`, `CODEX_THREAD_ID` — herdr parity): a pane is not a child agent of whatever started the daemon, and nested-session detection keyed on these vars (omp treats `OMPCODE=1` as nested and never reports) would hide the pane's own agents from rosters. `set-environment`/`new-session -e` (or any explicit `set_env`) opts back in for an intentional child session.
 
 ## Client Mode
 
