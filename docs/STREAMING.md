@@ -1553,7 +1553,17 @@ The session id selects the pane: `pane-N` mirrors pane `%N`; any other id mirror
 | Pane closes | A pane killed, reaped, or missing from its window's new layout, a closed window, or a daemon shutdown ends the session. Closing a streaming session never kills the pane. |
 | Not applicable | `--shell`, `--command`, `--preset`, and shell restart: the daemon owns the process. |
 
-Frontend handling of the size policy (dot-filling a viewport larger than the pane, a pinch-zoom viewport over a pane larger than the screen, and sending resizes only on deliberate actions) is not implemented yet. The server side already supports it, since connecting never resizes the pane.
+The bundled web frontend handles the size policy per viewer; the pane itself keeps one size:
+
+| Viewer | Behavior |
+|--------|----------|
+| Larger than the pane | The surplus right of and below the grid is filled with dim dots aligned to the cells, as tmux does (not stretched, not blank). |
+| Phone smaller than the pane | The full grid is shown fit to the width by default. Pinch to zoom, drag to pan; when the grid does not overflow vertically, a vertical drag scrolls scrollback. Zoom is a font size, so selection, links, and mouse reports stay aligned with the cells. The font-size buttons are the zoom after connect. |
+| Phone resize sends | Only on a deliberate action: the Fit button on the keyboard bar, or opening the on-screen keyboard. Connecting, rotating, zooming, and window resizes never resize the pane. A phone detected by width under 640 px or a mobile user agent. |
+| Desktop | Fits the pane to its window on connect and on window resize, as before. |
+| Any viewer | A server-sent `resize` is applied without being echoed back, so it cannot undo a newer resize from another client. |
+
+Phones apply the same deliberate-only rule to plain (non-mux) sessions: they open at the server's current size instead of resizing the PTY to the phone.
 
 ### File Transfer Events
 
