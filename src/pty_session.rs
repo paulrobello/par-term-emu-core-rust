@@ -651,6 +651,9 @@ impl PtySession {
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
         let output_callback = Arc::clone(&self.output_callback);
         let coprocess_manager = Arc::clone(&self.coprocess_manager);
+        // Only the unix SIGWINCH pulse on alt-screen entry signals the child.
+        #[cfg(not(unix))]
+        let _ = child_pid;
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
@@ -786,8 +789,6 @@ impl PtySession {
                             // This helps applications like tmux recalculate their layout correctly
                             // (iTerm2 does this, which is why tmux works correctly there)
                             if !was_alt_screen && is_alt_screen {
-                                // Get current terminal dimensions (not stale captured values)
-                                let (current_cols, current_rows) = term.size();
                                 debug::log(
                                     debug::DebugLevel::Info,
                                     "ALT_SCREEN",
@@ -796,6 +797,8 @@ impl PtySession {
                                 // Send SIGWINCH to the child process to force layout recalculation
                                 #[cfg(unix)]
                                 if let Some(pid) = child_pid {
+                                    // Current dimensions, not stale captured values
+                                    let (current_cols, current_rows) = term.size();
                                     unsafe {
                                         // Send SIGWINCH to the process group
                                         let pgid = -(pid as i32);
