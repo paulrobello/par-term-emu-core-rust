@@ -68,17 +68,17 @@ struct Rule {
 }
 
 /// A condition tree — herdr's matcher vocabulary with the AND/OR structure
-/// made explicit: present clauses AND together, `contains` lists are ALL,
-/// `regex`/`line_regex` lists are ANY, and the group clauses compose.
+/// made explicit: present clauses AND together, every list is ALL
+/// (`contains`, `regex`, `line_regex`), and the group clauses compose.
 #[derive(Debug, Default, Deserialize)]
 struct Cond {
     /// ALL of these substrings must appear in the region text.
     #[serde(default)]
     contains: Vec<String>,
-    /// ANY of these regexes matches the region text (multiline allowed).
+    /// ALL of these regexes must match the region text (multiline allowed).
     #[serde(default)]
     regex: Vec<String>,
-    /// ANY of these regexes matches at least one line of the region.
+    /// ALL of these regexes must match, each at least one line of the region.
     #[serde(default)]
     line_regex: Vec<String>,
     /// ANY sub-condition matches.
@@ -236,14 +236,14 @@ impl CompiledCond {
                 return false;
             }
         }
-        if !self.regex.is_empty() && !self.regex.iter().any(|re| re.is_match(text)) {
+        if !self.regex.is_empty() && !self.regex.iter().all(|re| re.is_match(text)) {
             return false;
         }
         if !self.line_regex.is_empty()
             && !self
                 .line_regex
                 .iter()
-                .any(|re| lines.iter().any(|line| re.is_match(line)))
+                .all(|re| lines.iter().any(|line| re.is_match(line)))
         {
             return false;
         }
@@ -701,6 +701,77 @@ contains = ["Override Idle"]
             set.evaluate(&snapshot)
                 .map(|(s, r)| (s.to_string(), r.to_string())),
             Some(("blocked".to_string(), "bash_permission_prompt".to_string()))
+        );
+    }
+
+    #[test]
+    fn btw_overlay_needs_every_pattern_not_any() {
+        // herdr parity (card 01a0da96d5c57ac08001102bf9234145): herdr's
+        // compiled_gate_matches requires EVERY regex/line_regex pattern to
+        // match; the port fired on ANY, so a bare "/btw" line without the
+        // esc-to-close footer read "working" where herdr reads nothing.
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("claude").expect("claude bundled");
+
+        let one_of_two = PaneSnapshot {
+            title: "zsh".to_string(),
+            screen: "  /btw what does this do\n".to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&one_of_two),
+            None,
+            "one line_regex pattern of two is not a match"
+        );
+
+        let both = PaneSnapshot {
+            title: "zsh".to_string(),
+            screen: "  /btw what does this do\nhere is the answer\n  esc to close".to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&both)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("working".to_string(), "btw_overlay_working".to_string()))
+        );
+    }
+
+    #[test]
+    fn codex_startup_update_needs_every_regex() {
+        // Same all-of contract on the top-level regex list: startup_update
+        // carries two patterns and must need both. With one present the
+        // pane's honest reading is the idle title rule, not blocked.
+        let engine = ScrapeEngine::load(None);
+        let set = engine.set_for("codex").expect("codex bundled");
+
+        let one_of_two = PaneSnapshot {
+            title: "codex".to_string(),
+            screen: concat!(
+                "Update available!\n",
+                "Update now\n",
+                "Skip until next version\n",
+            )
+            .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&one_of_two)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("idle".to_string(), "osc_title_idle".to_string())),
+            "one regex pattern of two must not fire startup_update"
+        );
+
+        let both = PaneSnapshot {
+            title: "codex".to_string(),
+            screen: concat!(
+                "Update available!\n",
+                "Update now\n",
+                "Skip until next version\n",
+                "Press enter to continue\n",
+            )
+            .to_string(),
+        };
+        assert_eq!(
+            set.evaluate(&both)
+                .map(|(s, r)| (s.to_string(), r.to_string())),
+            Some(("blocked".to_string(), "startup_update".to_string()))
         );
     }
 
