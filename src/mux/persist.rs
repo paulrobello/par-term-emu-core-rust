@@ -7,7 +7,7 @@
 //! (D3.5: spawn first, restore second — startup bytes must not overwrite a
 //! restored screen).
 
-use crate::mux::agent_resume::{render_argv, resume_invocation};
+use crate::mux::agent_resume::{render_surviving, resume_invocation};
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
 use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
@@ -325,11 +325,15 @@ impl MuxTree {
                     // exactly Phase 3 behavior; no retry and no probe (an
                     // agent that accepts a resume flag and starts fresh is
                     // 6.4's after-the-fact question, not spawn time's).
+                    // A chain that BUILDS but fails at runtime (uninstalled
+                    // binary, rejected session id) renders with a fallback
+                    // tail so the failure lands the pane on a live shell
+                    // rather than a reaper deletion.
                     let effective = pane
                         .agent_session
                         .as_ref()
                         .and_then(resume_invocation)
-                        .map(|argv| render_argv(&argv))
+                        .map(|argv| render_surviving(&argv))
                         .or_else(|| pane.spawn_command.clone());
                     let context = SpawnContext {
                         session: Some((SessionId(session.id), &session.name)),
@@ -646,6 +650,7 @@ pub fn load_or_quarantine(target: &Path) -> Loaded {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mux::agent_resume::SURVIVING_TAIL;
     use crate::mux::layout::SplitDirection;
     use crate::mux::pane::{MuxPane, PaneFactory, ShellPaneFactory};
     use std::path::PathBuf;
@@ -1243,7 +1248,7 @@ mod tests {
         let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some("'pi' '--session' '/tmp/pi-session.jsonl'"),
+            Some(format!("'pi' '--session' '/tmp/pi-session.jsonl'{SURVIVING_TAIL}").as_str()),
             "restore spawns the hook-reported invocation, not the original command"
         );
         let recaptured = restored.to_persist_state();
@@ -1314,7 +1319,9 @@ mod tests {
         );
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some("'omp' '--resume=/tmp/omp-session.jsonl'"),
+            Some(
+                format!("'omp' '--resume=/tmp/omp-session.jsonl'{SURVIVING_TAIL}").as_str()
+            ),
             "restore spawns the reported invocation for the path-only shape too"
         );
     }
@@ -1330,7 +1337,7 @@ mod tests {
         let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some("'claude' '--resume' 'abc-123'"),
+            Some(format!("'claude' '--resume' 'abc-123'{SURVIVING_TAIL}").as_str()),
             "the table builds the invocation when nothing was reported"
         );
         assert_eq!(
@@ -1388,10 +1395,11 @@ mod tests {
         );
     }
 
-    /// Task 6.3 degradation 3: an agent binary that no longer exists. The
-    /// resume command is spawned anyway — no probe detects the absence, no
-    /// fallback is swapped in; the shell's own "command not found" lands in
-    /// the pane exactly as a Phase 3 command failure would.
+    /// Task 6.3 degradation 3: an agent binary that no longer exists. No
+    /// probe detects the absence at restore time — the invocation spawns
+    /// anyway, carrying the surviving tail, so the runtime failure lands
+    /// in the pane (shell error message, fallback shell) and not in the
+    /// restore chain.
     #[test]
     fn an_absent_agent_binary_degrades_inside_the_pane_not_the_restore() {
         let (original, pane_id) = tree_with_metadata(&[
@@ -1405,10 +1413,100 @@ mod tests {
         let state = original.to_persist_state();
         let restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
             .expect("restore completes — an absent binary is the pane's problem");
+        let expected = if cfg!(windows) {
+            "'par-mux-test-no-such-binary' '--resume' 's-1'".to_string()
+        } else {
+            format!("'par-mux-test-no-such-binary' '--resume' 's-1'{SURVIVING_TAIL}")
+        };
         assert_eq!(
             restored.pane(pane_id).unwrap().spawn_command(),
-            Some("'par-mux-test-no-such-binary' '--resume' 's-1'"),
+            Some(expected.as_str()),
             "no probe swapped in a fallback — the failure is contained in the pane"
+        );
+    }
+
+    /// The D6.3 promise behind degradation 3: a restored agent pane whose
+    /// resume invocation exits non-zero must stay ALIVE — the reaper never
+    /// gets a dead pane, so the restored screen, scrollback, and agent
+    /// identity survive for a retry or an explicit `kill-pane`. Runs the
+    /// real spawn path (`sh -c` with the missing binary), unix only.
+    #[test]
+    #[cfg(unix)]
+    fn a_failed_resume_leaves_a_live_pane_with_its_restored_history() {
+        let (mut tree, pane_id) = tree_with_metadata(&[
+            ("agent", "pi"),
+            ("agent_session_id", "s-1"),
+            (
+                "agent_resume_argv",
+                r#"["par-mux-test-no-such-binary","--resume","s-1"]"#,
+            ),
+        ]);
+        // Markers written straight into the terminal (not through the
+        // child): 40 lines of scrollback plus on-screen content that the
+        // restore must still carry after the resume fails.
+        {
+            let terminal = tree.pane(pane_id).unwrap().terminal();
+            let mut guard = terminal.write();
+            for i in 0..40u16 {
+                guard.process(format!("PRE-MARK-{:02}\r\n", i).as_bytes());
+            }
+            guard.process(b"ON-SCREEN-MARK\r\n");
+        }
+        let state = tree.to_persist_state();
+
+        // Restore through the REAL factory: the pane's process is
+        // `sh -c '<missing binary> ... || { ...; exec shell }'`. sh fails
+        // near-instantly (127); the tail decides whether the pane survives.
+        let mut restored = MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+            .expect("restore completes");
+
+        // Give the failed exec far longer than `sh` needs to die, requiring
+        // the pane running throughout — pre-fix, poll_running() flips false
+        // within the first poll and the daemon-side reaper would have
+        // persisted the pane's deletion by now.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            assert!(
+                restored.pane_mut(pane_id).unwrap().poll_running(),
+                "the pane must survive its failed resume"
+            );
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        // The restored history and the fallback's own trace are both still
+        // readable (screen or scrollback — the shell's startup bytes may
+        // have scrolled the markers up).
+        let snapshot = restored
+            .pane(pane_id)
+            .unwrap()
+            .terminal()
+            .read()
+            .capture_snapshot();
+        let mut text: String = snapshot.grid.scrollback_cells.iter().map(|c| c.c).collect();
+        text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+        assert!(
+            text.contains("PRE-MARK-00") && text.contains("PRE-MARK-39"),
+            "restored scrollback survived the failed resume"
+        );
+        assert!(
+            text.contains("par-mux: agent resume failed"),
+            "the fallback announced itself in the pane"
+        );
+
+        // The agent identity survives the next persist — only an explicit
+        // kill-pane (or kill-window) removes it.
+        let recaptured = restored.to_persist_state();
+        let session = recaptured.sessions[0].windows[0].panes[0]
+            .agent_session
+            .as_ref()
+            .expect("agent identity survived the failed resume");
+        assert_eq!(session.agent, "pi");
+        assert_eq!(
+            session.resume_argv.as_deref(),
+            Some(r#"["par-mux-test-no-such-binary","--resume","s-1"]"#)
         );
     }
 

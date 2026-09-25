@@ -108,6 +108,28 @@ pub fn render_argv(argv: &[String]) -> String {
         .join(" ")
 }
 
+/// The spawn-command tail that keeps a failed resume from costing the pane
+/// (unix only): when the invocation exits non-zero — an uninstalled binary,
+/// a session id the CLI rejects — the pane falls through to a live shell
+/// instead of exiting into the reaper, so the restored screen, scrollback,
+/// and agent identity survive until an explicit `kill-pane`.
+pub(crate) const SURVIVING_TAIL: &str = " || { printf 'par-mux: agent resume failed; pane kept on a shell\\n' >&2; exec \"${SHELL:-sh}\"; }";
+
+/// Render a resume invocation for the pane factory's `sh -c` spawn, shaped
+/// so a FAILED resume cannot delete the pane (D6.3's "never a dead or
+/// half-initialized pane"): the invocation runs; only on a non-zero exit
+/// does the pane drop into a live shell carrying the restored screen and
+/// scrollback. On Windows the tail's POSIX syntax would reach cmd.exe
+/// verbatim, so the invocation stays bare there — cmd.exe resume quoting
+/// is tracked as its own gap.
+pub fn render_surviving(argv: &[String]) -> String {
+    let rendered = render_argv(argv);
+    if cfg!(windows) {
+        return rendered;
+    }
+    format!("{rendered}{SURVIVING_TAIL}")
+}
+
 /// The session ref for pi/omp, which accept a transcript path as well as an
 /// id. Path-first when both are present, matching what our own extensions
 /// report.
@@ -317,5 +339,25 @@ mod tests {
             render_argv(&argv),
             "'pi' '--session' '/tmp/my session'\\''s file.jsonl'"
         );
+    }
+
+    // --- the surviving render: a failed resume must not cost the pane ---
+
+    #[test]
+    fn render_surviving_appends_a_shell_fallback_tail_on_unix() {
+        let argv: Vec<String> = ["pi", "--session", "s-1"]
+            .iter()
+            .map(|part| part.to_string())
+            .collect();
+        if cfg!(windows) {
+            // cmd.exe cannot parse the POSIX tail; the invocation stays
+            // bare there (its cmd.exe quoting is a separate open gap).
+            assert_eq!(render_surviving(&argv), render_argv(&argv));
+        } else {
+            assert_eq!(
+                render_surviving(&argv),
+                format!("'pi' '--session' 's-1'{SURVIVING_TAIL}")
+            );
+        }
     }
 }
