@@ -207,6 +207,7 @@ Broadcast lines every connected (registered) client receives, emitted in this or
 | `%window-pane-changed @N %N` | A window's active pane changed |
 | `%session-changed $N <name>` | Sent to the issuing client after `new-session` |
 | `%agent-state-changed %N <agent> <state> [source=hook\|scrape]` | An agent's state changed, with provenance |
+| `%agent-released %N <agent>` | The pane's agent released its claim (`pane.release_agent`) — state, hook authority, and session identity cleared; the pane left the roster |
 | `%pane-title-changed %N [title]` | A pane's user title changed — `select-pane -T` set it (title follows the pane id, spaces included) or cleared it (no title token). The user title is sticky over the program's OSC title; the notification carries the user title only |
 | `%exit` | Graceful shutdown — the daemon is ending deliberately, not dying |
 
@@ -253,7 +254,8 @@ Two methods (`src/mux/hooks.rs`):
 - Common params: `pane_id`, `agent`, `seq` (monotonic per pane **per source**; a report at or below the last accepted `seq` from its own source is dropped with no write and no broadcast — sources stamp different clocks, e.g. `time.time_ns()` vs `Date.now()*1000`, so freshness is tracked per `source`), and optional `source`.
 - `pane.report_agent` additionally carries `state` (`working`/`blocked`/`idle`; `unknown` is accepted but never written), optional identity (`agent_session_id`/`agent_session_path`), and optional `message` — the blocked reason, stored whitespace-collapsed and cleared when a later report omits it.
 - Validation is at the door: `state` outside the fixed set, an `agent` label containing whitespace or control characters, or a `source` containing control characters is error-replied, nothing written, nothing broadcast. These fields are interpolated verbatim into the space-split `%agent-state-changed` and roster lines, and any process in any pane can reach this endpoint — a newline in a field would forge a control-mode line delivered to every attached client.
-- `pane.report_agent_session` identifies the session by **id or transcript path** (either alone is enough) and may carry `session_resume_argv` — an array of non-empty strings, malformed values error-replied — stored verbatim as the pane's resume invocation. `session_start_source` records startup vs resume provenance.
+- `pane.report_agent_session` identifies the session by **id or transcript path** (either alone is enough) and may carry `session_resume_argv` — an array of non-empty strings, malformed values error-replied — stored verbatim as the pane's resume invocation. `session_start_source` records startup vs resume provenance. A session report that moves the pane to a **different agent** clears the previous agent's state, hook authority, and blocked reason rather than rebroadcasting them under the new label.
+- `pane.release_agent` is the agent's exit announcement (herdr's SessionEnd shape): it clears the pane's whole claim — label, state, hook authority, blocked reason, sequence stamps, and session identity — broadcasts `%agent-released`, and thereby returns the pane to the roster-less majority (a later restart respawns the original command, not a resume invocation for a dead session). Guards: the releasing `agent` must match the pane's current label, and the report must clear the same per-source `seq` rule; a failing guard is a silent ok no-op, like a stale report.
 - Replies are one JSON line: `{"id":…,"result":"ok"}` or an error object.
 - Authorization is the socket's own owner-only boundary: a hook claiming another pane's id is same-user by construction — the same trust model tmux control mode has. There is no per-connection authentication beyond the socket.
 
@@ -353,7 +355,7 @@ The integration suites live in `tests/mux_*.rs` (`mux_daemon`, `mux_restart`, `m
 | `src/mux/ids.rs` | `SessionId`/`WindowId`/`PaneId` (`$N`/`@N`/`%N`) and id allocation |
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
-| `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session` |
+| `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.release_agent` |
 | `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick |
 | `src/mux/agent_resume.rs` | The per-agent resume invocation table |
 | `src/mux/client.rs` | `MuxClient`: connect/attach, `send`, notifications, spawn/kill daemon |

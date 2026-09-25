@@ -53,6 +53,7 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
     match method {
         "pane.report_agent" => handle_state_report(id, params, tree),
         "pane.report_agent_session" => handle_session_report(id, params, tree),
+        "pane.release_agent" => handle_release_report(id, params, tree),
         other => (error_reply(id, &format!("unknown method: {other}")), None),
     }
 }
@@ -265,6 +266,20 @@ fn handle_session_report(
         let prior_session_id = pane.metadata().get("agent_session_id").cloned();
         let prior_session_path = pane.metadata().get("agent_session_path").cloned();
 
+        // A report that moves the pane to a DIFFERENT agent ends the
+        // previous agent's claim: its state, hook authority, and blocked
+        // reason must not survive — and above all must not be rebroadcast
+        // under the new label as though the new agent had claimed it (the
+        // rebroadcast below reads `agent_state`, which this just removed).
+        if pane
+            .metadata()
+            .get("agent")
+            .map(String::as_str)
+            .is_some_and(|label| label != header.agent)
+        {
+            pane.clear_metadata(&["agent_state", "agent_state_source", "agent_message"]);
+        }
+
         pane.set_metadata("agent", &header.agent);
         record_seq(pane, header.source.as_deref(), header.seq);
         if let Some(source) = &header.source {
@@ -318,6 +333,62 @@ fn handle_session_report(
                 state: state.clone(),
                 source: state_source,
             })
+    };
+    (ok_reply(id), notification)
+}
+
+/// `pane.release_agent`: the claiming agent announces it is gone (herdr's
+/// SessionEnd shape). The claim — label, state, hook authority, blocked
+/// reason, sequence stamps, and session identity — is cleared and the
+/// removal broadcast, so the roster drops the pane instead of showing a
+/// dead agent "working" until the pane dies, and a restart respawns the
+/// pane's original command rather than a resume invocation for a session
+/// that no longer has a live agent.
+///
+/// Guards: the releasing agent must match the pane's current label (a
+/// stale hook from a different agent cannot wipe a live claim), and the
+/// report must clear the same monotonic-`seq` rule as every other report.
+/// Both failing guards are silent ok no-ops, exactly like a stale report.
+fn handle_release_report(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+    tree: &Arc<Mutex<MuxTree>>,
+) -> (String, Option<TmuxNotification>) {
+    let header = match parse_header(params) {
+        Ok(header) => header,
+        Err(message) => return (error_reply(id, &message), None),
+    };
+    let notification = {
+        let mut guard = tree.lock();
+        let Some(pane) = guard.pane_mut(header.pane_id) else {
+            return (
+                error_reply(id, &format!("no such pane: {}", header.pane_id)),
+                None,
+            );
+        };
+        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+            return (ok_reply(id), None);
+        }
+        if pane.metadata().get("agent").map(String::as_str) != Some(header.agent.as_str()) {
+            return (ok_reply(id), None);
+        }
+        pane.clear_metadata(&[
+            "agent",
+            "agent_state",
+            "agent_state_source",
+            "agent_message",
+            "agent_source",
+            "agent_seq",
+            SEQ_STAMPS_KEY,
+            "agent_session_id",
+            "agent_session_path",
+            "agent_session_start_source",
+            "agent_resume_argv",
+        ]);
+        Some(TmuxNotification::AgentReleased {
+            pane_id: header.pane_id.to_string(),
+            agent: header.agent.clone(),
+        })
     };
     (ok_reply(id), notification)
 }
@@ -1034,5 +1105,141 @@ mod tests {
             "a rejected report writes nothing: {:?}",
             pane.metadata()
         );
+    }
+
+    /// A release report (`pane.release_agent`, herdr's SessionEnd shape):
+    /// the agent that claimed the pane announces it is gone. The claim —
+    /// state, hook authority, blocked reason, and session identity — is
+    /// cleared and the removal is broadcast, so the roster drops the pane
+    /// instead of showing a dead agent "working" forever.
+    #[test]
+    fn a_release_clears_state_identity_and_authority_and_broadcasts_the_removal() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "pi", "working", 1_000), &tree);
+        handle_report(
+            &session_report(pane_id, "pi", "/tmp/pi-session.jsonl", None, 1_100),
+            &tree,
+        );
+
+        let release = format!(
+            r#"{{"id":"t-3","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"pi","seq":1200,"source":"par-mux:test"}}}}"#
+        );
+        let (reply, notification) = handle_report(&release, &tree);
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        assert_eq!(
+            notification,
+            Some(TmuxNotification::AgentReleased {
+                pane_id: pane_id.to_string(),
+                agent: "pi".to_string(),
+            }),
+            "the removal is broadcast"
+        );
+
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        for key in [
+            "agent",
+            "agent_state",
+            "agent_state_source",
+            "agent_message",
+            "agent_source",
+            "agent_seq",
+            SEQ_STAMPS_KEY,
+            "agent_session_id",
+            "agent_session_path",
+            "agent_session_start_source",
+            "agent_resume_argv",
+        ] {
+            assert!(
+                !pane.metadata().contains_key(key),
+                "release cleared {key}: {:?}",
+                pane.metadata()
+            );
+        }
+    }
+
+    /// A release naming a different agent than the pane's claim is a no-op:
+    /// a stale claude hook must not wipe a live pi claim (herdr's authority
+    /// match, on the label).
+    #[test]
+    fn a_release_from_a_different_agent_is_a_no_op() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "pi", "working", 1_000), &tree);
+
+        let release = format!(
+            r#"{{"id":"t-2","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":2000,"source":"par-mux:test"}}}}"#
+        );
+        let (reply, notification) = handle_report(&release, &tree);
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "politely accepted: {reply}"
+        );
+        assert_eq!(notification, None, "nothing was released");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_state").map(String::as_str),
+            Some("working"),
+            "the live claim is intact"
+        );
+    }
+
+    /// A release below the last accepted sequence number is dropped by the
+    /// same monotonic rule as every other report — a late release must not
+    /// wipe a newer claim.
+    #[test]
+    fn a_stale_release_is_dropped() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "pi", "working", 1_000), &tree);
+
+        let release = format!(
+            r#"{{"id":"t-2","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"pi","seq":900,"source":"par-mux:test"}}}}"#
+        );
+        let (reply, notification) = handle_report(&release, &tree);
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "dropped, not errored: {reply}"
+        );
+        assert_eq!(notification, None);
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            pane.metadata().contains_key("agent_state"),
+            "the claim survives a stale release"
+        );
+    }
+
+    /// A session report that moves the pane to a DIFFERENT agent clears the
+    /// previous agent's state instead of rebroadcasting it under the new
+    /// label — pi's idle must not become claude's hook claim.
+    #[test]
+    fn a_session_report_that_relabels_the_pane_clears_the_previous_agents_state() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "pi", "idle", 1_000), &tree);
+
+        let (reply, notification) = handle_report(
+            &session_report(pane_id, "claude", "/tmp/claude-session", None, 1_100),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        assert_eq!(
+            notification, None,
+            "the previous agent's state is not rebroadcast under the new label"
+        );
+
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("claude"),
+            "the new label is recorded"
+        );
+        for key in ["agent_state", "agent_state_source", "agent_message"] {
+            assert!(
+                !pane.metadata().contains_key(key),
+                "pi's {key} did not survive the relabel: {:?}",
+                pane.metadata()
+            );
+        }
     }
 }

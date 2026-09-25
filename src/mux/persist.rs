@@ -1634,6 +1634,40 @@ mod tests {
         );
     }
 
+    /// A released pane restores through its ORIGINAL command, not the
+    /// resume invocation: the release cleared the session identity, so
+    /// persistence has nothing to resume and Phase 3 behavior resumes.
+    #[test]
+    fn a_released_pane_restores_through_the_original_command() {
+        let (tree, pane_id) = tree_with_agent_pane();
+        let tree = std::sync::Arc::new(parking_lot::Mutex::new(tree));
+        let release = format!(
+            r#"{{"id":"t-9","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"pi","seq":2000,"source":"par-mux:test"}}}}"#
+        );
+        let (reply, _) = crate::mux::hooks::handle_report(&release, &tree);
+        assert!(reply.contains(r#""result":"ok""#), "released: {reply}");
+        let tree = std::sync::Arc::into_inner(tree)
+            .expect("the test holds the only reference")
+            .into_inner();
+
+        let state = tree.to_persist_state();
+        assert!(
+            state.sessions[0].windows[0].panes[0]
+                .agent_session
+                .is_none(),
+            "the release cleared what the resume path needs"
+        );
+
+        let factory = RecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.command_for(pane_id),
+            None,
+            "the pane respawns its original command (the default shell), not a resume"
+        );
+        assert!(restored.pane(pane_id).is_some());
+    }
+
     #[test]
     fn agent_session_identity_round_trips() {
         let (original, pane_id) = tree_with_agent_pane();
