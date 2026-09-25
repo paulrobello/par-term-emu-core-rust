@@ -202,6 +202,7 @@ impl MuxTree {
             session: Some((session_id, name)),
             window: Some(window_id),
             env: Some(&env),
+            cwd: None,
         };
         let pane = self
             .factory
@@ -253,6 +254,7 @@ impl MuxTree {
             session: Some((session_id, &session.name)),
             window: Some(window_id),
             env: Some(&session.env),
+            cwd: None,
         };
         let pane = self
             .factory
@@ -318,6 +320,7 @@ impl MuxTree {
             session: session.map(|s| (s.id, s.name.as_str())),
             window: Some(window_id),
             env: session.map(|s| &s.env),
+            cwd: None,
         };
         let pane = self
             .factory

@@ -190,6 +190,17 @@ impl MuxPane {
         self.session.terminal()
     }
 
+    /// The cwd persistence should capture for this pane: the shell's OSC 7
+    /// report first (the pane's logical cwd, kept current by every
+    /// prompt), the child process's live cwd second (a shell without
+    /// integration hooks). `None` when neither source yields a path.
+    pub fn persistence_cwd(&self) -> Option<std::path::PathBuf> {
+        if let Some(reported) = self.terminal().read().current_directory() {
+            return Some(std::path::PathBuf::from(reported));
+        }
+        self.session.child_pid().and_then(process_cwd)
+    }
+
     /// The pane's persistence snapshot, reusing the cached capture while the
     /// terminal has not changed since it was taken.
     ///
@@ -292,7 +303,8 @@ impl MuxPane {
 ///
 /// The tree builds one per spawn from the session and window the pane is
 /// created in. [`Default`] is a pane outside any session (tests, embedders
-/// driving a factory directly): no identity vars, no session environment.
+/// driving a factory directly): no identity vars, no session environment,
+/// no per-spawn cwd.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SpawnContext<'a> {
     /// The owning session's id and name, exported as `PAR_MUX_SESSION_ID`
@@ -303,6 +315,11 @@ pub struct SpawnContext<'a> {
     /// The session's environment (`set-environment`, `new-session -e`),
     /// applied on top of the daemon's own environment.
     pub env: Option<&'a BTreeMap<String, String>>,
+    /// The spawn's working directory — the per-pane override a restore
+    /// hands the factory so a pane re-lands where it left off. Wins over
+    /// [`ShellPaneFactory::cwd`] (the daemon-wide default); `None` keeps
+    /// the factory's value.
+    pub cwd: Option<&'a std::path::Path>,
 }
 
 /// Creates panes on demand — extension seam S1.
@@ -351,7 +368,10 @@ impl PaneFactory for ShellPaneFactory {
     ) -> Result<MuxPane, MuxError> {
         let mut session = PtySession::new(cols as usize, rows as usize, DEFAULT_SCROLLBACK);
 
-        if let Some(cwd) = &self.cwd {
+        // The per-spawn cwd (a restore re-landing a pane where it left off)
+        // outranks the factory-wide default.
+        let cwd = context.cwd.or(self.cwd.as_deref());
+        if let Some(cwd) = cwd {
             session.set_cwd(cwd);
         }
         // The pane id is exported so hooks running inside the pane can identify
@@ -455,6 +475,45 @@ impl PaneFactory for AgentPaneFactory {
     }
 }
 
+/// The live working directory of process `pid`, for panes whose shell never
+/// reported OSC 7. Best-effort by design: a reaped or reparented child, a
+/// sandboxed reader, or an OS without a pid→cwd path all yield `None`, and
+/// the caller falls back to the spawn-time default.
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: u32) -> Option<std::path::PathBuf> {
+    // proc_pidinfo writes a vnode path — the kernel-side equivalent of
+    // Linux's /proc/<pid>/cwd symlink.
+    unsafe {
+        let mut info: libc::proc_vnodepathinfo = std::mem::zeroed();
+        let size = libc::proc_pidinfo(
+            pid as libc::pid_t,
+            libc::PROC_PIDVNODEPATHINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int,
+        );
+        if size <= 0 {
+            return None;
+        }
+        // libc models the flat `[c_char; MAXPATHLEN]` as `[[c_char; 32]; 32]`
+        // for old-rustc compatibility; flatten before scanning for the NUL.
+        let bytes = info.pvi_cdir.vip_path.as_flattened();
+        let end = bytes.iter().position(|&b| b == 0)?;
+        let raw = std::slice::from_raw_parts(bytes.as_ptr() as *const u8, end);
+        std::str::from_utf8(raw).ok().map(std::path::PathBuf::from)
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn process_cwd(_pid: u32) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// A factory recording the [`SpawnContext`] of every spawn, for tests that
 /// assert what each tree path hands the factory.
 #[cfg(test)]
@@ -468,6 +527,7 @@ pub(crate) mod test_support {
         pub session: Option<(SessionId, String)>,
         pub window: Option<WindowId>,
         pub env: BTreeMap<String, String>,
+        pub cwd: Option<std::path::PathBuf>,
     }
 
     /// Records each spawn's context, then spawns a bounded sleeper.
@@ -501,6 +561,7 @@ pub(crate) mod test_support {
                 session: context.session.map(|(id, name)| (id, name.to_string())),
                 window: context.window,
                 env: context.env.cloned().unwrap_or_default(),
+                cwd: context.cwd.map(std::path::Path::to_path_buf),
             });
             ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
         }
@@ -740,6 +801,35 @@ mod tests {
     }
 
     #[test]
+    fn spawn_context_cwd_reaches_the_child_process() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = ShellPaneFactory::default();
+        let context = SpawnContext {
+            cwd: Some(dir.path()),
+            ..SpawnContext::default()
+        };
+        let mut pane = factory
+            .create_pane(PaneId(11), 80, 24, Some("pwd"), &context)
+            .expect("pane should spawn");
+        let seen: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        pane.on_output(move |bytes: &[u8]| sink.lock().extend_from_slice(bytes));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let text = String::from_utf8_lossy(&seen.lock().clone()).to_string();
+            if text.trim().contains(dir.path().to_str().unwrap()) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never ran in the context cwd; pwd said: {text}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+    }
+
+    #[test]
     fn spawn_context_reaches_the_child_environment() {
         let factory = ShellPaneFactory {
             bin_path: Some("/opt/par-mux-bin".to_string()),
@@ -749,6 +839,7 @@ mod tests {
             session: Some((SessionId(4), "work")),
             window: Some(WindowId(7)),
             env: None,
+            cwd: None,
         };
         #[cfg(windows)]
         let echo_env =

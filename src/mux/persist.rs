@@ -177,6 +177,16 @@ pub struct PersistPane {
     /// byte-identically to the pre-change format.
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
     pub agent_session: Option<PersistAgentSession>,
+    /// The pane's last cwd (its shell's OSC 7 report, else the child's live
+    /// cwd at capture), so a restore re-lands the pane — and a resumed
+    /// agent — where it left off instead of in the daemon's start
+    /// directory. Skipped when absent and defaulted on load, so pre-cwd
+    /// save files still restore.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub cwd: Option<String>,
 }
 
 /// The agent-session identity hooks write into pane metadata, persisted so
@@ -278,6 +288,9 @@ impl MuxTree {
                     spawn_command: pane.spawn_command().map(str::to_string),
                     user_title: pane.user_title().map(str::to_string),
                     agent_session: agent_session_from_metadata(pane.metadata()),
+                    cwd: pane
+                        .persistence_cwd()
+                        .map(|dir| dir.to_string_lossy().into_owned()),
                 }
             })
             .collect();
@@ -312,6 +325,9 @@ impl MuxTree {
         let mut panes = HashMap::new();
         let mut windows = HashMap::new();
         let mut sessions = HashMap::new();
+        // Panes whose persisted cwd was gone at restore — they spawned in
+        // home and get a visible note after their content is restored.
+        let mut cwd_fallbacks: HashMap<u32, String> = HashMap::new();
 
         for session in &state.sessions {
             let mut window_ids = Vec::with_capacity(session.windows.len());
@@ -335,10 +351,33 @@ impl MuxTree {
                         .and_then(resume_invocation)
                         .map(|argv| render_surviving(&argv))
                         .or_else(|| pane.spawn_command.clone());
+                    // The persisted cwd re-lands the pane where it left off.
+                    // A directory that vanished between save and restore
+                    // would fail the spawn, so it degrades to home — the
+                    // spawn's success may not depend on a directory this
+                    // process cannot control — and the pane says so after
+                    // its content is restored.
+                    let cwd: Option<PathBuf> = match pane.cwd.as_deref().map(Path::new) {
+                        Some(dir) if dir.is_dir() => Some(dir.to_path_buf()),
+                        Some(dir) => {
+                            let home = dirs::home_dir().unwrap_or_default();
+                            cwd_fallbacks.insert(
+                                pane.id,
+                                format!(
+                                    "\r\npar-mux: {} is gone; pane restored in {}\r\n",
+                                    dir.display(),
+                                    home.display()
+                                ),
+                            );
+                            home.is_dir().then_some(home)
+                        }
+                        None => None,
+                    };
                     let context = SpawnContext {
                         session: Some((SessionId(session.id), &session.name)),
                         window: Some(WindowId(window.id)),
                         env: Some(&session.env),
+                        cwd: cwd.as_deref(),
                     };
                     let mut created = factory.create_pane(
                         PaneId(pane.id),
@@ -373,12 +412,17 @@ impl MuxTree {
                     panes.insert(PaneId(pane.id), created);
                 }
                 for pane in &window.panes {
-                    panes
+                    let terminal = panes
                         .get_mut(&PaneId(pane.id))
                         .expect("just inserted above")
-                        .terminal()
-                        .write()
-                        .restore_for_new_process(pane.terminal.clone());
+                        .terminal();
+                    let mut restored = terminal.write();
+                    restored.restore_for_new_process(pane.terminal.clone());
+                    // After the snapshot re-hangs, so the note is the last
+                    // thing on screen rather than scrolled away by it.
+                    if let Some(note) = cwd_fallbacks.get(&pane.id) {
+                        restored.process(note.as_bytes());
+                    }
                 }
                 window_ids.push(WindowId(window.id));
                 windows.insert(
@@ -1022,6 +1066,170 @@ mod tests {
             None,
             "a missing field decodes as no title, not an error"
         );
+    }
+
+    /// A pane's last reported cwd (OSC 7 first, the process's live cwd
+    /// second) is captured on save and handed back to the factory on
+    /// restore, so a resumed pane — shell or agent — lands where it left
+    /// off instead of in the daemon's start directory.
+    #[test]
+    fn osc7_cwd_is_captured_and_restored_panes_spawn_in_it() {
+        let mut tree = tree();
+        let session = tree.new_session("cwd", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        let dir = tempfile::tempdir().unwrap();
+        let reported = dir.path().join("project");
+        std::fs::create_dir(&reported).unwrap();
+        // The shell-integration report a pane with OSC 7 hooks emits on
+        // every prompt — the primary cwd source.
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(format!("\x1b]7;file://localhost{}\x1b\\", reported.display()).as_bytes());
+
+        let state = tree.to_persist_state();
+        assert_eq!(
+            state.sessions[0].windows[0].panes[0].cwd.as_deref(),
+            Some(reported.to_str().unwrap()),
+            "positive control: the OSC 7 cwd is on the wire"
+        );
+
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.spawn_of(pane_id).cwd.as_deref(),
+            Some(reported.as_path()),
+            "the restored spawn carries the persisted cwd"
+        );
+        assert!(restored.pane(pane_id).is_some());
+    }
+
+    /// Without OSC 7 the pane's live process cwd is captured instead — a
+    /// plain shell that never reported anything still restores where the
+    /// user had `cd`-ed, because the child's own cwd is readable.
+    #[test]
+    fn a_pane_without_osc7_persists_its_process_cwd() {
+        let dir = tempfile::tempdir().unwrap();
+        let factory = ShellPaneFactory {
+            cwd: Some(dir.path().to_path_buf()),
+            ..ShellPaneFactory::default()
+        };
+        let pane = factory
+            .create_pane(
+                PaneId(1),
+                80,
+                24,
+                Some("sleep 60"),
+                &SpawnContext::default(),
+            )
+            .unwrap();
+        // The kernel resolves symlinks in the vnode path (`/var` →
+        // `/private/var` on macOS), so compare canonical-to-canonical.
+        let canonical = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            pane.persistence_cwd().as_deref(),
+            Some(canonical.as_path()),
+            "no OSC 7 report falls back to the process's live cwd"
+        );
+    }
+
+    /// OSC 7 wins when both sources exist: the shell's report is the
+    /// pane's logical cwd even if the child process has moved.
+    #[test]
+    fn osc7_wins_over_the_process_cwd() {
+        let spawn_dir = tempfile::tempdir().unwrap();
+        let factory = ShellPaneFactory {
+            cwd: Some(spawn_dir.path().to_path_buf()),
+            ..ShellPaneFactory::default()
+        };
+        let pane = factory
+            .create_pane(
+                PaneId(1),
+                80,
+                24,
+                Some("sleep 60"),
+                &SpawnContext::default(),
+            )
+            .unwrap();
+        let reported = tempfile::tempdir().unwrap();
+        pane.terminal().write().process(
+            format!("\x1b]7;file://localhost{}\x1b\\", reported.path().display()).as_bytes(),
+        );
+        assert_eq!(
+            pane.persistence_cwd().as_deref(),
+            Some(reported.path()),
+            "the OSC 7 report outranks the process cwd"
+        );
+    }
+
+    /// A persisted cwd whose directory no longer exists must not fail the
+    /// restore: the pane spawns in home and the pane itself says so.
+    #[test]
+    fn a_gone_persisted_cwd_falls_back_to_home_with_a_visible_message() {
+        let mut tree = tree();
+        let session = tree.new_session("gone", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        let mut state = tree.to_persist_state();
+        state.sessions[0].windows[0].panes[0].cwd = Some("/par-mux-test-no-such-dir".to_string());
+
+        let mut restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default()))
+                .expect("a gone cwd degrades, never fails the restore");
+        assert!(
+            restored.pane_mut(pane_id).unwrap().poll_running(),
+            "the pane is alive in the fallback cwd"
+        );
+        let snapshot = restored
+            .pane(pane_id)
+            .unwrap()
+            .terminal()
+            .read()
+            .capture_snapshot();
+        let text: String = snapshot.grid.cells.iter().map(|c| c.c).collect();
+        assert!(
+            text.contains("par-mux: /par-mux-test-no-such-dir is gone"),
+            "the fallback announced itself in the pane; screen held: {text}"
+        );
+    }
+
+    /// serde(default): a save file written before pane cwds existed carries
+    /// no `cwd` key and must decode — and spawn — with the factory default.
+    #[test]
+    fn a_save_file_without_the_cwd_field_still_loads() {
+        let mut tree = tree();
+        let session = tree.new_session("old", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane_id = tree.window(window).unwrap().panes()[0];
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(b"\x1b]7;file://localhost/tmp\x1b\\");
+
+        let json = serde_json::to_string(&tree.to_persist_state()).unwrap();
+        assert!(
+            json.contains("\"cwd\""),
+            "positive control: the field is on the wire"
+        );
+        let old_format = json.replace(",\"cwd\":\"/tmp\"", "");
+        assert!(
+            !old_format.contains("\"cwd\""),
+            "the strip removed the only occurrence"
+        );
+
+        let state: PersistState =
+            serde_json::from_str(&old_format).expect("a pre-cwd save file decodes");
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        assert_eq!(
+            factory.spawn_of(pane_id).cwd,
+            None,
+            "a missing field decodes as no cwd, not an error"
+        );
+        assert!(restored.pane(pane_id).is_some());
     }
 
     #[test]
