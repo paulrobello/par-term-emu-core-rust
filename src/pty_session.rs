@@ -58,9 +58,18 @@ pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
 /// A PTY session that manages a shell process and terminal state
 pub struct PtySession {
     terminal: Arc<RwLock<Terminal>>,
-    /// Master end of the PTY. We intentionally drop the slave side after
-    /// spawning the child so the master sees EOF when the child exits.
+    /// Master end of the PTY. The master sees EOF (EIO) once the child's side
+    /// of the slave is gone; see `held_slave` for how macOS keeps it readable.
     pty_master: Option<Box<dyn portable_pty::MasterPty + Send>>,
+    /// Our copy of the slave, kept open on macOS only. There, when the last
+    /// slave descriptor closes, output the master has not read yet is
+    /// discarded, so a child that exits before the reader's first `read()`
+    /// loses all of its output. Holding a slave fd prevents that, and the
+    /// master still reads EOF when the child (the session leader) exits,
+    /// because that revokes its controlling tty. Linux keeps unread output
+    /// readable after the slave closes and, with a slave held, would never
+    /// report EIO, so it drops the slave right after spawn.
+    held_slave: Option<Box<dyn portable_pty::SlavePty + Send>>,
     child: Option<Box<dyn Child + Send + Sync>>,
     reader_thread: Option<JoinHandle<()>>,
     writer: Option<Arc<Mutex<Box<dyn Write + Send>>>>,
@@ -89,6 +98,10 @@ pub struct PtySession {
     coprocess_manager: Arc<Mutex<CoprocessManager>>,
     /// PID of the spawned child process (shell or command), set after spawn
     child_pid: Option<u32>,
+    /// Test seam: the reader thread sleeps this long before its first read,
+    /// so a test can make the child exit before any output is read.
+    #[cfg(test)]
+    first_read_delay: Option<std::time::Duration>,
 }
 
 impl PtySession {
@@ -112,6 +125,7 @@ impl PtySession {
                 max_scrollback,
             ))),
             pty_master: None,
+            held_slave: None,
             child: None,
             reader_thread: None,
             writer: None,
@@ -128,6 +142,8 @@ impl PtySession {
             output_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
             child_pid: None,
+            #[cfg(test)]
+            first_read_delay: None,
         }
     }
 
@@ -303,6 +319,7 @@ impl PtySession {
             );
             drop(master);
         }
+        self.held_slave = None;
 
         // Wait for the old reader thread to finish (with timeout)
         if let Some(handle) = self.reader_thread.take() {
@@ -542,8 +559,9 @@ impl PtySession {
             cmd.cwd(cwd);
         }
 
-        // Spawn the child process using the slave side. Drop our handle to the slave
-        // immediately after spawn so that when the child exits, the master side sees EOF.
+        // Spawn the child process using the slave side. Off macOS, drop our handle
+        // to the slave immediately after spawn so that when the child exits, the
+        // master side sees EOF; macOS keeps it (see `held_slave`).
         let PtyPair { master, slave } = pair;
 
         let child = if is_login_shell {
@@ -558,7 +576,12 @@ impl PtySession {
                 .spawn_command(cmd)
                 .map_err(|e| PtyError::ProcessSpawnError(e.to_string()))?
         };
-        drop(slave);
+        let held_slave = if cfg!(target_os = "macos") {
+            Some(slave)
+        } else {
+            drop(slave);
+            None
+        };
 
         // Get the master reader
         let reader = master
@@ -576,6 +599,7 @@ impl PtySession {
 
         // Store the PTY master and child
         self.pty_master = Some(master);
+        self.held_slave = held_slave;
         self.child = Some(child);
         self.writer = Some(Arc::clone(&writer));
         self.running.store(true, Ordering::SeqCst);
@@ -654,9 +678,15 @@ impl PtySession {
         // Only the unix SIGWINCH pulse on alt-screen entry signals the child.
         #[cfg(not(unix))]
         let _ = child_pid;
+        #[cfg(test)]
+        let first_read_delay = self.first_read_delay;
 
         let handle = thread::spawn(move || {
             let mut buffer = [0u8; 16384];
+            #[cfg(test)]
+            if let Some(delay) = first_read_delay {
+                thread::sleep(delay);
+            }
 
             loop {
                 match reader.read(&mut buffer) {
@@ -1542,6 +1572,7 @@ impl Drop for PtySession {
         if let Some(master) = self.pty_master.take() {
             drop(master);
         }
+        self.held_slave = None;
 
         // Wait for the reader thread to finish with timeout
         if let Some(handle) = self.reader_thread.take() {
@@ -2299,6 +2330,39 @@ mod tests {
     /// on every successful PTY read, even if terminal processing encounters
     /// unexpected sequences (e.g., Windows ConPTY after Ctrl+C).
     ///
+    /// A child that exits before the reader's first `read()` must not lose
+    /// its output. On macOS the pty discards unread output once the last
+    /// slave fd closes; the delay forces the loaded-scheduler case every run.
+    #[cfg(unix)]
+    #[test]
+    fn output_of_a_child_that_exits_before_the_first_read_is_kept() {
+        let mut session = PtySession::new(80, 24, 1000);
+        session.first_read_delay = Some(std::time::Duration::from_millis(1500));
+        let gen_before = session.update_generation();
+        session
+            .spawn("/bin/echo", &["EARLY-EXIT-MARKER"])
+            .expect("spawn echo");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while session.is_running() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            !session.is_running(),
+            "reader should reach EOF after echo exits"
+        );
+        assert!(
+            session
+                .terminal()
+                .read()
+                .content()
+                .contains("EARLY-EXIT-MARKER"),
+            "output written before the first read was lost: {:?}",
+            session.terminal().read().content().trim()
+        );
+        assert!(session.update_generation() > gen_before);
+    }
+
     /// This test spawns a real PTY, writes data, and verifies that
     /// `has_updates_since()` correctly detects the change.
     #[test]
