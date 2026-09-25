@@ -1079,8 +1079,11 @@ mod tests {
     /// A pane's last reported cwd (OSC 7 first, the process's live cwd
     /// second) is captured on save and handed back to the factory on
     /// restore, so a resumed pane — shell or agent — lands where it left
-    /// off instead of in the daemon's start directory.
+    /// off instead of in the daemon's start directory. Unix only: the
+    /// OSC 7 URL is built from a `/`-rooted tempdir path, and the fallback
+    /// probe below needs a pid→cwd source Windows does not offer.
     #[test]
+    #[cfg(unix)]
     fn osc7_cwd_is_captured_and_restored_panes_spawn_in_it() {
         let mut tree = tree();
         let session = tree.new_session("cwd", 80, 24).unwrap();
@@ -1116,8 +1119,11 @@ mod tests {
 
     /// Without OSC 7 the pane's live process cwd is captured instead — a
     /// plain shell that never reported anything still restores where the
-    /// user had `cd`-ed, because the child's own cwd is readable.
+    /// user had `cd`-ed, because the child's own cwd is readable. Unix
+    /// only: `process_cwd` has no Windows implementation (no documented
+    /// pid→cwd API), so there is nothing to assert there.
     #[test]
+    #[cfg(unix)]
     fn a_pane_without_osc7_persists_its_process_cwd() {
         let dir = tempfile::tempdir().unwrap();
         let factory = ShellPaneFactory {
@@ -1144,8 +1150,11 @@ mod tests {
     }
 
     /// OSC 7 wins when both sources exist: the shell's report is the
-    /// pane's logical cwd even if the child process has moved.
+    /// pane's logical cwd even if the child process has moved. Unix only,
+    /// for the same reason as the process-cwd test above (the report URL
+    /// is `/`-rooted; the losing fallback is unix's pid→cwd probe).
     #[test]
+    #[cfg(unix)]
     fn osc7_wins_over_the_process_cwd() {
         let spawn_dir = tempfile::tempdir().unwrap();
         let factory = ShellPaneFactory {
@@ -1611,8 +1620,10 @@ mod tests {
 
     /// The resume spawn re-lands in the pane's persisted cwd: the agent's
     /// invocation (claude resolves transcripts per cwd) must run where the
-    /// session lived, not in the daemon's start directory.
+    /// session lived, not in the daemon's start directory. Unix only: the
+    /// persisted cwd is seeded through a `/`-rooted OSC 7 URL.
     #[test]
+    #[cfg(unix)]
     fn a_resume_invocation_spawns_in_the_persisted_cwd() {
         let (tree, pane_id) = tree_with_agent_pane();
         let dir = tempfile::tempdir().unwrap();
@@ -1703,9 +1714,17 @@ mod tests {
         // invocation, verbatim.
         let factory = RecordingFactory::default();
         let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let expected = if cfg!(windows) {
+            // The POSIX surviving tail cannot cross cmd.exe; on Windows the
+            // recorded spawn is the bare invocation (the real argv path is
+            // covered by a_windows_resume_receives_the_exact_arguments).
+            "'pi' '--session' '/tmp/pi-session.jsonl'".to_string()
+        } else {
+            format!("'pi' '--session' '/tmp/pi-session.jsonl'{SURVIVING_TAIL}")
+        };
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some(format!("'pi' '--session' '/tmp/pi-session.jsonl'{SURVIVING_TAIL}").as_str()),
+            Some(expected.as_str()),
             "restore spawns the hook-reported invocation, not the original command"
         );
         let recaptured = restored.to_persist_state();
@@ -1774,9 +1793,14 @@ mod tests {
                 .contains_key("agent_resume_argv"),
             "the override 6.2 reads survives the restart"
         );
+        let expected = if cfg!(windows) {
+            "'omp' '--resume=/tmp/omp-session.jsonl'".to_string()
+        } else {
+            format!("'omp' '--resume=/tmp/omp-session.jsonl'{SURVIVING_TAIL}")
+        };
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some(format!("'omp' '--resume=/tmp/omp-session.jsonl'{SURVIVING_TAIL}").as_str()),
+            Some(expected.as_str()),
             "restore spawns the reported invocation for the path-only shape too"
         );
     }
@@ -1790,9 +1814,14 @@ mod tests {
         let state = original.to_persist_state();
         let factory = RecordingFactory::default();
         let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let expected = if cfg!(windows) {
+            "'claude' '--resume' 'abc-123'".to_string()
+        } else {
+            format!("'claude' '--resume' 'abc-123'{SURVIVING_TAIL}")
+        };
         assert_eq!(
             factory.command_for(pane_id).as_deref(),
-            Some(format!("'claude' '--resume' 'abc-123'{SURVIVING_TAIL}").as_str()),
+            Some(expected.as_str()),
             "the table builds the invocation when nothing was reported"
         );
         assert_eq!(
