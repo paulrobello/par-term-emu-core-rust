@@ -139,18 +139,20 @@ impl MuxServer {
     /// tests and in-process use. The daemon binary runs
     /// [`Self::run_persisting`] instead (D3.3).
     pub fn run(self) {
-        self.run_with_state_path(None)
+        let _faulted = self.run_with_state_path(None);
     }
 
     /// [`Self::run`] with the whole state atomically saved to `state_path`
     /// after every mutating dispatch — the mode the `par-mux` daemon runs
     /// in. On a requested shutdown (Task 3.5) a final save captures content
     /// that arrived since the last structural one, so a clean SIGTERM never
-    /// loses the last window. Callers resolve the path with
+    /// loses the last window; a listener fault that ends the loop takes the
+    /// same save on its way out, so an accept error never silently discards
+    /// unsaved work. Callers resolve the path with
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
-        self.run_with_state_path(Some(state_path.clone()));
-        if self.shutdown.load(Ordering::Relaxed) {
+        let faulted = self.run_with_state_path(Some(state_path.clone()));
+        if faulted || self.shutdown.load(Ordering::Relaxed) {
             if let Err(err) = crate::mux::persist::save_to(&self.tree.lock(), &state_path) {
                 log::error!("par-mux: final state save failed: {err}");
             }
@@ -165,7 +167,7 @@ impl MuxServer {
         Arc::clone(&self.shutdown)
     }
 
-    fn run_with_state_path(&self, state_path: Option<PathBuf>) {
+    fn run_with_state_path(&self, state_path: Option<PathBuf>) -> bool {
         // The loop must be able to NOTICE a shutdown request while idle,
         // but `accept` transparently retries EINTR, so a blocking accept
         // never returns on a signal (observed: the daemon ignored SIGTERM
@@ -201,6 +203,7 @@ impl MuxServer {
         );
         let mut last_scrape = std::time::Instant::now();
         let mut last_reap = std::time::Instant::now();
+        let mut faulted = false;
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
@@ -239,22 +242,37 @@ impl MuxServer {
                 }
                 // A signal may land mid-accept; that is not a listener fault.
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                // Transient accept faults back off instead of dying: a full
+                // descriptor table (EMFILE/ENFILE — a burst of clients, or
+                // a leak elsewhere) or a connection that vanished before
+                // acceptance. tmux's server pauses accepting on
+                // ENFILE/EMFILE the same way. Held sockets keep working;
+                // new clients retry.
+                Err(err) if is_transient_accept_fault(&err) => {
+                    log::warn!("par-mux: accept backed off ({err}); still serving");
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                Err(err) => {
+                    log::error!("par-mux: listener fault ({err}) — saving state and exiting");
+                    faulted = true;
+                    break;
+                }
             }
         }
 
         // Shutdown ordering (ARC-003): join the persist worker BEFORE
         // `run_persisting`'s final synchronous save, so the worker's
         // in-flight write and the final save never touch the same tmp file
-        // concurrently. Joined only on a REQUESTED shutdown — a listener
-        // fault breaks the loop without one, leaving the worker detached to
-        // die with the process exactly like its client threads.
+        // concurrently. Joined on a requested shutdown and on a listener
+        // fault alike — both take the final save, so both must drain the
+        // worker first.
         drop(persist_tx);
-        if self.shutdown.load(Ordering::Relaxed) {
+        if faulted || self.shutdown.load(Ordering::Relaxed) {
             if let Some(worker) = persist_worker {
                 let _ = worker.join();
             }
         }
+        faulted
     }
 }
 
@@ -505,6 +523,23 @@ fn is_poll_wake(err: &std::io::Error) -> bool {
         err.kind(),
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
     )
+}
+
+/// Whether an accept error is a transient the accept loop should back off
+/// from and keep serving (card 01a0d9b47393): a full descriptor table, or a
+/// connection that vanished before acceptance. Everything else is a real
+/// listener fault.
+#[cfg(unix)]
+fn is_transient_accept_fault(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::ConnectionAborted
+        || matches!(err.raw_os_error(), Some(libc::EMFILE) | Some(libc::ENFILE))
+}
+
+/// Windows named-pipe listeners surface no descriptor-table errors; only
+/// the vanished-connection case applies.
+#[cfg(not(unix))]
+fn is_transient_accept_fault(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::ConnectionAborted
 }
 
 /// Execute one parsed-or-not command line and render its reply block, with
@@ -899,6 +934,72 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("%exit arrives before the socket closes");
         assert_eq!(line, "%exit\n", "graceful shutdown pushes %exit first");
+    }
+
+    /// A listener fault must not silently discard unsaved work (card
+    /// 01a0d9b47393: EMFILE killed the daemon with no final save). The fault
+    /// is injected by dup2'ing /dev/null over the listener's fd — accept
+    /// then fails with a non-transient error (ENOTSOCK), and the listener's
+    /// own Drop still closes a valid fd, so the test cannot double-close a
+    /// recycled descriptor.
+    #[cfg(unix)]
+    #[test]
+    fn a_listener_fault_still_performs_the_final_save() {
+        use crate::mux::persist::{load_or_quarantine, state_file_in, Loaded};
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+
+        let dir = temp_dir();
+        let path = dir.path().join("fault.sock");
+        let state_path = state_file_in(&dir.path().join("state"), &path);
+        let server = MuxServer::bind(&path).expect("bind");
+
+        // The fd is captured before the move into the serving thread; the
+        // mutation rides the wire first so the accept loop is provably live
+        // before anything breaks. The enum wraps the ud-socket listener,
+        // whose AsFd is the one fd access interprocess exposes.
+        let listener_fd = match &server.listener {
+            interprocess::local_socket::Listener::UdSocket(inner) => inner.as_fd().as_raw_fd(),
+        };
+        let fault_save_path = state_path.clone();
+        let serving = std::thread::spawn(move || server.run_persisting(fault_save_path));
+        let mut client = crate::mux::MuxClient::connect(&path).expect("client connects");
+        client
+            .send_checked("new-session -s kept")
+            .expect("mutation lands");
+        // Disconnect before the fault: each handler thread holds a persist
+        // clone, and the fault-exit join waits for the channel to close —
+        // a still-connected client would hold the exit open.
+        drop(client);
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(
+            null >= 0,
+            "open /dev/null: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(
+            unsafe { libc::dup2(null, listener_fd) },
+            listener_fd,
+            "replace the listener fd: {}",
+            std::io::Error::last_os_error()
+        );
+        unsafe { libc::close(null) };
+
+        // The accept loop sees a non-socket and breaks; the fault exit must
+        // still save. The join returns because the fault ends the loop.
+        serving.join().expect("the fault-exit path returns");
+        match load_or_quarantine(&state_path) {
+            Loaded::State(state) => assert_eq!(
+                state.sessions.len(),
+                1,
+                "the fault-exit save captured the session"
+            ),
+            Loaded::Fresh | Loaded::Quarantined { .. } => panic!(
+                "no state was saved on the listener fault at {}",
+                state_path.display()
+            ),
+        }
     }
 
     #[cfg(unix)]

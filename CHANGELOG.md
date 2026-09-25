@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **par-mux no longer dies with the terminal that started it** (`src/mux/client.rs`, `src/bin/par_mux/main.rs`). The auto-spawned daemon ran in the spawner's process group with a controlling tty, so a terminal hangup or Ctrl-C killed it — and every pane — with no final save; `par-mux --restart NAME &` stayed in the shell's job with the same failure. The auto-spawned daemon now `setsid`s into its own session before exec, `--restart` detaches before serving (fork + `setsid` + stdio to `/dev/null`, returning immediately — no `&` needed), and the serving daemon ignores SIGHUP, SIGINT, SIGQUIT, SIGTSTP, and SIGPIPE (tmux's server ignore set; SIGTERM remains the clean shutdown path). `MuxClient::spawned_daemon_pid` exposes the auto-spawned daemon's pid for session/process-group assertions. See [docs/MUX.md](docs/MUX.md#shutdown-semantics).
+- **par-mux accept faults no longer kill the daemon without a save** (`src/mux/server.rs`). EMFILE on the accept loop broke it silently: the daemon exited with nothing logged, the state file unwritten, and a stale socket left behind (measured: `ulimit -n 48` plus 40 raw connections). EMFILE, ENFILE, and ECONNABORTED now back off for a second and keep serving (tmux's server pauses on ENFILE/EMFILE the same way), and any other listener fault is logged and takes the same final-save path as SIGTERM. See [docs/MUX.md](docs/MUX.md#shutdown-semantics).
 
 ## [0.51.0] - 2026-09-24
 

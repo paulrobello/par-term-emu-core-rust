@@ -146,6 +146,15 @@ pub fn pid_after(marker: &str, text: &str) -> Option<u32> {
 /// unwind if the daemon is wedged.
 pub struct DaemonGuard(std::process::Child);
 
+impl DaemonGuard {
+    /// Wrap an already-spawned daemon the same way [`spawn_daemon`] does,
+    /// for tests that need a non-default spawn (a lowered rlimit, a
+    /// wrapper) but the same guaranteed cleanup.
+    pub fn wrap(child: std::process::Child) -> Self {
+        Self(child)
+    }
+}
+
 impl std::ops::Deref for DaemonGuard {
     type Target = std::process::Child;
     fn deref(&self) -> &Self::Target {

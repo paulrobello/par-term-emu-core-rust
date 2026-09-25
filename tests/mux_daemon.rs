@@ -774,3 +774,87 @@ fn restart_detaches_before_serving() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+/// EMFILE on accept must not kill the daemon (card 01a0d9b47393: unfixed, a
+/// `ulimit -n 48` daemon plus 40 raw connections ended it — no log, no
+/// final save, stale socket left). tmux's server pauses accepting on
+/// ENFILE/EMFILE and retries; here the daemon runs with a 48-descriptor
+/// table, silent raw connections exhaust it, and the daemon must keep
+/// answering an already-accepted client.
+#[cfg(unix)]
+#[test]
+fn accept_emfile_keeps_the_daemon_serving() {
+    use par_term_emu_core_rust::mux::MuxClient;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let fixture = MuxFixture::new("emfile");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_par-mux"));
+    command
+        .arg("--socket")
+        .arg(fixture.socket())
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .env_remove("PAR_MUX_ENV")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // The audit's live shape: enough descriptors to boot and serve, few
+    // enough that a burst of silent clients exhausts the table.
+    unsafe {
+        command.pre_exec(|| {
+            let mut limit: libc::rlimit = std::mem::zeroed();
+            if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            limit.rlim_cur = limit.rlim_max.min(48);
+            if libc::setrlimit(libc::RLIMIT_NOFILE, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = common::DaemonGuard::wrap(command.spawn().expect("low-limit daemon spawns"));
+    wait_listening(fixture.socket());
+    let mut client = MuxClient::connect(fixture.socket()).expect("daemon accepts");
+    client
+        .send_checked("new-session -s emfile")
+        .expect("session created");
+
+    // Exhaust: each silent connection is accepted and holds its descriptor
+    // (a handler thread blocks reading it forever). Client-side failures
+    // (backlog full once the daemon stops accepting) are simply skipped.
+    let mut held = Vec::new();
+    for _ in 0..80 {
+        if let Ok(stream) = connect_local_stream(fixture.socket()) {
+            held.push(stream);
+        }
+    }
+    assert!(!held.is_empty(), "the exhaustion connections started");
+
+    // Settle: the daemon must drain the backlog into accepts before the
+    // limit bites. Pre-fix, EMFILE breaks the accept loop and the daemon
+    // exits within this window (observed via BrokenPipe on the established
+    // client); post-fix it backs off and the deadline simply expires.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < deadline {
+        if child.try_wait().expect("daemon is waitable").is_some() {
+            panic!("the daemon died under descriptor exhaustion; accept must back off on EMFILE");
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    let reply = client
+        .send_checked("list-sessions")
+        .expect("the daemon still answers with a full descriptor table");
+    assert!(reply.ok, "list-sessions succeeds: {:?}", reply.body);
+    assert!(
+        reply.body.iter().any(|line| line.contains("emfile")),
+        "the session is listed: {:?}",
+        reply.body
+    );
+
+    drop(held);
+    drop(client);
+    common::sigterm_clean(&mut child);
+}
