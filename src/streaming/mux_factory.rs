@@ -664,6 +664,50 @@ mod tests {
         });
     }
 
+    /// Mouse reports: the server's Mouse arm encodes with the session
+    /// terminal's `report_mouse` and writes the bytes to `pty_writer`. For a
+    /// mirror that only works if the pane's mouse mode reached it as a delta.
+    /// Unix-only: the pane runs `cat -v` to make the received report visible.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mouse_report_encoded_by_the_mirror_reaches_the_pane() {
+        let (_dir, socket, mut control, pane) = daemon();
+        let server = streaming(&socket);
+        let session = mirror(&server, &pane);
+
+        type_line(&session, r#"printf '\033[?1000h'; echo MOUSE""-ON; cat -v"#);
+        wait_mirror(&session, "MOUSE-ON");
+        wait("the mirror in mouse mode", || {
+            let mode = session.terminal.read().mouse_mode();
+            (mode == crate::mouse::MouseMode::Off).then(|| format!("{mode:?}"))
+        });
+
+        let report = session
+            .terminal
+            .write()
+            .report_mouse(crate::mouse::MouseEvent::new(0, 4, 2, true, 0));
+        assert_eq!(report, b"\x1b[M %#", "an X10 press at col 4 row 2");
+        let writer = session
+            .pty_writer
+            .read()
+            .expect("pty_writer lock")
+            .clone()
+            .expect("input path");
+        {
+            let mut w = writer.lock();
+            w.write_all(&report).expect("mouse write");
+            w.write_all(b"\r").expect("flush the line to cat");
+            w.flush().expect("flush");
+        }
+        wait("the report echoed by cat -v in the pane", || {
+            let text = control
+                .send(&format!("capture-pane -t {pane}"))
+                .expect("capture")
+                .join("\n");
+            (!text.contains("^[[M %#")).then_some(text)
+        });
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn two_viewers_of_one_pane_both_stay_live() {
         let (_dir, socket, _control, pane) = daemon();
