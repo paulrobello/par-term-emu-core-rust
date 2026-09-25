@@ -410,16 +410,23 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     let outcome = ctx.tree.lock().kill_pane(pane);
     match outcome {
         Ok(window_id) => {
-            let mut result = Outcome::ok(ctx, "").with_layout(window_id);
-            // The tree refuses to kill a window's last pane, so a
-            // surviving window always has an active pane to name.
+            // A window whose last pane was killed is REMOVED by
+            // tree.kill_pane (an emptied session goes with it) — its
+            // clients learn that through %window-close, the same
+            // notification kill-window sends. A surviving window keeps
+            // an active pane to name, and gets the layout push.
             if let Some(active) = ctx.tree.lock().window(window_id).map(|w| w.active) {
-                result = result.notifying(TmuxNotification::WindowPaneChanged {
+                Outcome::ok(ctx, "").with_layout(window_id).notifying(
+                    TmuxNotification::WindowPaneChanged {
+                        window_id: window_id.to_string(),
+                        pane_id: active.to_string(),
+                    },
+                )
+            } else {
+                Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
                     window_id: window_id.to_string(),
-                    pane_id: active.to_string(),
-                });
+                })
             }
-            result
         }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }

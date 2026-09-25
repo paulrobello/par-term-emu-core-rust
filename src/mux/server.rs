@@ -2019,4 +2019,43 @@ mod tests {
             "the connection survives the panic: {reply}"
         );
     }
+
+    /// A kill-pane that empties a window must BROADCAST %window-close:
+    /// `tree.kill_pane` closes the window (and an emptied session), but
+    /// the dispatch only queued a layout push for the window — which
+    /// resolves to nothing once the window is gone — so clients kept a
+    /// tab for a window that no longer existed.
+    #[cfg(unix)]
+    #[test]
+    fn killing_a_windows_last_pane_broadcasts_window_close() {
+        let dir = temp_dir();
+        let path = dir.path().join("lastpane.sock");
+        let server = MuxServer::bind(&path).expect("bind");
+        std::thread::spawn(move || server.run());
+
+        let mut client = crate::mux::MuxClient::connect(&path).expect("connect");
+        client.send("new-session -s t").expect("new-session");
+        client.send("kill-pane -t %0").expect("kill-pane");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            match client
+                .notifications()
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
+                Ok(crate::tmux_control::TmuxNotification::WindowClose { window_id }) => {
+                    assert_eq!(window_id, "@0");
+                    return;
+                }
+                Ok(_) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "%window-close never arrived after kill-pane emptied the window"
+                    );
+                }
+                Err(_) => panic!("notification channel died before %window-close"),
+            }
+        }
+    }
 }
