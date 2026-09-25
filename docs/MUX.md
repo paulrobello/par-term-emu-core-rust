@@ -296,6 +296,8 @@ State saving is crash-safe by construction (`src/mux/persist.rs`): serialize to 
 
 A pane whose child process exits on its own (as opposed to via `kill-pane`) is detected and cleaned up automatically rather than left frozen in the tree. The accept loop's idle tick runs a reaper every 250 ms (`REAP_INTERVAL`, `src/mux/server.rs`): a dead pane (the PTY reader's `is_running` flipped false on EOF) is removed from its window with `%layout-change` + `%window-pane-changed` broadcasts, or the window itself is closed with `%window-close` when the dead pane was its last one — the same notifications a structural `kill-pane`/`kill-window` sends, so existing tmux consumers need no new handling. An emptied session is left in place rather than removed; create-or-attach refills it. Before this existed, a pane whose shell exited (typing `exit` at the prompt, for example) sat dead in the tree indefinitely and clients saw a permanently frozen pane.
 
+A structurally killed pane is reaped at kill time instead: `PtySession::kill` follows its signal escalation (SIGHUP → SIGKILL inside portable-pty) with a bounded wait, so a child that traps SIGHUP cannot linger as a zombie until the daemon exits. The kill also runs off the tree lock on a short-lived thread once the pane is removed from the tree — the ~200 ms SIGHUP-grace poll and the reap wait would otherwise stall every command for their duration (tmux kills from its child reaper, off the layout lock, for the same reason).
+
 ## Shutdown Semantics
 
 - **SIGTERM**: the handler makes one atomic store on the server's per-instance shutdown flag. The accept loop notices on its idle tick, broadcasts `%exit` to every client, and a final save captures content that arrived since the last structural save.

@@ -5,6 +5,18 @@ use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
 
+/// Kill a pane the tree has already removed, off the tree lock: killing is
+/// signal-then-reap with a bounded wait (portable-pty polls its SIGHUP
+/// grace for ~200 ms before SIGKILL, and the reap adds a short wait after),
+/// and running that under the tree mutex would stall every command for the
+/// duration. The thread always exits — SIGKILL cannot be trapped — and the
+/// pane it owns is dropped reaped.
+fn kill_detached(mut pane: MuxPane) {
+    std::thread::spawn(move || {
+        let _ = pane.kill();
+    });
+}
+
 /// One window: an interior split structure (Task 2.1) with one pane active.
 ///
 /// `active` is a pane id, not an index — [`LayoutTree`] has no stable linear
@@ -588,11 +600,11 @@ impl MuxTree {
         let affected_window = self
             .window_of_pane(pane_id)
             .ok_or(MuxError::NoSuchPane(pane_id))?;
-        let mut pane = self
+        let pane = self
             .panes
             .remove(&pane_id)
             .ok_or(MuxError::NoSuchPane(pane_id))?;
-        let _ = pane.kill();
+        kill_detached(pane);
         let empty_window = self.windows.iter_mut().find_map(|(id, window)| {
             match window.layout.remove_pane(pane_id) {
                 Ok(()) => {
@@ -684,8 +696,8 @@ impl MuxTree {
             .remove(&window_id)
             .ok_or(MuxError::NoSuchWindow(window_id))?;
         for pane_id in window.panes() {
-            if let Some(mut pane) = self.panes.remove(&pane_id) {
-                let _ = pane.kill();
+            if let Some(pane) = self.panes.remove(&pane_id) {
+                kill_detached(pane);
             }
         }
 
@@ -890,6 +902,80 @@ mod tests {
         tree.kill_pane(extra).expect("kill succeeds");
         assert!(tree.pane(extra).is_none(), "pane is gone from the tree");
         assert_eq!(tree.window(window_id).unwrap().panes().len(), 1);
+    }
+
+    /// A pane whose child ignores SIGHUP must not survive its kill as a
+    /// zombie, and the kill must not hold the tree lock through the ~200 ms
+    /// SIGHUP-grace poll portable-pty runs before SIGKILL (card
+    /// 01a0d9b4789c79219e7720d61729544c).
+    #[cfg(unix)]
+    #[test]
+    fn killing_a_hup_ignoring_pane_reaps_it_and_returns_promptly() {
+        let mut tree = tree();
+        let session_id = tree.new_session("zombies", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let first = tree.window(window_id).unwrap().panes()[0];
+        // The loop keeps the SHELL itself as the live process: `sh -c` (and
+        // zsh) exec-optimizes a trailing simple command, which would turn
+        // the pane's process into `sleep` — a fresh binary that never ran
+        // the trap and dies to the first SIGHUP. The echo is a readiness
+        // marker: kill must not race the shell's own startup (a SIGHUP
+        // delivered before the trap line runs kills the shell outright).
+        let doomed = tree
+            .split_pane(
+                first,
+                SplitDirection::Vertical,
+                0.5,
+                Some("trap '' HUP; echo PANEMUX-TRAP-SET; while true; do sleep 57; done"),
+            )
+            .unwrap();
+        let pid = tree
+            .pane(doomed)
+            .expect("doomed pane exists")
+            .child_pid()
+            .expect("child pid");
+        let ready = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let screen = tree
+                .pane(doomed)
+                .expect("doomed pane exists")
+                .terminal()
+                .read()
+                .content();
+            if screen.contains("PANEMUX-TRAP-SET") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < ready,
+                "trap marker never reached the pane screen: {screen}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+
+        let started = std::time::Instant::now();
+        tree.kill_pane(doomed).expect("kill succeeds");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < std::time::Duration::from_millis(150),
+            "kill_pane held the tree lock through the SIGHUP grace poll: {elapsed:?}"
+        );
+
+        // A reaped child vanishes from the process table; a zombie keeps
+        // answering signal 0 until someone waits for it. The detached kill
+        // needs a moment, so poll to a deadline instead of asserting at
+        // once — the assertion is that it EVER goes away, promptly.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let gone = unsafe { libc::kill(pid as libc::pid_t, 0) != 0 };
+            if gone {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child {pid} still in the process table after kill — unreaped zombie"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     #[test]

@@ -1265,6 +1265,19 @@ impl PtySession {
     pub fn kill(&mut self) -> Result<(), PtyError> {
         if let Some(ref mut child) = self.child {
             child.kill().map_err(PtyError::IoError)?;
+            // portable-pty's kill escalates SIGHUP → SIGKILL but never
+            // waits, so a child that ignores SIGHUP (a shell that trapped
+            // it) would stay a zombie until this process exits. SIGKILL
+            // cannot be trapped, so a bounded poll reaps it here. An
+            // already-reaped child (ECHILD) is success by another hand.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            while std::time::Instant::now() < deadline {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                    Err(_) => break,
+                }
+            }
             self.running.store(false, Ordering::SeqCst);
             Ok(())
         } else {
