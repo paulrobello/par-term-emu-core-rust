@@ -79,6 +79,14 @@ fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
         .filter(|label| !label.is_empty())
         .ok_or_else(|| "missing agent".to_string())?
         .to_string();
+    // The label is interpolated verbatim into the space-split
+    // `%agent-state-changed` and roster lines: inner whitespace breaks the
+    // shape every consumer parses, and a control character (a newline
+    // above all) forges a control-mode line delivered to every client.
+    // Any process in any pane can reach this endpoint, so the door is here.
+    if agent.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err("agent label must not contain whitespace or control characters".to_string());
+    }
     let seq = params
         .get("seq")
         .and_then(serde_json::Value::as_u64)
@@ -87,6 +95,16 @@ fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
         .get("source")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
+    // The source tag shares the metadata-and-emission surface; control
+    // characters are rejected for the same forging reason (colons and
+    // other printable punctuation are fine — real tags read
+    // `par-mux:claude:session-hook`).
+    if source
+        .as_deref()
+        .is_some_and(|source| source.chars().any(char::is_control))
+    {
+        return Err("source must not contain control characters".to_string());
+    }
     Ok(ReportHeader {
         pane_id,
         agent,
@@ -114,6 +132,18 @@ fn handle_state_report(
     else {
         return (error_reply(id, "missing state"), None);
     };
+    // herdr's fixed set, verbatim: anything else would ride the roster and
+    // broadcast lines as a word consumers cannot parse (or, with a
+    // newline, forge whole ones).
+    if !matches!(state, "working" | "blocked" | "idle" | "unknown") {
+        return (
+            error_reply(
+                id,
+                &format!("invalid state: {state} (working, blocked, idle, or unknown)"),
+            ),
+            None,
+        );
+    }
     // `unknown` is the absence of a hook claim, not a state — never written,
     // never broadcast (the Phase 5 ruling that keeps an agent without hooks
     // out of the roster rather than misreporting it).
@@ -662,6 +692,77 @@ mod tests {
             &tree,
         );
         assert!(third.is_some(), "the claude bucket was not reset by pi");
+    }
+
+    #[test]
+    fn reports_with_an_invalid_state_or_label_are_rejected_without_broadcast() {
+        let (tree, pane_id) = tree_with_pane();
+
+        // A state outside herdr's fixed set — stored today, misparsed by
+        // every consumer of the space-split roster line.
+        let (reply, notification) =
+            handle_report(&state_report(pane_id, "kimi", "waiting", 1_000), &tree);
+        assert!(
+            reply.contains("invalid state"),
+            "a state outside the set is an error: {reply}"
+        );
+        assert_eq!(notification, None);
+
+        // A label containing whitespace breaks the broadcast shape the
+        // same way.
+        let (reply, notification) = handle_report(
+            &state_report(pane_id, "claude code", "working", 1_000),
+            &tree,
+        );
+        assert!(
+            reply.contains("whitespace") && reply.contains("error"),
+            "a label with inner whitespace is an error: {reply}"
+        );
+        assert_eq!(notification, None);
+
+        // The injection shape: agent, state, and source are interpolated
+        // verbatim into `%agent-state-changed`, so a newline in any of
+        // them forges a control-mode line every attached client parses.
+        // The JSON wire form carries the newline escaped (\\n in the raw
+        // line, a real \n once decoded).
+        let forged = [
+            format!(
+                r#"{{"id":"f1","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"x\n%exit","state":"working","seq":1000,"source":"par-mux:test"}}}}"#
+            ),
+            format!(
+                r#"{{"id":"f2","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"kimi","state":"working\n%exit","seq":1000,"source":"par-mux:test"}}}}"#
+            ),
+            format!(
+                r#"{{"id":"f3","method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"kimi","state":"working","seq":1000,"source":"par-mux:pi\n%exit"}}}}"#
+            ),
+        ];
+        for report in &forged {
+            let (reply, notification) = handle_report(report, &tree);
+            assert!(
+                reply.contains("error") && !reply.contains("\"result\":\"ok\""),
+                "a forged field is an error, not a silent ok: {reply}"
+            );
+            assert_eq!(
+                notification, None,
+                "no notification — nothing that could carry a forged line to a client"
+            );
+        }
+
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert!(
+                !pane.metadata().contains_key("agent"),
+                "the rejected reports wrote nothing: {:?}",
+                pane.metadata()
+            );
+        }
+
+        // The pane is not poisoned: a valid report at the same seq is
+        // still accepted afterward.
+        let (_, notification) =
+            handle_report(&state_report(pane_id, "kimi", "working", 1_000), &tree);
+        assert!(notification.is_some(), "a valid report still lands");
     }
 
     #[test]
