@@ -21,6 +21,7 @@
 //! with no write and no broadcast.
 
 use crate::mux::ids::PaneId;
+use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
@@ -129,8 +130,9 @@ fn handle_state_report(
             );
         };
         // herdr's out-of-order rule: a report at or below the last accepted
-        // sequence number is dropped — no metadata write, no broadcast.
-        if is_stale(pane.metadata(), header.seq) {
+        // sequence number from the same source is dropped — no metadata
+        // write, no broadcast.
+        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
             return (ok_reply(id), None);
         }
 
@@ -140,7 +142,7 @@ fn handle_state_report(
         // on: the scrape tier skips it forever after (the structural
         // precedence rule — a claim is never overwritten by a guess).
         pane.set_metadata("agent_state_source", "hook");
-        pane.set_metadata("agent_seq", &header.seq.to_string());
+        record_seq(pane, header.source.as_deref(), header.seq);
         if let Some(source) = &header.source {
             pane.set_metadata("agent_source", source);
         }
@@ -223,7 +225,7 @@ fn handle_session_report(
                 None,
             );
         };
-        if is_stale(pane.metadata(), header.seq) {
+        if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
             return (ok_reply(id), None);
         }
 
@@ -234,7 +236,7 @@ fn handle_session_report(
         let prior_session_path = pane.metadata().get("agent_session_path").cloned();
 
         pane.set_metadata("agent", &header.agent);
-        pane.set_metadata("agent_seq", &header.seq.to_string());
+        record_seq(pane, header.source.as_deref(), header.seq);
         if let Some(source) = &header.source {
             pane.set_metadata("agent_source", source);
         }
@@ -321,14 +323,54 @@ fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, Strin
         .map_err(|err| format!("session_resume_argv: {err}"))
 }
 
-/// Whether `seq` is at or below the pane's last accepted report — the
-/// stale side of herdr's ordering rule.
-fn is_stale(metadata: &std::collections::HashMap<String, String>, seq: u64) -> bool {
-    match metadata.get("agent_seq").map(|stamp| stamp.parse::<u64>()) {
-        Some(Ok(stored)) => seq <= stored,
-        // No accepted report yet (or a hand-corrupted stamp) means nothing
-        // to be stale against.
-        _ => false,
+/// Whether `seq` is at or below the last accepted report from the same
+/// source — the stale side of herdr's ordering rule. Freshness is tracked
+/// per reporting source because the sources do not share a clock: the
+/// claude/codex/grok hooks stamp `time.time_ns()` while the pi/omp
+/// extensions stamp `Date.now()*1000`, three orders of magnitude apart —
+/// one per-pane stamp would drop every pi/omp report filed after any
+/// claude/codex/grok report.
+fn is_stale(
+    metadata: &std::collections::HashMap<String, String>,
+    source: Option<&str>,
+    seq: u64,
+) -> bool {
+    match seq_stamps(metadata).get(source.unwrap_or("")) {
+        Some(&stored) => seq <= stored,
+        // No accepted report from this source yet (or a hand-corrupted
+        // stamp) means nothing to be stale against.
+        None => false,
+    }
+}
+
+/// Metadata key holding the per-source sequence stamps as a JSON object
+/// (`{"<source>": <seq>}`) — herdr's `hook_report_sequences` map,
+/// flattened into the pane's stringly metadata. Reports without a source
+/// share the empty-string bucket.
+const SEQ_STAMPS_KEY: &str = "agent_seq_by_source";
+
+/// The pane's per-source sequence stamps. A map that fails to parse reads
+/// as empty, so a hand-corrupted entry costs staleness ordering, not
+/// reports.
+fn seq_stamps(
+    metadata: &std::collections::HashMap<String, String>,
+) -> std::collections::HashMap<String, u64> {
+    metadata
+        .get(SEQ_STAMPS_KEY)
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default()
+}
+
+/// Record `seq` as accepted: the plain `agent_seq` (the most recent
+/// report, whatever its source) and the reporting source's own bucket.
+/// Volatile like everything state-shaped — the save format copies named
+/// identity fields only, so the bucket map never reaches disk.
+fn record_seq(pane: &mut MuxPane, source: Option<&str>, seq: u64) {
+    pane.set_metadata("agent_seq", &seq.to_string());
+    let mut stamps = seq_stamps(pane.metadata());
+    stamps.insert(source.unwrap_or("").to_string(), seq);
+    if let Ok(encoded) = serde_json::to_string(&stamps) {
+        pane.set_metadata(SEQ_STAMPS_KEY, &encoded);
     }
 }
 
@@ -520,6 +562,106 @@ mod tests {
             pane.metadata().get("agent_seq").map(String::as_str),
             Some("500")
         );
+    }
+
+    /// A state report from a named source — the shape every shipped
+    /// reporter uses (`par-mux:claude:session-hook`, `par-mux:pi`, …).
+    fn sourced_state_report(
+        pane: PaneId,
+        agent: &str,
+        state: &str,
+        seq: u64,
+        source: &str,
+    ) -> String {
+        format!(
+            r#"{{"id":"t-{seq}","method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"{agent}","state":"{state}","seq":{seq},"source":"{source}"}}}}"#
+        )
+    }
+
+    #[test]
+    fn a_report_from_a_new_source_is_not_stale_against_another_sources_clock() {
+        let (tree, pane_id) = tree_with_pane();
+
+        // The two clocks the shipped reporters actually send: the
+        // claude/codex/grok session hooks stamp `time.time_ns()`
+        // (~1.8e18) while the pi/omp extensions stamp `Date.now()*1000`
+        // (~1.8e15) — three orders of magnitude apart. Against one
+        // per-pane stamp the pi report is always `<=` stored and dies.
+        let claude_seq = 1_790_000_000_000_000_000_u64;
+        let (_, first) = handle_report(
+            &sourced_state_report(
+                pane_id,
+                "claude",
+                "working",
+                claude_seq,
+                "par-mux:claude:session-hook",
+            ),
+            &tree,
+        );
+        assert!(first.is_some(), "the claude report broadcasts");
+
+        let pi_seq = 1_790_000_000_000_000_u64;
+        let (reply, second) = handle_report(
+            &sourced_state_report(pane_id, "pi", "blocked", pi_seq, "par-mux:pi"),
+            &tree,
+        );
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "accepted, not error-replied: {reply}"
+        );
+        assert_eq!(
+            second,
+            Some(TmuxNotification::AgentStateChanged {
+                pane_id: pane_id.to_string(),
+                agent: "pi".to_string(),
+                state: "blocked".to_string(),
+                source: "hook".to_string()
+            }),
+            "the pi report took the pane despite the smaller clock"
+        );
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert_eq!(
+                pane.metadata().get("agent").map(String::as_str),
+                Some("pi"),
+                "pi owns the pane: {:?}",
+                pane.metadata()
+            );
+        }
+
+        // Staleness still orders reports WITHIN a source: the same pi
+        // seq again is a duplicate, and the smaller of two pi seqs is
+        // old news.
+        for stale_pi in [pi_seq, pi_seq - 1] {
+            let (_, duplicate) = handle_report(
+                &sourced_state_report(pane_id, "pi", "working", stale_pi, "par-mux:pi"),
+                &tree,
+            );
+            assert_eq!(duplicate, None, "pi seq {stale_pi} must not broadcast");
+        }
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent_state").map(String::as_str),
+            Some("blocked"),
+            "the duplicate pi reports wrote nothing"
+        );
+
+        // And the claude bucket survived the pi interlude: a fresh claude
+        // report above its own last seq is still accepted.
+        drop(guard);
+        let (_, third) = handle_report(
+            &sourced_state_report(
+                pane_id,
+                "claude",
+                "idle",
+                claude_seq + 1,
+                "par-mux:claude:session-hook",
+            ),
+            &tree,
+        );
+        assert!(third.is_some(), "the claude bucket was not reset by pi");
     }
 
     #[test]

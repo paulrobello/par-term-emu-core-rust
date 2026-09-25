@@ -250,7 +250,7 @@ Two methods (`src/mux/hooks.rs`):
 }}
 ```
 
-- Common params: `pane_id`, `agent`, `seq` (monotonic per pane; a report at or below the last accepted `seq` is dropped with no write and no broadcast), and optional `source`.
+- Common params: `pane_id`, `agent`, `seq` (monotonic per pane **per source**; a report at or below the last accepted `seq` from its own source is dropped with no write and no broadcast — sources stamp different clocks, e.g. `time.time_ns()` vs `Date.now()*1000`, so freshness is tracked per `source`), and optional `source`.
 - `pane.report_agent` additionally carries `state` (`working`/`blocked`/`idle`; `unknown` is accepted but never written), optional identity (`agent_session_id`/`agent_session_path`), and optional `message` — the blocked reason, stored whitespace-collapsed and cleared when a later report omits it.
 - `pane.report_agent_session` identifies the session by **id or transcript path** (either alone is enough) and may carry `session_resume_argv` — an array of non-empty strings, malformed values error-replied — stored verbatim as the pane's resume invocation. `session_start_source` records startup vs resume provenance.
 - Replies are one JSON line: `{"id":…,"result":"ok"}` or an error object.
