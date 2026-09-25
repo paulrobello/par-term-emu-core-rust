@@ -10,6 +10,7 @@ The daemon is feature-gated (Rust `mux` feature), optional, and independent of t
 
 - [Building and Running](#building-and-running)
 - [Command Line](#command-line)
+- [Client Mode](#client-mode)
 - [Socket and State Paths](#socket-and-state-paths)
 - [Protocol Overview](#protocol-overview)
 - [Command Reference](#command-reference)
@@ -50,11 +51,42 @@ par-mux                     Same as par-mux default
 par-mux --state-dir <dir>   Override the platform state directory the tree is persisted under
 par-mux [<name>] --stop     Stop the daemon on this socket cleanly and wait for it to exit
 par-mux [<name>] --restart  Stop, then serve the same socket in this process
+par-mux [<name>] --cmd CMD  Send one control command to the running daemon and print the reply
 ```
 
 `--socket <path>` is what `MuxClient::connect_or_spawn_at` passes when it starts a daemon. A second daemon on a path a live server already owns is refused with "another server owns <path>"; a stale socket remnant (dead socket file, Windows marker file, or a stray regular file at the path) is reclaimed.
 
 `--stop` and `--restart` are flags rather than subcommands — the positional `NAME` would otherwise be ambiguous with a session literally named `stop`. `--stop` sends `kill-server` to the daemon on that socket and waits (30 s bound) for the socket to stop accepting connections; "no daemon running" is reported but is not an error. `--restart` does the same stop, then serves the same socket in this process — the state save the stop just completed is what it restores. Run it detached (e.g. `par-mux --restart NAME &`) to keep a shell; this is the routine fix after rebuilding par-mux, since clients attach to whatever daemon owns the socket and an old daemon keeps serving old code until restarted.
+
+## Client Mode
+
+`par-mux --cmd '<command>'` (short form `-c`) connects to the daemon that owns the socket, sends one control command, prints the reply, and exits. It drives panes from a shell or script without linking `MuxClient`. The target socket resolves exactly as the daemon's does: the positional `<name>` (default `default`) maps to the named default path, and `--socket <path>` overrides it. Like `--stop`, it is a flag rather than a subcommand so the positional name stays unambiguous.
+
+```bash
+# Type a command into pane %3 and press Enter (send-keys appends nothing; Enter is a key)
+par-mux --cmd 'send-keys -t %3 "ls -la" Enter'
+
+# Capture a pane's visible screen, or 200 lines of history plus the screen
+par-mux --cmd 'capture-pane -t %3'
+par-mux --cmd 'capture-pane -t %3 -S -200'
+
+# The agent roster, and a split of pane %3
+par-mux --cmd list-agents
+par-mux --cmd 'split-window -h -t %3'
+
+# A named daemon, or an explicit socket
+par-mux work --cmd list-panes
+par-mux --socket /tmp/par-mux-test.sock --cmd version
+```
+
+| Outcome | stdout | stderr | Exit code |
+|---------|--------|--------|-----------|
+| Success (`%end`) | The reply body, one line per reply line, framing stripped; nothing for an empty reply | — | 0 |
+| Command failed (`%error`) | — | The daemon's error text | 1 |
+| No daemon owns the socket | — | `no daemon running on <path>` | 1 |
+| Transport failure after connecting (no reply block, connection closed) | — | The I/O error | 2 |
+
+Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with nothing running fails immediately instead of booting one. The command string follows the daemon's grammar (see the quoting rules under [Command Reference](#command-reference)); wrap it in single quotes in the shell so its inner double quotes reach the daemon intact. One command per invocation — there is no `;` sequencing, interactive attach, or follow mode. Pushed notifications that arrive while the reply is pending are discarded. Stdout writes stop quietly on a closed pipe, so `par-mux --cmd '...' | head -1` does not panic.
 
 ## Socket and State Paths
 
@@ -261,7 +293,7 @@ for notification in client.notifications().try_recv() { /* … */ }
 ```
 
 - `MuxServer::bind` / `bind_with_tree` / `run` (no persistence) / `run_persisting` / `shutdown_handle`.
-- `MuxClient::connect` / `connect_or_spawn` / `connect_or_spawn_at` / `send` (one command, returns the reply body lines) / `notifications` (pushed `TmuxNotification`s) / `kill_spawned_daemon` — deliberately not a `Drop` impl, so a disconnecting client never kills the server other clients use.
+- `MuxClient::connect` / `connect_or_spawn` / `connect_or_spawn_at` / `send` (one command, returns the reply body lines — a `%error` block's body too) / `send_checked` (the same, as a `Reply { body, ok }` that tells `%end` from `%error`) / `notifications` (pushed `TmuxNotification`s) / `kill_spawned_daemon` — deliberately not a `Drop` impl, so a disconnecting client never kills the server other clients use.
 - Pane creation goes through a `PaneFactory`; the default `ShellPaneFactory` spawns plain commands, and `AgentPaneFactory` pre-tags agent panes for embedders and the resume path.
 
 ## Testing

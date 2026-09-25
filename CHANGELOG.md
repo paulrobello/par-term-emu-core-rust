@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`par-mux --cmd` client mode** (`src/bin/par_mux/main.rs`, `src/mux/client.rs`). `par-mux [<name>|--socket <path>] --cmd '<command>'` (short `-c`) sends one control command to the running daemon, prints the reply body one line per stdout line with the `%begin`/`%end` framing stripped, and exits 0; a `%error` reply prints the daemon's message to stderr and exits 1, as does a socket no daemon owns (client mode never spawns a daemon); a transport failure exits 2. Scripts and agents can now drive panes (`par-mux --cmd 'send-keys -t %3 "ls -la" Enter'`, `capture-pane`, `split-window`, `list-agents`) without raw socket I/O or linking the library. See [docs/MUX.md](docs/MUX.md#client-mode).
+- **`MuxClient::send_checked` and `mux::Reply`** (`src/mux/client.rs`). `send` returned the same `Ok(body)` for a `%end` and a `%error` block, so a caller could not tell a failed command from a successful one; `send_checked` returns `Reply { body, ok }`. `send` keeps its existing contract.
+
 ## [0.50.0] - 2026-09-23
 
 ### Removed
