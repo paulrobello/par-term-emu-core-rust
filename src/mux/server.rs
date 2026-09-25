@@ -1085,6 +1085,60 @@ mod tests {
         drop(silent);
     }
 
+    /// The requested-shutdown side of card 01a0da711dfb7cf397fa99ceaba76ae1:
+    /// SIGTERM and `kill-server` raise the same flag this test raises, and
+    /// the flag — not the persist channel's sender count — must bound the
+    /// exit join when a silent client's handler holds a sender clone.
+    #[cfg(unix)]
+    #[test]
+    fn a_requested_shutdown_exits_even_with_a_silent_connected_client() {
+        use crate::mux::persist::{load_or_quarantine, state_file_in, Loaded};
+
+        let dir = temp_dir();
+        let path = dir.path().join("shutdown-silent.sock");
+        let state_path = state_file_in(&dir.path().join("state"), &path);
+        let server = MuxServer::bind(&path).expect("bind");
+        let shutdown = server.shutdown_handle();
+        let save_path = state_path.clone();
+        let serving = std::thread::spawn(move || server.run_persisting(save_path));
+
+        let mut client = crate::mux::MuxClient::connect(&path).expect("client connects");
+        client
+            .send_checked("new-session -s kept")
+            .expect("mutation lands");
+        // Silent: connected, never sends, outlives the shutdown.
+        let silent = crate::mux::MuxClient::connect(&path).expect("silent client connects");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        shutdown.store(true, Ordering::Relaxed);
+
+        let (exited_tx, exited_rx) = channel();
+        let mut serving = Some(serving);
+        std::thread::spawn(move || {
+            if let Some(handle) = serving.take() {
+                let _ = handle.join();
+            }
+            let _ = exited_tx.send(());
+        });
+        let deadline = std::time::Duration::from_secs(10);
+        assert!(
+            exited_rx.recv_timeout(deadline).is_ok(),
+            "the requested-shutdown exit is held open past {deadline:?} — a silent \
+             client's persist clone is pinning the persist worker's channel open"
+        );
+        match load_or_quarantine(&state_path) {
+            Loaded::State(state) => assert_eq!(
+                state.sessions.len(),
+                1,
+                "the shutdown save captured the session"
+            ),
+            Loaded::Fresh | Loaded::Quarantined { .. } => panic!(
+                "no state was saved on the requested shutdown at {}",
+                state_path.display()
+            ),
+        }
+        drop(silent);
+    }
+
     #[cfg(unix)]
     #[test]
     fn bind_replaces_a_stale_socket_file_and_sets_mode_0600() {
