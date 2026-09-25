@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-09-24
+
 ### Added
 - **`par-mux --cmd` client mode** (`src/bin/par_mux/main.rs`, `src/mux/client.rs`). `par-mux [<name>|--socket <path>] --cmd '<command>'` (short `-c`) sends one control command to the running daemon, prints the reply body one line per stdout line with the `%begin`/`%end` framing stripped, and exits 0; a `%error` reply prints the daemon's message to stderr and exits 1, as does a socket no daemon owns (client mode never spawns a daemon); a transport failure exits 2. Scripts and agents can now drive panes (`par-mux --cmd 'send-keys -t %3 "ls -la" Enter'`, `capture-pane`, `split-window`, `list-agents`) without raw socket I/O or linking the library. See [docs/MUX.md](docs/MUX.md#client-mode).
 - **`MuxClient::send_checked` and `mux::Reply`** (`src/mux/client.rs`). `send` returned the same `Ok(body)` for a `%end` and a `%error` block, so a caller could not tell a failed command from a successful one; `send_checked` returns `Reply { body, ok }`. `send` keeps its existing contract.
@@ -16,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Web frontend: size policy for viewers of a shared pane** (`web-terminal-frontend/components/Terminal.tsx`, `lib/viewport.ts`, `components/OnscreenKeyboard.tsx`, `app/page.tsx`). A viewer larger than the pane dot-fills the surplus (tmux style); a phone shows the full grid fit to the width with pinch-zoom and drag-pan, and sends a resize only on a deliberate action (the new Fit button on the keyboard bar, or opening the on-screen keyboard). No viewer echoes a server-sent resize back any more. See [docs/STREAMING.md](docs/STREAMING.md#mux-backed-sessions).
 
 ### Changed
+- **par-mux daemon resolution falls back to PATH** (`src/mux/client.rs`). `MuxClient::connect_or_spawn_at` now tries the `par-mux` binary next to the current executable first, then every `PATH` entry that holds `par-mux`. A candidate that cannot be started advances the search; any other spawn error surfaces with its path, and exhausting the list names every path tried. Embedders such as par-term no longer need to ship `par-mux` beside their own binary.
 - **Behavior-affecting: phones no longer resize a plain streaming session's PTY on connect** (`web-terminal-frontend/components/Terminal.tsx`). A viewer detected as a phone (width under 640 px or a mobile user agent) now opens at the server's current size, fit to its width, and resizes the PTY only on the Fit button or when opening the on-screen keyboard. Desktop viewers are unchanged.
 
 ### Fixed

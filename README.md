@@ -19,6 +19,8 @@ A comprehensive terminal emulator library written in Rust with Python bindings f
 > The entries below cover the most recent releases; the full history for older
 > versions lives in CHANGELOG.md.
 
+Version 0.51.0 is a **minor release** adding par-mux client mode (`par-mux --cmd`), `MuxClient::send_checked`, mux-backed streaming sessions (`par-term-streamer --mux-socket`, `MuxSessionFactory`), a `pane-info` mux command, a web-frontend size policy for viewers of a shared pane, a PATH fallback for locating the `par-mux` daemon, and a macOS fix for PTY output lost when a child exits before its output is read. Phones no longer resize a plain streaming session's PTY on connect. See [CHANGELOG.md](CHANGELOG.md) for complete release notes.
+
 Version 0.50.0 is a **minor release with two breaking changes**: the dead terminal multiplexing module (`PaneState`/`WindowLayout`/`SessionState` and the `Terminal` pane-state methods) is removed from the Rust and Python surfaces, and `poll_events()`/`poll_subscribed_events()`/observer callbacks now return **native Python types** instead of stringly-typed dicts (a `poll_events_legacy()`/`poll_subscribed_events_legacy()` bridge keeps the old shape available for one release). The par-mux daemon gained its full Phase 2–6 command, agent, and resume work, plus post-release fixes for reattach scrollback, daemon-restart screen state, and a blank-split-pane bug; the streaming server picked up read-only-mode enforcement, a WebSocket handshake timeout, TLS/Basic-auth/CSP hardening, and clickjacking protection headers. See [What's New in 0.50.0](#whats-new-in-0500) below, and [CHANGELOG.md](CHANGELOG.md) for complete release notes.
 
 ## What's New in 0.50.0
