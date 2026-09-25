@@ -90,6 +90,70 @@ use tokio::signal;
 use tokio::time;
 use tracing::{error, info};
 
+/// `--mux-socket`: serve sessions that mirror par-mux panes. The daemon
+/// owns the panes, so there is no shell spawn, restart, or initial command.
+#[cfg(feature = "mux")]
+async fn run_mux_mode(
+    socket: std::path::PathBuf,
+    addr: String,
+    config: StreamingConfig,
+    theme: Theme,
+    args: &Args,
+) -> anyhow::Result<()> {
+    use par_term_emu_core_rust::streaming::{MuxPaneSelector, MuxSessionFactory};
+    let factory = Arc::new(
+        MuxSessionFactory::new(&socket, MuxPaneSelector::FromSessionId)
+            .with_scrollback(args.scrollback),
+    );
+    let mut server = StreamingServer::with_factory(
+        addr.clone(),
+        config,
+        Arc::clone(&factory) as Arc<dyn SessionFactory>,
+    );
+    server.set_theme(theme.to_protocol());
+    let server = Arc::new(server);
+    factory.set_streaming_server(Arc::clone(&server));
+
+    let path = if args.enable_http { "/ws" } else { "" };
+    println!(
+        "\n  Mode: PAR-MUX MIRROR (daemon socket {})",
+        socket.display()
+    );
+    println!(
+        "  Sessions mirror panes: ?session=pane-N selects pane %N; any other id the first pane"
+    );
+    println!("  WebSocket: ws://{addr}{path}");
+    println!("\nPress Ctrl+C to stop the server\n");
+
+    let handle = {
+        let server = Arc::clone(&server);
+        tokio::spawn(async move {
+            if let Err(e) = server.start().await {
+                error!("Streaming server error: {}", e);
+            }
+        })
+    };
+    signal::ctrl_c()
+        .await
+        .context("Failed to listen for Ctrl+C")?;
+    info!("Received shutdown signal");
+    server.shutdown("Server shutting down".to_string());
+    handle.abort();
+    Ok(())
+}
+
+/// Without the `mux` feature there is no pane source to mirror.
+#[cfg(not(feature = "mux"))]
+async fn run_mux_mode(
+    _socket: std::path::PathBuf,
+    _addr: String,
+    _config: StreamingConfig,
+    _theme: Theme,
+    _args: &Args,
+) -> anyhow::Result<()> {
+    anyhow::bail!("--mux-socket needs a par-term-streamer built with the `mux` feature")
+}
+
 mod bootstrap;
 mod cli;
 mod frontend_download;
@@ -252,6 +316,10 @@ async fn main() -> Result<()> {
     }
 
     let restart_shell = args.macro_file.is_none() && !args.no_restart_shell;
+
+    if let Some(socket) = args.mux_socket.clone() {
+        return run_mux_mode(socket, addr, config, theme, &args).await;
+    }
 
     // Create the session factory (shell mode) and the streaming server
     let (factory, mut streaming_server) = match &run_mode {
