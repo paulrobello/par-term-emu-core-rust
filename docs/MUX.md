@@ -138,33 +138,41 @@ Each registered client has a bounded broadcast queue (4096 lines). A client that
 
 ## Command Reference
 
-The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `select-pane -T TITLE` title, and environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value), so a name, title, or value may contain spaces. Every other flag is whitespace-split — the `-t`/`-s` targets elsewhere are typed `$N`/`@N`/`%N` ids that cannot contain whitespace, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+The parser is deliberately minimal: whitespace-split with a flag scan. tmux's full argument grammar (`--`, per-command option tables, command sequences) is not implemented. Quoting is honored in a fixed set of places, all sharing one bounded grammar (single or double quotes, backslash escapes outside quotes, the `'\''` close-escape-reopen idiom, no interpolation): the `send-keys` payload, the `new-session -s NAME` / `new-window -n NAME` names, the `select-pane -T TITLE` title, environment values (`new-session -e NAME=VALUE`, the `set-environment` name and value), and the `-t`/`-s` targets, so a name, title, value, or target may contain spaces. Every other flag is whitespace-split, and `rename-window` / `set-buffer` take the rest of the line verbatim. List replies have fixed shapes with no `-F` support — push notifications cover what `-F` polling existed for.
+
+A target placeholder in the table below (`<pane>`, `<window>`, `<session>`) is either the typed id (`%N`, `@N`, `$N`) or a **name**, resolved daemon-side against the tree:
+
+- **`<pane>`** matches the pane's sticky user title (`select-pane -T`) exactly. The pane program's live OSC 0/2 title never matches — it changes with the running program and would make name targets flaky.
+- **`<window>`** matches the window's name (`new-window -n`, `rename-window`) exactly, across every session.
+- **`<session>`** matches the session's name (`new-session -s`) exactly.
+
+Ids always win over names: a value starting with the target kind's own sigil is the id, so a pane titled `%3` can never shadow pane `%3` (and a sigil-prefixed value that is not a valid id, like `%abc`, is a parse error). A name matching more than one pane/window/session is an **error listing the sorted candidate ids** (`ambiguous pane target: dup (matching: %0, %2)`) — never a silent pick, and the command acts on nothing. An unknown name errors (`no such pane: <name>`). One limitation: `send-keys` takes a single-token target, because its raw payload split cannot carry a spaced name next to free text — address such a pane by id.
 
 | Command | Arguments | Reply body | Broadcasts |
 |---------|-----------|------------|------------|
 | `new-session` | `[-s name] [-e NAME=VALUE]…` | The session id (`$N`) | `%window-add` per window; `%session-changed` to the issuer |
-| `new-window` | `[-t $N] [-n name]` | The window id (`@N`) | `%window-add` |
-| `select-window` | `-t @N` | empty | `%window-pane-changed` |
-| `kill-window` | `-t @N` | empty | `%window-close` |
-| `rename-window` | `-t @N <name>` | empty | `%window-renamed` |
-| `split-window` | `-t %N [-h\|-v] [-p 1-99]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
-| `select-pane` | `-t %N [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
-| `pane-title` | `-t %N` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
-| `pane-info` | `-t %N` | One line, `%N @W COLSxROWS`: the pane's window and current grid size (read-only; lets a mirroring client seed at the pane's size instead of resizing it) | — |
-| `resize-pane` | `-t %N (-L\|-R\|-U\|-D [cells] \| -x COLS [-y ROWS])` | empty | `%layout-change` |
-| `swap-pane` | `-t %N -s %N` | empty | `%layout-change` |
-| `kill-pane` | `-t %N` | empty | `%layout-change`, `%window-pane-changed` |
+| `new-window` | `[-t <session>] [-n name]` | The window id (`@N`) | `%window-add` |
+| `select-window` | `-t <window>` | empty | `%window-pane-changed` |
+| `kill-window` | `-t <window>` | empty | `%window-close` |
+| `rename-window` | `-t <window> <name>` | empty | `%window-renamed` |
+| `split-window` | `-t <pane> [-h\|-v] [-p 1-99]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
+| `select-pane` | `-t <pane> [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
+| `pane-title` | `-t <pane>` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
+| `pane-info` | `-t %N` | One line, `%N @W COLSxROWS` for the resolved pane: its window and current grid size (read-only; lets a mirroring client seed at the pane's size instead of resizing it) | — |
+| `resize-pane` | `-t <pane> (-L\|-R\|-U\|-D [cells] \| -x COLS [-y ROWS])` | empty | `%layout-change` |
+| `swap-pane` | `-t <pane> -s <pane>` | empty | `%layout-change` |
+| `kill-pane` | `-t <pane>` | empty | `%layout-change`, `%window-pane-changed` |
 | `list-panes` | — | One `%N` line per pane, globally | — |
 | `list-windows` | — | One `@N: name` line per window, globally | — |
 | `list-sessions` | — | One `$N: name` line per session | — |
 | `list-agents` | — | Roster: one `%N <agent> <state> <source>` line per state-carrying pane (see below) | — |
-| `capture-pane` | `-t %N [-S start] [-E end] [-e]` | The captured lines | — |
-| `send-keys` | `-t %N <keys>` | empty | — |
-| `refresh-client` | `-t %N [-C WxH]` | Pane's screen-restore replay (no `-C`); empty with `-C` | `%layout-change` (with `-C`) |
+| `capture-pane` | `-t <pane> [-S start] [-E end] [-e]` | The captured lines | — |
+| `send-keys` | `-t <pane> <keys>` | empty | — |
+| `refresh-client` | `-t <pane> [-C WxH]` | Pane's screen-restore replay (no `-C`); empty with `-C` | `%layout-change` (with `-C`) |
 | `set-buffer` | `<content>` | empty | — |
-| `set-environment` | `-t $N NAME VALUE` or `-t $N -u NAME` | empty | — |
+| `set-environment` | `-t <session> NAME VALUE` or `-t <session> -u NAME` | empty | — |
 | `show-buffer` | — | The buffer content | — |
-| `paste-buffer` | `-t %N` | empty | — |
+| `paste-buffer` | `-t <pane>` | empty | — |
 | `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (`+unknown` when built outside a repository) | — |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 

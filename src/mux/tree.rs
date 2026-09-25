@@ -1,6 +1,6 @@
 //! The session/window/pane tree: the server's single source of truth.
 
-use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
+use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
@@ -115,6 +115,69 @@ impl MuxTree {
     /// Look up a pane mutably.
     pub fn pane_mut(&mut self, id: PaneId) -> Option<&mut MuxPane> {
         self.panes.get_mut(&id)
+    }
+
+    /// Resolve a pane target: typed `%N` ids pass through untouched (the
+    /// caller's pane lookup reports unknown ids as before), any other
+    /// value matches the pane's sticky user title exactly — the OSC 0/2
+    /// program title never matches, it changes with the running program
+    /// and would make name targets flaky.
+    ///
+    /// A title held by more than one pane is an error listing the
+    /// candidate ids, never a silent pick.
+    pub fn resolve_pane_target(&self, target: Target<PaneId>) -> Result<PaneId, MuxError> {
+        let name = match target {
+            Target::Id(id) => return Ok(id),
+            Target::Name(name) => name,
+        };
+        match match_name(
+            self.panes
+                .iter()
+                .filter_map(|(id, pane)| (pane.user_title() == Some(name.as_str())).then_some(*id)),
+        ) {
+            Match::None => Err(MuxError::NoSuchPaneNamed(name)),
+            Match::One(id) => Ok(id),
+            Match::Many(ids) => Err(MuxError::AmbiguousPaneTarget(name, ids)),
+        }
+    }
+
+    /// Resolve a window target: typed `@N` ids pass through; a name
+    /// matches window names exactly, across every session (no command
+    /// pairs a window target with a session scope today). Ambiguous names
+    /// error with the candidates.
+    pub fn resolve_window_target(&self, target: Target<WindowId>) -> Result<WindowId, MuxError> {
+        let name = match target {
+            Target::Id(id) => return Ok(id),
+            Target::Name(name) => name,
+        };
+        match match_name(
+            self.windows
+                .iter()
+                .filter_map(|(id, window)| (window.name == name).then_some(*id)),
+        ) {
+            Match::None => Err(MuxError::NoSuchWindowNamed(name)),
+            Match::One(id) => Ok(id),
+            Match::Many(ids) => Err(MuxError::AmbiguousWindowTarget(name, ids)),
+        }
+    }
+
+    /// Resolve a session target: typed `$N` ids pass through; a name
+    /// matches session names exactly. Ambiguous names error with the
+    /// candidates.
+    pub fn resolve_session_target(&self, target: Target<SessionId>) -> Result<SessionId, MuxError> {
+        let name = match target {
+            Target::Id(id) => return Ok(id),
+            Target::Name(name) => name,
+        };
+        match match_name(
+            self.sessions
+                .iter()
+                .filter_map(|(id, session)| (session.name == name).then_some(*id)),
+        ) {
+            Match::None => Err(MuxError::NoSuchSessionNamed(name)),
+            Match::One(id) => Ok(id),
+            Match::Many(ids) => Err(MuxError::AmbiguousSessionTarget(name, ids)),
+        }
     }
 
     /// Create a session, with one window holding one pane — tmux's shape.
@@ -636,6 +699,28 @@ impl MuxTree {
         }
 
         Ok(())
+    }
+}
+
+/// The outcome of matching a name against the tree: the resolvers above
+/// turn each case into its id-pass-through, not-found, or ambiguity error.
+enum Match<I> {
+    None,
+    One(I),
+    Many(Vec<I>),
+}
+
+/// Reduce a name's candidate ids to zero/one/many, sorted so an ambiguity
+/// error lists candidates in id order regardless of map iteration order.
+fn match_name<I: Ord + Copy>(candidates: impl Iterator<Item = I>) -> Match<I> {
+    let mut ids: Vec<I> = candidates.collect();
+    match ids.len() {
+        0 => Match::None,
+        1 => Match::One(ids.remove(0)),
+        _ => {
+            ids.sort_unstable();
+            Match::Many(ids)
+        }
     }
 }
 
@@ -1294,5 +1379,129 @@ mod tests {
         tree.set_buffer("default", "first".to_string());
         tree.set_buffer("default", "second".to_string());
         assert_eq!(tree.get_buffer("default"), Some("second"));
+    }
+
+    /// Two sessions of one window of one pane each, with the panes titled
+    /// per the test's needs — the shape every name-target test starts from.
+    fn named_tree(first_title: Option<&str>, second_title: Option<&str>) -> MuxTree {
+        let (mut tree, _factory) = recording_tree();
+        let session = tree.new_session("alpha", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+        let second_session = tree.new_session("beta", 80, 24).unwrap();
+        let second_window = tree.session(second_session).unwrap().windows[0];
+        let second = tree.window(second_window).unwrap().panes()[0];
+        if let Some(title) = first_title {
+            tree.pane_mut(first).unwrap().set_user_title(title);
+        }
+        if let Some(title) = second_title {
+            tree.pane_mut(second).unwrap().set_user_title(title);
+        }
+        tree
+    }
+
+    #[test]
+    fn pane_target_resolves_by_user_title_per_kind() {
+        let tree = named_tree(Some("build"), None);
+        let resolved = tree
+            .resolve_pane_target(Target::Name("build".to_string()))
+            .unwrap();
+        // The titled pane is %0 (first session's first pane).
+        assert_eq!(resolved, PaneId(0));
+        // The other pane stays reachable by its own distinct title.
+        let other = named_tree(None, Some("logs"));
+        assert_eq!(
+            other
+                .resolve_pane_target(Target::Name("logs".to_string()))
+                .unwrap(),
+            PaneId(1)
+        );
+    }
+
+    #[test]
+    fn window_and_session_targets_resolve_by_name() {
+        let mut tree = named_tree(None, None);
+        // new_session names the window after the session, so rename one
+        // window to prove name resolution is not id-shaped luck.
+        tree.rename_window(WindowId(1), "logs").unwrap();
+        assert_eq!(
+            tree.resolve_window_target(Target::Name("logs".to_string()))
+                .unwrap(),
+            WindowId(1)
+        );
+        assert_eq!(
+            tree.resolve_session_target(Target::Name("beta".to_string()))
+                .unwrap(),
+            SessionId(1)
+        );
+    }
+
+    #[test]
+    fn unknown_names_error_without_touching_the_tree() {
+        let tree = named_tree(Some("build"), None);
+        assert!(matches!(
+            tree.resolve_pane_target(Target::Name("nope".to_string())),
+            Err(MuxError::NoSuchPaneNamed(n)) if n == "nope"
+        ));
+        assert!(matches!(
+            tree.resolve_window_target(Target::Name("nope".to_string())),
+            Err(MuxError::NoSuchWindowNamed(n)) if n == "nope"
+        ));
+        assert!(matches!(
+            tree.resolve_session_target(Target::Name("nope".to_string())),
+            Err(MuxError::NoSuchSessionNamed(n)) if n == "nope"
+        ));
+    }
+
+    #[test]
+    fn ambiguous_names_error_listing_sorted_candidate_ids() {
+        let tree = named_tree(Some("dup"), Some("dup"));
+        match tree.resolve_pane_target(Target::Name("dup".to_string())) {
+            Err(MuxError::AmbiguousPaneTarget(name, ids)) => {
+                assert_eq!(name, "dup");
+                assert_eq!(ids, vec![PaneId(0), PaneId(1)], "candidates in id order");
+            }
+            other => panic!("ambiguity must error, got {other:?}"),
+        }
+        // Windows: two sessions' initial windows both carry their
+        // session's name, so one shared name makes them ambiguous.
+        let mut tree = named_tree(None, None);
+        tree.rename_window(WindowId(1), "alpha").unwrap();
+        match tree.resolve_window_target(Target::Name("alpha".to_string())) {
+            Err(MuxError::AmbiguousWindowTarget(_, ids)) => {
+                assert_eq!(ids, vec![WindowId(0), WindowId(1)]);
+            }
+            other => panic!("ambiguity must error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn typed_ids_pass_through_resolution_untouched() {
+        let tree = named_tree(Some("%1"), None);
+        // A pane TITLED "%1" must not capture id targets: %1 still means
+        // pane 1, whose existence the caller reports as before.
+        assert_eq!(
+            tree.resolve_pane_target(Target::Id(PaneId(1))).unwrap(),
+            PaneId(1)
+        );
+        // And the title "%1" is unreachable BY NAME (the parser classifies
+        // sigil-prefixed values as ids), so no name can shadow an id.
+        assert!(matches!(
+            tree.resolve_pane_target(Target::parse("%1").unwrap()),
+            Ok(PaneId(1))
+        ));
+    }
+
+    #[test]
+    fn duplicate_session_names_are_ambiguous_not_silently_picked() {
+        let (mut tree, _factory) = recording_tree();
+        tree.new_session("dup", 80, 24).unwrap();
+        tree.new_session("dup", 80, 24).unwrap();
+        match tree.resolve_session_target(Target::Name("dup".to_string())) {
+            Err(MuxError::AmbiguousSessionTarget(_, ids)) => {
+                assert_eq!(ids, vec![SessionId(0), SessionId(1)]);
+            }
+            other => panic!("ambiguity must error, got {other:?}"),
+        }
     }
 }

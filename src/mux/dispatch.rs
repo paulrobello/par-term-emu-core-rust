@@ -15,7 +15,7 @@
 
 use crate::mux::command::{MuxCommand, ResizeAdjustment};
 use crate::mux::emit::{emit, emit_block};
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::SplitDirection;
 use crate::mux::pane::MuxError;
 use crate::mux::persist::PersistState;
@@ -327,8 +327,12 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, &body)
 }
 
-fn cmd_send_keys(ctx: &Ctx<'_>, pane: PaneId, keys: &[u8]) -> Outcome {
+fn cmd_send_keys(ctx: &Ctx<'_>, pane: Target<PaneId>, keys: &[u8]) -> Outcome {
     let mut guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     match guard.pane_mut(pane) {
         Some(target) => match target.write(keys) {
             Ok(()) => Outcome::ok(ctx, ""),
@@ -338,7 +342,14 @@ fn cmd_send_keys(ctx: &Ctx<'_>, pane: PaneId, keys: &[u8]) -> Outcome {
     }
 }
 
-fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> Outcome {
+fn cmd_refresh_client(ctx: &Ctx<'_>, pane: Target<PaneId>, size: Option<(u16, u16)>) -> Outcome {
+    let pane = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     match size {
         // The window-size policy's input (T4.C): a client's renderer
         // reports its grid size, the pane's window is resized to it, and
@@ -384,7 +395,14 @@ fn cmd_refresh_client(ctx: &Ctx<'_>, pane: PaneId, size: Option<(u16, u16)>) -> 
     }
 }
 
-fn cmd_kill_pane(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
+    let pane = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     // kill_pane resolves and returns the owning window: afterwards the
     // pane (and its window membership) is gone and cannot be looked up.
     // The lock guard is let-bound so it is gone before the successor
@@ -409,12 +427,16 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
 
 fn cmd_split_window(
     ctx: &Ctx<'_>,
-    pane: PaneId,
+    pane: Target<PaneId>,
     direction: SplitDirection,
     percent: u32,
 ) -> Outcome {
     let outcome = {
         let mut guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
         let split = guard.split_pane_in_window(pane, direction, percent as f32 / 100.0, None);
         // Wire the new pane's output to the clients, as new-session and
         // new-window do for theirs. Without it the pane's PTY still feeds
@@ -441,8 +463,12 @@ fn cmd_split_window(
     }
 }
 
-fn cmd_select_pane(ctx: &Ctx<'_>, pane: PaneId, title: Option<String>) -> Outcome {
+fn cmd_select_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, title: Option<String>) -> Outcome {
     let mut guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     // The title lands first under the same lock: a failed select reports
     // the pane error and nothing else changed.
     let mut title_notification = None;
@@ -477,21 +503,29 @@ fn cmd_select_pane(ctx: &Ctx<'_>, pane: PaneId, title: Option<String>) -> Outcom
     }
 }
 
-fn cmd_pane_title(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+fn cmd_pane_title(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // Wire contract: the reply body is exactly one line — the effective
     // title (user `-T` title when set, else the pane terminal's current
     // OSC 0/2 title). An empty body means neither is set.
     let guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     match guard.pane(pane) {
         Some(pane) => Outcome::ok(ctx, &pane.effective_title()),
         None => Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string()),
     }
 }
 
-fn cmd_pane_info(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+fn cmd_pane_info(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // Wire contract: one line, `%N @W COLSxROWS` — the pane's window and
     // its terminal's current grid size.
     let guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     let (Some(target), Some(window)) = (guard.pane(pane), guard.window_of_pane(pane)) else {
         return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
     };
@@ -499,9 +533,13 @@ fn cmd_pane_info(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
     Outcome::ok(ctx, &format!("{pane} {window} {cols}x{rows}"))
 }
 
-fn cmd_resize_pane(ctx: &Ctx<'_>, pane: PaneId, adjustment: ResizeAdjustment) -> Outcome {
+fn cmd_resize_pane(ctx: &Ctx<'_>, pane: Target<PaneId>, adjustment: ResizeAdjustment) -> Outcome {
     let outcome = {
         let mut guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
         match adjustment {
             ResizeAdjustment::Relative { direction, cells } => {
                 guard.resize_pane(pane, direction, cells)
@@ -517,22 +555,41 @@ fn cmd_resize_pane(ctx: &Ctx<'_>, pane: PaneId, adjustment: ResizeAdjustment) ->
     }
 }
 
-fn cmd_swap_panes(ctx: &Ctx<'_>, target: PaneId, source: PaneId) -> Outcome {
+fn cmd_swap_panes(ctx: &Ctx<'_>, target: Target<PaneId>, source: Target<PaneId>) -> Outcome {
+    let (target, source) = {
+        let guard = ctx.tree.lock();
+        match (
+            guard.resolve_pane_target(target),
+            guard.resolve_pane_target(source),
+        ) {
+            (Ok(target), Ok(source)) => (target, source),
+            (Err(err), _) | (_, Err(err)) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     match ctx.tree.lock().swap_panes(target, source) {
         Ok(window_id) => Outcome::ok(ctx, "").with_layout(window_id),
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }
 
-fn cmd_new_window(ctx: &Ctx<'_>, session: Option<SessionId>, name: Option<String>) -> Outcome {
+fn cmd_new_window(
+    ctx: &Ctx<'_>,
+    session: Option<Target<SessionId>>,
+    name: Option<String>,
+) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let outcome = {
         let mut guard = ctx.tree.lock();
         // Bare `new-window` targets the most-recently-created
         // session — ids are monotonic and the registry keeps
         // insertion order, so the last entry is the newest.
-        let Some(session) = session.or_else(|| guard.sessions().last().copied()) else {
+        let Some(session) = session.or_else(|| guard.sessions().last().copied().map(Target::Id))
+        else {
             return Outcome::err(ctx, "no sessions exist");
+        };
+        let session = match guard.resolve_session_target(session) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
         guard
             .new_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS)
@@ -559,15 +616,20 @@ fn cmd_new_window(ctx: &Ctx<'_>, session: Option<SessionId>, name: Option<String
     }
 }
 
-fn cmd_select_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
+fn cmd_select_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
     let outcome = {
         let mut guard = ctx.tree.lock();
+        let window = match guard.resolve_window_target(window) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
         guard
             .select_window(window)
             .map(|()| guard.window(window).map(|w| w.active))
+            .map(|active| (window, active))
     };
     match outcome {
-        Ok(active) => {
+        Ok((window, active)) => {
             let mut result = Outcome::ok(ctx, "");
             if let Some(pane) = active {
                 result = result.notifying(TmuxNotification::WindowPaneChanged {
@@ -581,7 +643,14 @@ fn cmd_select_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
     }
 }
 
-fn cmd_kill_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
+fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
+    let window = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_window_target(window) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     match ctx.tree.lock().kill_window(window) {
         Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
             window_id: window.to_string(),
@@ -590,7 +659,14 @@ fn cmd_kill_window(ctx: &Ctx<'_>, window: WindowId) -> Outcome {
     }
 }
 
-fn cmd_rename_window(ctx: &Ctx<'_>, window: WindowId, name: String) -> Outcome {
+fn cmd_rename_window(ctx: &Ctx<'_>, window: Target<WindowId>, name: String) -> Outcome {
+    let window = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_window_target(window) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     match ctx.tree.lock().rename_window(window, &name) {
         Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WindowRenamed {
             window_id: window.to_string(),
@@ -645,12 +721,16 @@ fn cmd_list_sessions(ctx: &Ctx<'_>) -> Outcome {
 
 fn cmd_capture_pane(
     ctx: &Ctx<'_>,
-    pane: PaneId,
+    pane: Target<PaneId>,
     start_line: Option<i64>,
     end_line: Option<i64>,
     escape: bool,
 ) -> Outcome {
     let guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     match guard.pane(pane) {
         Some(target) => {
             let terminal = target.terminal();
@@ -697,10 +777,17 @@ fn cmd_set_buffer(ctx: &Ctx<'_>, content: String) -> Outcome {
 
 fn cmd_set_environment(
     ctx: &Ctx<'_>,
-    session: SessionId,
+    session: Target<SessionId>,
     name: &str,
     value: Option<&str>,
 ) -> Outcome {
+    let session = {
+        let guard = ctx.tree.lock();
+        match guard.resolve_session_target(session) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
     match ctx.tree.lock().set_session_env(session, name, value) {
         Ok(()) => Outcome::ok(ctx, ""),
         Err(err) => Outcome::err(ctx, &err.to_string()),
@@ -715,8 +802,12 @@ fn cmd_show_buffer(ctx: &Ctx<'_>) -> Outcome {
     }
 }
 
-fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+fn cmd_paste_buffer(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     let mut guard = ctx.tree.lock();
+    let pane = match guard.resolve_pane_target(pane) {
+        Ok(id) => id,
+        Err(err) => return Outcome::err(ctx, &err.to_string()),
+    };
     let Some(content) = guard.get_buffer(DEFAULT_BUFFER).map(str::to_string) else {
         return Outcome::err(ctx, "no buffers");
     };

@@ -20,6 +20,19 @@ pub enum MuxError {
     NoSuchWindow(WindowId),
     /// The requested session does not exist.
     NoSuchSession(SessionId),
+    /// A pane name (user title) matched no pane.
+    NoSuchPaneNamed(String),
+    /// A window name matched no window.
+    NoSuchWindowNamed(String),
+    /// A session name matched no session.
+    NoSuchSessionNamed(String),
+    /// A pane name (user title) matched more than one pane; the candidates
+    /// are listed so the caller can disambiguate with an id.
+    AmbiguousPaneTarget(String, Vec<PaneId>),
+    /// A window name matched more than one window.
+    AmbiguousWindowTarget(String, Vec<WindowId>),
+    /// A session name matched more than one session.
+    AmbiguousSessionTarget(String, Vec<SessionId>),
     /// The two panes are not in the same window, so their positions cannot
     /// be exchanged.
     PanesInDifferentWindows(PaneId, PaneId),
@@ -35,6 +48,30 @@ impl std::fmt::Display for MuxError {
             MuxError::NoSuchPane(id) => write!(f, "no such pane: {id}"),
             MuxError::NoSuchWindow(id) => write!(f, "no such window: {id}"),
             MuxError::NoSuchSession(id) => write!(f, "no such session: {id}"),
+            MuxError::NoSuchPaneNamed(name) => write!(f, "no such pane: {name}"),
+            MuxError::NoSuchWindowNamed(name) => write!(f, "no such window: {name}"),
+            MuxError::NoSuchSessionNamed(name) => write!(f, "no such session: {name}"),
+            MuxError::AmbiguousPaneTarget(name, ids) => {
+                write!(
+                    f,
+                    "ambiguous pane target: {name} (matching: {})",
+                    join_ids(ids)
+                )
+            }
+            MuxError::AmbiguousWindowTarget(name, ids) => {
+                write!(
+                    f,
+                    "ambiguous window target: {name} (matching: {})",
+                    join_ids(ids)
+                )
+            }
+            MuxError::AmbiguousSessionTarget(name, ids) => {
+                write!(
+                    f,
+                    "ambiguous session target: {name} (matching: {})",
+                    join_ids(ids)
+                )
+            }
             MuxError::PanesInDifferentWindows(a, b) => {
                 write!(f, "panes {a} and {b} are in different windows")
             }
@@ -46,6 +83,15 @@ impl std::fmt::Display for MuxError {
 }
 
 impl std::error::Error for MuxError {}
+
+/// Comma-separate ids for an ambiguity error's candidate list — each id's
+/// own Display carries its sigil, so the message reads `(matching: %0, %2)`.
+fn join_ids(ids: &[impl std::fmt::Display]) -> String {
+    ids.iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 impl From<PtyError> for MuxError {
     fn from(err: PtyError) -> Self {

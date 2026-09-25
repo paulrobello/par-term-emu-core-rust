@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(
             crate::mux::parse_command(&line).expect("the daemon accepts the line"),
             crate::mux::MuxCommand::SendKeys {
-                pane: crate::mux::PaneId(7),
+                pane: crate::mux::ids::Target::Id(crate::mux::PaneId(7)),
                 keys: b"a\x1b\"'\n".to_vec(),
             }
         );

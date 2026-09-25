@@ -27,6 +27,10 @@ macro_rules! mux_id {
         )]
         pub struct $name(pub u32);
 
+        impl SigilId for $name {
+            const SIGIL: &'static str = $sigil;
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 write!(f, "{}{}", $sigil, self.0)
@@ -54,6 +58,44 @@ macro_rules! mux_id {
 mux_id!(SessionId, "$", "session");
 mux_id!(WindowId, "@", "window");
 mux_id!(PaneId, "%", "pane");
+
+/// A typed id kind whose wire sigil drives [`Target::parse`] — the prefix
+/// that marks a value as a typed id rather than a name.
+pub trait SigilId: Sized {
+    /// The sigil (`%`, `@`, `$`) a target value must start with to be
+    /// parsed as this id kind.
+    const SIGIL: &'static str;
+}
+
+/// A command target that may be a typed id or a name, resolved against the
+/// tree daemon-side (the parser has no tree to resolve names against).
+///
+/// A `-t` value starting with the kind's sigil must parse as a typed id —
+/// a malformed one (`%abc`) keeps the parser's invalid-target error, and a
+/// pane TITLED `%3` can never shadow pane `%3` because the sigil prefix
+/// always means the id. Any other value is a name, matched exactly against
+/// the pane's user title, the window's name, or the session's name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target<I> {
+    /// A typed `%N`/`@N`/`$N` id.
+    Id(I),
+    /// A name, resolved by the tree: pane user titles, window names,
+    /// session names.
+    Name(String),
+}
+
+impl<I: SigilId + FromStr<Err = ParseIdError>> Target<I> {
+    /// Classify a raw `-t` value: sigil-prefixed values parse as ids (a
+    /// malformed one errors, as before name targets existed), any other
+    /// value becomes a name.
+    pub fn parse(raw: &str) -> Result<Self, ParseIdError> {
+        if raw.starts_with(I::SIGIL) {
+            raw.parse::<I>().map(Target::Id)
+        } else {
+            Ok(Target::Name(raw.to_string()))
+        }
+    }
+}
 
 /// Hands out monotonically increasing identifiers, counting each kind
 /// independently the way tmux does.
@@ -151,5 +193,56 @@ mod tests {
         // Each kind counts independently, as tmux does.
         assert_eq!(alloc.next_window(), WindowId(0));
         assert_eq!(alloc.next_session(), SessionId(0));
+    }
+
+    #[test]
+    fn target_parse_classifies_sigil_vs_name() {
+        assert_eq!(
+            Target::<PaneId>::parse("%3").unwrap(),
+            Target::Id(PaneId(3))
+        );
+        assert_eq!(
+            Target::<PaneId>::parse("build").unwrap(),
+            Target::Name("build".to_string())
+        );
+        assert_eq!(
+            Target::<SessionId>::parse("work").unwrap(),
+            Target::Name("work".to_string())
+        );
+        assert_eq!(
+            Target::<WindowId>::parse("logs").unwrap(),
+            Target::Name("logs".to_string())
+        );
+    }
+
+    #[test]
+    fn target_parse_treats_a_foreign_sigil_as_a_name() {
+        // Only the target KIND's own sigil means "typed id" — a foreign
+        // sigil is just characters, so "@0" as a pane target is a name
+        // that resolves only against a pane literally titled "@0" (and
+        // otherwise errors at resolution as an unknown pane).
+        assert_eq!(
+            Target::<PaneId>::parse("@0").unwrap(),
+            Target::Name("@0".to_string())
+        );
+        assert_eq!(
+            Target::<SessionId>::parse("%1").unwrap(),
+            Target::Name("%1".to_string())
+        );
+    }
+
+    #[test]
+    fn target_parse_sigil_prefix_always_means_the_id() {
+        // Ids win over names: "%3" classifies as the id even when some
+        // pane's title happens to be "%3" (the tree-side rule the
+        // ambiguity tests cover).
+        assert_eq!(
+            Target::<PaneId>::parse("%3").unwrap(),
+            Target::Id(PaneId(3)),
+            "a sigil-prefixed value never becomes a name"
+        );
+        // Malformed sigil values keep the invalid-target error shape.
+        assert!(Target::<PaneId>::parse("%abc").is_err());
+        assert!(Target::<PaneId>::parse("%").is_err());
     }
 }

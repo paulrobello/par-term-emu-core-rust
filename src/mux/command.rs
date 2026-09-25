@@ -1,6 +1,6 @@
 //! Control-mode command parsing (client → server).
 
-use crate::mux::ids::{PaneId, SessionId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{ResizeDirection, SplitDirection};
 
 /// How a `resize-pane` moves a pane's borders (T4.C).
@@ -47,7 +47,7 @@ pub enum MuxCommand {
     /// Send keys to a pane.
     SendKeys {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// Final bytes for the pane's PTY — key names interpreted, quotes
         /// resolved, no terminator added. `Enter` is an expressible key, not
         /// an implicit one (tmux semantics; par-mux.md Phase 4 T4.B).
@@ -56,14 +56,14 @@ pub enum MuxCommand {
     /// Kill a pane.
     KillPane {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
     },
     /// Replay a pane's current screen to the requesting client, or report
     /// the client's renderer size (`-C`) and resize the pane's window.
     RefreshClient {
         /// Target pane; the window it belongs to is the one a `-C` resize
         /// applies to.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// `-C WxH`: the client's renderer grid size. The window-size
         /// policy (par-mux.md Phase 4): the LATEST such report wins —
         /// par-mux has no other client-size input, so latest-attached-client
@@ -77,24 +77,24 @@ pub enum MuxCommand {
         /// bare `new-window` tmux clients issue, which tmux resolves against
         /// the client's attached session — par-mux has no client-session
         /// attachment, so "newest" is the documented stand-in).
-        session: Option<SessionId>,
+        session: Option<Target<SessionId>>,
         /// Window name; a default is chosen when absent.
         name: Option<String>,
     },
     /// Set a session's active window.
     SelectWindow {
         /// Target window; its session is derived from it server-side.
-        window: WindowId,
+        window: Target<WindowId>,
     },
     /// Kill a window and every pane it holds.
     KillWindow {
         /// Target window.
-        window: WindowId,
+        window: Target<WindowId>,
     },
     /// Rename a window.
     RenameWindow {
         /// Target window.
-        window: WindowId,
+        window: Target<WindowId>,
         /// New name.
         name: String,
     },
@@ -108,7 +108,7 @@ pub enum MuxCommand {
     /// Split a pane's area in two, creating and focusing a new pane.
     SplitWindow {
         /// Target pane to split.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// Split orientation after tmux's flag mapping: `-h` puts the new
         /// pane beside the target (side by side), `-v`/default below it.
         direction: SplitDirection,
@@ -119,7 +119,7 @@ pub enum MuxCommand {
     /// Make a pane its window's active pane.
     SelectPane {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// `-T`: the user title to set on the pane. `None` = flag absent
         /// (a pure focus change); `Some("")` = clear; any other value is
         /// the sticky user title, which the pane program's OSC 0/2 title
@@ -130,34 +130,34 @@ pub enum MuxCommand {
     /// else the pane terminal's current OSC 0/2 title.
     PaneTitle {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
     },
     /// Read a pane's window and current grid size, one line:
     /// `%N @W COLSxROWS`. A mirroring client seeds at the pane's own size
     /// instead of resizing the pane to its viewport.
     PaneInfo {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
     },
     /// Grow or shrink a pane by moving its bordering divider, or set its
     /// absolute extents.
     ResizePane {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// Relative (`-L`/`-R`/`-U`/`-D` cells) or absolute (`-x`/`-y`).
         adjustment: ResizeAdjustment,
     },
     /// Exchange two panes' positions within their window.
     SwapPanes {
         /// Pane swapped into the source's position (`-t`).
-        target: PaneId,
+        target: Target<PaneId>,
         /// Pane swapped into the target's position (`-s`).
-        source: PaneId,
+        source: Target<PaneId>,
     },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
         /// `-S`: first line to capture, tmux offset convention — `0` is the
         /// first line of the visible screen, negative numbers are history
         /// lines counted back from there (`-1` is the line directly above
@@ -181,7 +181,7 @@ pub enum MuxCommand {
     /// Write the paste buffer's content to a pane, as `send-keys` would.
     PasteBuffer {
         /// Target pane.
-        pane: PaneId,
+        pane: Target<PaneId>,
     },
     /// Set or unset one variable in a session's environment
     /// (`set-environment -t $N NAME VALUE` / `-u NAME`). Panes spawned
@@ -189,7 +189,7 @@ pub enum MuxCommand {
     SetEnvironment {
         /// Target session. Required: env landing on the wrong session is
         /// worse than an error, so there is no newest-session default.
-        session: SessionId,
+        session: Target<SessionId>,
         /// Variable name.
         name: String,
         /// `Some` sets the value; `None` (`-u`) removes the variable.
@@ -360,29 +360,31 @@ impl Args<'_> {
         self.args.contains(&flag)
     }
 
-    fn pane(&self, flag_name: &str) -> Result<PaneId, String> {
+    /// A target flag's value: a typed `%N`/`@N`/`$N` id or a name (see
+    /// [`Target`]), read through [`Self::quoted_flag`] so a name may
+    /// contain spaces. The value is classified, not resolved — the
+    /// daemon-side tree does the name matching.
+    fn pane(&self, flag_name: &str) -> Result<Target<PaneId>, String> {
         let raw = self
-            .flag(flag_name)
+            .quoted_flag(flag_name)?
             .ok_or_else(|| format!("{} requires {flag_name}", self.name))?;
-        raw.parse::<PaneId>()
-            .map_err(|_| format!("invalid pane target: {raw}"))
+        Target::parse(&raw).map_err(|_| format!("invalid pane target: {raw}"))
     }
 
-    fn window(&self, flag_name: &str) -> Result<WindowId, String> {
+    /// [`Self::pane`] for window targets.
+    fn window(&self, flag_name: &str) -> Result<Target<WindowId>, String> {
         let raw = self
-            .flag(flag_name)
+            .quoted_flag(flag_name)?
             .ok_or_else(|| format!("{} requires {flag_name}", self.name))?;
-        raw.parse::<WindowId>()
-            .map_err(|_| format!("invalid window target: {raw}"))
+        Target::parse(&raw).map_err(|_| format!("invalid window target: {raw}"))
     }
 
-    fn session(&self, flag_name: &str) -> Result<Option<SessionId>, String> {
-        match self.flag(flag_name) {
-            Some(raw) => Some(
-                raw.parse()
-                    .map_err(|_| format!("invalid session target: {raw}")),
-            )
-            .transpose(),
+    /// [`Self::pane`] for session targets, flag-optional as before.
+    fn session(&self, flag_name: &str) -> Result<Option<Target<SessionId>>, String> {
+        match self.quoted_flag(flag_name)? {
+            Some(raw) => Ok(Some(
+                Target::parse(&raw).map_err(|_| format!("invalid session target: {raw}"))?,
+            )),
             None => Ok(None),
         }
     }
@@ -699,11 +701,16 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 ///   as the hex escape hatch for anything the line-delimited wire cannot
 ///   carry.
 ///
-/// Every other flag stays whitespace-split, which is correct rather than
-/// merely cheap: the `-t`/`-s` targets everywhere else parse as typed
-/// `$N`/`@N`/`%N` identifiers, which cannot contain whitespace. The one
-/// trailing-text command left needs no quoting either, taking the rest of
-/// the line verbatim — `rename-window` (via [`Args::trailing_after`]).
+/// Every other flag stays whitespace-split where values cannot contain
+/// whitespace. `-t`/`-s` targets are the exception that now joins the
+/// quoted set (see [`Args::pane`]): a target is a typed `$N`/`@N`/`%N`
+/// id OR a name — pane user title, window name, session name — resolved
+/// daemon-side against the tree, and a name may contain spaces, so it is
+/// read through [`Args::quoted_flag`]. `send-keys` alone keeps a
+/// single-token target (see [`parse_send_keys`]), quoted alongside the
+/// payload it would collide with. The one trailing-text command left
+/// needs no quoting either, taking the rest of the line verbatim —
+/// `rename-window` (via [`Args::trailing_after`]).
 pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
     let parts: Vec<&str> = line.split_whitespace().collect();
     let Some((name, args)) = parts.split_first() else {
@@ -811,9 +818,12 @@ fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
         .expect("the command name prefixes the line");
     let (target_value, payload_raw) =
         split_after_flag(rest, "-t").ok_or_else(|| format!("{} requires -t", a.name))?;
-    let pane: PaneId = target_value
-        .parse()
-        .map_err(|_| format!("invalid pane target: {target_value}"))?;
+    // The raw-line split takes one whitespace-delimited token, so a
+    // send-keys target is a typed id or a SINGLE-WORD name — a spaced name
+    // cannot survive next to the free-text payload, and quoting it would
+    // eat into the payload's own quoting.
+    let pane: Target<PaneId> =
+        Target::parse(target_value).map_err(|_| format!("invalid pane target: {target_value}"))?;
     let keys = parse_send_keys_payload(payload_raw)?;
     Ok(MuxCommand::SendKeys { pane, keys })
 }
@@ -1033,6 +1043,68 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pane_targets_parse_as_names_and_ids() {
+        assert_eq!(
+            parse_command("pane-title -t build").unwrap(),
+            MuxCommand::PaneTitle {
+                pane: Target::Name("build".to_string()),
+            }
+        );
+        // A quoted name keeps its spaces, same grammar as -s/-n names.
+        assert_eq!(
+            parse_command("pane-title -t 'my build pane'").unwrap(),
+            MuxCommand::PaneTitle {
+                pane: Target::Name("my build pane".to_string()),
+            }
+        );
+        // Sigil-prefixed values stay ids; malformed ones stay errors.
+        assert_eq!(
+            parse_command("pane-title -t %3").unwrap(),
+            MuxCommand::PaneTitle {
+                pane: Target::Id(PaneId(3)),
+            }
+        );
+        assert!(parse_command("pane-title -t %abc").is_err());
+    }
+
+    #[test]
+    fn window_and_session_targets_parse_as_names() {
+        assert_eq!(
+            parse_command("select-window -t logs").unwrap(),
+            MuxCommand::SelectWindow {
+                window: Target::Name("logs".to_string()),
+            }
+        );
+        assert_eq!(
+            parse_command("set-environment -t work K V").unwrap(),
+            MuxCommand::SetEnvironment {
+                session: Target::Name("work".to_string()),
+                name: "K".into(),
+                value: Some("V".into()),
+            }
+        );
+        // new-window's optional session target accepts a name too.
+        assert_eq!(
+            parse_command("new-window -t alpha -n logs").unwrap(),
+            MuxCommand::NewWindow {
+                session: Some(Target::Name("alpha".to_string())),
+                name: Some("logs".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn send_keys_target_may_be_a_single_word_name() {
+        assert_eq!(
+            parse_command("send-keys -t build Enter").unwrap(),
+            MuxCommand::SendKeys {
+                pane: Target::Name("build".to_string()),
+                keys: vec![b'\r'],
+            }
+        );
+    }
+
+    #[test]
     fn parses_version_and_marks_it_read_only() {
         let cmd = parse_command("version").expect("parses");
         assert_eq!(cmd, MuxCommand::Version);
@@ -1080,7 +1152,7 @@ mod tests {
         assert_eq!(
             parse_command("set-environment -t $2 SSH_AUTH_SOCK /tmp/agent.sock").unwrap(),
             MuxCommand::SetEnvironment {
-                session: SessionId(2),
+                session: Target::Id(SessionId(2)),
                 name: "SSH_AUTH_SOCK".into(),
                 value: Some("/tmp/agent.sock".into()),
             }
@@ -1088,7 +1160,7 @@ mod tests {
         assert_eq!(
             parse_command("set-environment -t $0 GREETING 'hello there'").unwrap(),
             MuxCommand::SetEnvironment {
-                session: SessionId(0),
+                session: Target::Id(SessionId(0)),
                 name: "GREETING".into(),
                 value: Some("hello there".into()),
             }
@@ -1096,7 +1168,7 @@ mod tests {
         assert_eq!(
             parse_command("set-environment -t $0 EMPTY ''").unwrap(),
             MuxCommand::SetEnvironment {
-                session: SessionId(0),
+                session: Target::Id(SessionId(0)),
                 name: "EMPTY".into(),
                 value: Some(String::new()),
             }
@@ -1104,7 +1176,7 @@ mod tests {
         assert_eq!(
             parse_command("set-environment -u -t $1 DISPLAY").unwrap(),
             MuxCommand::SetEnvironment {
-                session: SessionId(1),
+                session: Target::Id(SessionId(1)),
                 name: "DISPLAY".into(),
                 value: None,
             }
@@ -1121,10 +1193,12 @@ mod tests {
             "set-environment -t $0 -u",
             "set-environment -t $0 -u NAME extra",
             "set-environment -t $0 A=B value",
-            "set-environment -t %0 NAME value",
         ] {
             assert!(parse_command(line).is_err(), "{line} must be rejected");
         }
+        // `-t %0` (pane sigil on a session target) is no longer a parse
+        // error: non-`$` values are session NAMES now, resolved (and
+        // reported unknown) daemon-side.
     }
 
     #[test]
@@ -1224,7 +1298,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n '-s'").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(SessionId(0)),
+                session: Some(Target::Id(SessionId(0))),
                 name: Some("-s".into())
             }
         );
@@ -1232,7 +1306,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -n 'two words' -t $0").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(SessionId(0)),
+                session: Some(Target::Id(SessionId(0))),
                 name: Some("two words".into())
             }
         );
@@ -1254,7 +1328,7 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n 'build and test'").expect("parses"),
             MuxCommand::NewWindow {
-                session: Some(SessionId(0)),
+                session: Some(Target::Id(SessionId(0))),
                 name: Some("build and test".into())
             }
         );
@@ -1267,7 +1341,7 @@ mod tests {
         assert_eq!(
             cmd,
             MuxCommand::SendKeys {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 keys: b"hello".to_vec()
             }
         );
@@ -1279,7 +1353,7 @@ mod tests {
         assert_eq!(
             cmd,
             MuxCommand::SendKeys {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 keys: vec![0x03]
             }
         );
@@ -1387,7 +1461,9 @@ mod tests {
         assert_eq!(parse_command("list-panes").unwrap(), MuxCommand::ListPanes);
         assert_eq!(
             parse_command("kill-pane -t %7").unwrap(),
-            MuxCommand::KillPane { pane: PaneId(7) }
+            MuxCommand::KillPane {
+                pane: Target::Id(PaneId(7))
+            }
         );
     }
 
@@ -1398,7 +1474,9 @@ mod tests {
 
     #[test]
     fn rejects_a_malformed_target() {
-        assert!(parse_command("kill-pane -t notapane").is_err());
+        // A non-sigil value is a NAME now, parsed fine and resolved
+        // daemon-side; only sigil-prefixed garbage is malformed.
+        assert!(parse_command("kill-pane -t %notapane").is_err());
         assert!(
             parse_command("kill-pane").is_err(),
             "kill-pane needs a target"
@@ -1410,14 +1488,14 @@ mod tests {
         assert_eq!(
             parse_command("new-window -t $0 -n build").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(SessionId(0)),
+                session: Some(Target::Id(SessionId(0))),
                 name: Some("build".into())
             }
         );
         assert_eq!(
             parse_command("new-window -t $0").unwrap(),
             MuxCommand::NewWindow {
-                session: Some(SessionId(0)),
+                session: Some(Target::Id(SessionId(0))),
                 name: None
             }
         );
@@ -1437,13 +1515,13 @@ mod tests {
         assert_eq!(
             parse_command("select-window -t @2").unwrap(),
             MuxCommand::SelectWindow {
-                window: WindowId(2)
+                window: Target::Id(WindowId(2))
             }
         );
         assert_eq!(
             parse_command("kill-window -t @2").unwrap(),
             MuxCommand::KillWindow {
-                window: WindowId(2)
+                window: Target::Id(WindowId(2))
             }
         );
     }
@@ -1453,7 +1531,7 @@ mod tests {
         assert_eq!(
             parse_command("rename-window -t @1 scratch").unwrap(),
             MuxCommand::RenameWindow {
-                window: WindowId(1),
+                window: Target::Id(WindowId(1)),
                 name: "scratch".into()
             }
         );
@@ -1485,8 +1563,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_window_and_session_targets() {
-        assert!(parse_command("new-window -t notasession").is_err());
-        assert!(parse_command("select-window -t notawindow").is_err());
+        // Non-sigil values are names now (resolved daemon-side); only
+        // sigil-prefixed garbage stays a parse error.
+        assert!(parse_command("new-window -t $x").is_err());
+        assert!(parse_command("select-window -t @!").is_err());
         // Bare new-window is valid (targets the newest session); the
         // malformed-TARGET cases above are what this test guards.
     }
@@ -1496,7 +1576,7 @@ mod tests {
         assert_eq!(
             parse_command("capture-pane -t %3 -p").unwrap(),
             MuxCommand::CapturePane {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 start_line: None,
                 end_line: None,
                 escape: false
@@ -1505,7 +1585,7 @@ mod tests {
         assert_eq!(
             parse_command("capture-pane -t %3 -p -S 50 -E -1").unwrap(),
             MuxCommand::CapturePane {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 start_line: Some(50),
                 end_line: Some(-1),
                 escape: false
@@ -1514,7 +1594,7 @@ mod tests {
         assert_eq!(
             parse_command("capture-pane -t %3 -p -S -20 -E -11").unwrap(),
             MuxCommand::CapturePane {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 start_line: Some(-20),
                 end_line: Some(-11),
                 escape: false
@@ -1523,7 +1603,7 @@ mod tests {
         assert_eq!(
             parse_command("capture-pane -t %3 -p -e -S -20 -E -11").unwrap(),
             MuxCommand::CapturePane {
-                pane: PaneId(3),
+                pane: Target::Id(PaneId(3)),
                 start_line: Some(-20),
                 end_line: Some(-11),
                 escape: true
@@ -1537,7 +1617,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0").unwrap(),
             MuxCommand::SplitWindow {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50
             }
@@ -1545,7 +1625,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -v").unwrap(),
             MuxCommand::SplitWindow {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50
             }
@@ -1554,7 +1634,7 @@ mod tests {
         assert_eq!(
             parse_command("split-window -t %0 -h -p 25").unwrap(),
             MuxCommand::SplitWindow {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Vertical,
                 percent: 25
             }
@@ -1572,15 +1652,15 @@ mod tests {
         assert_eq!(
             parse_command("select-pane -t %2").unwrap(),
             MuxCommand::SelectPane {
-                pane: PaneId(2),
+                pane: Target::Id(PaneId(2)),
                 title: None,
             }
         );
         assert_eq!(
             parse_command("swap-pane -t %2 -s %5").unwrap(),
             MuxCommand::SwapPanes {
-                target: PaneId(2),
-                source: PaneId(5)
+                target: Target::Id(PaneId(2)),
+                source: Target::Id(PaneId(5))
             }
         );
     }
@@ -1592,7 +1672,7 @@ mod tests {
         assert_eq!(
             parse_command("select-pane -t %0 -T 'My build pane'").unwrap(),
             MuxCommand::SelectPane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 title: Some("My build pane".to_string()),
             }
         );
@@ -1600,7 +1680,7 @@ mod tests {
         assert_eq!(
             parse_command("select-pane -t %0 -T ''").unwrap(),
             MuxCommand::SelectPane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 title: Some(String::new()),
             }
         );
@@ -1608,7 +1688,7 @@ mod tests {
         assert_eq!(
             parse_command("select-pane -t %0 -T logs").unwrap(),
             MuxCommand::SelectPane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 title: Some("logs".to_string()),
             }
         );
@@ -1620,7 +1700,9 @@ mod tests {
     fn parses_pane_title_query() {
         assert_eq!(
             parse_command("pane-title -t %3").unwrap(),
-            MuxCommand::PaneTitle { pane: PaneId(3) }
+            MuxCommand::PaneTitle {
+                pane: Target::Id(PaneId(3))
+            }
         );
         assert!(parse_command("pane-title").is_err());
     }
@@ -1629,7 +1711,9 @@ mod tests {
     fn parses_pane_info_query() {
         assert_eq!(
             parse_command("pane-info -t %3").unwrap(),
-            MuxCommand::PaneInfo { pane: PaneId(3) }
+            MuxCommand::PaneInfo {
+                pane: Target::Id(PaneId(3))
+            }
         );
         assert!(parse_command("pane-info").is_err());
     }
@@ -1639,7 +1723,7 @@ mod tests {
         assert_eq!(
             parse_command("resize-pane -t %0 -R").unwrap(),
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Relative {
                     direction: ResizeDirection::Right,
                     cells: 5
@@ -1649,7 +1733,7 @@ mod tests {
         assert_eq!(
             parse_command("resize-pane -t %0 -U 12").unwrap(),
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Relative {
                     direction: ResizeDirection::Up,
                     cells: 12
@@ -1665,7 +1749,7 @@ mod tests {
         assert_eq!(
             parse_command("resize-pane -t %0 -x 120 -y 40").unwrap(),
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Absolute {
                     cols: Some(120),
                     rows: Some(40)
@@ -1676,7 +1760,7 @@ mod tests {
         assert_eq!(
             parse_command("resize-pane -t %0 -x 25").unwrap(),
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Absolute {
                     cols: Some(25),
                     rows: None
@@ -1686,7 +1770,7 @@ mod tests {
         assert_eq!(
             parse_command("resize-pane -t %0 -y 30").unwrap(),
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Absolute {
                     cols: None,
                     rows: Some(30)
@@ -1711,14 +1795,14 @@ mod tests {
         assert_eq!(
             parse_command("refresh-client -t %0").unwrap(),
             MuxCommand::RefreshClient {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 size: None
             }
         );
         assert_eq!(
             parse_command("refresh-client -t %0 -C 120x40").unwrap(),
             MuxCommand::RefreshClient {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 size: Some((120, 40))
             }
         );
@@ -1746,7 +1830,9 @@ mod tests {
         );
         assert_eq!(
             parse_command("paste-buffer -t %2").unwrap(),
-            MuxCommand::PasteBuffer { pane: PaneId(2) }
+            MuxCommand::PasteBuffer {
+                pane: Target::Id(PaneId(2))
+            }
         );
     }
 
@@ -1765,9 +1851,11 @@ mod tests {
                 name: None,
                 env: vec![],
             },
-            MuxCommand::KillPane { pane: PaneId(0) },
+            MuxCommand::KillPane {
+                pane: Target::Id(PaneId(0)),
+            },
             MuxCommand::RefreshClient {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 size: Some((80, 24)),
             },
             MuxCommand::NewWindow {
@@ -1775,34 +1863,34 @@ mod tests {
                 name: None,
             },
             MuxCommand::SelectWindow {
-                window: WindowId(0),
+                window: Target::Id(WindowId(0)),
             },
             MuxCommand::KillWindow {
-                window: WindowId(0),
+                window: Target::Id(WindowId(0)),
             },
             MuxCommand::RenameWindow {
-                window: WindowId(0),
+                window: Target::Id(WindowId(0)),
                 name: String::new(),
             },
             MuxCommand::SplitWindow {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 direction: SplitDirection::Horizontal,
                 percent: 50,
             },
             MuxCommand::SelectPane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 title: None,
             },
             MuxCommand::ResizePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 adjustment: ResizeAdjustment::Relative {
                     direction: ResizeDirection::Right,
                     cells: 5,
                 },
             },
             MuxCommand::SwapPanes {
-                target: PaneId(0),
-                source: PaneId(1),
+                target: Target::Id(PaneId(0)),
+                source: Target::Id(PaneId(1)),
             },
             MuxCommand::SetBuffer {
                 content: String::new(),
@@ -1818,23 +1906,25 @@ mod tests {
             MuxCommand::ListPanes,
             MuxCommand::ListAgents,
             MuxCommand::SendKeys {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 keys: Vec::new(),
             },
             MuxCommand::RefreshClient {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 size: None,
             },
             MuxCommand::ListWindows,
             MuxCommand::ListSessions,
             MuxCommand::CapturePane {
-                pane: PaneId(0),
+                pane: Target::Id(PaneId(0)),
                 start_line: None,
                 end_line: None,
                 escape: false,
             },
             MuxCommand::ShowBuffer,
-            MuxCommand::PasteBuffer { pane: PaneId(0) },
+            MuxCommand::PasteBuffer {
+                pane: Target::Id(PaneId(0)),
+            },
         ];
         for command in &non_mutating {
             assert!(
