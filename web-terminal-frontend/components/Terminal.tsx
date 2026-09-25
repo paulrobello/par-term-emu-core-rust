@@ -423,8 +423,25 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Lay the grid out in the view: a phone zooms (font size) and pans the
     // full pane grid; everyone dot-fills the view's surplus beyond the grid.
+    //
+    // The font only changes on a real trigger (`fitPending`: connect, a new
+    // grid size, a view resize, a zoom change), never from a render, so a
+    // font change cannot feed back into another one. The fit is computed from
+    // the font's measured advance, then checked once the renderer has laid
+    // the grid out: xterm snaps cell widths to device pixels, so the grid can
+    // overshoot and is stepped down a bounded number of times.
     let layoutRaf: number | null = null;
-    const layoutViewport = (attempt = 0): void => {
+    let fitPending = true;
+    let fitChecks = 0;
+    const measureCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
+    const advancePerFontPx = (): number | null => {
+      const ctx = measureCanvas?.getContext('2d');
+      if (!ctx) return null;
+      ctx.font = `100px ${term.options.fontFamily ?? 'monospace'}`;
+      const w = ctx.measureText('W').width / 100;
+      return w > 0 ? w : null;
+    };
+    const layoutViewport = (): void => {
       const view = containerRef.current;
       const host = terminalRef.current;
       const screen = term.element?.querySelector('.xterm-screen') as HTMLElement | null;
@@ -433,21 +450,20 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
       if (isMobile()) {
         const font = term.options.fontSize ?? 14;
-        const pxPerColPerFontPx = screen.offsetWidth / term.cols / font;
-        const target = zoomFontRef.current ?? fitWidthFontSize(viewSize.width, term.cols, pxPerColPerFontPx);
-        // Re-measure after the renderer picks up a new cell size; the bound
-        // stops a rounding oscillation from looping.
-        if (target !== null && Math.abs(target - font) > 0.05 && attempt < 3) {
-          term.options.fontSize = target;
-          layoutRaf = requestAnimationFrame(() => layoutViewport(attempt + 1));
-          return;
+        if (fitPending) {
+          fitPending = false;
+          fitChecks = 0;
+          const ratio = advancePerFontPx();
+          const target = zoomFontRef.current ?? (ratio ? fitWidthFontSize(viewSize.width, term.cols, ratio) : null);
+          if (target !== null && Math.abs(target - font) > 0.01) {
+            term.options.fontSize = target;
+            return; // the render that follows lays out and checks the fit
+          }
         }
         const content = { width: screen.offsetWidth, height: screen.offsetHeight };
-        // xterm snaps cell widths to device pixels, so the computed fit can
-        // overshoot the view; step the font down until the grid fits.
-        if (zoomFontRef.current === null && content.width > viewSize.width && font > MIN_ZOOM_FONT_SIZE && attempt < 8) {
+        if (zoomFontRef.current === null && content.width > viewSize.width && font > MIN_ZOOM_FONT_SIZE && fitChecks < 6) {
+          fitChecks += 1;
           term.options.fontSize = Math.max(MIN_ZOOM_FONT_SIZE, font * Math.min(0.97, viewSize.width / content.width));
-          layoutRaf = requestAnimationFrame(() => layoutViewport(attempt + 1));
           return;
         }
         panRef.current = clampPan(panRef.current, content, viewSize);
@@ -484,19 +500,21 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
       paintDots(rightDotsRef.current, rightStrip, grid, cellW, cellH);
       paintDots(bottomDotsRef.current, bottom && bottom.height >= cellH ? bottom : null, grid, cellW, cellH);
     };
-    const scheduleLayout = (): void => {
+    // `refit` marks a real trigger: recompute the phone's fit-width font.
+    const scheduleLayout = (refit = false): void => {
+      if (refit) fitPending = true;
       if (layoutRaf !== null) cancelAnimationFrame(layoutRaf);
       layoutRaf = requestAnimationFrame(() => {
         layoutRaf = null;
         layoutViewport();
       });
     };
-    scheduleLayoutRef.current = scheduleLayout;
+    scheduleLayoutRef.current = () => scheduleLayout(true);
     const layoutOnRender = term.onRender(() => {
       if (layoutRaf === null) scheduleLayout();
     });
     const resizeObserver = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => scheduleLayout())
+      ? new ResizeObserver(() => scheduleLayout(true))
       : null;
     if (containerRef.current) resizeObserver?.observe(containerRef.current);
 
@@ -584,9 +602,8 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
         const font = gesture.startFont * gesture.scale;
         zoomFontRef.current = font;
         panRef.current = pinchPan(gesture.startPan, gesture.startMid, gesture.mid, gesture.scale);
-        term.options.fontSize = font;
         gesture = null;
-        scheduleLayout();
+        scheduleLayout(true);
         e.preventDefault();
         e.stopPropagation();
         return;
@@ -623,7 +640,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           // A phone keeps the grid at the pane's size unless asked to resize it.
           if (!opts?.resizePane && !sendsResizeOnFit()) {
             term.refresh(0, term.rows - 1);
-            scheduleLayout();
+            scheduleLayout(true);
             return;
           }
 
@@ -653,7 +670,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
             zoomFontRef.current = term.options.fontSize ?? newFontSize;
             panRef.current = { x: 0, y: 0 };
           }
-          scheduleLayout();
+          scheduleLayout(true);
         }, 50);
       });
     }
@@ -686,7 +703,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           }
         }
         if (sendsResizeOnFit()) fitAddon.fit();
-        scheduleLayout();
+        scheduleLayout(true);
       }, 100);
     };
 
@@ -702,7 +719,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           term.options.fontSize = newFontSize;
         }
         if (sendsResizeOnFit()) fitAddon.fit();
-        scheduleLayout();
+        scheduleLayout(true);
       }, 200);
     };
 
@@ -729,7 +746,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
 
     // Handle terminal resize - goes through connectionRef so it works across reconnects
     const onResizeDisposable = term.onResize(({ cols, rows }) => {
-      scheduleLayout();
+      scheduleLayout(true);
       if (applyingServerSizeRef.current || !sendsResizeOnFit()) return;
       if (connectionRef.current?.isOpen()) {
         debugLog(`Client resized to: ${cols}x${rows}`);
@@ -931,6 +948,7 @@ export default function Terminal({ wsUrl, fontSize, onStatusChange, onThemeChang
           connectedOnceRef.current = true;
           zoomFontRef.current = null;
           panRef.current = { x: 0, y: 0 };
+          scheduleLayoutRef.current();
 
           // Reset and clear terminal on fresh connection
           term.reset();
