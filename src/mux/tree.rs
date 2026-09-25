@@ -2,8 +2,8 @@
 
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
-use crate::mux::pane::{MuxError, MuxPane, PaneFactory};
-use std::collections::HashMap;
+use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
+use std::collections::{BTreeMap, HashMap};
 
 /// One window: an interior split structure (Task 2.1) with one pane active.
 ///
@@ -45,6 +45,10 @@ pub struct MuxSession {
     pub windows: Vec<WindowId>,
     /// Index into `windows` of the active window.
     pub active: usize,
+    /// The session environment (`set-environment`, `new-session -e`),
+    /// applied on top of the daemon's environment for every pane spawned
+    /// into this session after it is set.
+    pub env: BTreeMap<String, String>,
 }
 
 /// The server's whole state: every session, window, and pane.
@@ -115,11 +119,30 @@ impl MuxTree {
 
     /// Create a session, with one window holding one pane — tmux's shape.
     pub fn new_session(&mut self, name: &str, cols: u16, rows: u16) -> Result<SessionId, MuxError> {
+        self.new_session_with_env(name, cols, rows, BTreeMap::new())
+    }
+
+    /// [`Self::new_session`] with an initial session environment
+    /// (`new-session -e`), applied to the first pane as well.
+    pub fn new_session_with_env(
+        &mut self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        env: BTreeMap<String, String>,
+    ) -> Result<SessionId, MuxError> {
         let session_id = self.ids.next_session();
         let window_id = self.ids.next_window();
         let pane_id = self.ids.next_pane();
 
-        let pane = self.factory.create_pane(pane_id, cols, rows, None)?;
+        let context = SpawnContext {
+            session: Some((session_id, name)),
+            window: Some(window_id),
+            env: Some(&env),
+        };
+        let pane = self
+            .factory
+            .create_pane(pane_id, cols, rows, None, &context)?;
         self.panes.insert(pane_id, pane);
 
         self.windows.insert(
@@ -141,6 +164,7 @@ impl MuxTree {
                 name: name.to_string(),
                 windows: vec![window_id],
                 active: 0,
+                env,
             },
         );
 
@@ -155,13 +179,21 @@ impl MuxTree {
         cols: u16,
         rows: u16,
     ) -> Result<WindowId, MuxError> {
-        if !self.sessions.contains_key(&session_id) {
-            return Err(MuxError::NoSuchSession(session_id));
-        }
+        let session = self
+            .sessions
+            .get(&session_id)
+            .ok_or(MuxError::NoSuchSession(session_id))?;
         let window_id = self.ids.next_window();
         let pane_id = self.ids.next_pane();
 
-        let pane = self.factory.create_pane(pane_id, cols, rows, None)?;
+        let context = SpawnContext {
+            session: Some((session_id, &session.name)),
+            window: Some(window_id),
+            env: Some(&session.env),
+        };
+        let pane = self
+            .factory
+            .create_pane(pane_id, cols, rows, None, &context)?;
         self.panes.insert(pane_id, pane);
         self.windows.insert(
             window_id,
@@ -216,7 +248,17 @@ impl MuxTree {
             (window.cols, window.rows)
         };
         let pane_id = self.ids.next_pane();
-        let pane = self.factory.create_pane(pane_id, cols, rows, command)?;
+        let session = self
+            .session_of_window(window_id)
+            .and_then(|id| self.sessions.get(&id));
+        let context = SpawnContext {
+            session: session.map(|s| (s.id, s.name.as_str())),
+            window: Some(window_id),
+            env: session.map(|s| &s.env),
+        };
+        let pane = self
+            .factory
+            .create_pane(pane_id, cols, rows, command, &context)?;
         self.panes.insert(pane_id, pane);
         {
             let window = self.windows.get_mut(&window_id).expect("just found");
@@ -230,6 +272,37 @@ impl MuxTree {
         }
         self.sync_pane_sizes(window_id);
         Ok((pane_id, window_id))
+    }
+
+    /// Set (`Some`) or remove (`None`) one variable in a session's
+    /// environment. Running panes are untouched.
+    pub fn set_session_env(
+        &mut self,
+        session_id: SessionId,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), MuxError> {
+        let session = self
+            .sessions
+            .get_mut(&session_id)
+            .ok_or(MuxError::NoSuchSession(session_id))?;
+        match value {
+            Some(value) => {
+                session.env.insert(name.to_string(), value.to_string());
+            }
+            None => {
+                session.env.remove(name);
+            }
+        }
+        Ok(())
+    }
+
+    /// The session whose window list holds `window`, if any.
+    pub fn session_of_window(&self, window: WindowId) -> Option<SessionId> {
+        self.sessions
+            .values()
+            .find(|session| session.windows.contains(&window))
+            .map(|session| session.id)
     }
 
     /// The window whose layout holds `pane`, if any.
@@ -569,10 +642,88 @@ impl MuxTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mux::pane::test_support::ContextRecordingFactory;
     use crate::mux::pane::ShellPaneFactory;
 
     fn tree() -> MuxTree {
         MuxTree::new(Box::new(ShellPaneFactory::default()))
+    }
+
+    fn recording_tree() -> (MuxTree, ContextRecordingFactory) {
+        let factory = ContextRecordingFactory::default();
+        (MuxTree::new(Box::new(factory.clone())), factory)
+    }
+
+    #[test]
+    fn session_env_reaches_panes_spawned_after_it_is_set_only() {
+        let (mut tree, factory) = recording_tree();
+        let initial = BTreeMap::from([("A".to_string(), "1".to_string())]);
+        let session = tree.new_session_with_env("work", 80, 24, initial).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+        assert_eq!(
+            factory.spawn_of(first).env.get("A").map(String::as_str),
+            Some("1")
+        );
+
+        tree.set_session_env(session, "B", Some("2")).unwrap();
+        tree.set_session_env(session, "A", None).unwrap();
+        let second = tree
+            .split_pane(first, SplitDirection::Vertical, 0.5, None)
+            .unwrap();
+        let later = factory.spawn_of(second).env;
+        assert_eq!(later.get("B").map(String::as_str), Some("2"));
+        assert!(
+            !later.contains_key("A"),
+            "an unset var is gone for new panes"
+        );
+        assert_eq!(
+            factory.spawn_of(first).env.get("B"),
+            None,
+            "the earlier pane's spawn is not rewritten"
+        );
+        let third_window = tree.new_window(session, "w2", 80, 24).unwrap();
+        let third = tree.window(third_window).unwrap().panes()[0];
+        assert_eq!(factory.spawn_of(third).env, later);
+
+        assert!(tree.set_session_env(SessionId(99), "X", Some("y")).is_err());
+    }
+
+    #[test]
+    fn new_session_spawns_with_its_session_and_window_identity() {
+        let (mut tree, factory) = recording_tree();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let pane = tree.window(window).unwrap().panes()[0];
+        let spawn = factory.spawn_of(pane);
+        assert_eq!(spawn.session, Some((session, "work".to_string())));
+        assert_eq!(spawn.window, Some(window));
+    }
+
+    #[test]
+    fn new_window_spawns_with_its_session_and_new_window_identity() {
+        let (mut tree, factory) = recording_tree();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.new_window(session, "second", 80, 24).unwrap();
+        let pane = tree.window(window).unwrap().panes()[0];
+        let spawn = factory.spawn_of(pane);
+        assert_eq!(spawn.session, Some((session, "work".to_string())));
+        assert_eq!(spawn.window, Some(window));
+    }
+
+    #[test]
+    fn split_pane_spawns_with_the_target_windows_identity() {
+        let (mut tree, factory) = recording_tree();
+        tree.new_session("other", 80, 24).unwrap();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.new_window(session, "second", 80, 24).unwrap();
+        let target = tree.window(window).unwrap().panes()[0];
+        let pane = tree
+            .split_pane(target, SplitDirection::Horizontal, 0.5, None)
+            .unwrap();
+        let spawn = factory.spawn_of(pane);
+        assert_eq!(spawn.session, Some((session, "work".to_string())));
+        assert_eq!(spawn.window, Some(window));
     }
 
     #[test]

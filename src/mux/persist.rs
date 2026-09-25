@@ -10,7 +10,7 @@
 use crate::mux::agent_resume::{render_argv, resume_invocation};
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
-use crate::mux::pane::{MuxError, PaneFactory};
+use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
 use crate::mux::tree::{MuxSession, MuxTree, MuxWindow};
 use crate::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
 use std::collections::HashMap;
@@ -124,6 +124,11 @@ pub struct PersistSession {
     pub active_window_index: usize,
     /// The session's windows, in order.
     pub windows: Vec<PersistWindow>,
+    /// The session environment. May hold secrets, which is one reason the
+    /// file is owner-only. Absent in files written before the field
+    /// existed, which load with an empty environment.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 /// One persisted window: its layout tree plus the panes that tree references.
@@ -234,6 +239,7 @@ impl MuxTree {
                 id: session.id.0,
                 name: session.name.clone(),
                 active_window_index: session.active,
+                env: session.env.clone(),
                 windows: session
                     .windows
                     .iter()
@@ -325,11 +331,17 @@ impl MuxTree {
                         .and_then(resume_invocation)
                         .map(|argv| render_argv(&argv))
                         .or_else(|| pane.spawn_command.clone());
+                    let context = SpawnContext {
+                        session: Some((SessionId(session.id), &session.name)),
+                        window: Some(WindowId(window.id)),
+                        env: Some(&session.env),
+                    };
                     let mut created = factory.create_pane(
                         PaneId(pane.id),
                         window.cols,
                         window.rows,
                         effective.as_deref(),
+                        &context,
                     )?;
                     // Identity comes back as metadata so the format
                     // round-trips and task 6.3's hook-first lookup reads it
@@ -384,6 +396,7 @@ impl MuxTree {
                     name: session.name.clone(),
                     windows: window_ids,
                     active: session.active_window_index,
+                    env: session.env.clone(),
                 },
             );
         }
@@ -536,7 +549,20 @@ pub fn write_state(state: &PersistState, target: &Path) -> Result<(), PersistErr
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
 
-    let file = fs::File::create(&tmp)?;
+    // Owner-only from creation, not chmod-after: the file holds pane
+    // content and session environments (which can carry tokens), and a
+    // create-then-chmod leaves a umask-readable window. On Windows the file
+    // inherits the owner-only ACL of the user-profile state directory.
+    let file = {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&tmp)?
+    };
     // Buffer the encoder: `to_writer` into a bare File issues one write
     // syscall per JSON fragment, and a scrollback-heavy state (hundreds of
     // thousands of cells) spends minutes in those syscalls — measured
@@ -682,12 +708,13 @@ mod tests {
             cols: u16,
             rows: u16,
             command: Option<&str>,
+            context: &SpawnContext<'_>,
         ) -> Result<MuxPane, MuxError> {
             self.received
                 .lock()
                 .unwrap()
                 .push((id, command.map(str::to_string)));
-            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"))
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
         }
     }
 
@@ -767,6 +794,81 @@ mod tests {
             Some("hello".to_string()),
             "named buffers survive the round trip"
         );
+    }
+
+    #[test]
+    fn session_env_round_trips_and_restored_panes_spawn_with_it() {
+        let mut original = populated_tree();
+        let main = original
+            .sessions()
+            .into_iter()
+            .find(|id| original.session(*id).unwrap().name == "main")
+            .unwrap();
+        original
+            .set_session_env(main, "TOKEN", Some("s3cret value"))
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("env.state.json");
+        save_to(&original, &target).unwrap();
+        let Loaded::State(state) = load_or_quarantine(&target) else {
+            panic!("the saved file must load back");
+        };
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let env = &restored.session(main).unwrap().env;
+        assert_eq!(env.get("TOKEN").map(String::as_str), Some("s3cret value"));
+        for window in &restored.session(main).unwrap().windows {
+            for pane in restored.window(*window).unwrap().panes() {
+                assert_eq!(&factory.spawn_of(pane).env, env);
+            }
+        }
+    }
+
+    #[test]
+    fn a_state_file_without_session_env_loads_with_an_empty_one() {
+        let mut json = serde_json::to_value(populated_tree().to_persist_state()).unwrap();
+        for session in json["sessions"].as_array_mut().unwrap() {
+            session.as_object_mut().unwrap().remove("env");
+        }
+        let state: PersistState = serde_json::from_value(json).unwrap();
+        let restored =
+            MuxTree::from_persist_state(&state, Box::new(ShellPaneFactory::default())).unwrap();
+        for id in restored.sessions() {
+            assert!(restored.session(id).unwrap().env.is_empty());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_state_file_is_owner_only_even_over_a_stale_world_readable_tmp() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("s.state.json");
+        let tmp = dir.path().join("s.state.json.tmp");
+        fs::write(&tmp, b"stale").unwrap();
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o644)).unwrap();
+        save_to(&populated_tree(), &target).unwrap();
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn restore_spawns_each_pane_with_its_session_and_window_identity() {
+        let original = populated_tree();
+        let state = original.to_persist_state();
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone()))
+            .expect("state this build wrote must restore");
+        for session_id in restored.sessions() {
+            let session = restored.session(session_id).unwrap();
+            for window_id in &session.windows {
+                for pane_id in restored.window(*window_id).unwrap().panes() {
+                    let spawn = factory.spawn_of(pane_id);
+                    assert_eq!(spawn.session, Some((session_id, session.name.clone())));
+                    assert_eq!(spawn.window, Some(*window_id));
+                }
+            }
+        }
     }
 
     #[test]

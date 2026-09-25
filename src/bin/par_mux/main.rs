@@ -75,7 +75,10 @@ fn run_command(path: &std::path::Path, command: &str) -> std::process::ExitCode 
     let reply = match client.send_checked(command) {
         Ok(reply) => reply,
         Err(err) => {
-            eprintln!("par-mux: {command:?} failed: {err}");
+            // Only the command name: arguments may carry set-environment
+            // values, which can be secrets.
+            let name = command.split_whitespace().next().unwrap_or_default();
+            eprintln!("par-mux: {name} failed: {err}");
             return ExitCode::from(2);
         }
     };
@@ -201,17 +204,22 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         Some(dir) => par_term_emu_core_rust::mux::persist::state_file_in(&dir, &path),
         None => par_term_emu_core_rust::mux::persist::state_file_path(&path),
     };
+    // One factory serves both fresh and restored trees, so every pane gets
+    // the same env contract. PAR_MUX_BIN is this executable: only the binary
+    // knows it — in library code current_exe() names the embedding process.
+    let factory = || par_term_emu_core_rust::mux::pane::ShellPaneFactory {
+        socket_path: Some(path.to_string_lossy().into_owned()),
+        bin_path: std::env::current_exe()
+            .ok()
+            .map(|exe| exe.to_string_lossy().into_owned()),
+        ..Default::default()
+    };
     let restored = match par_term_emu_core_rust::mux::persist::load_or_quarantine(&state_path) {
         par_term_emu_core_rust::mux::persist::Loaded::Fresh => None,
         par_term_emu_core_rust::mux::persist::Loaded::State(state) => {
             match par_term_emu_core_rust::mux::tree::MuxTree::from_persist_state(
                 &state,
-                Box::new(par_term_emu_core_rust::mux::pane::ShellPaneFactory {
-                    // Restored panes respawn through this factory too, so
-                    // they get the same hook env contract as fresh ones.
-                    socket_path: Some(path.to_string_lossy().into_owned()),
-                    ..Default::default()
-                }),
+                Box::new(factory()),
             ) {
                 Ok(tree) => Some(tree),
                 Err(err) => {
@@ -225,10 +233,9 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
 
     // bind refuses a path a live server already owns, so a racing auto-spawn
     // loses cleanly instead of stealing the socket.
-    let server = match restored {
-        Some(tree) => par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?,
-        None => par_term_emu_core_rust::mux::MuxServer::bind(&path)?,
-    };
+    let tree = restored
+        .unwrap_or_else(|| par_term_emu_core_rust::mux::tree::MuxTree::new(Box::new(factory())));
+    let server = par_term_emu_core_rust::mux::MuxServer::bind_with_tree(&path, tree)?;
     log::info!("par-mux listening on {}", path.display());
 
     // A clean SIGTERM saves on the way out (Task 3.5): the handler requests

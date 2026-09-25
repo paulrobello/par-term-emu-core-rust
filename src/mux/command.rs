@@ -36,6 +36,9 @@ pub enum MuxCommand {
     NewSession {
         /// Session name; a default is chosen when absent.
         name: Option<String>,
+        /// `-e NAME=VALUE` (repeatable): the session's initial environment,
+        /// applied to every pane it spawns (tmux 3.x `new-session -e`).
+        env: Vec<(String, String)>,
     },
     /// List every live pane.
     ListPanes,
@@ -180,6 +183,18 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
+    /// Set or unset one variable in a session's environment
+    /// (`set-environment -t $N NAME VALUE` / `-u NAME`). Panes spawned
+    /// afterwards see it; panes already running do not (tmux semantics).
+    SetEnvironment {
+        /// Target session. Required: env landing on the wrong session is
+        /// worse than an error, so there is no newest-session default.
+        session: SessionId,
+        /// Variable name.
+        name: String,
+        /// `Some` sets the value; `None` (`-u`) removes the variable.
+        value: Option<String>,
+    },
     /// Report the daemon's build stamp — the `version` wire form of
     /// [`crate::mux::build_stamp`]. Read-only, tree-free: it exists so a
     /// client can compare the daemon's core build against its own linked
@@ -208,7 +223,8 @@ impl MuxCommand {
             | MuxCommand::SelectPane { .. }
             | MuxCommand::ResizePane { .. }
             | MuxCommand::SwapPanes { .. }
-            | MuxCommand::SetBuffer { .. } => true,
+            | MuxCommand::SetBuffer { .. }
+            | MuxCommand::SetEnvironment { .. } => true,
             MuxCommand::RefreshClient { size, .. } => size.is_some(),
             MuxCommand::ListPanes
             | MuxCommand::ListAgents
@@ -323,6 +339,19 @@ impl Args<'_> {
             flat
         };
         Ok(value)
+    }
+
+    /// Every value following `flag`, in order, read through
+    /// [`shell_split`] so a quoted value survives as one word — the
+    /// repeatable-flag form (`-e A=1 -e 'B=two words'`).
+    fn quoted_values(&self, flag: &str) -> Vec<String> {
+        let words = shell_split(self.line);
+        words
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| *w == flag)
+            .filter_map(|(i, _)| words.get(i + 1).cloned())
+            .collect()
     }
 
     /// Presence check for valueless flags (`-h`, `-R`, …) — [`Self::flag`]
@@ -642,6 +671,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("swap-pane", parse_swap_pane),
     ("capture-pane", parse_capture_pane),
     ("set-buffer", parse_set_buffer),
+    ("set-environment", parse_set_environment),
     ("show-buffer", parse_show_buffer),
     ("paste-buffer", parse_paste_buffer),
     ("version", parse_version),
@@ -653,7 +683,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 /// argument grammar (`--`, per-command option tables, command sequences) is
 /// not a goal here, and pretending to implement it would hide that.
 ///
-/// Quoting is honored in exactly three places, all of them values that may
+/// Quoting is honored in a fixed set of places, all of them values that may
 /// legitimately contain a space, and all sharing the one bounded grammar in
 /// [`shell_split`] (single or double quotes, backslash escapes outside
 /// quotes, the `'\''` close-escape-reopen idiom; no interpolation):
@@ -661,7 +691,9 @@ const COMMANDS: &[(&str, CommandParser)] = &[
 ///   names, `-l` and `-H` cannot survive a whitespace split;
 /// - `new-session -s NAME` and `new-window -n NAME` (see
 ///   [`Args::quoted_flag`]) — tmux admits any non-empty session or window
-///   name, spaces included.
+///   name, spaces included;
+/// - environment values: `new-session -e NAME=VALUE` (see
+///   [`Args::quoted_values`]) and the `set-environment` words.
 ///
 /// Every other flag stays whitespace-split, which is correct rather than
 /// merely cheap: the `-t`/`-s` targets everywhere else parse as typed
@@ -683,8 +715,68 @@ pub fn parse_command(line: &str) -> Result<MuxCommand, String> {
 }
 
 fn parse_new_session(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let env = a
+        .quoted_values("-e")
+        .into_iter()
+        .map(|assignment| {
+            let (name, value) = assignment
+                .split_once('=')
+                .ok_or_else(|| format!("new-session: -e expects NAME=VALUE, got: {assignment}"))?;
+            validate_env_name(name, a.name)?;
+            Ok((name.to_string(), value.to_string()))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     Ok(MuxCommand::NewSession {
         name: a.quoted_flag("-s")?,
+        env,
+    })
+}
+
+/// Reject a variable name no environment can hold: empty, or containing
+/// `=` or NUL.
+fn validate_env_name(name: &str, command: &str) -> Result<(), String> {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(format!(
+            "{command}: invalid environment variable name: {name:?}"
+        ));
+    }
+    Ok(())
+}
+
+/// `set-environment -t $N NAME VALUE` or `set-environment -t $N -u NAME`.
+/// The words after the flags go through [`shell_split`], so a quoted value
+/// may contain spaces; exactly one value word is accepted.
+fn parse_set_environment(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let session = a
+        .session("-t")?
+        .ok_or_else(|| format!("{} requires -t", a.name))?;
+    let unset = a.has_flag("-u");
+    let words = shell_split(a.line);
+    let mut positional = Vec::new();
+    let mut iter = words.iter().skip(1);
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "-t" => {
+                iter.next();
+            }
+            "-u" => {}
+            _ => positional.push(word.clone()),
+        }
+    }
+    let (name, value) = match (unset, positional.as_slice()) {
+        (true, [name]) => (name.clone(), None),
+        (false, [name, value]) => (name.clone(), Some(value.clone())),
+        (true, _) => return Err(format!("{}: -u takes exactly one NAME", a.name)),
+        (false, _) => return Err(format!("{} requires NAME VALUE", a.name)),
+    };
+    validate_env_name(&name, a.name)?;
+    if value.as_deref().is_some_and(|v| v.contains('\0')) {
+        return Err(format!("{}: value contains NUL", a.name));
+    }
+    Ok(MuxCommand::SetEnvironment {
+        session,
+        name,
+        value,
     })
 }
 
@@ -920,15 +1012,98 @@ mod tests {
         assert_eq!(
             cmd,
             MuxCommand::NewSession {
-                name: Some("work".into())
+                name: Some("work".into()),
+                env: vec![],
             }
         );
     }
 
     #[test]
+    fn parses_new_session_env_assignments_in_order_with_quoting() {
+        let cmd =
+            parse_command("new-session -s work -e A=1 -e 'B=two words' -e C=x=y -e D=").unwrap();
+        assert_eq!(
+            cmd,
+            MuxCommand::NewSession {
+                name: Some("work".into()),
+                env: vec![
+                    ("A".into(), "1".into()),
+                    ("B".into(), "two words".into()),
+                    ("C".into(), "x=y".into()),
+                    ("D".into(), String::new()),
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn new_session_env_rejects_malformed_assignments() {
+        assert!(parse_command("new-session -e NOEQUALS").is_err());
+        assert!(parse_command("new-session -e =value").is_err());
+    }
+
+    #[test]
+    fn parses_set_environment_set_and_unset() {
+        assert_eq!(
+            parse_command("set-environment -t $2 SSH_AUTH_SOCK /tmp/agent.sock").unwrap(),
+            MuxCommand::SetEnvironment {
+                session: SessionId(2),
+                name: "SSH_AUTH_SOCK".into(),
+                value: Some("/tmp/agent.sock".into()),
+            }
+        );
+        assert_eq!(
+            parse_command("set-environment -t $0 GREETING 'hello there'").unwrap(),
+            MuxCommand::SetEnvironment {
+                session: SessionId(0),
+                name: "GREETING".into(),
+                value: Some("hello there".into()),
+            }
+        );
+        assert_eq!(
+            parse_command("set-environment -t $0 EMPTY ''").unwrap(),
+            MuxCommand::SetEnvironment {
+                session: SessionId(0),
+                name: "EMPTY".into(),
+                value: Some(String::new()),
+            }
+        );
+        assert_eq!(
+            parse_command("set-environment -u -t $1 DISPLAY").unwrap(),
+            MuxCommand::SetEnvironment {
+                session: SessionId(1),
+                name: "DISPLAY".into(),
+                value: None,
+            }
+        );
+    }
+
+    #[test]
+    fn set_environment_rejects_bad_shapes() {
+        for line in [
+            "set-environment NAME value",
+            "set-environment -t $0",
+            "set-environment -t $0 NAME",
+            "set-environment -t $0 NAME a b",
+            "set-environment -t $0 -u",
+            "set-environment -t $0 -u NAME extra",
+            "set-environment -t $0 A=B value",
+            "set-environment -t %0 NAME value",
+        ] {
+            assert!(parse_command(line).is_err(), "{line} must be rejected");
+        }
+    }
+
+    #[test]
     fn parses_new_session_without_a_name() {
         let cmd = parse_command("new-session").expect("parses");
-        assert_eq!(cmd, MuxCommand::NewSession { name: None });
+        assert_eq!(
+            cmd,
+            MuxCommand::NewSession {
+                name: None,
+                env: vec![]
+            }
+        );
     }
 
     /// A quoted session name survives as one name. Before the fix the flag
@@ -943,7 +1118,8 @@ mod tests {
             assert_eq!(
                 parse_command(line).expect("parses"),
                 MuxCommand::NewSession {
-                    name: Some("Par Mux Test".into())
+                    name: Some("Par Mux Test".into()),
+                    env: vec![],
                 },
                 "line: {line}"
             );
@@ -958,7 +1134,8 @@ mod tests {
         assert_eq!(
             cmd,
             MuxCommand::NewSession {
-                name: Some("Paul's box".into())
+                name: Some("Paul's box".into()),
+                env: vec![],
             }
         );
     }
@@ -971,25 +1148,31 @@ mod tests {
         assert_eq!(
             parse_command("new-session -s work").expect("parses"),
             MuxCommand::NewSession {
-                name: Some("work".into())
+                name: Some("work".into()),
+                env: vec![],
             }
         );
         assert_eq!(
             parse_command("new-session   -s   work  ").expect("parses"),
             MuxCommand::NewSession {
-                name: Some("work".into())
+                name: Some("work".into()),
+                env: vec![],
             }
         );
         assert_eq!(
             parse_command("new-session -s").expect("parses"),
-            MuxCommand::NewSession { name: None }
+            MuxCommand::NewSession {
+                name: None,
+                env: vec![]
+            }
         );
         // An unquoted value keeps the flat scan's verbatim bytes: a bare
         // backslash is part of the name, not an escape.
         assert_eq!(
             parse_command(r"new-session -s a\b").expect("parses"),
             MuxCommand::NewSession {
-                name: Some(r"a\b".into())
+                name: Some(r"a\b".into()),
+                env: vec![],
             }
         );
     }
@@ -1001,7 +1184,8 @@ mod tests {
         assert_eq!(
             parse_command("new-session -s '-n'").expect("parses"),
             MuxCommand::NewSession {
-                name: Some("-n".into())
+                name: Some("-n".into()),
+                env: vec![],
             }
         );
         assert_eq!(
@@ -1544,7 +1728,10 @@ mod tests {
         // `mutated = true` set, verbatim. Structural commands save the state
         // file on success; content and read-only commands never do.
         let structural = [
-            MuxCommand::NewSession { name: None },
+            MuxCommand::NewSession {
+                name: None,
+                env: vec![],
+            },
             MuxCommand::KillPane { pane: PaneId(0) },
             MuxCommand::RefreshClient {
                 pane: PaneId(0),

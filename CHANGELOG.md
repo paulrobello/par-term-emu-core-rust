@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **par-mux panes export their session and window identity** (`src/mux/pane.rs`, `src/mux/tree.rs`, `src/mux/persist.rs`, `src/bin/par_mux/main.rs`). Every pane now also carries `PAR_MUX_SESSION_ID` (`$N`), `PAR_MUX_SESSION` (name), `PAR_MUX_WINDOW_ID` (`@N`), and `PAR_MUX_BIN` (the daemon executable, so a pane script can run `"$PAR_MUX_BIN" --socket "$PAR_MUX_SOCKET" --cmd …` without `par-mux` on `PATH`), set on `new-session`, `new-window`, `split-window`, and restore. The values are fixed at spawn, as tmux's are. See [docs/MUX.md](docs/MUX.md#agent-hook-reports).
+
+- **par-mux per-session environment: `set-environment` and `new-session -e`** (`src/mux/command.rs`, `src/mux/tree.rs`, `src/mux/dispatch.rs`, `src/mux/persist.rs`). `set-environment -t $N NAME VALUE` / `-u NAME` and `new-session -e NAME=VALUE` (repeatable) maintain a per-session environment applied on top of the daemon's for every pane spawned afterwards; running panes are untouched, as in tmux. A client that reconnects with a fresh `SSH_AUTH_SOCK`, `DISPLAY`, or `PATH` sends it here, since the daemon outlives its clients and would otherwise hand new panes its own stale startup environment. The map persists with the session; state files written before it existed load with an empty one. See [docs/MUX.md](docs/MUX.md#command-reference).
+
+### Changed
+- **par-mux state file is owner-only from creation** (`src/mux/persist.rs`). The temp file was created with the process umask and chmodded to `0600` after the write; it is now opened `0600`, so no readable window exists. This matters now that the file can hold session environment values.
+- **`par-mux --cmd` no longer echoes the full command on a transport failure**, only its name, since arguments can carry environment values.
+- **Breaking for embedders: `PaneFactory::create_pane` takes a `&SpawnContext`** (`src/mux/pane.rs`). The context carries the owning session and window and the session environment. `ShellPaneFactory` and `AgentPaneFactory` gain a `bin_path` field exported as `PAR_MUX_BIN`. Custom factories add the parameter and pass it through to `ShellPaneFactory::create_pane` when they delegate.
+
 ## [0.51.0] - 2026-09-24
 
 ### Added

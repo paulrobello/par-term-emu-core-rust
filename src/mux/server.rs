@@ -940,8 +940,9 @@ mod tests {
             cols: u16,
             rows: u16,
             _command: Option<&str>,
+            context: &crate::mux::pane::SpawnContext<'_>,
         ) -> Result<crate::mux::pane::MuxPane, crate::mux::pane::MuxError> {
-            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 30"))
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 30"), context)
         }
     }
 

@@ -148,7 +148,7 @@ pub(super) fn dispatch_command(
     }
     let mutates = command.mutates();
     let outcome = match command {
-        MuxCommand::NewSession { name } => cmd_new_session(ctx, name),
+        MuxCommand::NewSession { name, env } => cmd_new_session(ctx, name, env),
         MuxCommand::ListPanes => cmd_list_panes(ctx),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
@@ -178,6 +178,11 @@ pub(super) fn dispatch_command(
             escape,
         } => cmd_capture_pane(ctx, pane, start_line, end_line, escape),
         MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
+        MuxCommand::SetEnvironment {
+            session,
+            name,
+            value,
+        } => cmd_set_environment(ctx, session, &name, value.as_deref()),
         MuxCommand::ShowBuffer => cmd_show_buffer(ctx),
         MuxCommand::PasteBuffer { pane } => cmd_paste_buffer(ctx, pane),
         MuxCommand::Version => cmd_version(ctx),
@@ -207,11 +212,16 @@ pub(super) fn dispatch_command(
     outcome.reply
 }
 
-fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>) -> Outcome {
+fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String)>) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let outcome = {
         let mut guard = ctx.tree.lock();
-        match guard.new_session(&name, DEFAULT_COLS, DEFAULT_ROWS) {
+        match guard.new_session_with_env(
+            &name,
+            DEFAULT_COLS,
+            DEFAULT_ROWS,
+            env.into_iter().collect(),
+        ) {
             Ok(session_id) => {
                 // Wire every pane in the new session to push its output.
                 let window_ids = guard
@@ -683,6 +693,18 @@ fn cmd_capture_pane(
 fn cmd_set_buffer(ctx: &Ctx<'_>, content: String) -> Outcome {
     ctx.tree.lock().set_buffer(DEFAULT_BUFFER, content);
     Outcome::ok(ctx, "")
+}
+
+fn cmd_set_environment(
+    ctx: &Ctx<'_>,
+    session: SessionId,
+    name: &str,
+    value: Option<&str>,
+) -> Outcome {
+    match ctx.tree.lock().set_session_env(session, name, value) {
+        Ok(()) => Outcome::ok(ctx, ""),
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
 }
 
 fn cmd_show_buffer(ctx: &Ctx<'_>) -> Outcome {

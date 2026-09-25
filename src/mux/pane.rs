@@ -6,7 +6,7 @@ use crate::pty_session::PtySession;
 use crate::terminal::replay_snapshot::TerminalSnapshot;
 use crate::terminal::Terminal;
 use parking_lot::{Mutex, RwLock};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Errors raised while creating or driving a pane, window, or session.
@@ -242,6 +242,23 @@ impl MuxPane {
     }
 }
 
+/// Where a new pane lands: the identity and environment its spawn inherits.
+///
+/// The tree builds one per spawn from the session and window the pane is
+/// created in. [`Default`] is a pane outside any session (tests, embedders
+/// driving a factory directly): no identity vars, no session environment.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SpawnContext<'a> {
+    /// The owning session's id and name, exported as `PAR_MUX_SESSION_ID`
+    /// and `PAR_MUX_SESSION`.
+    pub session: Option<(SessionId, &'a str)>,
+    /// The owning window, exported as `PAR_MUX_WINDOW_ID`.
+    pub window: Option<WindowId>,
+    /// The session's environment (`set-environment`, `new-session -e`),
+    /// applied on top of the daemon's own environment.
+    pub env: Option<&'a BTreeMap<String, String>>,
+}
+
 /// Creates panes on demand — extension seam S1.
 ///
 /// Mirrors [`crate::streaming::SessionFactory`] deliberately. An agent layer
@@ -256,6 +273,7 @@ pub trait PaneFactory: Send + Sync {
         cols: u16,
         rows: u16,
         command: Option<&str>,
+        context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError>;
 }
 
@@ -269,6 +287,11 @@ pub struct ShellPaneFactory {
     /// agent state back to this server — the Phase 5 env contract.
     /// `None` (tests, embedders without a socket) seeds nothing.
     pub socket_path: Option<String>,
+    /// The daemon executable, exported as `PAR_MUX_BIN` so a pane script can
+    /// run client mode (`$PAR_MUX_BIN --socket "$PAR_MUX_SOCKET" --cmd …`)
+    /// without `par-mux` on `PATH`. Set by the binary: in library code
+    /// `current_exe()` would name whatever process embeds the server.
+    pub bin_path: Option<String>,
 }
 
 impl PaneFactory for ShellPaneFactory {
@@ -278,6 +301,7 @@ impl PaneFactory for ShellPaneFactory {
         cols: u16,
         rows: u16,
         command: Option<&str>,
+        context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
         let mut session = PtySession::new(cols as usize, rows as usize, DEFAULT_SCROLLBACK);
 
@@ -289,10 +313,29 @@ impl PaneFactory for ShellPaneFactory {
         // relies on. The socket path and gate variable complete herdr's env
         // contract (`HERDR_ENV`/`HERDR_SOCKET_PATH`, renamed): a ported hook
         // script checks all three before reporting.
+        // Session env first: the command builder applies vars in order, so
+        // the PAR_MUX_* identity set after it cannot be overridden by a
+        // client's set-environment.
+        for (name, value) in context.env.into_iter().flatten() {
+            session.set_env(name, value);
+        }
         session.set_env("PAR_MUX_PANE_ID", &id.to_string());
         if let Some(socket) = &self.socket_path {
             session.set_env("PAR_MUX_SOCKET", socket);
             session.set_env("PAR_MUX_ENV", "1");
+        }
+        // Fixed at spawn, as tmux's TMUX/TMUX_PANE are: a later
+        // rename-session or cross-window swap-pane leaves these stale. The
+        // ids stay valid; the name is advisory.
+        if let Some((session_id, name)) = context.session {
+            session.set_env("PAR_MUX_SESSION_ID", &session_id.to_string());
+            session.set_env("PAR_MUX_SESSION", name);
+        }
+        if let Some(window) = context.window {
+            session.set_env("PAR_MUX_WINDOW_ID", &window.to_string());
+        }
+        if let Some(bin) = &self.bin_path {
+            session.set_env("PAR_MUX_BIN", bin);
         }
 
         match command {
@@ -341,6 +384,9 @@ pub struct AgentPaneFactory {
     /// Control-socket path exported with the hook env contract (see
     /// [`ShellPaneFactory::socket_path`]).
     pub socket_path: Option<String>,
+    /// Daemon executable exported as `PAR_MUX_BIN` (see
+    /// [`ShellPaneFactory::bin_path`]).
+    pub bin_path: Option<String>,
 }
 
 impl PaneFactory for AgentPaneFactory {
@@ -350,14 +396,68 @@ impl PaneFactory for AgentPaneFactory {
         cols: u16,
         rows: u16,
         command: Option<&str>,
+        context: &SpawnContext<'_>,
     ) -> Result<MuxPane, MuxError> {
         let shell = ShellPaneFactory {
             cwd: self.cwd.clone(),
             socket_path: self.socket_path.clone(),
+            bin_path: self.bin_path.clone(),
         };
-        let mut pane = shell.create_pane(id, cols, rows, command)?;
+        let mut pane = shell.create_pane(id, cols, rows, command, context)?;
         pane.set_metadata("agent", &self.agent);
         Ok(pane)
+    }
+}
+
+/// A factory recording the [`SpawnContext`] of every spawn, for tests that
+/// assert what each tree path hands the factory.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    /// One spawn's context, owned.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(crate) struct RecordedSpawn {
+        pub pane: PaneId,
+        pub session: Option<(SessionId, String)>,
+        pub window: Option<WindowId>,
+        pub env: BTreeMap<String, String>,
+    }
+
+    /// Records each spawn's context, then spawns a bounded sleeper.
+    #[derive(Clone, Default)]
+    pub(crate) struct ContextRecordingFactory {
+        pub spawns: Arc<Mutex<Vec<RecordedSpawn>>>,
+    }
+
+    impl ContextRecordingFactory {
+        pub(crate) fn spawn_of(&self, pane: PaneId) -> RecordedSpawn {
+            self.spawns
+                .lock()
+                .iter()
+                .find(|s| s.pane == pane)
+                .cloned()
+                .unwrap_or_else(|| panic!("no spawn recorded for {pane}"))
+        }
+    }
+
+    impl PaneFactory for ContextRecordingFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            _command: Option<&str>,
+            context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            self.spawns.lock().push(RecordedSpawn {
+                pane: id,
+                session: context.session.map(|(id, name)| (id, name.to_string())),
+                window: context.window,
+                env: context.env.cloned().unwrap_or_default(),
+            });
+            ShellPaneFactory::default().create_pane(id, cols, rows, Some("sleep 60"), context)
+        }
     }
 }
 
@@ -372,7 +472,7 @@ mod tests {
     fn shell_factory_creates_a_running_pane() {
         let factory = ShellPaneFactory::default();
         let pane = factory
-            .create_pane(PaneId(0), 80, 24, None)
+            .create_pane(PaneId(0), 80, 24, None, &SpawnContext::default())
             .expect("shell pane should spawn");
         assert_eq!(pane.id(), PaneId(0));
         assert!(
@@ -386,7 +486,13 @@ mod tests {
     fn factory_honors_an_explicit_command() {
         let factory = ShellPaneFactory::default();
         let pane = factory
-            .create_pane(PaneId(1), 80, 24, Some("echo par-mux"))
+            .create_pane(
+                PaneId(1),
+                80,
+                24,
+                Some("echo par-mux"),
+                &SpawnContext::default(),
+            )
             .expect("command pane should spawn");
         assert!(pane.child_pid().is_some());
     }
@@ -395,7 +501,13 @@ mod tests {
     fn output_callback_receives_pty_bytes() {
         let factory = ShellPaneFactory::default();
         let mut pane = factory
-            .create_pane(PaneId(2), 80, 24, Some("echo par-mux-marker"))
+            .create_pane(
+                PaneId(2),
+                80,
+                24,
+                Some("echo par-mux-marker"),
+                &SpawnContext::default(),
+            )
             .expect("pane should spawn");
 
         let seen = Arc::new(AtomicUsize::new(0));
@@ -422,7 +534,9 @@ mod tests {
     #[test]
     fn metadata_starts_empty_and_accepts_entries() {
         let factory = ShellPaneFactory::default();
-        let mut pane = factory.create_pane(PaneId(3), 80, 24, None).unwrap();
+        let mut pane = factory
+            .create_pane(PaneId(3), 80, 24, None, &SpawnContext::default())
+            .unwrap();
         assert!(
             pane.metadata().is_empty(),
             "metadata starts empty (seam S2)"
@@ -440,9 +554,16 @@ mod tests {
             agent: "kimi".to_string(),
             cwd: None,
             socket_path: None,
+            bin_path: None,
         };
         let pane = factory
-            .create_pane(PaneId(5), 80, 24, Some("sleep 30"))
+            .create_pane(
+                PaneId(5),
+                80,
+                24,
+                Some("sleep 30"),
+                &SpawnContext::default(),
+            )
             .expect("agent pane should spawn");
         assert!(pane.is_running(), "the agent CLI pane runs");
         assert!(pane.child_pid().is_some(), "it has a child pid");
@@ -468,6 +589,7 @@ mod tests {
             agent: "kimi".to_string(),
             cwd: None,
             socket_path: Some(socket.clone()),
+            bin_path: None,
         };
         // Variable expansion syntax is the shell's: $VAR under POSIX sh,
         // %VAR% under cmd.exe (the pane command runs via the platform's
@@ -477,7 +599,7 @@ mod tests {
         #[cfg(not(windows))]
         let echo_env = "echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET";
         let mut pane = factory
-            .create_pane(PaneId(6), 80, 24, Some(echo_env))
+            .create_pane(PaneId(6), 80, 24, Some(echo_env), &SpawnContext::default())
             .expect("agent pane should spawn");
 
         // Collect the pane's output until the env line lands — the child
@@ -503,7 +625,9 @@ mod tests {
     #[test]
     fn resize_updates_the_terminal_dimensions() {
         let factory = ShellPaneFactory::default();
-        let mut pane = factory.create_pane(PaneId(4), 80, 24, None).unwrap();
+        let mut pane = factory
+            .create_pane(PaneId(4), 80, 24, None, &SpawnContext::default())
+            .unwrap();
         pane.resize(100, 30).expect("resize should succeed");
         let terminal = pane.terminal();
         let guard = terminal.read();
@@ -522,7 +646,9 @@ mod tests {
     #[test]
     fn without_a_user_title_the_osc_title_is_reported() {
         let factory = ShellPaneFactory::default();
-        let pane = factory.create_pane(PaneId(7), 80, 24, None).unwrap();
+        let pane = factory
+            .create_pane(PaneId(7), 80, 24, None, &SpawnContext::default())
+            .unwrap();
         set_osc_title(&pane, "prog title");
         assert_eq!(pane.effective_title(), "prog title");
         assert!(
@@ -536,7 +662,9 @@ mod tests {
         // The documented divergence from tmux: -T is sticky; the program
         // cannot overwrite it.
         let factory = ShellPaneFactory::default();
-        let mut pane = factory.create_pane(PaneId(8), 80, 24, None).unwrap();
+        let mut pane = factory
+            .create_pane(PaneId(8), 80, 24, None, &SpawnContext::default())
+            .unwrap();
         assert!(pane.set_user_title("user title"));
         set_osc_title(&pane, "later prog title");
         assert_eq!(pane.effective_title(), "user title");
@@ -550,7 +678,9 @@ mod tests {
     #[test]
     fn setting_the_same_title_twice_reports_no_change() {
         let factory = ShellPaneFactory::default();
-        let mut pane = factory.create_pane(PaneId(9), 80, 24, None).unwrap();
+        let mut pane = factory
+            .create_pane(PaneId(9), 80, 24, None, &SpawnContext::default())
+            .unwrap();
         assert!(pane.set_user_title("same"));
         assert!(
             !pane.set_user_title("same"),
@@ -561,5 +691,43 @@ mod tests {
             !pane.set_user_title(""),
             "clearing an already-clear pane is not a change"
         );
+    }
+
+    #[test]
+    fn spawn_context_reaches_the_child_environment() {
+        let factory = ShellPaneFactory {
+            bin_path: Some("/opt/par-mux-bin".to_string()),
+            ..ShellPaneFactory::default()
+        };
+        let context = SpawnContext {
+            session: Some((SessionId(4), "work")),
+            window: Some(WindowId(7)),
+            env: None,
+        };
+        #[cfg(windows)]
+        let echo_env =
+            "echo IDENT=%PAR_MUX_SESSION_ID%/%PAR_MUX_SESSION%/%PAR_MUX_WINDOW_ID%/%PAR_MUX_BIN%";
+        #[cfg(not(windows))]
+        let echo_env =
+            "echo IDENT=$PAR_MUX_SESSION_ID/$PAR_MUX_SESSION/$PAR_MUX_WINDOW_ID/$PAR_MUX_BIN";
+        let mut pane = factory
+            .create_pane(PaneId(10), 80, 24, Some(echo_env), &context)
+            .expect("pane should spawn");
+        let seen: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&seen);
+        pane.on_output(move |bytes: &[u8]| sink.lock().extend_from_slice(bytes));
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let text = String::from_utf8_lossy(&seen.lock().clone()).to_string();
+            if text.contains("IDENT=$4/work/@7//opt/par-mux-bin") {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "child never saw the identity vars; output so far: {text}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 }

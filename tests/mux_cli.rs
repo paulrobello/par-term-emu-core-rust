@@ -257,3 +257,115 @@ impl Drop for NamedDaemon {
         let _ = std::fs::remove_file(&self.socket);
     }
 }
+
+/// A pane runs `$PAR_MUX_BIN` in client mode against its own daemon with no
+/// `par-mux` on PATH: the env contract names the daemon executable and the
+/// socket, and the pane's identity vars match the session it lives in.
+#[test]
+fn a_pane_reaches_its_daemon_through_par_mux_bin() {
+    let fixture = MuxFixture::new("clibin");
+    let _daemon = daemon_with_session(&fixture, "clibin");
+    let socket = fixture.socket();
+    let pane = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    #[cfg(unix)]
+    let typed = r#"echo "ID=$PAR_MUX_SESSION_ID/$PAR_MUX_SESSION/$PAR_MUX_WINDOW_ID" && "$PAR_MUX_BIN" --socket "$PAR_MUX_SOCKET" --cmd version | sed 's/^/BIN-/'"#;
+    #[cfg(windows)]
+    let typed = r#"echo ID=%PAR_MUX_SESSION_ID%/%PAR_MUX_SESSION%/%PAR_MUX_WINDOW_ID% & "%PAR_MUX_BIN%" --socket "%PAR_MUX_SOCKET%" --cmd version"#;
+    cmd_ok(
+        socket,
+        &format!("send-keys -t {pane} -l '{}'", typed.replace('\'', r"'\''")),
+    );
+    cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
+
+    let stamp = par_term_emu_core_rust::mux::build_stamp();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        let ran_identity = screen.lines().any(|l| l.trim() == "ID=$0/clibin/@0");
+        let ran_client = screen
+            .lines()
+            .any(|l| !l.contains("PAR_MUX_BIN") && l.contains(stamp));
+        if ran_identity && ran_client {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pane never reached its daemon via PAR_MUX_BIN; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Wait until `pane`'s screen has a line equal to `want`.
+fn wait_line(socket: &Path, pane: &str, want: &str) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let screen = cmd_ok(socket, &format!("capture-pane -t {pane}"));
+        if screen.lines().any(|l| l.trim() == want) {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane {pane} never printed {want:?}; screen:\n{screen}"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Type a line into `pane` that prints `VAR` as `<tag>=[value]`.
+fn echo_var(socket: &Path, pane: &str, tag: &str, var: &str) {
+    #[cfg(unix)]
+    let typed = format!("echo {tag}=[\"${var}\"]");
+    #[cfg(windows)]
+    let typed = format!("echo {tag}=[%{var}%]");
+    cmd_ok(
+        socket,
+        &format!("send-keys -t {pane} -l '{}'", typed.replace('\'', r"'\''")),
+    );
+    cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
+}
+
+/// tmux `set-environment` semantics: a pane created after the call sees the
+/// session value, a pane created before does not, and `new-session -e`
+/// seeds the first pane.
+#[test]
+fn session_environment_reaches_new_panes_only() {
+    let fixture = MuxFixture::new("clienv");
+    let daemon = spawn_daemon(&fixture);
+    wait_listening(fixture.socket());
+    let socket = fixture.socket();
+    let session = cmd_ok(socket, "new-session -s clienv -e 'SEEDED=from -e'");
+    let session = session.trim();
+    let before = pane_ids(&cmd_ok(socket, "list-panes"))
+        .first()
+        .expect("the session has a pane")
+        .clone();
+
+    cmd_ok(
+        socket,
+        &format!("set-environment -t {session} PMX_LATE 'late value'"),
+    );
+    let after = cmd_ok(socket, &format!("split-window -t {before}"));
+    let after = after.trim();
+
+    echo_var(socket, &before, "SEED", "SEEDED");
+    wait_line(socket, &before, "SEED=[from -e]");
+    echo_var(socket, &before, "OLD", "PMX_LATE");
+    wait_line(socket, &before, "OLD=[]");
+    echo_var(socket, after, "NEW", "PMX_LATE");
+    wait_line(socket, after, "NEW=[late value]");
+
+    cmd_ok(socket, &format!("set-environment -t {session} -u PMX_LATE"));
+    let unset = cmd_ok(socket, &format!("split-window -t {after}"));
+    let unset = unset.trim();
+    echo_var(socket, unset, "GONE", "PMX_LATE");
+    wait_line(socket, unset, "GONE=[]");
+
+    let bad = cmd(socket, "set-environment -t $99 X y");
+    assert_eq!(bad.code, Some(1), "unknown session is an error");
+    drop(daemon);
+}
