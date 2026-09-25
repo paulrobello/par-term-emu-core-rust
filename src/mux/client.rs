@@ -57,6 +57,15 @@ impl MuxClient {
         if let Ok(client) = Self::connect(path) {
             return Ok(client);
         }
+        // Auto-spawning from inside a pane would start a nested daemon: the
+        // spawn inherits this env, PAR_MUX_ENV included, so the daemon's own
+        // guard would kill it at startup — surfacing here only as the full
+        // ten seconds of connect retries. Refuse up front with the reason
+        // instead; connecting to an existing daemon, the branch above, is
+        // unaffected.
+        if let Some(reason) = super::nested_daemon_refusal() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, reason));
+        }
         let candidates = daemon_binary_candidates()?;
         let mut last_err = io::Error::new(
             io::ErrorKind::NotFound,

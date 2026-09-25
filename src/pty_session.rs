@@ -497,16 +497,35 @@ impl PtySession {
         //    The child shell is inside a new PTY, NOT inside tmux. Inheriting these
         //    causes tools like fzf to render in the parent tmux pane instead of here.
         // 3. STY/WINDOW — GNU Screen equivalents of TMUX.
+        // 4. PAR_MUX_* — the par-mux pane identity set. A PtySession spawned by a
+        //    process inside a mux pane (e.g. par-term's local tabs) would inherit
+        //    the outer pane's identity, so hook scripts report agents to the outer
+        //    daemon under the wrong pane id. Prefix-matched so identity vars added
+        //    later are covered without editing this list; mux panes re-add their
+        //    own values via set_env, which runs after this drop.
         // CommandBuilder::new() pre-loads the full parent environment via
         // get_base_env(), so we must explicitly remove unwanted vars with
         // env_remove() — simply skipping them in the loop below is not enough.
         const DROP_VARS: &[&str] = &["COLUMNS", "LINES", "TMUX", "TMUX_PANE", "STY", "WINDOW"];
+        fn dropped_by_name(name: &str) -> bool {
+            DROP_VARS.contains(&name) || name.starts_with("PAR_MUX_")
+        }
         let mut dropped: Vec<&str> = Vec::new();
         for &var in DROP_VARS {
             if std::env::var_os(var).is_some() {
                 cmd.env_remove(var);
                 dropped.push(var);
             }
+        }
+        let mut mux_dropped = false;
+        for (key, _value) in std::env::vars() {
+            if key.starts_with("PAR_MUX_") {
+                cmd.env_remove(&key);
+                mux_dropped = true;
+            }
+        }
+        if mux_dropped {
+            dropped.push("PAR_MUX_*");
         }
         if !dropped.is_empty() {
             debug::log(
@@ -519,7 +538,7 @@ impl PtySession {
         // Re-apply parent env vars (overrides get_base_env values with current ones),
         // but skip the vars we just removed so we don't re-add them.
         for (key, value) in std::env::vars() {
-            if !DROP_VARS.contains(&key.as_str()) {
+            if !dropped_by_name(&key) {
                 cmd.env(&key, &value);
             }
         }
@@ -3067,5 +3086,54 @@ mod tests {
             dropped_ok.is_ok(),
             "Dropping an unspawned PtySession must not panic"
         );
+    }
+
+    /// A PTY spawned from an environment carrying PAR_MUX_* vars gets none of
+    /// them (they carry the OUTER pane's identity), unless set_env adds them
+    /// back — which is exactly how mux panes seed their own values. The
+    /// synthetic var proves the prefix rule covers identity vars beyond the
+    /// ones a daemon exports today.
+    #[test]
+    fn par_mux_env_does_not_leak_into_spawned_ptys() {
+        std::env::set_var("PAR_MUX_LEAK_PROBE", "stale-outer-value");
+        let mut session = PtySession::new(80, 24, 1000);
+        // set_env runs after the drop, so this one survives as the pane's own.
+        session.set_env("PAR_MUX_PANE_ID", "42");
+
+        #[cfg(unix)]
+        let (shell, flag, probe) = (
+            "/bin/sh",
+            "-c",
+            "echo LEAK=[$PAR_MUX_LEAK_PROBE] OWN=[$PAR_MUX_PANE_ID]",
+        );
+        #[cfg(windows)]
+        let (shell, flag, probe) = (
+            "cmd.exe",
+            "/C",
+            "echo LEAK=[%PAR_MUX_LEAK_PROBE%] OWN=[%PAR_MUX_PANE_ID%]",
+        );
+        session.spawn(shell, &[flag, probe]).expect("probe spawns");
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let screen = session.with_terminal(|term| term.content());
+            if screen.contains("LEAK=[") {
+                assert!(
+                    screen.contains("LEAK=[]"),
+                    "the outer pane's PAR_MUX_* leaked in: {screen}"
+                );
+                assert!(
+                    screen.contains("OWN=[42]"),
+                    "set_env values survive the drop: {screen}"
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "probe never ran; screen so far: {screen}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        std::env::remove_var("PAR_MUX_LEAK_PROBE");
     }
 }

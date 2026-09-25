@@ -59,6 +59,25 @@ pub fn build_stamp() -> &'static str {
     )
 }
 
+/// Why starting a daemon here would nest it under another: this process runs
+/// inside a par-mux pane (`PAR_MUX_ENV=1` in the pane env contract) and
+/// nesting is not explicitly allowed. `None` when starting is fine.
+///
+/// The daemon's serve path and [`MuxClient`]'s auto-spawn both consult this
+/// so their refusals cannot drift. One-shot client mode (`--cmd`), `--stop`
+/// and `--restart` never do — a pane must keep reaching and restarting its
+/// own daemon, as tmux allows `kill-server` from inside.
+pub fn nested_daemon_refusal() -> Option<&'static str> {
+    std::env::var_os("PAR_MUX_ENV")?;
+    if std::env::var("PAR_MUX_ALLOW_NESTED").ok().as_deref() == Some("1") {
+        return None;
+    }
+    Some(
+        "refusing to start a nested daemon: PAR_MUX_ENV is set, so this process runs \
+         inside a par-mux pane — set PAR_MUX_ALLOW_NESTED=1 to override",
+    )
+}
+
 /// Marker type used by the feature-isolation test to prove this module is
 /// reachable exactly when the `mux` feature is enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

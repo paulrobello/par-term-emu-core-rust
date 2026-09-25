@@ -194,6 +194,17 @@ fn run_daemon(cli: Cli, path: std::path::PathBuf) -> std::io::Result<()> {
         // it detached (e.g. `par-mux --restart NAME &`) to keep a shell.
     }
 
+    // Nested-daemon guard, on the path that actually serves: a daemon
+    // started from inside a pane (PAR_MUX_ENV=1) would shadow the outer
+    // server's identity for every PTY under it. --cmd returned earlier and
+    // --stop/--restart are exempt above, as tmux exempts kill-server; the
+    // guard below therefore only bites plain serve mode.
+    if !cli.restart {
+        if let Some(reason) = par_term_emu_core_rust::mux::nested_daemon_refusal() {
+            return Err(std::io::Error::other(reason));
+        }
+    }
+
     // D3.2/D3.3: a corrupt or unknown-version state file is quarantined
     // aside and the daemon starts fresh — unreadable state never blocks
     // startup. A readable state is REBUILT (D3.5): layout and content are
