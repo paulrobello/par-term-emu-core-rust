@@ -1601,6 +1601,39 @@ mod tests {
         ])
     }
 
+    /// The resume spawn re-lands in the pane's persisted cwd: the agent's
+    /// invocation (claude resolves transcripts per cwd) must run where the
+    /// session lived, not in the daemon's start directory.
+    #[test]
+    fn a_resume_invocation_spawns_in_the_persisted_cwd() {
+        let (tree, pane_id) = tree_with_agent_pane();
+        let dir = tempfile::tempdir().unwrap();
+        let reported = dir.path().join("repo");
+        std::fs::create_dir(&reported).unwrap();
+        tree.pane(pane_id)
+            .unwrap()
+            .terminal()
+            .write()
+            .process(format!("\x1b]7;file://localhost{}\x1b\\", reported.display()).as_bytes());
+        let state = tree.to_persist_state();
+
+        let factory = crate::mux::pane::test_support::ContextRecordingFactory::default();
+        let restored = MuxTree::from_persist_state(&state, Box::new(factory.clone())).unwrap();
+        let spawn = factory.spawn_of(pane_id);
+        assert_eq!(
+            spawn.cwd.as_deref(),
+            Some(reported.as_path()),
+            "the resume spawn carries the persisted cwd"
+        );
+        assert!(
+            restored.pane(pane_id).is_some()
+                && state.sessions[0].windows[0].panes[0]
+                    .agent_session
+                    .is_some(),
+            "positive control: this pane restored through the resume path"
+        );
+    }
+
     #[test]
     fn agent_session_identity_round_trips() {
         let (original, pane_id) = tree_with_agent_pane();
