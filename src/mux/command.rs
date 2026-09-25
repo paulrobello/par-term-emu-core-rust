@@ -129,6 +129,13 @@ pub enum MuxCommand {
         /// Target pane.
         pane: PaneId,
     },
+    /// Read a pane's window and current grid size, one line:
+    /// `%N @W COLSxROWS`. A mirroring client seeds at the pane's own size
+    /// instead of resizing the pane to its viewport.
+    PaneInfo {
+        /// Target pane.
+        pane: PaneId,
+    },
     /// Grow or shrink a pane by moving its bordering divider, or set its
     /// absolute extents.
     ResizePane {
@@ -211,6 +218,7 @@ impl MuxCommand {
             | MuxCommand::SendKeys { .. }
             | MuxCommand::CapturePane { .. }
             | MuxCommand::PaneTitle { .. }
+            | MuxCommand::PaneInfo { .. }
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
             | MuxCommand::Version => false,
@@ -629,6 +637,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("split-window", parse_split_window),
     ("select-pane", parse_select_pane),
     ("pane-title", parse_pane_title),
+    ("pane-info", parse_pane_info),
     ("resize-pane", parse_resize_pane),
     ("swap-pane", parse_swap_pane),
     ("capture-pane", parse_capture_pane),
@@ -803,6 +812,12 @@ fn parse_select_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
 
 fn parse_pane_title(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::PaneTitle {
+        pane: a.pane("-t")?,
+    })
+}
+
+fn parse_pane_info(a: &Args<'_>) -> Result<MuxCommand, String> {
+    Ok(MuxCommand::PaneInfo {
         pane: a.pane("-t")?,
     })
 }
@@ -1391,6 +1406,15 @@ mod tests {
             MuxCommand::PaneTitle { pane: PaneId(3) }
         );
         assert!(parse_command("pane-title").is_err());
+    }
+
+    #[test]
+    fn parses_pane_info_query() {
+        assert_eq!(
+            parse_command("pane-info -t %3").unwrap(),
+            MuxCommand::PaneInfo { pane: PaneId(3) }
+        );
+        assert!(parse_command("pane-info").is_err());
     }
 
     #[test]

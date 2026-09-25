@@ -952,6 +952,34 @@ mod tests {
     }
 
     #[test]
+    fn pane_info_reports_the_window_and_the_pane_grid_size() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s info", 1, &tree, &clients, None);
+        dispatch("refresh-client -t %0 -C 100x30", 2, &tree, &clients, None);
+        let body = |reply: &str| -> Vec<String> {
+            reply
+                .lines()
+                .filter(|l| !l.starts_with("%begin") && !l.starts_with("%end"))
+                .map(str::to_string)
+                .collect()
+        };
+        let reply = dispatch("pane-info -t %0", 3, &tree, &clients, None);
+        assert_eq!(body(&reply), vec!["%0 @0 100x30"], "{reply}");
+
+        let split = dispatch("split-window -h -t %0", 4, &tree, &clients, None);
+        assert!(!split.contains("%error"), "{split}");
+        let reply = dispatch("pane-info -t %0", 5, &tree, &clients, None);
+        let line = body(&reply).join("");
+        assert!(
+            line.starts_with("%0 @0 ") && !line.ends_with(" 100x30"),
+            "a split re-fits the pane: {reply}"
+        );
+
+        let reply = dispatch("pane-info -t %99", 6, &tree, &clients, None);
+        assert!(reply.contains("%error"), "{reply}");
+    }
+
+    #[test]
     fn bare_new_window_targets_the_newest_session_and_errors_without_one() {
         let (tree, clients) = harness();
         // No sessions yet: bare new-window is an error, like tmux's

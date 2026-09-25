@@ -161,6 +161,7 @@ pub(super) fn dispatch_command(
         } => cmd_split_window(ctx, pane, direction, percent),
         MuxCommand::SelectPane { pane, title } => cmd_select_pane(ctx, pane, title),
         MuxCommand::PaneTitle { pane } => cmd_pane_title(ctx, pane),
+        MuxCommand::PaneInfo { pane } => cmd_pane_info(ctx, pane),
         MuxCommand::ResizePane { pane, adjustment } => cmd_resize_pane(ctx, pane, adjustment),
         MuxCommand::SwapPanes { target, source } => cmd_swap_panes(ctx, target, source),
         MuxCommand::NewWindow { session, name } => cmd_new_window(ctx, session, name),
@@ -475,6 +476,17 @@ fn cmd_pane_title(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
         Some(pane) => Outcome::ok(ctx, &pane.effective_title()),
         None => Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string()),
     }
+}
+
+fn cmd_pane_info(ctx: &Ctx<'_>, pane: PaneId) -> Outcome {
+    // Wire contract: one line, `%N @W COLSxROWS` — the pane's window and
+    // its terminal's current grid size.
+    let guard = ctx.tree.lock();
+    let (Some(target), Some(window)) = (guard.pane(pane), guard.window_of_pane(pane)) else {
+        return Outcome::err(ctx, &MuxError::NoSuchPane(pane).to_string());
+    };
+    let (cols, rows) = target.terminal().read().size();
+    Outcome::ok(ctx, &format!("{pane} {window} {cols}x{rows}"))
 }
 
 fn cmd_resize_pane(ctx: &Ctx<'_>, pane: PaneId, adjustment: ResizeAdjustment) -> Outcome {

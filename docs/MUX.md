@@ -141,6 +141,7 @@ The parser is deliberately minimal: whitespace-split with a flag scan. tmux's fu
 | `split-window` | `-t %N [-h\|-v] [-p 1-99]` | The new pane id (`%N`) | `%layout-change`, `%window-pane-changed` |
 | `select-pane` | `-t %N [-T 'title']` | empty | `%layout-change`, `%window-pane-changed`; `%pane-title-changed` when `-T` changed the title |
 | `pane-title` | `-t %N` | The pane's effective title as the body; an empty body (no lines) = no title set | — |
+| `pane-info` | `-t %N` | One line, `%N @W COLSxROWS`: the pane's window and current grid size (read-only; lets a mirroring client seed at the pane's size instead of resizing it) | — |
 | `resize-pane` | `-t %N (-L\|-R\|-U\|-D [cells] \| -x COLS [-y ROWS])` | empty | `%layout-change` |
 | `swap-pane` | `-t %N -s %N` | empty | `%layout-change` |
 | `kill-pane` | `-t %N` | empty | `%layout-change`, `%window-pane-changed` |
