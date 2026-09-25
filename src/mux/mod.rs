@@ -31,8 +31,8 @@ pub use command::{parse_command, MuxCommand};
 pub use emit::{emit, emit_block, escape_output};
 pub use ids::{IdAllocator, PaneId, ParseIdError, SessionId, Target, WindowId};
 pub use ipc::{
-    bind_local_listener, connect_local_stream, default_socket_path, prepare_socket_path,
-    LocalListener, LocalStream,
+    accept_connection, bind_local_listener, connect_local_stream, default_socket_path,
+    prepare_socket_path, LocalListener, LocalStream,
 };
 pub use layout::{LayoutTree, NoSuchLeaf, PaneGeometry, SplitDirection};
 pub use pane::{MuxError, MuxPane, PaneFactory, ShellPaneFactory};
