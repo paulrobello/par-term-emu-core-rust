@@ -764,12 +764,10 @@ clean:
 	rm -rf *.egg-info
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete
-	find . -type f -name "*.so" -delete
 	@if [ -d "web-terminal-frontend" ]; then \
 		echo "Cleaning web frontend..."; \
-		cd web-terminal-frontend && rm -rf .next out node_modules .turbo; \
+		cd web-terminal-frontend && rm -rf .next out .turbo; \
 	fi
-	rm -rf web_term
 	@echo "Clean complete!"
 
 # ==== Grind loop (~/Repos/par-grind) ========================================
