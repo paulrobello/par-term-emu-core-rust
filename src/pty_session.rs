@@ -185,6 +185,18 @@ impl PtySession {
         *self.output_callback.lock() = None;
     }
 
+    /// Fire the output callback with data that did not come from the PTY
+    /// reader thread (e.g. tmux/mux mirror output fed by the frontend).
+    ///
+    /// Mirrors the reader thread's invocation so streaming/logging
+    /// consumers see daemon-fed output identically.
+    pub fn fire_output_callback(&self, data: &[u8]) {
+        let guard = self.output_callback.lock();
+        if let Some(ref callback) = *guard {
+            callback(data);
+        }
+    }
+
     /// Get a clone of the PTY writer for external use (e.g., streaming server)
     ///
     /// This allows external code to write input to the PTY in a thread-safe way.
