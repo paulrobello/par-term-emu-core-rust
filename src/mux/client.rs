@@ -211,37 +211,82 @@ fn reader_loop(
 ) {
     let reader = BufReader::new(stream);
     let mut parser = TmuxControlParser::new(true);
-    let mut block_body: Option<Vec<String>> = None;
+    // The open reply block: its command number and body so far.
+    let mut open: Option<(u32, Vec<String>)> = None;
     for line in reader.lines() {
         let Ok(line) = line else { break };
-        if line.starts_with("%begin") {
-            block_body = Some(Vec::new());
-        } else if block_body.is_some() && (line.starts_with("%end") || line.starts_with("%error")) {
-            let reply = Reply {
-                body: block_body.take().unwrap_or_default(),
-                ok: line.starts_with("%end"),
-            };
-            if reply_tx.send(reply).is_err() {
-                break;
+        match framing(&line) {
+            // A begin opens a block only when none is open — the daemon
+            // writes each block atomically, so a begin inside an open
+            // block is content that happens to look like framing.
+            Some((Framing::Begin, number)) if open.is_none() => {
+                open = Some((number, Vec::new()));
             }
-        } else if let Some(body) = block_body.as_mut() {
-            body.push(line);
-        } else {
-            // lines() strips the terminator; the parser only emits complete
-            // lines, so hand it back the newline it buffers on.
-            let mut framed = line.clone().into_bytes();
-            framed.push(b'\n');
-            let mut forwarded = true;
-            for notification in parser.parse(&framed) {
-                if notification_tx.send(notification).is_err() {
-                    forwarded = false;
+            // A close ends the block only when it carries the SAME command
+            // number as the begin that opened it (tmux's own rule). Reply
+            // bodies are written raw — a pane that printed %end/%begin
+            // lines rides them into capture-pane/show-buffer bodies, and a
+            // mismatched close must stay content or every later command
+            // would answer with the previous one's leftover block.
+            Some((kind @ (Framing::End | Framing::Error), number)) if matches!(open, Some((open_number, _)) if open_number == number) =>
+            {
+                let (_, body) = open.take().expect("the guard matched an open block");
+                let reply = Reply {
+                    body,
+                    ok: kind == Framing::End,
+                };
+                if reply_tx.send(reply).is_err() {
+                    break;
                 }
             }
-            if !forwarded {
-                break;
+            _ => {
+                if let Some((_, body)) = open.as_mut() {
+                    body.push(line);
+                } else {
+                    // lines() strips the terminator; the parser only emits
+                    // complete lines, so hand it back the newline it
+                    // buffers on.
+                    let mut framed = line.clone().into_bytes();
+                    framed.push(b'\n');
+                    let mut forwarded = true;
+                    for notification in parser.parse(&framed) {
+                        if notification_tx.send(notification).is_err() {
+                            forwarded = false;
+                        }
+                    }
+                    if !forwarded {
+                        break;
+                    }
+                }
             }
         }
     }
+}
+
+/// Which framing line a connection line is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Framing {
+    Begin,
+    End,
+    Error,
+}
+
+/// Parse a `%begin`/`%end`/`%error` line into its kind and command number
+/// (`%begin <time> <number> <flags>`). `None` when the line is not framing
+/// or is malformed — the first whitespace field must be exactly the
+/// keyword, and the number must parse, so body content that merely starts
+/// with `%end` does not qualify.
+fn framing(line: &str) -> Option<(Framing, u32)> {
+    let mut fields = line.split_whitespace();
+    let kind = match fields.next()? {
+        "%begin" => Framing::Begin,
+        "%end" => Framing::End,
+        "%error" => Framing::Error,
+        _ => return None,
+    };
+    let _timestamp = fields.next()?;
+    let number = fields.next()?.parse().ok()?;
+    Some((kind, number))
 }
 
 /// Where the par-mux daemon binary is looked up, in order: next to our own
@@ -540,5 +585,29 @@ mod tests {
         {
             "par-mux.exe"
         }
+    }
+
+    /// The framing parser accepts the daemon's `%begin/%end/%error <time>
+    /// <number> <flags>` shape and rejects everything else — a bare
+    /// keyword, a missing or non-numeric number, and content that merely
+    /// starts with a keyword are all body, not framing.
+    #[test]
+    fn framing_parses_only_well_formed_numbered_lines() {
+        assert_eq!(framing("%begin 1780000000 4 1"), Some((Framing::Begin, 4)));
+        assert_eq!(framing("%end 1780000000 4 1"), Some((Framing::End, 4)));
+        assert_eq!(framing("%error 0 12 1"), Some((Framing::Error, 12)));
+        assert_eq!(framing("%end"), None, "no fields at all");
+        assert_eq!(framing("%end 1780000000"), None, "number missing");
+        assert_eq!(framing("%end 1780000000 x 1"), None, "number not numeric");
+        assert_eq!(
+            framing("%endless 1780000000 4 1"),
+            None,
+            "keyword is a prefix of a longer word, not a field"
+        );
+        assert_eq!(
+            framing("%output %0 1"),
+            None,
+            "a notification is not framing"
+        );
     }
 }

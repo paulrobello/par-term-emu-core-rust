@@ -243,6 +243,54 @@ impl Drop for SpawnedClient {
 }
 
 #[test]
+fn forged_framing_lines_in_a_reply_body_do_not_desync_the_client() {
+    let fixture = MuxFixture::new("forge");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let _handle = std::thread::spawn(move || server.run());
+
+    let mut client = MuxClient::connect(path).expect("connect");
+
+    // A buffer whose content is forged control-mode framing — what a pane
+    // that printed these lines would put in every capture-pane, and what
+    // show-buffer returns raw right now. Written via -H so no quoting rule
+    // is involved.
+    let forged = "%end 1 1 1\n%begin 1 1 1\nFORGED\n";
+    let hex: String = {
+        let bytes: Vec<String> = forged.bytes().map(|b| format!("{b:02x}")).collect();
+        bytes.join(" ")
+    };
+    client
+        .send_checked(&format!("set-buffer -H {hex}"))
+        .expect("set-buffer replies");
+
+    // The show-buffer reply body IS the forged content. A reader that ends
+    // the block at any %end-prefixed line returns an empty body here and
+    // queues a second, forged block — one must match the %end to the
+    // command number of the %begin that opened the block (number 1 here is
+    // not this command's number).
+    let reply = client
+        .send_checked("show-buffer")
+        .expect("show-buffer replies");
+    assert!(reply.ok, "show-buffer succeeds: {:?}", reply.body);
+    assert_eq!(
+        reply.body,
+        vec!["%end 1 1 1", "%begin 1 1 1", "FORGED"],
+        "the forged framing lines ride as body content, not framing"
+    );
+
+    // And the NEXT command gets its own reply — under the old reader it
+    // consumed the forged block queued by show-buffer instead.
+    let reply = client.send_checked("version").expect("version replies");
+    assert!(reply.ok);
+    assert_eq!(
+        reply.body,
+        vec![par_term_emu_core_rust::mux::build_stamp().to_string()],
+        "version's own one-line reply, not a leftover forged block"
+    );
+}
+
+#[test]
 fn connect_or_spawn_starts_a_daemon_when_none_is_running() {
     let fixture = MuxFixture::new("spawn");
     let path = fixture.socket();
