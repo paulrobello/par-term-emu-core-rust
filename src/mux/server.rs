@@ -254,6 +254,13 @@ impl MuxServer {
                 }
                 Err(err) => {
                     log::error!("par-mux: listener fault ({err}) — saving state and exiting");
+                    // A fault ends the server exactly like a shutdown
+                    // request, so the flag goes up here too: the persist
+                    // worker's channel cannot close while connected clients
+                    // hold sender clones (a silent one holds its forever),
+                    // and the flag — not the sender count — is what bounds
+                    // the fault-exit join below.
+                    self.shutdown.store(true, Ordering::Relaxed);
                     faulted = true;
                     break;
                 }
@@ -966,9 +973,10 @@ mod tests {
         client
             .send_checked("new-session -s kept")
             .expect("mutation lands");
-        // Disconnect before the fault: each handler thread holds a persist
-        // clone, and the fault-exit join waits for the channel to close —
-        // a still-connected client would hold the exit open.
+        // Disconnect before the fault so this test exercises the plain
+        // save-on-fault path; the silent-client variant
+        // (`a_listener_fault_exits_even_with_a_silent_connected_client`)
+        // covers the join staying bounded with a connected client.
         drop(client);
         std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -1000,6 +1008,81 @@ mod tests {
                 state_path.display()
             ),
         }
+    }
+
+    /// A listener fault must not wait on connected clients (card
+    /// 01a0da711dfb7cf397fa99ceaba76ae1): every handler thread holds a
+    /// persist clone, and a silent one — connected, sends nothing, socket
+    /// open — never drops it, so the fault-exit join could only complete by
+    /// the worker observing the shutdown flag, not by the channel closing.
+    /// The join is bounded: a completion channel fires within the deadline
+    /// or the test fails.
+    #[cfg(unix)]
+    #[test]
+    fn a_listener_fault_exits_even_with_a_silent_connected_client() {
+        use crate::mux::persist::{load_or_quarantine, state_file_in, Loaded};
+        use std::os::fd::{AsFd as _, AsRawFd as _};
+
+        let dir = temp_dir();
+        let path = dir.path().join("fault-silent.sock");
+        let state_path = state_file_in(&dir.path().join("state"), &path);
+        let server = MuxServer::bind(&path).expect("bind");
+
+        let listener_fd = match &server.listener {
+            interprocess::local_socket::Listener::UdSocket(inner) => inner.as_fd().as_raw_fd(),
+        };
+        let fault_save_path = state_path.clone();
+        let serving = std::thread::spawn(move || server.run_persisting(fault_save_path));
+        let mut client = crate::mux::MuxClient::connect(&path).expect("client connects");
+        client
+            .send_checked("new-session -s kept")
+            .expect("mutation lands");
+        // The silent client: connected, registered no command, sends
+        // nothing, and stays alive past the fault. Its handler thread must
+        // not hold the fault-exit join open.
+        let silent = crate::mux::MuxClient::connect(&path).expect("silent client connects");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let null = unsafe { libc::open(c"/dev/null".as_ptr(), libc::O_RDONLY) };
+        assert!(
+            null >= 0,
+            "open /dev/null: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_eq!(
+            unsafe { libc::dup2(null, listener_fd) },
+            listener_fd,
+            "replace the listener fd: {}",
+            std::io::Error::last_os_error()
+        );
+        unsafe { libc::close(null) };
+
+        let (exited_tx, exited_rx) = std::sync::mpsc::channel();
+        let mut serving = Some(serving);
+        std::thread::spawn(move || {
+            if let Some(handle) = serving.take() {
+                let _ = handle.join();
+            }
+            let _ = exited_tx.send(());
+        });
+        let deadline = std::time::Duration::from_secs(10);
+        assert!(
+            exited_rx.recv_timeout(deadline).is_ok(),
+            "the fault exit is held open past {deadline:?} — a silent client's \
+             persist clone is pinning the persist worker's channel open"
+        );
+        match load_or_quarantine(&state_path) {
+            Loaded::State(state) => assert_eq!(
+                state.sessions.len(),
+                1,
+                "the fault-exit save captured the session"
+            ),
+            Loaded::Fresh | Loaded::Quarantined { .. } => panic!(
+                "no state was saved on the listener fault at {}",
+                state_path.display()
+            ),
+        }
+        drop(silent);
     }
 
     #[cfg(unix)]
