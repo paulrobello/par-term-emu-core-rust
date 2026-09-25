@@ -152,6 +152,11 @@ jobs:
       # serialization costs nothing.
       run: cargo test --no-default-features --features rust-only,mux,serde -- --test-threads=1
 
+    - name: Run mux-backed streaming tests (MuxSessionFactory)
+      # The only run with streaming and mux together; without it these
+      # tests would compile under lint's clippy and never execute.
+      run: cargo test --lib --no-default-features --features rust-only,streaming,mux,serde streaming::mux_factory -- --test-threads=1
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

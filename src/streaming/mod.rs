@@ -64,6 +64,9 @@ pub mod session;
 #[cfg(feature = "streaming")]
 pub mod rate_limit;
 
+#[cfg(all(feature = "streaming", feature = "mux"))]
+pub mod mux_factory;
+
 #[cfg(feature = "streaming")]
 pub mod auth_hash;
 
@@ -89,6 +92,9 @@ pub use session::{SessionInfo, SessionRegistry, StreamSessionState};
 
 #[cfg(feature = "streaming")]
 pub use server::{ConnectionParams, SessionFactory, SessionFactoryResult, StreamingServer};
+
+#[cfg(all(feature = "streaming", feature = "mux"))]
+pub use mux_factory::{MuxPaneSelector, MuxSessionFactory};
 
 #[cfg(feature = "streaming")]
 pub use proto::{
