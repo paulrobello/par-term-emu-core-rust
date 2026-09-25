@@ -508,6 +508,38 @@ mod tests {
         f()
     }
 
+    /// A long-lived child that echoes each stdin line to stdout. Windows has no
+    /// `cat`; `more.com` streams per line (`findstr` buffers until stdin EOF).
+    fn echo_child() -> CoprocessConfig {
+        let command = if cfg!(windows) { "more.com" } else { "cat" };
+        CoprocessConfig {
+            command: command.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// A child running a one-shot shell script: `sh -c` on unix, `cmd.exe /C`
+    /// on Windows. The dialects differ (cmd has no `;`, and `echo x >&2` keeps
+    /// the space before the redirect), so each platform gets its own script.
+    fn script_child(unix: &str, windows: &str) -> CoprocessConfig {
+        let (command, flag, script) = if cfg!(windows) {
+            ("cmd.exe", "/C", windows)
+        } else {
+            ("sh", "-c", unix)
+        };
+        CoprocessConfig {
+            command: command.to_string(),
+            args: vec![flag.to_string(), script.to_string()],
+            ..Default::default()
+        }
+    }
+
+    /// A child that exits immediately with `code`.
+    fn exit_child(code: i32) -> CoprocessConfig {
+        let script = format!("exit {code}");
+        script_child(&script, &script)
+    }
+
     #[test]
     fn test_coprocess_config_default() {
         let config = CoprocessConfig::default();
@@ -585,10 +617,7 @@ mod tests {
     #[test]
     fn test_coprocess_spawn_cat() {
         let mut mgr = CoprocessManager::new();
-        let config = CoprocessConfig {
-            command: "cat".to_string(),
-            ..Default::default()
-        };
+        let config = echo_child();
         let id = mgr.start(config).unwrap();
         assert_eq!(mgr.list(), vec![id]);
         assert_eq!(mgr.status(id), Some(true));
@@ -598,10 +627,7 @@ mod tests {
     #[test]
     fn test_coprocess_write_read() {
         let mut mgr = CoprocessManager::new();
-        let config = CoprocessConfig {
-            command: "cat".to_string(),
-            ..Default::default()
-        };
+        let config = echo_child();
         let id = mgr.start(config).unwrap();
 
         // Write data to coprocess
@@ -629,9 +655,8 @@ mod tests {
     fn test_coprocess_feed_output() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "cat".to_string(),
             copy_terminal_output: true,
-            ..Default::default()
+            ..echo_child()
         };
         let id = mgr.start(config).unwrap();
 
@@ -650,10 +675,7 @@ mod tests {
     #[test]
     fn test_coprocess_dead_process() {
         let mut mgr = CoprocessManager::new();
-        let config = CoprocessConfig {
-            command: "true".to_string(), // exits immediately
-            ..Default::default()
-        };
+        let config = exit_child(0);
         let id = mgr.start(config).unwrap();
 
         // Wait for the reaper thread to observe the exit.
@@ -669,11 +691,7 @@ mod tests {
     #[test]
     fn test_coprocess_stderr_capture() {
         let mut mgr = CoprocessManager::new();
-        let config = CoprocessConfig {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo error_msg >&2".to_string()],
-            ..Default::default()
-        };
+        let config = script_child("echo error_msg >&2", ">&2 echo error_msg");
         let id = mgr.start(config).unwrap();
 
         // Poll for the stderr line to arrive. The subprocess writes and exits
@@ -698,9 +716,8 @@ mod tests {
     fn test_coprocess_auto_cleanup_never_policy() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "true".to_string(), // exits immediately
             restart_policy: RestartPolicy::Never,
-            ..Default::default()
+            ..exit_child(0)
         };
         let id = mgr.start(config).unwrap();
         assert_eq!(mgr.list(), vec![id]);
@@ -723,10 +740,8 @@ mod tests {
     fn test_coprocess_restart_always_policy() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "sh".to_string(),
-            args: vec!["-c".to_string(), "echo restarted; exit 0".to_string()],
             restart_policy: RestartPolicy::Always,
-            ..Default::default()
+            ..script_child("echo restarted; exit 0", "echo restarted")
         };
         let id = mgr.start(config).unwrap();
 
@@ -752,9 +767,8 @@ mod tests {
     fn test_coprocess_restart_on_failure_clean_exit() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "true".to_string(), // exits with code 0
             restart_policy: RestartPolicy::OnFailure,
-            ..Default::default()
+            ..exit_child(0)
         };
         let id = mgr.start(config).unwrap();
 
@@ -774,9 +788,8 @@ mod tests {
     fn test_coprocess_restart_on_failure_nonzero_exit() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "false".to_string(), // exits with code 1
             restart_policy: RestartPolicy::OnFailure,
-            ..Default::default()
+            ..exit_child(1)
         };
         let id = mgr.start(config).unwrap();
 
@@ -799,10 +812,9 @@ mod tests {
     fn test_coprocess_restart_delay() {
         let mut mgr = CoprocessManager::new();
         let config = CoprocessConfig {
-            command: "true".to_string(), // exits immediately
             restart_policy: RestartPolicy::Always,
             restart_delay_ms: 300,
-            ..Default::default()
+            ..exit_child(0)
         };
         let id = mgr.start(config).unwrap();
 
