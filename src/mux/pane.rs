@@ -845,28 +845,46 @@ mod tests {
         let path = temp.path().to_path_buf();
         let encoded =
             base64::engine::general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
-        // The command must emit the escape through the platform's default
-        // shell (create_pane wraps it in `sh -c` / `cmd.exe /C` — cmd has
-        // no printf, and single quotes are not quoting there). POSIX sh:
-        // single-quoted printf — the path is tempfile-safe (alphanumerics,
-        // '/', '.', '_', '-') and the escape contains no single quotes.
-        // The leading sleep keeps the child's output behind the test's
-        // sink registration — create_pane spawns before on_output can be
-        // called, so an immediate printf races the callback wiring.
-        // Windows: powershell builds the ESC bytes with [char]27 (a raw
-        // \x1b in the cmd.exe line would be re-parsed away); PowerShell's
-        // own startup latency covers the same wiring race.
+        // POSIX sh: single-quoted printf — the path is tempfile-safe
+        // (alphanumerics, '/', '.', '_', '-') and the escape contains no
+        // single quotes. The leading sleep keeps the child's output behind
+        // the test's sink registration — create_pane spawns before
+        // on_output can be called, so an immediate printf races the
+        // callback wiring.
         #[cfg(not(windows))]
         let command = format!("sleep 1; printf '%s' '\x1b_Ga=T,f=100,t=t;{encoded}\x1b\\'");
-        #[cfg(windows)]
-        let command = format!(
-            "powershell.exe -NoProfile -NoLogo -Command Start-Sleep -Milliseconds 250; \
-             [Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')"
-        );
 
         let factory = ShellPaneFactory::default();
+        // Windows: cmd.exe (what create_pane's string path wraps commands
+        // in) has no printf, and the same command through cmd /C produced
+        // no output at all inside 20s (sink held only ConPTY's banner).
+        // Spawn powershell as structured argv instead — the direct-PE
+        // resume transport create_argv_pane routes through — building the
+        // ESC bytes with [char]27 since a raw \x1b would not survive a
+        // shell line. PowerShell's startup latency covers the wiring race
+        // the sh branch's sleep guards.
+        #[cfg(not(windows))]
         let mut pane = factory
             .create_pane(PaneId(9), 80, 24, Some(&command), &SpawnContext::default())
+            .expect("pane should spawn");
+        #[cfg(windows)]
+        let mut pane = factory
+            .create_argv_pane(
+                PaneId(9),
+                80,
+                24,
+                &[
+                    "powershell.exe".to_string(),
+                    "-NoProfile".to_string(),
+                    "-NoLogo".to_string(),
+                    "-Command".to_string(),
+                    format!(
+                        "Start-Sleep -Milliseconds 250; \
+                         [Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')"
+                    ),
+                ],
+                &SpawnContext::default(),
+            )
             .expect("pane should spawn");
 
         // Capture exactly what pane_output_sink would forward to clients.
