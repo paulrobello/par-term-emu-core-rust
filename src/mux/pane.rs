@@ -871,7 +871,7 @@ mod tests {
         std::fs::write(
             &script_path,
             format!(
-                "Start-Sleep -Milliseconds 250\r\n[Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')\r\n"
+                "Start-Sleep -Seconds 1\r\nWrite-Output \"ALIVE\"\r\n[Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')\r\nWrite-Output \"DONE\"\r\n"
             ),
         )
         .unwrap();
@@ -907,14 +907,19 @@ mod tests {
         // with the ST terminator. Under the reordered reader loop the output
         // callback fires after the bytes are applied to the daemon terminal,
         // so complete sink bytes imply the graphic is already in the
-        // daemon's store. Windows needs the larger budget: powershell's
-        // first start under a fresh ConPTY can take seconds (see the
-        // resume-transport note in persist.rs), far past sh's ~1s.
+        // daemon's store. Windows polls for the script's trailing DONE
+        // marker (Write-Output lines bracket the escape, so DONE implies
+        // the whole script ran) with the persist-test-sized budget.
         #[cfg(not(windows))]
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        fn complete(sink: &[u8]) -> bool {
+            sink.ends_with(b"\x1b\\")
+        }
         #[cfg(windows)]
+        fn complete(sink: &[u8]) -> bool {
+            sink.windows(4).any(|w| w == b"DONE")
+        }
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-        while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
+        while !complete(&sink_bytes.lock()) && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         let sink_text = String::from_utf8_lossy(&sink_bytes.lock().clone()).to_string();
