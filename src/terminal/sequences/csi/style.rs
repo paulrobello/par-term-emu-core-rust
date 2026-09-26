@@ -3,7 +3,7 @@
 use crate::cell::CellFlags;
 use crate::color::{Color, NamedColor};
 use crate::terminal::Terminal;
-use vte::Params;
+use vte::{Params, ParamsIter};
 
 impl Terminal {
     pub(crate) fn handle_csi_style(&mut self, action: char, params: &Params, intermediates: &[u8]) {
@@ -115,126 +115,24 @@ impl Terminal {
                         }
                         30..=37 => self.fg = Color::Named(NamedColor::from_u8((param - 30) as u8)),
                         38 => {
-                            if let Some(&mode) = param_slice.get(1) {
-                                match mode {
-                                    2 => {
-                                        let r = param_slice.get(2).copied().unwrap_or(0) as u8;
-                                        let g = param_slice.get(3).copied().unwrap_or(0) as u8;
-                                        let b = param_slice.get(4).copied().unwrap_or(0) as u8;
-                                        self.fg = Color::Rgb(r, g, b);
-                                    }
-                                    5 => {
-                                        if let Some(&idx) = param_slice.get(2) {
-                                            self.fg = Color::from_ansi_code(idx as u8);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            } else if let Some(next) = iter.next() {
-                                if let Some(&mode) = next.first() {
-                                    match mode {
-                                        2 => {
-                                            let r = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            let g = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            let b = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            self.fg = Color::Rgb(r, g, b);
-                                        }
-                                        5 => {
-                                            if let Some(idx) = iter.next().and_then(|p| p.first()) {
-                                                self.fg = Color::from_ansi_code(*idx as u8);
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                            if let Some(color) = Self::parse_extended_color(param_slice, &mut iter)
+                            {
+                                self.fg = color;
                             }
                         }
                         39 => self.fg = self.theme.default_fg,
                         40..=47 => self.bg = Color::Named(NamedColor::from_u8((param - 40) as u8)),
                         48 => {
-                            if let Some(&mode) = param_slice.get(1) {
-                                match mode {
-                                    2 => {
-                                        let r = param_slice.get(2).copied().unwrap_or(0) as u8;
-                                        let g = param_slice.get(3).copied().unwrap_or(0) as u8;
-                                        let b = param_slice.get(4).copied().unwrap_or(0) as u8;
-                                        self.bg = Color::Rgb(r, g, b);
-                                    }
-                                    5 => {
-                                        if let Some(&idx) = param_slice.get(2) {
-                                            self.bg = Color::from_ansi_code(idx as u8);
-                                        }
-                                    }
-                                    _ => {}
-                                }
-                            } else if let Some(next) = iter.next() {
-                                if let Some(&mode) = next.first() {
-                                    match mode {
-                                        2 => {
-                                            let r = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            let g = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            let b = iter
-                                                .next()
-                                                .and_then(|p| p.first())
-                                                .copied()
-                                                .unwrap_or(0)
-                                                as u8;
-                                            self.bg = Color::Rgb(r, g, b);
-                                        }
-                                        5 => {
-                                            if let Some(idx) = iter.next().and_then(|p| p.first()) {
-                                                self.bg = Color::from_ansi_code(*idx as u8);
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
+                            if let Some(color) = Self::parse_extended_color(param_slice, &mut iter)
+                            {
+                                self.bg = color;
                             }
                         }
                         49 => self.bg = self.theme.default_bg,
                         58 => {
-                            // Set underline color
-                            if let Some(&mode) = param_slice.get(1) {
-                                match mode {
-                                    2 => {
-                                        let r = param_slice.get(2).copied().unwrap_or(0) as u8;
-                                        let g = param_slice.get(3).copied().unwrap_or(0) as u8;
-                                        let b = param_slice.get(4).copied().unwrap_or(0) as u8;
-                                        self.underline_color = Some(Color::Rgb(r, g, b));
-                                    }
-                                    5 => {
-                                        if let Some(&idx) = param_slice.get(2) {
-                                            self.underline_color =
-                                                Some(Color::from_ansi_code(idx as u8));
-                                        }
-                                    }
-                                    _ => {}
-                                }
+                            // Set underline color (colon sub-parameter form only)
+                            if let Some(color) = Self::parse_extended_color_subparams(param_slice) {
+                                self.underline_color = Some(color);
                             }
                         }
                         59 => self.underline_color = None,
@@ -244,6 +142,49 @@ impl Terminal {
                     }
                 }
             }
+        }
+    }
+
+    /// Parse an SGR extended-color specifier (`38`/`48`): either the colon
+    /// sub-parameter form (`38:2:r:g:b` / `38:5:n`) carried entirely in
+    /// `param_slice`, or the semicolon form (`38;2;r;g;b` / `38;5;n`) whose
+    /// mode and value parameters are consumed from `iter`. Returns `None`
+    /// when the parameters name no color; `iter` is only advanced when
+    /// `param_slice` carries no sub-parameters.
+    fn parse_extended_color(param_slice: &[u16], iter: &mut ParamsIter) -> Option<Color> {
+        if param_slice.get(1).is_some() {
+            Self::parse_extended_color_subparams(param_slice)
+        } else if let Some(next) = iter.next() {
+            match next.first().copied() {
+                Some(2) => Some(Color::Rgb(
+                    iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8,
+                    iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8,
+                    iter.next().and_then(|p| p.first()).copied().unwrap_or(0) as u8,
+                )),
+                Some(5) => iter
+                    .next()
+                    .and_then(|p| p.first())
+                    .map(|&idx| Color::from_ansi_code(idx as u8)),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Parse the colon sub-parameter color form (`38:2:r:g:b` / `38:5:n`);
+    /// missing RGB components default to 0.
+    fn parse_extended_color_subparams(param_slice: &[u16]) -> Option<Color> {
+        match param_slice.get(1).copied() {
+            Some(2) => Some(Color::Rgb(
+                param_slice.get(2).copied().unwrap_or(0) as u8,
+                param_slice.get(3).copied().unwrap_or(0) as u8,
+                param_slice.get(4).copied().unwrap_or(0) as u8,
+            )),
+            Some(5) => param_slice
+                .get(2)
+                .map(|&idx| Color::from_ansi_code(idx as u8)),
+            _ => None,
         }
     }
 }

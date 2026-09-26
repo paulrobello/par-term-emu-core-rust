@@ -459,6 +459,30 @@ async fn main() -> Result<()> {
     }
 
     // Print startup information
+    print_startup_banner(
+        &args,
+        &theme,
+        &addr,
+        cols,
+        rows,
+        use_tls,
+        http_basic_auth.is_some(),
+    );
+
+    serve_until_ctrl_c(streaming_server, &run_mode, factory.as_ref(), &args).await
+}
+
+/// Print the startup banner: endpoints, auth state, terminal and theme
+/// settings, presets, and the active run mode.
+fn print_startup_banner(
+    args: &Args,
+    theme: &Theme,
+    addr: &str,
+    cols: u16,
+    rows: u16,
+    use_tls: bool,
+    http_basic_auth_enabled: bool,
+) {
     let http_scheme = if use_tls { "https" } else { "http" };
     let ws_scheme = if use_tls { "wss" } else { "ws" };
 
@@ -501,7 +525,7 @@ async fn main() -> Result<()> {
     }
 
     // HTTP Basic Authentication
-    if http_basic_auth.is_some() {
+    if http_basic_auth_enabled {
         println!("\n  HTTP Basic Auth: ENABLED");
     } else if args.enable_http {
         println!("\n  HTTP Basic Auth: DISABLED (no password protection)");
@@ -556,7 +580,17 @@ async fn main() -> Result<()> {
 
     println!("\n{}", "=".repeat(60));
     println!("\nPress Ctrl+C to stop the server\n");
+}
 
+/// Start the streaming server, serve until CTRL+C (shell mode) or end of
+/// macro playback (macro mode), then tear everything down: server shutdown,
+/// factory session teardown, macro PTY exit, and server-task cancellation.
+async fn serve_until_ctrl_c(
+    streaming_server: Arc<StreamingServer>,
+    run_mode: &RunMode,
+    factory: Option<&Arc<BinarySessionFactory>>,
+    args: &Args,
+) -> Result<()> {
     // Start streaming server in background
     let server_handle = {
         let streaming_server = Arc::clone(&streaming_server);
@@ -570,7 +604,7 @@ async fn main() -> Result<()> {
     if let RunMode::Macro {
         pty_session: macro_pty,
         ..
-    } = &run_mode
+    } = run_mode
     {
         // Macro mode: run the event loop (resize handling, PTY monitoring)
         run_macro_mode(
@@ -583,7 +617,7 @@ async fn main() -> Result<()> {
         // Shell mode: factory handles per-session resize, PTY monitoring, and event polling.
         // Send initial command to default session if specified
         if let Some(command) = &args.command {
-            let factory_ref = factory.clone();
+            let factory_ref = factory.cloned();
             let command = command.clone();
             tokio::spawn(async move {
                 // Wait 1 second for shell prompt to settle
@@ -621,7 +655,7 @@ async fn main() -> Result<()> {
     streaming_server.shutdown("Server shutting down".to_string());
 
     // Teardown all factory sessions
-    if let Some(ref factory) = factory {
+    if let Some(factory) = factory {
         let session_ids: Vec<String> = factory.pty_sessions.read().keys().cloned().collect();
         for id in session_ids {
             factory.teardown_session(&id);
@@ -629,7 +663,7 @@ async fn main() -> Result<()> {
     }
 
     // Stop macro mode PTY
-    if let RunMode::Macro { pty_session, .. } = &run_mode {
+    if let RunMode::Macro { pty_session, .. } = run_mode {
         let session = pty_session.lock();
         if session.is_running() {
             if let Some(writer) = session.get_writer() {
