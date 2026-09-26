@@ -451,6 +451,11 @@ impl ShellPaneFactory {
 
     /// The shared back half: wrap a spawned session as a pane.
     fn finish_pane(id: PaneId, session: PtySession, spawn_command: Option<String>) -> MuxPane {
+        // Client mirrors rebuild their grid from the raw PTY bytes forwarded
+        // over %output — this terminal's read of a kitty t=t temp file must
+        // not delete it, or the mirrors' later read finds nothing. The
+        // client that renders the graphic deletes it.
+        session.terminal().write().set_retain_kitty_temp_files(true);
         MuxPane {
             id,
             session,
@@ -745,6 +750,96 @@ mod tests {
         assert!(
             seen.load(Ordering::Relaxed) > 0,
             "output callback should have received PTY bytes within 5s"
+        );
+    }
+
+    /// Card 01a0d9e6f2ef70e383213a2911689228: a kitty `t=t` (temp file)
+    /// image must render in a mux pane. The daemon-side terminal processes
+    /// the PTY bytes first, but client mirrors rebuild their grid from the
+    /// same raw bytes forwarded over `%output` — and the t=t contract has
+    /// the reading terminal delete the file. If the daemon's read deletes
+    /// it, no client can ever load the graphic. The daemon must retain the
+    /// file; the client mirror that actually renders it is the one whose
+    /// read deletes it.
+    #[test]
+    fn kitty_temp_file_graphic_survives_for_client_mirrors() {
+        use base64::Engine as _;
+
+        // A real 2x1 PNG so decode_pixels succeeds in both terminals.
+        let img = image::RgbaImage::from_pixel(2, 1, image::Rgba([9, 8, 7, 6]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        // The t=t sender's temp file. The escape carries its path
+        // base64-encoded — the wire payload is always base64; the file
+        // medium resolves the path after decode.
+        let mut temp = tempfile::NamedTempFile::new().expect("temp file");
+        std::io::Write::write_all(&mut temp, &png).unwrap();
+        let path = temp.path().to_path_buf();
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
+        // Single-quoted printf: the path is tempfile-safe (alphanumerics,
+        // '/', '.', '_', '-') and the escape contains no single quotes.
+        // The leading sleep keeps the child's output behind the test's
+        // sink registration — create_pane spawns before on_output can be
+        // called, so an immediate printf races the callback wiring.
+        let command = format!("sleep 1; printf '%s' '\x1b_Ga=T,f=100,t=t;{encoded}\x1b\\'");
+
+        let factory = ShellPaneFactory::default();
+        let mut pane = factory
+            .create_pane(PaneId(9), 80, 24, Some(&command), &SpawnContext::default())
+            .expect("pane should spawn");
+
+        // Capture exactly what pane_output_sink would forward to clients.
+        let sink_bytes = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&sink_bytes);
+        pane.on_output(move |bytes: &[u8]| captured.lock().extend_from_slice(bytes));
+
+        // Wait for the daemon-side terminal to process the graphic — the
+        // output callback fires before processing on the same reader thread,
+        // so the sink bytes are complete by then.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while pane
+            .terminal()
+            .read()
+            .graphics
+            .graphics_store
+            .all_graphics()
+            .is_empty()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(
+            pane.terminal()
+                .read()
+                .graphics
+                .graphics_store
+                .all_graphics()
+                .len(),
+            1,
+            "daemon terminal should hold the t=t graphic"
+        );
+
+        assert!(
+            path.exists(),
+            "daemon processing must not delete the t=t file client mirrors still need to read"
+        );
+
+        // The client mirror replays the forwarded bytes and must render the
+        // same graphic — a plain Terminal, exactly what a mux client embeds.
+        let mut mirror = crate::terminal::Terminal::new(80, 24);
+        mirror.process(&sink_bytes.lock().clone());
+        assert_eq!(
+            mirror.graphics.graphics_store.all_graphics().len(),
+            1,
+            "client mirror must render the t=t graphic from forwarded bytes"
+        );
+
+        assert!(
+            !path.exists(),
+            "the rendering client mirror deletes the temp file after its read"
         );
     }
 

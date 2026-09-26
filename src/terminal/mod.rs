@@ -1444,6 +1444,19 @@ impl Terminal {
         }
     }
 
+    /// Keep kitty `t=t` temp files on disk after reading instead of
+    /// deleting them (crate-internal: mux daemon wiring).
+    ///
+    /// A multiplexer's daemon-side terminal processes PTY bytes before the
+    /// client mirrors that rebuild their grid from the same raw bytes
+    /// forwarded over the socket — the daemon's read of a `t=t` file must
+    /// not delete it, or no client can ever load the graphic. The client
+    /// that renders it deletes the file with its own (default) read.
+    #[cfg(feature = "mux")]
+    pub(crate) fn set_retain_kitty_temp_files(&mut self, retain: bool) {
+        self.kitty_parser.retain_temp_files = retain;
+    }
+
     /// Set the host-supplied window position for XTWINOPS reporting
     /// (`CSI 13 t` / `CSI 13 ; 2 t`).
     ///

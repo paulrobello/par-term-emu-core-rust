@@ -211,6 +211,13 @@ pub struct KittyParser {
     /// C=1: do not move the cursor after displaying the image (Kitty TGP).
     /// C=0 or omitted uses the default (cursor moves).
     pub suppress_cursor_move: bool,
+    /// Configuration (not per-escape state): keep `t=t` temp files on disk
+    /// after reading. A multiplexer's daemon-side terminal processes PTY
+    /// bytes first, but client mirrors re-read the same file from the raw
+    /// bytes forwarded to them — the daemon's read must not delete the
+    /// file out from under them. The client that actually renders the
+    /// graphic deletes it. Preserved by [`Self::reset`].
+    pub retain_temp_files: bool,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
 }
@@ -223,7 +230,9 @@ impl KittyParser {
 
     /// Reset parser state for new transmission
     pub fn reset(&mut self) {
+        let retain_temp_files = self.retain_temp_files;
         *self = Self::default();
+        self.retain_temp_files = retain_temp_files;
     }
 
     /// Parse a Kitty graphics payload
@@ -962,8 +971,10 @@ impl KittyParser {
         let file_data = fs::read(path)
             .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
 
-        // Delete temp file if requested
-        if self.medium == KittyMedium::TempFile {
+        // Delete temp file if requested. Skipped when `retain_temp_files`
+        // is set (mux daemon terminals): client mirrors re-read the same
+        // file from forwarded bytes — the rendering client deletes it.
+        if self.medium == KittyMedium::TempFile && !self.retain_temp_files {
             let _ = fs::remove_file(path); // Ignore errors on cleanup
         }
 
@@ -1149,6 +1160,55 @@ mod tests {
         assert_eq!(KittyMedium::from_char('t'), Some(KittyMedium::TempFile));
         assert_eq!(KittyMedium::from_char('s'), Some(KittyMedium::SharedMem));
         assert_eq!(KittyMedium::from_char('x'), None);
+    }
+
+    /// `retain_temp_files` is terminal configuration, not per-escape parse
+    /// state: a mux daemon terminal keeps it across every escape's reset,
+    /// so the second `t=t` image in a pane retains its file exactly like
+    /// the first. Pins both that and the default (rendering client) delete.
+    #[test]
+    fn retain_temp_files_survives_reset_and_guards_the_delete() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mk_temp_png = || {
+            let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 4]));
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .unwrap();
+            let mut f = NamedTempFile::new().unwrap();
+            f.write_all(&png).unwrap();
+            f
+        };
+
+        // Default: the read deletes (the rendering client's contract).
+        let mut parser = KittyParser::new();
+        let f = mk_temp_png();
+        parser.medium = KittyMedium::TempFile;
+        parser
+            .load_file_data(f.path().to_str().unwrap().as_bytes())
+            .unwrap();
+        assert!(!f.path().exists(), "default read deletes the t=t file");
+
+        // Retained: the read keeps the file, across resets.
+        let mut parser = KittyParser::new();
+        parser.retain_temp_files = true;
+        parser.medium = KittyMedium::TempFile;
+        let f = mk_temp_png();
+        parser
+            .load_file_data(f.path().to_str().unwrap().as_bytes())
+            .unwrap();
+        assert!(f.path().exists(), "retained read keeps the t=t file");
+        parser.reset();
+        parser.medium = KittyMedium::TempFile;
+        let f2 = mk_temp_png();
+        parser
+            .load_file_data(f2.path().to_str().unwrap().as_bytes())
+            .unwrap();
+        assert!(
+            f2.path().exists(),
+            "reset preserves retain_temp_files — the second escape retains too"
+        );
     }
 
     #[test]
