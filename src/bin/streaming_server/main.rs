@@ -79,6 +79,7 @@ static GLOBAL: Jemalloc = Jemalloc;
 use anyhow::{Context, Result};
 use clap::Parser;
 use par_term_emu_core_rust::{
+    graphics::kitty::FileMediaMode,
     macros::{KeyParser, Macro, MacroEvent, MacroPlayback},
     streaming::{SessionFactory, StreamingConfig, StreamingServer, TlsConfig},
 };
@@ -279,6 +280,7 @@ async fn main() -> Result<()> {
         api_key: args.api_key.clone(),
         allow_api_key_in_query: args.allow_api_key_in_query,
         allowed_origins: args.allowed_origins.clone(),
+        kitty_file_media: FileMediaMode::default(),
     };
 
     // Create streaming server
