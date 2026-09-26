@@ -45,8 +45,11 @@ pub use tree::{MuxSession, MuxTree, MuxWindow};
 
 /// The build identity of THIS crate compilation: the crate version plus the
 /// git sha it was built from (`0.50.0+a02b2b3`, `-dirty` appended when the
-/// checkout had uncommitted tracked changes; `+unknown` when built outside a
-/// repository, e.g. from a crates.io tarball).
+/// checkout had uncommitted tracked changes). Outside a repository (a
+/// crates.io tarball) the sha is a content digest of the crate source
+/// (`0.52.0+src-0123456789abcdef`), so same-version drift stays detectable
+/// in release builds; only a build with neither identity available stamps
+/// `+unknown`.
 ///
 /// Both sides of a daemon/client pair read this same function — the daemon
 /// serves it as the `version` command's reply, clients compare their own

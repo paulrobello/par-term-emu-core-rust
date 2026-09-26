@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **par-mux `send-keys` no longer panics on leading whitespace** (`src/mux/command.rs`; fuzz-found by ENH-018's new `mux_parse_command` target within its first 60 seconds). `parse_command` finds the command name after any leading whitespace, but `parse_send_keys` stripped the name from byte 0 of the raw line — a control line like `" send-keys -t %0 Enter"` (or tab-led) panicked the per-connection handler with `the command name prefixes the line`. The strip now runs on the trimmed line, matching the tokenizer's own view.
+- **Build stamps no longer degrade to `+unknown` for crates.io builds** (`build.rs`). Without `.git`, the stamp fell back to `unknown`, so a daemon and client built from different code at the same crate version were indistinguishable and clients' stale-daemon checks stayed silent. The fallback is now `src-<16hex>`: an FNV-1a digest over the sorted crate source (`src/**`, `Cargo.toml`, `build.rs`, CR-normalized), deterministic for identical source and different the moment any of it differs, with `rerun-if-changed` on the hashed inputs so in-place edits re-stamp. Git checkouts keep the sha-based stamp.
 
 ## [0.52.0] - 2026-09-25
 

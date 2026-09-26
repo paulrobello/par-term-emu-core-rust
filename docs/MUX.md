@@ -180,13 +180,13 @@ Ids always win over names: a value starting with the target kind's own sigil is 
 | `set-environment` | `-t <session> NAME VALUE` or `-t <session> -u NAME` | empty | — |
 | `show-buffer` | — | The buffer content | — |
 | `paste-buffer` | `-t <pane>` | empty | — |
-| `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (`+unknown` when built outside a repository) | — |
+| `version` | — | The daemon's build stamp, one line: `<crate version>+<git sha[-dirty]>` (a `src-<16hex>` content digest when built outside a repository, e.g. from a crates.io tarball) | — |
 | `kill-server` | — | empty | `%exit` to every client, then the daemon exits |
 
 Details worth knowing:
 
 - **Bare `new-window`** targets the most-recently-created session (ids are monotonic). par-mux has no client-session attachment, so "newest" is the documented stand-in for tmux's attached-session resolution.
-- **`version` exists for stale-daemon detection**: the daemon outlives its clients, so an old daemon silently serves new clients. A client compares the reply against its own linked core's `mux::build_stamp()`; differing stamps mean the daemon predates the client's build. When either side's sha is `unknown` (crates.io builds), only the version prefix is comparable — a same-version mismatch is then unprovable and clients stay quiet rather than cry wolf.
+- **`version` exists for stale-daemon detection**: the daemon outlives its clients, so an old daemon silently serves new clients. A client compares the reply against its own linked core's `mux::build_stamp()`; differing stamps mean the daemon predates the client's build. Outside a repository both sides carry a content digest of the crate source, so same-version drift is still comparable; only a build with neither identity (`+unknown`) degrades to version-only comparison — a same-version mismatch is then unprovable and clients stay quiet rather than cry wolf.
 - **`split-window` flags name the arrangement, not the divider**: `-h` puts the new pane beside the target, `-v`/default below it. `-p` is the percent of the split area given to the **new** pane (default 50; the target keeps the remainder).
 - **`split-window -c dir` and `new-window -c dir`** start the new pane in `dir` instead of the daemon-wide default. A `dir` that does not exist degrades to home rather than failing the command — the same rule a restore applies to a gone persisted cwd — and the new pane's screen says so (`par-mux: <dir> is gone; pane started in <home>`).
 - **`resize-pane` relative form** moves the bordering divider; the first of `-L -R -U -D` wins, and a flag without a number means 5 cells (tmux's default). The absolute form `-x COLS` and/or `-y ROWS` sets exact extents and cannot combine with the direction flags. Both forms re-fit the affected panes' terminals and PTYs to the layout geometry.
