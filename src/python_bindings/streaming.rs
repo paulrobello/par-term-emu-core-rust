@@ -33,7 +33,7 @@ impl Clone for PyStreamingConfig {
 #[pymethods]
 impl PyStreamingConfig {
     #[new]
-    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None))]
+    #[pyo3(signature = (max_clients=1000, send_initial_screen=true, keepalive_interval=30, default_read_only=false, initial_cols=0, initial_rows=0, enable_http=false, web_root="./web_term", max_clients_per_session=0, input_rate_limit_bytes_per_sec=0, enable_system_stats=false, system_stats_interval_secs=5, api_key=None, allow_api_key_in_query=false, allowed_origins=None, kitty_file_media="temp_only"))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         max_clients: usize,
@@ -51,8 +51,16 @@ impl PyStreamingConfig {
         api_key: Option<String>,
         allow_api_key_in_query: bool,
         allowed_origins: Option<Vec<String>>,
-    ) -> Self {
-        Self {
+        kitty_file_media: &str,
+    ) -> PyResult<Self> {
+        let kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(kitty_file_media)
+            .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid kitty_file_media {:?}: expected \"off\", \"temp_only\", or \"all\"",
+                kitty_file_media
+            ))
+        })?;
+        Ok(Self {
             inner: StreamingConfig {
                 max_clients,
                 send_initial_screen,
@@ -74,8 +82,9 @@ impl PyStreamingConfig {
                 api_key,
                 allow_api_key_in_query,
                 allowed_origins,
+                kitty_file_media,
             },
-        }
+        })
     }
 
     /// Get the maximum number of clients
@@ -386,6 +395,38 @@ impl PyStreamingConfig {
     #[setter]
     fn set_allowed_origins(&mut self, origins: Option<Vec<String>>) {
         self.inner.allowed_origins = origins;
+    }
+
+    /// Get the Kitty graphics file-media mode applied to session terminals.
+    ///
+    /// Returns:
+    ///     str: "off", "temp_only", or "all"
+    #[getter]
+    fn kitty_file_media(&self) -> String {
+        self.inner.kitty_file_media.as_str().to_string()
+    }
+
+    /// Set the Kitty graphics file-media mode applied to every session
+    /// terminal the server creates (SEC-101). PTY output is untrusted:
+    /// the default "temp_only" allows only a spec-named temp file to be
+    /// loaded (and deleted after it decodes); "all" also permits "t=f"
+    /// reads of arbitrary paths; "off" refuses both.
+    ///
+    /// Args:
+    ///     mode: One of "off", "temp_only", "all"
+    ///
+    /// Raises:
+    ///     ValueError: If mode is not one of the accepted names
+    #[setter]
+    fn set_kitty_file_media(&mut self, mode: &str) -> PyResult<()> {
+        self.inner.kitty_file_media = crate::graphics::kitty::FileMediaMode::from_name(mode)
+            .ok_or_else(|| {
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "Invalid kitty_file_media {:?}: expected \"off\", \"temp_only\", or \"all\"",
+                    mode
+                ))
+            })?;
+        Ok(())
     }
 
     fn __repr__(&self) -> String {

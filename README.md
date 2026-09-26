@@ -115,7 +115,7 @@ is documented there (older README release notes were merged into the changelog).
 
 - **Sixel Graphics** - DEC VT340 compatible bitmap graphics with half-block rendering
 - **iTerm2 Inline Images** - OSC 1337 protocol for PNG, JPEG, GIF images
-- **Kitty Graphics Protocol** - APC G protocol with image reuse, animations, zlib compression (`o=z`), and advanced placement
+- **Kitty Graphics Protocol** - APC G protocol with image reuse, animations, zlib compression (`o=z`), and advanced placement; the `t=f`/`t=t` file media is security-gated (`set_allow_file_media`, default allows only spec-named `*tty-graphics-protocol*` temp files, deleted only after decoding)
 - **Unicode Placeholders** - Virtual placements insert U+10EEEE characters for inline image display
 - **Unified Graphics Store** - Protocol-agnostic storage with scrollback support
 - **Animation Support** - Frame-based animations with timing and composition control

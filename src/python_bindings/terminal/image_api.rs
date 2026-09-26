@@ -128,4 +128,47 @@ impl PyTerminal {
         self.inner.set_max_inline_images(max);
         Ok(())
     }
+
+    /// Control whether Kitty graphics may load image payloads from
+    /// filesystem paths (the `t=f` file and `t=t` temp-file media).
+    ///
+    /// Terminal output is untrusted input: before this gate a single
+    /// `t=t` escape naming a path could delete that file. The default
+    /// ``"temp_only"`` allows only the spec's gated form — a
+    /// ``*tty-graphics-protocol*`` file inside an allowed temp root,
+    /// deleted only after it decodes as an image. ``"all"`` re-enables
+    /// unrestricted ``t=f`` reads; ``"off"`` refuses both media.
+    ///
+    /// Args:
+    ///     mode: One of ``"off"``, ``"temp_only"`` (default), ``"all"``
+    ///
+    /// Raises:
+    ///     ValueError: If mode is not one of the accepted names
+    ///
+    /// Example:
+    ///     >>> terminal.set_allow_file_media("all")
+    ///     >>> terminal.set_allow_file_media("off")
+    fn set_allow_file_media(&mut self, mode: &str) -> PyResult<()> {
+        let parsed = crate::graphics::kitty::FileMediaMode::from_name(mode).ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "Invalid file media mode {:?}: expected \"off\", \"temp_only\", or \"all\"",
+                mode
+            ))
+        })?;
+        self.inner.set_allow_file_media(parsed);
+        Ok(())
+    }
+
+    /// Get the current Kitty file-media mode.
+    ///
+    /// Returns:
+    ///     str: ``"off"``, ``"temp_only"``, or ``"all"`` — see
+    ///     :meth:`set_allow_file_media`
+    ///
+    /// Example:
+    ///     >>> terminal.get_allow_file_media()
+    ///     'temp_only'
+    fn get_allow_file_media(&self) -> PyResult<String> {
+        Ok(self.inner.allow_file_media().as_str().to_string())
+    }
 }

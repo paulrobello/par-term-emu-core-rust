@@ -91,6 +91,44 @@ impl KittyMedium {
     }
 }
 
+/// Whether Kitty graphics may load payloads from filesystem paths
+/// (SEC-101/SEC-102). Terminal configuration, not per-escape state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FileMediaMode {
+    /// `t=f` and `t=t` both refused — no file is ever opened.
+    Off,
+    /// Only the gated `t=t` form: a `tty-graphics-protocol*` file inside an
+    /// allowed temp root, deleted only after it decodes as an image.
+    /// The default, matching kitty's own spec for the temp-file medium.
+    #[default]
+    TempOnly,
+    /// Any path for both media (`t=f` reads any file the process can read;
+    /// `t=t` still requires the temp-root gate before deleting).
+    All,
+}
+
+impl FileMediaMode {
+    /// Parse a mode name (case-insensitive, `-`/``_` tolerant) — the Python
+    /// and streaming-config surface is stringly typed.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+            "off" => Some(Self::Off),
+            "temp" | "temp_only" | "temponly" => Some(Self::TempOnly),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+
+    /// Canonical lowercase name, the inverse of [`Self::from_name`].
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::TempOnly => "temp_only",
+            Self::All => "all",
+        }
+    }
+}
+
 /// Kitty compression format (o= parameter)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KittyCompression {
@@ -218,8 +256,48 @@ pub struct KittyParser {
     /// file out from under them. The client that actually renders the
     /// graphic deletes it. Preserved by [`Self::reset`].
     pub retain_temp_files: bool,
+    /// Configuration (not per-escape state): whether file mediums (`t=f`
+    /// and `t=t`) may load payloads from disk at all, and which forms —
+    /// see [`FileMediaMode`]. Preserved by [`Self::reset`].
+    pub allow_file_media: FileMediaMode,
     /// Raw parameters for debugging
     params: HashMap<String, String>,
+}
+
+/// Temp roots a `t=t` payload may name (SEC-101): kitty's spec restricts
+/// the temp-file medium to files inside a temp directory. Both sides are
+/// canonicalized, so a symlinked root (macOS `/tmp` → `/private/tmp`)
+/// compares equal to the canonical path it yields.
+fn is_under_allowed_temp_root(canonical: &Path) -> bool {
+    let roots = [
+        std::env::temp_dir(),
+        std::path::PathBuf::from("/tmp"),
+        std::path::PathBuf::from("/dev/shm"),
+    ];
+    roots.iter().any(|root| match root.canonicalize() {
+        Ok(canon_root) => canonical.starts_with(canon_root),
+        Err(_) => false, // root absent on this platform (e.g. /dev/shm on macOS)
+    })
+}
+
+/// Open for reading without following a final symlink component (SEC-103),
+/// so a swapped link cannot redirect the read after validation.
+fn open_no_follow(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        // Windows std has no O_NOFOLLOW equivalent; the canonicalize gate
+        // above already resolved the path, so the symlink-swap window
+        // between check and open is accepted here.
+        std::fs::File::open(path)
+    }
 }
 
 impl KittyParser {
@@ -231,8 +309,10 @@ impl KittyParser {
     /// Reset parser state for new transmission
     pub fn reset(&mut self) {
         let retain_temp_files = self.retain_temp_files;
+        let allow_file_media = self.allow_file_media;
         *self = Self::default();
         self.retain_temp_files = retain_temp_files;
+        self.allow_file_media = allow_file_media;
     }
 
     /// Parse a Kitty graphics payload
@@ -902,26 +982,48 @@ impl KittyParser {
         raw_data: Vec<u8>,
         shared_mem_error: &str,
     ) -> Result<(usize, usize, Vec<u8>), GraphicsError> {
-        // Load image data based on transmission medium
-        let image_data = match self.medium {
+        // Load image data based on transmission medium. For file media the
+        // load also returns the `t=t` cleanup path: deletion is deferred
+        // until the payload decodes, so a non-image temp file is never
+        // destroyed (SEC-101).
+        let (image_data, delete_after_decode) = match self.medium {
             KittyMedium::File | KittyMedium::TempFile => {
                 // For file transmission, raw_data is a file path (not base64-encoded)
                 self.load_file_data(&raw_data)?
             }
             KittyMedium::Direct => {
                 // For direct transmission, use data as-is
-                raw_data
+                (raw_data, None)
             }
             KittyMedium::SharedMem => {
                 return Err(GraphicsError::KittyError(shared_mem_error.to_string()));
             }
         };
 
-        self.decode_pixels(&image_data)
+        let decoded = self.decode_pixels(&image_data);
+
+        // Delete the t=t temp file only once the payload proved decodable.
+        // Skipped when `retain_temp_files` is set (mux daemon terminals):
+        // client mirrors re-read the same file from forwarded bytes — the
+        // rendering client deletes it.
+        if decoded.is_ok() {
+            if let Some(path) = delete_after_decode {
+                let _ = fs::remove_file(path); // Ignore errors on cleanup
+            }
+        }
+
+        decoded
     }
 
-    /// Load image data from file path with security validation
-    fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
+    /// Load image data from a file medium (`t=f`/`t=t`) with security
+    /// gating (SEC-101/SEC-102/SEC-103).
+    ///
+    /// Returns the file bytes plus, for a non-retained `t=t` read, the
+    /// path the caller must delete **after** the payload decodes.
+    fn load_file_data(
+        &self,
+        path_data: &[u8],
+    ) -> Result<(Vec<u8>, Option<std::path::PathBuf>), GraphicsError> {
         // Decode path from UTF-8 bytes (NOT base64-encoded for file transmission)
         let path_str = String::from_utf8(path_data.to_vec())
             .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
@@ -939,26 +1041,75 @@ impl KittyParser {
             ));
         }
 
-        // 2. Validate file exists and is readable
-        if !path.exists() {
-            return Err(GraphicsError::KittyError(format!(
-                "File not found: {}",
-                path_str
-            )));
+        // 2. Mode gate (SEC-101/SEC-102): file media is opt-in per medium,
+        //    and is checked before touching the filesystem so a probe
+        //    leaks no existence information.
+        match self.medium {
+            KittyMedium::File => {
+                if self.allow_file_media != FileMediaMode::All {
+                    return Err(GraphicsError::KittyError(
+                        "File medium (t=f) requires allow_file_media=\"all\"".to_string(),
+                    ));
+                }
+            }
+            KittyMedium::TempFile if self.allow_file_media == FileMediaMode::Off => {
+                return Err(GraphicsError::KittyError(
+                    "Temp-file medium (t=t) is disabled (allow_file_media=\"off\")".to_string(),
+                ));
+            }
+            _ => {}
         }
 
-        if !path.is_file() {
+        // 3. t=t path gate (SEC-101): the canonicalized path must sit under
+        //    an allowed temp root AND carry the spec's marker in its
+        //    filename — kitty's own rule for the temp-file medium. Refuse
+        //    without touching the file otherwise.
+        if self.medium == KittyMedium::TempFile {
+            let canonical = path.canonicalize().map_err(|e| {
+                GraphicsError::KittyError(format!("Cannot resolve temp file path: {}", e))
+            })?;
+            if !is_under_allowed_temp_root(&canonical) {
+                return Err(GraphicsError::KittyError(
+                    "Temp file is outside the allowed temp directories".to_string(),
+                ));
+            }
+            let name_has_marker = canonical
+                .file_name()
+                .map(|n| n.to_string_lossy().contains("tty-graphics-protocol"))
+                .unwrap_or(false);
+            if !name_has_marker {
+                return Err(GraphicsError::KittyError(
+                    "Temp file name must contain \"tty-graphics-protocol\"".to_string(),
+                ));
+            }
+        }
+
+        // 4. Open without following a final symlink (SEC-103) and validate
+        //    the handle itself, so the file we read is the file we checked.
+        let mut file = open_no_follow(path).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                GraphicsError::KittyError(format!("File not found: {}", path_str))
+            } else if path.is_dir() {
+                // Windows refuses to open directories outright.
+                GraphicsError::KittyError(format!("Path is not a file: {}", path_str))
+            } else {
+                GraphicsError::KittyError(format!("Cannot open file: {}", e))
+            }
+        })?;
+
+        let metadata = file
+            .metadata()
+            .map_err(|e| GraphicsError::KittyError(format!("Cannot read file metadata: {}", e)))?;
+
+        if !metadata.is_file() {
             return Err(GraphicsError::KittyError(format!(
                 "Path is not a file: {}",
                 path_str
             )));
         }
 
-        // 3. Check file size (limit to 100MB for safety)
+        // 5. Check file size (limit to 100MB for safety)
         const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
-        let metadata = fs::metadata(path)
-            .map_err(|e| GraphicsError::KittyError(format!("Cannot read file metadata: {}", e)))?;
-
         if metadata.len() > MAX_FILE_SIZE {
             return Err(GraphicsError::KittyError(format!(
                 "File too large: {} bytes (max {})",
@@ -967,18 +1118,20 @@ impl KittyParser {
             )));
         }
 
-        // 4. Read file
-        let file_data = fs::read(path)
+        // 6. Read from the validated handle
+        let mut file_data = Vec::with_capacity(metadata.len() as usize);
+        file.read_to_end(&mut file_data)
             .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
 
-        // Delete temp file if requested. Skipped when `retain_temp_files`
-        // is set (mux daemon terminals): client mirrors re-read the same
-        // file from forwarded bytes — the rendering client deletes it.
-        if self.medium == KittyMedium::TempFile && !self.retain_temp_files {
-            let _ = fs::remove_file(path); // Ignore errors on cleanup
-        }
+        // Pending delete: only a non-retained t=t read deletes, and only
+        // after decode succeeds (the caller's job).
+        let pending_delete = if self.medium == KittyMedium::TempFile && !self.retain_temp_files {
+            Some(path.to_path_buf())
+        } else {
+            None
+        };
 
-        Ok(file_data)
+        Ok((file_data, pending_delete))
     }
 
     /// Decode pixels based on format
@@ -1169,41 +1322,49 @@ mod tests {
     #[test]
     fn retain_temp_files_survives_reset_and_guards_the_delete() {
         use std::io::Write;
-        use tempfile::NamedTempFile;
 
+        // The t=t gate (SEC-101) requires the spec's marker in the filename.
         let mk_temp_png = || {
             let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([1, 2, 3, 4]));
             let mut png = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
                 .unwrap();
-            let mut f = NamedTempFile::new().unwrap();
+            let mut f = tempfile::Builder::new()
+                .prefix("tty-graphics-protocol-")
+                .tempfile()
+                .unwrap();
             f.write_all(&png).unwrap();
             f
         };
 
-        // Default: the read deletes (the rendering client's contract).
+        // Default: a decoded payload deletes its file (the rendering
+        // client's contract). Deletion rides decode_payload, not the bare
+        // read, so a valid PNG is the fixture.
         let mut parser = KittyParser::new();
-        let f = mk_temp_png();
         parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let f = mk_temp_png();
         parser
-            .load_file_data(f.path().to_str().unwrap().as_bytes())
+            .decode_payload(f.path().to_str().unwrap().as_bytes().to_vec(), "shm")
             .unwrap();
-        assert!(!f.path().exists(), "default read deletes the t=t file");
+        assert!(!f.path().exists(), "decoded read deletes the t=t file");
 
         // Retained: the read keeps the file, across resets.
         let mut parser = KittyParser::new();
         parser.retain_temp_files = true;
         parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
         let f = mk_temp_png();
         parser
-            .load_file_data(f.path().to_str().unwrap().as_bytes())
+            .decode_payload(f.path().to_str().unwrap().as_bytes().to_vec(), "shm")
             .unwrap();
         assert!(f.path().exists(), "retained read keeps the t=t file");
         parser.reset();
         parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
         let f2 = mk_temp_png();
         parser
-            .load_file_data(f2.path().to_str().unwrap().as_bytes())
+            .decode_payload(f2.path().to_str().unwrap().as_bytes().to_vec(), "shm")
             .unwrap();
         assert!(
             f2.path().exists(),
@@ -1237,6 +1398,8 @@ mod tests {
         let file_path_b64 =
             base64::Engine::encode(&base64::engine::general_purpose::STANDARD_NO_PAD, file_path);
         let mut parser = KittyParser::new();
+        // t=f is unrestricted only under `All` (SEC-101 gate).
+        parser.allow_file_media = FileMediaMode::All;
         let payload = format!("a=T,f=100,t=f;{}", file_path_b64);
         let result = parser.parse_chunk(&payload);
 
@@ -1253,8 +1416,9 @@ mod tests {
         // Load file data
         let file_data = parser.load_file_data(&data);
         assert!(file_data.is_ok());
-        let file_data = file_data.unwrap();
+        let (file_data, pending_delete) = file_data.unwrap();
         assert_eq!(file_data.len(), png_data.len());
+        assert!(pending_delete.is_none(), "t=f never deletes");
 
         // Decode pixels
         let decode_result = parser.decode_pixels(&file_data);
@@ -1293,6 +1457,7 @@ mod tests {
     fn test_kitty_file_security_nonexistent() {
         let mut parser = KittyParser::new();
         parser.medium = KittyMedium::File;
+        parser.allow_file_media = FileMediaMode::All;
 
         // Test nonexistent file
         let nonexistent_path = b"/this/file/does/not/exist.png";
@@ -2949,6 +3114,7 @@ mod tests {
         // A directory exists and is not a regular file.
         let mut parser = KittyParser::new();
         parser.medium = KittyMedium::File;
+        parser.allow_file_media = FileMediaMode::All;
         let dir = std::env::temp_dir(); // guaranteed to exist and be a dir
         let result = parser.load_file_data(dir.to_string_lossy().as_bytes());
         assert!(result.is_err());
@@ -2997,24 +3163,27 @@ mod tests {
 
         let mut parser = KittyParser::new();
         parser.medium = KittyMedium::File;
-        let data = parser
+        parser.allow_file_media = FileMediaMode::All;
+        let (data, _) = parser
             .load_file_data(path.to_string_lossy().as_bytes())
             .expect("a '..' substring inside a filename must be readable");
         assert_eq!(data, png);
     }
 
     #[test]
-    fn test_load_file_data_temp_file_is_deleted_after_read() {
+    fn test_load_file_data_temp_file_is_deleted_after_decode() {
         use std::io::Write;
-        use tempfile::NamedTempFile;
 
-        // Write a real PNG to a NamedTempFile, then close the handle (keep path).
+        // Write a real PNG to a spec-named temp file, then close the handle.
         let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([9, 8, 7, 6]));
         let mut png = Vec::new();
         img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
             .unwrap();
 
-        let mut tf = NamedTempFile::new().unwrap();
+        let mut tf = tempfile::Builder::new()
+            .prefix("tty-graphics-protocol-")
+            .tempfile()
+            .unwrap();
         tf.write_all(&png).unwrap();
         let (file, path) = tf.keep().expect("keep temp file");
         drop(file); // close OS handle so removal can succeed
@@ -3024,13 +3193,16 @@ mod tests {
 
         let mut parser = KittyParser::new();
         parser.medium = KittyMedium::TempFile;
-        let data = parser.load_file_data(path_str.as_bytes()).unwrap();
+        parser.format = KittyFormat::Png;
+        let (data, pending) = parser.load_file_data(path_str.as_bytes()).unwrap();
         assert_eq!(data, png);
-        // TempFile medium: file must have been removed during load.
-        assert!(!path.exists(), "temp file should be deleted after read");
-
-        // Clean up defensively in case the assertion above failed.
-        let _ = std::fs::remove_file(&path);
+        // Deletion is deferred to decode: the bare read keeps the file.
+        assert!(path.exists(), "bare read must not delete the t=t file");
+        let pending = pending.expect("t=t read returns a pending delete path");
+        parser
+            .decode_payload(pending.to_string_lossy().as_bytes().to_vec(), "shm")
+            .expect("valid PNG decodes");
+        assert!(!path.exists(), "temp file should be deleted after decode");
     }
 
     #[test]
@@ -3050,9 +3222,182 @@ mod tests {
 
         let mut parser = KittyParser::new();
         parser.medium = KittyMedium::File; // NOT temp file -> should remain
-        let data = parser.load_file_data(path.as_bytes()).unwrap();
+        parser.allow_file_media = FileMediaMode::All;
+        let (data, pending) = parser.load_file_data(path.as_bytes()).unwrap();
         assert_eq!(data, png);
+        assert!(pending.is_none(), "t=f never returns a delete path");
         assert!(tf.path().exists(), "non-temp file should NOT be deleted");
+    }
+
+    // --- SEC-101 regression suite: the t=t file-media gate ---
+
+    /// Helper: write bytes to a spec-named file inside the real temp dir.
+    fn write_gated_temp_file(bytes: &[u8]) -> std::path::PathBuf {
+        use std::io::Write;
+        let mut f = tempfile::Builder::new()
+            .prefix("tty-graphics-protocol-")
+            .tempfile()
+            .expect("create gated temp file");
+        f.write_all(bytes).expect("write gated temp file");
+        let (_, path) = f.keep().expect("keep gated temp file");
+        path
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([7, 7, 7, 7]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    }
+
+    /// SEC-101 criterion 1: a `t=t` payload naming an absolute path
+    /// outside the allowed temp roots is refused AND the file survives.
+    #[test]
+    fn tt_absolute_path_outside_temp_roots_refused_and_kept() {
+        // A directory outside every temp root: the crate's target/ dir
+        // (cwd for cargo test is the crate root).
+        let dir = std::env::current_dir()
+            .expect("cwd")
+            .join("target")
+            .join("sec101-fixtures");
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+        let path = dir.join("tty-graphics-protocol-innocent.png");
+        std::fs::write(&path, tiny_png()).expect("write fixture");
+        // The fixture must genuinely live outside every allowed root for
+        // this test to mean anything; if the whole checkout is inside a
+        // temp dir, say so loudly instead of passing vacuously.
+        let canonical = path.canonicalize().unwrap();
+        assert!(
+            !super::is_under_allowed_temp_root(&canonical),
+            "test setup broken: fixture {:?} is inside a temp root",
+            canonical
+        );
+
+        let mut parser = KittyParser::new(); // default TempOnly
+        parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let result = parser.decode_payload(path.to_string_lossy().as_bytes().to_vec(), "shm");
+        let msg = result
+            .expect_err("path outside temp roots must be refused")
+            .to_string();
+        assert!(
+            msg.contains("outside the allowed temp"),
+            "unexpected error: {}",
+            msg
+        );
+        assert!(path.exists(), "refused payload must NOT delete the file");
+
+        let _ = std::fs::remove_file(&path); // clean up
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// SEC-101 criterion 2: a gated temp file whose bytes are not a
+    /// decodable image is refused and never deleted — deletion happens
+    /// only after a successful decode.
+    #[test]
+    fn tt_non_image_gated_file_survives_decode() {
+        let path = write_gated_temp_file(b"definitely not an image");
+
+        let mut parser = KittyParser::new(); // default TempOnly
+        parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let result = parser.decode_payload(path.to_string_lossy().as_bytes().to_vec(), "shm");
+        assert!(result.is_err(), "garbage bytes must not decode");
+        assert!(path.exists(), "undecodable t=t payload must NOT be deleted");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The gated happy path still works: a valid PNG in a spec-named temp
+    /// file loads under the default mode and deletes after decoding.
+    #[test]
+    fn tt_valid_gated_png_loads_and_deletes_under_default_mode() {
+        let path = write_gated_temp_file(&tiny_png());
+
+        let mut parser = KittyParser::new(); // default TempOnly
+        parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let (w, h, px) = parser
+            .decode_payload(path.to_string_lossy().as_bytes().to_vec(), "shm")
+            .expect("gated temp PNG must load under TempOnly");
+        assert_eq!((w, h), (1, 1));
+        assert_eq!(px.len(), 4);
+        assert!(!path.exists(), "decoded gated file is deleted");
+    }
+
+    /// `Off` refuses both file media outright; `All` opens `t=f` back up.
+    #[test]
+    fn file_media_mode_off_refuses_both_media() {
+        let path = write_gated_temp_file(&tiny_png());
+
+        let mut parser = KittyParser::new();
+        parser.allow_file_media = FileMediaMode::Off;
+        parser.medium = KittyMedium::TempFile;
+        parser.format = KittyFormat::Png;
+        let err = parser
+            .decode_payload(path.to_string_lossy().as_bytes().to_vec(), "shm")
+            .expect_err("Off must refuse t=t");
+        assert!(err.to_string().contains("disabled"));
+        assert!(path.exists(), "Off must not delete");
+
+        let mut parser = KittyParser::new();
+        parser.allow_file_media = FileMediaMode::Off;
+        parser.medium = KittyMedium::File;
+        let err = parser
+            .load_file_data(path.to_string_lossy().as_bytes())
+            .expect_err("Off must refuse t=f");
+        assert!(err.to_string().contains("t=f"));
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The gate is reachable from processed PTY bytes through
+    /// `Terminal::process` — the path the audit reproduced the
+    /// vulnerability on. A gated temp file loads and deletes by default;
+    /// with the mode switched off on the terminal the same APC is refused
+    /// and the file survives.
+    #[test]
+    fn terminal_applies_the_file_media_gate_over_apc() {
+        use crate::terminal::Terminal;
+        use crate::terminal::TerminalEvent;
+        use base64::Engine;
+
+        let path = write_gated_temp_file(&tiny_png());
+        let path_b64 = base64::engine::general_purpose::STANDARD_NO_PAD
+            .encode(path.to_string_lossy().as_bytes());
+        let apc = format!("\x1b_Ga=T,f=100,t=t;{}\x1b\\", path_b64);
+
+        // Default (TempOnly): the graphic lands and the file is deleted.
+        let mut term = Terminal::new(10, 5);
+        term.process(apc.as_bytes());
+        let events = term.poll_events();
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            "gated t=t must produce a graphic by default"
+        );
+        assert!(!path.exists(), "rendering terminal deletes the temp file");
+
+        // Off: refused, no event, file survives.
+        let path = write_gated_temp_file(&tiny_png());
+        let path_b64 = base64::engine::general_purpose::STANDARD_NO_PAD
+            .encode(path.to_string_lossy().as_bytes());
+        let apc = format!("\x1b_Ga=T,f=100,t=t;{}\x1b\\", path_b64);
+        let mut term = Terminal::new(10, 5);
+        term.set_allow_file_media(crate::graphics::kitty::FileMediaMode::Off);
+        term.process(apc.as_bytes());
+        let events = term.poll_events();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+            "Off must refuse the t=t APC"
+        );
+        assert!(path.exists(), "refused APC must leave the file alone");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     // --- KittyGraphicResult Debug round-trip (cheap enum coverage) ---

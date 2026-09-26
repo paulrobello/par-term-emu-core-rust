@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- **Kitty graphics file media is gated (`t=f`/`t=t` no longer reads or deletes arbitrary paths)** (`src/graphics/kitty.rs`). Terminal output is untrusted input, but a single `t=t` APC naming an absolute path deleted that file after reading it — before even checking it was an image (audit SEC-101, CWE-73/CWE-22; also closes the SEC-102 `t=f` read and the SEC-103 symlink race). The new `FileMediaMode` gate defaults to `temp_only`: `t=t` loads only a file whose canonicalized path sits under an allowed temp root (`$TMPDIR`, `/tmp`, `/dev/shm`) **and** whose filename contains `tty-graphics-protocol` (kitty's own spec rule), opens it with `O_NOFOLLOW`, and deletes it only after the payload decodes as an image. `t=f` now requires opting in. **Behavior-affecting/breaking:** tools relying on unrestricted `t=f`/`t=t` must opt in via `Terminal::set_allow_file_media` / `Terminal.set_allow_file_media("all")` in Python, or the new `kitty_file_media` field on `StreamingConfig` (`"off"` / `"temp_only"` / `"all"`, default `"temp_only"`) which the streaming server applies to every session terminal it creates. Sixel and iTerm2 media are unaffected (they take no paths).
+
+### Added
+- `Terminal.set_allow_file_media(mode)` / `Terminal.get_allow_file_media()` — Python bindings for the Kitty file-media gate, with `StreamingConfig.kitty_file_media` for streaming session terminals.
+
 ## [0.52.0] - 2026-09-25
 
 ### Security

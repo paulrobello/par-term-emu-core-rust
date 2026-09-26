@@ -357,6 +357,10 @@ pub struct StreamingConfig {
     /// are rejected to prevent CSRF-via-WebSocket. Set this to expose the server
     /// to specific remote browser origins.
     pub allowed_origins: Option<Vec<String>>,
+    /// Kitty graphics file-media gate applied to every session terminal the
+    /// server creates (SEC-101): `TempOnly` (default) allows only the spec's
+    /// gated `t=t` form, `All` also permits `t=f`, `Off` refuses both.
+    pub kitty_file_media: crate::graphics::kitty::FileMediaMode,
 }
 
 /// Redacting `Debug` (SEC-009): mirrors the derived output field-for-field
@@ -393,6 +397,7 @@ impl std::fmt::Debug for StreamingConfig {
             .field("api_key", &api_key)
             .field("allow_api_key_in_query", &self.allow_api_key_in_query)
             .field("allowed_origins", &self.allowed_origins)
+            .field("kitty_file_media", &self.kitty_file_media)
             .finish()
     }
 }
@@ -420,6 +425,7 @@ impl Default for StreamingConfig {
             api_key: None,
             allow_api_key_in_query: false,
             allowed_origins: None,
+            kitty_file_media: crate::graphics::kitty::FileMediaMode::default(),
         }
     }
 }

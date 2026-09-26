@@ -454,7 +454,10 @@ impl ShellPaneFactory {
         // Client mirrors rebuild their grid from the raw PTY bytes forwarded
         // over %output — this terminal's read of a kitty t=t temp file must
         // not delete it, or the mirrors' later read finds nothing. The
-        // client that renders the graphic deletes it.
+        // client that renders the graphic deletes it. The file-media gate
+        // (SEC-101) lives in the *client's* terminal state: the daemon's
+        // read only passes for a spec-named file under a temp root, and
+        // the rendering client's delete re-checks the same gate.
         session.terminal().write().set_retain_kitty_temp_files(true);
         MuxPane {
             id,
@@ -773,8 +776,14 @@ mod tests {
 
         // The t=t sender's temp file. The escape carries its path
         // base64-encoded — the wire payload is always base64; the file
-        // medium resolves the path after decode.
-        let mut temp = tempfile::NamedTempFile::new().expect("temp file");
+        // medium resolves the path after decode. Real senders name the
+        // file per kitty's spec, which the SEC-101 file-media gate
+        // requires before the daemon terminal will load (and a client
+        // delete) it.
+        let mut temp = tempfile::Builder::new()
+            .prefix("tty-graphics-protocol-")
+            .tempfile()
+            .expect("temp file");
         std::io::Write::write_all(&mut temp, &png).unwrap();
         let path = temp.path().to_path_buf();
         let encoded =

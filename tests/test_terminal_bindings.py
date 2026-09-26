@@ -596,5 +596,50 @@ class TestSpecialFeatures:
         assert region == "hello world"
 
 
+class TestKittyFileMediaGate:
+    """Test the Kitty file-media switch (SEC-101)"""
+
+    def test_default_mode_is_temp_only(self):
+        term = Terminal(10, 5)
+        assert term.get_allow_file_media() == "temp_only"
+
+    def test_setter_round_trip(self):
+        term = Terminal(10, 5)
+        term.set_allow_file_media("all")
+        assert term.get_allow_file_media() == "all"
+        term.set_allow_file_media("off")
+        assert term.get_allow_file_media() == "off"
+        term.set_allow_file_media("temp-only")  # hyphen alias
+        assert term.get_allow_file_media() == "temp_only"
+
+    def test_invalid_mode_raises_value_error(self):
+        term = Terminal(10, 5)
+        with pytest.raises(ValueError):
+            term.set_allow_file_media("yes")
+
+    def test_off_blocks_t_of_t_from_output(self, tmp_path):
+        """A t=t APC naming a spec-named temp file must not delete it when disabled"""
+        import base64
+
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+            + b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+            + b"\x1f\x15\xc4\x89"  # 1x1 header; bytes need not decode — gate fires first
+        )
+        target = tmp_path / "tty-graphics-protocol-innocent.png"
+        target.write_bytes(png)
+
+        apc = (
+            "\x1b_Ga=T,f=100,t=t;"
+            + base64.b64encode(str(target).encode()).decode().rstrip("=")
+            + "\x1b\\"
+        )
+
+        term = Terminal(10, 5)
+        term.set_allow_file_media("off")
+        term.process_str(apc)
+        assert target.exists(), "disabled t=t must leave the file alone"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

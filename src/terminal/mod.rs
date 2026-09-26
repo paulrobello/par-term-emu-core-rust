@@ -1457,6 +1457,26 @@ impl Terminal {
         self.kitty_parser.retain_temp_files = retain;
     }
 
+    /// Control whether Kitty graphics may load image payloads from
+    /// filesystem paths — the `t=f` (file) and `t=t` (temp-file) media
+    /// (SEC-101).
+    ///
+    /// Terminal output is untrusted input: a `t=t` APC used to delete (or
+    /// `t=f` to display) any file the process could reach. The default
+    /// (`TempOnly`) allows only the spec's gated form — a
+    /// `*tty-graphics-protocol*` file inside an allowed temp root, deleted
+    /// only after it decodes as an image. `All` re-enables unrestricted
+    /// `t=f` reads (with `..` still rejected); `Off` refuses both media.
+    pub fn set_allow_file_media(&mut self, mode: crate::graphics::kitty::FileMediaMode) {
+        self.kitty_parser.allow_file_media = mode;
+    }
+
+    /// Get the current Kitty file-media mode — see
+    /// [`Terminal::set_allow_file_media`].
+    pub fn allow_file_media(&self) -> crate::graphics::kitty::FileMediaMode {
+        self.kitty_parser.allow_file_media
+    }
+
     /// Set the host-supplied window position for XTWINOPS reporting
     /// (`CSI 13 t` / `CSI 13 ; 2 t`).
     ///

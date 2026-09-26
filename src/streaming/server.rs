@@ -585,6 +585,14 @@ impl StreamingServer {
 
             let result = factory.create_session(session_id, cols, rows, shell_command)?;
 
+            // Apply the configured Kitty file-media gate to every session
+            // terminal the server creates (SEC-101): PTY output is untrusted
+            // input, so `t=t`/`t=f` APCs must not read/delete arbitrary files.
+            result
+                .terminal
+                .write()
+                .set_allow_file_media(self.config.kitty_file_media);
+
             let session = Arc::new(StreamSessionState::new(
                 session_id.clone(),
                 result.terminal,

@@ -494,6 +494,7 @@ mod streaming_tests {
                 api_key: Some("test-key-123".to_string()),
                 allow_api_key_in_query: false,
                 allowed_origins: None,
+                kitty_file_media: par_term_emu_core_rust::graphics::kitty::FileMediaMode::default(),
             };
 
             assert_eq!(config.max_clients, 50);

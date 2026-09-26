@@ -690,6 +690,8 @@ Additional graphics management beyond basic display:
 - `delete_image(id: int)`: Delete image by ID
 - `clear_images()`: Clear all inline images
 - `set_max_inline_images(max: int)`: Set maximum inline image count
+- `set_allow_file_media(mode: str)`: Control whether Kitty graphics may load payloads from files (`t=f`/`t=t`): `"off"`, `"temp_only"` (default — only `*tty-graphics-protocol*` files inside an allowed temp root, deleted after decoding), or `"all"` (unrestricted `t=f` reads). Raises `ValueError` on any other name
+- `get_allow_file_media() -> str`: Get the current Kitty file-media mode (`"off"`, `"temp_only"`, or `"all"`)
 - `get_sixel_limits() -> tuple[int, int]`: Get Sixel size limits (width, height)
 - `set_sixel_limits(max_width: int, max_height: int)`: Set Sixel size limits
 - `get_sixel_graphics_limit() -> int`: Get maximum Sixel graphics count
