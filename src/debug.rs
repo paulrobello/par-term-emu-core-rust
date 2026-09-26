@@ -15,7 +15,8 @@ use parking_lot::Mutex;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Once, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(unix)]
@@ -138,6 +139,25 @@ fn get_logger() -> &'static Mutex<DebugLogger> {
     LOGGER.get_or_init(|| Mutex::new(DebugLogger::new()))
 }
 
+// The level check runs on every escape sequence (QA-112), so it reads an
+// AtomicU8 instead of the LOGGER mutex; the mutex serializes file writes
+// only, and is taken only once a message is known to be enabled.
+static LOG_LEVEL: AtomicU8 = AtomicU8::new(0);
+static LOG_LEVEL_INIT: Once = Once::new();
+
+fn current_level() -> DebugLevel {
+    LOG_LEVEL_INIT.call_once(|| {
+        LOG_LEVEL.store(DebugLevel::from_env() as u8, Ordering::Relaxed);
+    });
+    match LOG_LEVEL.load(Ordering::Relaxed) {
+        1 => DebugLevel::Error,
+        2 => DebugLevel::Info,
+        3 => DebugLevel::Debug,
+        4 => DebugLevel::Trace,
+        _ => DebugLevel::Off,
+    }
+}
+
 fn get_timestamp() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -147,12 +167,16 @@ fn get_timestamp() -> String {
 
 /// Check if debugging is enabled at given level
 pub fn is_enabled(level: DebugLevel) -> bool {
-    let logger = get_logger().lock();
-    level <= logger.level
+    level <= current_level()
 }
 
 /// Log a message at specified level
 pub fn log(level: DebugLevel, category: &str, msg: &str) {
+    // Atomic level check first: with logging off (the common case) the
+    // LOGGER mutex is never taken on this path.
+    if !is_enabled(level) {
+        return;
+    }
     let mut logger = get_logger().lock();
     logger.log(level, category, msg);
 }

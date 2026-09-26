@@ -24,13 +24,18 @@ impl Terminal {
         _ignore: bool,
         action: char,
     ) {
-        // Extract params for debug logging
-        let params_vec: Vec<i64> = params
-            .iter()
-            .flat_map(|subparams| subparams.iter().copied().map(|p| p as i64))
-            .collect();
+        // Extract params for debug logging only when a Debug-level message
+        // will be written — this runs for every CSI sequence (QA-112), and
+        // the Vec is not used by the dispatch itself (the 's' branch reads
+        // params.is_empty() directly).
+        if debug::is_enabled(debug::DebugLevel::Debug) {
+            let params_vec: Vec<i64> = params
+                .iter()
+                .flat_map(|subparams| subparams.iter().copied().map(|p| p as i64))
+                .collect();
 
-        debug::log_csi_dispatch(&params_vec, intermediates, action);
+            debug::log_csi_dispatch(&params_vec, intermediates, action);
+        }
 
         match action {
             'A' | 'B' | 'C' | 'D' | 'H' | 'f' | 'E' | 'F' | 'G' | '`' | 'd' | 'I' | 'Z' | 'g' => {
@@ -75,7 +80,7 @@ impl Terminal {
             's' => {
                 // s can be SCOSC (no params) or DECSLRM (with params, only if DECLRMM is set)
                 // We check if there are any parameters to distinguish them
-                if !params_vec.is_empty() && self.margins.use_lr_margins {
+                if !params.is_empty() && self.margins.use_lr_margins {
                     self.handle_csi_window(action, params, intermediates);
                 } else {
                     self.handle_csi_cursor(action, params, intermediates);
