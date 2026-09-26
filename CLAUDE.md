@@ -116,6 +116,7 @@ The crate produces three artifacts:
 |---------|---------|
 | `python` (default) | PyO3 bindings with `extension-module`; also enables `pty_session` |
 | `python-test` | The `python` feature's dependencies with `pyo3/auto-initialize` instead of `extension-module`, so the bindings (and their unit tests) link a real interpreter under `cargo test` |
+| `screenshot` | Terminal-to-image renderer (embedded fonts + swash/image). Enabled by `python`/`python-test`; `sim` keeps it on by default today — the gate exists so a slim sim build can drop it (ARC-021). Free functions: `screenshot::render_terminal` / `save_terminal`; `Terminal::screenshot*` are deprecated forwarders |
 | `pty_session` | Real PTY backend (`PtySession`/`PtyTerminal`): portable-pty + Unix signals. Auto-enabled by `python`, `streaming-bin`, and `mux` |
 | `streaming` | Library streaming: WebSocket server, protobuf, TLS, HTTP. Excludes the binary-only CLI/logging/download deps (see `streaming-bin`) |
 | `streaming-bin` | Standalone `par-term-streamer` binary only: CLI/logging/download deps on top of `streaming` (also enables `pty_session`) |
