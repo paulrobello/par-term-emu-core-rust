@@ -163,13 +163,12 @@ impl Terminal {
             } else {
                 (partial.title, partial.body)
             };
-            debug::log(
-                debug::DebugLevel::Debug,
+            crate::debug_log!(
                 "OSC99",
-                &format!(
-                    "Notification: id={:?}, urgency={:?}, actions={:?}",
-                    partial.id, partial.urgency, partial.actions
-                ),
+                "Notification: id={:?}, urgency={:?}, actions={:?}",
+                partial.id,
+                partial.urgency,
+                partial.actions
             );
             let notification = Notification::with_metadata(
                 title,
@@ -210,39 +209,29 @@ impl Terminal {
 
         self.progress_state.progress_bar = ProgressBar::new(state, progress);
 
-        debug::log(
-            debug::DebugLevel::Debug,
+        crate::debug_log!(
             "OSC9",
-            &format!(
-                "Progress bar: state={}, progress={}",
-                state.description(),
-                progress
-            ),
+            "Progress bar: state={}, progress={}",
+            state.description(),
+            progress
         );
     }
 
     pub(crate) fn handle_osc934(&mut self, params: &[&[u8]]) {
         match ProgressBarCommand::parse(params) {
             Some(ProgressBarCommand::Set(bar)) => {
-                debug::log(
-                    debug::DebugLevel::Debug,
+                crate::debug_log!(
                     "OSC934",
-                    &format!(
-                        "Set progress bar: id={}, state={}, percent={}, label={:?}",
-                        bar.id,
-                        bar.state.description(),
-                        bar.percent,
-                        bar.label
-                    ),
+                    "Set progress bar: id={}, state={}, percent={}, label={:?}",
+                    bar.id,
+                    bar.state.description(),
+                    bar.percent,
+                    bar.label
                 );
                 self.set_named_progress_bar(bar);
             }
             Some(ProgressBarCommand::Remove(id)) => {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "OSC934",
-                    &format!("Remove progress bar: id={}", id),
-                );
+                crate::debug_log!("OSC934", "Remove progress bar: id={}", id);
                 self.remove_named_progress_bar(&id);
             }
             Some(ProgressBarCommand::RemoveAll) => {

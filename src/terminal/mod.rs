@@ -1515,11 +1515,7 @@ impl Terminal {
 
     /// Resize the terminal
     pub fn resize(&mut self, cols: usize, rows: usize) {
-        debug::log(
-            debug::DebugLevel::Debug,
-            "TERMINAL_RESIZE",
-            &format!("Requested resize to {}x{}", cols, rows),
-        );
+        crate::debug_log!("TERMINAL_RESIZE", "Requested resize to {}x{}", cols, rows);
 
         let old_cols = self.grid.cols().max(1);
         let old_rows = self.grid.rows().max(1);
@@ -1547,18 +1543,15 @@ impl Terminal {
             .session_variables
             .set_dimensions(cols as u16, rows as u16);
 
-        debug::log(
-            debug::DebugLevel::Trace,
+        crate::debug_trace!(
             "TERMINAL_RESIZE",
-            &format!(
-                "Applied resize: primary={}x{}, alt={}x{}, pixels={}x{}",
-                self.grid.cols(),
-                self.grid.rows(),
-                self.alt_grid.cols(),
-                self.alt_grid.rows(),
-                self.pixel_width,
-                self.pixel_height
-            ),
+            "Applied resize: primary={}x{}, alt={}x{}, pixels={}x{}",
+            self.grid.cols(),
+            self.grid.rows(),
+            self.alt_grid.cols(),
+            self.alt_grid.rows(),
+            self.pixel_width,
+            self.pixel_height
         );
 
         // Update tab stops (guard against zero-width terminal)
@@ -1576,13 +1569,10 @@ impl Terminal {
         // scroll region via DECSTBM after the resize if needed.
         self.margins.scroll_region_top = 0;
         self.margins.scroll_region_bottom = rows.saturating_sub(1);
-        debug::log(
-            debug::DebugLevel::Debug,
+        crate::debug_log!(
             "TERMINAL_RESIZE",
-            &format!(
-                "Reset scroll region to full screen: 0-{}",
-                self.margins.scroll_region_bottom
-            ),
+            "Reset scroll region to full screen: 0-{}",
+            self.margins.scroll_region_bottom
         );
 
         // Clamp left/right margins to new width
@@ -2129,11 +2119,7 @@ impl Terminal {
     pub fn flush_synchronized_updates(&mut self) {
         if !self.sync_state.update_buffer.is_empty() {
             let buffer = std::mem::take(&mut self.sync_state.update_buffer);
-            debug::log(
-                debug::DebugLevel::Debug,
-                "SYNC_UPDATE",
-                &format!("Flushing buffer ({} bytes)", buffer.len()),
-            );
+            crate::debug_log!("SYNC_UPDATE", "Flushing buffer ({} bytes)", buffer.len());
             // Process the buffered data without synchronized mode
             let saved_mode = self.sync_state.synchronized_updates;
             self.sync_state.sync_update_explicitly_disabled = false;
@@ -3044,13 +3030,10 @@ impl Terminal {
                     if s.osc_in_flight >= s.max_osc_data_length {
                         if !s.osc_discard_dispatch {
                             s.osc_discard_dispatch = true;
-                            debug::log(
-                                debug::DebugLevel::Debug,
+                            crate::debug_log!(
                                 "SECURITY",
-                                &format!(
-                                    "OSC payload exceeds max_osc_data_length ({} bytes), dropping sequence",
-                                    s.max_osc_data_length
-                                ),
+                                "OSC payload exceeds max_osc_data_length ({} bytes), dropping sequence",
+                                s.max_osc_data_length
                             );
                         }
                         return false;

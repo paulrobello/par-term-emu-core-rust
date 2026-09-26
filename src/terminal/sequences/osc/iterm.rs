@@ -44,11 +44,7 @@ impl Terminal {
 
         match crate::badge::decode_badge_format(encoded) {
             Ok(format) => {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "OSC1337",
-                    &format!("Set badge format: {:?}", format),
-                );
+                crate::debug_log!("OSC1337", "Set badge format: {:?}", format);
                 self.badge_state.badge_format = Some(format.clone());
                 let badge_text = self.evaluate_badge();
                 self.events
@@ -56,11 +52,7 @@ impl Terminal {
                     .push(crate::terminal::TerminalEvent::BadgeChanged(badge_text));
             }
             Err(e) => {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "OSC1337",
-                    &format!("Invalid badge format: {}", e),
-                );
+                crate::debug_log!("OSC1337", "Invalid badge format: {}", e);
             }
         }
     }

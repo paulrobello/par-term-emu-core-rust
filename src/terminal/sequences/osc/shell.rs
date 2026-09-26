@@ -1,6 +1,5 @@
 //! Shell integration OSC sequence handling
 
-use crate::debug;
 use crate::shell_integration::ShellIntegrationMarker;
 use crate::terminal::Terminal;
 use percent_encoding::percent_decode_str;
@@ -23,10 +22,11 @@ impl Terminal {
                                 username,
                                 timestamp: crate::terminal::unix_millis(),
                             });
-                            debug::log(
-                                debug::DebugLevel::Debug,
+                            crate::debug_log!(
                                 "OSC7",
-                                &format!("Set directory to: {} (hostname: {:?})", path, hostname),
+                                "Set directory to: {} (hostname: {:?})",
+                                path,
+                                hostname
                             );
                         }
                     }

@@ -42,26 +42,21 @@ impl Terminal {
         let max = self.security_state.max_osc_data_length;
         let total_len: usize = params.iter().map(|p| p.len()).sum();
         if total_len > max {
-            debug::log(
-                debug::DebugLevel::Debug,
+            crate::debug_log!(
                 "OSC",
-                &format!(
-                    "OSC data too large: {} bytes (max {}), ignoring",
-                    total_len, max
-                ),
+                "OSC data too large: {} bytes (max {}), ignoring",
+                total_len,
+                max
             );
             return;
         }
 
         if let Ok(command) = std::str::from_utf8(params[0]) {
             if self.is_insecure_osc(command) {
-                debug::log(
-                    debug::DebugLevel::Debug,
+                crate::debug_log!(
                     "SECURITY",
-                    &format!(
-                        "Blocked insecure OSC {} (disable_insecure_sequences=true)",
-                        command
-                    ),
+                    "Blocked insecure OSC {} (disable_insecure_sequences=true)",
+                    command
                 );
                 return;
             }
@@ -77,11 +72,7 @@ impl Terminal {
                 }
                 "1337" => self.handle_osc_iterm(command, params),
                 _ => {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "OSC",
-                        &format!("Unsupported OSC command: {}", command),
-                    );
+                    crate::debug_log!("OSC", "Unsupported OSC command: {}", command);
                 }
             }
         }
