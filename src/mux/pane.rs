@@ -860,7 +860,7 @@ mod tests {
         let command = format!("sleep 1; printf '%s' '\x1b_Ga=T,f=100,t=t;{encoded}\x1b\\'");
         #[cfg(windows)]
         let command = format!(
-            "powershell.exe -NoProfile -Command Start-Sleep -Milliseconds 500; \
+            "powershell.exe -NoProfile -NoLogo -Command Start-Sleep -Milliseconds 250; \
              [Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')"
         );
 
@@ -878,8 +878,13 @@ mod tests {
         // with the ST terminator. Under the reordered reader loop the output
         // callback fires after the bytes are applied to the daemon terminal,
         // so complete sink bytes imply the graphic is already in the
-        // daemon's store.
+        // daemon's store. Windows needs the larger budget: powershell's
+        // first start under a fresh ConPTY can take seconds (see the
+        // resume-transport note in persist.rs), far past sh's ~1s.
+        #[cfg(not(windows))]
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        #[cfg(windows)]
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
         while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
