@@ -39,8 +39,23 @@ impl MuxClient {
 
     /// The transparency entry point: connect to the default socket for `name`,
     /// starting a daemon if none is running.
+    ///
+    /// Before spawning, the pre-0.52 default path is probed (Unix only): a
+    /// daemon from before the per-UID socket-directory move still serves it
+    /// with every session it owns, and a fresh daemon here would strand it
+    /// invisibly. Whatever answers there is attached instead — the client's
+    /// version check then surfaces the mismatch — so an upgrade can never
+    /// leave two daemons for one name.
     pub fn connect_or_spawn(name: &str) -> io::Result<Self> {
-        Self::connect_or_spawn_at(&default_socket_path(name))
+        let path = default_socket_path(name);
+        if let Ok(client) = Self::connect(&path) {
+            return Ok(client);
+        }
+        #[cfg(unix)]
+        if let Ok(client) = Self::connect(&crate::mux::ipc::legacy_socket_path(name)) {
+            return Ok(client);
+        }
+        Self::connect_or_spawn_at(&path)
     }
 
     /// Connect to a daemon at `path`, spawning one when no live server owns it.
@@ -537,6 +552,82 @@ mod tests {
 
         drop(client);
         binder.join().expect("binder thread");
+        drop(dir);
+    }
+
+    /// Restores `TMPDIR` and `XDG_RUNTIME_DIR` when dropped, so the env
+    /// mutations of the legacy-probe test cannot leak into later tests even
+    /// on a panic. The mux suite runs under `--test-threads=1`, which makes
+    /// mutating process env safe here.
+    struct EnvGuard {
+        tmpdir: Option<std::ffi::OsString>,
+        xdg: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.tmpdir.take() {
+                Some(v) => std::env::set_var("TMPDIR", v),
+                None => std::env::remove_var("TMPDIR"),
+            }
+            match self.xdg.take() {
+                Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+    }
+
+    /// A daemon answering on the pre-0.52 default path must be attached, not
+    /// silently replaced: 0.52 moved the default socket into a per-UID
+    /// directory, and without the probe a fresh daemon would be spawned for
+    /// the same name while the old one kept its sessions invisibly.
+    #[cfg(unix)]
+    #[test]
+    fn a_legacy_path_daemon_is_attached_not_replaced_by_a_second_spawn() {
+        // Short name: the default path nests two directories deep, and
+        // macOS caps a Unix socket path at 104 bytes — a long name would
+        // make a regressed run fail on path length instead of on the
+        // second spawn it actually performed.
+        let name = format!("lp-{}", std::process::id());
+        let (dir, legacy) = temp_socket(&format!("par-mux-{name}.sock"));
+        // The new default path must land somewhere else inside this temp
+        // dir root: point TMPDIR at it and keep XDG_RUNTIME_DIR out of the
+        // way so the per-UID fallback applies.
+        let guard = EnvGuard {
+            tmpdir: std::env::var_os("TMPDIR"),
+            xdg: std::env::var_os("XDG_RUNTIME_DIR"),
+        };
+        std::env::set_var("TMPDIR", dir.path());
+        std::env::remove_var("XDG_RUNTIME_DIR");
+
+        // The "legacy daemon": a listener on the pre-0.52 path. MuxClient
+        // sends no handshake at connect, so a held accept is a live daemon
+        // from the client's point of view.
+        let listener = bind_local_listener(&legacy).expect("bind the legacy path");
+        let holder = std::thread::spawn(move || {
+            let stream = listener.accept().expect("accept the probing client");
+            std::thread::sleep(Duration::from_millis(200));
+            drop(stream);
+        });
+
+        let new_path = default_socket_path(&name);
+        let client = MuxClient::connect_or_spawn(&name).expect("attach to the legacy daemon");
+
+        assert!(
+            client.spawned_daemon.is_none(),
+            "a daemon answered on the legacy path — spawning a second one for \
+             the same name strands the old daemon and its sessions"
+        );
+        assert!(
+            !new_path.exists(),
+            "no daemon may bind the new default path while the legacy one is \
+             alive: {}",
+            new_path.display()
+        );
+
+        drop(client);
+        holder.join().expect("holder thread");
+        drop(guard);
         drop(dir);
     }
 

@@ -406,6 +406,20 @@ fn current_uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// The default socket path before the per-UID directory move (pre-0.52).
+///
+/// A daemon from before the move keeps serving this path with every session
+/// it owns, invisible to [`default_socket_path`]. `MuxClient::connect_or_spawn`
+/// probes it before spawning a replacement so an upgrade never strands a
+/// live daemon behind a parallel one (observed 2026-09-26: a 0.51 daemon
+/// kept serving while 0.52 clients built a second world for the same name).
+/// Windows never moved — its default path is unchanged — so this is
+/// Unix-only.
+#[cfg(unix)]
+pub(crate) fn legacy_socket_path(name: &str) -> PathBuf {
+    std::env::temp_dir().join(format!("par-mux-{name}.sock"))
+}
+
 /// When `path` sits in the per-UID fallback directory, make sure that
 /// directory exists and is exclusively ours before it is used for binding
 /// or connecting. Paths elsewhere — an explicit `--socket`, or
