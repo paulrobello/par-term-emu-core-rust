@@ -212,11 +212,14 @@ pub(super) fn dispatch_command(
     }
     if mutates && outcome.succeeded {
         if let Some(tx) = persist {
-            // Capture under the lock (cheap clones of already-materialized
-            // state), then hand off — the worker serializes and fsyncs off
-            // the lock (ARC-003). A send fails only if the worker is gone;
-            // the shutdown save is the durability backstop.
-            let state = ctx.tree.lock().to_persist_state();
+            // Collect under the lock (cheap clones and field reads), then
+            // capture OFF it — the grid walks and cwd syscalls a cache miss
+            // triggers must not stall every client (ARC-032) — and hand off
+            // to the worker, which serializes and fsyncs off the lock
+            // (ARC-003). A send fails only if the worker is gone; the
+            // shutdown save is the durability backstop.
+            let capture = ctx.tree.lock().collect_persist_capture();
+            let state = capture.capture();
             let _ = tx.send((SaveOrigin::Command, state));
         }
     }

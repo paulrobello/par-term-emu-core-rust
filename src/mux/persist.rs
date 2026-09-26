@@ -10,10 +10,11 @@
 use crate::mux::agent_resume::resume_invocation;
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, WindowId};
 use crate::mux::layout::LayoutTree;
+use crate::mux::pane::{snapshot_from_parts, PaneSnapshotParts};
 use crate::mux::pane::{MuxError, PaneFactory, SpawnContext};
 use crate::mux::tree::{MuxSession, MuxTree, MuxWindow};
 use crate::terminal::replay_snapshot::{GridSnapshot, TerminalSnapshot};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -236,24 +237,87 @@ fn agent_session_from_metadata(metadata: &HashMap<String, String>) -> Option<Per
     .then_some(session)
 }
 
-impl MuxTree {
-    /// Capture the whole tree into its persisted form (D3.2).
-    ///
-    /// Sessions serialize in id order so two captures of an unchanged tree
-    /// differ only in their timestamps.
-    pub fn to_persist_state(&self) -> PersistState {
+/// The collected-under-lock half of a tree save (ARC-032): the structure
+/// plus per-pane capture handles, no pane payloads. Built by
+/// [`MuxTree::collect_persist_capture`] while the tree lock is held (cheap
+/// field reads only); [`PersistCapture::capture`] then finishes the save
+/// after the lock drops — the grid-walk snapshots on cache miss and the
+/// per-pane cwd syscalls are the expensive half, and they no longer run
+/// with every client waiting on the tree.
+pub struct PersistCapture {
+    next_ids: (u32, u32, u32),
+    sessions: Vec<SessionCapture>,
+    buffers: HashMap<String, String>,
+}
+
+struct SessionCapture {
+    id: SessionId,
+    name: String,
+    active: usize,
+    env: BTreeMap<String, String>,
+    windows: Vec<WindowCapture>,
+}
+
+struct WindowCapture {
+    id: WindowId,
+    name: String,
+    cols: u16,
+    rows: u16,
+    active_pane: PaneId,
+    layout: LayoutTree,
+    panes: Vec<PaneCapture>,
+}
+
+struct PaneCapture {
+    id: PaneId,
+    parts: PaneSnapshotParts,
+    spawn_command: Option<String>,
+    user_title: Option<String>,
+    agent_session: Option<PersistAgentSession>,
+}
+
+impl PersistCapture {
+    /// Finish the capture off the tree lock: per-pane snapshots (cached
+    /// while unchanged) and cwd resolution, then the same shape
+    /// [`MuxTree::to_persist_state`] produces — sessions in id order so two
+    /// captures of an unchanged tree differ only in their timestamps.
+    pub fn capture(self) -> PersistState {
         let mut sessions: Vec<PersistSession> = self
             .sessions
-            .values()
+            .into_iter()
             .map(|session| PersistSession {
                 id: session.id.0,
-                name: session.name.clone(),
+                name: session.name,
                 active_window_index: session.active,
-                env: session.env.clone(),
+                env: session.env,
                 windows: session
                     .windows
-                    .iter()
-                    .map(|window_id| self.to_persist_window(*window_id))
+                    .into_iter()
+                    .map(|window| PersistWindow {
+                        id: window.id.0,
+                        name: window.name,
+                        cols: window.cols,
+                        rows: window.rows,
+                        active_pane: window.active_pane.0,
+                        layout: window.layout,
+                        panes: window
+                            .panes
+                            .into_iter()
+                            .map(|pane| PersistPane {
+                                id: pane.id.0,
+                                terminal: cap_persisted_scrollback(snapshot_from_parts(
+                                    &pane.parts,
+                                )),
+                                spawn_command: pane.spawn_command,
+                                user_title: pane.user_title,
+                                agent_session: pane.agent_session,
+                                cwd: pane
+                                    .parts
+                                    .cwd()
+                                    .map(|dir| dir.to_string_lossy().into_owned()),
+                            })
+                            .collect(),
+                    })
                     .collect(),
             })
             .collect();
@@ -262,46 +326,76 @@ impl MuxTree {
         PersistState {
             format_version: FORMAT_VERSION,
             saved_at_unix_ms: unix_ms(),
-            next_ids: self.ids.next_ids(),
+            next_ids: self.next_ids,
             sessions,
+            buffers: self.buffers,
+        }
+    }
+}
+
+impl MuxTree {
+    /// Capture the whole tree into its persisted form (D3.2) — the one-shot
+    /// form of [`Self::collect_persist_capture`] + [`PersistCapture::capture`],
+    /// for callers that do not hold the tree lock through the capture.
+    pub fn to_persist_state(&self) -> PersistState {
+        self.collect_persist_capture().capture()
+    }
+
+    /// The under-lock half of a save (ARC-032): structure and capture
+    /// handles only. Pair with [`PersistCapture::capture`] after dropping
+    /// the tree lock.
+    pub fn collect_persist_capture(&self) -> PersistCapture {
+        PersistCapture {
+            next_ids: self.ids.next_ids(),
+            sessions: self
+                .sessions
+                .values()
+                .map(|session| SessionCapture {
+                    id: session.id,
+                    name: session.name.clone(),
+                    active: session.active,
+                    env: session.env.clone(),
+                    windows: session
+                        .windows
+                        .iter()
+                        .map(|window_id| self.capture_window(*window_id))
+                        .collect(),
+                })
+                .collect(),
             buffers: self.buffers.clone(),
         }
     }
 
-    /// Capture one window and its panes; panes serialize in layout order.
-    fn to_persist_window(&self, window_id: WindowId) -> PersistWindow {
+    /// Collect one window and its panes; panes serialize in layout order.
+    fn capture_window(&self, window_id: WindowId) -> WindowCapture {
         let window = self
             .windows
             .get(&window_id)
             .expect("session window lists only hold live windows");
-        let panes = window
-            .panes()
-            .into_iter()
-            .map(|pane_id| {
-                let pane = self
-                    .panes
-                    .get(&pane_id)
-                    .expect("layout leaf ids are always live panes");
-                PersistPane {
-                    id: pane_id.0,
-                    terminal: cap_persisted_scrollback(pane.persisted_snapshot()),
-                    spawn_command: pane.spawn_command().map(str::to_string),
-                    user_title: pane.user_title().map(str::to_string),
-                    agent_session: agent_session_from_metadata(pane.metadata()),
-                    cwd: pane
-                        .persistence_cwd()
-                        .map(|dir| dir.to_string_lossy().into_owned()),
-                }
-            })
-            .collect();
-        PersistWindow {
-            id: window.id.0,
+        WindowCapture {
+            id: window.id,
             name: window.name.clone(),
             cols: window.cols,
             rows: window.rows,
-            active_pane: window.active.0,
+            active_pane: window.active,
             layout: window.layout.clone(),
-            panes,
+            panes: window
+                .panes()
+                .into_iter()
+                .map(|pane_id| {
+                    let pane = self
+                        .panes
+                        .get(&pane_id)
+                        .expect("layout leaf ids are always live panes");
+                    PaneCapture {
+                        id: pane_id,
+                        parts: pane.snapshot_capture_parts(),
+                        spawn_command: pane.spawn_command().map(str::to_string),
+                        user_title: pane.user_title().map(str::to_string),
+                        agent_session: agent_session_from_metadata(pane.metadata()),
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -902,6 +996,34 @@ mod tests {
         tree.set_buffer("default", "hello".to_string());
         tree.new_session("other", 120, 40).unwrap();
         tree
+    }
+
+    /// ARC-032: the two-phase capture (collect under the lock, capture
+    /// after) produces the same save as the one-shot form, modulo the
+    /// timestamp.
+    #[test]
+    fn two_phase_capture_matches_one_shot() {
+        let tree = populated_tree();
+        let one_shot = serde_json::to_value(tree.to_persist_state()).unwrap();
+        let two_phase = serde_json::to_value(tree.collect_persist_capture().capture()).unwrap();
+        let strip = |mut value: serde_json::Value| {
+            value.as_object_mut().unwrap().remove("saved_at_unix_ms");
+            value
+        };
+        assert_eq!(strip(one_shot), strip(two_phase));
+    }
+
+    /// ARC-032: the capture owns no tree borrow — it completes after the
+    /// tree is gone, the lifetime-level guarantee that the expensive half
+    /// (grid walks, cwd syscalls) cannot be running under the tree lock.
+    #[test]
+    fn capture_outlives_the_tree() {
+        let capture = {
+            let tree = populated_tree();
+            tree.collect_persist_capture()
+        };
+        let state = capture.capture();
+        assert!(!state.sessions.is_empty(), "the captured tree had sessions");
     }
 
     /// Assert every structural fact a round trip must preserve.

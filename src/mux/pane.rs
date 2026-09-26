@@ -123,8 +123,10 @@ pub struct MuxPane {
     user_title: Option<String>,
     metadata: HashMap<String, String>,
     /// Last persistence snapshot, valid while the terminal has not changed
-    /// since it was taken — see [`MuxPane::persisted_snapshot`].
-    snapshot_cache: Mutex<Option<SnapshotCacheEntry>>,
+    /// since it was taken — see [`MuxPane::persisted_snapshot`]. Shared
+    /// handle so a capture started under the tree lock can finish OFF it
+    /// (ARC-032).
+    snapshot_cache: Arc<Mutex<Option<SnapshotCacheEntry>>>,
 }
 
 /// The validity key of a cached snapshot: the pane's PTY generation (bumped
@@ -141,6 +143,60 @@ struct SnapshotCacheKey {
 struct SnapshotCacheEntry {
     key: SnapshotCacheKey,
     snapshot: TerminalSnapshot,
+}
+
+/// Everything [`MuxPane::persisted_snapshot`] needs, without the pane —
+/// collected under the tree lock in cheap field reads (ARC-032), so the
+/// expensive half (the grid walk on a cache miss, the cwd syscalls) can
+/// run after the lock drops, from [`snapshot_from_parts`].
+pub(crate) struct PaneSnapshotParts {
+    terminal: Arc<RwLock<Terminal>>,
+    generation: u64,
+    cache: Arc<Mutex<Option<SnapshotCacheEntry>>>,
+    child_pid: Option<u32>,
+}
+
+impl PaneSnapshotParts {
+    /// [`MuxPane::persistence_cwd`]'s logic over collected parts (ARC-032):
+    /// the terminal's OSC 7 reported cwd first, then the child's live cwd
+    /// via syscall — both off the tree lock.
+    pub(crate) fn cwd(&self) -> Option<std::path::PathBuf> {
+        if let Some(reported) = self.terminal.read().current_directory() {
+            return Some(std::path::PathBuf::from(reported));
+        }
+        self.child_pid.and_then(process_cwd)
+    }
+}
+
+/// [`MuxPane::persisted_snapshot`]'s logic over collected parts: serve the
+/// cached capture while the terminal has not changed, else walk the grid
+/// and cache the result. Holds no tree lock, only the pane's own cache
+/// slot and terminal read lock.
+pub(crate) fn snapshot_from_parts(parts: &PaneSnapshotParts) -> TerminalSnapshot {
+    let PaneSnapshotParts {
+        terminal,
+        generation,
+        cache,
+        child_pid: _,
+    } = parts;
+    let (cols, rows) = terminal.read().size();
+    let key = SnapshotCacheKey {
+        generation: *generation,
+        cols,
+        rows,
+    };
+    let mut cache = cache.lock();
+    if let Some(entry) = cache.as_ref() {
+        if entry.key == key {
+            return entry.snapshot.clone();
+        }
+    }
+    let snapshot = terminal.read().capture_snapshot();
+    *cache = Some(SnapshotCacheEntry {
+        key,
+        snapshot: snapshot.clone(),
+    });
+    snapshot
 }
 
 impl MuxPane {
@@ -211,26 +267,20 @@ impl MuxPane {
     /// costs one `Vec<Cell>` clone instead of a full grid walk. Keyed on
     /// both, per [`SnapshotCacheKey`].
     pub fn persisted_snapshot(&self) -> TerminalSnapshot {
-        let terminal = self.session.terminal();
-        let generation = self.session.update_generation();
-        let (cols, rows) = terminal.read().size();
-        let key = SnapshotCacheKey {
-            generation,
-            cols,
-            rows,
-        };
-        let mut cache = self.snapshot_cache.lock();
-        if let Some(entry) = cache.as_ref() {
-            if entry.key == key {
-                return entry.snapshot.clone();
-            }
+        snapshot_from_parts(&self.snapshot_capture_parts())
+    }
+
+    /// The collect-under-lock half of [`Self::persisted_snapshot`]
+    /// (ARC-032): terminal handle, PTY generation, and the shared cache
+    /// slot, all cheap field reads safe to take while the tree lock is
+    /// held.
+    pub(crate) fn snapshot_capture_parts(&self) -> PaneSnapshotParts {
+        PaneSnapshotParts {
+            terminal: self.session.terminal(),
+            generation: self.session.update_generation(),
+            cache: Arc::clone(&self.snapshot_cache),
+            child_pid: self.session.child_pid(),
         }
-        let snapshot = terminal.read().capture_snapshot();
-        *cache = Some(SnapshotCacheEntry {
-            key,
-            snapshot: snapshot.clone(),
-        });
-        snapshot
     }
 
     /// Whether the pane's child process is still running.
@@ -465,7 +515,7 @@ impl ShellPaneFactory {
             spawn_command,
             user_title: None,
             metadata: HashMap::new(),
-            snapshot_cache: Mutex::new(None),
+            snapshot_cache: Arc::new(Mutex::new(None)),
         }
     }
 }

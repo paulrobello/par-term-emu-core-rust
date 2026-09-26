@@ -898,7 +898,11 @@ fn reap_dead_panes(
     }
     if changed {
         if let Some(tx) = persist {
-            let _ = tx.send((SaveOrigin::Reap, tree.lock().to_persist_state()));
+            // Same off-lock capture discipline as the command path
+            // (ARC-032): collect handles under the lock, walk grids after.
+            let capture = tree.lock().collect_persist_capture();
+            let state = capture.capture();
+            let _ = tx.send((SaveOrigin::Reap, state));
         }
     }
 }
