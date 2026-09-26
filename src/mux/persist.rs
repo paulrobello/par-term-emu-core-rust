@@ -1001,16 +1001,37 @@ mod tests {
     /// ARC-032: the two-phase capture (collect under the lock, capture
     /// after) produces the same save as the one-shot form, modulo the
     /// timestamp.
+    ///
+    /// Parity is a claim about a QUIESCENT tree: a pane whose PTY produced
+    /// output between the two captures legitimately differs, so each attempt
+    /// requires every pane's generation to hold still across both captures
+    /// and retries while startup output is still landing.
     #[test]
     fn two_phase_capture_matches_one_shot() {
         let tree = populated_tree();
-        let one_shot = serde_json::to_value(tree.to_persist_state()).unwrap();
-        let two_phase = serde_json::to_value(tree.collect_persist_capture().capture()).unwrap();
-        let strip = |mut value: serde_json::Value| {
-            value.as_object_mut().unwrap().remove("saved_at_unix_ms");
-            value
+        let generations = |tree: &MuxTree| {
+            tree.sessions()
+                .iter()
+                .flat_map(|s| tree.session(*s).unwrap().windows.clone())
+                .flat_map(|w| tree.window(w).unwrap().panes())
+                .map(|p| tree.pane(p).unwrap().update_generation())
+                .collect::<Vec<_>>()
         };
-        assert_eq!(strip(one_shot), strip(two_phase));
+        for _ in 0..50 {
+            let before = generations(&tree);
+            let one_shot = serde_json::to_value(tree.to_persist_state()).unwrap();
+            let two_phase = serde_json::to_value(tree.collect_persist_capture().capture()).unwrap();
+            if generations(&tree) == before {
+                let strip = |mut value: serde_json::Value| {
+                    value.as_object_mut().unwrap().remove("saved_at_unix_ms");
+                    value
+                };
+                assert_eq!(strip(one_shot), strip(two_phase));
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        panic!("panes never quiesced within 5 s; parity not testable this run");
     }
 
     /// ARC-032: the capture owns no tree borrow — it completes after the

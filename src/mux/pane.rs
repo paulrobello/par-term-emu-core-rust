@@ -288,6 +288,13 @@ impl MuxPane {
         self.session.is_running()
     }
 
+    /// The pane's update generation — bumped on every processed PTY read,
+    /// so it is the liveness signal a test (or embedder) can poll to know a
+    /// pane's terminal has stopped changing.
+    pub fn update_generation(&self) -> u64 {
+        self.session.update_generation()
+    }
+
     /// Liveness for the reaper's periodic pass — the reader flag plus the OS
     /// child handle. On Windows ConPTY the reader never observes EOF after
     /// the child exits, so [`Self::is_running`] alone would leave an exited
