@@ -190,13 +190,13 @@ impl Terminal {
             }
         }
 
-        debug::log(
-            debug::DebugLevel::Debug,
+        crate::debug_log!(
             "DECSERA",
-            &format!(
-                "Selective erase rect ({},{}) to ({},{})",
-                left, top, right, bottom
-            ),
+            "Selective erase rect ({},{}) to ({},{})",
+            left,
+            top,
+            right,
+            bottom
         );
     }
 }

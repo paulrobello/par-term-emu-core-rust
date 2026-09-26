@@ -187,13 +187,11 @@ impl Terminal {
             if let Some(size) = total_size {
                 let limits = self.graphics.graphics_store.limits();
                 if size > limits.max_total_memory {
-                    debug::log(
-                        debug::DebugLevel::Debug,
+                    crate::debug_log!(
                         "ITERM",
-                        &format!(
-                            "MultipartFile rejected: size {} exceeds graphics limit {}",
-                            size, limits.max_total_memory
-                        ),
+                        "MultipartFile rejected: size {} exceeds graphics limit {}",
+                        size,
+                        limits.max_total_memory
                     );
                     self.events.terminal_events.push(
                         crate::terminal::TerminalEvent::InlineImageDropped {
@@ -221,13 +219,11 @@ impl Terminal {
             if let Some(size) = total_size {
                 let max_size = self.graphics.file_transfer_manager.max_transfer_size();
                 if size > max_size {
-                    debug::log(
-                        debug::DebugLevel::Debug,
+                    crate::debug_log!(
                         "ITERM",
-                        &format!(
-                            "MultipartFile file transfer rejected: size {} exceeds limit {}",
-                            size, max_size
-                        ),
+                        "MultipartFile file transfer rejected: size {} exceeds limit {}",
+                        size,
+                        max_size
                     );
                     self.events.terminal_events.push(
                         crate::terminal::TerminalEvent::InlineImageDropped {
@@ -304,11 +300,7 @@ impl Terminal {
         ) {
             Ok(d) => d,
             Err(e) => {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "ITERM",
-                    &format!("FilePart base64 decode failed: {}", e),
-                );
+                crate::debug_log!("ITERM", "FilePart base64 decode failed: {}", e);
                 // If this is a file transfer, emit failure event
                 if state.is_file_transfer {
                     if let Some(transfer_id) = state.transfer_id {
@@ -344,11 +336,7 @@ impl Terminal {
                     .file_transfer_manager
                     .append_data(transfer_id, &decoded)
                 {
-                    debug::log(
-                        debug::DebugLevel::Debug,
-                        "ITERM",
-                        &format!("File transfer append failed: {}", e),
-                    );
+                    crate::debug_log!("ITERM", "File transfer append failed: {}", e);
                     self.events.terminal_events.push(
                         crate::terminal::TerminalEvent::FileTransferFailed {
                             id: transfer_id,
@@ -376,13 +364,12 @@ impl Terminal {
         if !state.is_file_transfer {
             if let Some(expected_size) = state.total_size {
                 if new_accumulated > expected_size {
-                    debug::log(
-                        debug::DebugLevel::Debug,
+                    crate::debug_log!(
                         "ITERM",
-                        &format!(
-                            "FilePart rejected: accumulated {} + chunk {} > expected {}",
-                            state.accumulated_size, decoded_size, expected_size
-                        ),
+                        "FilePart rejected: accumulated {} + chunk {} > expected {}",
+                        state.accumulated_size,
+                        decoded_size,
+                        expected_size
                     );
                     self.events.terminal_events.push(
                         crate::terminal::TerminalEvent::InlineImageDropped {
@@ -485,11 +472,7 @@ impl Terminal {
                         );
                     }
                     Err(e) => {
-                        debug::log(
-                            debug::DebugLevel::Debug,
-                            "ITERM",
-                            &format!("File transfer complete failed: {}", e),
-                        );
+                        crate::debug_log!("ITERM", "File transfer complete failed: {}", e);
                         self.events.terminal_events.push(
                             crate::terminal::TerminalEvent::FileTransferFailed {
                                 id: transfer_id,
@@ -544,11 +527,7 @@ impl Terminal {
 
         // Must start with "File="
         if !params_str.starts_with("File=") {
-            debug::log(
-                debug::DebugLevel::Debug,
-                "ITERM",
-                &format!("Unsupported OSC 1337 command: {}", params_str),
-            );
+            crate::debug_log!("ITERM", "Unsupported OSC 1337 command: {}", params_str);
             self.events
                 .terminal_events
                 .push(crate::terminal::TerminalEvent::InlineImageDropped {
@@ -566,11 +545,7 @@ impl Terminal {
 
         // Parse parameters
         if let Err(e) = parser.parse_params(params_str) {
-            debug::log(
-                debug::DebugLevel::Debug,
-                "ITERM",
-                &format!("Failed to parse iTerm params: {}", e),
-            );
+            crate::debug_log!("ITERM", "Failed to parse iTerm params: {}", e);
             return;
         }
 
@@ -642,18 +617,15 @@ impl Terminal {
                         crate::terminal::TerminalEvent::GraphicsAdded(graphic.position.1),
                     );
 
-                    debug::log(
-                        debug::DebugLevel::Debug,
+                    crate::debug_log!(
                         "ITERM",
-                        &format!(
-                            "Added iTerm image at ({}, {}), size {}x{}, cursor moved to ({}, {})",
-                            position.0,
-                            position.1,
-                            graphic.width,
-                            graphic.height,
-                            self.cursor.col,
-                            self.cursor.row
-                        ),
+                        "Added iTerm image at ({}, {}), size {}x{}, cursor moved to ({}, {})",
+                        position.0,
+                        position.1,
+                        graphic.width,
+                        graphic.height,
+                        self.cursor.col,
+                        self.cursor.row
                     );
                 }
                 Err(e) => {

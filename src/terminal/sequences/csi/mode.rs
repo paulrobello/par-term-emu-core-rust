@@ -1,6 +1,5 @@
 //! Mode-related CSI sequence handling (SM/RM)
 
-use crate::debug;
 use crate::mouse::{MouseEncoding, MouseMode};
 use crate::terminal::Terminal;
 use vte::Params;
@@ -211,14 +210,11 @@ impl Terminal {
             }
             80 => self.modes.sixel_display_mode = enabled,
             _ => {
-                debug::log(
-                    debug::DebugLevel::Debug,
+                crate::debug_log!(
                     "CSI",
-                    &format!(
-                        "Unsupported {}: {}",
-                        if enabled { "DECSET" } else { "DECRST" },
-                        param
-                    ),
+                    "Unsupported {}: {}",
+                    if enabled { "DECSET" } else { "DECRST" },
+                    param
                 );
             }
         }

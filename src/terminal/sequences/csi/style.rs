@@ -2,7 +2,6 @@
 
 use crate::cell::CellFlags;
 use crate::color::{Color, NamedColor};
-use crate::debug;
 use crate::terminal::Terminal;
 use vte::Params;
 
@@ -25,13 +24,10 @@ impl Terminal {
                         .copied()
                         .unwrap_or(0) as u8;
                     self.keyboard_state.modify_other_keys_mode = mode.min(2);
-                    debug::log(
-                        debug::DebugLevel::Info,
+                    crate::debug_info!(
                         "CSI",
-                        &format!(
-                            "modifyOtherKeys mode set to {}",
-                            self.keyboard_state.modify_other_keys_mode
-                        ),
+                        "modifyOtherKeys mode set to {}",
+                        self.keyboard_state.modify_other_keys_mode
                     );
                 }
                 return;

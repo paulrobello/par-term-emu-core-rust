@@ -91,13 +91,10 @@ impl Terminal {
         }
         if self.dcs_state.dcs_buffer.len() >= MAX_DCS_BUFFER {
             self.dcs_state.dcs_overflow = true;
-            debug::log(
-                debug::DebugLevel::Debug,
+            crate::debug_log!(
                 "SECURITY",
-                &format!(
-                    "DCS payload exceeds {} bytes, dropping sequence",
-                    MAX_DCS_BUFFER
-                ),
+                "DCS payload exceeds {} bytes, dropping sequence",
+                MAX_DCS_BUFFER
             );
             return;
         }
