@@ -609,12 +609,17 @@ impl MuxTree {
     /// the window that held it — resolved BEFORE the kill, because the pane's
     /// window membership is gone afterwards. The dispatcher's
     /// `%layout-change` target; a window closing entirely reports its own
-    /// `%window-close` instead.
+    /// `%window-close` instead. The second element names the session the
+    /// cascade removed, when the window's closure emptied it — the caller's
+    /// cue to broadcast `%sessions-changed`.
     ///
     /// Cascading matches tmux: a window with no panes and a session with no
     /// windows do not linger. A surviving pane is resized to the extent the
     /// killed pane freed.
-    pub fn kill_pane(&mut self, pane_id: PaneId) -> Result<WindowId, MuxError> {
+    pub fn kill_pane(
+        &mut self,
+        pane_id: PaneId,
+    ) -> Result<(WindowId, Option<SessionId>), MuxError> {
         let affected_window = self
             .window_of_pane(pane_id)
             .ok_or(MuxError::NoSuchPane(pane_id))?;
@@ -648,6 +653,7 @@ impl MuxTree {
             }
         });
 
+        let mut removed_session = None;
         if let Some(window_id) = empty_window {
             self.windows.remove(&window_id);
             let empty_session = self.sessions.iter_mut().find_map(|(id, session)| {
@@ -664,6 +670,7 @@ impl MuxTree {
             });
             if let Some(session_id) = empty_session {
                 self.sessions.remove(&session_id);
+                removed_session = Some(session_id);
             }
         }
 
@@ -671,7 +678,7 @@ impl MuxTree {
         // the freed extent and its terminal must grow into it.
         self.sync_pane_sizes(affected_window);
 
-        Ok(affected_window)
+        Ok((affected_window, removed_session))
     }
 
     /// Make `window_id` its session's active window.
@@ -707,8 +714,10 @@ impl MuxTree {
     }
 
     /// Kill a window and every pane it holds, closing its session when it
-    /// was the last window — the same cascade [`Self::kill_pane`] uses.
-    pub fn kill_window(&mut self, window_id: WindowId) -> Result<(), MuxError> {
+    /// was the last window — the same cascade [`Self::kill_pane`] uses. The
+    /// Ok value names that removed session, when the cascade reached it, so
+    /// the caller can broadcast `%sessions-changed`.
+    pub fn kill_window(&mut self, window_id: WindowId) -> Result<Option<SessionId>, MuxError> {
         let window = self
             .windows
             .remove(&window_id)
@@ -727,11 +736,11 @@ impl MuxTree {
             }
             session.windows.is_empty().then_some(*id)
         });
-        if let Some(session_id) = empty_session {
+        let removed = empty_session.inspect(|&session_id| {
             self.sessions.remove(&session_id);
-        }
+        });
 
-        Ok(())
+        Ok(removed)
     }
 }
 
@@ -1060,6 +1069,32 @@ mod tests {
         assert!(
             tree.session(session_id).is_none(),
             "a session with no windows does not survive — matches tmux"
+        );
+    }
+
+    #[test]
+    fn kill_results_name_the_session_the_cascade_removed() {
+        // The %sessions-changed cue: both entry points report the removed
+        // session, and report None when the session survives.
+        let mut tree = tree();
+        let session_id = tree.new_session("main", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        let second = tree.new_window(session_id, "logs", 80, 24).unwrap();
+        let pane_id = tree.window(second).unwrap().panes()[0];
+
+        let (_, removed) = tree.kill_pane(pane_id).expect("kill succeeds");
+        assert_eq!(removed, None, "the session survives its non-last window");
+        let (_, removed) = tree
+            .kill_pane(tree.window(window_id).unwrap().panes()[0])
+            .expect("kill succeeds");
+        assert_eq!(removed, Some(session_id), "the cascade names the session");
+
+        let session_id = tree.new_session("next", 80, 24).unwrap();
+        let window_id = tree.session(session_id).unwrap().windows[0];
+        assert_eq!(
+            tree.kill_window(window_id).expect("kill succeeds"),
+            Some(session_id),
+            "kill-window names the session it emptied"
         );
     }
 

@@ -257,6 +257,10 @@ fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String
                     window_id: window.to_string(),
                 });
             }
+            // The session set changed on the create side too — one cue for
+            // both directions, so a client's "re-query list-sessions"
+            // handling is written once.
+            result = result.notifying(TmuxNotification::SessionsChanged);
             result.telling_issuer(TmuxNotification::SessionChanged {
                 session_id: session_id.to_string(),
                 name,
@@ -415,7 +419,7 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
     // lookup below takes the tree again (parking_lot is not reentrant).
     let outcome = ctx.tree.lock().kill_pane(pane);
     match outcome {
-        Ok(window_id) => {
+        Ok((window_id, removed_session)) => {
             // A window whose last pane was killed is REMOVED by
             // tree.kill_pane (an emptied session goes with it) — its
             // clients learn that through %window-close, the same
@@ -429,9 +433,15 @@ fn cmd_kill_pane(ctx: &Ctx<'_>, pane: Target<PaneId>) -> Outcome {
                     },
                 )
             } else {
-                Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+                let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
                     window_id: window_id.to_string(),
-                })
+                });
+                if removed_session.is_some() {
+                    // The window's closure emptied the session: the set of
+                    // sessions changed, and tmux says so argument-less.
+                    outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+                }
+                outcome
             }
         }
         Err(err) => Outcome::err(ctx, &err.to_string()),
@@ -709,9 +719,17 @@ fn cmd_kill_window(ctx: &Ctx<'_>, window: Target<WindowId>) -> Outcome {
         }
     };
     match ctx.tree.lock().kill_window(window) {
-        Ok(()) => Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
-            window_id: window.to_string(),
-        }),
+        Ok(removed_session) => {
+            let mut outcome = Outcome::ok(ctx, "").notifying(TmuxNotification::WindowClose {
+                window_id: window.to_string(),
+            });
+            if removed_session.is_some() {
+                // The cascade reached the session — same argument-less
+                // cue kill-pane's cascade sends, so one handler covers both.
+                outcome = outcome.notifying(TmuxNotification::SessionsChanged);
+            }
+            outcome
+        }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }
 }

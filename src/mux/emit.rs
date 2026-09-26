@@ -60,6 +60,10 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::SessionChanged { session_id, name } => {
             format!("%session-changed {session_id} {name}\n")
         }
+        // The session set changed (one created or destroyed) — tmux's own
+        // argument-less shape: clients re-query `list-sessions` rather than
+        // parsing ids off the line.
+        TmuxNotification::SessionsChanged => "%sessions-changed\n".to_string(),
         TmuxNotification::LayoutChange {
             window_id,
             window_layout,
@@ -364,7 +368,23 @@ mod tests {
     fn unemitted_variants_produce_nothing_rather_than_panicking() {
         // Seam S3: the catch-all arm. Adding a notification later is one new
         // arm here, never a change at call sites; until then it emits nothing.
-        assert_eq!(emit(&TmuxNotification::SessionsChanged), "");
+        assert_eq!(
+            emit(&TmuxNotification::SessionRenamed {
+                session_id: "$0".to_string(),
+                name: "renamed".to_string()
+            }),
+            ""
+        );
+    }
+
+    #[test]
+    fn sessions_changed_round_trips() {
+        let original = TmuxNotification::SessionsChanged;
+        let line = emit(&original);
+        assert_eq!(line, "%sessions-changed\n", "the wire shape: no arguments");
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
     }
 
     #[test]

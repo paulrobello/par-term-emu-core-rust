@@ -602,6 +602,12 @@ pub enum SaveOrigin {
     /// snapshot; empty leaves it alone, because the emptiness may be the
     /// race above rather than the user's intent.
     Shutdown,
+    /// The final save of an exit-when-empty daemon: zero sessions and zero
+    /// clients, held empty past a grace period, with no shutdown signal
+    /// received — the emptiness is the user's doing (every pane closed), not
+    /// the reboot race. Clears the snapshot so the next start is fresh, not
+    /// a resurrection of panes whose processes were deliberately closed.
+    ShutdownEmpty,
 }
 
 /// The synchronous entry the shutdown save and tests use; the per-command
@@ -610,6 +616,17 @@ pub enum SaveOrigin {
 /// lock.
 pub fn save_to(tree: &MuxTree, target: &Path) -> Result<(), PersistError> {
     write_job(SaveOrigin::Shutdown, &tree.to_persist_state(), target)
+}
+
+/// [`save_to`] with an explicit origin — the exit-when-empty path's final
+/// save, which must be distinguished from a requested shutdown's (see
+/// [`SaveOrigin::ShutdownEmpty`]).
+pub fn save_to_with_origin(
+    tree: &MuxTree,
+    target: &Path,
+    origin: SaveOrigin,
+) -> Result<(), PersistError> {
+    write_job(origin, &tree.to_persist_state(), target)
 }
 
 /// Serialize and atomically land one already-captured state with the
@@ -701,9 +718,10 @@ fn maintain_lastgood(origin: SaveOrigin, state: &PersistState, target: &Path) {
                 lastgood.display()
             );
         }
-    } else if origin == SaveOrigin::Command {
-        // Deliberately empty (kill-pane of the last pane): the next start
-        // must be fresh, not a resurrection.
+    } else if matches!(origin, SaveOrigin::Command | SaveOrigin::ShutdownEmpty) {
+        // Deliberately empty (kill-pane of the last pane, or the daemon
+        // exiting because everything closed): the next start must be fresh,
+        // not a resurrection.
         let _ = fs::remove_file(&lastgood);
     }
     // An empty Shutdown save leaves the snapshot alone — the emptiness may
@@ -1528,6 +1546,34 @@ mod tests {
             Loaded::State(state) => assert!(
                 !state_has_panes(&state),
                 "a deliberate empty is the honest state — no resurrection"
+            ),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+    }
+
+    /// The exit-when-empty daemon's final save is deliberate the same way:
+    /// everything closed, no signal raced it, so the snapshot goes and the
+    /// next start is fresh. Contrast with the Shutdown arm above, where the
+    /// emptiness may be the reboot race and the snapshot must survive.
+    #[test]
+    fn an_exit_when_empty_final_save_clears_the_last_good_snapshot() {
+        let (_dir, target) = temp_target("empty-exit");
+        write_job(
+            SaveOrigin::Command,
+            &populated_tree().to_persist_state(),
+            &target,
+        )
+        .unwrap();
+        write_job(
+            SaveOrigin::ShutdownEmpty,
+            &tree().to_persist_state(),
+            &target,
+        )
+        .unwrap();
+        match load_or_quarantine(&target) {
+            Loaded::State(state) => assert!(
+                !state_has_panes(&state),
+                "the empty exit is deliberate — no resurrection"
             ),
             other => panic!("a readable state file loaded as {other:?}"),
         }

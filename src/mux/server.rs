@@ -52,6 +52,21 @@ const REAP_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250)
 /// Bounds how long the shutdown join waits after the flag is set.
 const PERSIST_POLL: Duration = Duration::from_millis(200);
 
+/// How long a persisting daemon tolerates holding zero sessions and zero
+/// clients before exiting — tmux's `exit-empty`, with a grace so the two
+/// races it could lose are won instead: a client that disconnects from an
+/// emptied daemon and immediately reconnects (or creates a session) resets
+/// the clock, and a logout's SIGTERM — which follows pane deaths within
+/// moments — beats the grace, so the reboot-race resurrection
+/// ([`SaveOrigin::Shutdown`]) stays intact.
+#[cfg(not(test))]
+const EXIT_EMPTY_GRACE: Duration = Duration::from_secs(5);
+
+/// Tests run the accept loop for real; a 5 s grace would dominate every
+/// test's runtime.
+#[cfg(test)]
+const EXIT_EMPTY_GRACE: Duration = Duration::from_millis(300);
+
 /// Per-client broadcast queue depth in lines (ARC-011). A `%output` line
 /// carries one PTY read (up to 16 KiB raw, roughly doubled by escape
 /// encoding), so a stalled client pins at most ~128 MiB before eviction;
@@ -79,6 +94,20 @@ static CLIENT_SEQ: AtomicU64 = AtomicU64::new(0);
 /// Windows, where no timeout ever wakes them.
 pub(crate) type ClientEntry = (u64, SyncSender<String>, Arc<AtomicBool>, ConnectionAbort);
 pub(crate) type Clients = Arc<Mutex<Vec<ClientEntry>>>;
+
+/// Why the accept loop ended — the final save's snapshot semantics hang on
+/// the difference between a requested shutdown (any emptiness may be the
+/// reboot race) and an exit-when-empty (the emptiness is deliberate).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoopExit {
+    /// SIGTERM or `kill-server` raised the shutdown flag.
+    Requested,
+    /// A listener fault ended the loop.
+    Fault,
+    /// Zero sessions and zero clients, held past [`EXIT_EMPTY_GRACE`] —
+    /// tmux's exit-empty.
+    Empty,
+}
 
 /// A control-mode multiplexer server listening on a Unix socket.
 pub struct MuxServer {
@@ -141,7 +170,7 @@ impl MuxServer {
     /// tests and in-process use. The daemon binary runs
     /// [`Self::run_persisting`] instead (D3.3).
     pub fn run(self) {
-        let _faulted = self.run_with_state_path(None);
+        let _exit = self.run_with_state_path(None);
     }
 
     /// [`Self::run`] with the whole state atomically saved to `state_path`
@@ -150,14 +179,20 @@ impl MuxServer {
     /// that arrived since the last structural one, so a clean SIGTERM never
     /// loses the last window; a listener fault that ends the loop takes the
     /// same save on its way out, so an accept error never silently discards
-    /// unsaved work. Callers resolve the path with
+    /// unsaved work. An exit-when-empty (below) saves with
+    /// [`SaveOrigin::ShutdownEmpty`] so the emptiness reads as deliberate.
+    /// Callers resolve the path with
     /// [`crate::mux::persist::state_file_path`].
     pub fn run_persisting(self, state_path: PathBuf) {
-        let faulted = self.run_with_state_path(Some(state_path.clone()));
-        if faulted || self.shutdown.load(Ordering::Relaxed) {
-            if let Err(err) = crate::mux::persist::save_to(&self.tree.lock(), &state_path) {
-                log::error!("par-mux: final state save failed: {err}");
-            }
+        let exit = self.run_with_state_path(Some(state_path.clone()));
+        let origin = match exit {
+            LoopExit::Empty => SaveOrigin::ShutdownEmpty,
+            LoopExit::Fault | LoopExit::Requested => SaveOrigin::Shutdown,
+        };
+        if let Err(err) =
+            crate::mux::persist::save_to_with_origin(&self.tree.lock(), &state_path, origin)
+        {
+            log::error!("par-mux: final state save failed: {err}");
         }
     }
 
@@ -169,7 +204,7 @@ impl MuxServer {
         Arc::clone(&self.shutdown)
     }
 
-    fn run_with_state_path(&self, state_path: Option<PathBuf>) -> bool {
+    fn run_with_state_path(&self, state_path: Option<PathBuf>) -> LoopExit {
         // The loop must be able to NOTICE a shutdown request while idle,
         // but `accept` transparently retries EINTR, so a blocking accept
         // never returns on a signal (observed: the daemon ignored SIGTERM
@@ -205,7 +240,11 @@ impl MuxServer {
         );
         let mut last_scrape = std::time::Instant::now();
         let mut last_reap = std::time::Instant::now();
-        let mut faulted = false;
+        // When the daemon (persisting only) first observed zero sessions AND
+        // zero clients — reset to None the moment either returns. Held past
+        // EXIT_EMPTY_GRACE it ends the loop as [LoopExit::Empty].
+        let mut empty_since: Option<std::time::Instant> = None;
+        let mut exit = LoopExit::Requested;
 
         loop {
             if self.shutdown.load(Ordering::Relaxed) {
@@ -241,6 +280,27 @@ impl MuxServer {
                         reap_dead_panes(&self.tree, &self.clients, persist_tx.as_ref());
                         last_reap = std::time::Instant::now();
                     }
+                    // Exit-when-empty, the persisting daemon only: an
+                    // embedded `run()` server serves until stopped, whatever
+                    // it holds. Both locks are taken and released one at a
+                    // time — never nested.
+                    if state_path.is_some() {
+                        let idle_empty = self.tree.lock().sessions().is_empty()
+                            && self.clients.lock().is_empty();
+                        empty_since = match (idle_empty, empty_since) {
+                            (true, Some(since)) => Some(since),
+                            (true, None) => Some(std::time::Instant::now()),
+                            (false, _) => None,
+                        };
+                        if empty_since.is_some_and(|since| since.elapsed() >= EXIT_EMPTY_GRACE) {
+                            // Held empty past the grace: exit through the
+                            // same %exit + final-save path every shutdown
+                            // takes, recorded as Empty so the save's origin
+                            // clears the last-good snapshot.
+                            exit = LoopExit::Empty;
+                            self.shutdown.store(true, Ordering::Relaxed);
+                        }
+                    }
                 }
                 // A signal may land mid-accept; that is not a listener fault.
                 Err(err) if err.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -263,7 +323,7 @@ impl MuxServer {
                     // and the flag — not the sender count — is what bounds
                     // the fault-exit join below.
                     self.shutdown.store(true, Ordering::Relaxed);
-                    faulted = true;
+                    exit = LoopExit::Fault;
                     break;
                 }
             }
@@ -272,16 +332,16 @@ impl MuxServer {
         // Shutdown ordering (ARC-003): join the persist worker BEFORE
         // `run_persisting`'s final synchronous save, so the worker's
         // in-flight write and the final save never touch the same tmp file
-        // concurrently. Joined on a requested shutdown and on a listener
-        // fault alike — both take the final save, so both must drain the
-        // worker first.
+        // concurrently. Every loop exit raises the shutdown flag (request,
+        // fault, or exit-when-empty) and every exit takes the final save,
+        // so the worker is always drained first.
         drop(persist_tx);
-        if faulted || self.shutdown.load(Ordering::Relaxed) {
+        if self.shutdown.load(Ordering::Relaxed) {
             if let Some(worker) = persist_worker {
                 let _ = worker.join();
             }
         }
-        faulted
+        exit
     }
 }
 
@@ -740,8 +800,11 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
 /// accept loop's idle tick, [`REAP_INTERVAL`]) then removes the pane and
 /// broadcasts what clients need to drop it: `%layout-change` +
 /// `%window-pane-changed` for a surviving window, `%window-close` when the
-/// dead pane was the window's last. An emptied session is left in place —
-/// create-or-attach refills it; killing the session is a later decision.
+/// dead pane was the window's last. The window's closure cascades further in
+/// the tree — a session with no windows is removed with it, and that removal
+/// broadcasts `%sessions-changed`, the same cue a structural kill sends.
+/// A persisting daemon emptied this way exits once the last client is gone
+/// (see [`EXIT_EMPTY_GRACE`]).
 ///
 /// A `kill_pane` on the last pane is refused by the tree, so that case must
 /// resolve to `kill_window` BEFORE the pane is gone from the layout's point
@@ -786,10 +849,10 @@ fn reap_dead_panes(
         let outcome = if last_pane {
             tree.lock().kill_window(window)
         } else {
-            tree.lock().kill_pane(pane).map(|_| ())
+            tree.lock().kill_pane(pane).map(|(_, removed)| removed)
         };
         match outcome {
-            Ok(()) => {
+            Ok(removed_session) => {
                 changed = true;
                 if last_pane {
                     broadcast_notification(
@@ -798,6 +861,12 @@ fn reap_dead_panes(
                             window_id: window.to_string(),
                         },
                     );
+                    if removed_session.is_some() {
+                        // The window's closure emptied the session — the
+                        // reaper-cascade counterpart of what cmd_kill_window
+                        // broadcasts for the same tree mutation.
+                        broadcast_notification(clients, &TmuxNotification::SessionsChanged);
+                    }
                 } else {
                     broadcast_layout_change(tree, clients, window);
                     if let Some(active) = tree.lock().window(window).map(|w| w.active) {
@@ -1016,6 +1085,112 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("%exit arrives before the socket closes");
         assert_eq!(line, "%exit\n", "graceful shutdown pushes %exit first");
+    }
+
+    /// Card 01a0d9b47b26, exit-when-empty: a persisting daemon holding zero
+    /// sessions and zero clients exits through the ordinary shutdown path,
+    /// and its final save is deliberate — an existing last-good snapshot is
+    /// cleared, so the next start is fresh rather than a resurrection.
+    #[cfg(unix)]
+    #[test]
+    fn an_empty_persisting_server_exits_and_clears_the_snapshot() {
+        use crate::mux::persist::{load_or_quarantine, Loaded};
+
+        let dir = temp_dir();
+        let path = dir.path().join("exit-empty.sock");
+        let state_path = dir.path().join("state.json");
+        // Content is irrelevant to this test: only the file's removal is
+        // asserted (the origin routing is what decides fresh-vs-resurrect;
+        // the snapshot-content matrix is persist.rs's suite).
+        let lastgood = dir.path().join("state.json.lastgood");
+        std::fs::write(&lastgood, b"seed").expect("seed the snapshot");
+
+        let server = MuxServer::bind(&path).expect("bind");
+        let (done_tx, done_rx) = channel();
+        std::thread::spawn(move || {
+            server.run_persisting(state_path);
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the empty daemon exits without anyone asking");
+        match load_or_quarantine(&dir.path().join("state.json")) {
+            Loaded::State(state) => assert!(
+                state.sessions.is_empty(),
+                "the final save holds the honest empty state"
+            ),
+            other => panic!("a readable state file loaded as {other:?}"),
+        }
+        assert!(
+            !lastgood.exists(),
+            "the empty exit is deliberate — the snapshot is cleared"
+        );
+    }
+
+    /// The other half of exit-when-empty: a connected client is a reason to
+    /// stay. An empty daemon with a registered client outlives the grace,
+    /// answers commands, and only exits once the client disconnects.
+    #[cfg(unix)]
+    #[test]
+    fn a_connected_client_keeps_an_empty_persisting_server_alive() {
+        use crate::mux::ipc::connect_local_stream;
+        use std::io::{BufRead, BufReader, Write};
+
+        let dir = temp_dir();
+        let path = dir.path().join("kept-alive.sock");
+        let state_path = dir.path().join("state.json");
+        let server = MuxServer::bind(&path).expect("bind");
+        let (done_tx, done_rx) = channel();
+        std::thread::spawn(move || {
+            server.run_persisting(state_path);
+            let _ = done_tx.send(());
+        });
+
+        let stream = connect_local_stream(&path).expect("connect");
+        let mut writer = stream.try_clone().expect("clone");
+        let round_trip = |writer: &mut LocalStream, command: &str| -> String {
+            let mut reader = {
+                let clone = writer.try_clone().expect("clone for reading");
+                BufReader::new(clone)
+            };
+            writeln!(writer, "{command}").expect("write");
+            writer.flush().expect("flush");
+            let mut block = String::new();
+            // One full reply block: %begin … %end, in bounded time.
+            for _ in 0..16 {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                block.push_str(&line);
+                if line.starts_with("%end") || line.starts_with("%error") {
+                    break;
+                }
+            }
+            block
+        };
+
+        // Registration proof: a completed round trip means the client's
+        // sender is in the registry, so the empty-check sees it.
+        let reply = round_trip(&mut writer, "list-sessions");
+        assert!(reply.contains("%end"), "first reply arrives: {reply}");
+
+        // Outlive the grace (test grace is 300 ms; 900 ms triples it).
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let reply = round_trip(&mut writer, "list-sessions");
+        assert!(
+            reply.contains("%end"),
+            "a connected client keeps the empty daemon serving: {reply}"
+        );
+
+        // Disconnect: the daemon notices (≤ one idle tick), holds the empty
+        // state through the grace, then exits.
+        drop(writer);
+        drop(stream);
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the daemon exits after its last client leaves");
     }
 
     /// Card 01a0d9b2fd2c: an inherited 256-descriptor soft limit must not
@@ -1578,6 +1753,96 @@ mod tests {
                 .any(|l| l.starts_with("%window-close") && l.contains(&second_window.to_string())),
             "kill-window must broadcast %window-close naming it: {lines:?}"
         );
+        // The session survives (its first window remains), so the set of
+        // sessions did NOT change — the kill above must not have sent
+        // %sessions-changed either.
+        assert!(
+            !lines.iter().any(|l| l.starts_with("%sessions-changed")),
+            "a surviving session is not a session-set change: {lines:?}"
+        );
+    }
+
+    /// Card 01a0d9b47b26: a client must learn its session is gone through a
+    /// defined line, not infer it from an empty tab set. tmux's cue is the
+    /// argument-less `%sessions-changed`, on both the create and destroy
+    /// sides of the session set.
+    #[test]
+    fn session_set_changes_broadcast_sessions_changed() {
+        let (tree, clients) = quiet_harness();
+
+        // An observer client: everything it sees is a broadcast.
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
+
+        // Create side: new-session lands in the observer's channel.
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines.iter().any(|l| l.starts_with("%sessions-changed")),
+            "new-session must broadcast %sessions-changed: {lines:?}"
+        );
+
+        // Destroy side: kill-window of the session's last window cascades to
+        // the session, and the client learns it after the window-close line.
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        dispatch(
+            &format!("kill-window -t {window_id}"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        let lines = drain_broadcasts(&rx);
+        let close = lines
+            .iter()
+            .position(|l| l.starts_with("%window-close"))
+            .expect("%window-close precedes the session cue");
+        let changed = lines
+            .iter()
+            .position(|l| l.starts_with("%sessions-changed"))
+            .expect("the emptied session must broadcast %sessions-changed");
+        assert!(
+            close < changed,
+            "%window-close names the window first, %sessions-changed follows: {lines:?}"
+        );
+    }
+
+    /// The kill-pane cascade sends the same cue: a session emptied through
+    /// its last pane is still a session-set change.
+    #[test]
+    fn a_kill_pane_that_empties_the_session_broadcasts_sessions_changed() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane_id = tree.lock().window(window_id).unwrap().panes()[0];
+
+        let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
+        clients.lock().push((
+            u64::MAX,
+            tx,
+            Arc::new(AtomicBool::new(false)),
+            ConnectionAbort::none(),
+        ));
+        dispatch(&format!("kill-pane -t {pane_id}"), 2, &tree, &clients, None);
+        let lines = drain_broadcasts(&rx);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("%window-close") && l.contains(&window_id.to_string())),
+            "the emptied window closes first: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l.starts_with("%sessions-changed")),
+            "kill-pane's cascade to the session must broadcast %sessions-changed: {lines:?}"
+        );
+        assert!(tree.lock().session(session_id).is_none());
     }
 
     #[test]
