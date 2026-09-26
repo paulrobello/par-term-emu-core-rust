@@ -899,8 +899,15 @@ mod tests {
             cwd: Some(dir.path()),
             ..SpawnContext::default()
         };
+        // `pwd` under the POSIX shell, bare `cd` under cmd.exe (the spawn
+        // wraps pane commands in `cmd.exe /C` on Windows) — each prints the
+        // child's cwd, proving the context directory reached the process.
+        #[cfg(unix)]
+        let probe = "pwd";
+        #[cfg(windows)]
+        let probe = "cd";
         let mut pane = factory
-            .create_pane(PaneId(11), 80, 24, Some("pwd"), &context)
+            .create_pane(PaneId(11), 80, 24, Some(probe), &context)
             .expect("pane should spawn");
         let seen: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&seen);
@@ -914,7 +921,7 @@ mod tests {
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "child never ran in the context cwd; pwd said: {text}"
+                "child never ran in the context cwd; probe said: {text}"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }

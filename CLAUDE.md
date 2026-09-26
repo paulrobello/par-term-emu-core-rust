@@ -74,12 +74,11 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
 
 # 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
-#     As of 2026-09-25 the mux::persist filter is expected to PASS on Windows:
-#     the 3 surviving-tail assertions are platform-conditional and the 4
-#     process-cwd/OSC 7 tests are cfg(unix)-gated (card 01a0dae97f437291b544a6db14564d5c).
-#     A failure here is no longer latent — control-run against a pre-change
-#     archive if unsure.
-prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux::persist -- --test-threads=1"
+#     As of 2026-09-25 the whole mux:: filter is expected to PASS on Windows
+#     (cards 01a0dae97f43, 01a0db06f0a8: platform-conditional tail assertions,
+#     cfg(unix)-gated cwd tests, cross-platform cwd probe). A failure here is
+#     not latent — control-run against a pre-change archive if unsure.
+prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
 ```
