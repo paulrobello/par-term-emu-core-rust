@@ -103,7 +103,7 @@ fn source_digest() -> Option<String> {
     files.sort();
 
     let mut hash: u64 = 0xcbf29ce484222325;
-    let mut mix = |hash: &mut u64, bytes: &[u8]| {
+    let mix = |hash: &mut u64, bytes: &[u8]| {
         for &byte in bytes {
             if byte == b'\r' {
                 continue;
