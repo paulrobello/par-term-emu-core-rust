@@ -840,10 +840,14 @@ fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
 }
 
 fn parse_send_keys(a: &Args<'_>) -> Result<MuxCommand, String> {
+    // trim_start first: the name token `split_whitespace` found may sit
+    // behind leading whitespace, so it prefixes the TRIMMED line, not the
+    // raw one (fuzz-found: " send-keys …" panicked the old strip).
     let rest = a
         .line
+        .trim_start()
         .strip_prefix(a.name)
-        .expect("the command name prefixes the line");
+        .expect("the command name prefixes the trimmed line");
     let (target_value, payload_raw) =
         split_after_flag(rest, "-t").ok_or_else(|| format!("{} requires -t", a.name))?;
     // The raw-line split takes one whitespace-delimited token, so a
@@ -1406,6 +1410,20 @@ mod tests {
             MuxCommand::SendKeys {
                 pane: Target::Id(PaneId(3)),
                 keys: b"hello".to_vec()
+            }
+        );
+    }
+
+    #[test]
+    fn send_keys_tolerates_leading_whitespace_before_the_name() {
+        // Fuzz-found (ENH-018): split_whitespace finds the name after any
+        // leading whitespace, but the raw-line strip assumed byte 0.
+        let cmd = parse_command("\t send-keys -t %3 Enter").expect("parses");
+        assert_eq!(
+            cmd,
+            MuxCommand::SendKeys {
+                pane: Target::Id(PaneId(3)),
+                keys: b"\r".to_vec()
             }
         );
     }
