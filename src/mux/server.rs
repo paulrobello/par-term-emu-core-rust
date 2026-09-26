@@ -12,11 +12,12 @@ use crate::mux::command::parse_command;
 use crate::mux::command::{parse_line, Line};
 use crate::mux::dispatch::{dispatch_command, Ctx};
 use crate::mux::emit::{emit, emit_block};
-use crate::mux::ids::{PaneId, WindowId};
+use crate::mux::ids::{PaneId, SessionId, WindowId};
 use crate::mux::ipc::{
     accept_connection, bind_local_listener, prepare_socket_path, ConnectionAbort, LocalListener,
     LocalStream,
 };
+use crate::mux::pane::MuxError;
 use crate::mux::pane::ShellPaneFactory;
 use crate::mux::persist::{write_job, PersistState, SaveOrigin};
 use crate::mux::tree::MuxTree;
@@ -808,8 +809,11 @@ pub(crate) fn broadcast_notification(clients: &Clients, notification: &TmuxNotif
 ///
 /// A `kill_pane` on the last pane is refused by the tree, so that case must
 /// resolve to `kill_window` BEFORE the pane is gone from the layout's point
-/// of view. Collections and mutations interleave on purpose: parking_lot is
-/// not reentrant, so every kill re-locks the tree itself.
+/// of view. Decision and kill share one lock guard (QA-115) — separate
+/// acquisitions could watch the window change shape between the last-pane
+/// check and the kill — while every broadcast happens after the guard drops
+/// (parking_lot is not reentrant and the broadcast helpers lock the tree
+/// themselves).
 fn reap_dead_panes(
     tree: &Arc<Mutex<MuxTree>>,
     clients: &Clients,
@@ -839,22 +843,29 @@ fn reap_dead_panes(
     }
     let mut changed = false;
     for pane in dead {
-        let Some(window) = tree.lock().window_of_pane(pane) else {
-            continue;
+        // (window, killed-whole-window, session-removed-by-cascade, active
+        // pane left behind by a pane kill)
+        let killed: Result<(WindowId, bool, Option<SessionId>, Option<PaneId>), MuxError> = {
+            let mut guard = tree.lock();
+            let Some(window) = guard.window_of_pane(pane) else {
+                continue;
+            };
+            let last_pane = guard.window(window).is_some_and(|w| w.panes().len() <= 1);
+            if last_pane {
+                guard
+                    .kill_window(window)
+                    .map(|removed_session| (window, true, removed_session, None))
+            } else {
+                guard.kill_pane(pane).map(|(window, removed_session)| {
+                    let active = guard.window(window).map(|w| w.active);
+                    (window, false, removed_session, active)
+                })
+            }
         };
-        let last_pane = tree
-            .lock()
-            .window(window)
-            .is_some_and(|w| w.panes().len() <= 1);
-        let outcome = if last_pane {
-            tree.lock().kill_window(window)
-        } else {
-            tree.lock().kill_pane(pane).map(|(_, removed)| removed)
-        };
-        match outcome {
-            Ok(removed_session) => {
+        match killed {
+            Ok((window, was_window, removed_session, active)) => {
                 changed = true;
-                if last_pane {
+                if was_window {
                     broadcast_notification(
                         clients,
                         &TmuxNotification::WindowClose {
@@ -869,7 +880,7 @@ fn reap_dead_panes(
                     }
                 } else {
                     broadcast_layout_change(tree, clients, window);
-                    if let Some(active) = tree.lock().window(window).map(|w| w.active) {
+                    if let Some(active) = active {
                         broadcast_notification(
                             clients,
                             &TmuxNotification::WindowPaneChanged {
