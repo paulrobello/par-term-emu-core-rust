@@ -796,19 +796,13 @@ mod tests {
         let captured = Arc::clone(&sink_bytes);
         pane.on_output(move |bytes: &[u8]| captured.lock().extend_from_slice(bytes));
 
-        // Wait for the daemon-side terminal to process the graphic — the
-        // output callback fires before processing on the same reader thread,
-        // so the sink bytes are complete by then.
+        // Wait until the sink holds the printf's complete escape — it ends
+        // with the ST terminator. Under the reordered reader loop the output
+        // callback fires after the bytes are applied to the daemon terminal,
+        // so complete sink bytes imply the graphic is already in the
+        // daemon's store.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while pane
-            .terminal()
-            .read()
-            .graphics
-            .graphics_store
-            .all_graphics()
-            .is_empty()
-            && std::time::Instant::now() < deadline
-        {
+        while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         assert_eq!(

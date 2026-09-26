@@ -12,8 +12,10 @@
 //! A dedicated background thread reads raw bytes from the PTY master and calls
 //! `term.process(..)` while holding the terminal lock. It also forwards
 //! device-query responses (DA/DSR/DECRQM/etc.) back to the child through the
-//! shared writer. Raw output callbacks (if registered) fire before processing,
-//! allowing recording, logging, or streaming to clients.
+//! shared writer. Raw output callbacks (if registered) fire after each read
+//! is applied to the terminal, so callback consumers that also read terminal
+//! state never see bytes the state lacks; the bytes themselves are passed
+//! unmodified, for recording, logging, or streaming to clients.
 //!
 //! ## Lifetime signaling
 //!
@@ -47,9 +49,12 @@ use std::thread::{self, JoinHandle};
 
 /// Callback function for PTY output
 ///
-/// Called whenever raw data is read from the PTY master, before it's processed
-/// by the terminal. This allows capturing the raw ANSI stream for logging,
-/// recording, or streaming to clients.
+/// Called whenever raw data is read from the PTY master, after the bytes have
+/// been applied to the terminal. The bytes are passed unmodified, for
+/// capturing the raw ANSI stream for logging, recording, or streaming to
+/// clients; because the terminal state already includes them, a callback that
+/// reads terminal state (e.g. to compose a snapshot for a client) is always
+/// consistent with the bytes it observes.
 ///
 /// # Arguments
 /// * `data` - The raw bytes read from the PTY
@@ -772,14 +777,6 @@ impl PtySession {
                         let old_gen = update_generation.fetch_add(1, Ordering::SeqCst);
                         debug::log_generation_change(old_gen, old_gen + 1, "PTY read");
 
-                        // Call output callback if set (for streaming, logging, etc.)
-                        {
-                            let callback_guard = output_callback.lock();
-                            if let Some(ref callback) = *callback_guard {
-                                callback(&buffer[..n]);
-                            }
-                        }
-
                         // Feed terminal output to coprocesses
                         {
                             let mut mgr = coprocess_manager.lock();
@@ -945,6 +942,21 @@ impl PtySession {
                             // Write responses back to PTY master so child can read them
                             let _ = w.write_all(&response_bytes);
                             let _ = w.flush();
+                        }
+
+                        // Call output callback if set (for streaming, logging,
+                        // etc.). Fires after the bytes are applied to the
+                        // terminal above, so a callback that reads terminal
+                        // state (e.g. the mux daemon composing a reattach
+                        // seed for a client it forwards these bytes to)
+                        // observes state that already includes them — the
+                        // forwarded output can never race ahead of the
+                        // seed. Still raw, unmodified bytes.
+                        {
+                            let callback_guard = output_callback.lock();
+                            if let Some(ref callback) = *callback_guard {
+                                callback(&buffer[..n]);
+                            }
                         }
 
                         // ARC-001: deliver observer callbacks now that the write
@@ -2482,10 +2494,14 @@ mod tests {
     /// write must move the counter PAST any value observed in that window so the
     /// next frame regenerates instead of freezing.
     ///
-    /// The output callback runs in the reader thread after the pre-processing
-    /// bump but before the grid write, so it observes the exact "poisonable"
-    /// generation a racing renderer could stamp. We assert the final generation
-    /// has advanced beyond it.
+    /// Since the reader-loop reorder (output callback fires after the read's
+    /// bytes are applied), the callback observes the generation AFTER both
+    /// bumps of its read: it runs on the reader thread itself, so nothing of
+    /// that read can land after it. Asserting the callback observed >= 2
+    /// proves the second, content-applied bump happened before the callback
+    /// fired — the terminal state a callback reads is never missing the bytes
+    /// it is being handed. (Before the reorder the callback ran between the
+    /// two bumps and observed the pre-processing bump alone, value 1.)
     #[test]
     fn test_generation_advances_after_content_applied() {
         let mut session = PtySession::new(80, 24, 1000);
@@ -2493,10 +2509,10 @@ mod tests {
         // Mirror the session's internal generation counter into the callback.
         // The `tests` module can reach the private field directly.
         let gen_counter = Arc::clone(&session.update_generation);
-        let observed_in_window = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let observed_cb = Arc::clone(&observed_in_window);
+        let observed_in_callback = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let observed_cb = Arc::clone(&observed_in_callback);
         session.set_output_callback(Arc::new(move |_bytes: &[u8]| {
-            // Runs after the pre-processing fetch_add, before the grid write.
+            // Runs after both the pre-processing and content-applied bumps.
             observed_cb.store(gen_counter.load(Ordering::SeqCst), Ordering::SeqCst);
         }));
 
@@ -2506,34 +2522,77 @@ mod tests {
         let result = session.spawn("cmd.exe", &["/C", "echo hello"]);
         assert!(result.is_ok());
 
-        // Wait for the command to run, produce output, and be fully
-        // processed: the callback must observe the pre-processing bump AND
-        // the post-write bump must land after it. A fixed sleep flakes
-        // under load — the reader thread can lag the wait (observed locally
-        // 2026-09-22 under back-to-back gate runs) — so poll with a
-        // deadline for both conditions before asserting. 30 s, not 5 s:
+        // Wait for the command to run, produce output, and reach the
+        // callback. A fixed sleep flakes under load — the reader thread can
+        // lag the wait (observed locally 2026-09-22 under back-to-back gate
+        // runs) — so poll with a deadline before asserting. 30 s, not 5 s:
         // this deadline is a starvation bound, and the 5 s bound still
         // expired under back-to-back gate load (2026-09-23) while green
         // runs finish in milliseconds.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        let (observed, final_gen) = loop {
-            let observed = observed_in_window.load(Ordering::SeqCst);
+        let observed = loop {
+            let observed = observed_in_callback.load(Ordering::SeqCst);
             let final_gen = session.update_generation();
-            if (observed > 0 && final_gen > observed) || std::time::Instant::now() >= deadline {
-                break (observed, final_gen);
+            if (observed > 0 && final_gen >= observed) || std::time::Instant::now() >= deadline {
+                break observed;
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
 
         assert!(
             observed > 0,
-            "output callback should have run and observed the pre-processing bump"
+            "output callback should have run and observed a post-application generation"
         );
         assert!(
-            final_gen > observed,
-            "generation must advance after content is applied so a renderer that \
-             stamped its cache with the pre-write generation ({observed}) is forced \
-             to regenerate; final generation was {final_gen}"
+            observed >= 2,
+            "the content-applied bump (second bump of the read) must precede the \
+             output callback; callback observed generation {observed}"
+        );
+    }
+
+    /// Reader-loop ordering contract: the output callback must fire only
+    /// after the bytes it receives have been applied to the terminal, so a
+    /// callback that reads terminal state (e.g. the mux daemon composing a
+    /// reattach seed for a client it is forwarding those same bytes to) can
+    /// never observe state that lacks them. The callback runs on the reader
+    /// thread itself, so before the reorder this failed deterministically —
+    /// the thread executing the callback was the one that had not yet taken
+    /// the write guard to process the bytes.
+    #[test]
+    fn output_callback_sees_applied_terminal_state() {
+        let mut session = PtySession::new(80, 24, 1000);
+
+        let terminal = Arc::clone(session.terminal_ref());
+        let saw_marker = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let saw_applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let marker_probe = Arc::clone(&saw_marker);
+        let applied_probe = Arc::clone(&saw_applied);
+        session.set_output_callback(Arc::new(move |bytes: &[u8]| {
+            if bytes.windows(7).any(|w| w == b"MARKERZ") {
+                marker_probe.store(true, Ordering::SeqCst);
+                let text = terminal.read().grid.export_text_buffer();
+                applied_probe.store(text.contains("MARKERZ"), Ordering::SeqCst);
+            }
+        }));
+
+        #[cfg(unix)]
+        let result = session.spawn("/bin/sh", &["-c", "printf 'MARKERZ'"]);
+        #[cfg(windows)]
+        let result = session.spawn("cmd.exe", &["/C", "echo MARKERZ"]);
+        assert!(result.is_ok());
+        let _ = session.wait();
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !saw_marker.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            saw_marker.load(Ordering::SeqCst),
+            "output callback should have received the marker bytes"
+        );
+        assert!(
+            saw_applied.load(Ordering::SeqCst),
+            "terminal state must contain the callback's bytes by the time the callback fires"
         );
     }
 
