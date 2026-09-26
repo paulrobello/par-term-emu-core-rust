@@ -102,8 +102,10 @@ Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with not
 | Item | Unix | Windows |
 |------|------|---------|
 | Transport | Unix domain socket at `<base>/par-mux-<name>.sock` | Named pipe; a marker file is written at the same path so staleness checks work uniformly |
-| Default socket base | `$XDG_RUNTIME_DIR`, falling back to the temp dir | Per-user temp dir |
-| Access control | Socket file mode `0600` (owner only) | Owner-only security descriptor (system + creating user, nothing for anyone else) |
+| Default socket base | `$XDG_RUNTIME_DIR`, falling back to `<tmp>/par-mux-<uid>/` | Per-user temp dir |
+| Access control | Socket file mode `0600` (owner only); the fallback directory is mode `0700` and its owner and mode are verified before bind and connect; accepted connections are refused unless the peer runs as the daemon's user | Owner-only security descriptor (system + creating user, nothing for anyone else) |
+
+The fallback-directory guard is tmux's `/tmp/tmux-<uid>` defense: `/tmp` is world-writable and shared by every local user, so a socket named directly under it could be pre-bound by another user, whose server would then receive a client's keystrokes and clipboard. A fallback directory that exists but is owned by another user, grants group/other access, or is not a directory fails closed with `PermissionDenied` on both the bind and the connect side; remove or fix the directory to proceed. Explicit `--socket` paths are not guarded — whoever named the path chose its location. `$XDG_RUNTIME_DIR` needs no guard: the OS provisions it per-user.
 
 The on-disk state file (see [Persistence and Restart](#persistence-and-restart)) never lives next to the socket:
 

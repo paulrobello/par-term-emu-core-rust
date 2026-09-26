@@ -11,6 +11,10 @@
 //! 3. `0o600` has no Windows equivalent: a named pipe created without an
 //!    explicit security descriptor is openable by other users on the machine.
 //!    The pipe is therefore created with an owner-only DACL.
+//! 4. On Unix the fallback base is a shared temp dir on Linux, so default
+//!    sockets live in a per-UID `0700` directory (tmux's `/tmp/tmux-<uid>`
+//!    model) whose owner and mode are verified before bind and connect, and
+//!    accepted connections are refused unless the peer runs as this user.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -80,16 +84,45 @@ pub fn bind_local_listener(path: &Path) -> io::Result<LocalListener> {
 /// Accept one connection, returning the stream to serve it on plus the
 /// [`ConnectionAbort`] the server's eviction path needs. Every accept goes
 /// through here so no platform can drift out of the pair contract.
+///
+/// Unix refuses a connection whose peer is not running as this user: the
+/// per-UID socket directory already keeps other users from reaching the
+/// socket, and this is the second lock on the door (tmux checks credentials
+/// on accept too). A refused peer is dropped and the listener keeps
+/// serving — erroring instead would hand any local user the daemon's
+/// fatal-fault exit.
 pub fn accept_connection(listener: &LocalListener) -> io::Result<(LocalStream, ConnectionAbort)> {
     #[cfg(unix)]
     {
         use interprocess::local_socket::traits::Listener as _;
-        Ok((listener.accept()?, ConnectionAbort))
+        loop {
+            let stream = listener.accept()?;
+            if peer_is_current_user(&stream) {
+                return Ok((stream, ConnectionAbort));
+            }
+            log::warn!("par-mux: refused a socket connection from another user");
+            // Bound the spin of a repeated offender; the sleep is inside the
+            // accept cadence, not the serving path.
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
     #[cfg(windows)]
     {
         listener.accept_with_abort()
     }
+}
+
+/// Whether the stream's peer runs as this daemon's user. A peer the platform
+/// will not vouch for is treated as foreign — fail closed.
+#[cfg(unix)]
+fn peer_is_current_user(stream: &LocalStream) -> bool {
+    use interprocess::local_socket::traits::StreamCommon as _;
+
+    stream
+        .peer_creds()
+        .ok()
+        .and_then(|creds| creds.euid())
+        .is_some_and(|euid| euid == current_uid())
 }
 
 /// What an evictor needs to tear this connection down (ENH-012).
@@ -260,6 +293,7 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     {
         use interprocess::local_socket::{prelude::*, GenericFilePath};
 
+        guard_fallback_socket_dir(path)?;
         let name = path.to_fs_name::<GenericFilePath>()?;
         LocalStream::connect(name)
     }
@@ -284,6 +318,8 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
 /// error means the previous owner is gone; the remnant is removed. Anything
 /// else is reported unchanged.
 pub fn prepare_socket_path(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    guard_fallback_socket_dir(path)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -333,14 +369,15 @@ fn remove_remnant(path: &Path) -> io::Result<()> {
 /// The default socket path for a server named `name`, namespaced per user.
 ///
 /// Unix prefers `$XDG_RUNTIME_DIR` (per-user by definition) and falls back to
-/// the temp dir; Windows uses the (per-user) temp dir as the marker-file
-/// location the pipe name is derived from.
+/// a per-UID directory under the temp dir — see [`uid_socket_dir`] for why
+/// the fallback is not the temp dir itself; Windows uses the (per-user) temp
+/// dir as the marker-file location the pipe name is derived from.
 pub fn default_socket_path(name: &str) -> PathBuf {
     #[cfg(unix)]
     {
         let base = std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir);
+            .unwrap_or_else(uid_socket_dir);
         base.join(format!("par-mux-{name}.sock"))
     }
 
@@ -348,6 +385,95 @@ pub fn default_socket_path(name: &str) -> PathBuf {
     {
         std::env::temp_dir().join(format!("par-mux-{name}.sock"))
     }
+}
+
+/// The per-UID directory the shared-temp fallback serves its sockets from.
+///
+/// `std::env::temp_dir()` is `/tmp` on Linux: world-writable, shared by
+/// every user on the machine. A socket named directly under it can be
+/// pre-bound by another user, whose server then receives this client's
+/// keystrokes and clipboard. The per-UID `0700` directory is tmux's
+/// `/tmp/tmux-<uid>` defense; macOS `$TMPDIR` is already per-user, but the
+/// extra directory costs nothing and keeps one code path.
+#[cfg(unix)]
+fn uid_socket_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("par-mux-{}", current_uid()))
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    // SAFETY: getuid takes no arguments and cannot fail.
+    unsafe { libc::getuid() }
+}
+
+/// When `path` sits in the per-UID fallback directory, make sure that
+/// directory exists and is exclusively ours before it is used for binding
+/// or connecting. Paths elsewhere — an explicit `--socket`, or
+/// `$XDG_RUNTIME_DIR`, which the OS guarantees per-user — are untouched.
+#[cfg(unix)]
+fn guard_fallback_socket_dir(path: &Path) -> io::Result<()> {
+    socket_dir_guard(path, &uid_socket_dir())
+}
+
+/// The parent-match half of the guard, split out so tests can stage a
+/// hostile directory as `base` without touching the real per-UID one.
+#[cfg(unix)]
+fn socket_dir_guard(path: &Path, base: &Path) -> io::Result<()> {
+    match path.parent() {
+        Some(parent) if parent == base => ensure_owned_socket_dir(parent),
+        _ => Ok(()),
+    }
+}
+
+/// Create `dir`, or verify the existing one is exclusively ours: owned by
+/// the current UID and granting nothing to group or other. Anything else
+/// fails closed — a directory another user controls could host their socket
+/// at our path, and one with group/other access lets them reach ours.
+#[cfg(unix)]
+fn ensure_owned_socket_dir(dir: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    match std::fs::create_dir(dir) {
+        Ok(()) => {
+            // create_dir applies the umask; pin 0700 before any socket lives
+            // under it. A pre-existing directory keeps its own mode — the
+            // checks below are what gate it.
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err),
+    }
+
+    let meta = std::fs::metadata(dir)?;
+    if !meta.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} exists but is not a directory", dir.display()),
+        ));
+    }
+    if meta.uid() != current_uid() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "socket directory {} is owned by uid {}, not the current uid {} — refusing to use it",
+                dir.display(),
+                meta.uid(),
+                current_uid()
+            ),
+        ));
+    }
+    let mode = meta.permissions().mode();
+    if mode & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "socket directory {} is accessible by group or other (mode {:o}) — refusing to use it",
+                dir.display(),
+                mode & 0o777
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether a connect error means "nothing live owns this path".
@@ -371,9 +497,6 @@ fn windows_socket_marker() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Windows serves its wrapper listener, whose accept is inherent.
-    #[cfg(unix)]
-    use interprocess::local_socket::traits::Listener as _;
     use std::io::{Read, Write};
 
     /// A socket path that no other test run can ever name, cleaned up even
@@ -419,7 +542,9 @@ mod tests {
         let listener = bind_local_listener(path).expect("bind succeeds");
 
         let server = std::thread::spawn(move || {
-            let mut stream = listener.accept().expect("accept");
+            // accept_connection, not the raw trait accept: the same-user peer
+            // check it adds must pass for this connection.
+            let (mut stream, _abort) = accept_connection(&listener).expect("accept");
             let mut buf = [0u8; 5];
             stream.read_exact(&mut buf).expect("read");
             stream.write_all(b"pong\n").expect("write");
@@ -550,5 +675,133 @@ mod tests {
             0,
             "group and other must have no access: {mode:o}"
         );
+    }
+
+    #[cfg(unix)]
+    mod socket_dir_guard {
+        use super::*;
+
+        /// A guard-dir target inside a throwaway base, so tests never touch
+        /// the real per-UID directory.
+        fn guard_dir(tag: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+            let base = tempfile::Builder::new()
+                .prefix("par-mux-guard-")
+                .tempdir()
+                .expect("create temp base");
+            let dir = base.path().join(tag);
+            (base, dir)
+        }
+
+        #[test]
+        fn creates_a_0700_directory_owned_by_the_current_user() {
+            use std::os::unix::fs::{MetadataExt, PermissionsExt};
+            let (_base, dir) = guard_dir("fresh");
+            ensure_owned_socket_dir(&dir).expect("creates the guard dir");
+            let meta = std::fs::metadata(&dir).expect("stat the guard dir");
+            assert_eq!(
+                meta.uid(),
+                current_uid(),
+                "a freshly created guard dir is owned by this user"
+            );
+            assert_eq!(
+                meta.permissions().mode() & 0o777,
+                0o700,
+                "a freshly created guard dir is 0700 regardless of umask"
+            );
+        }
+
+        #[test]
+        fn accepts_an_existing_owned_0700_dir() {
+            use std::os::unix::fs::PermissionsExt;
+            let (_base, dir) = guard_dir("kept");
+            std::fs::create_dir(&dir).expect("stage dir");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+                .expect("tighten");
+            ensure_owned_socket_dir(&dir).expect("an owned 0700 dir passes");
+        }
+
+        #[test]
+        fn refuses_a_dir_with_group_access() {
+            use std::os::unix::fs::PermissionsExt;
+            let (_base, dir) = guard_dir("group");
+            std::fs::create_dir(&dir).expect("stage dir");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o750))
+                .expect("loosen to group-readable");
+            let err = ensure_owned_socket_dir(&dir).expect_err("group access is refused");
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+
+        #[test]
+        fn refuses_a_world_accessible_dir() {
+            use std::os::unix::fs::PermissionsExt;
+            let (_base, dir) = guard_dir("world");
+            std::fs::create_dir(&dir).expect("stage dir");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o701))
+                .expect("loosen to other-execute");
+            let err = ensure_owned_socket_dir(&dir).expect_err("other access is refused");
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+
+        #[test]
+        fn refuses_a_non_directory_at_the_guard_path() {
+            let (_base, dir) = guard_dir("file");
+            std::fs::write(&dir, b"not a directory").expect("stage a file");
+            let err = ensure_owned_socket_dir(&dir).expect_err("a file is refused");
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
+
+        #[test]
+        fn guard_targets_the_per_uid_fallback_only() {
+            use std::os::unix::fs::PermissionsExt;
+            // A custom path (explicit --socket, or XDG base) must pass
+            // through untouched even when its parent is loose: the user
+            // chose that location.
+            let base = tempfile::Builder::new()
+                .prefix("par-mux-custom-")
+                .tempdir()
+                .expect("create temp base");
+            let loose = base.path().join("loose-dir");
+            std::fs::create_dir(&loose).expect("stage dir");
+            std::fs::set_permissions(&loose, std::fs::Permissions::from_mode(0o755))
+                .expect("leave loose");
+            let custom_socket = loose.join("par-mux-custom.sock");
+            socket_dir_guard(&custom_socket, &uid_socket_dir())
+                .expect("a path outside the fallback dir is not guarded");
+        }
+
+        #[test]
+        fn fallback_default_path_lives_in_the_per_uid_dir() {
+            // The real fallback layout: <tmp>/par-mux-<uid>/par-mux-<name>.sock
+            // — and the wiring runs the guard for exactly that parent. This
+            // creates the genuine per-UID dir under the real temp dir, which
+            // is what any default-path daemon run would create anyway.
+            let socket = uid_socket_dir().join("par-mux-layout.sock");
+            guard_fallback_socket_dir(&socket).expect("guard runs on the fallback layout");
+            assert!(
+                socket.starts_with(uid_socket_dir()),
+                "fallback socket lives in the per-UID dir: {}",
+                socket.display()
+            );
+        }
+
+        #[test]
+        fn a_loose_fallback_dir_is_refused_for_bind_and_connect() {
+            use std::os::unix::fs::PermissionsExt;
+            // The attack: another user pre-creates the per-UID dir with
+            // group/other bits, so their socket could be reached at the
+            // default path. The guard staged on a stand-in base — the real
+            // one belongs to this user and must not be loosened by a test —
+            // must fail closed for both entry points.
+            let base = tempfile::Builder::new()
+                .prefix("par-mux-hostile-")
+                .tempdir()
+                .expect("create temp base");
+            let dir = base.path().join(format!("par-mux-{}", current_uid()));
+            std::fs::create_dir(&dir).expect("stage hostile dir");
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("loosen");
+            let socket = dir.join("par-mux-evil.sock");
+            let err = socket_dir_guard(&socket, &dir).expect_err("a loose dir is refused");
+            assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        }
     }
 }
