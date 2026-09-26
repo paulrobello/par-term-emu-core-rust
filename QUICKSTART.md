@@ -19,19 +19,35 @@ Get up and running with par-term-emu in minutes!
 
 ## Installation
 
-**Requirements:** Rust 1.98+ and Python 3.12+
+### From PyPI (recommended)
+
+```bash
+uv add par-term-emu-core-rust
+# or
+pip install par-term-emu-core-rust
+```
+
+**Requirements:** Python 3.12+
+
+### Install from source
+
+For hacking on the library itself. Requires Rust 1.98+ and Python 3.12+.
 
 ```bash
 # Install Rust if you haven't already
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Install maturin using uv (recommended)
-uv tool install maturin
-
-# Clone and build
 git clone https://github.com/paulrobello/par-term-emu-core-rust
 cd par-term-emu-core-rust
-maturin develop --release
+
+# One-time setup: create .venv and sync dependencies
+make setup-venv
+
+# Build the library and install it into the venv (release mode)
+make dev
+
+# Verify the import works
+uv run python -c "import par_term_emu_core_rust; print(par_term_emu_core_rust.__version__)"
 ```
 
 ## Your First Terminal
@@ -221,7 +237,7 @@ uv run python examples/pty_shell.py
 - Check out the [full API documentation](docs/API_REFERENCE.md) for complete method reference
 - Explore the [examples directory](examples/) for code samples including PTY, graphics, and advanced features
 - Review [Streaming Documentation](docs/STREAMING.md) for WebSocket protocol, advanced features, and troubleshooting
-- Review [CLAUDE.md](CLAUDE.md) for development and build instructions
+- Read [docs/BUILDING.md](docs/BUILDING.md) for build details and [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
 - Run example demonstrations: `make examples`
 
 ## Common Patterns
@@ -278,6 +294,6 @@ term.process_str("New content\n")
 
 ## Help & Support
 
-- Report issues on GitHub
+- [Report issues on GitHub](https://github.com/paulrobello/par-term-emu-core-rust/issues)
 - Read the full documentation in README.md
 - Check examples/ for more code samples
