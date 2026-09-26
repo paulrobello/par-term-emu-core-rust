@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `Terminal.set_allow_file_media(mode)` / `Terminal.get_allow_file_media()` — Python bindings for the Kitty file-media gate, with `StreamingConfig.kitty_file_media` for streaming session terminals.
+- **PyPI wheels now ship with the streaming server compiled in** (ENH-017; `.github/workflows/deployment.yml`). Wheels were built without the `streaming` feature, so `StreamingServer`/`StreamingConfig` were constructor-raising stubs while `_has_streaming` still reported `True` (audit ARC-025). The publish pipeline now builds every wheel with `--features streaming` (wheel size 7.6MB → 12.0MB on macOS arm64; job timeouts widened for the extra dep closure). New native constant `par_term_emu_core_rust._native.HAS_STREAMING` reports the real capability, `_has_streaming` derives from it instead of an ImportError probe that never fired, and non-streaming source builds now export `None` for the streaming names instead of unusable stubs. `scripts/generate_stubs.py` handles `bool` module constants.
 
 ## [0.52.0] - 2026-09-25
 

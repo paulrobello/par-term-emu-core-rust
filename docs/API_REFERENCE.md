@@ -2043,7 +2043,7 @@ The terminal supports multiple concurrent named progress bars via OSC 934 sequen
 
 ## StreamingServer Class
 
-WebSocket streaming server for broadcasting terminal state to connected clients. Available when the `streaming` feature is enabled.
+WebSocket streaming server for broadcasting terminal state to connected clients. Compiled into the PyPI wheels; in source builds available when the `streaming` feature is enabled (runtime check: `par_term_emu_core_rust._native.HAS_STREAMING`).
 
 ### Constructor
 

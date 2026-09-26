@@ -213,6 +213,8 @@ uv add par-term-emu-core-rust
 pip install par-term-emu-core-rust
 ```
 
+Wheels ship with the streaming server compiled in (`StreamingServer` works out of the box; check `par_term_emu_core_rust._native.HAS_STREAMING` to detect a build without it).
+
 ### From Source
 
 Requires Rust 1.98+ and Python 3.12+:
@@ -228,7 +230,8 @@ maturin develop --release
 ### Building a Wheel
 
 ```bash
-maturin build --release
+# --features streaming matches the PyPI wheels; drop it for a lean local wheel
+maturin build --release --features streaming
 uv add --find-links target/wheels par-term-emu-core-rust
 # or
 pip install target/wheels/par_term_emu_core_rust-*.whl

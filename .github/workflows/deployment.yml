@@ -208,7 +208,7 @@ jobs:
   linux:
     name: Linux ${{ matrix.target }} - Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     needs: [version-check]
     strategy:
       matrix:
@@ -235,7 +235,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --features streaming --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
           manylinux: auto
 
@@ -268,7 +268,7 @@ jobs:
   macos:
     name: macOS - Python ${{ matrix.python-version }}
     runs-on: macos-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: [version-check]
     strategy:
       matrix:
@@ -290,13 +290,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --features streaming --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
       - name: Build wheels - universal2
         uses: PyO3/maturin-action@v1
         with:
           target: universal2-apple-darwin
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --features streaming --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
       - name: Create virtual environment
         run: |
@@ -321,7 +321,7 @@ jobs:
   windows:
     name: Windows - Python ${{ matrix.python-version }}
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     needs: [version-check]
     strategy:
       matrix:
@@ -341,7 +341,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64
-          args: --release --out dist --interpreter python${{ matrix.python-version }}
+          args: --release --features streaming --out dist --interpreter python${{ matrix.python-version }}
           sccache: 'true'
 
       - name: Create virtual environment
