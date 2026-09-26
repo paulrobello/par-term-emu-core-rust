@@ -12,6 +12,7 @@ pub mod agent_resume;
 pub mod client;
 pub mod command;
 pub mod emit;
+pub(crate) mod foreground;
 pub mod hooks;
 pub mod ids;
 pub mod ipc;

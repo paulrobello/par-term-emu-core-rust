@@ -277,7 +277,7 @@ Panes whose agent reports no state hook (claude, codex, grok) get state read fro
 
 Structural rules (`src/mux/scrape.rs`):
 
-- **Hooks stay primary.** A pane that has ever accepted a hook state report is hook-authoritative until it dies; the tick skips it outright, and a quiet hook agent holds its last claim.
+- **Hooks stay primary.** A pane that has ever accepted a hook state report is hook-authoritative until it dies; the tick skips it outright, and a quiet hook agent holds its last claim — except the liveness sweep below, which clears the one thing a quiet hook can never correct: a dead agent.
 - **A scrape never invents state.** An unmatched scrape clears its own earlier guess and yields nothing — never `idle`.
 - **Provenance rides every surface**: the `source=` token on `%agent-state-changed`, the `<source>` column in `list-agents`, and the `agent_state_rule` metadata (which pattern fired).
 - **`contains` matches case-insensitively** (herdr parity): needles lowercase at compile and the region text at match, so real-cased agent chrome ("Do you want to proceed?") hits rules authored in lowercase. `regex`/`line_regex` stay case-sensitive as written — make them `(?i)` explicitly when they must fold.
@@ -290,6 +290,12 @@ Patterns ship bundled (`include_str!` from `src/mux/patterns/{claude,codex,grok}
 ```
 
 An override that fails to parse or validate falls back to the bundled set with a warning; a file for an agent with no bundled set adds it. Pattern files document which herdr rule regions are implemented (`osc_title`, `whole`, `bottom_non_empty_lines(N)`, `top_non_empty_lines(N)`).
+
+### Claim liveness sweep
+
+`pane.release_agent` only fires when the agent's hook is alive to send it. An agent that crashes or is killed would hold its roster entry and resume identity until relabel or pane death, so the same once-per-second tick runs a liveness sweep over hook-authoritative panes (`src/mux/foreground.rs`): a claim is stale when **no process descending from the pane's child matches the claimed agent's CLI** — the descendant tree, not the foreground process, because an agent backgrounded with Ctrl+Z or hidden behind an editor is still alive. The CLI match accepts the label as a path component or a `-`/`_`/`.`-suffixed variant (`pi`, `…/bin/pi`, `…/claude-cli/cli.js`, `pi.js`), which covers npm/bun-installed agents whose argv is an interpreter plus a package script.
+
+Two mismatching ticks (not interrupted by a proven match) clear the whole claim and broadcast `%agent-released`, exactly as a release report would. The verdict is conservative in every ambiguous direction: a probe that goes blind (unreadable argv — the fresh-spawn window where macOS cannot read a mid-`exec` argv) keeps its recorded misses and never adds one, and Windows has no portable process-tree/argv access, so the sweep is inert there and hook release remains the only claim-clearing path.
 
 ## Persistence and Restart
 
@@ -375,7 +381,8 @@ The integration suites live in `tests/mux_*.rs` (`mux_daemon`, `mux_restart`, `m
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
 | `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.release_agent` |
-| `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick |
+| `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick, incl. the claim liveness sweep |
+| `src/mux/foreground.rs` | Process-table snapshot + descendant-tree liveness probe for hook claims (macOS `sysctl KERN_PROC_ALL` + `KERN_PROCARGS2` — libproc is ancestry-gated; Linux `/proc`; inert on Windows) |
 | `src/mux/agent_resume.rs` | The per-agent resume invocation table |
 | `src/mux/win_resume.rs` | Windows resume transport: PE resolution and the cmd bridge batch |
 | `src/mux/client.rs` | `MuxClient`: connect/attach, `send`, notifications, spawn/kill daemon |

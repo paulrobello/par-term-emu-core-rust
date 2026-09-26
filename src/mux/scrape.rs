@@ -16,7 +16,10 @@
 //! ruling). An override that fails to parse or validate falls back to
 //! bundled with a warning, never silently disabling the agent.
 
+use crate::mux::foreground::{Liveness, ProcessTable};
+use crate::mux::hooks::AGENT_CLAIM_KEYS;
 use crate::mux::ids::PaneId;
+use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
@@ -472,8 +475,64 @@ impl ScrapeEngine {
 /// precedence: the pane must carry an `agent` label (hook report or
 /// factory tag), must not be hook-authoritative (`agent_state_source` =
 /// `hook` — permanent once any hook state report is accepted), and must
-/// have patterns for its agent.
+/// have patterns for its agent. Hook-authoritative panes are still visited
+/// by the liveness sweep: a claim whose agent provably left the pane's
+/// process tree is cleared and released (see `foreground.rs`).
 pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<TmuxNotification> {
+    scrape_tick_with(tree, engine, ProcessTable::snapshot().as_ref())
+}
+
+/// Mismatching ticks (not interrupted by a proven match) before a hook
+/// claim is cleared. One never clears: the probe runs while a pane's
+/// process tree is in ordinary flux (a shell pipeline between execs, an
+/// agent restarting itself), and provable absence held across two
+/// 1-second ticks is the death signal.
+const LIVENESS_MISSES_TO_CLEAR: u8 = 2;
+
+/// The keys the liveness sweep keeps its miss count under. The count
+/// belongs to one agent label, so it lives and dies with the claim
+/// (`AGENT_CLAIM_KEYS` clears it) and a relabel starts a fresh count.
+const LIVENESS_MISS_KEYS: &[&str] = &["agent_liveness_misses", "agent_liveness_misses_agent"];
+
+/// A tick that saw the agent alive drops the miss count: only unbroken
+/// mismatches clear a claim. `Unknown` deliberately does NOT reset — a
+/// measurement failure (argv unreadable mid-`exec`, the fresh-spawn
+/// window) is not liveness, and erasing proof because the probe went
+/// blind for a tick would let a dead agent's claim survive alternation.
+fn reset_liveness_misses(pane: &mut MuxPane) {
+    pane.clear_metadata(LIVENESS_MISS_KEYS);
+}
+
+/// Record one mismatching tick and return the count after the increment.
+/// A count carried under a different agent label is the previous agent's;
+/// restart from one under the current label.
+fn bump_liveness_misses(pane: &mut MuxPane, agent: &str) -> u8 {
+    let prior = if pane
+        .metadata()
+        .get("agent_liveness_misses_agent")
+        .map(String::as_str)
+        == Some(agent)
+    {
+        pane.metadata()
+            .get("agent_liveness_misses")
+            .and_then(|value| value.parse::<u8>().ok())
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let misses = prior.saturating_add(1);
+    pane.set_metadata("agent_liveness_misses", &misses.to_string());
+    pane.set_metadata("agent_liveness_misses_agent", agent);
+    misses
+}
+
+/// The tick with the process table injected — the liveness sweep's test
+/// seam; [`scrape_tick`] reads the real one.
+pub(crate) fn scrape_tick_with(
+    tree: &Arc<Mutex<MuxTree>>,
+    engine: &ScrapeEngine,
+    table: Option<&ProcessTable>,
+) -> Vec<TmuxNotification> {
     let mut notifications = Vec::new();
     let mut guard = tree.lock();
     let panes: Vec<PaneId> = guard
@@ -499,6 +558,30 @@ pub fn scrape_tick(tree: &Arc<Mutex<MuxTree>>, engine: &ScrapeEngine) -> Vec<Tmu
         };
         let prior_source = pane.metadata().get("agent_state_source").cloned();
         if prior_source.as_deref() == Some("hook") {
+            // Hook authority is never scraped — but a claim whose agent
+            // provably left the pane's process tree is cleared here. A
+            // crashed agent's hook never sends `pane.release_agent`; see
+            // `foreground.rs` for why the sweep asks the descendant tree,
+            // not the foreground process.
+            if let Some(table) = table {
+                if let Some(child_pid) = pane.child_pid() {
+                    match table.agent_alive(child_pid, &agent) {
+                        Liveness::Matches => reset_liveness_misses(pane),
+                        // Unknown keeps the current count: the probe went
+                        // blind, which is neither liveness nor death.
+                        Liveness::Unknown => {}
+                        Liveness::Mismatch => {
+                            if bump_liveness_misses(pane, &agent) >= LIVENESS_MISSES_TO_CLEAR {
+                                pane.clear_metadata(AGENT_CLAIM_KEYS);
+                                notifications.push(TmuxNotification::AgentReleased {
+                                    pane_id: pane_id.to_string(),
+                                    agent: agent.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
             continue;
         }
         let Some(set) = engine.set_for(&agent) else {
@@ -1057,5 +1140,296 @@ contains = ["Override Idle"]
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert!(!pane.metadata().contains_key("agent_state"));
+    }
+
+    // ---- the liveness sweep (foreground.rs) over hook claims ----
+
+    fn argv(parts: &[&str]) -> Option<Vec<String>> {
+        Some(parts.iter().map(|p| p.to_string()).collect())
+    }
+
+    /// A hook-authoritative claim carrying the full identity the sweep
+    /// must clear: label, state, session ref, and resume argv.
+    fn hook_claim(tree: &Arc<Mutex<MuxTree>>, pane_id: PaneId, agent: &str) {
+        let mut guard = tree.lock();
+        let pane = guard.pane_mut(pane_id).expect("pane exists");
+        pane.set_metadata("agent", agent);
+        pane.set_metadata("agent_state", "working");
+        pane.set_metadata("agent_state_source", "hook");
+        pane.set_metadata("agent_session_id", "sess-1");
+        pane.set_metadata("agent_resume_argv", r#"["pi","--session","/tmp/s.json"]"#);
+    }
+
+    fn claim_intact(tree: &Arc<Mutex<MuxTree>>, pane_id: PaneId) -> bool {
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        pane.metadata()
+            .get("agent_state_source")
+            .map(String::as_str)
+            == Some("hook")
+    }
+
+    #[test]
+    fn a_dead_agent_loses_its_hook_claim_after_two_mismatching_ticks() {
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "pi");
+        let engine = ScrapeEngine::load(None);
+        let child = tree
+            .lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child");
+        let agent_pid = child as i32 + 8000; // synthetic; no OS lookup happens
+        let alive = ProcessTable::with_fixed_argv(&[
+            (child as i32, 1, argv(&["-bash"])),
+            (
+                agent_pid,
+                child as i32,
+                argv(&["/usr/local/bin/pi", "--session", "/tmp/s.json"]),
+            ),
+        ]);
+        let dead = ProcessTable::with_fixed_argv(&[(child as i32, 1, argv(&["-bash"]))]);
+
+        // Alive: the claim stands and no miss count accumulates.
+        assert!(scrape_tick_with(&tree, &engine, Some(&alive)).is_empty());
+        assert!(claim_intact(&tree, pane_id));
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert!(
+                !pane.metadata().contains_key("agent_liveness_misses"),
+                "a matching tick stores no miss count"
+            );
+        }
+
+        // Dead, tick one of two: recorded, not yet acted on.
+        assert!(scrape_tick_with(&tree, &engine, Some(&dead)).is_empty());
+        assert!(claim_intact(&tree, pane_id), "one mismatch never clears");
+
+        // Dead, tick two: the claim — label, state, session identity,
+        // resume argv, and the miss count — is cleared and the release
+        // broadcast, exactly as a `pane.release_agent` report would.
+        let notifications = scrape_tick_with(&tree, &engine, Some(&dead));
+        assert_eq!(
+            notifications,
+            vec![TmuxNotification::AgentReleased {
+                pane_id: pane_id.to_string(),
+                agent: "pi".to_string(),
+            }],
+            "the sweep broadcasts the release"
+        );
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            for key in AGENT_CLAIM_KEYS {
+                assert!(
+                    !pane.metadata().contains_key(*key),
+                    "{key} cleared: {:?}",
+                    pane.metadata()
+                );
+            }
+        }
+
+        // A cleared claim is nobody's pane: further ticks are quiet.
+        assert!(scrape_tick_with(&tree, &engine, Some(&dead)).is_empty());
+    }
+
+    #[test]
+    fn a_live_agent_keeps_its_claim_and_a_transient_miss_resets() {
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "pi");
+        let engine = ScrapeEngine::load(None);
+        let child = tree
+            .lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child");
+        let agent_pid = child as i32 + 8000;
+        let alive = ProcessTable::with_fixed_argv(&[
+            (child as i32, 1, argv(&["-bash"])),
+            (agent_pid, child as i32, argv(&["pi"])),
+        ]);
+        let dead = ProcessTable::with_fixed_argv(&[(child as i32, 1, argv(&["-bash"]))]);
+
+        // Alive across ticks: no clear ever.
+        for _ in 0..3 {
+            assert!(scrape_tick_with(&tree, &engine, Some(&alive)).is_empty());
+        }
+        assert!(claim_intact(&tree, pane_id));
+
+        // One mismatch, then alive again: the count resets, so a LATER
+        // run of mismatches must start from one again.
+        scrape_tick_with(&tree, &engine, Some(&dead));
+        scrape_tick_with(&tree, &engine, Some(&alive));
+        assert!(
+            scrape_tick_with(&tree, &engine, Some(&dead)).is_empty(),
+            "first mismatch after a reset does not clear"
+        );
+        assert!(claim_intact(&tree, pane_id));
+    }
+
+    #[test]
+    fn an_unreadable_descendant_keeps_the_claim() {
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "pi");
+        let engine = ScrapeEngine::load(None);
+        let child = tree
+            .lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child");
+        let table = ProcessTable::with_fixed_argv(&[
+            (child as i32, 1, argv(&["-bash"])),
+            (child as i32 + 8000, child as i32, None), // present, argv unreadable
+        ]);
+        for _ in 0..3 {
+            assert!(scrape_tick_with(&tree, &engine, Some(&table)).is_empty());
+        }
+        assert!(
+            claim_intact(&tree, pane_id),
+            "Unknown keeps the claim — the sweep only acts on proof"
+        );
+    }
+
+    #[test]
+    fn a_relabelled_claim_starts_a_fresh_miss_count() {
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "pi");
+        let engine = ScrapeEngine::load(None);
+        let child = tree
+            .lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child");
+        let dead_for_pi = ProcessTable::with_fixed_argv(&[(child as i32, 1, argv(&["-bash"]))]);
+
+        // One miss under pi, then the hook relabels to claude.
+        scrape_tick_with(&tree, &engine, Some(&dead_for_pi));
+        tree.lock()
+            .pane_mut(pane_id)
+            .expect("pane exists")
+            .set_metadata("agent", "claude");
+
+        // The new label must not inherit pi's miss: first claude mismatch
+        // does not clear…
+        assert!(scrape_tick_with(&tree, &engine, Some(&dead_for_pi)).is_empty());
+        assert!(claim_intact(&tree, pane_id));
+        // …the second does, naming claude.
+        let notifications = scrape_tick_with(&tree, &engine, Some(&dead_for_pi));
+        assert_eq!(
+            notifications,
+            vec![TmuxNotification::AgentReleased {
+                pane_id: pane_id.to_string(),
+                agent: "claude".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn a_probe_blind_tick_preserves_the_miss_count() {
+        // Unknown is a measurement failure, not liveness: a mismatch must
+        // not be erased by an interleaved unreadable-argv tick (the
+        // fresh-spawn window where macOS cannot read a mid-exec argv).
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "pi");
+        let engine = ScrapeEngine::load(None);
+        let child = tree
+            .lock()
+            .pane(pane_id)
+            .expect("pane exists")
+            .child_pid()
+            .expect("spawned pane has a child");
+        let dead = ProcessTable::with_fixed_argv(&[(child as i32, 1, argv(&["-bash"]))]);
+        let blind = ProcessTable::with_fixed_argv(&[
+            (child as i32, 1, argv(&["-bash"])),
+            (child as i32 + 8000, child as i32, None),
+        ]);
+
+        scrape_tick_with(&tree, &engine, Some(&dead)); // miss 1
+        scrape_tick_with(&tree, &engine, Some(&blind)); // Unknown: count kept
+        let notifications = scrape_tick_with(&tree, &engine, Some(&dead)); // miss 2
+        assert_eq!(
+            notifications,
+            vec![TmuxNotification::AgentReleased {
+                pane_id: pane_id.to_string(),
+                agent: "pi".to_string(),
+            }],
+            "the blind tick did not reset the miss count"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_real_table_clears_a_claim_no_process_can_match() {
+        // End-to-end over the REAL process table: a hook claim whose agent
+        // is provably not in the pane's tree (the pane's shell is the only
+        // descendant) is cleared. The real table intermittently returns
+        // Unknown right after spawn (argv unreadable mid-exec), which keeps
+        // — not resets — the count, so poll a bounded number of ticks
+        // instead of asserting an exact tick count.
+        let (tree, pane_id) = tree_with_pane();
+        hook_claim(&tree, pane_id, "zz-no-such-agent-cli");
+        let engine = ScrapeEngine::load(None);
+        assert!(
+            scrape_tick(&tree, &engine).is_empty(),
+            "the first mismatching tick never clears"
+        );
+        let mut released = Vec::new();
+        for _ in 0..40 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            released = scrape_tick(&tree, &engine);
+            if !released.is_empty() {
+                break;
+            }
+        }
+        assert_eq!(
+            released,
+            vec![TmuxNotification::AgentReleased {
+                pane_id: pane_id.to_string(),
+                agent: "zz-no-such-agent-cli".to_string(),
+            }],
+            "the real probe proves absence and the sweep clears"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_real_table_keeps_a_claim_for_a_process_in_the_pane_tree() {
+        // A pane whose child tree really does contain the claimed "agent"
+        // — here a sleep command standing in for the CLI — keeps its claim
+        // across the real table's ticks.
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory::default()));
+        let session = tree.new_session("real", 80, 24).expect("session spawns");
+        let root = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let sleeper = split_pane_with_command(&mut tree, root, "sleep 300");
+        let tree = Arc::new(Mutex::new(tree));
+        hook_claim(&tree, sleeper, "sleep");
+        let engine = ScrapeEngine::load(None);
+        for _ in 0..5 {
+            assert!(
+                scrape_tick(&tree, &engine).is_empty(),
+                "a live stand-in agent is never released"
+            );
+        }
+        assert!(claim_intact(&tree, sleeper));
+    }
+
+    #[cfg(unix)]
+    fn split_pane_with_command(tree: &mut MuxTree, root: PaneId, command: &str) -> PaneId {
+        use crate::mux::layout::SplitDirection;
+        tree.split_pane(root, SplitDirection::Vertical, 0.5, Some(command))
+            .expect("split spawns")
     }
 }

@@ -337,6 +337,26 @@ fn handle_session_report(
     (ok_reply(id), notification)
 }
 
+/// Every metadata key that constitutes an agent claim, cleared as one unit
+/// by `pane.release_agent` and by the scrape tick's liveness sweep
+/// (`scrape.rs`) alike — roster label, state, hook authority, sequence
+/// stamps, session identity, and the liveness miss counter the sweep keeps.
+pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
+    "agent",
+    "agent_state",
+    "agent_state_source",
+    "agent_message",
+    "agent_source",
+    "agent_seq",
+    SEQ_STAMPS_KEY,
+    "agent_session_id",
+    "agent_session_path",
+    "agent_session_start_source",
+    "agent_resume_argv",
+    "agent_liveness_misses",
+    "agent_liveness_misses_agent",
+];
+
 /// `pane.release_agent`: the claiming agent announces it is gone (herdr's
 /// SessionEnd shape). The claim — label, state, hook authority, blocked
 /// reason, sequence stamps, and session identity — is cleared and the
@@ -372,19 +392,7 @@ fn handle_release_report(
         if pane.metadata().get("agent").map(String::as_str) != Some(header.agent.as_str()) {
             return (ok_reply(id), None);
         }
-        pane.clear_metadata(&[
-            "agent",
-            "agent_state",
-            "agent_state_source",
-            "agent_message",
-            "agent_source",
-            "agent_seq",
-            SEQ_STAMPS_KEY,
-            "agent_session_id",
-            "agent_session_path",
-            "agent_session_start_source",
-            "agent_resume_argv",
-        ]);
+        pane.clear_metadata(AGENT_CLAIM_KEYS);
         Some(TmuxNotification::AgentReleased {
             pane_id: header.pane_id.to_string(),
             agent: header.agent.clone(),
