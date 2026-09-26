@@ -90,40 +90,39 @@ with open(log_file, 'a') as f:
 
         # Spawn bash, which will spawn the Python script
         term = PtyTerminal(80, 24)
-        term.spawn_shell()  # Spawns bash
-
-        assert wait_for(lambda: term.content().strip())
-
-        # Execute the Python script from bash
-        cmd = f"{sys.executable} {script_file} &\n"
-        print(f"Executing in bash: {cmd}")
-        term.write_str(cmd)
-        assert wait_for(lambda: "INITIAL:" in read_log(log_file))
-
-        # Read the log to get process info
-        content = read_log(log_file)
-        print(f"Initial state:\n{content}")
-
-        # Resize the terminal
-        print("\nResizing to 100x30...")
-        term.resize(100, 30)
-
-        # Check what the Python process sees. Nested SIGWINCH delivery is a
-        # known-broken path, so absence within a bounded window skips rather
-        # than fails (the original test's expected-failure probe).
         try:
+            term.spawn_shell()  # Spawns bash
+
+            assert wait_for(lambda: term.content().strip())
+
+            # Execute the Python script from bash. FOREGROUND, deliberately:
+            # the kernel delivers SIGWINCH on resize to the terminal's
+            # foreground process group only, and a `&` background job is
+            # excluded by construction — the original backgrounded form
+            # could never see the signal and skipped forever (the
+            # expected-failure probe this test used to carry).
+            cmd = f"{sys.executable} {script_file}\n"
+            print(f"Executing in bash: {cmd}")
+            term.write_str(cmd)
+            assert wait_for(lambda: "INITIAL:" in read_log(log_file))
+
+            # Read the log to get process info
+            content = read_log(log_file)
+            print(f"Initial state:\n{content}")
+
+            # Resize the terminal
+            print("\nResizing to 100x30...")
+            term.resize(100, 30)
+
+            # The grandchild must observe the resize: the kernel signals the
+            # foreground process group, and its handler logs the new size.
             assert wait_for(
                 lambda: "SIGWINCH:100x30" in read_log(log_file), timeout=2.0
             )
-        except AssertionError:
-            print(f"After resize:\n{read_log(log_file)}")
-            pytest.skip(
-                "Nested resize not yet working - need to investigate process groups"
-            )
 
-        print("✓ SUCCESS: Python grandchild received resize!")
-
-        term.kill()
+            print("✓ SUCCESS: Python grandchild received resize!")
+        finally:
+            term.kill()
 
     finally:
         if os.path.exists(log_file):
