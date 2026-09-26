@@ -1285,32 +1285,21 @@ impl StreamingServer {
                         return replies;
                     }
                 }
-                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                if session
+                    .pty_writer
+                    .read()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false)
+                {
                     session
                         .metrics
                         .input_bytes
                         .fetch_add(data.len(), Ordering::Relaxed);
-                    // SEC-005: never block the async runtime on a PTY write.
-                    // A non-reading foreground process with a full kernel
-                    // buffer would stall `write_all` and, on the tokio worker,
-                    // freeze every session sharing that worker. The payload
-                    // and writer handle move to the blocking pool; no lock is
-                    // held across an await.
-                    let payload = data.into_bytes();
-                    let session = Arc::clone(session);
-                    tokio::task::spawn_blocking(move || {
-                        use std::io::Write;
-                        let mut w = writer.lock();
-                        if let Err(e) = w.write_all(&payload).and_then(|_| w.flush()) {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "PTY write error for session {}: {}",
-                                session.id,
-                                e
-                            );
-                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                        }
-                    });
+                    // QA-110: enqueue onto the session's serialized input
+                    // path. One blocking drain task owns the PTY writes, so
+                    // arrival order is write order, and no async worker can
+                    // be stalled by a blocking PTY write (SEC-005).
+                    session.enqueue_pty_input(data.into_bytes());
                 }
             }
             crate::streaming::protocol::ClientMessage::Resize { cols, rows } => {
@@ -1352,7 +1341,12 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
-                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                if session
+                    .pty_writer
+                    .read()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false)
+                {
                     let bytes = {
                         let mut terminal = session.terminal.write();
                         // Build modifiers bitmask: shift=1, meta/alt=2, ctrl=4
@@ -1374,17 +1368,10 @@ impl StreamingServer {
                             .metrics
                             .input_bytes
                             .fetch_add(bytes.len(), Ordering::Relaxed);
-                        let mut w = writer.lock();
-                        use std::io::Write;
-                        if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "PTY mouse write error for session {}: {}",
-                                session.id,
-                                e
-                            );
-                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                        }
+                        // QA-110: same serialized input path as keystrokes —
+                        // a mouse report may not overtake or trail the
+                        // keystrokes around it.
+                        session.enqueue_pty_input(bytes);
                     }
                 }
             }
@@ -1392,7 +1379,12 @@ impl StreamingServer {
                 if read_only {
                     return replies;
                 }
-                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                if session
+                    .pty_writer
+                    .read()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false)
+                {
                     let bytes = {
                         let terminal = session.terminal.write();
                         if terminal.focus_tracking() {
@@ -1410,17 +1402,8 @@ impl StreamingServer {
                             .metrics
                             .input_bytes
                             .fetch_add(bytes.len(), Ordering::Relaxed);
-                        let mut w = writer.lock();
-                        use std::io::Write;
-                        if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "PTY focus write error for session {}: {}",
-                                session.id,
-                                e
-                            );
-                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                        }
+                        // QA-110: same serialized input path as keystrokes.
+                        session.enqueue_pty_input(bytes);
                     }
                 }
             }
@@ -1450,7 +1433,12 @@ impl StreamingServer {
                         return replies;
                     }
                 }
-                if let Some(writer) = session.pty_writer.read().ok().and_then(|g| g.clone()) {
+                if session
+                    .pty_writer
+                    .read()
+                    .map(|g| g.is_some())
+                    .unwrap_or(false)
+                {
                     // Copy the bracketed-paste markers and payload out under
                     // the terminal guard, then drop the guard before the
                     // (blocking) PTY write (SEC-005).
@@ -1470,28 +1458,14 @@ impl StreamingServer {
                         .metrics
                         .input_bytes
                         .fetch_add(payload.len(), Ordering::Relaxed);
-                    let session = Arc::clone(session);
-                    tokio::task::spawn_blocking(move || {
-                        use std::io::Write;
-                        let mut w = writer.lock();
-                        let result = if !start.is_empty() {
-                            w.write_all(&start)
-                                .and_then(|_| w.write_all(&payload))
-                                .and_then(|_| w.write_all(&end))
-                                .and_then(|_| w.flush())
-                        } else {
-                            w.write_all(&payload).and_then(|_| w.flush())
-                        };
-                        if let Err(e) = result {
-                            crate::debug_error!(
-                                "STREAMING",
-                                "PTY paste write error for session {}: {}",
-                                session.id,
-                                e
-                            );
-                            session.metrics.errors.fetch_add(1, Ordering::Relaxed);
-                        }
-                    });
+                    // QA-110: one frame through the serialized input path, so
+                    // the bracket markers can never split from their payload
+                    // and the paste keeps its place among other input.
+                    let mut frame = Vec::with_capacity(start.len() + payload.len() + end.len());
+                    frame.extend_from_slice(&start);
+                    frame.extend_from_slice(&payload);
+                    frame.extend_from_slice(&end);
+                    session.enqueue_pty_input(frame);
                 }
             }
             crate::streaming::protocol::ClientMessage::SelectionRequest {

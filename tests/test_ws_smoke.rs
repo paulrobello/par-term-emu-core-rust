@@ -406,3 +406,110 @@ async fn axum_http_path_forwards_mouse_to_pty_writer() {
 
     server_handle.abort();
 }
+
+/// PTY writer stub that records every byte written through it, taking a
+/// moment per write — a PTY whose foreground process consumes input at a
+/// realistic pace rather than instantly. The delay is what lets concurrent
+/// writers pile up on the PTY mutex, which is the precondition for the
+/// QA-110 reorder.
+struct SlowCaptureWriter {
+    per_write: Duration,
+    captured: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Write for SlowCaptureWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        std::thread::sleep(self.per_write);
+        self.captured.lock().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// QA-110: N sequential Input messages must reach the PTY in send order.
+/// Each Input used to spawn its own `spawn_blocking` writer contending for
+/// the PTY mutex with no arrival-order guarantee, so back-to-back
+/// keystrokes could reach the shell reordered ("a","b" → "ba"). All input
+/// kinds now enqueue onto one per-session channel drained by a single
+/// writer, so the captured byte stream must equal the send order exactly.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sequential_inputs_reach_the_pty_in_order() {
+    let port = ephemeral_port();
+    let addr = format!("127.0.0.1:{}", port);
+
+    let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+    let captured = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let server = Arc::new(StreamingServer::new(terminal, addr.clone()));
+    server.set_pty_writer(Arc::new(Mutex::new(Box::new(SlowCaptureWriter {
+        per_write: Duration::from_micros(200),
+        captured: Arc::clone(&captured),
+    }) as Box<dyn Write + Send>)));
+
+    let server_handle = tokio::spawn(async move { server.start().await });
+
+    // Wait briefly for the listener to come up.
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(&addr).await.is_ok() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    let url = format!("ws://{}", addr);
+    let (mut ws, _response) = connect_async(url).await.expect("WS handshake");
+
+    // Drain the initial Connected message.
+    let first = ws.next().await.expect("server sent a message").unwrap();
+    match first {
+        Message::Binary(data) => {
+            let msg = decode_server_message(&data).expect("decode Connected");
+            assert!(matches!(msg, ServerMessage::Connected { .. }));
+        }
+        other => panic!("expected Binary Connected, got {:?}", other),
+    }
+
+    // N sequential Inputs, each a fixed-width token: any reorder shows up
+    // as a wrong byte in the captured stream.
+    const N: usize = 200;
+    let mut expected = Vec::with_capacity(N * 4);
+    for i in 0..N {
+        let token = format!("{:04}", i);
+        ws.send(Message::Binary(
+            encode_client_message(&ClientMessage::Input {
+                data: token.clone(),
+            })
+            .unwrap()
+            .into(),
+        ))
+        .await
+        .expect("send Input");
+        expected.extend_from_slice(token.as_bytes());
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        {
+            let buf = captured.lock();
+            if buf.len() >= expected.len() {
+                assert_eq!(
+                    buf.as_slice(),
+                    expected.as_slice(),
+                    "PTY received input out of send order"
+                );
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "PTY writer never received all {} inputs; captured {:?}",
+            N,
+            String::from_utf8_lossy(&captured.lock())
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    server_handle.abort();
+}

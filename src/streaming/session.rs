@@ -82,6 +82,11 @@ pub struct StreamSessionState {
     pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
     pub(crate) pty_writer: std::sync::RwLock<Option<PtyWriterHandle>>,
+    /// Serialized PTY input path (QA-110): every input-bearing client
+    /// message enqueues bytes here; one blocking drain task (spawned on
+    /// first use) owns all PTY writes, so channel order is byte order on
+    /// the PTY. `None` until the first input after PTY attach.
+    pty_input_tx: std::sync::RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>,
     /// Channel for sending resize requests
     pub(crate) resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Receiver for resize requests
@@ -126,6 +131,7 @@ impl StreamSessionState {
             output_tx,
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
             pty_writer: std::sync::RwLock::new(None),
+            pty_input_tx: std::sync::RwLock::new(None),
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
             client_count: AtomicUsize::new(0),
@@ -301,6 +307,67 @@ impl StreamSessionState {
     pub fn set_pty_writer(&self, writer: PtyWriterHandle) {
         if let Ok(mut guard) = self.pty_writer.write() {
             *guard = Some(writer);
+        }
+    }
+
+    /// Enqueue client input bytes for the session's PTY (QA-110).
+    ///
+    /// Every input-bearing client message (Input, Paste, Mouse,
+    /// FocusChange) routes through this one channel; a single blocking
+    /// drain task owns the PTY writes, so bytes reach the PTY in the order
+    /// the session loop accepted them. The previous shape — one
+    /// `spawn_blocking` writer per Input/Paste plus direct writes from the
+    /// async task for Mouse/FocusChange — raced for the PTY mutex with no
+    /// arrival-order guarantee (back-to-back keystrokes could arrive
+    /// "ba"), and let a blocked write freeze a tokio worker (the SEC-005
+    /// worker-freeze).
+    ///
+    /// The drain task holds only a [`Weak`](std::sync::Weak) reference to
+    /// this state: when the session is dropped its sender drops too, the
+    /// channel closes, and the task exits instead of leaking a blocking
+    /// thread per session.
+    pub(crate) fn enqueue_pty_input(self: &Arc<Self>, bytes: Vec<u8>) {
+        // Fast path: the drain task is up, hand it the bytes.
+        if let Some(tx) = self.pty_input_tx.read().ok().and_then(|g| g.clone()) {
+            let _ = tx.send(bytes);
+            return;
+        }
+
+        // First input after attach: create the channel and start the drain
+        // task. The write lock makes create-once race-safe; the send runs
+        // under it so no input is lost between the empty check and the
+        // store.
+        if let Ok(mut guard) = self.pty_input_tx.write() {
+            if guard.is_none() {
+                let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+                let weak = Arc::downgrade(self);
+                tokio::task::spawn_blocking(move || {
+                    use std::io::Write;
+                    while let Some(bytes) = rx.blocking_recv() {
+                        let Some(session) = weak.upgrade() else {
+                            // Session gone; nothing left to write for.
+                            break;
+                        };
+                        let writer = session.pty_writer.read().ok().and_then(|g| g.clone());
+                        if let Some(w) = writer {
+                            let mut w = w.lock();
+                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                crate::debug_error!(
+                                    "STREAMING",
+                                    "PTY input write error for session {}: {}",
+                                    session.id,
+                                    e
+                                );
+                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                });
+                *guard = Some(tx);
+            }
+            if let Some(tx) = guard.as_ref() {
+                let _ = tx.send(bytes);
+            }
         }
     }
 
