@@ -213,34 +213,61 @@ fn test_reset_profiling_data() {
 
 #[test]
 fn test_benchmark_rendering_returns_result() {
+    use crate::terminal::TerminalBenchmarks;
     let mut term = Terminal::new(80, 24);
-    let result = term.benchmark_rendering(10);
+    let result = TerminalBenchmarks::benchmark_rendering(&mut term, 10);
     assert_eq!(result.iterations, 10);
 }
 
 #[test]
 fn test_benchmark_parsing_returns_result() {
+    use crate::terminal::TerminalBenchmarks;
     let mut term = Terminal::new(80, 24);
-    let result = term.benchmark_parsing("hello world\r\n", 5);
+    let result = TerminalBenchmarks::benchmark_parsing(&mut term, "hello world\r\n", 5);
     assert_eq!(result.iterations, 5);
 }
 
 #[test]
 fn test_benchmark_grid_ops_returns_result() {
+    use crate::terminal::TerminalBenchmarks;
     let mut term = Terminal::new(80, 24);
-    let result = term.benchmark_grid_ops(5);
+    let result = TerminalBenchmarks::benchmark_grid_ops(&mut term, 5);
     assert_eq!(result.iterations, 5);
 }
 
 #[test]
 fn test_run_benchmark_suite() {
+    use crate::terminal::TerminalBenchmarks;
     let mut term = Terminal::new(80, 24);
-    let suite = term.run_benchmark_suite("test-suite".to_string());
+    let suite = TerminalBenchmarks::run_benchmark_suite(&mut term, "test-suite".to_string());
     assert_eq!(suite.suite_name, "test-suite");
     assert!(
         !suite.results.is_empty(),
         "suite should have at least one result"
     );
+}
+
+/// The deprecated Terminal forwarding methods must keep returning exactly
+/// what the service returns (ARC-021 phase 1 keeps them for one minor
+/// release; par-term still calls them).
+#[test]
+fn test_benchmark_forwarders_match_service() {
+    use crate::terminal::TerminalBenchmarks;
+    let mut term = Terminal::new(80, 24);
+    term.process(b"forwarder parity\r\nsecond line\r\n");
+
+    let mut via_service = Terminal::new(80, 24);
+    via_service.process(b"forwarder parity\r\nsecond line\r\n");
+
+    #[allow(deprecated)]
+    let forwarded = term.benchmark_parsing("x", 3);
+    let served = TerminalBenchmarks::benchmark_parsing(&mut via_service, "x", 3);
+    assert_eq!(forwarded.iterations, served.iterations);
+    assert_eq!(forwarded.category, served.category);
+
+    #[allow(deprecated)]
+    let suite = term.run_benchmark_suite("parity".to_string());
+    assert_eq!(suite.results.len(), 2);
 }
 
 #[test]

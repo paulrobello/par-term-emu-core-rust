@@ -6,6 +6,7 @@
 // Submodules
 pub mod action;
 mod apc_filter;
+pub mod benchmarks;
 pub mod clipboard;
 mod colors;
 pub mod compliance;
@@ -30,6 +31,7 @@ pub mod trigger;
 mod write;
 
 // Re-export types as they're part of the public API
+pub use benchmarks::TerminalBenchmarks;
 pub use clipboard::{
     ClipboardEntry, ClipboardHistoryEntry, ClipboardOperation, ClipboardSlot, ClipboardSyncEvent,
     ClipboardTarget,

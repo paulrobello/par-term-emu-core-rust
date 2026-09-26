@@ -189,7 +189,8 @@ impl PyTerminal {
         &mut self,
         iterations: u64,
     ) -> PyResult<crate::python_bindings::types::PyBenchmarkResult> {
-        let result = self.inner.benchmark_rendering(iterations);
+        let result =
+            crate::terminal::TerminalBenchmarks::benchmark_rendering(&mut self.inner, iterations);
         Ok(crate::python_bindings::types::PyBenchmarkResult::from(
             &result,
         ))
@@ -208,7 +209,11 @@ impl PyTerminal {
         text: &str,
         iterations: u64,
     ) -> PyResult<crate::python_bindings::types::PyBenchmarkResult> {
-        let result = self.inner.benchmark_parsing(text, iterations);
+        let result = crate::terminal::TerminalBenchmarks::benchmark_parsing(
+            &mut self.inner,
+            text,
+            iterations,
+        );
         Ok(crate::python_bindings::types::PyBenchmarkResult::from(
             &result,
         ))
@@ -225,7 +230,8 @@ impl PyTerminal {
         &mut self,
         iterations: u64,
     ) -> PyResult<crate::python_bindings::types::PyBenchmarkResult> {
-        let result = self.inner.benchmark_grid_ops(iterations);
+        let result =
+            crate::terminal::TerminalBenchmarks::benchmark_grid_ops(&mut self.inner, iterations);
         Ok(crate::python_bindings::types::PyBenchmarkResult::from(
             &result,
         ))
@@ -242,7 +248,8 @@ impl PyTerminal {
         &mut self,
         suite_name: String,
     ) -> PyResult<crate::python_bindings::types::PyBenchmarkSuite> {
-        let suite = self.inner.run_benchmark_suite(suite_name);
+        let suite =
+            crate::terminal::TerminalBenchmarks::run_benchmark_suite(&mut self.inner, suite_name);
         Ok(crate::python_bindings::types::PyBenchmarkSuite::from(
             &suite,
         ))

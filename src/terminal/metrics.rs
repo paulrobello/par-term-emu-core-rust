@@ -286,111 +286,43 @@ impl Terminal {
     // === Feature 28: Benchmarking Suite ===
 
     /// Run rendering benchmark
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_rendering; this forwarding method will be removed in a future release"
+    )]
     pub fn benchmark_rendering(&mut self, iterations: u64) -> BenchmarkResult {
-        let start = std::time::Instant::now();
-        let mut min_time = u64::MAX;
-        let mut max_time = 0u64;
-
-        for _ in 0..iterations {
-            let iter_start = std::time::Instant::now();
-
-            // Simulate rendering operation
-            let grid = self.active_grid();
-            for row in 0..grid.rows() {
-                if let Some(line) = grid.row(row) {
-                    let _ = crate::terminal::cells_to_text(line);
-                }
-            }
-
-            let iter_time = iter_start.elapsed().as_micros() as u64;
-            min_time = min_time.min(iter_time);
-            max_time = max_time.max(iter_time);
-        }
-
-        let total_time = start.elapsed().as_micros() as u64;
-        let avg_time = total_time / iterations;
-
-        BenchmarkResult {
-            category: BenchmarkCategory::Rendering,
-            name: "Text Rendering".to_string(),
-            iterations,
-            total_time_us: total_time,
-            avg_time_us: avg_time,
-            min_time_us: min_time,
-            max_time_us: max_time,
-            ops_per_sec: if avg_time > 0 {
-                1_000_000.0 / avg_time as f64
-            } else {
-                0.0
-            },
-            memory_bytes: None,
-        }
+        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_rendering(self, iterations)
     }
 
     /// Run parsing benchmark
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_parsing; this forwarding method will be removed in a future release"
+    )]
     pub fn benchmark_parsing(&mut self, text: &str, iterations: u64) -> BenchmarkResult {
-        let start = std::time::Instant::now();
-        let bytes = text.as_bytes();
-        for _ in 0..iterations {
-            self.process(bytes);
-        }
-        let total_time = start.elapsed().as_micros() as u64;
-        let avg_time = total_time / iterations;
-
-        BenchmarkResult {
-            category: BenchmarkCategory::Parsing,
-            name: "Parsing".to_string(),
-            iterations,
-            total_time_us: total_time,
-            avg_time_us: avg_time,
-            min_time_us: 0,
-            max_time_us: 0,
-            ops_per_sec: if avg_time > 0 {
-                1_000_000.0 / avg_time as f64
-            } else {
-                0.0
-            },
-            memory_bytes: None,
-        }
+        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_parsing(self, text, iterations)
     }
 
     /// Run grid operations benchmark
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops; this forwarding method will be removed in a future release"
+    )]
     pub fn benchmark_grid_ops(&mut self, iterations: u64) -> BenchmarkResult {
-        let start = std::time::Instant::now();
-        for _ in 0..iterations {
-            // Perform various grid ops
-            self.grid.clear();
-        }
-        let total_time = start.elapsed().as_micros() as u64;
-        let avg_time = total_time / iterations;
-
-        BenchmarkResult {
-            category: BenchmarkCategory::GridOps,
-            name: "Grid Ops".to_string(),
-            iterations,
-            total_time_us: total_time,
-            avg_time_us: avg_time,
-            min_time_us: 0,
-            max_time_us: 0,
-            ops_per_sec: if avg_time > 0 {
-                1_000_000.0 / avg_time as f64
-            } else {
-                0.0
-            },
-            memory_bytes: None,
-        }
+        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops(self, iterations)
     }
 
     /// Run full benchmark suite
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite; this forwarding method will be removed in a future release"
+    )]
     pub fn run_benchmark_suite(&mut self, suite_name: String) -> BenchmarkSuite {
-        let start = std::time::Instant::now();
-        let results = vec![self.benchmark_rendering(10), self.benchmark_grid_ops(100)];
-
-        BenchmarkSuite {
-            results,
-            total_time_ms: start.elapsed().as_millis() as u64,
-            suite_name,
-        }
+        crate::terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite(self, suite_name)
     }
 
     /// Get comprehensive terminal statistics
