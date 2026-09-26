@@ -113,6 +113,8 @@ impl MuxServer {
     /// instead of a fresh one. Every restored pane is wired to push its
     /// output to connected clients exactly as a newly created pane is.
     pub fn bind_with_tree(path: &Path, tree: MuxTree) -> std::io::Result<Self> {
+        #[cfg(unix)]
+        raise_nofile_soft_limit();
         prepare_socket_path(path)?;
         let listener = bind_local_listener(path)?;
 
@@ -578,6 +580,47 @@ fn is_transient_accept_fault(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::ConnectionAborted
 }
 
+/// Raise the RLIMIT_NOFILE soft limit toward the hard limit at daemon start
+/// (card 01a0d9b2fd2c).
+///
+/// The daemon inherits its spawner's limits: under launchd or the Dock on
+/// macOS that is a soft limit of 256, and at roughly four descriptors per
+/// pane the 60th pane is where new-window starts failing with EMFILE.
+/// herdr raises its server to 8192 the same way. An unbounded hard limit
+/// (the macOS default) is not infinity to the kernel, so a concrete 8192 is
+/// requested in that case instead. Failures are logged and survived — the
+/// raise is headroom, not a guarantee.
+#[cfg(unix)]
+fn raise_nofile_soft_limit() {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: valid rlimit out-pointer.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        log::warn!("par-mux: getrlimit(RLIMIT_NOFILE) failed — serving at the inherited limit");
+        return;
+    }
+    let (soft, hard) = (limit.rlim_cur, limit.rlim_max);
+    let target = if hard == libc::RLIM_INFINITY {
+        8192
+    } else {
+        hard
+    };
+    if soft >= target {
+        return;
+    }
+    limit.rlim_cur = target;
+    // SAFETY: the limit came from getrlimit with only rlim_cur raised.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        log::warn!(
+            "par-mux: raising the RLIMIT_NOFILE soft limit past {soft} failed — serving at {soft}"
+        );
+        return;
+    }
+    log::info!("par-mux: raised the RLIMIT_NOFILE soft limit {soft} -> {target}");
+}
+
 /// Execute one parsed-or-not command line and render its reply block, with
 /// an issuer channel — the line-level entry the unit tests below drive. The
 /// socket path parses once via [`parse_line`] and enters dispatch with the
@@ -973,6 +1016,86 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("%exit arrives before the socket closes");
         assert_eq!(line, "%exit\n", "graceful shutdown pushes %exit first");
+    }
+
+    /// Card 01a0d9b2fd2c: an inherited 256-descriptor soft limit must not
+    /// cap the daemon at ~60 panes. The soft limit is lowered to 256 the
+    /// way an inherited daemon limit looks, binding a server raises it
+    /// toward the hard limit, and 70 sessions open. At roughly four
+    /// descriptors per pane, 70 panes need more than 256 descriptors, so
+    /// the raise is what lets them all live; without it the spawns die with
+    /// EMFILE around the 55th. The guard restores the inherited limit while
+    /// the test unwinds, and the panes' own Drop kills their children.
+    #[cfg(unix)]
+    #[test]
+    fn more_than_60_panes_open_under_a_256_descriptor_soft_limit() {
+        struct NofileGuard(libc::rlim_t, libc::rlim_t);
+        impl Drop for NofileGuard {
+            fn drop(&mut self) {
+                let limit = libc::rlimit {
+                    rlim_cur: self.0,
+                    rlim_max: self.1,
+                };
+                // SAFETY: the values came from getrlimit at test start.
+                unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) };
+            }
+        }
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: valid rlimit out-pointer.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) },
+            0,
+            "read the inherited limit"
+        );
+        let _guard = NofileGuard(limit.rlim_cur, limit.rlim_max);
+        let inherited_hard = limit.rlim_max;
+        limit.rlim_cur = 256;
+        // SAFETY: 256 is below the inherited hard limit, and only rlim_cur
+        // changes.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) },
+            0,
+            "lower the soft limit the way an inherited daemon limit looks"
+        );
+
+        let dir = temp_dir();
+        let path = dir.path().join("nofile.sock");
+        let server = MuxServer::bind(&path).expect("bind raises the soft limit");
+
+        // The raise must have actually happened: 256 is below any sane
+        // hard limit, so the soft limit after bind is strictly higher.
+        let mut raised = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: valid rlimit out-pointer.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut raised) },
+            0,
+            "read the limit after bind"
+        );
+        assert!(
+            raised.rlim_cur > 256 || inherited_hard <= 256,
+            "bind raised the soft limit above 256 (now {}, hard {inherited_hard})",
+            raised.rlim_cur
+        );
+
+        let tree = Arc::clone(&server.tree);
+        for pane in 1..=70u32 {
+            let session = tree
+                .lock()
+                .new_session(&format!("nofile-{pane}"), 80, 24)
+                .unwrap_or_else(|err| panic!("pane {pane} of 70 opened: {err}"));
+            let _ = session;
+        }
+        assert_eq!(
+            tree.lock().sessions.len(),
+            70,
+            "all 70 panes live under a 256-inherited soft limit"
+        );
     }
 
     /// A listener fault must not silently discard unsaved work (card

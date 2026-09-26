@@ -41,6 +41,8 @@ cargo run --bin par-mux --no-default-features --features mux
 
 The Python wheel and the default `make dev` build do not include the daemon.
 
+At startup the daemon raises its `RLIMIT_NOFILE` soft limit toward the hard limit (Unix), logging the old and new values — an inherited launchd-style limit of 256 descriptors caps the daemon near 60 panes (~4 descriptors each), which the raise removes. An unbounded hard limit is treated as 8192.
+
 ## Command Line
 
 The daemon parses its arguments with `clap` (`--help` and `--version` both work):
