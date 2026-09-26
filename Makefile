@@ -1,4 +1,4 @@
-.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python coverage coverage-html coverage-python clean install install-force dev fmt lint check \
+.PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python checkall bench pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
@@ -35,6 +35,7 @@ help:
 	@echo "  test-rust       - Run Rust tests only"
 	@echo "  test-rust-streaming - Run Rust streaming tests only"
 	@echo "  test-python     - Run Python tests only"
+	@echo "  test-pty        - Run the PTY test family with a longer per-test timeout"
 	@echo "  test-web        - Run web frontend tests (vitest)"
 	@echo ""
 	@echo "Code Quality:"
@@ -224,6 +225,14 @@ test-rust-streaming:
 test-python: dev
 	@echo "Running Python tests..."
 	uv run pytest tests/ -v
+
+# QA-111: the PTY-spawning family runs in the default local suite too, but
+# GitHub runners hang on PTY I/O, so CI keeps its --ignore entries for these
+# files (ci.yml) and this target gives them a dedicated, more generous entry
+# point (the 5s default timeout races wait_for's own 5s budget).
+test-pty: dev
+	@echo "Running PTY tests..."
+	uv run pytest tests/test_pty.py tests/test_pty_resize_sigwinch.py tests/test_nested_shell_resize.py tests/test_ioctl_size.py -v --timeout=30
 
 coverage:
 	@echo "Running Rust coverage via cargo-llvm-cov (lib + integration tests, streaming feature)..."

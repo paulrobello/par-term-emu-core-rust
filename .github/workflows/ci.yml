@@ -96,6 +96,10 @@ jobs:
     - name: Run python_bindings unit tests (python-test)
       run: cargo test --lib --no-default-features --features python-test
 
+    # The --ignore entries are the only CI guard for the PTY test family:
+    # since QA-111 removed the module-level skips, these files run in every
+    # local `make test`/`make test-pty`, but GitHub runners hang on PTY I/O.
+    # Do not remove the ignores without first proving they pass on runners.
     - name: Run Python tests (Linux)
       if: runner.os == 'Linux'
       run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py

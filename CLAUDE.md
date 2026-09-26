@@ -27,6 +27,7 @@ make checkall            # All quality checks (run before every commit)
 make test                # Run all tests (Rust + Python)
 make test-rust           # Rust tests only
 make test-python         # Python tests only (rebuilds first)
+make test-pty            # PTY test family with a longer per-test timeout
 
 # Single Rust test
 cargo test --lib --no-default-features --features pyo3/auto-initialize test_name
