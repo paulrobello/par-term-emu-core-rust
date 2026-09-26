@@ -858,3 +858,72 @@ fn accept_emfile_keeps_the_daemon_serving() {
     drop(client);
     common::sigterm_clean(&mut child);
 }
+
+/// SEC-104: a control line over the 1 MiB budget is answered with one
+/// `%error` block and the connection is closed — and the daemon keeps
+/// serving other clients afterwards. The budget check fires before the
+/// newline arm, so this complete-but-oversized line covers the
+/// unterminated-growth case too.
+#[test]
+fn oversized_control_line_gets_error_and_close() {
+    use std::io::{BufRead, Write as _};
+
+    let fixture = MuxFixture::new("sec104");
+    let path = fixture.socket();
+    let server = MuxServer::bind(path).expect("bind");
+    let handle = std::thread::spawn(move || server.run());
+    wait_listening(path);
+
+    {
+        let stream = connect_local_stream(path).expect("connect");
+        let mut writer = stream.try_clone().expect("clone");
+        let mut reader = BufReader::new(stream);
+
+        let oversized = format!("send-keys -l {}\n", "x".repeat(1024 * 1024 + 64));
+        // The daemon stops reading once the budget trips, so the tail of the
+        // write may hit a closed socket — that teardown is expected, and the
+        // reply below is the assertion that matters.
+        let _ = writer.write_all(oversized.as_bytes());
+        let _ = writer.flush();
+
+        let mut reply = String::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    reply.push_str(&line);
+                    if line.starts_with("%error") {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(
+            reply.contains("%error"),
+            "an over-budget line must be answered with an %error block: {reply}"
+        );
+        assert!(
+            reply.contains("1 MiB"),
+            "the error must name the budget: {reply}"
+        );
+    }
+
+    // The daemon is unharmed: a fresh client gets a normal reply.
+    wait_listening(path);
+    let stream = connect_local_stream(path).expect("second connect");
+    let mut writer = stream.try_clone().expect("clone");
+    let mut reader = BufReader::new(stream);
+    let listed = command(&mut writer, &mut reader, "list-panes").join("");
+    assert!(
+        listed.contains('%'),
+        "the daemon must keep serving other clients: {listed}"
+    );
+
+    drop(writer);
+    drop(reader);
+    let _ = handle;
+    drop(fixture);
+}

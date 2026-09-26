@@ -76,6 +76,14 @@ const EXIT_EMPTY_GRACE: Duration = Duration::from_millis(300);
 /// policy for a control client that stops draining).
 const CLIENT_QUEUE_DEPTH: usize = 4096;
 
+/// Per-line byte budget for the control-socket read loop (SEC-104). A line
+/// is accumulated until its newline, so without a budget a client streaming
+/// an unterminated line grows the daemon's memory until the socket closes.
+/// Over budget answers one `%error` block and closes the connection — same
+/// exposure class as the queue depth above (peer-euid-verified same user),
+/// so this bounds accidental growth, not an adversary.
+const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
+
 /// How often an evicted client's connection threads re-check the eviction
 /// flag. Both the writer and the reader of a connection run with
 /// send/recv timeouts of this length, so eviction tears a wedged client
@@ -484,6 +492,28 @@ fn handle_client(
                         break 'connection;
                     }
                     break;
+                }
+                // SEC-104: over-budget accumulation is answered like a
+                // malformed command and the connection is closed. Checked
+                // before the newline arm so a complete-but-oversized line is
+                // caught too, not only an unterminated one.
+                Ok(_) if line.len() > MAX_CONTROL_LINE_BYTES => {
+                    if !registered {
+                        clients.lock().push((
+                            client_id,
+                            tx.clone(),
+                            Arc::clone(&evicted),
+                            abort.take().expect("abort is registered once"),
+                        ));
+                        registered = true;
+                    }
+                    command_number += 1;
+                    let _ = tx.send(emit_block(
+                        command_number,
+                        "line exceeds 1 MiB budget, closing connection",
+                        false,
+                    ));
+                    break 'connection;
                 }
                 Ok(_) if line.ends_with('\n') => break,
                 Ok(_) => continue,
