@@ -856,13 +856,25 @@ mod tests {
 
         let factory = ShellPaneFactory::default();
         // Windows: cmd.exe (what create_pane's string path wraps commands
-        // in) has no printf, and the same command through cmd /C produced
-        // no output at all inside 20s (sink held only ConPTY's banner).
-        // Spawn powershell as structured argv instead — the direct-PE
-        // resume transport create_argv_pane routes through — building the
-        // ESC bytes with [char]27 since a raw \x1b would not survive a
-        // shell line. PowerShell's startup latency covers the wiring race
+        // in) has no printf, and neither a cmd /C line nor a direct
+        // `powershell -Command` argv surfaced any output inside 20s (sink
+        // held only ConPTY's banner). The shape proven on this machinery
+        // is the persist resume test's: powershell.exe reading a .ps1
+        // file via the direct-PE argv transport (create_argv_pane), with
+        // a 45s budget for powershell's ConPTY cold start. ESC bytes are
+        // built with [char]27 — a raw \x1b would not survive a shell
+        // line — and PowerShell's startup latency covers the wiring race
         // the sh branch's sleep guards.
+        #[cfg(windows)]
+        let script_path = std::env::temp_dir().join("par-mux-kitty-tt.ps1");
+        #[cfg(windows)]
+        std::fs::write(
+            &script_path,
+            format!(
+                "Start-Sleep -Milliseconds 250\r\n[Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')\r\n"
+            ),
+        )
+        .unwrap();
         #[cfg(not(windows))]
         let mut pane = factory
             .create_pane(PaneId(9), 80, 24, Some(&command), &SpawnContext::default())
@@ -876,12 +888,11 @@ mod tests {
                 &[
                     "powershell.exe".to_string(),
                     "-NoProfile".to_string(),
-                    "-NoLogo".to_string(),
-                    "-Command".to_string(),
-                    format!(
-                        "Start-Sleep -Milliseconds 250; \
-                         [Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')"
-                    ),
+                    // Stock policy on Windows blocks .ps1 files.
+                    "-ExecutionPolicy".to_string(),
+                    "Bypass".to_string(),
+                    "-File".to_string(),
+                    script_path.display().to_string(),
                 ],
                 &SpawnContext::default(),
             )
@@ -902,7 +913,7 @@ mod tests {
         #[cfg(not(windows))]
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         #[cfg(windows)]
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
         while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
@@ -937,6 +948,9 @@ mod tests {
             !path.exists(),
             "the rendering client mirror deletes the temp file after its read"
         );
+
+        #[cfg(windows)]
+        let _ = std::fs::remove_file(&script_path);
     }
 
     #[test]
