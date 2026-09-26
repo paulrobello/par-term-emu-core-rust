@@ -350,6 +350,12 @@ impl MuxServer {
                 let _ = worker.join();
             }
         }
+        // The socket file dies with the listener (on Windows, the marker
+        // file does): remove it so `ls par-mux-*.sock` lists only live
+        // daemons — a `--stop` that leaves the file behind reads as a
+        // daemon that is still there. A crash skips this; the next bind
+        // reclaims the stale remnant (`prepare_socket_path`).
+        let _ = std::fs::remove_file(&self.path);
         exit
     }
 }
@@ -1512,6 +1518,23 @@ mod tests {
             ),
         }
         drop(silent);
+    }
+
+    /// A shutdown removes the socket file: `--stop` reporting success
+    /// while the file stays behind makes `ls par-mux-*.sock` useless for
+    /// spotting live daemons. SIGTERM and `kill-server` raise the same
+    /// flag this test raises.
+    #[test]
+    fn a_shutdown_removes_the_socket_file() {
+        let dir = temp_dir();
+        let path = dir.path().join("stop-unlink.sock");
+        let server = MuxServer::bind(&path).expect("bind");
+        assert!(path.exists(), "the socket file exists while serving");
+        let shutdown = server.shutdown_handle();
+        let serving = std::thread::spawn(move || server.run());
+        shutdown.store(true, Ordering::Relaxed);
+        serving.join().expect("server exits cleanly");
+        assert!(!path.exists(), "the socket file is removed after shutdown");
     }
 
     #[cfg(unix)]
@@ -2708,12 +2731,11 @@ mod tests {
         use crate::mux::ipc::connect_local_stream;
         use std::io::{Read, Write};
 
-        let socket_path = std::env::temp_dir().join(format!(
-            "par-mux-evict-close-{}-{}.sock",
-            std::process::id(),
-            line!()
-        ));
-        let _ = std::fs::remove_file(&socket_path);
+        // A raw listener, not a MuxServer, so the shutdown-unlink never
+        // runs for it — keep the socket inside a temp dir the harness
+        // removes rather than littering the real $TMPDIR.
+        let dir = temp_dir();
+        let socket_path = dir.path().join("evict-close.sock");
         let listener = bind_local_listener(&socket_path).expect("binds the test listener");
 
         let clients: Clients = Arc::new(Mutex::new(Vec::new()));
