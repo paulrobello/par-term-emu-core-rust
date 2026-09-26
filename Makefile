@@ -265,7 +265,7 @@ fmt-python:
 
 lint:
 	@echo "Running Rust linters and auto-fixing issues..."
-	cargo clippy --all-targets --features python,streaming,mux,serde --fix --allow-dirty --allow-staged -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin --fix --allow-dirty --allow-staged -- -D warnings
 	cargo fmt
 
 lint-python:
@@ -285,7 +285,7 @@ typecheck:
 
 clippy:
 	@echo "Running Rust clippy (check only, no auto-fix)..."
-	cargo clippy --all-targets --features python,streaming,mux,serde -- -D warnings
+	cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin -- -D warnings
 
 # Regenerate the _native.pyi stub from the built module (ARC-002).
 # Build with streaming first so streaming-only methods are captured:

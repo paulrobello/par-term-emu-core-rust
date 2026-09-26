@@ -189,7 +189,7 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Run Rust clippy
-      run: cargo clippy --all-targets --features python,streaming,mux,serde -- -D warnings
+      run: cargo clippy --all-targets --features python,streaming,mux,serde,streaming-bin -- -D warnings
 
     - name: Check Python formatting
       run: uv run ruff format --check .
