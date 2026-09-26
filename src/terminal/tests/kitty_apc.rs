@@ -504,12 +504,85 @@ fn image_cursor_advance_uses_the_reported_cell_size() {
 
     // a=T transmits and displays a 2x24 px image: 2*24*3 = 144 zero bytes
     // = 192 base64 'A' chars. The length is computed, not hand-counted —
-    // a short payload is silently dropped by the parser (see the
-    // s1v24-silently-dropped backlog card).
+    // a payload short of the declared dimensions is silently rejected (see
+    // `short_payload_for_declared_dims_is_silently_rejected` below).
     let sequence = format!("\x1b_Ga=T,f=24,i=7,s=2,v=24;{}\x1b\\", "A".repeat(192));
     term.process(sequence.as_bytes());
     assert_eq!(
         term.cursor().row, 1,
         "a 24 px image over 24 px cells advances one row — the mirror's advance, where the (1, 2) default would advance 12 and desync the grids"
+    );
+}
+
+/// Card 01a0db7800637762b6c3189dee5c9189: a 1-wide, 24-tall RGB image
+/// (`s=1,v=24`, 1*24*3 = 72 bytes = exactly 96 base64 chars) must store a
+/// graphic and emit GraphicsAdded like every other well-formed shape — the
+/// card's "silently produces no graphic" did not reproduce at HEAD in any
+/// context (fresh terminal, with/without `set_pixel_size`, parser-direct).
+/// Pins the shape so a regression of exactly this dimension pair is caught.
+#[test]
+fn w1_h24_exact_payload_stores_graphic_and_emits_event() {
+    use crate::terminal::TerminalEvent;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_pixel_size(80 * 12, 24 * 24);
+
+    let sequence = format!("\x1b_Ga=T,f=24,i=7,s=1,v=24;{}\x1b\\", "A".repeat(96));
+    term.process(sequence.as_bytes());
+
+    let graphics = term.graphics.graphics_store.all_graphics();
+    assert_eq!(graphics.len(), 1, "the 1x24 placement must be stored");
+    assert_eq!(
+        (graphics[0].width, graphics[0].height),
+        (1, 24),
+        "stored graphic carries the transmitted pixel dimensions"
+    );
+    assert!(
+        term.poll_events()
+            .into_iter()
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+        "a=T must emit GraphicsAdded for the 1x24 shape"
+    );
+    assert_eq!(
+        term.cursor().row,
+        1,
+        "24 px over 24 px cells advances one row, same rule as the 2x24 shape"
+    );
+}
+
+/// The rejection the filing session actually hit (misattributed to 1x24):
+/// a payload whose decoded length disagrees with the declared dimensions is
+/// rejected by `KittyParser::decode_pixels` ("Data size mismatch") inside
+/// `build_graphic`, whose error the terminal layer swallows by design
+/// ("Errors here are non-fatal" — a malformed graphic must never kill the
+/// emulator). The rejection is silent on purpose: no graphic, no event, no
+/// cursor move. Kitty TGP error replies (`_G...;ENOCI`-style APC responses)
+/// are a separate, unimplemented contract.
+#[test]
+fn short_payload_for_declared_dims_is_silently_rejected() {
+    use crate::terminal::TerminalEvent;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_pixel_size(80 * 12, 24 * 24);
+
+    // 96 chars decode to 72 bytes, but s=2,v=24 RGB declares 2*24*3 = 144.
+    let sequence = format!("\x1b_Ga=T,f=24,i=7,s=2,v=24;{}\x1b\\", "A".repeat(96));
+    term.process(sequence.as_bytes());
+
+    assert!(
+        term.graphics.graphics_store.all_graphics().is_empty(),
+        "mismatched payload must not produce a placement"
+    );
+    assert!(
+        !term
+            .poll_events()
+            .into_iter()
+            .any(|e| matches!(e, TerminalEvent::GraphicsAdded(_))),
+        "no GraphicsAdded for a rejected graphic"
+    );
+    assert_eq!(
+        (term.cursor().col, term.cursor().row),
+        (0, 0),
+        "a rejected graphic never moves the cursor"
     );
 }
