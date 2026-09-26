@@ -191,6 +191,16 @@ pub enum MuxCommand {
         /// Buffer content.
         content: String,
     },
+    /// Report the client's theme colors (`set-client-colors -f/-b rrggbb`)
+    /// so OSC 10/11 queries in panes answer with what the client actually
+    /// renders instead of the core's built-in theme. At least one of the
+    /// two flags is required; each is independent.
+    SetClientColors {
+        /// `-f rrggbb`: the theme foreground (OSC 10's answer).
+        fg: Option<(u8, u8, u8)>,
+        /// `-b rrggbb`: the theme background (OSC 11's answer).
+        bg: Option<(u8, u8, u8)>,
+    },
     /// Retrieve the paste buffer's content.
     ShowBuffer,
     /// Write the paste buffer's content to a pane, as `send-keys` would.
@@ -252,6 +262,7 @@ impl MuxCommand {
             | MuxCommand::PaneInfo { .. }
             | MuxCommand::ShowBuffer
             | MuxCommand::PasteBuffer { .. }
+            | MuxCommand::SetClientColors { .. }
             | MuxCommand::Version => false,
         }
     }
@@ -688,6 +699,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("swap-pane", parse_swap_pane),
     ("capture-pane", parse_capture_pane),
     ("set-buffer", parse_set_buffer),
+    ("set-client-colors", parse_set_client_colors),
     ("set-environment", parse_set_environment),
     ("show-buffer", parse_show_buffer),
     ("paste-buffer", parse_paste_buffer),
@@ -1040,6 +1052,35 @@ fn parse_set_buffer(a: &Args<'_>) -> Result<MuxCommand, String> {
         return Err("set-buffer requires content".to_string());
     }
     Ok(MuxCommand::SetBuffer { content })
+}
+
+/// `rrggbb` (exactly six hex digits, case-insensitive) — the color form
+/// `set-client-colors` accepts. No leading `#`: the control wire is
+/// whitespace-split, and a `#` would read as a comment in some shells'
+/// history expansions clients paste from.
+fn parse_hex_color(raw: &str, flag: &str) -> Result<(u8, u8, u8), String> {
+    if raw.len() != 6 || !raw.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(format!(
+            "set-client-colors: {flag} expects rrggbb, got: {raw}"
+        ));
+    }
+    let byte = |i: usize| u8::from_str_radix(&raw[i..i + 2], 16).expect("validated hex pair");
+    Ok((byte(0), byte(2), byte(4)))
+}
+
+fn parse_set_client_colors(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let fg = match a.flag("-f") {
+        Some(raw) => Some(parse_hex_color(&raw, "-f")?),
+        None => None,
+    };
+    let bg = match a.flag("-b") {
+        Some(raw) => Some(parse_hex_color(&raw, "-b")?),
+        None => None,
+    };
+    if fg.is_none() && bg.is_none() {
+        return Err("set-client-colors requires -f and/or -b rrggbb".to_string());
+    }
+    Ok(MuxCommand::SetClientColors { fg, bg })
 }
 
 fn parse_show_buffer(_a: &Args<'_>) -> Result<MuxCommand, String> {
@@ -1911,6 +1952,29 @@ mod tests {
                 pane: Target::Id(PaneId(2))
             }
         );
+    }
+
+    #[test]
+    fn parses_set_client_colors() {
+        assert_eq!(
+            parse_command("set-client-colors -f c0c0c0 -b 1e1e2e").unwrap(),
+            MuxCommand::SetClientColors {
+                fg: Some((0xc0, 0xc0, 0xc0)),
+                bg: Some((0x1e, 0x1e, 0x2e)),
+            }
+        );
+        // Each flag is independent; uppercase hex is accepted.
+        assert_eq!(
+            parse_command("set-client-colors -b AABBCC").unwrap(),
+            MuxCommand::SetClientColors {
+                fg: None,
+                bg: Some((0xaa, 0xbb, 0xcc)),
+            }
+        );
+        assert!(parse_command("set-client-colors").is_err());
+        assert!(parse_command("set-client-colors -f 12345").is_err());
+        assert!(parse_command("set-client-colors -f zz1234").is_err());
+        assert!(parse_command("set-client-colors -b #1e1e2e").is_err());
     }
 
     #[test]

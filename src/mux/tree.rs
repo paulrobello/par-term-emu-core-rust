@@ -1,5 +1,6 @@
 //! The session/window/pane tree: the server's single source of truth.
 
+use crate::color::Color;
 use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
@@ -87,6 +88,14 @@ pub struct MuxTree {
     /// the 10×20 construction default. Never persisted: a reconnecting
     /// client re-reports on attach.
     pub(crate) client_cell_pixels: Option<(u16, u16)>,
+    /// The client's theme colors (`set-client-colors`), held daemon-wide
+    /// for the same reason the cell pixels are: the daemon's terminals
+    /// answer OSC 10/11 queries programs make, and the honest answer is
+    /// what the client actually renders, not the core's built-in theme.
+    /// Each half is independently optional. Never persisted — re-reported
+    /// on attach.
+    pub(crate) client_fg: Option<Color>,
+    pub(crate) client_bg: Option<Color>,
 }
 
 impl MuxTree {
@@ -100,6 +109,8 @@ impl MuxTree {
             factory,
             buffers: HashMap::new(),
             client_cell_pixels: None,
+            client_fg: None,
+            client_bg: None,
         }
     }
 
@@ -608,6 +619,30 @@ impl MuxTree {
         }
     }
 
+    /// Record the client's theme colors and apply them to every pane
+    /// terminal — the OSC 10/11 answer path. Each half is set only when
+    /// reported; panes created later inherit at insert. Never persisted.
+    pub fn set_client_colors(&mut self, fg: Option<Color>, bg: Option<Color>) {
+        if fg.is_some() {
+            self.client_fg = fg;
+        }
+        if bg.is_some() {
+            self.client_bg = bg;
+        }
+        let fg = self.client_fg;
+        let bg = self.client_bg;
+        for pane in self.panes.values_mut() {
+            let terminal = pane.terminal();
+            let mut term = terminal.write();
+            if let Some(fg) = fg {
+                term.set_default_fg(fg);
+            }
+            if let Some(bg) = bg {
+                term.set_default_bg(bg);
+            }
+        }
+    }
+
     /// Apply the recorded cell pixel size to one just-inserted pane — the
     /// creation paths that build the window around the pane and never
     /// re-fit through [`Self::sync_pane_sizes`]. A no-op until a client
@@ -616,6 +651,19 @@ impl MuxTree {
         if let Some((cell_w, cell_h)) = self.client_cell_pixels {
             if let Some(pane) = self.panes.get_mut(&pane_id) {
                 let _ = pane.resize_with_cell_pixels(cols, rows, cell_w, cell_h);
+            }
+        }
+        let (fg, bg) = (self.client_fg, self.client_bg);
+        if fg.is_some() || bg.is_some() {
+            if let Some(pane) = self.panes.get(&pane_id) {
+                let terminal = pane.terminal();
+                let mut term = terminal.write();
+                if let Some(fg) = fg {
+                    term.set_default_fg(fg);
+                }
+                if let Some(bg) = bg {
+                    term.set_default_bg(bg);
+                }
             }
         }
     }
@@ -886,6 +934,47 @@ mod tests {
         let spawn = factory.spawn_of(pane);
         assert_eq!(spawn.session, Some((session, "work".to_string())));
         assert_eq!(spawn.window, Some(window));
+    }
+
+    /// Card 01a0d9e6f012, criterion 2: an OSC 11 query inside a pane
+    /// answers with the CLIENT's theme background — what the client
+    /// actually renders — once `set-client-colors` has reported it, and a
+    /// pane created later inherits the same answer.
+    #[test]
+    fn client_colors_answer_osc_queries_in_existing_and_later_panes() {
+        let mut tree = tree();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+
+        fn osc_11_reply(tree: &MuxTree, pane: PaneId) -> String {
+            let pane = tree.pane(pane).unwrap();
+            let terminal = pane.terminal();
+            let mut term = terminal.write();
+            term.process(b"\x1b]11;?\x1b\\");
+            String::from_utf8(term.drain_responses()).unwrap()
+        }
+
+        let before = osc_11_reply(&tree, first);
+        assert!(
+            !before.contains("2e2e3e1e1e") && !before.contains("1e1e/2e2e"),
+            "pre-report: the core theme answers, not the client's"
+        );
+
+        tree.set_client_colors(None, Some(Color::Rgb(0x1e, 0x1e, 0x2e)));
+        let after = osc_11_reply(&tree, first);
+        assert!(
+            after.contains("rgb:1e1e/1e1e/2e2e"),
+            "OSC 11 answers with the client bg: {after}"
+        );
+
+        let later_window = tree.new_window(session, "w2", 80, 24).unwrap();
+        let later = tree.window(later_window).unwrap().panes()[0];
+        let inherited = osc_11_reply(&tree, later);
+        assert!(
+            inherited.contains("rgb:1e1e/1e1e/2e2e"),
+            "a pane created after the report inherits it: {inherited}"
+        );
     }
 
     /// Card 01a0d9e6f012: the client's cell pixel size is daemon-wide state

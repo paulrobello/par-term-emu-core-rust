@@ -188,6 +188,7 @@ pub(super) fn dispatch_command(
             escape,
         } => cmd_capture_pane(ctx, pane, start_line, end_line, escape),
         MuxCommand::SetBuffer { content } => cmd_set_buffer(ctx, content),
+        MuxCommand::SetClientColors { fg, bg } => cmd_set_client_colors(ctx, fg, bg),
         MuxCommand::SetEnvironment {
             session,
             name,
@@ -864,6 +865,18 @@ fn cmd_capture_pane(
 
 fn cmd_set_buffer(ctx: &Ctx<'_>, content: String) -> Outcome {
     ctx.tree.lock().set_buffer(DEFAULT_BUFFER, content);
+    Outcome::ok(ctx, "")
+}
+
+fn cmd_set_client_colors(
+    ctx: &Ctx<'_>,
+    fg: Option<(u8, u8, u8)>,
+    bg: Option<(u8, u8, u8)>,
+) -> Outcome {
+    let to_color = |(r, g, b)| crate::color::Color::Rgb(r, g, b);
+    ctx.tree
+        .lock()
+        .set_client_colors(fg.map(to_color), bg.map(to_color));
     Outcome::ok(ctx, "")
 }
 
