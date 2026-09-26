@@ -821,6 +821,18 @@ mod tests {
     /// it, no client can ever load the graphic. The daemon must retain the
     /// file; the client mirror that actually renders it is the one whose
     /// read deletes it.
+    ///
+    /// Unix-only, measured on the Windows 11 VM (card 01a0defb, 2026-09-26):
+    /// conhost's VT parser consumes an APC (`ESC _ … ESC \`) and never
+    /// re-emits it to the ConPTY reader. A pane child that printed
+    /// `ALIVE`, the escape, `DONE` delivered both markers to the daemon
+    /// sink with the escape missing — through a cmd /C line, a
+    /// `powershell -Command` argv, and a `powershell -File` script alike
+    /// (the persist resume control passes on the same transport in
+    /// 0.34s). No pane child on Windows can deliver kitty APC over the
+    /// PTY, so the daemon-retain/mirror-delete contract is asserted where
+    /// the medium exists.
+    #[cfg(unix)]
     #[test]
     fn kitty_temp_file_graphic_survives_for_client_mirrors() {
         use base64::Engine as _;
@@ -845,57 +857,16 @@ mod tests {
         let path = temp.path().to_path_buf();
         let encoded =
             base64::engine::general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
-        // POSIX sh: single-quoted printf — the path is tempfile-safe
-        // (alphanumerics, '/', '.', '_', '-') and the escape contains no
-        // single quotes. The leading sleep keeps the child's output behind
-        // the test's sink registration — create_pane spawns before
-        // on_output can be called, so an immediate printf races the
-        // callback wiring.
-        #[cfg(not(windows))]
+        // Single-quoted printf: the path is tempfile-safe (alphanumerics,
+        // '/', '.', '_', '-') and the escape contains no single quotes.
+        // The leading sleep keeps the child's output behind the test's
+        // sink registration — create_pane spawns before on_output can be
+        // called, so an immediate printf races the callback wiring.
         let command = format!("sleep 1; printf '%s' '\x1b_Ga=T,f=100,t=t;{encoded}\x1b\\'");
 
         let factory = ShellPaneFactory::default();
-        // Windows: cmd.exe (what create_pane's string path wraps commands
-        // in) has no printf, and neither a cmd /C line nor a direct
-        // `powershell -Command` argv surfaced any output inside 20s (sink
-        // held only ConPTY's banner). The shape proven on this machinery
-        // is the persist resume test's: powershell.exe reading a .ps1
-        // file via the direct-PE argv transport (create_argv_pane), with
-        // a 45s budget for powershell's ConPTY cold start. ESC bytes are
-        // built with [char]27 — a raw \x1b would not survive a shell
-        // line — and PowerShell's startup latency covers the wiring race
-        // the sh branch's sleep guards.
-        #[cfg(windows)]
-        let script_path = std::env::temp_dir().join("par-mux-kitty-tt.ps1");
-        #[cfg(windows)]
-        std::fs::write(
-            &script_path,
-            format!(
-                "Start-Sleep -Seconds 1\r\nWrite-Output \"ALIVE\"\r\n[Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')\r\nWrite-Output \"DONE\"\r\n"
-            ),
-        )
-        .unwrap();
-        #[cfg(not(windows))]
         let mut pane = factory
             .create_pane(PaneId(9), 80, 24, Some(&command), &SpawnContext::default())
-            .expect("pane should spawn");
-        #[cfg(windows)]
-        let mut pane = factory
-            .create_argv_pane(
-                PaneId(9),
-                80,
-                24,
-                &[
-                    "powershell.exe".to_string(),
-                    "-NoProfile".to_string(),
-                    // Stock policy on Windows blocks .ps1 files.
-                    "-ExecutionPolicy".to_string(),
-                    "Bypass".to_string(),
-                    "-File".to_string(),
-                    script_path.display().to_string(),
-                ],
-                &SpawnContext::default(),
-            )
             .expect("pane should spawn");
 
         // Capture exactly what pane_output_sink would forward to clients.
@@ -907,19 +878,9 @@ mod tests {
         // with the ST terminator. Under the reordered reader loop the output
         // callback fires after the bytes are applied to the daemon terminal,
         // so complete sink bytes imply the graphic is already in the
-        // daemon's store. Windows polls for the script's trailing DONE
-        // marker (Write-Output lines bracket the escape, so DONE implies
-        // the whole script ran) with the persist-test-sized budget.
-        #[cfg(not(windows))]
-        fn complete(sink: &[u8]) -> bool {
-            sink.ends_with(b"\x1b\\")
-        }
-        #[cfg(windows)]
-        fn complete(sink: &[u8]) -> bool {
-            sink.windows(4).any(|w| w == b"DONE")
-        }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
-        while !complete(&sink_bytes.lock()) && std::time::Instant::now() < deadline {
+        // daemon's store.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         let sink_text = String::from_utf8_lossy(&sink_bytes.lock().clone()).to_string();
@@ -953,9 +914,6 @@ mod tests {
             !path.exists(),
             "the rendering client mirror deletes the temp file after its read"
         );
-
-        #[cfg(windows)]
-        let _ = std::fs::remove_file(&script_path);
     }
 
     #[test]

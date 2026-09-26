@@ -75,11 +75,12 @@ prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && tar -xf src.tgz"
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo check --all-targets"
 
 # 4b. Optional: run a lib test suite on the VM (no python needed with rust-only).
-#     As of 2026-09-26 the mux:: filter is expected to PASS on Windows with ONE
-#     exception: kitty_temp_file_graphic_survives_for_client_mirrors fails
-#     (SEC-101's t=t file-media gate; card 01a0defb073c77d397cd7e61ffe22360).
-#     A failure here is not latent — control-run against a pre-change archive
-#     if unsure.
+#     As of 2026-09-26 the mux:: filter is expected to PASS on Windows.
+#     kitty_temp_file_graphic_survives_for_client_mirrors is #[cfg(unix)] by
+#     design (card 01a0defb073c77d397cd7e61ffe22360): conhost's VT parser
+#     consumes APC (ESC _ … ST), so a kitty escape never crosses a ConPTY
+#     pane — the test asserts the daemon-retain/mirror-delete contract
+#     where the medium exists.
 prlctl exec "Windows 11" cmd /c "cd C:\ptecr-test && cargo test --lib --no-default-features --features rust-only,mux,serde mux:: -- --test-threads=1"
 
 # 5. Cleanup: pkill -f "http.server 8931"; prlctl stop "Windows 11"
