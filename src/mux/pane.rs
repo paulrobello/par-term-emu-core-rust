@@ -845,12 +845,24 @@ mod tests {
         let path = temp.path().to_path_buf();
         let encoded =
             base64::engine::general_purpose::STANDARD.encode(path.to_string_lossy().as_bytes());
-        // Single-quoted printf: the path is tempfile-safe (alphanumerics,
+        // The command must emit the escape through the platform's default
+        // shell (create_pane wraps it in `sh -c` / `cmd.exe /C` — cmd has
+        // no printf, and single quotes are not quoting there). POSIX sh:
+        // single-quoted printf — the path is tempfile-safe (alphanumerics,
         // '/', '.', '_', '-') and the escape contains no single quotes.
         // The leading sleep keeps the child's output behind the test's
         // sink registration — create_pane spawns before on_output can be
         // called, so an immediate printf races the callback wiring.
+        // Windows: powershell builds the ESC bytes with [char]27 (a raw
+        // \x1b in the cmd.exe line would be re-parsed away); PowerShell's
+        // own startup latency covers the same wiring race.
+        #[cfg(not(windows))]
         let command = format!("sleep 1; printf '%s' '\x1b_Ga=T,f=100,t=t;{encoded}\x1b\\'");
+        #[cfg(windows)]
+        let command = format!(
+            "powershell.exe -NoProfile -Command Start-Sleep -Milliseconds 500; \
+             [Console]::Write([char]27+'_Ga=T,f=100,t=t;{encoded}'+[char]27+'\\')"
+        );
 
         let factory = ShellPaneFactory::default();
         let mut pane = factory
@@ -871,6 +883,7 @@ mod tests {
         while !sink_bytes.lock().ends_with(b"\x1b\\") && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
+        let sink_text = String::from_utf8_lossy(&sink_bytes.lock().clone()).to_string();
         assert_eq!(
             pane.terminal()
                 .read()
@@ -879,7 +892,7 @@ mod tests {
                 .all_graphics()
                 .len(),
             1,
-            "daemon terminal should hold the t=t graphic"
+            "daemon terminal should hold the t=t graphic; sink bytes so far: {sink_text:?}"
         );
 
         assert!(
