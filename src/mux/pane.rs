@@ -902,10 +902,21 @@ mod tests {
         // `pwd` under the POSIX shell, bare `cd` under cmd.exe (the spawn
         // wraps pane commands in `cmd.exe /C` on Windows) — each prints the
         // child's cwd, proving the context directory reached the process.
+        // cmd.exe may print that path through a junction (C:\WINDOWS\TEMP
+        // resolving to C:\Windows\SystemTemp) and with its own casing, so
+        // the WITNESS is the tempdir's unique random leaf, not the full
+        // string: the probe prints only the cwd, and no other directory
+        // carries this run's leaf name.
         #[cfg(unix)]
         let probe = "pwd";
         #[cfg(windows)]
         let probe = "cd";
+        let leaf = dir
+            .path()
+            .file_name()
+            .expect("tempdir path has a leaf")
+            .to_string_lossy()
+            .to_string();
         let mut pane = factory
             .create_pane(PaneId(11), 80, 24, Some(probe), &context)
             .expect("pane should spawn");
@@ -916,12 +927,12 @@ mod tests {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             let text = String::from_utf8_lossy(&seen.lock().clone()).to_string();
-            if text.trim().contains(dir.path().to_str().unwrap()) {
+            if text.contains(&leaf) {
                 break;
             }
             assert!(
                 std::time::Instant::now() < deadline,
-                "child never ran in the context cwd; probe said: {text}"
+                "child never ran in the context cwd ({leaf}); probe said: {text}"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
