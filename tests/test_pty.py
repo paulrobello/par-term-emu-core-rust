@@ -7,8 +7,6 @@ import sys
 import pytest
 from conftest import wait_for
 
-pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")
-
 
 def test_import_pty_terminal():
     """Test that PtyTerminal can be imported"""
@@ -374,33 +372,29 @@ def test_pty_terminal_flush_synchronized_updates():
 
 def test_pty_terminal_focus_events():
     """Test focus event methods from PtyTerminal"""
+    import sys
+
     from par_term_emu_core_rust import PtyTerminal, Terminal
 
-    # Test with regular Terminal first (as reference)
+    # Test with regular Terminal first (as reference). Focus reporting
+    # follows xterm DEC 1004 semantics: no events until the application
+    # opts in with CSI ? 1004 h.
     term_regular = Terminal(80, 24)
-    focus_in = term_regular.get_focus_in_event()
-    focus_out = term_regular.get_focus_out_event()
-    assert focus_in == b"\x1b[I"
-    assert focus_out == b"\x1b[O"
+    assert term_regular.get_focus_in_event() == b""
+    assert term_regular.get_focus_out_event() == b""
 
-    # Verify PtyTerminal has the same API
-    pty_term = PtyTerminal(80, 24)
-    assert hasattr(pty_term, "get_focus_in_event"), (
-        "PtyTerminal should have get_focus_in_event() method"
-    )
-    assert hasattr(pty_term, "get_focus_out_event"), (
-        "PtyTerminal should have get_focus_out_event() method"
-    )
+    term_regular.process_str("\x1b[?1004h")
+    assert term_regular.get_focus_in_event() == b"\x1b[I"
+    assert term_regular.get_focus_out_event() == b"\x1b[O"
 
-    pty_focus_in = pty_term.get_focus_in_event()
-    pty_focus_out = pty_term.get_focus_out_event()
-    assert pty_focus_in == b"\x1b[I"
-    assert pty_focus_out == b"\x1b[O"
-
-    # Note: Since PTY tests are skipped in CI, we've verified:
-    # 1. Both methods exist
-    # 2. They return the correct event sequences
-    # 3. They match the Terminal API contract
+    # PtyTerminal: the mode can only be enabled by the child writing the
+    # sequence through the PTY (there is no process_str on PtyTerminal).
+    if sys.platform != "win32":
+        pty_term = PtyTerminal(80, 24)
+        assert pty_term.get_focus_in_event() == b""
+        pty_term.spawn("/bin/sh", args=["-c", "printf '\x1b[?1004h'"])
+        assert wait_for(lambda: pty_term.get_focus_in_event() == b"\x1b[I")
+        assert pty_term.get_focus_out_event() == b"\x1b[O"
 
 
 def test_context_manager():

@@ -11,8 +11,6 @@ import tempfile
 import pytest
 from conftest import wait_for
 
-pytestmark = pytest.mark.skip(reason="PTY tests hang in CI")
-
 
 def read_log(path: str) -> str:
     """Current contents of the child's log file (empty until it writes)."""
@@ -43,6 +41,7 @@ import struct
 import termios
 import sys
 import time
+import os
 
 log_file = "{log_file}"
 
