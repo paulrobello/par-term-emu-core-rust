@@ -565,119 +565,39 @@ def safe_send_input(term, user_input):
 
 ### Kitty Graphics Protocol File Transmission
 
-The terminal emulator supports the Kitty graphics protocol, which includes file transmission modes (`t=f` and `t=t`). When enabled, applications can send image file paths instead of inline image data. This feature implements multiple security layers to protect against malicious file access.
+The terminal emulator supports the Kitty graphics protocol, which includes file transmission modes (`t=f` and `t=t`). When enabled, applications can send image file paths instead of inline image data. File media are driven by terminal **output** — any program writing to the terminal can name a path — so since 0.52.0 they sit behind a gate (SEC-101/102/103) rather than a set of path checks alone.
 
 **Security Measures Implemented**:
 
-1. **Directory Traversal Prevention**: File paths containing a `..` path *component* are rejected (a literal `..` inside a filename, e.g. `my..notes.png`, is not a component and is allowed)
-2. **File Type Validation**: Only existing regular files are loaded (directories and special files are rejected)
-3. **File Size Limits**: Maximum file size of 100MB to prevent memory exhaustion
-4. **Path Validation**: File paths must exist and be readable
+1. **File-Media Mode Gate**: file transmission is opt-in per medium through the terminal's `allow_file_media` setting — `"off"` (no file is ever opened), `"temp_only"` (the default: only the gated `t=t` form), or `"all"` (`t=f` reads any file the process can read; `t=t` still requires the temp-root gate before deleting). The mode is checked before touching the filesystem, so a probe leaks no existence information. Set it with `Terminal.set_allow_file_media(...)` from Python or the streaming server's `kitty_file_media` config (default `"temp_only"`).
+2. **Temp-Root and Name Gate (`t=t`)**: the canonicalized path must sit under an allowed temp root (`$TMPDIR`, `/tmp`, `/dev/shm`) **and** carry the spec's `tty-graphics-protocol` marker in its filename — kitty's own rule for the temp-file medium. Refused without touching the file otherwise.
+3. **Directory Traversal Prevention**: paths containing a `..` path *component* are rejected (a literal `..` inside a filename, e.g. `my..notes.png`, is not a component and is allowed)
+4. **Handle-Based Validation (no final-component symlinks)**: the file is opened with `O_NOFOLLOW` (no final symlink component), validated through the opened handle (regular file, size), and read from that same handle — closing the check-then-read race where a swapped link redirects the read after validation. On Windows, where std has no `O_NOFOLLOW`, the canonicalize gate has already resolved the path and the check-to-open window is accepted.
+5. **File Size Limits**: maximum file size of 100MB to prevent memory exhaustion
+6. **Decode Before Delete**: a `t=t` file is deleted only after the payload decodes as an image, and only when temp-file retention is off. In a par-mux pane the daemon's terminal retains `t=t` temp files so client mirrors can read them from the forwarded `%output` bytes; the client that actually renders the graphic deletes it, re-checking the same gate.
 
 **Transmission Modes**:
 - `t=d` - Direct base64 image data (no file access, most secure)
-- `t=f` - File path (raw UTF-8 string, NOT base64-encoded) - **Requires file system access**
-- `t=t` - Temporary file path (raw UTF-8 string, auto-deleted after loading) - **Requires file system access**
+- `t=f` - File path (raw UTF-8 string, NOT base64-encoded) - **Requires `allow_file_media="all"`**; reads any file the emulator process can read
+- `t=t` - Temporary file path (raw UTF-8 string, auto-deleted after decoding) - gated to spec-named files under an allowed temp root; enabled at the default `allow_file_media="temp_only"`
 - `t=s` - Shared memory (not supported)
 
 ### File Loading Implementation
 
-The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty.rs`.
+The file loading security implementation is located in the `load_file_data()` method in `src/graphics/kitty.rs`. Validations run in this order, each refusing with a distinct error before the next runs:
 
-**Security validations applied:**
-
-1. **UTF-8 Path Validation**
-   - File paths are decoded from the raw bytes (not base64-encoded for file transmission)
-   - Must be valid UTF-8 strings
-   - Invalid encoding returns error: "Invalid UTF-8 in file path"
-
-2. **Directory Traversal Prevention**
-   - Paths with a `..` path *component* are rejected (checked via `Path::components()`, not a substring match — `my..notes.png` remains readable)
-   - Prevents explicit parent-directory traversal within a supplied path
-   - Applied before any file system operations
-   - Returns error: "Directory traversal not allowed"
-
-3. **File Existence and Type Validation**
-   - Path must exist on the filesystem
-   - Path must be a regular file (not directory, symlink, or special file)
-   - Clear error messages for each validation failure
-   - Errors include the path for debugging
-
-4. **File Size Limits**
-   - Maximum file size: 100MB (`100 * 1024 * 1024` bytes)
-   - Checked via `fs::metadata()` before reading file content
-   - Prevents memory exhaustion attacks
-   - Error message includes actual file size and the maximum limit
-
-5. **Automatic Cleanup for Temporary Files**
-   - Files loaded with `t=t` (TempFile medium) are automatically deleted after reading via `fs::remove_file()`
-   - Cleanup errors are silently ignored (using `let _ = ...`) to prevent blocking on file system issues
-   - This is intentional to handle cases where the file may already be deleted or locked
-
-**Implementation Details:**
-```rust
-// From src/graphics/kitty.rs - load_file_data() method
-fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
-    // 1. Decode path (NOT base64 for file transmission)
-    let path_str = String::from_utf8(path_data.to_vec())
-        .map_err(|e| GraphicsError::KittyError(format!("Invalid UTF-8 in file path: {}", e)))?;
-
-    let path = Path::new(&path_str);
-
-    // 2. Directory traversal check (component-wise: a literal ".." inside a
-    //    filename like my..notes.png is NOT a parent-dir component)
-    if path.components().any(|c| c == Component::ParentDir) {
-        return Err(GraphicsError::KittyError(
-            "Directory traversal not allowed".to_string(),
-        ));
-    }
-
-    // 3. File existence and type validation
-    if !path.exists() {
-        return Err(GraphicsError::KittyError(format!(
-            "File not found: {}",
-            path_str
-        )));
-    }
-
-    if !path.is_file() {
-        return Err(GraphicsError::KittyError(format!(
-            "Path is not a file: {}",
-            path_str
-        )));
-    }
-
-    // 4. File size limit check
-    const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
-    let metadata = fs::metadata(path)
-        .map_err(|e| GraphicsError::KittyError(format!("Cannot read file metadata: {}", e)))?;
-
-    if metadata.len() > MAX_FILE_SIZE {
-        return Err(GraphicsError::KittyError(format!(
-            "File too large: {} bytes (max {})",
-            metadata.len(),
-            MAX_FILE_SIZE
-        )));
-    }
-
-    // 5. Read file
-    let file_data = fs::read(path)
-        .map_err(|e| GraphicsError::KittyError(format!("Cannot read file: {}", e)))?;
-
-    // 6. Delete temp file if t=t
-    if self.medium == KittyMedium::TempFile {
-        let _ = fs::remove_file(path); // Ignore cleanup errors
-    }
-
-    Ok(file_data)
-}
-```
+1. **UTF-8 Path Validation** — paths are decoded from the raw bytes (not base64-encoded for file transmission) and must be valid UTF-8.
+2. **Directory Traversal Prevention** — component-wise, not substring: `my..notes.png` has no `..` component and stays readable, `a/../b` does not. Applied before any filesystem operation.
+3. **Mode Gate** — `t=f` requires `allow_file_media="all"`; `t=t` is refused under `"off"`. Checked before touching the filesystem so a probe leaks no existence information.
+4. **Temp Gate (`t=t` only)** — the canonicalized path must sit under an allowed temp root and its filename must contain `tty-graphics-protocol`.
+5. **Handle-Based Open and Validation** — opened with `O_NOFOLLOW`, `fstat`'d through the handle (regular file, ≤ 100MB), and read from that same handle, so the file read is the file checked.
+6. **Deferred Delete** — for a non-retained `t=t` read, the delete is returned to the caller and performed only after the payload decodes as an image.
 
 ### Security Considerations
 
 **File System Access Risks**:
-- Applications can request loading of **any readable file** on the system (within the user's permissions)
-- Absolute paths are readable **by design**: the requesting application already runs with the emulator user's privileges and could read those files directly, so restricting readable roots would not reduce its access
+- Applications can request loading of **any readable file** on the system (within the user's permissions) — but only under `allow_file_media="all"`; the default `"temp_only"` refuses `t=f` outright and confines `t=t` to spec-named files under temp roots
+- Absolute paths are readable **by design** under `"all"`: the requesting application already runs with the emulator user's privileges and could read those files directly, so restricting readable roots would not reduce its access
 - No sandboxing or chroot isolation is applied
 - Applications could potentially:
   - Probe for file existence by observing error messages
@@ -688,7 +608,7 @@ fn load_file_data(&self, path_data: &[u8]) -> Result<Vec<u8>, GraphicsError> {
 1. **User Permission Model**: File loading operates with the same permissions as the terminal emulator process. If running as a non-root user, sensitive system files are inaccessible.
 2. **Size Limits**: 100MB maximum file size prevents single-file memory exhaustion
 3. **No Execution**: Files are only read and decoded as images, never executed
-4. **Path Check Is Not a Sandbox**: The `..` component check blocks explicit parent-directory traversal within a supplied path only. It is not a sandbox and does not restrict which absolute paths may be read — treat any file-load feature accordingly.
+4. **Path Check Is Not a Sandbox**: The `..` component check blocks explicit parent-directory traversal within a supplied path only. Under `allow_file_media="all"` it is not a sandbox and does not restrict which absolute paths may be read — treat that mode accordingly. The default `"temp_only"` mode is the safe configuration: `t=f` is refused and `t=t` is confined to spec-named files under temp roots.
 
 **Recommendations**:
 
@@ -989,44 +909,86 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 
 The `par-mux` daemon owns PTYs running as the invoking user and serves the
 tmux control-mode protocol over a local socket. This section describes the
-daemon's security posture as it stands today.
-
-> **Note:** No dedicated security audit of the mux daemon has run yet. The
-> statements below describe current implementation behavior, verified
-> against `src/mux/ipc.rs`, `src/mux/persist.rs`, `src/mux/hooks.rs`, and
-> `src/mux/server.rs` — not audited-and-remediated guarantees.
+daemon's security posture as of 0.52.0, after the 2026-09-26 security pass
+landed (socket ownership hardening, the 1 MiB control-line budget, and the
+4 KiB hook-value caps); every statement is verified against
+`src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks.rs`,
+`src/mux/persist.rs`, and `src/mux/win_resume.rs`.
 
 ### Threat Model
 
 The daemon's power is the same as tmux's: any process that can connect to
 the control socket can create and kill panes, send keystrokes to them
 (arbitrary command execution as the daemon's user), and read every pane's
-full content via `capture-pane`. The socket's own access permissions are
-the only trust boundary — there is no per-connection authentication on the
-control protocol, and none is claimed. This is the same single-boundary
-model tmux control mode has: **any connection the socket accepts is
-trusted completely.**
+full content via `capture-pane`. There is no per-connection authentication
+on the control protocol, and none is claimed. This is the same
+single-boundary model tmux control mode has: **any connection the socket
+accepts is trusted completely.** The boundary itself, however, is layered
+rather than a single file mode: the default socket sits in a per-user
+directory whose owner and mode are verified before bind and connect, the
+socket file is owner-only, and an accepted connection is refused unless
+the peer runs as the daemon's user (see [Socket
+Permissions](#socket-permissions)).
 
 ### Socket Permissions
 
-- **Unix:** the socket file is created with mode `0600` (owner only). The
-  default path lives under `$XDG_RUNTIME_DIR` (per-user by definition) or
-  the user's temp directory. A second daemon on a path a live server owns
-  is refused (`AddrInUse`); stale remnants are reclaimed.
+- **Unix:** the default path lives under `$XDG_RUNTIME_DIR` (per-user by
+  definition) or, when unset, in a **per-UID `0700` directory**
+  (`<tmp>/par-mux-<uid>/`) — tmux's `/tmp/tmux-<uid>` defense against the
+  world-writable temp dir. Before binding *or* connecting, a fallback-path
+  directory is verified to be a directory, owned by the current UID, and
+  granting nothing to group or other; anything else fails closed with
+  `PermissionDenied` rather than use a directory another user controls.
+  The socket file itself is created with mode `0600` (owner only). A
+  second daemon on a path a live server owns is refused (`AddrInUse`);
+  stale remnants are reclaimed. Finally, `accept` refuses any connection
+  whose peer does not run as the daemon's user (the socket's credentials
+  carry the peer's effective UID) — a second lock on the door that drops
+  the connection and keeps serving rather than hand another local user a
+  fatal-fault exit. Explicit `--socket` paths are not guarded — whoever
+  named the path chose its location.
 - **Windows:** named pipes are reachable by other users on the machine
   unless restricted, so the pipe is created with an owner-only security
   descriptor (system and creating user only, nothing for anyone else), and
   a marker file is written at the socket path.
 
+Pre-0.52 daemons serve the old default path (directly under the temp
+dir); clients probe it before spawning a replacement so an upgrade never
+strands a live daemon behind a parallel one.
+
+### Control-Connection Resource Bounds
+
+Both bounds below exist on a connection whose peer is already verified to
+be the same user — they bound accidental and runaway growth, not an
+adversary:
+
+- **Per-line byte budget (1 MiB):** the client read loop accumulates a
+  line until its newline; without a budget a client streaming an
+  unterminated line grows the daemon's memory until the socket closes. A
+  line — complete or unterminated — exceeding 1 MiB is answered with one
+  `%error` block ("line exceeds 1 MiB budget, closing connection") and
+  the connection is closed.
+- **Per-client broadcast queue (4096 lines):** a `%output` line carries
+  one PTY read (up to 16 KiB raw, roughly doubled by escape encoding), so
+  a client that stops draining pins at most ~128 MiB before it is
+  evicted and disconnected, and the disconnect frees the queue.
+
 ### On-Disk State
 
 The state file (`<state_dir>/par-mux/<socket-stem>.state.json`) contains
 everything needed to rebuild the session tree: each pane's screen and full
-scrollback content, the paste buffer, and agent session identity (agent
-label, session id/transcript path, and the hook-reported resume argv).
-Treat the file as private as the terminal sessions it came from:
+scrollback content, the paste buffer, agent session identity (agent
+label, session id/transcript path, and the hook-reported resume argv),
+**and each session's environment** — the variables set through
+`set-environment`/`new-session -e`, which the session's panes spawn with
+and which can hold secrets (an `SSH_AUTH_SOCK` pointing at a live agent
+socket, an API token attached to a session). Treat the file as private
+as the terminal sessions it came from:
 
-- Written `0600` on Unix through an atomic tmp-file + fsync + rename.
+- Written owner-only **from creation** on Unix (mode `0600` set at open,
+  not chmod-after, so no umask-readable window exists), through an atomic
+  tmp-file + fsync + rename. On Windows the file inherits the owner-only
+  ACL of the user-profile state directory.
 - A corrupt or unknown-version state file is **quarantined** — renamed
   aside with a timestamp suffix rather than deleted or overwritten — so
   startup never blocks on unreadable state and the evidence survives.
@@ -1037,30 +999,66 @@ Treat the file as private as the terminal sessions it came from:
 ### Hook Reports
 
 A pane's process can report agent state over the socket (one JSON line,
-one JSON reply). Validation today: the report must parse as JSON, carry a
-well-formed `pane_id`, `agent`, and integer `seq`; `session_resume_argv`
-must be an array of non-empty strings or the report is error-replied;
-reports at or below the pane's last accepted `seq` are dropped; the state
-value `unknown` is never written. The values themselves are unvalidated
-free text from the reporting process — which is acceptable only because
-the reporter is by construction the same user (the socket accepted it). A
-hook can claim **any** pane id, not just its own; that is same-user
-trust, a recorded design decision, not an oversight.
+one JSON reply). Validation is bounded and ordered:
+
+- The report must parse as JSON and carry a well-formed `pane_id`, a
+  non-empty `agent` label, and an integer `seq`.
+- **The agent label may not contain whitespace or control characters** —
+  it is interpolated into the `%agent-state-changed` and roster lines, so
+  a newline would forge a control-mode line delivered to every client.
+  The `source` tag may not contain control characters.
+- Every free-text value — label, source, session id/path, blocked reason,
+  `session_start_source`, and the JSON-encoded `session_resume_argv` — is
+  capped at **4 KiB**: these values persist into pane metadata and the
+  on-disk state file, and the label also rides broadcast lines, so
+  without a cap each field could pin up to the full line budget per pane.
+- `state` must be one of the fixed set (`working`, `blocked`, `idle`);
+  `unknown` is the absence of a claim and is never written or broadcast.
+- `session_resume_argv` must be an array of non-empty strings (its
+  JSON-encoded form is under the same 4 KiB cap).
+- Reports at or below the pane's last accepted `seq` from the same source
+  are dropped — no write, no broadcast. Freshness is tracked per source
+  because the hook families stamp different clocks (`time.time_ns()` vs
+  `Date.now()*1000`).
+- **All validation happens before the tree lock is taken:** a rejected
+  report writes nothing — not even the sequence stamp — so it cannot
+  poison the pane's ordering.
+
+A hook can claim **any** pane id, not just its own; that is same-user
+trust (the socket accepted the connection and verified the peer's euid),
+a recorded design decision, not an oversight.
 
 ### Spawn Quoting on Restore
 
-Restored agent panes respawn through `sh -c`, so the stored/table resume
-argv crosses from a validated structure into a string a shell re-parses.
-`render_argv` single-quotes every argument unconditionally (embedded
-single quotes escaped POSIX-style as `'\''`), so a stored argv element
-cannot break out of its quoting. The argv's provenance is the same-user
-hook report or the table compiled into the binary — a hostile value
-requires already having the user's privileges.
+Restored agent panes respawn the stored/table resume argv, and the
+transport is chosen by platform:
+
+- **Unix:** respawn goes through `sh -c`, so the argv crosses from a
+  validated structure into a string a shell re-parses. `render_argv`
+  single-quotes every argument unconditionally (embedded single quotes
+  escaped POSIX-style as `'\''`), so a stored argv element cannot break
+  out of its quoting.
+- **Windows:** `argv[0]` is resolved against the daemon's `PATH`. A PE
+  image (`.exe`/`.com`) is spawned directly — every argument arrives
+  verbatim, no shell involved. Anything else (`.cmd`/`.bat` shims — the
+  shape npm-distributed agent CLIs take on Windows — and unresolved
+  names) is spawned through a self-deleting bridge batch file the daemon
+  fully controls, run under `%COMSPEC% /d /c` (`/d` skips AutoRun
+  registry hooks) with every argument double-quoted. Residuals, recorded
+  rather than hidden: `%VAR%` expansion and embedded double quotes cannot
+  be represented on a cmd command line, so the bridge passes them through
+  live — bounded by the same-user socket trust, as before.
+
+The argv's provenance is the same-user hook report or the table compiled
+into the binary — a hostile value requires already having the user's
+privileges.
 
 ### See Also
 
 - [MUX.md](MUX.md) — the daemon's operational reference (paths, protocol,
-  persistence).
+  persistence); its [Socket and State
+  Paths](MUX.md#socket-and-state-paths) section holds the path table
+  these guarantees attach to.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the mux subsystem's place in the
   crate.
 
