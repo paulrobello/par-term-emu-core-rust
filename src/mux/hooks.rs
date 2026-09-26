@@ -67,6 +67,24 @@ struct ReportHeader {
     source: Option<String>,
 }
 
+/// Free-text report values are bounded (SEC-105): every one of them
+/// persists into pane metadata and the on-disk state file, and the label
+/// also rides broadcast lines, so an unvalidated value otherwise pins up
+/// to the full SEC-104 line budget per field per pane. 4 KiB clears any
+/// legitimate label, path, or blocked reason with orders of magnitude to
+/// spare.
+const MAX_REPORT_VALUE_LEN: usize = 4096;
+
+fn check_value_len(field: &str, value: &str) -> Result<(), String> {
+    if value.len() > MAX_REPORT_VALUE_LEN {
+        Err(format!(
+            "{field} exceeds {MAX_REPORT_VALUE_LEN} bytes, report rejected"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
     let pane_id = params
         .get("pane_id")
@@ -88,6 +106,7 @@ fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
     if agent.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("agent label must not contain whitespace or control characters".to_string());
     }
+    check_value_len("agent label", &agent)?;
     let seq = params
         .get("seq")
         .and_then(serde_json::Value::as_u64)
@@ -105,6 +124,9 @@ fn parse_header(params: &serde_json::Value) -> Result<ReportHeader, String> {
         .is_some_and(|source| source.chars().any(char::is_control))
     {
         return Err("source must not contain control characters".to_string());
+    }
+    if let Some(source) = source.as_deref() {
+        check_value_len("source", source)?;
     }
     Ok(ReportHeader {
         pane_id,
@@ -150,6 +172,17 @@ fn handle_state_report(
     // out of the roster rather than misreporting it).
     if state == "unknown" {
         return (ok_reply(id), None);
+    }
+
+    // Free-text length validation happens before the tree lock: a rejection
+    // must write nothing — not even the sequence stamp — or a rejected
+    // report would poison the pane's ordering for its seq (SEC-105).
+    for field in ["agent_session_id", "agent_session_path", "message"] {
+        if let Some(value) = params.get(field).and_then(serde_json::Value::as_str) {
+            if let Err(message) = check_value_len(field, value) {
+                return (error_reply(id, &message), None);
+            }
+        }
     }
 
     let notification = {
@@ -242,6 +275,24 @@ fn handle_session_report(
             error_reply(id, "missing agent_session_id or agent_session_path"),
             None,
         );
+    }
+    if let Some(value) = session_id.as_deref() {
+        if let Err(message) = check_value_len("agent_session_id", value) {
+            return (error_reply(id, &message), None);
+        }
+    }
+    if let Some(value) = session_path.as_deref() {
+        if let Err(message) = check_value_len("agent_session_path", value) {
+            return (error_reply(id, &message), None);
+        }
+    }
+    if let Some(start) = params
+        .get("session_start_source")
+        .and_then(serde_json::Value::as_str)
+    {
+        if let Err(message) = check_value_len("session_start_source", start) {
+            return (error_reply(id, &message), None);
+        }
     }
     let resume_argv = match parse_resume_argv(params) {
         Ok(argv) => argv,
@@ -427,9 +478,10 @@ fn parse_resume_argv(params: &serde_json::Value) -> Result<Option<String>, Strin
     if argv.is_empty() {
         return Err("session_resume_argv must not be empty".to_string());
     }
-    serde_json::to_string(&argv)
-        .map(Some)
-        .map_err(|err| format!("session_resume_argv: {err}"))
+    let encoded =
+        serde_json::to_string(&argv).map_err(|err| format!("session_resume_argv: {err}"))?;
+    check_value_len("session_resume_argv", &encoded)?;
+    Ok(Some(encoded))
 }
 
 /// Whether `seq` is at or below the last accepted report from the same
@@ -839,6 +891,62 @@ mod tests {
 
         // The pane is not poisoned: a valid report at the same seq is
         // still accepted afterward.
+        let (_, notification) =
+            handle_report(&state_report(pane_id, "kimi", "working", 1_000), &tree);
+        assert!(notification.is_some(), "a valid report still lands");
+    }
+
+    /// SEC-105: free-text report values are bounded — an oversized label,
+    /// source, identity field, blocked reason, or resume argv is rejected
+    /// with an error and writes nothing, keeping pane metadata and the
+    /// persisted state file bounded per pane.
+    #[test]
+    fn oversized_report_values_are_rejected_without_broadcast() {
+        let (tree, pane_id) = tree_with_pane();
+        let oversized = "x".repeat(MAX_REPORT_VALUE_LEN + 1);
+
+        // Every persisted free-text field, one report per field.
+        let oversized_reports = [
+            format!(
+                r#"{{"method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"{oversized}","state":"working","seq":1000}}}}"#
+            ),
+            format!(
+                r#"{{"method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"kimi","state":"working","seq":1000,"source":"{oversized}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"kimi","state":"working","seq":1000,"agent_session_id":"{oversized}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"pane.report_agent","params":{{"pane_id":"{pane_id}","agent":"kimi","state":"blocked","seq":1000,"message":"{oversized}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"kimi","seq":1000,"agent_session_path":"{oversized}"}}}}"#
+            ),
+            format!(
+                r#"{{"method":"pane.report_agent_session","params":{{"pane_id":"{pane_id}","agent":"kimi","seq":1000,"agent_session_id":"ok","session_resume_argv":["pi","{oversized}"]}}}}"#
+            ),
+        ];
+        for report in &oversized_reports {
+            let (reply, notification) = handle_report(report, &tree);
+            assert!(
+                reply.contains("error") && reply.contains("exceeds"),
+                "an oversized value is an error naming the budget: {reply}"
+            );
+            assert_eq!(notification, None, "nothing is broadcast for a rejection");
+        }
+
+        {
+            let guard = tree.lock();
+            let pane = guard.pane(pane_id).expect("pane exists");
+            assert!(
+                !pane.metadata().contains_key("agent"),
+                "the rejected reports wrote nothing: {:?}",
+                pane.metadata()
+            );
+        }
+
+        // The pane is not poisoned: a valid report at the same seq still
+        // lands.
         let (_, notification) =
             handle_report(&state_report(pane_id, "kimi", "working", 1_000), &tree);
         assert!(notification.is_some(), "a valid report still lands");
