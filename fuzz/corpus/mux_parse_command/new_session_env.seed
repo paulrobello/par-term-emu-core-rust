@@ -1,0 +1,1 @@
+new-session -s work -e FOO=bar -e BAZ=qux -c /tmp

@@ -14,15 +14,17 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+parking_lot = "0.12.5"
 
 [dependencies.par-term-emu-core-rust]
 path = ".."
 default-features = false
-features = ["rust-only"]
+features = ["rust-only", "mux"]
 
 # rust-only: no Python toolchain in the fuzzer — see docs/fable/ENH-014-parser-fuzz-targets.md.
-# The four targets mirror the untrusted-byte entry points: the whole VTE pipeline,
-# the Sixel state machine, the Kitty APC parser, and the tmux control parser.
+# The targets mirror the untrusted-byte entry points: the whole VTE pipeline,
+# the Sixel state machine, the Kitty APC parser, the tmux control parser, and
+# (ENH-018, +mux) the par-mux control-protocol command and hook-report grammars.
 
 [[bin]]
 name = "terminal_process"
@@ -48,6 +50,20 @@ bench = false
 [[bin]]
 name = "tmux_control"
 path = "fuzz_targets/tmux_control.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mux_parse_command"
+path = "fuzz_targets/mux_parse_command.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mux_hook_report"
+path = "fuzz_targets/mux_hook_report.rs"
 test = false
 doc = false
 bench = false

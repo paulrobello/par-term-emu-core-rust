@@ -1,0 +1,1 @@
+{"id":"t-8","method":"pane.report_agent","params":{"pane_id":"%0","agent":"a","state":"running","seq":-1,"extra":[1,2,{"nested":true}]}}

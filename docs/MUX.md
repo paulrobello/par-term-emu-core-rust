@@ -366,6 +366,23 @@ cargo test --no-default-features --features rust-only,mux,serde -- --test-thread
 
 The integration suites live in `tests/mux_*.rs` (`mux_daemon`, `mux_restart`, `mux_reattach`, `mux_hooks`, `mux_agents`, `mux_feature_isolation`, and others).
 
+### Fuzzing the control protocol
+
+The control-socket parser is an adversarial-input surface (it executes commands, spawns panes, and persists state), so its two grammars have cargo-fuzz targets in the detached `fuzz/` workspace (see `docs/fable/ENH-014-parser-fuzz-targets.md` for the harness setup):
+
+- `mux_parse_command` — `parse_line`/`parse_command` over arbitrary lines, including multi-line inputs and `%`-notification-looking shapes.
+- `mux_hook_report` — the `{`-shaped hook-report JSON grammar through `handle_report` against an empty tree (JSON parse, header validation, SEC-105 value caps; no panes exist, so nothing downstream can be corrupted).
+
+Run them locally (nightly toolchain, first build is slow — the sanitizer instruments the whole dependency tree):
+
+```bash
+cd fuzz
+cargo fuzz run mux_parse_command -max_total_time=60
+cargo fuzz run mux_hook_report -max_total_time=60
+```
+
+Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new command or report shape.
+
 ## Module Map
 
 | File | Role |

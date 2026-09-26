@@ -1,0 +1,1 @@
+{"id":"t-4","method":"pane.release_agent","params":{"pane_id":"%1","agent":"claude","seq":9,"source":"test"}}

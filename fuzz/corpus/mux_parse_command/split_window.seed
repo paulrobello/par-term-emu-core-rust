@@ -1,0 +1,1 @@
+split-window -h -t %0 -c /tmp

@@ -1,0 +1,1 @@
+{"id":"t-3","method":"pane.report_agent_session","params":{"pane_id":"%1","agent":"codex","seq":500,"agent_session_id":"s-1","session_start_source":"startup","source":"test"}}

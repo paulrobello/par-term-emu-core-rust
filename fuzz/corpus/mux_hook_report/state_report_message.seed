@@ -1,0 +1,1 @@
+{"id":"t-2","method":"pane.report_agent","params":{"pane_id":"%3","agent":"kimi","state":"blocked","message":"needs approval","seq":7,"source":"test"}}
