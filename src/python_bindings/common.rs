@@ -2589,7 +2589,7 @@ macro_rules! impl_terminal_screenshot_methods {
                     ..Default::default()
                 };
 
-                t.screenshot(config, scrollback_offset).map_err(|e| {
+                $crate::screenshot::render_terminal(&t, config, scrollback_offset).map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
                 })
             }
@@ -2718,7 +2718,7 @@ macro_rules! impl_terminal_screenshot_methods {
             ) -> pyo3::PyResult<Vec<u8>> {
                 let cfg = config.to_screenshot_config()?;
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                t.screenshot(cfg, scrollback_offset).map_err(|e| {
+                $crate::screenshot::render_terminal(&t, cfg, scrollback_offset).map_err(|e| {
                     pyo3::exceptions::PyRuntimeError::new_err(format!("Screenshot error: {}", e))
                 })
             }

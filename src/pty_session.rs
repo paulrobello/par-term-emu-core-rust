@@ -1405,13 +1405,14 @@ impl PtySession {
     /// # Returns
     /// * `Ok(Vec<u8>)` - Image bytes in the configured format
     /// * `Err(ScreenshotError)` - If rendering or encoding fails
+    #[cfg(feature = "screenshot")]
     pub fn screenshot(
         &self,
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
         let term = self.terminal.write();
-        term.screenshot(config, scrollback_offset)
+        crate::screenshot::render_terminal(&term, config, scrollback_offset)
     }
 
     /// Take a screenshot and save to file
@@ -1426,6 +1427,7 @@ impl PtySession {
     /// # Returns
     /// * `Ok(())` - Success
     /// * `Err(ScreenshotError)` - If rendering, encoding, or writing fails
+    #[cfg(feature = "screenshot")]
     pub fn screenshot_to_file(
         &self,
         path: &std::path::Path,
@@ -1433,7 +1435,7 @@ impl PtySession {
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<()> {
         let term = self.terminal.write();
-        term.screenshot_to_file(path, config, scrollback_offset)
+        crate::screenshot::save_terminal(&term, path, config, scrollback_offset)
     }
 
     /// Get the cursor position

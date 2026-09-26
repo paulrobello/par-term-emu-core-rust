@@ -2649,7 +2649,8 @@ impl Terminal {
     }
 
     /// Get the grid with scrollback applied (for screenshots/export)
-    fn grid_with_scrollback(&self, scrollback_offset: usize) -> Grid {
+    #[cfg(feature = "screenshot")]
+    pub(crate) fn grid_with_scrollback(&self, scrollback_offset: usize) -> Grid {
         let grid = self.active_grid();
         let (cols, rows) = self.size();
         let scrollback_len = grid.scrollback_len();
@@ -2690,80 +2691,34 @@ impl Terminal {
     /// # Returns
     /// * `Ok(Vec<u8>)` - Image bytes in the configured format
     /// * `Err(ScreenshotError)` - If rendering or encoding fails
+    #[cfg(feature = "screenshot")]
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use screenshot::render_terminal (free function); this forwarding method will be removed in a future release"
+    )]
     pub fn screenshot(
         &self,
-        mut config: crate::screenshot::ScreenshotConfig,
+        config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
-        // Populate theme colors if not already set
-        if config.link_color.is_none() {
-            config.link_color = Some(self.theme.link_color.to_rgb());
-        }
-        if config.bold_color.is_none() {
-            config.bold_color = Some(self.theme.bold_color.to_rgb());
-        }
-        config.use_bold_color = self.theme.use_bold_color;
-        config.bold_brightening = self.modes.bold_brightening;
-        config.faint_text_alpha = self.theme.faint_text_alpha;
-
-        // Use terminal's default background if not specified
-        if config.background_color.is_none() {
-            config.background_color = Some(self.theme.default_bg.to_rgb());
-        }
-
-        let grid = self.grid_with_scrollback(scrollback_offset);
-        let cursor = if config.render_cursor && scrollback_offset == 0 {
-            Some(&self.cursor)
-        } else {
-            None
-        };
-        let graphics = if config.sixel_render_mode != crate::screenshot::SixelRenderMode::Disabled
-            && scrollback_offset == 0
-        {
-            self.all_graphics()
-        } else {
-            &[]
-        };
-        crate::screenshot::render_grid(&grid, cursor, graphics, config)
+        crate::screenshot::render_terminal(self, config, scrollback_offset)
     }
 
     /// Take a screenshot and save to file
+    #[cfg(feature = "screenshot")]
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.53.0",
+        note = "use screenshot::save_terminal (free function); this forwarding method will be removed in a future release"
+    )]
     pub fn screenshot_to_file(
         &self,
         path: &std::path::Path,
-        mut config: crate::screenshot::ScreenshotConfig,
+        config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<()> {
-        // Populate theme colors if not already set
-        if config.link_color.is_none() {
-            config.link_color = Some(self.theme.link_color.to_rgb());
-        }
-        if config.bold_color.is_none() {
-            config.bold_color = Some(self.theme.bold_color.to_rgb());
-        }
-        config.use_bold_color = self.theme.use_bold_color;
-        config.bold_brightening = self.modes.bold_brightening;
-        config.faint_text_alpha = self.theme.faint_text_alpha;
-
-        // Use terminal's default background if not specified
-        if config.background_color.is_none() {
-            config.background_color = Some(self.theme.default_bg.to_rgb());
-        }
-
-        let grid = self.grid_with_scrollback(scrollback_offset);
-        let cursor = if config.render_cursor && scrollback_offset == 0 {
-            Some(&self.cursor)
-        } else {
-            None
-        };
-        let graphics = if config.sixel_render_mode != crate::screenshot::SixelRenderMode::Disabled
-            && scrollback_offset == 0
-        {
-            self.all_graphics()
-        } else {
-            &[]
-        };
-        crate::screenshot::save_grid(&grid, cursor, graphics, path, config)
+        crate::screenshot::save_terminal(self, path, config, scrollback_offset)
     }
 
     /// Drain and return pending responses

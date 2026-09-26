@@ -13,6 +13,7 @@ pub use shaper::FontType;
 use crate::cursor::Cursor;
 use crate::graphics::TerminalGraphic;
 use crate::grid::Grid;
+use crate::terminal::Terminal;
 use renderer::Renderer;
 use std::path::Path;
 
@@ -66,6 +67,76 @@ pub fn save_grid(
     Ok(())
 }
 
+/// Apply the terminal's theme/defaults to a screenshot config (ARC-021:
+/// shared by the free functions below and Terminal's forwarding methods).
+fn apply_terminal_theme(term: &Terminal, config: &mut ScreenshotConfig) {
+    // Populate theme colors if not already set
+    if config.link_color.is_none() {
+        config.link_color = Some(term.theme.link_color.to_rgb());
+    }
+    if config.bold_color.is_none() {
+        config.bold_color = Some(term.theme.bold_color.to_rgb());
+    }
+    config.use_bold_color = term.theme.use_bold_color;
+    config.bold_brightening = term.modes.bold_brightening;
+    config.faint_text_alpha = term.theme.faint_text_alpha;
+
+    // Use terminal's default background if not specified
+    if config.background_color.is_none() {
+        config.background_color = Some(term.theme.default_bg.to_rgb());
+    }
+}
+
+/// Render a terminal's visible buffer (with optional scrollback offset) to
+/// image bytes. Free-function screenshot entry point over `&Terminal` so the
+/// capability is reachable without the `Terminal` methods (ARC-021).
+pub fn render_terminal(
+    term: &Terminal,
+    mut config: ScreenshotConfig,
+    scrollback_offset: usize,
+) -> ScreenshotResult<Vec<u8>> {
+    apply_terminal_theme(term, &mut config);
+
+    let grid = term.grid_with_scrollback(scrollback_offset);
+    let cursor = if config.render_cursor && scrollback_offset == 0 {
+        Some(&term.cursor)
+    } else {
+        None
+    };
+    let graphics =
+        if config.sixel_render_mode != SixelRenderMode::Disabled && scrollback_offset == 0 {
+            term.all_graphics()
+        } else {
+            &[]
+        };
+    render_grid(&grid, cursor, graphics, config)
+}
+
+/// Render a terminal's visible buffer and save it to a file (free-function
+/// counterpart of `render_terminal`; ARC-021).
+pub fn save_terminal(
+    term: &Terminal,
+    path: &Path,
+    mut config: ScreenshotConfig,
+    scrollback_offset: usize,
+) -> ScreenshotResult<()> {
+    apply_terminal_theme(term, &mut config);
+
+    let grid = term.grid_with_scrollback(scrollback_offset);
+    let cursor = if config.render_cursor && scrollback_offset == 0 {
+        Some(&term.cursor)
+    } else {
+        None
+    };
+    let graphics =
+        if config.sixel_render_mode != SixelRenderMode::Disabled && scrollback_offset == 0 {
+            term.all_graphics()
+        } else {
+            &[]
+        };
+    save_grid(&grid, cursor, graphics, path, config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,6 +164,22 @@ mod tests {
             // Check PNG signature
             assert_eq!(&bytes[0..8], b"\x89PNG\r\n\x1a\n");
         }
+    }
+
+    #[test]
+    fn test_render_terminal_and_deprecated_forwarder_agree() {
+        use crate::terminal::Terminal;
+
+        let mut term = Terminal::new(80, 24);
+        term.process(b"forwarder parity\r\n");
+
+        let free = render_terminal(&term, ScreenshotConfig::default(), 0).expect("free fn renders");
+        #[allow(deprecated)]
+        let forwarded = term
+            .screenshot(ScreenshotConfig::default(), 0)
+            .expect("forwarder renders");
+        // Same config + state must encode identical PNG bytes.
+        assert_eq!(free, forwarded);
     }
 
     #[test]
