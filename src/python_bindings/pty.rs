@@ -1392,6 +1392,7 @@ mod tests {
 
     #[test]
     fn test_get_default_shell_valid() {
+        #[cfg(unix)]
         let shell = pty_session::PtySession::get_default_shell();
         #[cfg(unix)]
         assert!(
