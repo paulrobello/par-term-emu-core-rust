@@ -483,3 +483,33 @@ fn display_paths_emit_graphics_added() {
         .expect("a=p must emit GraphicsAdded");
     assert_eq!(row, row_before, "a=p reports the placement row");
 }
+
+/// Card 01a0d9e6f012, criterion 3: after displaying an image the cursor row
+/// must match between a daemon-side terminal and the client-side mirror
+/// rendering it. Both derive rows from the cell size, so a terminal whose
+/// host reported real text-area pixels (`set_pixel_size`, what
+/// `refresh-client -p` drives through `resize_with_cell_pixels`) advances
+/// by pixel-height / cell-height — not by the (1, 2) no-information default,
+/// which would put the daemon dozens of rows past the mirror.
+#[test]
+fn image_cursor_advance_uses_the_reported_cell_size() {
+    let mut term = Terminal::new(80, 24);
+    // The client's metrics: an 80x24 grid at 12x24 px cells.
+    term.set_pixel_size(80 * 12, 24 * 24);
+    assert_eq!(
+        term.graphics.cell_dimensions,
+        (12, 24),
+        "reporting text-area pixels derives the graphics cell size"
+    );
+
+    // a=T transmits and displays a 2x24 px image: 2*24*3 = 144 zero bytes
+    // = 192 base64 'A' chars. The length is computed, not hand-counted —
+    // a short payload is silently dropped by the parser (see the
+    // s1v24-silently-dropped backlog card).
+    let sequence = format!("\x1b_Ga=T,f=24,i=7,s=2,v=24;{}\x1b\\", "A".repeat(192));
+    term.process(sequence.as_bytes());
+    assert_eq!(
+        term.cursor().row, 1,
+        "a 24 px image over 24 px cells advances one row — the mirror's advance, where the (1, 2) default would advance 12 and desync the grids"
+    );
+}

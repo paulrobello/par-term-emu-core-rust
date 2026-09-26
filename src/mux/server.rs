@@ -1651,6 +1651,59 @@ mod tests {
         lines
     }
 
+    /// Card 01a0d9e6f012, criterion 1: a client's cell pixel report rides
+    /// `refresh-client -p` through the control protocol, lands daemon-wide,
+    /// and reaches the pane terminal's pixel state — what `CSI 14 t`/`16 t`
+    /// in the pane answer from. A `-C` grid resize afterwards keeps the
+    /// reported cells (every re-fit re-derives the totals).
+    #[test]
+    fn refresh_client_pixel_report_reaches_the_pane_terminal() {
+        let (tree, clients) = quiet_harness();
+        dispatch("new-session -s main", 1, &tree, &clients, None);
+        let session_id = tree.lock().sessions()[0];
+        let window_id = tree.lock().session(session_id).unwrap().windows[0];
+        let pane = tree.lock().window(window_id).unwrap().panes()[0];
+
+        dispatch(
+            &format!("refresh-client -t {pane} -p 10x20"),
+            2,
+            &tree,
+            &clients,
+            None,
+        );
+        {
+            let term = tree.lock().pane(pane).unwrap().terminal();
+            let term = term.read();
+            assert_eq!(
+                (term.pixel_width, term.pixel_height),
+                (800, 480),
+                "an 80x24 pane at 10x20 px cells"
+            );
+            assert_eq!(
+                term.graphics.cell_dimensions,
+                (10, 20),
+                "image cell-span math uses the reported cell size"
+            );
+        }
+
+        // A later grid resize re-derives the pixel totals from the kept
+        // cell report — the attach-and-resize flow par-term runs.
+        dispatch(
+            &format!("refresh-client -t {pane} -C 120x40 -p 10x20"),
+            3,
+            &tree,
+            &clients,
+            None,
+        );
+        let term = tree.lock().pane(pane).unwrap().terminal();
+        let term = term.read();
+        assert_eq!(
+            (term.pixel_width, term.pixel_height),
+            (1200, 800),
+            "a 120x40 grid at the kept 10x20 px cells"
+        );
+    }
+
     #[test]
     fn mutating_dispatches_broadcast_lifecycle_notifications_to_other_clients() {
         let (tree, clients) = harness();
@@ -1658,7 +1711,6 @@ mod tests {
         let session_id = tree.lock().sessions()[0];
         let window_id = tree.lock().session(session_id).unwrap().windows[0];
         let first = tree.lock().window(window_id).unwrap().panes()[0];
-
         // A second, non-issuing client: everything it sees is a broadcast.
         let (tx, rx) = sync_channel(CLIENT_QUEUE_DEPTH);
         clients.lock().push((
