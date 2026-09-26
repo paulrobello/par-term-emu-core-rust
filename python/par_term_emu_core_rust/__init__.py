@@ -17,7 +17,13 @@ This library provides a full-featured terminal emulator with support for:
 - PTY support for running shell processes (PtyTerminal)
 """
 
+# Optional streaming support (available when built with --features streaming).
+# The stub classes registered in non-streaming builds still import, so probe
+# the native HAS_STREAMING constant instead of catching ImportError.
+from typing import Any
+
 from ._native import (
+    HAS_STREAMING,
     AmbiguousWidth,
     Attributes,
     CoprocessConfig,
@@ -72,8 +78,9 @@ from ._native import (
     str_width_cjk,
 )
 
-# Optional streaming support (available when built with --features streaming)
-try:
+_has_streaming = HAS_STREAMING
+
+if _has_streaming:
     from ._native import (
         StreamingConfig,
         StreamingServer,
@@ -82,16 +89,15 @@ try:
         encode_client_message,
         encode_server_message,
     )
-
-    _has_streaming = True
-except ImportError:
-    _has_streaming = False
-    StreamingConfig = None
-    StreamingServer = None
-    encode_server_message = None
-    decode_server_message = None
-    encode_client_message = None
-    decode_client_message = None
+else:
+    # Static consumers keep the _native.pyi surface (streaming classes are
+    # declared there unconditionally), so the None fallbacks are typed Any.
+    StreamingConfig: Any = None
+    StreamingServer: Any = None
+    encode_server_message: Any = None
+    decode_server_message: Any = None
+    encode_client_message: Any = None
+    decode_client_message: Any = None
 
 from .observers import (
     on_bell,

@@ -216,6 +216,9 @@ fn register_constants(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SIXEL_PIXELS", "pixels")?;
     m.add("SIXEL_HALFBLOCKS", "halfblocks")?;
 
+    // Build-capability flag: true when compiled with the `streaming` feature.
+    m.add("HAS_STREAMING", cfg!(feature = "streaming"))?;
+
     Ok(())
 }
 

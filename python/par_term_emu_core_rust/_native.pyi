@@ -9,6 +9,8 @@
 from types import TracebackType
 from typing import Any
 
+HAS_STREAMING: bool = True
+
 SIXEL_DISABLED: str = "disabled"
 
 SIXEL_HALFBLOCKS: str = "halfblocks"
@@ -1571,13 +1573,13 @@ class StreamingConfig:
     @input_rate_limit_bytes_per_sec.setter
     def input_rate_limit_bytes_per_sec(self, value: Any) -> None: ...
     @property
-    def kitty_file_media(self) -> Any: ...
-    @kitty_file_media.setter
-    def kitty_file_media(self, value: Any) -> None: ...
-    @property
     def keepalive_interval(self) -> Any: ...
     @keepalive_interval.setter
     def keepalive_interval(self, value: Any) -> None: ...
+    @property
+    def kitty_file_media(self) -> Any: ...
+    @kitty_file_media.setter
+    def kitty_file_media(self, value: Any) -> None: ...
     @property
     def max_clients(self) -> Any: ...
     @max_clients.setter

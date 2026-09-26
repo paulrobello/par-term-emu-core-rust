@@ -275,7 +275,7 @@ def main() -> None:
             classes[name] = obj
         elif kind == "builtin_function_or_method":
             functions[name] = obj
-        elif isinstance(obj, str):
+        elif isinstance(obj, (str, bool)):
             constants[name] = obj
         # Anything else unexpected: fail loudly rather than silently drop.
         else:
@@ -286,7 +286,7 @@ def main() -> None:
 
     for name in sorted(constants):
         value = constants[name]
-        out.append(f"\n{name}: str = {value!r}")
+        out.append(f"\n{name}: {type(value).__name__} = {value!r}")
 
     for cname in sorted(classes):
         out.append("")
