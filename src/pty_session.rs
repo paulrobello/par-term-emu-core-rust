@@ -2563,15 +2563,18 @@ mod tests {
         let mut session = PtySession::new(80, 24, 1000);
 
         let terminal = Arc::clone(session.terminal_ref());
-        let saw_marker = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let saw_applied = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let marker_probe = Arc::clone(&saw_marker);
-        let applied_probe = Arc::clone(&saw_applied);
+        // 0 = marker not seen yet, 1 = seen and state contained it, 2 = seen
+        // and state lacked it. Stored once, after the check completes, so the
+        // test thread never samples a "seen but not yet checked" window.
+        let outcome = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let outcome_probe = Arc::clone(&outcome);
         session.set_output_callback(Arc::new(move |bytes: &[u8]| {
             if bytes.windows(7).any(|w| w == b"MARKERZ") {
-                marker_probe.store(true, Ordering::SeqCst);
                 let text = terminal.read().grid.export_text_buffer();
-                applied_probe.store(text.contains("MARKERZ"), Ordering::SeqCst);
+                outcome_probe.store(
+                    if text.contains("MARKERZ") { 1 } else { 2 },
+                    Ordering::SeqCst,
+                );
             }
         }));
 
@@ -2583,15 +2586,17 @@ mod tests {
         let _ = session.wait();
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-        while !saw_marker.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+        while outcome.load(Ordering::SeqCst) == 0 && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(
-            saw_marker.load(Ordering::SeqCst),
+        assert_ne!(
+            outcome.load(Ordering::SeqCst),
+            0,
             "output callback should have received the marker bytes"
         );
-        assert!(
-            saw_applied.load(Ordering::SeqCst),
+        assert_eq!(
+            outcome.load(Ordering::SeqCst),
+            1,
             "terminal state must contain the callback's bytes by the time the callback fires"
         );
     }
