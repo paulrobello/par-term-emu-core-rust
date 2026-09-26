@@ -5,7 +5,8 @@ use crate::mux::ids::{IdAllocator, PaneId, SessionId, Target, WindowId};
 use crate::mux::layout::{LayoutTree, ResizeDirection, SplitDirection};
 use crate::mux::pane::{MuxError, MuxPane, PaneFactory, SpawnContext};
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Kill a pane the tree has already removed, off the tree lock: killing is
 /// signal-then-reap with a bounded wait (portable-pty polls its SIGHUP
@@ -65,6 +66,89 @@ pub struct MuxSession {
     pub env: BTreeMap<String, String>,
 }
 
+/// A pane spawn reserved under the tree lock but not yet run — the first
+/// phase of two-phase spawning (ARC-022). `begin_*` reserves ids and
+/// geometry; the caller then DROPS the tree lock, spawns through
+/// [`MuxTree::factory`], and re-locks to `complete_*`, which inserts the
+/// pane or — when the tree moved underneath the reservation — kills the
+/// spawned pane and reports the error. Discarding a plan (spawn failed)
+/// leaves only an id gap, the same residue a failed one-shot spawn leaves.
+pub struct SessionSpawn {
+    /// The reserved ids, visible to the caller for the factory call.
+    pub session_id: SessionId,
+    pub window_id: WindowId,
+    pub pane_id: PaneId,
+    pub cols: u16,
+    pub rows: u16,
+    name: String,
+    env: BTreeMap<String, String>,
+}
+
+impl SessionSpawn {
+    /// The factory-facing context — the same fields the one-shot path passes.
+    pub fn context(&self) -> SpawnContext<'_> {
+        SpawnContext {
+            session: Some((self.session_id, &self.name)),
+            window: Some(self.window_id),
+            env: Some(&self.env),
+            cwd: None,
+        }
+    }
+}
+
+/// [`SessionSpawn`] for `new-window`: a second window in an existing
+/// session, so completion depends on that session surviving the spawn.
+pub struct WindowSpawn {
+    pub window_id: WindowId,
+    pub pane_id: PaneId,
+    session_id: SessionId,
+    pub cols: u16,
+    pub rows: u16,
+    name: String,
+    session_name: String,
+    env: BTreeMap<String, String>,
+    cwd: Option<PathBuf>,
+}
+
+impl WindowSpawn {
+    /// The factory-facing context — the same fields the one-shot path passes.
+    pub fn context(&self) -> SpawnContext<'_> {
+        SpawnContext {
+            session: Some((self.session_id, &self.session_name)),
+            window: Some(self.window_id),
+            env: Some(&self.env),
+            cwd: self.cwd.as_deref(),
+        }
+    }
+}
+
+/// [`SessionSpawn`] for `split-window`: completion depends on the target
+/// pane still being a live leaf of the same window after the spawn.
+pub struct SplitSpawn {
+    pub pane_id: PaneId,
+    window_id: WindowId,
+    target: PaneId,
+    direction: SplitDirection,
+    new_share: f32,
+    pub cols: u16,
+    pub rows: u16,
+    session: Option<(SessionId, String)>,
+    env: Option<BTreeMap<String, String>>,
+    cwd: Option<PathBuf>,
+}
+
+impl SplitSpawn {
+    /// The factory-facing context — the same fields the one-shot path passes.
+    pub fn context(&self) -> SpawnContext<'_> {
+        SpawnContext {
+            session: self.session.as_ref().map(|(id, name)| (*id, name.as_str())),
+            window: Some(self.window_id),
+            env: self.env.as_ref(),
+            cwd: self.cwd.as_deref(),
+        }
+    }
+}
+
 /// The server's whole state: every session, window, and pane.
 ///
 /// Flat maps keyed by id rather than a nested ownership tree, because panes are
@@ -77,7 +161,7 @@ pub struct MuxTree {
     pub(crate) windows: HashMap<WindowId, MuxWindow>,
     pub(crate) panes: HashMap<PaneId, MuxPane>,
     pub(crate) ids: IdAllocator,
-    factory: Box<dyn PaneFactory>,
+    factory: Arc<dyn PaneFactory>,
     /// Named paste buffers (`set-buffer`/`show-buffer`). A single value per
     /// name, not tmux's numbered stack — the Phase 2 non-goal in par-mux.md D3.
     pub(crate) buffers: HashMap<String, String>,
@@ -106,7 +190,7 @@ impl MuxTree {
             windows: HashMap::new(),
             panes: HashMap::new(),
             ids: IdAllocator::new(),
-            factory,
+            factory: Arc::from(factory),
             buffers: HashMap::new(),
             client_cell_pixels: None,
             client_fg: None,
@@ -219,6 +303,9 @@ impl MuxTree {
 
     /// [`Self::new_session`] with an initial session environment
     /// (`new-session -e`), applied to the first pane as well.
+    ///
+    /// One-shot form of the two-phase flow for callers that already hold
+    /// the tree exclusively (tests, embedders): reserve, spawn, complete.
     pub fn new_session_with_env(
         &mut self,
         name: &str,
@@ -226,46 +313,90 @@ impl MuxTree {
         rows: u16,
         env: BTreeMap<String, String>,
     ) -> Result<SessionId, MuxError> {
-        let session_id = self.ids.next_session();
-        let window_id = self.ids.next_window();
-        let pane_id = self.ids.next_pane();
+        let plan = self.begin_session(name, cols, rows, &env);
+        let pane = self.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
+        self.complete_session(plan, pane?)
+    }
 
-        let context = SpawnContext {
-            session: Some((session_id, name)),
-            window: Some(window_id),
-            env: Some(&env),
-            cwd: None,
-        };
-        let pane = self
-            .factory
-            .create_pane(pane_id, cols, rows, None, &context)?;
+    /// Phase 1 of `new-session` (ARC-022): reserve the ids under the tree
+    /// lock. Infallible — fresh ids depend on no existing state.
+    pub fn begin_session(
+        &mut self,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        env: &BTreeMap<String, String>,
+    ) -> SessionSpawn {
+        SessionSpawn {
+            session_id: self.ids.next_session(),
+            window_id: self.ids.next_window(),
+            pane_id: self.ids.next_pane(),
+            cols,
+            rows,
+            name: name.to_string(),
+            env: env.clone(),
+        }
+    }
+
+    /// Phase 3 of `new-session`: insert the spawned pane and its window and
+    /// session. Infallible by construction (fresh ids), `Err` only for
+    /// shape symmetry with the other completions.
+    pub fn complete_session(
+        &mut self,
+        plan: SessionSpawn,
+        pane: MuxPane,
+    ) -> Result<SessionId, MuxError> {
+        let SessionSpawn {
+            session_id,
+            window_id,
+            pane_id,
+            cols,
+            rows,
+            name,
+            env,
+        } = plan;
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
-
         self.windows.insert(
             window_id,
             MuxWindow {
                 id: window_id,
-                name: name.to_string(),
+                name: name.clone(),
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
                 cols,
                 rows,
             },
         );
-
         self.sessions.insert(
             session_id,
             MuxSession {
                 id: session_id,
-                name: name.to_string(),
+                name,
                 windows: vec![window_id],
                 active: 0,
                 env,
             },
         );
-
         Ok(session_id)
+    }
+
+    /// The factory this tree spawns panes with (seam S1), handed out so the
+    /// dispatcher can run phase 2 — the spawn itself — OFF the tree lock.
+    pub fn factory(&self) -> Arc<dyn PaneFactory> {
+        self.factory.clone()
+    }
+
+    fn spawn_from(
+        &self,
+        pane_id: &PaneId,
+        cols: u16,
+        rows: u16,
+        command: Option<&str>,
+        context: &SpawnContext<'_>,
+    ) -> Result<MuxPane, MuxError> {
+        self.factory
+            .create_pane(*pane_id, cols, rows, command, context)
     }
 
     /// Add a window to a session.
@@ -282,6 +413,9 @@ impl MuxTree {
     /// [`Self::new_window`] with a start directory for the new pane — the
     /// `new-window -c` path. `None` keeps the factory-wide default; the
     /// caller (dispatch) owns the gone-directory degrade-to-home rule.
+    ///
+    /// One-shot form of the two-phase flow for callers that already hold
+    /// the tree exclusively.
     pub fn new_window_with_cwd(
         &mut self,
         session_id: SessionId,
@@ -290,38 +424,78 @@ impl MuxTree {
         rows: u16,
         cwd: Option<&Path>,
     ) -> Result<WindowId, MuxError> {
+        let plan = self.begin_window(session_id, name, cols, rows, cwd)?;
+        let pane = self.spawn_from(&plan.pane_id, plan.cols, plan.rows, None, &plan.context());
+        self.complete_window(plan, pane?)
+    }
+
+    /// Phase 1 of `new-window`: validate the session and reserve the ids.
+    pub fn begin_window(
+        &mut self,
+        session_id: SessionId,
+        name: &str,
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+    ) -> Result<WindowSpawn, MuxError> {
         let session = self
             .sessions
             .get(&session_id)
             .ok_or(MuxError::NoSuchSession(session_id))?;
-        let window_id = self.ids.next_window();
-        let pane_id = self.ids.next_pane();
+        Ok(WindowSpawn {
+            window_id: self.ids.next_window(),
+            pane_id: self.ids.next_pane(),
+            session_id,
+            cols,
+            rows,
+            name: name.to_string(),
+            session_name: session.name.clone(),
+            env: session.env.clone(),
+            cwd: cwd.map(Path::to_owned),
+        })
+    }
 
-        let context = SpawnContext {
-            session: Some((session_id, &session.name)),
-            window: Some(window_id),
-            env: Some(&session.env),
-            cwd,
-        };
-        let pane = self
-            .factory
-            .create_pane(pane_id, cols, rows, None, &context)?;
+    /// Phase 3 of `new-window`: insert the pane and window. The session may
+    /// have been killed while the pane spawned off the lock; the pane is
+    /// killed and the error reported rather than leaking a live PTY.
+    pub fn complete_window(
+        &mut self,
+        plan: WindowSpawn,
+        pane: MuxPane,
+    ) -> Result<WindowId, MuxError> {
+        let WindowSpawn {
+            window_id,
+            pane_id,
+            session_id,
+            cols,
+            rows,
+            name,
+            session_name: _,
+            env: _,
+            cwd: _,
+        } = plan;
+        if !self.sessions.contains_key(&session_id) {
+            kill_detached(pane);
+            return Err(MuxError::NoSuchSession(session_id));
+        }
         self.panes.insert(pane_id, pane);
         self.apply_cell_pixels(pane_id, cols, rows);
         self.windows.insert(
             window_id,
             MuxWindow {
                 id: window_id,
-                name: name.to_string(),
+                name,
                 layout: LayoutTree::leaf(pane_id),
                 active: pane_id,
                 cols,
                 rows,
             },
         );
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            session.windows.push(window_id);
-        }
+        self.sessions
+            .get_mut(&session_id)
+            .expect("checked directly above")
+            .windows
+            .push(window_id);
         Ok(window_id)
     }
 
@@ -348,6 +522,9 @@ impl MuxTree {
     /// the window without re-deriving it after the fact. `cwd` is the
     /// `split-window -c` start directory; `None` keeps the factory-wide
     /// default and the caller owns the gone-directory degrade.
+    ///
+    /// One-shot form of the two-phase flow for callers that already hold
+    /// the tree exclusively.
     pub fn split_pane_in_window(
         &mut self,
         target: PaneId,
@@ -356,6 +533,26 @@ impl MuxTree {
         command: Option<&str>,
         cwd: Option<&Path>,
     ) -> Result<(PaneId, WindowId), MuxError> {
+        let plan = self.begin_split(target, direction, new_share, cwd)?;
+        let pane = self.spawn_from(
+            &plan.pane_id,
+            plan.cols,
+            plan.rows,
+            command,
+            &plan.context(),
+        );
+        self.complete_split(plan, pane?)
+    }
+
+    /// Phase 1 of `split-window`: resolve the target's window, snapshot its
+    /// geometry and session environment, reserve the pane id.
+    pub fn begin_split(
+        &mut self,
+        target: PaneId,
+        direction: SplitDirection,
+        new_share: f32,
+        cwd: Option<&Path>,
+    ) -> Result<SplitSpawn, MuxError> {
         let window_id = self
             .window_of_pane(target)
             .ok_or(MuxError::NoSuchPane(target))?;
@@ -367,24 +564,59 @@ impl MuxTree {
         let session = self
             .session_of_window(window_id)
             .and_then(|id| self.sessions.get(&id));
-        let context = SpawnContext {
-            session: session.map(|s| (s.id, s.name.as_str())),
-            window: Some(window_id),
-            env: session.map(|s| &s.env),
-            cwd,
-        };
-        let pane = self
-            .factory
-            .create_pane(pane_id, cols, rows, command, &context)?;
+        Ok(SplitSpawn {
+            pane_id,
+            window_id,
+            target,
+            direction,
+            new_share,
+            cols,
+            rows,
+            session: session.map(|s| (s.id, s.name.clone())),
+            env: session.map(|s| s.env.clone()),
+            cwd: cwd.map(Path::to_owned),
+        })
+    }
+
+    /// Phase 3 of `split-window`: insert the pane and re-shape the layout.
+    /// The target pane (or its window) may be gone after the unlocked
+    /// spawn; the pane is killed and the error reported rather than leaking
+    /// a live PTY.
+    pub fn complete_split(
+        &mut self,
+        plan: SplitSpawn,
+        pane: MuxPane,
+    ) -> Result<(PaneId, WindowId), MuxError> {
+        let SplitSpawn {
+            pane_id,
+            window_id,
+            target,
+            direction,
+            new_share,
+            cols: _,
+            rows: _,
+            session: _,
+            env: _,
+            cwd: _,
+        } = plan;
+        // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
+        // (the target), while the command speaks in the NEW pane's share.
+        let split = self.windows.get_mut(&window_id).and_then(|window| {
+            if window.panes().contains(&target) {
+                window
+                    .layout
+                    .split_pane(target, pane_id, direction, 1.0 - new_share)
+                    .ok()
+            } else {
+                None
+            }
+        });
+        if split.is_none() {
+            kill_detached(pane);
+            return Err(MuxError::NoSuchPane(target));
+        }
         self.panes.insert(pane_id, pane);
-        {
-            let window = self.windows.get_mut(&window_id).expect("just found");
-            // `LayoutTree::split_pane`'s ratio is the fraction kept by `first`
-            // (the target), while the command speaks in the NEW pane's share.
-            window
-                .layout
-                .split_pane(target, pane_id, direction, 1.0 - new_share)
-                .expect("window_of_pane only returns windows holding the pane as a leaf");
+        if let Some(window) = self.windows.get_mut(&window_id) {
             window.active = pane_id;
         }
         self.sync_pane_sizes(window_id);

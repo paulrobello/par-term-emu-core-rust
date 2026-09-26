@@ -204,3 +204,88 @@ fn a_non_utf8_line_gets_an_error_reply_and_the_connection_survives() {
         "the reply is version's own, on the same connection"
     );
 }
+
+/// ARC-022: the pane spawn (fork/exec + reader start) runs OFF the tree
+/// lock. A factory that stalls mid-spawn proves it: while client A's
+/// new-session is still inside the factory, client B's list-panes must
+/// answer — under the single-lock flow it queued behind the spawn for the
+/// whole stall, and so would every other command in the daemon.
+#[test]
+fn a_slow_spawn_does_not_stall_other_clients() {
+    use par_term_emu_core_rust::mux::pane::{
+        MuxError, MuxPane, PaneFactory, ShellPaneFactory, SpawnContext,
+    };
+    use par_term_emu_core_rust::mux::{MuxServer, MuxTree, PaneId};
+
+    /// The real factory behind a fixed stall in `create_pane`.
+    struct SleepingFactory {
+        inner: ShellPaneFactory,
+        stall: Duration,
+    }
+    impl PaneFactory for SleepingFactory {
+        fn create_pane(
+            &self,
+            id: PaneId,
+            cols: u16,
+            rows: u16,
+            command: Option<&str>,
+            context: &SpawnContext<'_>,
+        ) -> Result<MuxPane, MuxError> {
+            std::thread::sleep(self.stall);
+            self.inner.create_pane(id, cols, rows, command, context)
+        }
+    }
+
+    let (_dir, path) = socket_path("slowspawn");
+    let tree = MuxTree::new(Box::new(SleepingFactory {
+        inner: ShellPaneFactory::default(),
+        stall: Duration::from_millis(1500),
+    }));
+    let server = MuxServer::bind_with_tree(&path, tree).expect("server binds");
+    let handle = std::thread::spawn(move || server.run());
+
+    // Client A starts a session whose pane spawn stalls 1.5 s. Its reply
+    // arrives only after the spawn, so drive A from its own thread.
+    let (mut writer_a, mut reader_a) = connect(&path);
+    let session_a = std::thread::spawn(move || {
+        writeln!(writer_a, "new-session -s slow").expect("A: write new-session");
+        writer_a.flush().expect("A: flush");
+        read_reply_block(&mut reader_a)
+    });
+
+    // Let the dispatcher reach the factory stall, then time client B's
+    // list-panes. Old behavior: B blocks on the tree lock until the stall
+    // ends (≥1.2 s from here). New: B answers in scheduler time while the
+    // spawn is still in flight.
+    std::thread::sleep(Duration::from_millis(300));
+    let (mut writer_b, mut reader_b) = connect(&path);
+    writeln!(writer_b, "list-panes").expect("B: write list-panes");
+    writer_b.flush().expect("B: flush");
+    let started = Instant::now();
+    let body_b = read_reply_block(&mut reader_b);
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_millis(800),
+        "list-panes queued behind the in-flight spawn ({elapsed:?}); the \
+         spawn must run off the tree lock"
+    );
+    // Two-phase semantics: the pane is invisible until the insert lands —
+    // an empty body is the correct answer mid-spawn.
+    assert!(
+        body_b.is_empty(),
+        "no pane exists yet while the spawn is in flight: {body_b:?}"
+    );
+
+    // The stalled spawn still completes and becomes visible.
+    session_a.join().expect("A: session thread");
+    writeln!(writer_b, "list-panes").expect("B: write list-panes again");
+    writer_b.flush().expect("B: flush again");
+    let body_after = read_reply_block(&mut reader_b);
+    assert_eq!(
+        body_after,
+        vec!["%0".to_string()],
+        "pane %0 exists after the spawn lands"
+    );
+
+    drop(handle);
+}

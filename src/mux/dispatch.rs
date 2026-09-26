@@ -225,35 +225,46 @@ pub(super) fn dispatch_command(
 
 fn cmd_new_session(ctx: &Ctx<'_>, name: Option<String>, env: Vec<(String, String)>) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
-    let outcome = {
+    let env: std::collections::BTreeMap<String, String> = env.into_iter().collect();
+    // Two-phase spawn (ARC-022): reserve ids under the lock, run the
+    // fork/exec OFF it — a slow spawn must not stall every other client —
+    // then re-lock to insert and wire. The in-flight session is invisible
+    // until the insert lands.
+    let (plan, factory) = {
         let mut guard = ctx.tree.lock();
-        match guard.new_session_with_env(
-            &name,
-            DEFAULT_COLS,
-            DEFAULT_ROWS,
-            env.into_iter().collect(),
-        ) {
-            Ok(session_id) => {
-                // Wire every pane in the new session to push its output.
-                let window_ids = guard
-                    .session(session_id)
-                    .map(|s| s.windows.clone())
-                    .unwrap_or_default();
-                let pane_ids: Vec<_> = window_ids
-                    .iter()
-                    .filter_map(|w| guard.window(*w))
-                    .flat_map(|w| w.panes())
-                    .collect();
-                for pane_id in pane_ids {
-                    if let Some(pane) = guard.pane_mut(pane_id) {
-                        pane.on_output(pane_output_sink(ctx.clients, pane_id));
+        (
+            guard.begin_session(&name, DEFAULT_COLS, DEFAULT_ROWS, &env),
+            guard.factory(),
+        )
+    };
+    let outcome =
+        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
+            Ok(pane) => {
+                let mut guard = ctx.tree.lock();
+                match guard.complete_session(plan, pane) {
+                    Ok(session_id) => {
+                        // Wire every pane in the new session to push its output.
+                        let window_ids = guard
+                            .session(session_id)
+                            .map(|s| s.windows.clone())
+                            .unwrap_or_default();
+                        let pane_ids: Vec<_> = window_ids
+                            .iter()
+                            .filter_map(|w| guard.window(*w))
+                            .flat_map(|w| w.panes())
+                            .collect();
+                        for pane_id in pane_ids {
+                            if let Some(pane) = guard.pane_mut(pane_id) {
+                                pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                            }
+                        }
+                        Ok((session_id, window_ids))
                     }
+                    Err(err) => Err(err),
                 }
-                Ok((session_id, window_ids))
             }
             Err(err) => Err(err),
-        }
-    };
+        };
     match outcome {
         Ok((session_id, window_ids)) => {
             let mut result = Outcome::ok(ctx, &session_id.to_string());
@@ -498,36 +509,47 @@ fn cmd_split_window(
     start_dir: Option<&str>,
 ) -> Outcome {
     let (cwd, note) = resolve_start_dir(start_dir);
-    let outcome = {
+    // Two-phase spawn (ARC-022): resolve + reserve under the lock, fork/exec
+    // off it, re-lock to insert, wire, and shape the layout. A target killed
+    // while the pane spawned fails the insert (the pane is killed tree-side).
+    let (plan, factory) = {
         let mut guard = ctx.tree.lock();
         let pane = match guard.resolve_pane_target(pane) {
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        let split = guard.split_pane_in_window(
-            pane,
-            direction,
-            percent as f32 / 100.0,
-            None,
-            cwd.as_deref(),
-        );
-        // Wire the new pane's output to the clients, as new-session and
-        // new-window do for theirs. Without it the pane's PTY still feeds
-        // the daemon grid (capture-pane shows it) but no %output line ever
-        // leaves, so every client renders a blank split pane.
-        if let Ok((new_pane, _)) = &split {
-            if let Some(created) = guard.pane_mut(*new_pane) {
-                created.on_output(pane_output_sink(ctx.clients, *new_pane));
-                if let Some(note) = &note {
-                    // Same visibility rule as a restore's gone cwd: the
-                    // pane says where it landed instead of silently
-                    // starting elsewhere.
-                    created.terminal().write().process(note.as_bytes());
+        match guard.begin_split(pane, direction, percent as f32 / 100.0, cwd.as_deref()) {
+            Ok(plan) => (plan, guard.factory()),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    let outcome =
+        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
+            Ok(pane) => {
+                let mut guard = ctx.tree.lock();
+                match guard.complete_split(plan, pane) {
+                    Ok((new_pane, window_id)) => {
+                        // Wire the new pane's output to the clients, as new-session
+                        // and new-window do for theirs. Without it the pane's PTY
+                        // still feeds the daemon grid (capture-pane shows it) but
+                        // no %output line ever leaves, so every client renders a
+                        // blank split pane.
+                        if let Some(created) = guard.pane_mut(new_pane) {
+                            created.on_output(pane_output_sink(ctx.clients, new_pane));
+                            if let Some(note) = &note {
+                                // Same visibility rule as a restore's gone cwd: the
+                                // pane says where it landed instead of silently
+                                // starting elsewhere.
+                                created.terminal().write().process(note.as_bytes());
+                            }
+                        }
+                        Ok((new_pane, window_id))
+                    }
+                    Err(err) => Err(err),
                 }
             }
-        }
-        split
-    };
+            Err(err) => Err(err),
+        };
     match outcome {
         Ok((new_pane, window_id)) => {
             // split-window focuses the new pane (tmux semantics).
@@ -659,7 +681,10 @@ fn cmd_new_window(
 ) -> Outcome {
     let name = name.unwrap_or_else(|| "0".to_string());
     let (cwd, note) = resolve_start_dir(start_dir);
-    let outcome = {
+    // Two-phase spawn (ARC-022): resolve + reserve under the lock, fork/exec
+    // off it, re-lock to insert and wire. A session killed while the pane
+    // spawned fails the insert (the pane is killed tree-side).
+    let (plan, factory) = {
         let mut guard = ctx.tree.lock();
         // Bare `new-window` targets the most-recently-created
         // session — ids are monotonic and the registry keeps
@@ -672,25 +697,38 @@ fn cmd_new_window(
             Ok(id) => id,
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         };
-        guard
-            .new_window_with_cwd(session, &name, DEFAULT_COLS, DEFAULT_ROWS, cwd.as_deref())
-            .inspect(|&window_id| {
-                // Wire the new window's pane the same way new-session does.
-                let pane_ids = guard
-                    .window(window_id)
-                    .map(|w| w.panes())
-                    .unwrap_or_default();
-                for pane_id in pane_ids {
-                    if let Some(pane) = guard.pane_mut(pane_id) {
-                        pane.on_output(pane_output_sink(ctx.clients, pane_id));
-                        if let Some(note) = &note {
-                            // Same visibility rule as a restore's gone cwd.
-                            pane.terminal().write().process(note.as_bytes());
-                        }
-                    }
-                }
-            })
+        match guard.begin_window(session, &name, DEFAULT_COLS, DEFAULT_ROWS, cwd.as_deref()) {
+            Ok(plan) => (plan, guard.factory()),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
     };
+    let outcome =
+        match factory.create_pane(plan.pane_id, plan.cols, plan.rows, None, &plan.context()) {
+            Ok(pane) => {
+                let mut guard = ctx.tree.lock();
+                match guard.complete_window(plan, pane) {
+                    Ok(window_id) => {
+                        // Wire the new window's pane the same way new-session does.
+                        let pane_ids = guard
+                            .window(window_id)
+                            .map(|w| w.panes())
+                            .unwrap_or_default();
+                        for pane_id in pane_ids {
+                            if let Some(pane) = guard.pane_mut(pane_id) {
+                                pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                                if let Some(note) = &note {
+                                    // Same visibility rule as a restore's gone cwd.
+                                    pane.terminal().write().process(note.as_bytes());
+                                }
+                            }
+                        }
+                        Ok(window_id)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            Err(err) => Err(err),
+        };
     match outcome {
         Ok(window_id) => {
             Outcome::ok(ctx, &window_id.to_string()).notifying(TmuxNotification::WindowAdd {
