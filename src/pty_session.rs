@@ -109,6 +109,49 @@ pub struct PtySession {
     first_read_delay: Option<std::time::Duration>,
 }
 
+/// Deliver SIGWINCH to the child's process group, falling back to the PID.
+///
+/// The single delivery path for every resize trigger — the reader thread's
+/// alt-screen pulse, [`PtySession::resize`], and
+/// [`PtySession::resize_with_pixels`] — so a resize reaches the child the
+/// same way regardless of which API the caller used. The group is signalled
+/// first so grandchildren (apps launched from the shell) also recalculate;
+/// the direct PID is the fallback for a child that left its group.
+#[cfg(unix)]
+fn send_sigwinch(pid: u32, tag: &str, context: &str) -> std::io::Result<()> {
+    // SAFETY: both `kill` calls address a PID taken from a live child handle
+    // of this session; the negative form addresses only that child's process
+    // group. If the child exits and its PID is recycled between the handle
+    // check and the delivery, SIGWINCH's default disposition is ignore, so a
+    // stray delivery cannot terminate an unrelated process.
+    unsafe {
+        if libc::kill(-(pid as libc::pid_t), libc::SIGWINCH) == 0 {
+            debug::log(
+                debug::DebugLevel::Debug,
+                tag,
+                &format!("SIGWINCH sent to process group -{pid} ({context})"),
+            );
+            return Ok(());
+        }
+        let group_err = std::io::Error::last_os_error();
+        if libc::kill(pid as libc::pid_t, libc::SIGWINCH) == 0 {
+            debug::log(
+                debug::DebugLevel::Debug,
+                tag,
+                &format!("SIGWINCH sent to PID {pid} (group failed: {group_err}; {context})"),
+            );
+            return Ok(());
+        }
+        let pid_err = std::io::Error::last_os_error();
+        debug::log(
+            debug::DebugLevel::Error,
+            tag,
+            &format!("SIGWINCH delivery failed for {context}: group {group_err}, pid {pid_err}"),
+        );
+        Err(pid_err)
+    }
+}
+
 impl PtySession {
     /// Create a new PTY session with the specified dimensions
     ///
@@ -871,33 +914,15 @@ impl PtySession {
                                     "ALT_SCREEN",
                                     "Entered alternate screen - sending SIGWINCH resize pulse",
                                 );
-                                // Send SIGWINCH to the child process to force layout recalculation
+                                // Current dimensions, not stale captured values
+                                let (current_cols, current_rows) = term.size();
                                 #[cfg(unix)]
                                 if let Some(pid) = child_pid {
-                                    // Current dimensions, not stale captured values
-                                    let (current_cols, current_rows) = term.size();
-                                    unsafe {
-                                        // Send SIGWINCH to the process group
-                                        let pgid = -(pid as i32);
-                                        let result = libc::kill(pgid, libc::SIGWINCH);
-                                        if result == 0 {
-                                            debug::log(
-                                                debug::DebugLevel::Info,
-                                                "ALT_SCREEN",
-                                                &format!(
-                                                    "SIGWINCH sent to process group -{} ({}x{})",
-                                                    pid, current_cols, current_rows
-                                                ),
-                                            );
-                                        } else {
-                                            let err = std::io::Error::last_os_error();
-                                            debug::log(
-                                                debug::DebugLevel::Error,
-                                                "ALT_SCREEN",
-                                                &format!("Failed to send SIGWINCH: {}", err),
-                                            );
-                                        }
-                                    }
+                                    let _ = send_sigwinch(
+                                        pid,
+                                        "ALT_SCREEN",
+                                        &format!("alt-screen entry {current_cols}x{current_rows}"),
+                                    );
                                 }
                             }
 
@@ -1081,48 +1106,14 @@ impl PtySession {
             );
         }
 
-        // Manually send SIGWINCH to the child process
-        // This ensures the child receives the resize signal, as portable-pty's
-        // resize() may not reliably deliver SIGWINCH in all scenarios
+        // Manually deliver SIGWINCH after the pty resize: portable-pty's
+        // resize() updates the kernel winsize but may not reliably deliver
+        // the signal in all scenarios. Group-then-PID delivery lives in
+        // [`send_sigwinch`].
         #[cfg(unix)]
         if let Some(ref child) = self.child {
             if let Some(pid) = child.process_id() {
-                debug::log(
-                    debug::DebugLevel::Debug,
-                    "PTY_RESIZE",
-                    &format!("Sending SIGWINCH to PID {}", pid),
-                );
-                unsafe {
-                    // Send SIGWINCH to the process group, not just the direct child
-                    // This ensures grandchildren (e.g., apps launched from shell) also receive it
-                    let result = libc::kill(-(pid as libc::pid_t), libc::SIGWINCH);
-                    if result == 0 {
-                        debug::log(
-                            debug::DebugLevel::Debug,
-                            "PTY_RESIZE",
-                            &format!("SIGWINCH sent successfully to process group -{}", pid),
-                        );
-                        debug::log(
-                            debug::DebugLevel::Trace,
-                            "PTY_RESIZE",
-                            &format!("SIGWINCH notified processes of new size: {}x{}", cols, rows),
-                        );
-                    } else {
-                        let errno = std::io::Error::last_os_error();
-                        debug::log(
-                            debug::DebugLevel::Info,
-                            "PTY_RESIZE",
-                            &format!("Failed to send SIGWINCH to process group, errno: {}", errno),
-                        );
-                        // Fallback: send to the process itself
-                        libc::kill(pid as libc::pid_t, libc::SIGWINCH);
-                        debug::log(
-                            debug::DebugLevel::Debug,
-                            "PTY_RESIZE",
-                            &format!("SIGWINCH sent to PID {} (fallback)", pid),
-                        );
-                    }
-                }
+                let _ = send_sigwinch(pid, "PTY_RESIZE", &format!("resize {cols}x{rows}"));
             }
         }
 
@@ -1195,28 +1186,16 @@ impl PtySession {
             );
         }
 
-        // Manually send SIGWINCH to the child process (as in resize())
+        // Manually deliver SIGWINCH after the pty resize (as in resize());
+        // delivery and failure logging live in [`send_sigwinch`].
         #[cfg(unix)]
         if let Some(ref child) = self.child {
             if let Some(pid) = child.process_id() {
-                debug::log(
-                    debug::DebugLevel::Debug,
+                let _ = send_sigwinch(
+                    pid,
                     "PTY_RESIZE",
-                    &format!("Sending SIGWINCH to PID {}", pid),
+                    &format!("resize {cols}x{rows} ({pixel_width}x{pixel_height} px)"),
                 );
-                unsafe {
-                    let result = libc::kill(-(pid as libc::pid_t), libc::SIGWINCH);
-                    if result == 0 {
-                        debug::log(
-                            debug::DebugLevel::Debug,
-                            "PTY_RESIZE",
-                            &format!(
-                                "SIGWINCH notified processes of new size: {}x{} ({}x{} px)",
-                                cols, rows, pixel_width, pixel_height
-                            ),
-                        );
-                    }
-                }
             }
         }
 
