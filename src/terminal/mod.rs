@@ -1428,9 +1428,20 @@ impl Terminal {
     }
 
     /// Set pixel dimensions for XTWINOPS reporting
+    ///
+    /// Also refreshes the graphics cell dimensions (the per-cell pixel size
+    /// image placement converts image extents to cell spans with): a host
+    /// that reports real text-area pixels knows its real cell size, and the
+    /// (1, 2) no-information default would make a daemon-side terminal with
+    /// client pixels advance the cursor a different number of rows after an
+    /// image than the client-side mirror rendering it does.
     pub fn set_pixel_size(&mut self, width_px: usize, height_px: usize) {
         self.pixel_width = width_px;
         self.pixel_height = height_px;
+        let (cols, rows) = self.size();
+        if cols > 0 && rows > 0 && width_px > 0 && height_px > 0 {
+            self.graphics.cell_dimensions = ((width_px / cols) as u32, (height_px / rows) as u32);
+        }
     }
 
     /// Set the host-supplied window position for XTWINOPS reporting

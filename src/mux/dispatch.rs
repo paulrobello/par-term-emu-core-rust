@@ -153,7 +153,11 @@ pub(super) fn dispatch_command(
         MuxCommand::ListPanes => cmd_list_panes(ctx),
         MuxCommand::ListAgents => cmd_list_agents(ctx),
         MuxCommand::SendKeys { pane, keys } => cmd_send_keys(ctx, pane, &keys),
-        MuxCommand::RefreshClient { pane, size } => cmd_refresh_client(ctx, pane, size),
+        MuxCommand::RefreshClient {
+            pane,
+            size,
+            cell_pixels,
+        } => cmd_refresh_client(ctx, pane, size, cell_pixels),
         MuxCommand::KillPane { pane } => cmd_kill_pane(ctx, pane),
         MuxCommand::SplitWindow {
             pane,
@@ -352,7 +356,12 @@ fn cmd_send_keys(ctx: &Ctx<'_>, pane: Target<PaneId>, keys: &[u8]) -> Outcome {
     }
 }
 
-fn cmd_refresh_client(ctx: &Ctx<'_>, pane: Target<PaneId>, size: Option<(u16, u16)>) -> Outcome {
+fn cmd_refresh_client(
+    ctx: &Ctx<'_>,
+    pane: Target<PaneId>,
+    size: Option<(u16, u16)>,
+    cell_pixels: Option<(u16, u16)>,
+) -> Outcome {
     let pane = {
         let guard = ctx.tree.lock();
         match guard.resolve_pane_target(pane) {
@@ -360,6 +369,14 @@ fn cmd_refresh_client(ctx: &Ctx<'_>, pane: Target<PaneId>, size: Option<(u16, u1
             Err(err) => return Outcome::err(ctx, &err.to_string()),
         }
     };
+    // `-p` is applied first and independently of `-C`: the cell size is
+    // daemon-wide state every later re-fit reads (sync_pane_sizes), so a
+    // combined report lands the pixels even when the grid resize below
+    // fails on a dead pane, and a pixels-only report re-fits at the
+    // current grid through the same sync path.
+    if let Some((cell_w, cell_h)) = cell_pixels {
+        ctx.tree.lock().set_client_cell_pixels(cell_w, cell_h);
+    }
     match size {
         // The window-size policy's input (T4.C): a client's renderer
         // reports its grid size, the pane's window is resized to it, and

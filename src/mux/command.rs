@@ -70,6 +70,14 @@ pub enum MuxCommand {
         /// and latest `-C` are the same rule here. `None` keeps the
         /// replay-only behavior.
         size: Option<(u16, u16)>,
+        /// `-p WxH`: the client's per-CELL pixel size (font metrics), the
+        /// one renderer measurement every pane shares. Applied daemon-wide
+        /// so `TIOCGWINSZ`, XTWINOPS pixel reports, and image cell-span
+        /// math carry the size cells actually render at. Independently
+        /// optional from `-C`: a resize without pixels keeps the last
+        /// reported cells, a pixel report without `-C` re-fits at the
+        /// current grid.
+        cell_pixels: Option<(u16, u16)>,
     },
     /// Add a window to a session, optionally named.
     NewWindow {
@@ -815,6 +823,7 @@ fn parse_refresh_client(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::RefreshClient {
         pane: a.pane("-t")?,
         size: a.size_pair("-C")?,
+        cell_pixels: a.size_pair("-p")?,
     })
 }
 
@@ -1842,14 +1851,34 @@ mod tests {
             parse_command("refresh-client -t %0").unwrap(),
             MuxCommand::RefreshClient {
                 pane: Target::Id(PaneId(0)),
-                size: None
+                size: None,
+                cell_pixels: None
             }
         );
         assert_eq!(
             parse_command("refresh-client -t %0 -C 120x40").unwrap(),
             MuxCommand::RefreshClient {
                 pane: Target::Id(PaneId(0)),
-                size: Some((120, 40))
+                size: Some((120, 40)),
+                cell_pixels: None
+            }
+        );
+        // The cell-pixel report rides along or stands alone: a client
+        // re-reporting font metrics without a grid change sends only -p.
+        assert_eq!(
+            parse_command("refresh-client -t %0 -C 120x40 -p 10x20").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: Target::Id(PaneId(0)),
+                size: Some((120, 40)),
+                cell_pixels: Some((10, 20))
+            }
+        );
+        assert_eq!(
+            parse_command("refresh-client -t %0 -p 9x17").unwrap(),
+            MuxCommand::RefreshClient {
+                pane: Target::Id(PaneId(0)),
+                size: None,
+                cell_pixels: Some((9, 17))
             }
         );
     }
@@ -1860,6 +1889,8 @@ mod tests {
         assert!(parse_command("refresh-client -t %0 -C 0x40").is_err());
         assert!(parse_command("refresh-client -t %0 -C 120x0").is_err());
         assert!(parse_command("refresh-client -t %0 -C ax40").is_err());
+        assert!(parse_command("refresh-client -t %0 -p 0x20").is_err());
+        assert!(parse_command("refresh-client -t %0 -p 10").is_err());
     }
 
     #[test]
@@ -1903,6 +1934,7 @@ mod tests {
             MuxCommand::RefreshClient {
                 pane: Target::Id(PaneId(0)),
                 size: Some((80, 24)),
+                cell_pixels: None,
             },
             MuxCommand::NewWindow {
                 session: None,
@@ -1960,6 +1992,7 @@ mod tests {
             MuxCommand::RefreshClient {
                 pane: Target::Id(PaneId(0)),
                 size: None,
+                cell_pixels: None,
             },
             MuxCommand::ListWindows,
             MuxCommand::ListSessions,

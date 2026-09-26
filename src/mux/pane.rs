@@ -294,6 +294,25 @@ impl MuxPane {
         self.session.resize(cols, rows).map_err(MuxError::from)
     }
 
+    /// [`Self::resize`] with the client's per-cell pixel size, so
+    /// XTWINOPS reports (`CSI 14 t`/`16 t`), `TIOCGWINSZ`, and image
+    /// cell-span math all carry the size the client actually renders
+    /// cells at instead of the 10×20 construction default. Total text-area
+    /// pixels are derived per pane (`cols × cell_w`) because the protocol
+    /// carries the cell size — the one renderer-metric every pane shares —
+    /// while grid extents differ per pane.
+    pub fn resize_with_cell_pixels(
+        &mut self,
+        cols: u16,
+        rows: u16,
+        cell_w: u16,
+        cell_h: u16,
+    ) -> Result<(), MuxError> {
+        self.session
+            .resize_with_pixels(cols, rows, cols * cell_w, rows * cell_h)
+            .map_err(MuxError::from)
+    }
+
     /// Terminate the pane's child process.
     pub fn kill(&mut self) -> Result<(), MuxError> {
         self.session.kill().map_err(MuxError::from)

@@ -80,6 +80,13 @@ pub struct MuxTree {
     /// Named paste buffers (`set-buffer`/`show-buffer`). A single value per
     /// name, not tmux's numbered stack — the Phase 2 non-goal in par-mux.md D3.
     pub(crate) buffers: HashMap<String, String>,
+    /// The client's per-cell pixel size (`refresh-client -p`), the one
+    /// renderer metric every pane shares. Latest report wins, the same
+    /// policy the grid-size report (`-C`) uses — par-mux has no other
+    /// client-metrics input. `None` until a client reports, so panes keep
+    /// the 10×20 construction default. Never persisted: a reconnecting
+    /// client re-reports on attach.
+    pub(crate) client_cell_pixels: Option<(u16, u16)>,
 }
 
 impl MuxTree {
@@ -92,6 +99,7 @@ impl MuxTree {
             ids: IdAllocator::new(),
             factory,
             buffers: HashMap::new(),
+            client_cell_pixels: None,
         }
     }
 
@@ -221,6 +229,7 @@ impl MuxTree {
             .factory
             .create_pane(pane_id, cols, rows, None, &context)?;
         self.panes.insert(pane_id, pane);
+        self.apply_cell_pixels(pane_id, cols, rows);
 
         self.windows.insert(
             window_id,
@@ -287,6 +296,7 @@ impl MuxTree {
             .factory
             .create_pane(pane_id, cols, rows, None, &context)?;
         self.panes.insert(pane_id, pane);
+        self.apply_cell_pixels(pane_id, cols, rows);
         self.windows.insert(
             window_id,
             MuxWindow {
@@ -582,6 +592,34 @@ impl MuxTree {
         Ok(())
     }
 
+    /// Record the client's per-cell pixel size and re-fit every pane to it.
+    ///
+    /// `refresh-client -p WxH`'s landing point: the cell size is the one
+    /// renderer metric every pane shares (grid extents differ per pane, the
+    /// font does not), so it is held daemon-wide and every pane's terminal,
+    /// PTY `TIOCGWINSZ`, and image cell-span math re-derive from it — see
+    /// [`MuxPane::resize_with_cell_pixels`]. Latest report wins, matching
+    /// the `-C` grid-size policy.
+    pub fn set_client_cell_pixels(&mut self, cell_w: u16, cell_h: u16) {
+        self.client_cell_pixels = Some((cell_w, cell_h));
+        let window_ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        for window_id in window_ids {
+            self.sync_pane_sizes(window_id);
+        }
+    }
+
+    /// Apply the recorded cell pixel size to one just-inserted pane — the
+    /// creation paths that build the window around the pane and never
+    /// re-fit through [`Self::sync_pane_sizes`]. A no-op until a client
+    /// has reported, so fresh daemons spawn with the construction default.
+    fn apply_cell_pixels(&mut self, pane_id: PaneId, cols: u16, rows: u16) {
+        if let Some((cell_w, cell_h)) = self.client_cell_pixels {
+            if let Some(pane) = self.panes.get_mut(&pane_id) {
+                let _ = pane.resize_with_cell_pixels(cols, rows, cell_w, cell_h);
+            }
+        }
+    }
+
     /// Resize every pane terminal (and PTY) in `window_id` to the window's
     /// current layout geometry — the step every extent-affecting mutation
     /// ends with, so the terminals `capture-pane` reads and clients render
@@ -600,7 +638,19 @@ impl MuxTree {
             .geometry(0, 0, window.cols as usize, window.rows as usize);
         for pane_geometry in geometry {
             if let Some(pane) = self.panes.get_mut(&pane_geometry.pane) {
-                let _ = pane.resize(pane_geometry.width as u16, pane_geometry.height as u16);
+                // A reported cell pixel size rides every re-fit, so grid
+                // changes keep XTWINOPS/TIOCGWINSZ/image-span math correct
+                // instead of reverting to the construction default.
+                let resized = match self.client_cell_pixels {
+                    Some((cell_w, cell_h)) => pane.resize_with_cell_pixels(
+                        pane_geometry.width as u16,
+                        pane_geometry.height as u16,
+                        cell_w,
+                        cell_h,
+                    ),
+                    None => pane.resize(pane_geometry.width as u16, pane_geometry.height as u16),
+                };
+                let _ = resized;
             }
         }
     }
@@ -836,6 +886,59 @@ mod tests {
         let spawn = factory.spawn_of(pane);
         assert_eq!(spawn.session, Some((session, "work".to_string())));
         assert_eq!(spawn.window, Some(window));
+    }
+
+    /// Card 01a0d9e6f012: the client's cell pixel size is daemon-wide state
+    /// that reaches every pane — existing ones re-fit through the sync path,
+    /// panes created later inherit it at insert — and the pane terminal's
+    /// pixel state (XTWINOPS 14 t's answer) and graphics cell dimensions
+    /// (image cell-span math) both derive from it.
+    #[test]
+    fn client_cell_pixels_reach_existing_and_later_panes() {
+        let mut tree = tree();
+        let session = tree.new_session("work", 80, 24).unwrap();
+        let window = tree.session(session).unwrap().windows[0];
+        let first = tree.window(window).unwrap().panes()[0];
+
+        {
+            let term = tree.pane(first).unwrap().terminal();
+            let term = term.read();
+            assert_eq!(
+                (term.pixel_width, term.pixel_height),
+                (800, 480),
+                "pre-report: the 10x20 construction default (80x24 grid)"
+            );
+        }
+
+        tree.set_client_cell_pixels(12, 24);
+        {
+            let term = tree.pane(first).unwrap().terminal();
+            let term = term.read();
+            assert_eq!(
+                (term.pixel_width, term.pixel_height),
+                (960, 576),
+                "an existing pane re-fits: 80x24 cells at 12x24 px"
+            );
+            assert_eq!(
+                term.graphics.cell_dimensions,
+                (12, 24),
+                "image cell-span math uses the client's cell size, not the (1,2) default"
+            );
+        }
+
+        // A pane created after the report inherits it at insert — the
+        // creation paths that never run sync_pane_sizes.
+        let later_window = tree.new_window(session, "w2", 40, 10).unwrap();
+        let later = tree.window(later_window).unwrap().panes()[0];
+        {
+            let term = tree.pane(later).unwrap().terminal();
+            let term = term.read();
+            assert_eq!(
+                (term.pixel_width, term.pixel_height),
+                (480, 240),
+                "a later pane derives its totals from its own 40x10 grid"
+            );
+        }
     }
 
     #[test]
