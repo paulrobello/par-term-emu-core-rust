@@ -68,7 +68,7 @@ cargo bench --no-default-features --features rust-only -- --save-baseline my-cha
 cargo bench --no-default-features --features rust-only -- --baseline my-change
 ```
 
-A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only -- --test`.
+A quick compile-and-run sanity check without timing (useful in CI-like environments) is `cargo bench --no-default-features --features rust-only -- --test`. A scheduled gate also tracks these benches against a stored baseline tag over time — see [docs/BENCHMARKING.md](docs/BENCHMARKING.md).
 
 ## Fuzzing
 

@@ -1,0 +1,32 @@
+name: Bench gate
+
+on:
+  schedule:
+    # Weekly, Monday 09:17 UTC — off the :00 mark to dodge the scheduled-job
+    # stampede. GH-hosted runner noise is why verdicts start warning-level.
+    - cron: "17 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  # The gate rotates the bench-baseline tag on clean compares — a tag-only
+  # force push; branch history is never rewritten (docs/BENCHMARKING.md).
+  contents: write
+
+jobs:
+  bench:
+    name: Interleaved A/B bench compare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run bench gate
+        env:
+          # Only the default branch may move the baseline tag; dispatch runs
+          # from scratch branches compare without rotating.
+          BENCH_ROTATE_TAG: ${{ github.ref == 'refs/heads/main' && '1' || '0' }}
+        run: bash scripts/bench_gate.sh
