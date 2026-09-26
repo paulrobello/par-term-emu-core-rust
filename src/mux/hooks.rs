@@ -276,12 +276,12 @@ fn handle_session_report(
             None,
         );
     }
-    if let Some(value) = session_id.as_deref() {
+    if let Some(value) = session_id {
         if let Err(message) = check_value_len("agent_session_id", value) {
             return (error_reply(id, &message), None);
         }
     }
-    if let Some(value) = session_path.as_deref() {
+    if let Some(value) = session_path {
         if let Err(message) = check_value_len("agent_session_path", value) {
             return (error_reply(id, &message), None);
         }
