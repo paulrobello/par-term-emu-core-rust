@@ -110,7 +110,7 @@ dev = [
     "pytest-cov>=7.1.0",
     "pytest-timeout>=2.4.0",
     "rich>=15.0.0",
-    "ruff>=0.16.8",
+    "ruff>=0.16.9",
     "websockets>=17.1",
 ]
 
