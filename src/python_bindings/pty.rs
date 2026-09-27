@@ -21,6 +21,7 @@ use pyo3::prelude::*;
 use std::collections::HashMap;
 
 use crate::pty_session;
+use crate::terminal::MacroEngine;
 
 /// Python wrapper for PtySession - a terminal with PTY support
 #[pyclass(name = "PtyTerminal", unsendable)]
@@ -799,7 +800,7 @@ impl PyPtyTerminal {
         {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.load_macro(name, macro_obj.inner.clone());
+            MacroEngine::load_macro(&mut term, name, macro_obj.inner.clone());
         }
         Ok(())
     }
@@ -814,8 +815,7 @@ impl PyPtyTerminal {
     fn get_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term
-            .get_macro(&name)
+        Ok(MacroEngine::get_macro(&term, &name)
             .cloned()
             .map(super::types::PyMacro::from))
     }
@@ -830,7 +830,7 @@ impl PyPtyTerminal {
     fn remove_macro(&self, name: String) -> PyResult<Option<super::types::PyMacro>> {
         let terminal = self.inner.terminal();
         let mut term = terminal.write();
-        Ok(term.remove_macro(&name).map(super::types::PyMacro::from))
+        Ok(MacroEngine::remove_macro(&mut term, &name).map(super::types::PyMacro::from))
     }
 
     /// List all macro names
@@ -840,7 +840,7 @@ impl PyPtyTerminal {
     fn list_macros(&self) -> PyResult<Vec<String>> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term.list_macros())
+        Ok(MacroEngine::list_macros(&term))
     }
 
     /// Start playing a macro
@@ -852,9 +852,9 @@ impl PyPtyTerminal {
     fn play_macro(&self, name: String, speed: Option<f64>) -> PyResult<()> {
         let terminal = self.inner.terminal();
         let mut term = terminal.write();
-        term.play_macro(&name).map_err(PyValueError::new_err)?;
+        MacroEngine::play_macro(&mut term, &name).map_err(PyValueError::new_err)?;
         if let Some(s) = speed {
-            term.set_macro_speed(s);
+            MacroEngine::set_macro_speed(&mut term, s);
         }
         Ok(())
     }
@@ -864,7 +864,7 @@ impl PyPtyTerminal {
         {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.stop_macro();
+            MacroEngine::stop_macro(&mut term);
         }
         Ok(())
     }
@@ -874,7 +874,7 @@ impl PyPtyTerminal {
         {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.pause_macro();
+            MacroEngine::pause_macro(&mut term);
         }
         Ok(())
     }
@@ -884,7 +884,7 @@ impl PyPtyTerminal {
         {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.resume_macro();
+            MacroEngine::resume_macro(&mut term);
         }
         Ok(())
     }
@@ -897,7 +897,7 @@ impl PyPtyTerminal {
         {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.set_macro_speed(speed);
+            MacroEngine::set_macro_speed(&mut term, speed);
         }
         Ok(())
     }
@@ -909,7 +909,7 @@ impl PyPtyTerminal {
     fn is_macro_playing(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term.is_macro_playing())
+        Ok(MacroEngine::is_macro_playing(&term))
     }
 
     /// Check if macro playback is paused
@@ -919,7 +919,7 @@ impl PyPtyTerminal {
     fn is_macro_paused(&self) -> PyResult<bool> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term.is_macro_paused())
+        Ok(MacroEngine::is_macro_paused(&term))
     }
 
     /// Get macro playback progress
@@ -929,7 +929,7 @@ impl PyPtyTerminal {
     fn get_macro_progress(&self) -> PyResult<Option<(usize, usize)>> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term.get_macro_progress())
+        Ok(MacroEngine::get_macro_progress(&term))
     }
 
     /// Get the name of the currently playing macro
@@ -939,7 +939,7 @@ impl PyPtyTerminal {
     fn get_current_macro_name(&self) -> PyResult<Option<String>> {
         let terminal = self.inner.terminal();
         let term = terminal.write();
-        Ok(term.get_current_macro_name())
+        Ok(MacroEngine::get_current_macro_name(&term))
     }
 
     /// Tick macro playback and send events to PTY
@@ -952,7 +952,7 @@ impl PyPtyTerminal {
         let bytes = {
             let terminal = self.inner.terminal();
             let mut term = terminal.write();
-            term.tick_macro()
+            MacroEngine::tick_macro(&mut term)
         };
 
         if let Some(bytes) = bytes {
@@ -970,7 +970,7 @@ impl PyPtyTerminal {
     fn get_macro_screenshot_triggers(&self) -> PyResult<Vec<String>> {
         let terminal = self.inner.terminal();
         let mut term = terminal.write();
-        Ok(term.get_macro_screenshot_triggers())
+        Ok(MacroEngine::get_macro_screenshot_triggers(&mut term))
     }
 
     /// Convert a recording session to a macro
@@ -989,7 +989,7 @@ impl PyPtyTerminal {
         let terminal = self.inner.terminal();
         let term = terminal.write();
         Ok(super::types::PyMacro::from(
-            term.recording_to_macro(&session.inner, name),
+            MacroEngine::recording_to_macro(&term, &session.inner, name),
         ))
     }
 

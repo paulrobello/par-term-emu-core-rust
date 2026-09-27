@@ -43,6 +43,7 @@ pub use file_transfer::{
 };
 pub(crate) use image::ITermMultipartState;
 pub use image::{ImageFormat, ImagePlacement, ImageProtocol, InlineImage};
+pub use macros::MacroEngine;
 pub use metrics::{
     BenchmarkCategory, BenchmarkResult, BenchmarkSuite, EscapeSequenceProfile, FrameTiming,
     PerformanceMetrics, ProfileCategory, ProfilingData, TerminalStats,
