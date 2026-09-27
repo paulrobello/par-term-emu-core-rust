@@ -361,7 +361,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 - `accept_osc7() -> bool`: Check if OSC 7 (CWD) is accepted
 - `set_accept_osc7(accept: bool)`: Set whether to accept OSC 7 sequences
 - `shell_integration_state() -> ShellIntegration`: Get shell integration state
-- `record_cwd_change(new_cwd: str, hostname: str | None, username: str | None)`: Manually record a CWD change (updates history + session variables; `hostname`/`username` are required positionally — pass `None` for localhost / when unknown)
+- `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Manually record a CWD change (updates history + session variables; `hostname`/`username` default to `None` for localhost / when unknown)
 - `disable_insecure_sequences() -> bool`: Check if insecure sequences are disabled
 - `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
 - `answerback_string() -> str | None`: Get the configured ENQ answerback payload (None if disabled)
@@ -445,8 +445,8 @@ Multi-protocol graphics support: Sixel (DCS), iTerm2 Inline Images (OSC 1337), a
 - `export_scrollback(format: str = "plain", max_lines: int | None = None) -> str`: Export scrollback buffer. Format can be "plain", "html", or "ansi" ("ansi" preserves SGR colors/attributes per run). Raises `ValueError` for any other format. If max_lines is None, exports all scrollback.
 
 #### Screenshots
-- `screenshot(format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast) -> bytes`: Take screenshot and return image bytes
-- `screenshot_to_file(path, format, font_path, font_size, include_scrollback, padding, quality, render_cursor, cursor_color, sixel_mode, scrollback_offset, link_color, bold_color, use_bold_color, bold_brightening, background_color, faint_text_alpha, minimum_contrast)`: Take screenshot and save to file
+- `screenshot(format="png", font_path=None, font_size=14.0, include_scrollback=False, padding=10, quality=90, render_cursor=False, cursor_color=None, sixel_mode="halfblocks", scrollback_offset=0, link_color=None, bold_color=None, use_bold_color=None, bold_brightening=None, background_color=None, faint_text_alpha=0.5, minimum_contrast=0.5) -> bytes`: Take screenshot and return image bytes
+- `screenshot_to_file(path, format=None, font_path=None, font_size=14.0, include_scrollback=False, padding=10, quality=90, render_cursor=False, cursor_color=None, sixel_mode="halfblocks", scrollback_offset=0, link_color=None, bold_color=None, use_bold_color=None, bold_brightening=None, background_color=None, faint_text_alpha=0.5, minimum_contrast=0.5)`: Take screenshot and save to file
 - `screenshot_config(config: ScreenshotConfig, scrollback_offset: int = 0) -> bytes`: Take a screenshot using a reusable `ScreenshotConfig` instead of repeating 16+ keyword args on every call (QA-005). Available on both `Terminal` and `PtyTerminal`.
 - `screenshot_to_file_config(path: str, config: ScreenshotConfig, scrollback_offset: int = 0)`: Take a screenshot to a file using a reusable `ScreenshotConfig`. Available on both `Terminal` and `PtyTerminal`.
 
@@ -462,7 +462,7 @@ term.screenshot_to_file_config("out.png", cfg)
 See [ScreenshotConfig](#screenshotconfig) for the full list of constructor fields.
 
 #### Session Recording
-- `start_recording(title: str | None = None)`: Start recording session
+- `start_recording(title: str | None)`: Start recording session
 - `stop_recording() -> RecordingSession | None`: Stop recording and return session
 - `is_recording() -> bool`: Check if recording is active
 - `get_recording_session() -> RecordingSession | None`: Get current session info
@@ -487,8 +487,8 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 
 - `mouse_encoding() -> MouseEncoding`: Get current mouse encoding mode
 - `set_mouse_encoding(encoding: MouseEncoding)`: Set mouse encoding (Default, Utf8, Sgr, Urxvt)
-- `get_mouse_events(count: int) -> list[MouseEvent]`: Get the most recent recorded mouse events
-- `get_mouse_positions(count: int) -> list[MousePosition]`: Get the most recent mouse position history
+- `get_mouse_events(count: int | None = None) -> list[MouseEvent]`: Get the most recent recorded mouse events
+- `get_mouse_positions(count: int | None = None) -> list[MousePosition]`: Get the most recent mouse position history
 - `get_last_mouse_position() -> MousePosition | None`: Get most recent mouse position
 - `clear_mouse_history()`: Clear mouse event history
 - `set_max_mouse_history(max: int)`: Set maximum mouse events to track
@@ -557,7 +557,7 @@ Extended shell integration features beyond basic OSC 133:
 - `get_cwd_changes() -> list[CwdChange]`: Get working directory change history (includes hostname/username)
 - `clear_cwd_history()`: Clear CWD history
 - `set_max_cwd_history(max: int)`: Set CWD history limit
-- `record_cwd_change(new_cwd: str, hostname: str | None, username: str | None)`: Record working directory change (same method as documented under Shell Integration)
+- `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change (same method as documented under Shell Integration)
 - `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
 - `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
@@ -921,7 +921,7 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 - `poll_events() -> list[dict]`: Drain all pending terminal events. Each dict has a `type` key plus event-specific fields with **native value types**: `int` for numeric fields (rows, cols, ids, timestamps, exit codes, volumes, byte counts), `bool` for flags (`enabled`, `include_scrollback`), `None` for unset optional fields, `str` for text
 - `poll_events_legacy() -> list[dict]`: Same events as `poll_events()`, but with the pre-0.51 stringly-typed shape: every value is a `str` and unset optional fields are omitted entirely. Migration bridge, kept for one release
 - `drain_bell_events() -> list[str]`: Drain pending bell events
-- `set_event_subscription(kinds: list[str] | None)`: Filter which terminal events are returned by `poll_subscribed_events()` (None clears filter)
+- `set_event_subscription(kinds: list[str] | None = None)`: Filter which terminal events are returned by `poll_subscribed_events()` (None clears filter)
 - `clear_event_subscription()`: Clear event filter (all events are returned)
 - `poll_subscribed_events() -> list[dict]`: Drain events that match subscription filter (same native-typed shape as `poll_events()`)
 - `poll_subscribed_events_legacy() -> list[dict]`: Same events as `poll_subscribed_events()`, in the pre-0.51 stringly-typed shape (see `poll_events_legacy()`)
@@ -1463,7 +1463,7 @@ Macro recording for keyboard automation.
 **Methods:**
 - `add_key(key: str)`: Add a key press event
 - `add_delay(duration_ms: int)`: Add a delay event
-- `add_screenshot(label: str | None = None)`: Add a screenshot trigger event
+- `add_screenshot(label: str | None)`: Add a screenshot trigger event
 - `set_description(description: str)`: Set macro description
 - `to_yaml() -> str`: Export macro to YAML format
 - `from_yaml(yaml: str) -> Macro`: Load macro from YAML format (static method)

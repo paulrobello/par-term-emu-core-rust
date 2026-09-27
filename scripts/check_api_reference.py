@@ -6,6 +6,11 @@ phantom arguments, missing required ones. The stub is generated from the
 compiled module (ARC-002), so it is ground truth for names and arity; this
 checker keeps the prose honest.
 
+DOC-064: names-only comparison let parameter-default drift through
+(``record_cwd_change`` documented ``hostname=None`` against a required stub
+param). Default PRESENCE is now compared too — never the values, which the
+prose routinely paraphrases.
+
 For every ``- `name(args)``` list item, the parameter names (order-sensitive,
 defaults and annotations stripped) must match the stub's signature for the
 enclosing class — or, failing that, a module-level function, since some
@@ -56,37 +61,50 @@ HEADING3 = re.compile(r"^### (.+)$")
 
 def stub_param_names(
     func: ast.FunctionDef | ast.AsyncFunctionDef, is_method: bool
-) -> list[str]:
-    """Parameter names in definition order, self/cls dropped for bound methods."""
+) -> list[tuple[str, bool]]:
+    """(name, has_default) per parameter in definition order, self/cls dropped
+    for bound methods. DOC-064: has_default drives the default-presence check;
+    values are deliberately not compared."""
     a = func.args
-    names = [arg.arg for arg in a.posonlyargs + a.args]
-    if is_method and names:
+    pos = a.posonlyargs + a.args
+    # Defaults align to the tail of the positional parameters.
+    has_default = [False] * len(pos)
+    for i in range(len(a.defaults)):
+        has_default[len(pos) - len(a.defaults) + i] = True
+    pairs = [(arg.arg, has_default[i]) for i, arg in enumerate(pos)]
+    if is_method and pairs:
         decorators = {
             d.id if isinstance(d, ast.Name) else getattr(d, "attr", "")
             for d in func.decorator_list
         }
         if not decorators & {"staticmethod"}:
             # Bound methods carry self (instance) or cls (classmethod) first.
-            names = names[1:]
+            pairs = pairs[1:]
     if a.vararg:
-        names.append(a.vararg.arg)
-    names.extend(arg.arg for arg in a.kwonlyargs)
+        pairs.append((a.vararg.arg, False))
+    pairs.extend(
+        (arg.arg, d is not None) for arg, d in zip(a.kwonlyargs, a.kw_defaults)
+    )
     if a.kwarg:
-        names.append(a.kwarg.arg)
-    return names
+        pairs.append((a.kwarg.arg, False))
+    return pairs
 
 
 def parse_stub(
     path: Path,
-) -> tuple[dict[str, dict[str, list[str]]], dict[str, set[str]], dict[str, list[str]]]:
+) -> tuple[
+    dict[str, dict[str, list[tuple[str, bool]]]],
+    dict[str, set[str]],
+    dict[str, list[tuple[str, bool]]],
+]:
     """Return ({class: {method: params}}, {class: property names}, {module function: params})."""
     tree = ast.parse(path.read_text())
-    classes: dict[str, dict[str, list[str]]] = {}
+    classes: dict[str, dict[str, list[tuple[str, bool]]]] = {}
     properties: dict[str, set[str]] = {}
-    functions: dict[str, list[str]] = {}
+    functions: dict[str, list[tuple[str, bool]]] = {}
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
-            methods: dict[str, list[str]] = {}
+            methods: dict[str, list[tuple[str, bool]]] = {}
             props: set[str] = set()
             for n in node.body:
                 if not isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -109,8 +127,9 @@ def parse_stub(
     return classes, properties, functions
 
 
-def doc_param_names(arg_text: str) -> list[str]:
-    """Split a doc signature's argument list, stripping defaults and annotations."""
+def doc_param_names(arg_text: str) -> list[tuple[str, bool]]:
+    """Split a doc signature's argument list into (name, has_default) pairs,
+    stripping default values and annotations."""
     arg_text = arg_text.strip()
     if not arg_text:
         return []
@@ -129,9 +148,11 @@ def doc_param_names(arg_text: str) -> list[str]:
             current += ch
     parts.append(current)
 
-    names = []
+    pairs: list[tuple[str, bool]] = []
     for part in parts:
         # Strip a default value, then the annotation, each at bracket depth 0.
+        # An `=` cut means the doc line shows a default (DOC-064 presence flag).
+        has_default = False
         for sep in ("=", ":"):
             depth = 0
             cut = None
@@ -144,11 +165,13 @@ def doc_param_names(arg_text: str) -> list[str]:
                     cut = i
                     break
             if cut is not None:
+                if sep == "=":
+                    has_default = True
                 part = part[:cut]
         name = part.strip().lstrip("*")
         if name:
-            names.append(name)
-    return names
+            pairs.append((name, has_default))
+    return pairs
 
 
 def iter_doc_signatures(path: Path):
@@ -218,11 +241,24 @@ def main() -> int:
             checked += 1
             continue
         checked += 1
-        if doc_params != stub_params:
+        doc_names = [n for n, _ in doc_params]
+        stub_names = [n for n, _ in stub_params]
+        if doc_names != stub_names:
             problems.append(
-                f"{DOC_PATH}:{lineno}: `{where}` params doc=({', '.join(doc_params)}) "
-                f"stub=({', '.join(stub_params)})"
+                f"{DOC_PATH}:{lineno}: `{where}` params doc=({', '.join(doc_names)}) "
+                f"stub=({', '.join(stub_names)})"
             )
+            continue
+        for (dname, doc_has), (_, stub_has) in zip(doc_params, stub_params):
+            if doc_has != stub_has:
+                drift = (
+                    "doc shows a default, stub param has none"
+                    if doc_has
+                    else "stub param has a default, doc shows none"
+                )
+                problems.append(
+                    f"{DOC_PATH}:{lineno}: `{where}` param `{dname}` default drift: {drift}"
+                )
 
     if problems:
         print(
