@@ -72,15 +72,15 @@ A quick compile-and-run sanity check without timing (useful in CI-like environme
 
 ## Fuzzing
 
-Coverage-guided fuzz targets for the code that consumes bytes from untrusted programs live in `fuzz/` (a cargo-fuzz crate, deliberately outside the workspace). Four targets, one per untrusted-byte entry point: `terminal_process` (the whole VTE pipeline plus the export walkers), `sixel` (the Sixel state machine, asserting `SixelLimits` holds), `kitty` (the Kitty graphics APC parser, mirroring the real caller's continuation/final-chunk semantics), and `tmux_control` (notification parsing, including re-parsed split points for partial-line buffering).
+Coverage-guided fuzz targets for the code that consumes bytes from untrusted programs live in `fuzz/` (a cargo-fuzz crate, deliberately outside the workspace). One target per untrusted-byte entry point: `terminal_process` (the whole VTE pipeline plus the export walkers), `sixel` (the Sixel state machine, asserting `SixelLimits` holds), `kitty` (the Kitty graphics APC parser, mirroring the real caller's continuation/final-chunk semantics), `apc_filter` (the APC pre-filter byte state machine every terminal byte walks, driven directly via a `cfg(fuzzing)` entry point — ENH-020), `tmux_control` (notification parsing, including re-parsed split points for partial-line buffering), and the par-mux control-protocol grammars `mux_parse_command` / `mux_hook_report` (ENH-018; run them directly with `cargo +nightly fuzz run <target>` — the Makefile/CI matrix covers the five `make fuzz-*` targets).
 
 ```bash
 make fuzz-all                    # each target for FUZZ_SECONDS (default 60)
 make fuzz-kitty                  # one target
-cargo +nightly fuzz run kitty -- -max_total_time=600   # directly
+cargo +nightly fuzz run kitty -- -max_total_time=600 -rss_limit_mb=512   # directly
 ```
 
-Requirements: a nightly toolchain (`rustup toolchain add nightly`) and `cargo install cargo-fuzz --locked`. Fuzzing is never part of `make checkall`; the nightly CI job (`.github/workflows/fuzz.yml`) runs each target for 10 minutes on a schedule and on manual dispatch.
+Requirements: a nightly toolchain (`rustup toolchain add nightly`) and `cargo install cargo-fuzz --locked`. Fuzzing is never part of `make checkall`; the nightly CI job (`.github/workflows/fuzz.yml`) runs each matrix target for 10 minutes on a schedule and on manual dispatch. Every run is memory-bounded with `-rss_limit_mb=512` (ENH-020): a decompression bomb or unbounded buffer is a *finding*, not a slower run — SEC-109's 581 MB peak sat under libFuzzer's 2 GiB default and was never flagged.
 
 **Crash-to-regression policy:** a crash artifact (`fuzz/artifacts/<target>/crash-*`) is never just deleted. Reproduce it locally, minimize it (`cargo +nightly fuzz fmt <target> <artifact>`), copy the minimized input into the parser's normal test module, and add a `#[test]` asserting the panic is gone — the artifact's bytes become a permanent regression test. Only then is the artifact file itself deletable. A crash found by fuzzing is a defect card, not a blocker for whatever change is in flight.
 

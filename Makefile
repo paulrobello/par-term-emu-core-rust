@@ -849,18 +849,25 @@ grind-clean-logs: ## Delete all but the newest 2 grind run dirs (latest symlink,
 # docs/fable/ENH-014-parser-fuzz-targets.md and CONTRIBUTING.md "Fuzzing".
 # Needs nightly + cargo-fuzz (cargo install cargo-fuzz --locked).
 # Not part of checkall: fuzzing is open-ended, the gate is bounded.
+# -rss_limit_mb=512 (ENH-020): a memory blowup is a finding, not a laggier
+# run — SEC-109's 581 MB zlib bomb sat under libFuzzer's 2 GiB default and
+# was never flagged. 512 MB is well above every target's legitimate parser
+# working set (spot-checked with 30 s runs per target).
 FUZZ_SECONDS ?= 60
 
 fuzz-terminal_process: ## Fuzz the whole VTE pipeline (Terminal::process)
-	cargo +nightly fuzz run terminal_process -- -max_total_time=$(FUZZ_SECONDS)
+	cargo +nightly fuzz run terminal_process -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
 fuzz-sixel: ## Fuzz the Sixel state machine
-	cargo +nightly fuzz run sixel -- -max_total_time=$(FUZZ_SECONDS)
+	cargo +nightly fuzz run sixel -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
 fuzz-kitty: ## Fuzz the Kitty graphics APC parser
-	cargo +nightly fuzz run kitty -- -max_total_time=$(FUZZ_SECONDS)
+	cargo +nightly fuzz run kitty -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
+
+fuzz-apc_filter: ## Fuzz the APC pre-filter byte state machine (ENH-020)
+	cargo +nightly fuzz run apc_filter -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
 fuzz-tmux_control: ## Fuzz the tmux control-mode parser
-	cargo +nightly fuzz run tmux_control -- -max_total_time=$(FUZZ_SECONDS)
+	cargo +nightly fuzz run tmux_control -- -max_total_time=$(FUZZ_SECONDS) -rss_limit_mb=512
 
-fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-tmux_control ## Run all four fuzz targets for FUZZ_SECONDS each (default 60)
+fuzz-all: fuzz-terminal_process fuzz-sixel fuzz-kitty fuzz-apc_filter fuzz-tmux_control ## Run all five fuzz targets for FUZZ_SECONDS each (default 60)

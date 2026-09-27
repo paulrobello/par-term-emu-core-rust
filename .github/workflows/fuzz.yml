@@ -1,8 +1,9 @@
 name: Fuzz
 
-# Coverage-guided fuzzing of the four untrusted-byte parsers (ENH-014).
-# Manual-dispatch like every other workflow in this repo, plus a nightly
-# schedule — the cron keeps looking when nobody remembers to.
+# Coverage-guided fuzzing of the untrusted-byte parsers (ENH-014, +apc_filter
+# in ENH-020). Manual-dispatch like every other workflow in this repo, plus a
+# nightly schedule — the cron keeps looking when nobody remembers to.
+# -rss_limit_mb=512 (ENH-020): memory blowups count as failures.
 on:
   workflow_dispatch:
   schedule:
@@ -15,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [terminal_process, sixel, kitty, tmux_control]
+        target: [terminal_process, sixel, kitty, apc_filter, tmux_control]
     steps:
       - uses: actions/checkout@v7
 
@@ -25,7 +26,7 @@ jobs:
         run: cargo install cargo-fuzz --locked
 
       - name: Fuzz ${{ matrix.target }} (10 min bounded)
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=600 -rss_limit_mb=512
 
       - name: Upload crash artifacts on failure
         if: failure()

@@ -41,6 +41,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "apc_filter"
+path = "fuzz_targets/apc_filter.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "kitty"
 path = "fuzz_targets/kitty.rs"
 test = false
