@@ -6,6 +6,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use super::PyTerminal;
+use crate::terminal::TriggerEngine;
 
 /// One active trigger highlight: (row, col_start, col_end, fg, bg).
 type TriggerHighlight = (
@@ -43,8 +44,7 @@ impl PyTerminal {
             actions.iter().map(|a| a.to_trigger_action()).collect();
         let rust_actions =
             rust_actions.map_err(|e| PyValueError::new_err(format!("Invalid action: {}", e)))?;
-        self.inner
-            .add_trigger(name, pattern, rust_actions)
+        TriggerEngine::add_trigger(&mut self.inner, name, pattern, rust_actions)
             .map_err(PyValueError::new_err)
     }
 
@@ -56,7 +56,7 @@ impl PyTerminal {
     /// Returns:
     ///     bool: True if trigger was found and removed
     fn remove_trigger(&mut self, trigger_id: u64) -> PyResult<bool> {
-        Ok(self.inner.remove_trigger(trigger_id))
+        Ok(TriggerEngine::remove_trigger(&mut self.inner, trigger_id))
     }
 
     /// Enable or disable a trigger
@@ -68,7 +68,11 @@ impl PyTerminal {
     /// Returns:
     ///     bool: True if trigger was found and updated
     fn set_trigger_enabled(&mut self, trigger_id: u64, enabled: bool) -> PyResult<bool> {
-        Ok(self.inner.set_trigger_enabled(trigger_id, enabled))
+        Ok(TriggerEngine::set_trigger_enabled(
+            &mut self.inner,
+            trigger_id,
+            enabled,
+        ))
     }
 
     /// List all registered triggers
@@ -76,9 +80,7 @@ impl PyTerminal {
     /// Returns:
     ///     list[Trigger]: List of all triggers
     fn list_triggers(&self) -> PyResult<Vec<crate::python_bindings::types::PyTrigger>> {
-        Ok(self
-            .inner
-            .list_triggers()
+        Ok(TriggerEngine::list_triggers(&self.inner)
             .iter()
             .map(|t| crate::python_bindings::types::PyTrigger::from(*t))
             .collect())
@@ -95,9 +97,7 @@ impl PyTerminal {
         &self,
         trigger_id: u64,
     ) -> PyResult<Option<crate::python_bindings::types::PyTrigger>> {
-        Ok(self
-            .inner
-            .get_trigger(trigger_id)
+        Ok(TriggerEngine::get_trigger(&self.inner, trigger_id)
             .map(crate::python_bindings::types::PyTrigger::from))
     }
 
@@ -113,9 +113,7 @@ impl PyTerminal {
     fn poll_trigger_matches(
         &mut self,
     ) -> PyResult<Vec<crate::python_bindings::types::PyTriggerMatch>> {
-        Ok(self
-            .inner
-            .poll_trigger_matches()
+        Ok(TriggerEngine::poll_trigger_matches(&mut self.inner)
             .iter()
             .map(crate::python_bindings::types::PyTriggerMatch::from)
             .collect())
@@ -125,7 +123,7 @@ impl PyTerminal {
     ///
     /// Called automatically in PTY mode. Use manually for non-PTY terminals.
     fn process_trigger_scans(&mut self) -> PyResult<()> {
-        self.inner.process_trigger_scans();
+        TriggerEngine::process_trigger_scans(&mut self.inner);
         Ok(())
     }
 
@@ -135,9 +133,7 @@ impl PyTerminal {
     ///     list[tuple]: List of (row, col_start, col_end, fg, bg) tuples
     ///         where fg and bg are optional (r, g, b) tuples
     fn get_trigger_highlights(&self) -> PyResult<Vec<TriggerHighlight>> {
-        Ok(self
-            .inner
-            .get_trigger_highlights()
+        Ok(TriggerEngine::get_trigger_highlights(&self.inner)
             .iter()
             .map(|h| (h.row, h.col_start, h.col_end, h.fg, h.bg))
             .collect())
@@ -145,7 +141,7 @@ impl PyTerminal {
 
     /// Clear all trigger highlights
     fn clear_trigger_highlights(&mut self) -> PyResult<()> {
-        self.inner.clear_trigger_highlights();
+        TriggerEngine::clear_trigger_highlights(&mut self.inner);
         Ok(())
     }
 
@@ -155,9 +151,7 @@ impl PyTerminal {
     ///     list[dict]: List of action result dicts with 'type' and action-specific fields
     fn poll_action_results(&mut self) -> PyResult<Vec<std::collections::HashMap<String, String>>> {
         use crate::terminal::trigger::ActionResult;
-        Ok(self
-            .inner
-            .poll_action_results()
+        Ok(TriggerEngine::poll_action_results(&mut self.inner)
             .iter()
             .map(|ar| {
                 let mut map = std::collections::HashMap::new();

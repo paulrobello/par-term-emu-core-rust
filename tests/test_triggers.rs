@@ -1,59 +1,55 @@
 // Integration tests for trigger system (Feature 18)
 use par_term_emu_core_rust::terminal::trigger::TriggerAction;
 use par_term_emu_core_rust::terminal::Terminal;
+use par_term_emu_core_rust::terminal::TriggerEngine;
 
 #[test]
 fn test_trigger_add_remove() {
     let mut term = Terminal::new(80, 24);
-    let id = term
-        .add_trigger("test".into(), "ERROR".into(), vec![])
-        .unwrap();
-    assert_eq!(term.list_triggers().len(), 1);
-    assert!(term.get_trigger(id).is_some());
-    assert!(term.remove_trigger(id));
-    assert!(term.get_trigger(id).is_none());
-    assert_eq!(term.list_triggers().len(), 0);
+    let id = TriggerEngine::add_trigger(&mut term, "test".into(), "ERROR".into(), vec![]).unwrap();
+    assert_eq!(TriggerEngine::list_triggers(&term,).len(), 1);
+    assert!(TriggerEngine::get_trigger(&term, id).is_some());
+    assert!(TriggerEngine::remove_trigger(&mut term, id));
+    assert!(TriggerEngine::get_trigger(&term, id).is_none());
+    assert_eq!(TriggerEngine::list_triggers(&term,).len(), 0);
 }
 
 #[test]
 fn test_trigger_enable_disable() {
     let mut term = Terminal::new(80, 24);
-    let id = term
-        .add_trigger("test".into(), "MATCH".into(), vec![])
-        .unwrap();
+    let id = TriggerEngine::add_trigger(&mut term, "test".into(), "MATCH".into(), vec![]).unwrap();
 
     // Process text with trigger enabled
     term.process(b"MATCH here\n");
-    term.process_trigger_scans();
-    let matches = term.poll_trigger_matches();
+    TriggerEngine::process_trigger_scans(&mut term);
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 1);
 
     // Disable trigger
-    assert!(term.set_trigger_enabled(id, false));
+    assert!(TriggerEngine::set_trigger_enabled(&mut term, id, false));
 
     term.process(b"MATCH again\n");
-    term.process_trigger_scans();
-    let matches = term.poll_trigger_matches();
+    TriggerEngine::process_trigger_scans(&mut term);
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 0);
 
     // Re-enable
-    assert!(term.set_trigger_enabled(id, true));
+    assert!(TriggerEngine::set_trigger_enabled(&mut term, id, true));
     term.process(b"MATCH once more\n");
-    term.process_trigger_scans();
-    let matches = term.poll_trigger_matches();
+    TriggerEngine::process_trigger_scans(&mut term);
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 1);
 }
 
 #[test]
 fn test_trigger_scan_match() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger("error".into(), r"ERROR:\s+(.+)".into(), vec![])
-        .unwrap();
+    TriggerEngine::add_trigger(&mut term, "error".into(), r"ERROR:\s+(.+)".into(), vec![]).unwrap();
 
     term.process(b"prefix ERROR: something went wrong\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
-    let matches = term.poll_trigger_matches();
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].row, 0);
     assert!(matches[0].text.contains("ERROR:"));
@@ -63,7 +59,8 @@ fn test_trigger_scan_match() {
 #[test]
 fn test_trigger_capture_groups() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "ip".into(),
         r"(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})".into(),
         vec![],
@@ -71,9 +68,9 @@ fn test_trigger_capture_groups() {
     .unwrap();
 
     term.process(b"IP: 192.168.1.100\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
-    let matches = term.poll_trigger_matches();
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 1);
     assert_eq!(matches[0].captures.len(), 5);
     assert_eq!(matches[0].captures[0], "192.168.1.100");
@@ -84,33 +81,30 @@ fn test_trigger_capture_groups() {
 #[test]
 fn test_trigger_multi_pattern() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger("error".into(), "ERROR".into(), vec![])
-        .unwrap();
-    term.add_trigger("warn".into(), "WARN".into(), vec![])
-        .unwrap();
+    TriggerEngine::add_trigger(&mut term, "error".into(), "ERROR".into(), vec![]).unwrap();
+    TriggerEngine::add_trigger(&mut term, "warn".into(), "WARN".into(), vec![]).unwrap();
 
     term.process(b"ERROR and WARN on same line\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
-    let matches = term.poll_trigger_matches();
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
     assert_eq!(matches.len(), 2);
 }
 
 #[test]
 fn test_trigger_invalid_regex() {
     let mut term = Terminal::new(80, 24);
-    let result = term.add_trigger("bad".into(), "[invalid".into(), vec![]);
+    let result = TriggerEngine::add_trigger(&mut term, "bad".into(), "[invalid".into(), vec![]);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_trigger_event_generation() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger("test".into(), "FOUND".into(), vec![])
-        .unwrap();
+    TriggerEngine::add_trigger(&mut term, "test".into(), "FOUND".into(), vec![]).unwrap();
 
     term.process(b"FOUND it\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     let events = term.poll_events();
     let trigger_events: Vec<_> = events
@@ -128,7 +122,8 @@ fn test_trigger_event_generation() {
 #[test]
 fn test_trigger_action_highlight() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         "HIGHLIGHT".into(),
         vec![TriggerAction::Highlight {
@@ -140,9 +135,9 @@ fn test_trigger_action_highlight() {
     .unwrap();
 
     term.process(b"HIGHLIGHT this\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
-    let highlights = term.get_trigger_highlights();
+    let highlights = TriggerEngine::get_trigger_highlights(&term);
     assert_eq!(highlights.len(), 1);
     assert_eq!(highlights[0].row, 0);
     assert_eq!(highlights[0].bg, Some((255, 0, 0)));
@@ -152,7 +147,8 @@ fn test_trigger_action_highlight() {
 #[test]
 fn test_trigger_action_notify() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         r"ERROR: (\S+)".into(),
         vec![TriggerAction::Notify {
@@ -163,7 +159,7 @@ fn test_trigger_action_notify() {
     .unwrap();
 
     term.process(b"ERROR: diskfull\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     let notifications = term.notifications();
     assert_eq!(notifications.len(), 1);
@@ -174,7 +170,8 @@ fn test_trigger_action_notify() {
 #[test]
 fn test_trigger_action_mark_line() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         "BOOKMARK".into(),
         vec![TriggerAction::MarkLine {
@@ -185,7 +182,7 @@ fn test_trigger_action_mark_line() {
     .unwrap();
 
     term.process(b"BOOKMARK here\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     let bookmarks = term.get_bookmarks();
     assert_eq!(bookmarks.len(), 1);
@@ -195,7 +192,8 @@ fn test_trigger_action_mark_line() {
 #[test]
 fn test_trigger_action_set_variable() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         r"STATUS: (\w+)".into(),
         vec![TriggerAction::SetVariable {
@@ -206,7 +204,7 @@ fn test_trigger_action_set_variable() {
     .unwrap();
 
     term.process(b"STATUS: RUNNING\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     let vars = term.session_variables();
     assert_eq!(vars.custom.get("last_status"), Some(&"RUNNING".to_string()));
@@ -215,7 +213,8 @@ fn test_trigger_action_set_variable() {
 #[test]
 fn test_trigger_action_stop_propagation() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         "STOP".into(),
         vec![
@@ -233,7 +232,7 @@ fn test_trigger_action_stop_propagation() {
     .unwrap();
 
     term.process(b"STOP here\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     // Only the first action before StopPropagation should have executed
     let bookmarks = term.get_bookmarks();
@@ -244,7 +243,8 @@ fn test_trigger_action_stop_propagation() {
 #[test]
 fn test_trigger_capture_substitution() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         r"USER:(\w+) CMD:(\w+)".into(),
         vec![TriggerAction::SetVariable {
@@ -255,7 +255,7 @@ fn test_trigger_capture_substitution() {
     .unwrap();
 
     term.process(b"USER:alice CMD:deploy\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     let vars = term.session_variables();
     assert_eq!(
@@ -267,7 +267,8 @@ fn test_trigger_capture_substitution() {
 #[test]
 fn test_highlight_expiry() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         "BRIEF".into(),
         vec![TriggerAction::Highlight {
@@ -279,22 +280,23 @@ fn test_highlight_expiry() {
     .unwrap();
 
     term.process(b"BRIEF flash\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
     // Wait for expiry
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    let highlights = term.get_trigger_highlights();
+    let highlights = TriggerEngine::get_trigger_highlights(&term);
     assert_eq!(highlights.len(), 0, "Expired highlights should be filtered");
 
     // Also test clear_expired_highlights
-    term.clear_expired_highlights();
+    TriggerEngine::clear_expired_highlights(&mut term);
 }
 
 #[test]
 fn test_trigger_frontend_actions() {
     let mut term = Terminal::new(80, 24);
-    term.add_trigger(
+    TriggerEngine::add_trigger(
+        &mut term,
         "test".into(),
         "RUN".into(),
         vec![
@@ -315,8 +317,8 @@ fn test_trigger_frontend_actions() {
     .unwrap();
 
     term.process(b"RUN now\n");
-    term.process_trigger_scans();
+    TriggerEngine::process_trigger_scans(&mut term);
 
-    let results = term.poll_action_results();
+    let results = TriggerEngine::poll_action_results(&mut term);
     assert_eq!(results.len(), 3);
 }

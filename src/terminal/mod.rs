@@ -71,7 +71,7 @@ pub use semantic_snapshot::{
 };
 pub use shell_integration::{CommandExecution, CommandOutput, ShellIntegrationStats};
 pub use trigger::{
-    ActionResult, Trigger, TriggerAction, TriggerHighlight, TriggerId, TriggerMatch,
+    ActionResult, Trigger, TriggerAction, TriggerEngine, TriggerHighlight, TriggerId, TriggerMatch,
     TriggerRegistry, TriggerSplitCommand, TriggerSplitDirection, TriggerSplitTarget,
 };
 

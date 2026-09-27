@@ -852,7 +852,7 @@ impl PtySession {
                             // Record output for session recording
                             term.record_output(&buffer[..n]);
                             // Process trigger scans on dirty rows
-                            term.process_trigger_scans();
+                            crate::terminal::TriggerEngine::process_trigger_scans(&mut term);
                             let is_alt_screen = term.is_alt_screen_active();
 
                             // Check for device query responses and stage them for

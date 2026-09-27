@@ -128,58 +128,61 @@ pub struct TriggerHighlight {
 
 use crate::terminal::Terminal;
 
-impl Terminal {
-    // === Feature 18: Triggers & Automation ===
+/// Trigger & automation operations on a [`Terminal`] (ARC-039).
+///
+/// Stateless by construction — call as `TriggerEngine::add_trigger(&mut term, ...)`.
+pub struct TriggerEngine;
 
+impl TriggerEngine {
     /// Add a new trigger with the given name, regex pattern, and actions
     ///
     /// Returns the trigger ID on success, or an error if the regex is invalid.
     pub fn add_trigger(
-        &mut self,
+        term: &mut Terminal,
         name: String,
         pattern: String,
         actions: Vec<TriggerAction>,
     ) -> Result<TriggerId, String> {
-        self.triggers.trigger_registry.add(name, pattern, actions)
+        term.triggers.trigger_registry.add(name, pattern, actions)
     }
 
     /// Remove a trigger by ID
-    pub fn remove_trigger(&mut self, id: TriggerId) -> bool {
-        self.triggers.trigger_registry.remove(id)
+    pub fn remove_trigger(term: &mut Terminal, id: TriggerId) -> bool {
+        term.triggers.trigger_registry.remove(id)
     }
 
     /// Enable or disable a trigger
-    pub fn set_trigger_enabled(&mut self, id: TriggerId, enabled: bool) -> bool {
-        self.triggers.trigger_registry.set_enabled(id, enabled)
+    pub fn set_trigger_enabled(term: &mut Terminal, id: TriggerId, enabled: bool) -> bool {
+        term.triggers.trigger_registry.set_enabled(id, enabled)
     }
 
     /// List all registered triggers
-    pub fn list_triggers(&self) -> Vec<&Trigger> {
-        self.triggers.trigger_registry.list()
+    pub fn list_triggers<'a>(term: &'a Terminal) -> Vec<&'a Trigger> {
+        term.triggers.trigger_registry.list()
     }
 
     /// Get a trigger by ID
-    pub fn get_trigger(&self, id: TriggerId) -> Option<&Trigger> {
-        self.triggers.trigger_registry.get(id)
+    pub fn get_trigger<'a>(term: &'a Terminal, id: TriggerId) -> Option<&'a Trigger> {
+        term.triggers.trigger_registry.get(id)
     }
 
     /// Drain all pending trigger match events
-    pub fn poll_trigger_matches(&mut self) -> Vec<TriggerMatch> {
-        self.triggers.trigger_registry.poll_matches()
+    pub fn poll_trigger_matches(term: &mut Terminal) -> Vec<TriggerMatch> {
+        term.triggers.trigger_registry.poll_matches()
     }
 
     /// Process trigger scans on pending dirty rows
     ///
     /// Called automatically in the PTY reader thread after `process()`.
     /// Can also be called manually for non-PTY terminals.
-    pub fn process_trigger_scans(&mut self) {
-        if !self.triggers.trigger_registry.has_active_triggers() {
-            self.triggers.pending_trigger_rows.clear();
+    pub fn process_trigger_scans(term: &mut Terminal) {
+        if !term.triggers.trigger_registry.has_active_triggers() {
+            term.triggers.pending_trigger_rows.clear();
             return;
         }
 
-        let rows_to_scan: Vec<usize> = self.triggers.pending_trigger_rows.drain().collect();
-        let grid = self.active_grid();
+        let rows_to_scan: Vec<usize> = term.triggers.pending_trigger_rows.drain().collect();
+        let grid = term.active_grid();
         let cols = grid.cols();
 
         // Collect row texts and their char-to-grid-col mappings
@@ -207,16 +210,16 @@ impl Terminal {
         // Scan each row
         for (row, text, mapping) in &row_data {
             let matches =
-                self.triggers
+                term.triggers
                     .trigger_registry
                     .scan_line(*row, text, Some(mapping.as_slice()));
 
             for trigger_match in &matches {
                 // Execute actions for this match
-                self.execute_trigger_actions(trigger_match);
+                Self::execute_trigger_actions(term, trigger_match);
 
                 // Emit event
-                self.events
+                term.events
                     .terminal_events
                     .push(crate::terminal::TerminalEvent::TriggerMatched(
                         trigger_match.clone(),
@@ -226,9 +229,9 @@ impl Terminal {
     }
 
     /// Execute trigger actions for a match
-    fn execute_trigger_actions(&mut self, trigger_match: &TriggerMatch) {
+    fn execute_trigger_actions(term: &mut Terminal, trigger_match: &TriggerMatch) {
         let trigger_id = trigger_match.trigger_id;
-        let actions = match self.triggers.trigger_registry.get(trigger_id) {
+        let actions = match term.triggers.trigger_registry.get(trigger_id) {
             Some(t) => t.actions.clone(),
             None => return,
         };
@@ -247,7 +250,7 @@ impl Terminal {
                     } else {
                         now.saturating_add(*duration_ms)
                     };
-                    self.triggers.trigger_highlights.push(TriggerHighlight {
+                    term.triggers.trigger_highlights.push(TriggerHighlight {
                         row: trigger_match.row,
                         col_start: trigger_match.col,
                         col_end: trigger_match.end_col,
@@ -262,11 +265,11 @@ impl Terminal {
                     // Apply immediately to terminal notification state so `notifications()`
                     // reflects trigger-driven alerts, consistent with SetVariable/Highlight.
                     // The ActionResult below is retained for host-side polling.
-                    self.enqueue_notification(crate::terminal::notification::Notification::new(
+                    term.enqueue_notification(crate::terminal::notification::Notification::new(
                         title.clone(),
                         message.clone(),
                     ));
-                    self.triggers
+                    term.triggers
                         .trigger_action_results
                         .push(ActionResult::Notify {
                             trigger_id: trigger_match.trigger_id,
@@ -281,8 +284,8 @@ impl Terminal {
                     // Apply immediately to terminal bookmark state so `get_bookmarks()`
                     // reflects trigger-driven marks, consistent with SetVariable/Highlight.
                     // The ActionResult below is retained for host-side polling.
-                    self.add_bookmark(trigger_match.row as isize, label.clone());
-                    self.triggers
+                    term.add_bookmark(trigger_match.row as isize, label.clone());
+                    term.triggers
                         .trigger_action_results
                         .push(ActionResult::MarkLine {
                             trigger_id: trigger_match.trigger_id,
@@ -294,7 +297,7 @@ impl Terminal {
                 TriggerAction::SetVariable { name, value } => {
                     let name = substitute_captures(name, &trigger_match.captures);
                     let value = substitute_captures(value, &trigger_match.captures);
-                    self.badge_state
+                    term.badge_state
                         .session_variables
                         .custom
                         .insert(name, value);
@@ -305,9 +308,9 @@ impl Terminal {
                         .iter()
                         .map(|a| substitute_captures(a, &trigger_match.captures))
                         .collect();
-                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
                     {
-                        self.triggers
+                        term.triggers
                             .trigger_action_results
                             .push(ActionResult::RunCommand {
                                 trigger_id,
@@ -318,9 +321,9 @@ impl Terminal {
                 }
                 TriggerAction::PlaySound { sound_id, volume } => {
                     let sound_id = substitute_captures(sound_id, &trigger_match.captures);
-                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
                     {
-                        self.triggers
+                        term.triggers
                             .trigger_action_results
                             .push(ActionResult::PlaySound {
                                 trigger_id,
@@ -331,9 +334,9 @@ impl Terminal {
                 }
                 TriggerAction::SendText { text, delay_ms } => {
                     let text = substitute_captures(text, &trigger_match.captures);
-                    if self.triggers.trigger_action_results.len() < self.triggers.max_action_results
+                    if term.triggers.trigger_action_results.len() < term.triggers.max_action_results
                     {
-                        self.triggers
+                        term.triggers
                             .trigger_action_results
                             .push(ActionResult::SendText {
                                 trigger_id,
@@ -348,7 +351,7 @@ impl Terminal {
                     focus_new_pane,
                     target,
                 } => {
-                    self.triggers
+                    term.triggers
                         .trigger_action_results
                         .push(ActionResult::SplitPane {
                             trigger_id,
@@ -367,9 +370,9 @@ impl Terminal {
     }
 
     /// Get active trigger highlights (filters expired ones)
-    pub fn get_trigger_highlights(&self) -> Vec<TriggerHighlight> {
+    pub fn get_trigger_highlights(term: &Terminal) -> Vec<TriggerHighlight> {
         let now = crate::terminal::unix_millis();
-        self.triggers
+        term.triggers
             .trigger_highlights
             .iter()
             .filter(|h| h.expiry > now)
@@ -378,29 +381,168 @@ impl Terminal {
     }
 
     /// Clear all trigger highlights
-    pub fn clear_trigger_highlights(&mut self) {
-        self.triggers.trigger_highlights.clear();
+    pub fn clear_trigger_highlights(term: &mut Terminal) {
+        term.triggers.trigger_highlights.clear();
     }
 
     /// Remove expired trigger highlights
-    pub fn clear_expired_highlights(&mut self) {
+    pub fn clear_expired_highlights(term: &mut Terminal) {
         let now = crate::terminal::unix_millis();
-        self.triggers.trigger_highlights.retain(|h| h.expiry > now);
+        term.triggers.trigger_highlights.retain(|h| h.expiry > now);
     }
 
     /// Drain pending action results for frontend consumption
-    pub fn poll_action_results(&mut self) -> Vec<ActionResult> {
-        std::mem::take(&mut self.triggers.trigger_action_results)
+    pub fn poll_action_results(term: &mut Terminal) -> Vec<ActionResult> {
+        std::mem::take(&mut term.triggers.trigger_action_results)
     }
 
     /// Get access to the trigger registry
-    pub fn trigger_registry(&self) -> &TriggerRegistry {
-        &self.triggers.trigger_registry
+    pub fn trigger_registry(term: &Terminal) -> &TriggerRegistry {
+        &term.triggers.trigger_registry
     }
 
     /// Get mutable access to the trigger registry
+    pub fn trigger_registry_mut(term: &mut Terminal) -> &mut TriggerRegistry {
+        &mut term.triggers.trigger_registry
+    }
+}
+
+impl Terminal {
+    // === Triggers & Automation (forwarders; use terminal::TriggerEngine) ===
+
+    /// Add a new trigger with the given name, regex pattern, and actions
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::add_trigger; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn add_trigger(
+        &mut self,
+        name: String,
+        pattern: String,
+        actions: Vec<TriggerAction>,
+    ) -> Result<TriggerId, String> {
+        crate::terminal::TriggerEngine::add_trigger(self, name, pattern, actions)
+    }
+
+    /// Remove a trigger by ID
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::remove_trigger; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn remove_trigger(&mut self, id: TriggerId) -> bool {
+        crate::terminal::TriggerEngine::remove_trigger(self, id)
+    }
+
+    /// Enable or disable a trigger
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::set_trigger_enabled; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn set_trigger_enabled(&mut self, id: TriggerId, enabled: bool) -> bool {
+        crate::terminal::TriggerEngine::set_trigger_enabled(self, id, enabled)
+    }
+
+    /// List all registered triggers
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::list_triggers; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn list_triggers(&self) -> Vec<&Trigger> {
+        crate::terminal::TriggerEngine::list_triggers(self)
+    }
+
+    /// Get a trigger by ID
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::get_trigger; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn get_trigger(&self, id: TriggerId) -> Option<&Trigger> {
+        crate::terminal::TriggerEngine::get_trigger(self, id)
+    }
+
+    /// Drain all pending trigger match events
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::poll_trigger_matches; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn poll_trigger_matches(&mut self) -> Vec<TriggerMatch> {
+        crate::terminal::TriggerEngine::poll_trigger_matches(self)
+    }
+
+    /// Process trigger scans on pending dirty rows
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::process_trigger_scans; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn process_trigger_scans(&mut self) {
+        crate::terminal::TriggerEngine::process_trigger_scans(self)
+    }
+
+    /// Get active trigger highlights (filters expired ones)
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::get_trigger_highlights; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn get_trigger_highlights(&self) -> Vec<TriggerHighlight> {
+        crate::terminal::TriggerEngine::get_trigger_highlights(self)
+    }
+
+    /// Clear all trigger highlights
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::clear_trigger_highlights; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn clear_trigger_highlights(&mut self) {
+        crate::terminal::TriggerEngine::clear_trigger_highlights(self)
+    }
+
+    /// Remove expired trigger highlights
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::clear_expired_highlights; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn clear_expired_highlights(&mut self) {
+        crate::terminal::TriggerEngine::clear_expired_highlights(self)
+    }
+
+    /// Drain pending action results for frontend consumption
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::poll_action_results; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn poll_action_results(&mut self) -> Vec<ActionResult> {
+        crate::terminal::TriggerEngine::poll_action_results(self)
+    }
+
+    /// Get access to the trigger registry
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::trigger_registry; this forwarding method will be removed in 0.56.0"
+    )]
+    pub fn trigger_registry(&self) -> &TriggerRegistry {
+        crate::terminal::TriggerEngine::trigger_registry(self)
+    }
+
+    /// Get mutable access to the trigger registry
+    #[doc(hidden)]
+    #[deprecated(
+        since = "0.54.0",
+        note = "use terminal::TriggerEngine::trigger_registry_mut; this forwarding method will be removed in 0.56.0"
+    )]
     pub fn trigger_registry_mut(&mut self) -> &mut TriggerRegistry {
-        &mut self.triggers.trigger_registry
+        crate::terminal::TriggerEngine::trigger_registry_mut(self)
     }
 }
 
@@ -1156,5 +1298,70 @@ mod tests {
         // "ERROR" at bytes 2..7, chars 2..7 -> grid cols 3..8
         assert_eq!(matches[0].col, 3);
         assert_eq!(matches[0].end_col, 8);
+    }
+
+    /// The deprecated Terminal forwarding methods must keep returning exactly
+    /// what the service returns (ARC-039 keeps them for one minor release).
+    #[test]
+    fn trigger_forwarders_match_service() {
+        let mut via_forwarder = crate::terminal::Terminal::new(80, 24);
+        let mut via_service = crate::terminal::Terminal::new(80, 24);
+        let action = TriggerAction::Highlight {
+            fg: None,
+            bg: Some((255, 0, 0)),
+            duration_ms: 0,
+        };
+
+        TriggerEngine::add_trigger(
+            &mut via_service,
+            "err".to_string(),
+            r"ERROR: (.+)".to_string(),
+            vec![action.clone()],
+        )
+        .unwrap();
+        #[allow(deprecated)]
+        {
+            via_forwarder
+                .add_trigger("err".to_string(), r"ERROR: (.+)".to_string(), vec![action])
+                .unwrap();
+        }
+
+        via_forwarder.process(b"ERROR: boom\r\n");
+        via_service.process(b"ERROR: boom\r\n");
+        #[allow(deprecated)]
+        via_forwarder.process_trigger_scans();
+        TriggerEngine::process_trigger_scans(&mut via_service);
+
+        let strip = |m: &TriggerMatch| {
+            (
+                m.trigger_id,
+                m.row,
+                m.col,
+                m.end_col,
+                m.text.clone(),
+                m.captures.clone(),
+            )
+        };
+        #[allow(deprecated)]
+        let fwd_matches: Vec<_> = via_forwarder
+            .poll_trigger_matches()
+            .iter()
+            .map(strip)
+            .collect();
+        let served_matches: Vec<_> = TriggerEngine::poll_trigger_matches(&mut via_service)
+            .iter()
+            .map(strip)
+            .collect();
+        assert!(
+            !served_matches.is_empty(),
+            "service path must produce a match"
+        );
+        assert_eq!(fwd_matches, served_matches);
+
+        #[allow(deprecated)]
+        let fwd_highlights = via_forwarder.get_trigger_highlights();
+        let served_highlights = TriggerEngine::get_trigger_highlights(&via_service);
+        assert_eq!(fwd_highlights, served_highlights);
+        assert!(!served_highlights.is_empty());
     }
 }
