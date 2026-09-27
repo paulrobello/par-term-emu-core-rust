@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+- **The Kitty file-media gate is reachable from every embedder path** (`src/python_bindings/`, `src/streaming/server.rs`; audit SEC-112). `PtyTerminal` — the class that runs untrusted programs — had no `set_allow_file_media`/`get_allow_file_media`, and `StreamingServer::with_config` never applied its `kitty_file_media` config to the caller-supplied terminal (only the session-factory path did), so an embedder hardening a single-session server with `"off"` kept `"temp_only"` silently. Both methods now exist on `PtyTerminal` too (emitted from one shared definition with `Terminal`), and `with_config` applies the configured mode to the default session's terminal. **Behavior-affecting:** a terminal passed to `StreamingServer::new`/`with_config` now carries the configured mode — including the `temp_only` default — instead of keeping whatever mode it had.
+- **API_REFERENCE.md parameter lists now match the stub** (audit DOC-039). 39 documented signatures were wrong (phantom arguments, missing required ones, wrong keyword names/shapes); all corrected against `_native.pyi`, with a new `scripts/check_api_reference.py` wired into `make stub-check` that fails on any doc-vs-stub parameter drift (495 signatures checked).
+
+### Fixed
+- **`PtyTerminal` is documented as what it is: not a `Terminal` subclass** (audit DOC-040). The reference claimed it "inherits all Terminal methods"; at runtime 222 of `Terminal`'s 386 public methods have no `PtyTerminal` counterpart. The false claims are replaced with a generated Method Availability section (full list from `_native.pyi`), and SECURITY.md's Kitty section now names the `PtyTerminal` way to set the file-media mode.
+
 ## [0.53.0] - 2026-09-26
 
 ### Security

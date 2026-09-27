@@ -1115,7 +1115,7 @@ Terminal emulator with PTY (pseudo-terminal) support for interactive shell sessi
 PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 ```
 
-**Inherits:** All methods from `Terminal` class
+**Method availability:** `PtyTerminal` is a standalone wrapper around a live PTY session, not a `Terminal` subclass (`PtyTerminal.__mro__` is `(PtyTerminal, object)`). It exposes 204 of `Terminal`'s 386 public methods plus 40 PTY-specific ones (process management, I/O, update tracking, macro playback, coprocesses — documented in this section). See [Method Availability](#method-availability) for the Terminal-only surface it lacks.
 
 ### PTY-Specific Methods
 
@@ -1153,7 +1153,7 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 - `faint_text_alpha() -> float`: Get alpha multiplier for SGR 2 (dim/faint) text (0.0-1.0, default 0.5)
 - `set_faint_text_alpha(alpha: float)`: Set alpha multiplier for dim text (clamped to 0.0-1.0)
 
-**Note:** PtyTerminal inherits all Terminal methods, so you can also use all Terminal appearance settings like `set_default_fg()`, `set_default_bg()`, etc.
+**Note:** appearance settings such as `set_default_fg()`, `set_default_bg()`, and the other shared setters from the Terminal section are available on `PtyTerminal` too (shared definitions emit them for both classes). The [Method Availability](#method-availability) list covers the Terminal-only surface.
 
 #### Macro Playback (PTY-Specific)
 
@@ -1187,6 +1187,27 @@ Run external processes alongside the terminal session, optionally feeding termin
 - `list_coprocesses() -> list[int]`: List active coprocess IDs.
 - `coprocess_status(coprocess_id: int) -> bool | None`: Check if coprocess is running. Returns `None` if not found.
 - `read_coprocess_errors(coprocess_id: int) -> list[str]`: Read buffered stderr lines from coprocess (drains the buffer). Raises `ValueError` if not found.
+
+### Method Availability
+
+`PtyTerminal` is not a `Terminal` subclass. Of `Terminal`'s 386 public methods, 222 have no `PtyTerminal` counterpart (counts generated from `_native.pyi` at this release). The notable groups:
+
+- **Input processing**: `process`/`process_str`/`reset` — a `PtyTerminal` is fed by its child through the PTY (`write`/`write_str`), not by host-side `process()` calls
+- **Observers and events**: `add_observer`/`add_async_observer`/`remove_observer`, the whole `poll_*` family, `set_event_subscription`
+- **Search and semantics**: `detect_urls`/`detect_file_paths`/`detect_semantic_items`, `regex_search` and the `*_regex_match` navigation, semantic zones and snapshots
+- **History and state tracking**: bookmarks, command history, CWD history, clipboard history and sync events, notifications, mouse history, triggers
+- **Rendering and performance**: damage regions, rendering hints, benchmarks, compliance tests, profiling, frame timings
+- **Appearance and modes**: many theme-color getters/setters (`badge_color`, `link_color`, selection colors, ...), mode setters (`set_bracketed_paste`, `set_focus_tracking`, tab stops, conformance level, bell volumes), tmux control mode
+- **Graphics extras**: inline-image management (`add_inline_image`, `get_images_at`, ...), `color_distance`, `generate_color_palette`
+
+The Kitty file-media gate is available on both classes: `set_allow_file_media`/`get_allow_file_media` work on `Terminal` and `PtyTerminal` alike.
+
+<details>
+<summary>Full list of the 222 Terminal-only methods</summary>
+
+`add_async_observer`, `add_bookmark`, `add_damage_region`, `add_inline_image`, `add_observer`, `add_rendering_hint`, `add_to_clipboard_history`, `add_trigger`, `application_cursor`, `application_keypad`, `auto_wrap_mode`, `badge_color`, `benchmark_grid_ops`, `benchmark_parsing`, `benchmark_rendering`, `bold_brightening`, `bold_color`, `capture_replay_snapshot`, `check_activity`, `check_silence`, `clear_all_clipboard_history`, `clear_all_tab_stops`, `clear_bookmarks`, `clear_clipboard_history`, `clear_clipboard_sync_events`, `clear_command_history`, `clear_cwd_history`, `clear_damage_regions`, `clear_event_subscription`, `clear_images`, `clear_mouse_history`, `clear_notification_events`, `clear_regex_matches`, `clear_rendering_hints`, `clear_selection`, `clear_tab_stop`, `clear_tmux_notifications`, `clear_trigger_highlights`, `color_distance`, `conformance_level`, `conformance_level_name`, `cursor_guide_color`, `delete_image`, `detect_file_paths`, `detect_semantic_items`, `detect_urls`, `diff_snapshots`, `disable_profiling`, `drain_bell_events`, `drain_tmux_notifications`, `enable_profiling`, `end_command_execution`, `erase_rectangle`, `export_graphics_json`, `export_scrollback`, `fill_rectangle`, `format_compliance_report`, `generate_color_palette`, `get_all_hyperlinks`, `get_all_images`, `get_ansi_color`, `get_ansi_palette`, `get_average_frame_time`, `get_bookmarks`, `get_clipboard_from_slot`, `get_clipboard_history`, `get_clipboard_sync_events`, `get_clipboard_sync_history`, `get_command_history`, `get_command_output`, `get_command_outputs`, `get_current_command`, `get_current_regex_pattern`, `get_cwd_changes`, `get_damage_regions`, `get_dirty_region`, `get_dirty_rows`, `get_fps`, `get_frame_timings`, `get_image_by_id`, `get_images_at`, `get_last_mouse_position`, `get_latest_clipboard`, `get_line_context`, `get_logical_lines`, `get_max_clipboard_event_bytes`, `get_max_clipboard_sync_events`, `get_max_mouse_history`, `get_max_notifications`, `get_mouse_events`, `get_mouse_positions`, `get_named_progress_bar`, `get_notification_config`, `get_notification_events`, `get_paragraph_at`, `get_performance_metrics`, `get_profiling_data`, `get_rectangle`, `get_regex_matches`, `get_rendering_hints`, `get_selected_text`, `get_selection`, `get_semantic_snapshot`, `get_semantic_snapshot_json`, `get_shell_integration_stats`, `get_tab_stops`, `get_tmux_notifications`, `get_trigger`, `get_trigger_highlights`, `get_user_var`, `get_user_vars`, `get_zone_at`, `get_zone_text`, `get_zones`, `handle_bell_notification`, `has_tmux_notifications`, `hsl_to_rgb_color`, `hsv_to_rgb_color`, `import_graphics_json`, `is_line_start`, `is_profiling_enabled`, `is_tmux_auto_detect`, `is_tmux_control_mode`, `join_wrapped_lines`, `left_right_margins`, `link_color`, `list_triggers`, `margin_bell_volume`, `mark_clean`, `mark_notification_delivered`, `mark_row_dirty`, `match_color`, `merge_damage_regions`, `modify_other_keys_mode`, `mouse_encoding`, `named_progress_bars`, `next_regex_match`, `normalization_form`, `observer_count`, `origin_mode`, `poll_action_results`, `poll_cwd_events`, `poll_events`, `poll_events_legacy`, `poll_screen_cleared_events`, `poll_shell_integration_events`, `poll_subscribed_events`, `poll_subscribed_events_legacy`, `poll_trigger_matches`, `poll_upload_requests`, `prev_regex_match`, `process`, `process_str`, `process_trigger_scans`, `record_allocation`, `record_clipboard_sync`, `record_cwd_change`, `record_escape_sequence`, `record_frame_timing`, `record_mouse_event`, `regex_search`, `register_custom_trigger`, `remote_session_id`, `remove_all_named_progress_bars`, `remove_bookmark`, `remove_named_progress_bar`, `remove_observer`, `remove_trigger`, `reset`, `reset_performance_metrics`, `reset_profiling_data`, `rgb_to_hsl_color`, `rgb_to_hsv_color`, `run_benchmark_suite`, `scroll_region`, `scrollback_stats`, `search`, `search_clipboard_history`, `search_scrollback`, `select_line`, `select_word_at`, `selection_bg_color`, `selection_fg_color`, `set_bracketed_paste`, `set_clipboard_with_slot`, `set_conformance_level`, `set_event_subscription`, `set_focus_tracking`, `set_margin_bell_volume`, `set_max_clipboard_event_bytes`, `set_max_clipboard_sync_events`, `set_max_clipboard_sync_history`, `set_max_command_history`, `set_max_cwd_history`, `set_max_inline_images`, `set_max_mouse_history`, `set_max_notifications`, `set_modify_other_keys_mode`, `set_mouse_encoding`, `set_named_progress_bar`, `set_normalization_form`, `set_notification_config`, `set_remote_session_id`, `set_selection`, `set_tab_stop`, `set_title`, `set_tmux_auto_detect`, `set_tmux_control_mode`, `set_trigger_enabled`, `set_warning_bell_volume`, `simulate_mouse_event`, `start_command_execution`, `test_compliance`, `trigger_custom_notification`, `trigger_notification`, `update_activity`, `update_peak_memory`, `use_alt_screen`, `use_bold_color`, `use_primary_screen`, `use_underline_color`, `warning_bell_volume`
+
+</details>
 
 ### Context Manager Support
 
