@@ -1,6 +1,7 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
         typecheck clippy fmt-python lint-python checkall check-features bench pre-commit-install pre-commit-uninstall \
+        caps-table caps-table-check \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -311,7 +312,15 @@ stub-check:
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
 	uv run python scripts/check_api_reference.py
 
-checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web
+# ENH-022: regenerate the resource-caps table in docs/SECURITY.md from the
+# `/// cap:` doc comments on the size constants; the check flavor gates drift.
+caps-table:
+	python3 scripts/gen_caps_table.py
+
+caps-table-check:
+	python3 scripts/gen_caps_table.py --check
+
+checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web caps-table-check
 
 # ENH-019: not part of checkall — the matrix takes minutes. Run after any
 # [features] or dependency edit in Cargo.toml.

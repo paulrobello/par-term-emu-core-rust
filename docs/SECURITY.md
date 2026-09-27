@@ -72,6 +72,7 @@ term.spawn(
 - [Security Checklist](#security-checklist)
 - [Streaming Server Security (Network Attack Surface)](#streaming-server-security-network-attack-surface)
 - [Multiplexer Daemon Security (par-mux, Local Attack Surface)](#multiplexer-daemon-security-par-mux-local-attack-surface)
+- [Resource Limits Reference](#resource-limits-reference)
 - [Reporting Security Issues](#reporting-security-issues)
 
 ## Security Architecture
@@ -1078,6 +1079,23 @@ privileges.
   these guarantees attach to.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — the mux subsystem's place in the
   crate.
+
+## Resource Limits Reference
+
+Every security-relevant size constant in the crate — the bounds this
+document reasons about — is generated below directly from the code, so the
+table cannot drift from reality unnoticed. Each entry carries a `/// cap:`
+doc comment at its declaration (see `scripts/gen_caps_table.py`); regenerate
+with `make caps-table` and gate with `make caps-table-check` (part of
+`checkall`). Semantics — what happens when a cap is hit — stay in the prose
+sections; the numbers live here.
+
+<!-- caps-table:start -->
+
+| Constant | Value | Location | Bounds |
+|----------|-------|----------|--------|
+
+<!-- caps-table:end -->
 
 ## Reporting Security Issues
 
