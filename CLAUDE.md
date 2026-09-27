@@ -65,7 +65,10 @@ prlctl start "Windows 11"
 
 # 2. Tarball the source on the Mac (~6.6 MB) and serve it
 git archive HEAD --format=tar.gz -o /tmp/ptecr-src.tgz
-python3 -m http.server 8931 --bind 0.0.0.0 &   # from /tmp; host IP from the VM is 10.211.55.2
+python3 -m http.server 8931 --bind 0.0.0.0 --directory /tmp &   # host IP from the VM is 10.211.55.2.
+#    --directory /tmp keeps the served root correct regardless of cwd; if port 8931 is
+#    held by a stale server from a dead session (lsof -iTCP:8931 -sTCP:LISTEN, age in
+#    `ps -o etime`), kill it or serve on another port — a stale root serves 404 HTML.
 
 # 3. Fetch + extract in the VM (separate exec calls)
 prlctl exec "Windows 11" cmd /c "curl -s -o C:\ptecr-test\src.tgz http://10.211.55.2:8931/ptecr-src.tgz"
