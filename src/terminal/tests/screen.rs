@@ -712,6 +712,52 @@ fn test_get_line_unwrapped() {
     assert!(line.unwrap().contains("test line"));
 }
 
+/// A prompt + echoed command that fill the row exactly reproduce bash's
+/// accept-line workaround at the pending-wrap margin: one more space (which
+/// soft-wraps the command row), CR, then a CUU/CUF/EL redraw of the last
+/// glyph before the CRLF that starts the output row. The wrap flag the
+/// space set survives the redraw, so the logical-lines capture joins the
+/// command with its output — the screen shape an 80-column pane whose
+/// prompt is exactly 24 columns produces for a 56-column command
+/// (QA-145). Screen probes over `content()`/capture-pane must therefore
+/// match by substring, never whole-line equality.
+#[test]
+fn exact_margin_command_output_joins_in_logical_capture() {
+    let mut term = Terminal::new(80, 24);
+    let prompt = "aaaaaaaaaaaaaaaaaaaa:~$ "; // 24 columns
+    let command = "echo AGENV=$PAR_MUX_ENV/$PAR_MUX_PANE_ID/$PAR_MUX_SOCKET"; // 56
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(prompt.as_bytes());
+    bytes.extend_from_slice(command.as_bytes());
+    // The space at the pending-wrap margin, then CR back — readline's trick.
+    bytes.extend_from_slice(b" \r");
+    // The redraw: up, right to the margin, erase the tail, reprint it, CRLF.
+    bytes.extend_from_slice(b"\x1b[A");
+    for _ in 0..80 {
+        bytes.extend_from_slice(b"\x1b[C");
+    }
+    bytes.extend_from_slice(b"\x1b[KT\r\n");
+    // The output overwrites the space the wrap left on the next row.
+    bytes.extend_from_slice(b"\x1b[?2004l\r");
+    let want = "AGENV=1/%0//tmp/par-mux-t/nestown-t";
+    bytes.extend_from_slice(want.as_bytes());
+    bytes.extend_from_slice(b"\r\n\x1b[?2004h");
+    bytes.extend_from_slice(prompt.as_bytes());
+    term.process(&bytes);
+
+    let content = term.content();
+    assert!(
+        content
+            .lines()
+            .any(|l| l.contains(&format!("$PAR_MUX_SOCKET{want}"))),
+        "the exact-margin command row joins with its output: {content:?}"
+    );
+    assert!(
+        content.lines().all(|l| l.trim() != want),
+        "no logical line equals the bare output, so equality probes can never match"
+    );
+}
+
 #[test]
 fn test_is_line_start() {
     let term = Terminal::new(80, 24);

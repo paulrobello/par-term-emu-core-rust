@@ -229,17 +229,25 @@ fn the_override_starts_a_daemon_whose_panes_drop_the_outer_env() {
             &[],
         )
         .stdout;
-        if !saw_env && screen.lines().any(|l| l.trim() == want_env) {
+        // Substring, not whole-line: when prompt + echoed command fill the
+        // 80-column pane exactly, bash's accept-line redraw leaves the
+        // command row soft-wrapped and capture-pane's logical-lines join
+        // glues the command onto its output — no line ever equals the bare
+        // probe output (QA-145; pinned by
+        // exact_margin_command_output_joins_in_logical_capture). The echoed
+        // command carries the unexpanded $PAR_MUX_* names, so containment
+        // cannot false-positive. Windows keeps line equality for the leak
+        // probes: its echoed probe text contains the literal answers
+        // (`LEAK=set` / `LEAK=unset`).
+        if !saw_env && screen.lines().any(|l| l.contains(&want_env)) {
             saw_env = true;
         }
         #[cfg(unix)]
-        let leaked = screen
-            .lines()
-            .any(|l| l.trim() == "LEAK=[stale-outer-value]");
+        let leaked = screen.contains("LEAK=[stale-outer-value]");
         #[cfg(windows)]
         let leaked = screen.lines().any(|l| l.trim() == "LEAK=set");
         #[cfg(unix)]
-        let dropped = screen.lines().any(|l| l.trim() == "LEAK=[]");
+        let dropped = screen.contains("LEAK=[]");
         #[cfg(windows)]
         let dropped = screen.lines().any(|l| l.trim() == "LEAK=unset");
         if !saw_leak && dropped {
