@@ -272,6 +272,11 @@ rust-only = []
 sim = ["screenshot"]
 full = ["python", "streaming", "streaming-bin"]
 
+# cargo-fuzz builds the library with `--cfg fuzzing` (the ENH-020 apc_filter
+# entry point); declare the cfg so those builds stay warning-clean.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+
 [profile.release]
 opt-level = 3
 lto = true

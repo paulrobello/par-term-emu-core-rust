@@ -151,6 +151,28 @@ pub(crate) fn feed<F>(
     }
 }
 
+/// One full `feed` pass over `data` from a fresh state, returning how many
+/// Kitty APC payloads completed. `#[doc(hidden)]` and `cfg(fuzzing)`: this
+/// exists for the `apc_filter` cargo-fuzz target (cargo-fuzz builds the
+/// library with `--cfg fuzzing`), not the public API — the byte-level
+/// accumulator is otherwise reachable only through `Terminal::process`.
+#[cfg(fuzzing)]
+#[doc(hidden)]
+pub fn fuzz_apc_filter(data: &[u8]) -> usize {
+    let mut state = ApcFilterState::Outside;
+    let mut apc_buffer = Vec::new();
+    let mut passthrough = Vec::new();
+    let mut completed = 0usize;
+    feed(
+        &mut state,
+        &mut apc_buffer,
+        data,
+        &mut passthrough,
+        |_payload, _offset| completed += 1,
+    );
+    completed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

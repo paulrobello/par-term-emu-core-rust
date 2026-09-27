@@ -6,6 +6,11 @@
 // Submodules
 pub mod action;
 mod apc_filter;
+// Fuzz-only re-export (ENH-020): the module is pub(crate), the fuzz crate is
+// an external path dependency, and cargo-fuzz is the only builder that sets
+// the cfg.
+#[cfg(fuzzing)]
+pub use apc_filter::fuzz_apc_filter;
 pub mod benchmarks;
 pub mod clipboard;
 mod colors;
