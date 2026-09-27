@@ -46,14 +46,26 @@ impl MuxClient {
     /// invisibly. Whatever answers there is attached instead — the client's
     /// version check then surfaces the mismatch — so an upgrade can never
     /// leave two daemons for one name.
+    ///
+    /// The probe only runs when `XDG_RUNTIME_DIR` is unset: pre-0.52 clients
+    /// preferred that directory when it was set, so under XDG the legacy name
+    /// was never this user's default and probing it only reaches sockets
+    /// someone else planted. The legacy file must also be a socket this user
+    /// owns (`legacy_socket_is_trustworthy`) — it sits in the shared temp
+    /// dir — and the connect itself verifies the serving daemon's euid.
     pub fn connect_or_spawn(name: &str) -> io::Result<Self> {
         let path = default_socket_path(name);
         if let Ok(client) = Self::connect(&path) {
             return Ok(client);
         }
         #[cfg(unix)]
-        if let Ok(client) = Self::connect(&crate::mux::ipc::legacy_socket_path(name)) {
-            return Ok(client);
+        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+            let legacy = crate::mux::ipc::legacy_socket_path(name);
+            if crate::mux::ipc::legacy_socket_is_trustworthy(&legacy) {
+                if let Ok(client) = Self::connect(&legacy) {
+                    return Ok(client);
+                }
+            }
         }
         Self::connect_or_spawn_at(&path)
     }

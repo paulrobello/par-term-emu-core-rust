@@ -941,12 +941,15 @@ Permissions](#socket-permissions)).
   `PermissionDenied` rather than use a directory another user controls.
   The socket file itself is created with mode `0600` (owner only). A
   second daemon on a path a live server owns is refused (`AddrInUse`);
-  stale remnants are reclaimed. Finally, `accept` refuses any connection
-  whose peer does not run as the daemon's user (the socket's credentials
-  carry the peer's effective UID) — a second lock on the door that drops
-  the connection and keeps serving rather than hand another local user a
-  fatal-fault exit. Explicit `--socket` paths are not guarded — whoever
-  named the path chose its location.
+  stale remnants are reclaimed. Finally, both directions of the connection
+  verify identity: `accept` refuses any connection whose peer does not run
+  as the daemon's user, and the client (`connect_local_stream`, every
+  connect path) refuses a server whose effective UID differs from its own
+  (the socket's credentials carry the peer's effective UID) — fail closed
+  with `PermissionDenied` rather than send keystrokes and clipboard to a
+  socket another user bound. Explicit `--socket` paths are not
+  directory-guarded — whoever named the path chose its location — but the
+  client-side peer check still applies to them.
 - **Windows:** named pipes are reachable by other users on the machine
   unless restricted, so the pipe is created with an owner-only security
   descriptor (system and creating user only, nothing for anyone else), and
@@ -954,7 +957,12 @@ Permissions](#socket-permissions)).
 
 Pre-0.52 daemons serve the old default path (directly under the temp
 dir); clients probe it before spawning a replacement so an upgrade never
-strands a live daemon behind a parallel one.
+strands a live daemon behind a parallel one. The probe is gated twice on
+Unix: it only runs when `XDG_RUNTIME_DIR` is unset (pre-0.52 clients
+preferred that directory when set, so under XDG the legacy name was never
+this user's default), and the legacy file must be a socket the current
+user owns — `lstat`, no symlink following — before it is connected to.
+The connect's euid verification then covers whatever answers.
 
 ### Control-Connection Resource Bounds
 

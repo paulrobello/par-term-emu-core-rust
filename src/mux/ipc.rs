@@ -112,17 +112,23 @@ pub fn accept_connection(listener: &LocalListener) -> io::Result<(LocalStream, C
     }
 }
 
-/// Whether the stream's peer runs as this daemon's user. A peer the platform
-/// will not vouch for is treated as foreign — fail closed.
+/// Whether the stream's peer runs as this process's user. A peer the
+/// platform will not vouch for is treated as foreign — fail closed.
 #[cfg(unix)]
 fn peer_is_current_user(stream: &LocalStream) -> bool {
     use interprocess::local_socket::traits::StreamCommon as _;
 
-    stream
-        .peer_creds()
-        .ok()
-        .and_then(|creds| creds.euid())
-        .is_some_and(|euid| euid == current_uid())
+    euid_matches(
+        stream.peer_creds().ok().and_then(|creds| creds.euid()),
+        current_uid(),
+    )
+}
+
+/// The comparison behind [`peer_is_current_user`], split out so its
+/// fail-closed `None` arm is unit-testable without a second user.
+#[cfg(unix)]
+fn euid_matches(peer: Option<u32>, me: u32) -> bool {
+    peer.is_some_and(|euid| euid == me)
 }
 
 /// What an evictor needs to tear this connection down (ENH-012).
@@ -288,6 +294,12 @@ impl LocalListener {
 }
 
 /// Connect a stream to the server listening at `path`.
+///
+/// On Unix the server's identity is verified before the stream is returned:
+/// a socket another user bound would receive everything this client sends it
+/// — keystrokes, clipboard — as its "server", so a peer whose effective UID
+/// is not ours fails closed with `PermissionDenied`. Every connect path
+/// (default, explicit `--socket`, the legacy probe) goes through here.
 pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     #[cfg(unix)]
     {
@@ -295,7 +307,14 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
 
         guard_fallback_socket_dir(path)?;
         let name = path.to_fs_name::<GenericFilePath>()?;
-        LocalStream::connect(name)
+        let stream = LocalStream::connect(name)?;
+        if !peer_is_current_user(&stream) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("par-mux: {} is served by another user", path.display()),
+            ));
+        }
+        Ok(stream)
     }
 
     #[cfg(windows)]
@@ -418,6 +437,20 @@ fn current_uid() -> u32 {
 #[cfg(unix)]
 pub(crate) fn legacy_socket_path(name: &str) -> PathBuf {
     std::env::temp_dir().join(format!("par-mux-{name}.sock"))
+}
+
+/// Whether the legacy-path socket at `path` is safe to probe: a socket file
+/// — not a symlink, not a regular file — owned by this user. The legacy name
+/// sits in the shared temp dir, so anyone can plant a file (or a symlink
+/// redirecting the probe) there; `symlink_metadata` never follows the link.
+#[cfg(unix)]
+pub(crate) fn legacy_socket_is_trustworthy(path: &Path) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return false;
+    };
+    meta.file_type().is_socket() && meta.uid() == current_uid()
 }
 
 /// When `path` sits in the per-UID fallback directory, make sure that
@@ -571,6 +604,42 @@ mod tests {
         assert_eq!(reply.trim(), "pong");
 
         server.join().expect("server thread");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn euid_matches_fails_closed() {
+        // A peer the platform will not vouch for (None) is foreign, not
+        // trusted: the credential lookup failing must not read as a match.
+        assert!(!euid_matches(None, current_uid()));
+        assert!(euid_matches(Some(current_uid()), current_uid()));
+        assert!(!euid_matches(Some(current_uid() + 1), current_uid()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_socket_is_trustworthy_rejects_planted_files() {
+        // Nothing there: not trustworthy.
+        let socket = temp_socket("legacy-absent");
+        assert!(!legacy_socket_is_trustworthy(socket.path()));
+
+        // A regular file planted on the legacy name: not a socket.
+        let socket = temp_socket("legacy-regular");
+        std::fs::write(socket.path(), b"not a socket").expect("write regular file");
+        assert!(!legacy_socket_is_trustworthy(socket.path()));
+
+        // A symlink planted on the legacy name: not followed — not
+        // trustworthy even when it points at this user's live socket.
+        let real = temp_socket("legacy-real");
+        let _listener = bind_local_listener(real.path()).expect("bind real socket");
+        let link = temp_socket("legacy-link");
+        std::os::unix::fs::symlink(real.path(), link.path()).expect("plant symlink");
+        assert!(!legacy_socket_is_trustworthy(link.path()));
+
+        // This user's own socket file: trustworthy.
+        let socket = temp_socket("legacy-live");
+        let _listener = bind_local_listener(socket.path()).expect("bind succeeds");
+        assert!(legacy_socket_is_trustworthy(socket.path()));
     }
 
     #[test]
