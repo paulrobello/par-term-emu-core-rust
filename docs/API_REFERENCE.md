@@ -255,7 +255,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 - `set_allow_clipboard_read(allow: bool)`: Set clipboard read permission (security flag)
 - `set_max_clipboard_sync_events(max: int)`: Limit clipboard event history
 - `get_max_clipboard_sync_events() -> int`: Get clipboard event limit
-- `set_max_clipboard_event_bytes(max: int)`: Truncate large clipboard payloads
+- `set_max_clipboard_event_bytes(max_bytes: int)`: Truncate large clipboard payloads
 - `get_max_clipboard_event_bytes() -> int`: Get clipboard payload size limit
 
 #### Clipboard History
@@ -361,7 +361,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 - `accept_osc7() -> bool`: Check if OSC 7 (CWD) is accepted
 - `set_accept_osc7(accept: bool)`: Set whether to accept OSC 7 sequences
 - `shell_integration_state() -> ShellIntegration`: Get shell integration state
-- `record_cwd_change(new_cwd: str, hostname: str | None = None, username: str | None = None)`: Manually record a CWD change (updates history + session variables)
+- `record_cwd_change(new_cwd: str, hostname: str | None, username: str | None)`: Manually record a CWD change (updates history + session variables; `hostname`/`username` are required positionally — pass `None` for localhost / when unknown)
 - `disable_insecure_sequences() -> bool`: Check if insecure sequences are disabled
 - `set_disable_insecure_sequences(disable: bool)`: Disable insecure/dangerous sequences
 - `answerback_string() -> str | None`: Get the configured ENQ answerback payload (None if disabled)
@@ -372,7 +372,7 @@ all_vars = term.get_user_vars()  # {"hostname": "server1", "username": "alice"}
 #### Paste Operations
 - `get_paste_start() -> tuple[int, int] | None`: Get bracketed paste start position
 - `get_paste_end() -> tuple[int, int] | None`: Get bracketed paste end position
-- `paste(text: str)`: Simulate bracketed paste
+- `paste(content: str)`: Simulate bracketed paste
 
 #### Focus Events
 - `get_focus_in_event() -> str`: Get focus-in event sequence
@@ -468,7 +468,7 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 - `get_recording_session() -> RecordingSession | None`: Get current session info
 - `record_output(data: bytes)`: Record output event
 - `record_input(data: bytes)`: Record input event
-- `record_marker(name: str)`: Add marker/bookmark
+- `record_marker(label: str)`: Add marker/bookmark
 - `record_resize(cols: int, rows: int)`: Record resize event
 - `export_asciicast(session: RecordingSession | None = None) -> str`: Export to asciicast v2 format
 - `export_asciicast_v3(session: RecordingSession | None = None) -> str`: Export to asciicast v3 format — nested `term` header, relative per-event intervals, `"COLSxROWS"` resize data, and a `g` graphics event per graphic in the store (live placements plus scrollback promotions) carrying protocol, geometry, position, and base64 RGBA pixels
@@ -479,16 +479,16 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 - `regex_search(pattern: str, case_insensitive: bool = False, multiline: bool = True, include_scrollback: bool = True, max_matches: int = 0, reverse: bool = False) -> list[RegexMatch]`: Search terminal content using regex pattern. `max_matches=0` means unlimited. Raises `ValueError` for an invalid regex pattern.
 - `get_regex_matches() -> list[RegexMatch]`: Get current regex matches
 - `clear_regex_matches()`: Clear regex match highlighting
-- `next_regex_match()`: Move to next regex match
-- `prev_regex_match()`: Move to previous regex match
+- `next_regex_match(from_row: int, from_col: int)`: Find the next regex match from a position
+- `prev_regex_match(from_row: int, from_col: int)`: Find the previous regex match from a position
 - `get_current_regex_pattern() -> str | None`: Get active regex pattern
 
 ### Mouse Tracking and Events
 
 - `mouse_encoding() -> MouseEncoding`: Get current mouse encoding mode
 - `set_mouse_encoding(encoding: MouseEncoding)`: Set mouse encoding (Default, Utf8, Sgr, Urxvt)
-- `get_mouse_events() -> list[MouseEvent]`: Get recorded mouse events
-- `get_mouse_positions() -> list[MousePosition]`: Get mouse position history
+- `get_mouse_events(count: int) -> list[MouseEvent]`: Get the most recent recorded mouse events
+- `get_mouse_positions(count: int) -> list[MousePosition]`: Get the most recent mouse position history
 - `get_last_mouse_position() -> MousePosition | None`: Get most recent mouse position
 - `clear_mouse_history()`: Clear mouse event history
 - `set_max_mouse_history(max: int)`: Set maximum mouse events to track
@@ -498,7 +498,7 @@ See [ScreenshotConfig](#screenshotconfig) for the full list of constructor field
 ### Bookmarks
 
 - `add_bookmark(row: int, label: str | None = None)`: Add bookmark at row with optional label
-- `remove_bookmark(row: int)`: Remove bookmark at row
+- `remove_bookmark(id: int)`: Remove bookmark by ID (returns `True` if found)
 - `get_bookmarks() -> list[Bookmark]`: Get all bookmarks
 - `clear_bookmarks()`: Remove all bookmarks
 
@@ -557,7 +557,7 @@ Extended shell integration features beyond basic OSC 133:
 - `get_cwd_changes() -> list[CwdChange]`: Get working directory change history (includes hostname/username)
 - `clear_cwd_history()`: Clear CWD history
 - `set_max_cwd_history(max: int)`: Set CWD history limit
-- `record_cwd_change(cwd: str, hostname: str | None = None, username: str | None = None)`: Record working directory change
+- `record_cwd_change(new_cwd: str, hostname: str | None, username: str | None)`: Record working directory change (same method as documented under Shell Integration)
 - `poll_events()`: Now also returns `cwd_changed` events with `old_cwd`, `new_cwd`, `hostname`, `username`, `timestamp`
 - `poll_events()`: Now also returns `user_var_changed` events with `name`, `value`, `old_value` (optional) when OSC 1337 SetUserVar sequences are received
 - `poll_shell_integration_events() -> list[dict]`: Drain only shell integration events (keeping other events queued). Returns dicts with `event_type`, `command`, `exit_code`, `timestamp`, `cursor_line`. The `cursor_line` is the absolute cursor line (`scrollback_len + cursor_row`) captured at the exact moment each OSC 133 marker was parsed
@@ -676,8 +676,8 @@ Advanced clipboard features beyond basic OSC 52:
 - `get_clipboard_sync_events() -> list[ClipboardSyncEvent]`: Get clipboard synchronization events
 - `clear_clipboard_sync_events()`: Clear clipboard sync event log
 - `set_max_clipboard_sync_history(max: int)`: Set clipboard sync history limit
-- `get_clipboard_sync_history() -> list[ClipboardHistoryEntry]`: Get clipboard sync history
-- `record_clipboard_sync(slot: str, content: str)`: Record clipboard synchronization
+- `get_clipboard_sync_history(target: str) -> list[ClipboardHistoryEntry]`: Get clipboard sync history for a target (`"clipboard"`, `"primary"`, `"secondary"`, or `"cutbuffer0"`, case-insensitive)
+- `record_clipboard_sync(target: str, operation: str, content: str | None, is_remote: bool)`: Record a clipboard synchronization event (e.g. `record_clipboard_sync("clipboard", "set", "hello", False)`)
 
 ### Graphics Extended
 
@@ -685,7 +685,7 @@ Additional graphics management beyond basic display:
 
 - `add_inline_image(image: InlineImage)`: Add inline image (iTerm2 protocol)
 - `get_image_by_id(id: int) -> InlineImage | None`: Get image by ID
-- `get_images_at(row: int) -> list[InlineImage]`: Get images at specific row
+- `get_images_at(col: int, row: int) -> list[InlineImage]`: Get images at a position
 - `get_all_images() -> list[InlineImage]`: Get all images in terminal
 - `delete_image(id: int)`: Delete image by ID
 - `clear_images()`: Clear all inline images
@@ -693,9 +693,9 @@ Additional graphics management beyond basic display:
 - `set_allow_file_media(mode: str)`: Control whether Kitty graphics may load payloads from files (`t=f`/`t=t`): `"off"`, `"temp_only"` (default — only `*tty-graphics-protocol*` files inside an allowed temp root, deleted after decoding), or `"all"` (unrestricted `t=f` reads). Raises `ValueError` on any other name
 - `get_allow_file_media() -> str`: Get the current Kitty file-media mode (`"off"`, `"temp_only"`, or `"all"`)
 - `get_sixel_limits() -> tuple[int, int]`: Get Sixel size limits (width, height)
-- `set_sixel_limits(max_width: int, max_height: int)`: Set Sixel size limits
+- `set_sixel_limits(max_width: int, max_height: int, max_repeat: int)`: Set Sixel size limits and max attribute repeat count
 - `get_sixel_graphics_limit() -> int`: Get maximum Sixel graphics count
-- `set_sixel_graphics_limit(limit: int)`: Set maximum Sixel graphics count
+- `set_sixel_graphics_limit(max_graphics: int)`: Set maximum Sixel graphics count
 - `get_sixel_stats() -> dict[str, int]`: Get Sixel statistics
 - `get_dropped_sixel_graphics() -> int`: Get count of dropped Sixel graphics
 
@@ -800,7 +800,7 @@ obs_id = term.add_observer(on_upload_request, kinds=["upload_requested"])
 
 For optimized rendering in frontends:
 
-- `add_damage_region(x: int, y: int, width: int, height: int)`: Mark region as damaged/needing redraw
+- `add_damage_region(left: int, top: int, right: int, bottom: int)`: Mark region as damaged/needing redraw (`left`/`top` inclusive, `right`/`bottom` exclusive, 0-indexed)
 - `get_damage_regions() -> list[DamageRegion]`: Get all damaged regions
 - `clear_damage_regions()`: Clear damage tracking
 - `merge_damage_regions()`: Merge overlapping damage regions
@@ -808,7 +808,7 @@ For optimized rendering in frontends:
 - `get_dirty_region() -> DamageRegion | None`: Get bounding box of all dirty regions
 - `mark_row_dirty(row: int)`: Mark specific row as dirty
 - `mark_clean()`: Mark all content as clean
-- `add_rendering_hint(hint: RenderingHint)`: Add rendering optimization hint
+- `add_rendering_hint(left: int, top: int, right: int, bottom: int, layer: str, animation: str, priority: str)`: Add a rendering optimization hint for a damaged rectangle — `layer` one of `"background"`, `"normal"`, `"overlay"`, `"cursor"`; `animation` one of `"none"`, `"smoothscroll"`, `"fade"`, `"cursorblink"`; `priority` one of `"low"`, `"normal"`, `"high"`, `"critical"` (all case-insensitive)
 - `get_rendering_hints(sort_by_priority: bool = False) -> list[RenderingHint]`: Get rendering hints, optionally sorted by priority (high to low)
 - `clear_rendering_hints()`: Clear rendering hints
 
@@ -816,10 +816,10 @@ For optimized rendering in frontends:
 
 Performance measurement and optimization tools:
 
-- `benchmark_rendering(duration_ms: int) -> BenchmarkResult`: Benchmark rendering performance
-- `benchmark_parsing(duration_ms: int) -> BenchmarkResult`: Benchmark ANSI parsing performance
+- `benchmark_rendering(iterations: int) -> BenchmarkResult`: Benchmark rendering performance
+- `benchmark_parsing(text: str, iterations: int) -> BenchmarkResult`: Benchmark ANSI parsing performance
 - `benchmark_grid_ops(iterations: int) -> BenchmarkResult`: Benchmark grid operations
-- `run_benchmark_suite() -> BenchmarkSuite`: Run comprehensive benchmark suite
+- `run_benchmark_suite(suite_name: str) -> BenchmarkSuite`: Run comprehensive benchmark suite
 - `enable_profiling()`: Enable performance profiling
 - `disable_profiling()`: Disable performance profiling
 - `is_profiling_enabled() -> bool`: Check if profiling is active
@@ -830,7 +830,7 @@ Performance measurement and optimization tools:
 - `get_frame_timings(count: int | None = None) -> list[FrameTiming]`: Get frame timing history (most recent `count` entries, or all if None)
 - `get_fps() -> float`: Get current FPS
 - `get_average_frame_time() -> float`: Get average frame time in milliseconds
-- `record_frame_timing(render_time_ms: float)`: Record frame timing
+- `record_frame_timing(processing_us: int, cells_updated: int, bytes_processed: int)`: Record frame timing
 - `record_escape_sequence(category: str, time_us: int)`: Record escape sequence processing time for profiling
 - `record_allocation(bytes: int)`: Record memory allocation for profiling
 - `update_peak_memory(current_bytes: int)`: Update peak memory tracking
@@ -852,7 +852,7 @@ Terminal multiplexer integration:
 
 Save and restore terminal state:
 
-- `set_remote_session_id(id: str | None)`: Set remote session identifier
+- `set_remote_session_id(session_id: str | None)`: Set remote session identifier
 - `remote_session_id() -> str | None`: Get remote session identifier
 
 > The pane/window session-state API (`PaneState`, `SessionState`, `WindowLayout` and the `*_pane_state` / `serialize_session` / `deserialize_session` / `create_session_state` / `create_window_layout` methods) was removed in 0.50.0 — see the [0.50.0 changelog entry](CHANGELOG.md#0500---2026-09-21) for the rationale and the `replay_snapshot` replacement.
@@ -861,7 +861,7 @@ Save and restore terminal state:
 
 Extended text manipulation beyond basic extraction:
 
-- `get_paragraph_at(col: int, row: int) -> str | None`: Extract paragraph at position
+- `get_paragraph_at(row: int) -> str | None`: Extract the paragraph containing a row
 - `get_logical_lines() -> list[str]`: Get all logical lines (respecting wrapping, each string is a joined logical line)
 - `join_wrapped_lines(start_row: int) -> JoinedLines | None`: Join wrapped lines from start position (returns None if row is out of bounds)
 - `is_line_start(row: int) -> bool`: Check if row is start of logical line
@@ -871,7 +871,7 @@ Extended text manipulation beyond basic extraction:
 
 VT compliance testing:
 
-- `test_compliance() -> ComplianceReport`: Run VT compliance tests
+- `test_compliance(level: str) -> ComplianceReport`: Run VT compliance tests for a level (`"vt52"`, `"vt100"`, `"vt220"`, `"vt320"`, `"vt420"`, `"vt520"`, or `"xterm"`)
 - `format_compliance_report(report: ComplianceReport) -> str`: Format compliance report for display
 
 ### Unicode Normalization
@@ -936,12 +936,12 @@ Single active progress bar state, separate from the multiple concurrent [Named P
 The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`None` when the variable is first set; absent from `poll_events_legacy()` output when unset).
 - `update_animations()`: Update animation frames (for blinking cursor, text, etc.)
 - `debug_info() -> str`: Get debug information string
-- `detect_urls(text: str) -> list[DetectedItem]`: Detect URLs in text
-- `detect_file_paths(text: str) -> list[DetectedItem]`: Detect file paths in text
-- `detect_semantic_items(text: str) -> list[DetectedItem]`: Detect semantic items (URLs, paths, emails)
+- `detect_urls() -> list[DetectedItem]`: Detect URLs in the visible screen
+- `detect_file_paths() -> list[DetectedItem]`: Detect file paths in the visible screen
+- `detect_semantic_items() -> list[DetectedItem]`: Detect semantic items (URLs, paths, emails) in the visible screen
 - `get_all_hyperlinks() -> list[str]`: Get all OSC 8 hyperlinks in terminal
-- `generate_color_palette() -> ColorPalette`: Generate color palette from terminal colors
-- `color_distance(color1: tuple[int, int, int], color2: tuple[int, int, int]) -> float`: Calculate perceptual color distance
+- `generate_color_palette(r: int, g: int, b: int, mode: str) -> ColorPalette`: Generate a color palette from a base color (e.g. `generate_color_palette(255, 0, 0, "complementary")`)
+- `color_distance(r1: int, g1: int, b1: int, r2: int, g2: int, b2: int) -> float`: Calculate color distance (Euclidean RGB; 0.0 = identical, ~441.7 = black vs. white)
 
 ### Debug and Snapshot Methods
 
@@ -972,7 +972,7 @@ The `user_var_changed` event dict contains: `name`, `value`, and `old_value` (`N
 
 #### Rectangle Operations (DECCRA/DECERA)
 - `get_rectangle(top: int, left: int, bottom: int, right: int) -> str | None`: Get text content of rectangular region
-- `fill_rectangle(top: int, left: int, bottom: int, right: int, char: str)`: Fill rectangular region with character (DECERA)
+- `fill_rectangle(top: int, left: int, bottom: int, right: int, ch: str)`: Fill rectangular region with character (DECERA)
 - `erase_rectangle(top: int, left: int, bottom: int, right: int)`: Erase rectangular region (DECERA with space)
 
 ### Content Search
@@ -1134,11 +1134,11 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 
 #### I/O Operations
 - `write(data: bytes)`: Write bytes to the PTY
-- `write_str(text: str)`: Write string to the PTY (convenience method)
+- `write_str(s: str)`: Write string to the PTY (convenience method)
 
 #### Update Tracking
 - `update_generation() -> int`: Get current update generation counter
-- `has_updates_since(generation: int) -> bool`: Check if terminal updated since generation
+- `has_updates_since(last_generation: int) -> bool`: Check if terminal updated since generation
 - `wait_for_update(since: int, timeout: float = 5.0) -> int | None`: Block until the generation advances past `since` (condvar-signalled by the reader thread; the GIL is released while blocking). Returns the new generation, or `None` on timeout or child exit with no new output
 - `wait_for_text(needle: str, timeout: float = 5.0, scrollback: bool = False) -> bool`: Block until `needle` appears in the visible content (or also scrollback with `scrollback=True`), re-checking after every applied update. The GIL is released while blocking
 - `send_resize_pulse()`: Send SIGWINCH to child process after resize
@@ -1169,7 +1169,7 @@ Automate terminal interactions with recorded macros:
 - `recording_to_macro(session: RecordingSession, name: str) -> Macro`: Convert recording session to macro
 - `get_macro(name: str) -> Macro | None`: Get macro by name
 - `list_macros() -> list[str]`: List all available macros
-- `load_macro(name: str, macro: Macro)`: Load a `Macro` object into the macro library under the given name (does not parse YAML; use `Macro.from_yaml()` / `Macro.load_yaml()` for that)
+- `load_macro(name: str, macro_obj: Macro)`: Load a `Macro` object into the macro library under the given name (does not parse YAML; use `Macro.from_yaml()` / `Macro.load_yaml()` for that)
 - `remove_macro(name: str)`: Remove macro by name
 
 #### Coprocess Management
@@ -1200,7 +1200,7 @@ Comprehensive color manipulation functions available as standalone module functi
 ### Brightness and Contrast
 
 - `perceived_brightness_rgb(r: int, g: int, b: int) -> float`: Calculate perceived brightness (0.0-1.0) using NTSC formula (30% red, 59% green, 11% blue)
-- `adjust_contrast_rgb(fg: tuple[int, int, int], bg: tuple[int, int, int], min_contrast: float) -> tuple[int, int, int]`: Adjust foreground for minimum contrast ratio (0.0-1.0), preserving hue
+- `adjust_contrast_rgb(fg: tuple[int, int, int], bg: tuple[int, int, int], minimum_contrast: float) -> tuple[int, int, int]`: Adjust foreground for minimum contrast ratio (0.0-1.0), preserving hue
 
 ### Basic Adjustments
 
@@ -1211,13 +1211,13 @@ Comprehensive color manipulation functions available as standalone module functi
 
 - `color_luminance(rgb: tuple[int, int, int]) -> float`: Calculate relative luminance (0.0-1.0) per WCAG formula
 - `is_dark_color(rgb: tuple[int, int, int]) -> bool`: Check if color is dark (luminance < 0.5)
-- `contrast_ratio(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> float`: Calculate WCAG contrast ratio (1.0-21.0)
+- `contrast_ratio(rgb1: tuple[int, int, int], rgb2: tuple[int, int, int]) -> float`: Calculate WCAG contrast ratio (1.0-21.0)
 - `meets_wcag_aa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AA (4.5:1)
 - `meets_wcag_aaa(fg: tuple[int, int, int], bg: tuple[int, int, int]) -> bool`: Check if contrast meets WCAG AAA (7:1)
 
 ### Color Mixing and Manipulation
 
-- `mix_colors(color1: tuple[int, int, int], color2: tuple[int, int, int], ratio: float) -> tuple[int, int, int]`: Mix two colors (ratio: 0.0=color1, 1.0=color2)
+- `mix_colors(rgb1: tuple[int, int, int], rgb2: tuple[int, int, int], ratio: float) -> tuple[int, int, int]`: Mix two colors (ratio: 0.0=rgb1, 1.0=rgb2)
 - `complementary_color(rgb: tuple[int, int, int]) -> tuple[int, int, int]`: Get complementary color (opposite on color wheel)
 
 ### Color Space Conversions
@@ -1377,9 +1377,11 @@ Session recording metadata.
 **Methods:**
 - `get_size() -> tuple[int, int]`: Get recording size (cols, rows)
 - `get_duration_seconds() -> float`: Get recording duration in seconds
-- `created_at() -> int`: Get recording creation timestamp (milliseconds)
-- `events() -> list[RecordingEvent]`: Get all recorded events
-- `env() -> dict[str, str]`: Get environment variables captured during recording
+
+**Additional properties:**
+- `created_at: int`: Recording creation timestamp (milliseconds)
+- `events: list[RecordingEvent]`: All recorded events
+- `env: dict[str, str]`: Environment variables captured during recording
 
 ### RecordingEvent
 
@@ -1439,7 +1441,7 @@ Macro recording for keyboard automation.
 - `add_screenshot(label: str | None = None)`: Add a screenshot trigger event
 - `set_description(description: str)`: Set macro description
 - `to_yaml() -> str`: Export macro to YAML format
-- `from_yaml(yaml_str: str) -> Macro`: Load macro from YAML format (static method)
+- `from_yaml(yaml: str) -> Macro`: Load macro from YAML format (static method)
 - `save_yaml(path: str)`: Save macro to YAML file
 - `load_yaml(path: str) -> Macro`: Load macro from YAML file (static method)
 

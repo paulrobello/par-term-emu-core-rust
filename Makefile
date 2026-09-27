@@ -47,7 +47,7 @@ help:
 	@echo "  typecheck       - Run type checks (Rust cargo check + Python pyright)"
 	@echo "  clippy          - Run Rust clippy (check only, no auto-fix)"
 	@echo "  stubs           - Regenerate python/par_term_emu_core_rust/_native.pyi (after dev-streaming)"
-	@echo "  stub-check      - Verify the module imports and the stub parses under pyright"
+	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
 	@echo ""
@@ -308,6 +308,7 @@ stub-check:
 	fi
 	uv run python -c "import par_term_emu_core_rust"
 	uv run pyright python/par_term_emu_core_rust/_native.pyi
+	uv run python scripts/check_api_reference.py
 
 checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web
 
