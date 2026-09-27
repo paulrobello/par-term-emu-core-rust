@@ -300,7 +300,8 @@ par-term-streamer --enable-http
 | `PAR_TERM_SYSTEM_STATS_INTERVAL` | `--system-stats-interval` | Stats collection interval (seconds) |
 | `PAR_TERM_ALLOW_API_KEY_IN_QUERY` | `--allow-api-key-in-query` | Allow API key in URL query param (not recommended) |
 | `PAR_TERM_MAX_CLIENTS_PER_SESSION` | `--max-clients-per-session` | Maximum clients per session (0=unlimited) |
-| `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Input rate limit (bytes/sec, 0=unlimited) |
+| `PAR_TERM_INPUT_RATE_LIMIT` | `--input-rate-limit` | Per-client input rate limit (bytes/sec; default 1048576 = 1 MiB/s, 0=unlimited) |
+| `PAR_TERM_KITTY_FILE_MEDIA` | `--kitty-file-media` | Kitty graphics file media: `off` \| `temp_only` (default) \| `all` — see [SECURITY.md](SECURITY.md#kitty-graphics-protocol-file-transmission) |
 | `PAR_TERM_SCROLLBACK` | `--scrollback` | Scrollback buffer size (lines) |
 | `PAR_TERM_SHELL` | `--shell` | Shell to spawn (default: auto-detected) |
 | `PAR_TERM_COMMAND` | `--command` | Command to run instead of a shell |

@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use clap::Parser;
+use par_term_emu_core_rust::graphics::kitty::FileMediaMode;
 
 use crate::theme::Theme;
 
@@ -73,6 +74,17 @@ fn parse_preset(s: &str) -> Result<(String, String), String> {
         return Err(format!("Preset '{}' command cannot be empty", name));
     }
     Ok((name, command))
+}
+
+/// Parse a Kitty file-media mode name (same vocabulary as the Python binding's
+/// `kitty_file_media` config: off | temp_only | all)
+fn parse_file_media(s: &str) -> Result<FileMediaMode, String> {
+    FileMediaMode::from_name(s).ok_or_else(|| {
+        format!(
+            "Invalid kitty file media '{}'. Expected off, temp_only, or all",
+            s
+        )
+    })
 }
 
 /// Command line arguments
@@ -277,9 +289,24 @@ pub struct Args {
     #[arg(long, default_value = "0", env = "PAR_TERM_MAX_CLIENTS_PER_SESSION")]
     pub max_clients_per_session: usize,
 
-    /// Input rate limit in bytes per second (0 = unlimited)
-    #[arg(long, default_value = "0", env = "PAR_TERM_INPUT_RATE_LIMIT")]
+    /// Input rate limit in bytes per second, per client connection (0 = unlimited)
+    ///
+    /// Default 1 MiB/s: well above human typing and normal pastes (the 256 KiB
+    /// paste cap clears in under a second) while bounding runaway clients
+    #[arg(long, default_value = "1048576", env = "PAR_TERM_INPUT_RATE_LIMIT")]
     pub input_rate_limit: usize,
+
+    /// Kitty graphics file media (t=f / t=t): off | temp_only | all
+    ///
+    /// Same vocabulary as StreamingConfig.kitty_file_media; the default
+    /// temp_only only loads kitty file transfers from temp directories
+    #[arg(
+        long,
+        default_value = "temp_only",
+        env = "PAR_TERM_KITTY_FILE_MEDIA",
+        value_parser = parse_file_media
+    )]
+    pub kitty_file_media: FileMediaMode,
 
     /// Enable system resource statistics collection (CPU, memory, disk, network)
     #[arg(long, env = "PAR_TERM_ENABLE_SYSTEM_STATS")]
@@ -288,4 +315,63 @@ pub struct Args {
     /// System stats collection interval in seconds
     #[arg(long, default_value = "5", env = "PAR_TERM_SYSTEM_STATS_INTERVAL")]
     pub system_stats_interval: u64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Args, clap::Error> {
+        Args::try_parse_from(std::iter::once("par-term-streamer").chain(args.iter().copied()))
+    }
+
+    #[test]
+    fn kitty_file_media_flag_parses_all_modes() {
+        assert!(matches!(
+            parse(&["--kitty-file-media", "off"])
+                .unwrap()
+                .kitty_file_media,
+            FileMediaMode::Off
+        ));
+        assert!(matches!(
+            parse(&["--kitty-file-media", "temp_only"])
+                .unwrap()
+                .kitty_file_media,
+            FileMediaMode::TempOnly
+        ));
+        assert!(matches!(
+            parse(&["--kitty-file-media", "all"])
+                .unwrap()
+                .kitty_file_media,
+            FileMediaMode::All
+        ));
+    }
+
+    #[test]
+    fn kitty_file_media_rejects_unknown_mode() {
+        assert!(parse(&["--kitty-file-media", "everything"]).is_err());
+    }
+
+    #[test]
+    fn kitty_file_media_defaults_to_temp_only() {
+        assert!(matches!(
+            parse(&[]).unwrap().kitty_file_media,
+            FileMediaMode::TempOnly
+        ));
+    }
+
+    #[test]
+    fn input_rate_limit_defaults_to_one_mib_per_sec() {
+        assert_eq!(parse(&[]).unwrap().input_rate_limit, 1_048_576);
+    }
+
+    #[test]
+    fn input_rate_limit_zero_still_selects_unlimited() {
+        assert_eq!(
+            parse(&["--input-rate-limit", "0"])
+                .unwrap()
+                .input_rate_limit,
+            0
+        );
+    }
 }
