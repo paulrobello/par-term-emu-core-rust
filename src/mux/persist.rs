@@ -2137,14 +2137,33 @@ mod tests {
         // Give the failed exec far longer than `sh` needs to die, requiring
         // the pane running throughout — pre-fix, poll_running() flips false
         // within the first poll and the daemon-side reaper would have
-        // persisted the pane's deletion by now.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        // persisted the pane's deletion by now. Poll for the fallback's
+        // marker instead of sleeping a fixed span: under a parallel test
+        // run's process-spawn load, the printf can take seconds to land
+        // (QA-133 measured 20/20 solo passes at the old fixed 3s, and a
+        // ~1-in-20 failure only under the parallel `mux::` filter). A
+        // marker that never arrives still fails below.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut text = String::new();
         loop {
             assert!(
                 restored.pane_mut(pane_id).unwrap().poll_running(),
                 "the pane must survive its failed resume"
             );
-            if std::time::Instant::now() >= deadline {
+            let snapshot = restored
+                .pane(pane_id)
+                .unwrap()
+                .terminal()
+                .read()
+                .capture_snapshot();
+            text.clear();
+            text.extend(snapshot.grid.scrollback_cells.iter().map(|c| c.c));
+            text.extend(snapshot.grid.cells.iter().map(|c| c.c));
+            if (text.contains("PRE-MARK-00")
+                && text.contains("PRE-MARK-39")
+                && text.contains("par-mux: agent resume failed"))
+                || std::time::Instant::now() >= deadline
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(250));
@@ -2153,14 +2172,6 @@ mod tests {
         // The restored history and the fallback's own trace are both still
         // readable (screen or scrollback — the shell's startup bytes may
         // have scrolled the markers up).
-        let snapshot = restored
-            .pane(pane_id)
-            .unwrap()
-            .terminal()
-            .read()
-            .capture_snapshot();
-        let mut text: String = snapshot.grid.scrollback_cells.iter().map(|c| c.c).collect();
-        text.extend(snapshot.grid.cells.iter().map(|c| c.c));
         assert!(
             text.contains("PRE-MARK-00") && text.contains("PRE-MARK-39"),
             "restored scrollback survived the failed resume"

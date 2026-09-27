@@ -569,8 +569,12 @@ mod tests {
 
     /// Restores `TMPDIR` and `XDG_RUNTIME_DIR` when dropped, so the env
     /// mutations of the legacy-probe test cannot leak into later tests even
-    /// on a panic. The mux suite runs under `--test-threads=1`, which makes
-    /// mutating process env safe here.
+    /// on a panic. Mutating process env is NOT thread-safe — tests run in
+    /// parallel under the `mux::` cargo filter — but the only readers at
+    /// risk are tempfile creations, and the sandbox they may land in is
+    /// never recursively deleted (see `keep` in the legacy test), so
+    /// a concurrent creation at worst leaks its file into that sandbox,
+    /// where its own guard still deletes it.
     struct EnvGuard {
         tmpdir: Option<std::ffi::OsString>,
         xdg: Option<std::ffi::OsString>,
@@ -602,6 +606,13 @@ mod tests {
         // second spawn it actually performed.
         let name = format!("lp-{}", std::process::id());
         let (dir, legacy) = temp_socket(&format!("par-mux-{name}.sock"));
+        // Take ownership without TempDir's recursive delete. While TMPDIR
+        // points at this sandbox, any concurrently running test that calls
+        // tempfile (env temp is process-global) lands its own files in
+        // here — a recursive drop deletes those too and fails that test
+        // (QA-133: the kitty t=t and persist flakes). Cleanup at the end
+        // is a non-recursive remove_dir instead.
+        let sandbox = dir.keep();
         // The new default path must land somewhere else inside this temp
         // dir root: point TMPDIR at it and keep XDG_RUNTIME_DIR out of the
         // way so the per-UID fallback applies.
@@ -609,7 +620,7 @@ mod tests {
             tmpdir: std::env::var_os("TMPDIR"),
             xdg: std::env::var_os("XDG_RUNTIME_DIR"),
         };
-        std::env::set_var("TMPDIR", dir.path());
+        std::env::set_var("TMPDIR", &sandbox);
         std::env::remove_var("XDG_RUNTIME_DIR");
 
         // The "legacy daemon": a listener on the pre-0.52 path. MuxClient
@@ -640,7 +651,11 @@ mod tests {
         drop(client);
         holder.join().expect("holder thread");
         drop(guard);
-        drop(dir);
+        // Non-recursive on purpose: a concurrent test's tempfile may still
+        // occupy the sandbox (see the into_path note above). ENOTEMPTY
+        // just leaves the empty-behind dir for the OS temp cleaner after
+        // that test's own guard deletes its file.
+        let _ = std::fs::remove_dir(&sandbox);
     }
 
     #[test]
