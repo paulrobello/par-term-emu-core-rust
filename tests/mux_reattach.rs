@@ -26,8 +26,13 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         // login shell finishes init, and an echo that contains the marker
         // satisfies the wait before any output exists (measured: the
         // marker containment passed on the echoed command line alone).
+        // cmd.exe has no tr; powershell lowercases instead.
+        #[cfg(unix)]
+        let marker_cmd = "echo PAR-MUX-RESYNC-MARKER | tr A-Z a-z";
+        #[cfg(windows)]
+        let marker_cmd = "powershell -NoProfile -Command \"'PAR-MUX-RESYNC-MARKER'.ToLower()\"";
         client
-            .send("send-keys -t %0 'echo PAR-MUX-RESYNC-MARKER | tr A-Z a-z' Enter")
+            .send(&format!("send-keys -t %0 '{marker_cmd}' Enter"))
             .expect("send-keys");
 
         let deadline = Instant::now() + Duration::from_secs(15);

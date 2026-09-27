@@ -109,11 +109,16 @@ fn window_and_session_commands_accept_name_targets() {
     // The session-name proof: pane %2 was spawned by the `-t alpha`
     // new-window, so it carries alpha's env — the shell echoes alpha's
     // value. A wrong session pick (or the name silently failing) never
-    // prints the marker.
+    // prints the marker. ($WHO on sh, %WHO% on cmd.exe — the typed echo
+    // shows the unexpanded form on both.)
+    #[cfg(unix)]
+    let echo_mark = "echo MARK-$WHO";
+    #[cfg(windows)]
+    let echo_mark = "echo MARK-%WHO%";
     command(
         &mut writer,
         &mut reader,
-        "send-keys -t %2 'echo MARK-$WHO' Enter",
+        &format!("send-keys -t %2 '{echo_mark}' Enter"),
     );
     let output = wait_for(
         &mut writer,

@@ -489,11 +489,14 @@ fn a_split_pane_pushes_its_output_to_clients() {
     );
 
     // Case-folded marker: the typed command's echo carries the uppercase
-    // form only, so only real output satisfies the wait.
+    // form only, so only real output satisfies the wait. cmd.exe has no tr;
+    // powershell lowercases instead.
+    #[cfg(unix)]
+    let marker_cmd = "echo SPLIT-OUT | tr A-Z a-z";
+    #[cfg(windows)]
+    let marker_cmd = "powershell -NoProfile -Command \"'SPLIT-OUT'.ToLower()\"";
     client
-        .send(&format!(
-            "send-keys -t {new_pane} 'echo SPLIT-OUT | tr A-Z a-z' Enter"
-        ))
+        .send(&format!("send-keys -t {new_pane} '{marker_cmd}' Enter"))
         .expect("send-keys");
     let deadline = Instant::now() + Duration::from_secs(15);
     let mut saw = false;
