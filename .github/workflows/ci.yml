@@ -269,3 +269,29 @@ jobs:
           exit 1
         fi
         echo "web_term/ is in sync with the frontend sources."
+
+  # ENH-019: every feature must build on its own, and heavy dependencies must
+  # stay out of the slim profiles (rust-only/sim/mux/streaming). Catches the
+  # ARC-043 class (screenshot = [] leaving swash unconditional) and the
+  # ARC-044 class (mux pulling binary-only clap) mechanically.
+  features:
+    name: Feature matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [version-check]
+    steps:
+    - uses: actions/checkout@v7
+
+    - name: Set up Python
+      uses: actions/setup-python@v7
+      with:
+        python-version: "3.14"
+
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-hack
+      run: cargo install cargo-hack --locked
+
+    - name: Run feature matrix and dependency assertions
+      run: make check-features

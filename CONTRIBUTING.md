@@ -52,6 +52,10 @@ make lint-python  # Python ruff format + check + pyright
 
 Do not push until `make checkall` passes cleanly. When fixing a failing test, confirm you are fixing the actual bug and not papering over a real issue in the code.
 
+### Feature matrix
+
+Any edit to `[features]` or the dependency lists in `Cargo.toml` gets an additional gate (ENH-019): `make check-features` builds every feature on its own (`cargo hack --each-feature`), checks the combinations that matter (`rust-only,mux`, `rust-only,streaming`, `streaming-bin`, `python-test`), and asserts that heavy dependencies stay out of the slim profiles — no `pyo3`/`tokio`/`clap` in `rust-only`, no `portable-pty`/`pyo3`/`tokio` in `sim`, no `tokio-tungstenite` in `mux`, no `clap`/`tracing-subscriber` in library `streaming`. It needs `cargo install cargo-hack --locked` locally and takes minutes, so it is not part of `make checkall`; the CI `features` job runs it on every dispatch.
+
 ## Benchmarks
 
 Criterion benchmarks for the VTE processing hot path live in `benches/terminal_throughput.rs`. They drive the real `Terminal::process` pipeline (vte parser, sequence dispatch, grid writes, scrolling, Sixel/Kitty graphics) and report throughput as MB/s.

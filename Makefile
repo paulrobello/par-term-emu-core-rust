@@ -1,6 +1,6 @@
 .PHONY: help build build-release build-streaming dev-streaming test test-rust test-rust-streaming test-python test-pty coverage coverage-html coverage-python clean install install-force dev fmt lint check \
         examples examples-basic examples-pty examples-streaming examples-all setup-venv watch \
-        typecheck clippy fmt-python lint-python checkall bench pre-commit-install pre-commit-uninstall \
+        typecheck clippy fmt-python lint-python checkall check-features bench pre-commit-install pre-commit-uninstall \
         pre-commit-run pre-commit-update deploy \
         proto-generate proto-rust proto-typescript proto-clean \
         web-install web-dev web-build web-build-static web-start web-clean web-open test-web \
@@ -50,6 +50,7 @@ help:
 	@echo "  stub-check      - Verify the module imports, the stub parses under pyright, and API_REFERENCE.md matches the stub"
 	@echo "  checkall        - Run ALL checks: tests, format, lint, typecheck (auto-fix all)"
 	@echo "  bench           - Run VTE throughput benchmarks (criterion, not part of checkall)"
+	@echo "  check-features  - Feature matrix + dependency-tree assertions (not part of checkall; needs cargo-hack)"
 	@echo ""
 	@echo "Pre-commit Hooks:"
 	@echo "  pre-commit-install   - Install pre-commit hooks"
@@ -311,6 +312,11 @@ stub-check:
 	uv run python scripts/check_api_reference.py
 
 checkall: test-rust test-rust-streaming lint lint-python stub-check test-python test-web
+
+# ENH-019: not part of checkall — the matrix takes minutes. Run after any
+# [features] or dependency edit in Cargo.toml.
+check-features:
+	bash scripts/check_features.sh
 
 bench:
 	@echo "Running VTE throughput benchmarks (criterion, ENH-007)..."
