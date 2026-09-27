@@ -157,12 +157,12 @@ impl TriggerEngine {
     }
 
     /// List all registered triggers
-    pub fn list_triggers<'a>(term: &'a Terminal) -> Vec<&'a Trigger> {
+    pub fn list_triggers(term: &Terminal) -> Vec<&Trigger> {
         term.triggers.trigger_registry.list()
     }
 
     /// Get a trigger by ID
-    pub fn get_trigger<'a>(term: &'a Terminal, id: TriggerId) -> Option<&'a Trigger> {
+    pub fn get_trigger(term: &Terminal, id: TriggerId) -> Option<&Trigger> {
         term.triggers.trigger_registry.get(id)
     }
 
