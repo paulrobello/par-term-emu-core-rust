@@ -222,9 +222,7 @@ python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session",
 python-test = ["pyo3", "pyo3/auto-initialize", "par-term-emu-derive", "pty_session", "screenshot"]
 
 # Terminal-to-image screenshot renderer (embedded fonts + swash/image deps).
-# Enabled by `python`/`full`. The `sim` profile keeps it enabled by default
-# today, but this gate dep-gates swash so a slim sim build CAN drop it —
-# flipping sim's default is a deliberate release-note item, not done silently
+# Enabled by `python`/`full`. The `sim` profile has excluded it since 0.54.0
 # (ARC-021 created the gate; ARC-043 made it actually gate the dep).
 screenshot = ["dep:swash"]
 
@@ -274,10 +272,9 @@ rust-only = []
 # Terminal and the screenshot renderer depend on them intrinsically.
 # Intentionally an empty feature list: `sim` enables nothing itself — it only
 # names the profile, and src/lib.rs rejects combining it with `python`.
-# It keeps `screenshot` on by default today (ARC-021 made that gate exist so
-# a future slim-sim release CAN drop it — flipping this is a release-note
-# item, not a silent change).
-sim = ["screenshot"]
+# Since 0.54.0 it no longer implies `screenshot` (ENH-024): embedders that
+# render images opt in with `features = ["sim", "screenshot"]`.
+sim = []
 full = ["python", "streaming", "streaming-bin"]
 
 # cargo-fuzz builds the library with `--cfg fuzzing` (the ENH-020 apc_filter

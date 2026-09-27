@@ -72,7 +72,8 @@ pub mod pty_session;
 #[cfg(any(feature = "python", feature = "python-test"))]
 pub mod python_bindings;
 // Gated so a slim sim build can drop the ~700KB embedded fonts + renderer
-// (ARC-021); python/full keep it on, and sim keeps it on by default today.
+// (ARC-021); python/full keep it on. `sim` no longer implies it (ENH-024) —
+// render-capable sim embedders add `features = ["sim", "screenshot"]`.
 #[cfg(feature = "screenshot")]
 pub mod screenshot;
 pub mod shell_integration;

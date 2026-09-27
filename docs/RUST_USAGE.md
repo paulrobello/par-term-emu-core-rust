@@ -123,9 +123,11 @@ par-term-emu-core-rust = { version = "0.50", features = ["full"] }
 cargo build --no-default-features --features pty_session
 ```
 
-**Headless, no PTY (grid + terminal + screenshot only):**
+**Headless, no PTY (grid + terminal only; screenshot rendering is opt-in since 0.54.0):**
 ```bash
 cargo build --no-default-features --features sim
+# render-capable embedders add screenshot:
+cargo build --no-default-features --features sim,screenshot
 ```
 
 **Rust with streaming:**
@@ -469,7 +471,7 @@ The server side (`MuxServer`), the full command table, hook-report JSON contract
 | `mux` | `par-mux` multiplexer daemon: PTYs, session tree, control-mode socket, on-disk persistence (Rust only; not part of the default build) | `pty_session`, `interprocess`, `widestring` (Windows only), `serde`, `dirs`, `toml` |
 | `serde` | Serde derives on the replay-snapshot types (`TerminalSnapshot`/`GridSnapshot` and their leaves) — the on-disk format for par-mux persistence | `smallvec/serde`, `bitflags/serde` |
 | `rust-only` | Pure Rust, no Python (empty convenience feature) | (none) |
-| `sim` | Headless profile: grid + terminal + screenshot only — no PTY, Python, or streaming. Cannot be combined with `python` | (none — names the profile only) |
+| `sim` | Headless profile: grid + terminal only — no PTY, Python, streaming, or screenshot (screenshot is opt-in since 0.54.0, ENH-024). Cannot be combined with `python` | (none — names the profile only) |
 | `full` | All features | `python`, `streaming`, `streaming-bin` |
 | `jemalloc` | Better server performance (non-Windows) | `tikv-jemallocator` |
 | `regenerate-proto` | Rebuild protobuf from `proto/terminal.proto` | `prost-build` |

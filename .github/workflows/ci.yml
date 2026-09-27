@@ -144,8 +144,8 @@ jobs:
       shell: bash
       # cargo tree resolves without linking, so the git-bash PATH is harmless.
       run: |
-        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum'; then
-          echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, or axum"
+        if cargo tree --no-default-features --features sim -e normal | grep -qE 'tokio|portable-pty|subtle|zeroize|prost|axum|swash'; then
+          echo "D1 violation: sim pulled tokio, portable-pty, subtle, zeroize, prost, axum, or swash"
           exit 1
         fi
 

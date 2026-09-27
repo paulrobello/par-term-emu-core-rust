@@ -59,10 +59,12 @@ else
     echo "  skip: rust-only still pulls swash (ARC-043 not landed)"
 fi
 
-# sim: headless profile — no PTY backend, no Python, no async runtime.
+# sim: headless profile — no PTY backend, no Python, no async runtime, and no
+# font-rendering stack (ENH-024: sim no longer implies screenshot).
 assert_absent sim portable-pty
 assert_absent sim pyo3
 assert_absent sim tokio
+assert_absent sim swash
 
 # mux: a daemon, not a WebSocket client — no streaming client stack.
 assert_absent rust-only,mux tokio-tungstenite
