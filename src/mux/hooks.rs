@@ -397,8 +397,8 @@ fn handle_session_report(
 /// Every metadata key that constitutes an agent claim, cleared as one unit
 /// by `pane.release_agent` and by the scrape tick's liveness sweep
 /// (`scrape.rs`) alike — roster label, state, hook authority, sequence
-/// stamps, session identity, the ephemeral telemetry blob, and the
-/// liveness miss counter the sweep keeps.
+/// stamps, session identity, the ephemeral telemetry blobs (hook- and
+/// host-probed), and the liveness miss counter the sweep keeps.
 pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent",
     "agent_state",
@@ -412,6 +412,7 @@ pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent_session_start_source",
     "agent_resume_argv",
     "agent_telemetry",
+    "agent_host_telemetry",
     "agent_liveness_misses",
     "agent_liveness_misses_agent",
 ];
@@ -470,7 +471,7 @@ const TELEMETRY_KEY: &str = "agent_telemetry";
 /// (55 min, par-remote-herd status_telemetry.py), mirrored so daemon and
 /// hub age data out at the same rate. Absent beats stale — a dropped
 /// sample leaves readers serving nothing rather than something expired.
-const TELEMETRY_FRESHNESS_MS: u64 = 55 * 60 * 1000;
+pub(crate) const TELEMETRY_FRESHNESS_MS: u64 = 55 * 60 * 1000;
 
 /// `pane.report_agent_telemetry`: versioned, bounded agent telemetry —
 /// model, effort, context and rate-limit percents — for roster display

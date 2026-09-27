@@ -347,9 +347,15 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             // Fresh telemetry rides as one final whitespace-free token
             // (base64 of the canonical JSON — string values carry
             // spaces). Stale or absent telemetry adds nothing, so a
-            // pane without it keeps the exact pre-telemetry row.
+            // pane without it keeps the exact pre-telemetry row. The
+            // host probe's sibling token follows the same rule, aged
+            // per field — and neither ever triggers a probe: the roster
+            // reads only what the cadence thread already wrote.
             if let Some(telemetry) = crate::mux::hooks::fresh_telemetry_b64(pane.metadata()) {
                 entry.push_str(&format!(" telemetry={telemetry}"));
+            }
+            if let Some(host) = crate::mux::host_probe::fresh_host_telemetry_b64(pane.metadata()) {
+                entry.push_str(&format!(" host_telemetry={host}"));
             }
             Some((p, entry))
         })

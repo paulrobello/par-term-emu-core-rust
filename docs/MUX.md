@@ -16,6 +16,7 @@ The daemon is feature-gated (Rust `mux` feature), optional, and independent of t
 - [Command Reference](#command-reference)
 - [Notifications](#notifications)
 - [Agent Hook Reports](#agent-hook-reports)
+- [Host Telemetry Probe](#host-telemetry-probe)
 - [Agent Scrape Tier](#agent-scrape-tier)
 - [Persistence and Restart](#persistence-and-restart)
 - [Pane Reaping](#pane-reaping)
@@ -201,7 +202,7 @@ Details worth knowing:
 - **Buffers** are a single slot named `default` — no numbered stack, and `-b` is not implemented.
 - **`kill-pane`** is refused for a window's last pane. A pane whose child process exits on its own (rather than via `kill-pane`) is instead reaped automatically — see [Pane Reaping](#pane-reaping) below.
 - **`kill-server`** raises the same shutdown flag SIGTERM does: the reply goes out, the accept loop notices on its next tick, `%exit` reaches every client, and the final state save runs before the process exits — see [Shutdown Semantics](#shutdown-semantics). Refused with an error for an embedded `MuxServer` that has no shutdown handle (`ctx.shutdown` is `None`). `par-mux --stop`/`--restart` send this command under the hood.
-- **`list-agents`** returns one line per pane a hook has claimed or a scrape pattern has matched, sorted by pane id: `%N <agent> <state> <source>` with `source` `hook` or `scrape`, plus the blocked reason as the rest of the line when the agent reported one, plus one final `telemetry=<base64>` token when the pane holds a **fresh** telemetry sample (base64 of the canonical JSON, so string values with spaces ride as one whitespace-free token). Stale or absent telemetry adds nothing — the row keeps its exact pre-telemetry shape — and the token leaves with the sample's age, no write needed. Panes without state are absent — `unknown` is never reported, and `idle` is never guessed.
+- **`list-agents`** returns one line per pane a hook has claimed or a scrape pattern has matched, sorted by pane id: `%N <agent> <state> <source>` with `source` `hook` or `scrape`, plus the blocked reason as the rest of the line when the agent reported one, plus one final `telemetry=<base64>` token when the pane holds a **fresh** telemetry sample (base64 of the canonical JSON, so string values with spaces ride as one whitespace-free token), plus a sibling `host_telemetry=<base64>` token when the daemon's host probe has fresh fields for the pane's cwd. Stale or absent telemetry adds nothing — the row keeps its exact pre-telemetry shape — and a token leaves with its sample's age, no write needed. Panes without state are absent — `unknown` is never reported, and `idle` is never guessed.
 - **Pane titles (`select-pane -T`)** set a user title on the pane; `-T ''` clears it (quoting is what makes an empty value expressible). Precedence is a deliberate divergence from tmux: a user title is **sticky** — the pane program's OSC 0/2 title never overwrites it — while with no user title the pane reports the program's live OSC title. The effective title (user when set, else OSC) is what `pane-title -t %N` replies — an empty reply body means neither is set; a broadcast carries only the *user* title's changes, so a client composing a display title falls back to its own OSC tracking on the empty form. Setting the same title again is a no-op and broadcasts nothing.
 
 ## Notifications
@@ -292,6 +293,12 @@ Four methods (`src/mux/hooks.rs`):
 - `pane.release_agent` is the agent's exit announcement (herdr's SessionEnd shape): it clears the pane's whole claim — label, state, hook authority, blocked reason, sequence stamps, session identity, and telemetry — broadcasts `%agent-released`, and thereby returns the pane to the roster-less majority (a later restart respawns the original command, not a resume invocation for a dead session). Guards: the releasing `agent` must match the pane's current label, and the report must clear the same per-source `seq` rule; a failing guard is a silent ok no-op, like a stale report.
 - Replies are one JSON line: `{"id":…,"result":"ok"}` or an error object.
 - Authorization is the socket's own owner-only boundary: a hook claiming another pane's id is same-user by construction — the same trust model tmux control mode has. There is no per-connection authentication beyond the socket.
+
+## Host Telemetry Probe
+
+What the daemon can measure about a rostered pane's cwd that no hook can (card 01a0e3f1205371619309073eb5f803d6): disk-free percent (`statvfs` on Unix; Windows serves nothing for it — a field that cannot be measured is absent, never zero) and git state (`symbolic-ref` for the branch, `diff-index` + `ls-files --others` for dirty; a failing repo serves no verdict, never "dirty"). The shapes mirror HerdDeck's hub probe (par-remote-herd `status_telemetry.py` `_probe_cwd`).
+
+A dedicated thread sweeps every 30 s (`src/mux/host_probe.rs`), whole-sweep deadline 10 s, one git deadline 5 s — never on the roster poll, so `list-agents` costs zero probe syscalls and reads only what the sweep already wrote (the invariant the hub keeps by snapshot cadence). Results land in pane metadata as one canonical object with per-field `sampled_at_unix_ms` and `source: "host-probe"`, served as the roster row's `host_telemetry=<base64>` sibling token, aged per field against the same 55-minute window as hook telemetry — a stopped sweep fades the token out field by field. Like hook telemetry it is display-only (never persisted) and clears with the claim. It broadcasts nothing: `%agent-telemetry-changed` stays the hook's signal, and host fields refresh on the roster poll's next read.
 
 ## Agent Scrape Tier
 
@@ -420,6 +427,7 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `src/mux/ids.rs` | `SessionId`/`WindowId`/`PaneId` (`$N`/`@N`/`%N`) and id allocation |
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
+| `src/mux/host_probe.rs` | The host telemetry probe: disk + git per pane cwd, its 30 s cadence thread, and per-field freshness serving |
 | `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.report_agent_telemetry`, `pane.release_agent` |
 | `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick, incl. the claim liveness sweep |
 | `src/mux/foreground.rs` | Process-table snapshot + descendant-tree liveness probe for hook claims (macOS `sysctl KERN_PROC_ALL` + `KERN_PROCARGS2` — libproc is ancestry-gated; Linux `/proc`; inert on Windows) |

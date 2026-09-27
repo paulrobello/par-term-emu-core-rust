@@ -237,6 +237,16 @@ impl MuxServer {
             None => (None, None),
         };
 
+        // Card 01a0e3f1205371619309073eb5f803d6: the host-probe sweep
+        // (disk + git per pane cwd) owns its own thread — its
+        // deadline-bounded git invocations must never stall the accept
+        // loop's idle poll or any roster query, which reads only what
+        // the sweep already wrote.
+        let probe_worker = crate::mux::host_probe::spawn_host_probe_worker(
+            Arc::clone(&self.tree),
+            Arc::clone(&self.shutdown),
+        );
+
         // The scrape tier rides this loop as its heartbeat: pattern
         // overrides live beside the state file when there is one, and the
         // idle poll doubles as the 1 s tick without a thread of its own to
@@ -350,6 +360,9 @@ impl MuxServer {
             if let Some(worker) = persist_worker {
                 let _ = worker.join();
             }
+            // Bounded by one 500 ms poll plus an in-flight sweep, itself
+            // capped by SWEEP_DEADLINE.
+            let _ = probe_worker.join();
         }
         // The socket file dies with the listener (on Windows, the marker
         // file does): remove it so `ls par-mux-*.sock` lists only live

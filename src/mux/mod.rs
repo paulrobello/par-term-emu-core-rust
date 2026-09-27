@@ -14,6 +14,7 @@ pub mod command;
 pub mod emit;
 pub(crate) mod foreground;
 pub mod hooks;
+pub(crate) mod host_probe;
 pub mod ids;
 pub mod ipc;
 pub mod layout;
