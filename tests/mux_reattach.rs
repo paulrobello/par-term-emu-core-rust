@@ -28,9 +28,10 @@ fn a_reconnecting_client_resyncs_the_pane_screen() {
         // marker containment passed on the echoed command line alone).
         // cmd.exe has no tr; powershell lowercases instead.
         #[cfg(unix)]
-        let marker_cmd = "echo PAR-MUX-RESYNC-MARKER | tr A-Z a-z";
+        let marker_cmd = "echo PAR-MUX-RESYNC-MARKER | tr A-Z a-z".to_string();
         #[cfg(windows)]
-        let marker_cmd = "powershell -NoProfile -Command \"'PAR-MUX-RESYNC-MARKER'.ToLower()\"";
+        let marker_cmd = r#"powershell -NoProfile -Command "'PAR-MUX-RESYNC-MARKER'.ToLower()"#
+            .replace('\'', r"'\''");
         client
             .send(&format!("send-keys -t %0 '{marker_cmd}' Enter"))
             .expect("send-keys");

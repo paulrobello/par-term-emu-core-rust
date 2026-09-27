@@ -492,9 +492,10 @@ fn a_split_pane_pushes_its_output_to_clients() {
     // form only, so only real output satisfies the wait. cmd.exe has no tr;
     // powershell lowercases instead.
     #[cfg(unix)]
-    let marker_cmd = "echo SPLIT-OUT | tr A-Z a-z";
+    let marker_cmd = "echo SPLIT-OUT | tr A-Z a-z".to_string();
     #[cfg(windows)]
-    let marker_cmd = "powershell -NoProfile -Command \"'SPLIT-OUT'.ToLower()\"";
+    let marker_cmd =
+        r#"powershell -NoProfile -Command "'SPLIT-OUT'.ToLower()"#.replace('\'', r"'\''");
     client
         .send(&format!("send-keys -t {new_pane} '{marker_cmd}' Enter"))
         .expect("send-keys");
