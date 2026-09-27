@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+from typing import cast
 
 import pytest
 from par_term_emu_core_rust import PtyTerminal, Terminal
@@ -316,7 +317,9 @@ class TestEmojiRendering:
         # Load image and check for colored pixels
         img = Image.open(io.BytesIO(png_bytes))
         img = img.convert("RGBA")
-        pixels = list(img.getdata())  # type: ignore[arg-type]
+        # Without `band`, get_flattened_data yields one tuple per pixel; the
+        # declared union's flat-float arm only applies to band-mode calls.
+        pixels = cast("list[tuple[int, ...]]", list(img.get_flattened_data()))
 
         # Count colored pixels (not grayscale)
         colored_pixels = sum(1 for r, g, b, a in pixels if r != g or g != b or r != b)
