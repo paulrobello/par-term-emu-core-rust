@@ -353,7 +353,10 @@ async def test_websocket_receive_output(streaming_server):
             decoded = decode_server_message(message)
             assert decoded["type"]
         except TimeoutError:
-            pytest.skip("No output received within timeout")
+            # The server sends the Connected frame unconditionally on accept
+            # (server.rs build_connect_message), so a silent 2s window means
+            # a real defect, not a race.
+            pytest.fail("No output received within 2s of connecting")
 
 
 @pytest.mark.asyncio

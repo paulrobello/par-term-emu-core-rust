@@ -102,15 +102,15 @@ jobs:
     # Do not remove the ignores without first proving they pass on runners.
     - name: Run Python tests (Linux)
       if: runner.os == 'Linux'
-      run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+      run: timeout 300 uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py --ignore=tests/test_pty_screenshot.py
 
     - name: Run Python tests (macOS)
       if: runner.os == 'macOS'
-      run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+      run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py --ignore=tests/test_pty_screenshot.py
 
     - name: Run Python tests (Windows)
       if: runner.os == 'Windows'
-      run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py
+      run: uv run pytest tests/ -v --timeout=5 --timeout-method=thread --ignore=tests/test_pty.py --ignore=tests/test_ioctl_size.py --ignore=tests/test_pty_resize_sigwinch.py --ignore=tests/test_nested_shell_resize.py --ignore=tests/test_pty_screenshot.py
 
   # Phase 1 exit criteria (par-mux.md): mux tests on all three platforms, and
   # the D1 isolation guarantee — `sim` must never pull tokio or portable-pty.

@@ -232,7 +232,7 @@ test-python: dev
 # point (the 5s default timeout races wait_for's own 5s budget).
 test-pty: dev
 	@echo "Running PTY tests..."
-	uv run pytest tests/test_pty.py tests/test_pty_resize_sigwinch.py tests/test_nested_shell_resize.py tests/test_ioctl_size.py -v --timeout=30
+	uv run pytest tests/test_pty.py tests/test_pty_resize_sigwinch.py tests/test_nested_shell_resize.py tests/test_ioctl_size.py tests/test_pty_screenshot.py -v --timeout=30
 
 coverage:
 	@echo "Running Rust coverage via cargo-llvm-cov (lib + integration tests, streaming feature)..."
