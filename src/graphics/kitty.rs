@@ -1087,11 +1087,14 @@ impl KittyParser {
         // 4. Open without following a final symlink (SEC-103) and validate
         //    the handle itself, so the file we read is the file we checked.
         let mut file = open_no_follow(path).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                GraphicsError::KittyError(format!("File not found: {}", path_str))
-            } else if path.is_dir() {
-                // Windows refuses to open directories outright.
+            // The directory check comes first: Windows fails opening a
+            // directory with ERROR_PATH_NOT_FOUND (io kind NotFound), so a
+            // kind-ordered check would report an existing directory as
+            // "File not found".
+            if path.is_dir() {
                 GraphicsError::KittyError(format!("Path is not a file: {}", path_str))
+            } else if e.kind() == std::io::ErrorKind::NotFound {
+                GraphicsError::KittyError(format!("File not found: {}", path_str))
             } else {
                 GraphicsError::KittyError(format!("Cannot open file: {}", e))
             }
