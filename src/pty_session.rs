@@ -3207,10 +3207,14 @@ mod tests {
         loop {
             let screen = session.with_terminal(|term| term.content());
             if screen.contains("LEAK=[") {
-                assert!(
-                    screen.contains("LEAK=[]"),
-                    "the outer pane's PAR_MUX_* leaked in: {screen}"
-                );
+                // sh expands an unset var to empty; cmd.exe echoes %VAR%
+                // literally — both shapes prove the drop. OWN=[42] expands
+                // on either shell and proves set_env survives it.
+                #[cfg(unix)]
+                let dropped = screen.contains("LEAK=[]");
+                #[cfg(windows)]
+                let dropped = screen.contains("LEAK=[%PAR_MUX_LEAK_PROBE%]");
+                assert!(dropped, "the outer pane's PAR_MUX_* leaked in: {screen}");
                 assert!(
                     screen.contains("OWN=[42]"),
                     "set_env values survive the drop: {screen}"
@@ -3267,24 +3271,37 @@ mod tests {
         loop {
             let screen = session.with_terminal(|term| term.content());
             if screen.contains("CC=[") {
-                assert!(screen.contains("CC=[]"), "CLAUDECODE leaked: {screen}");
+                // sh expands an unset var to empty ([]); cmd.exe echoes the
+                // literal %VAR% — both prove the drop. The opted-in OMPCODE
+                // expands to its value on either shell.
+                #[cfg(unix)]
+                let (cc, cs, ch, ct, cx) = ("CC=[]", "CS=[]", "CH=[]", "CT=[]", "CX=[]");
+                #[cfg(windows)]
+                let (cc, cs, ch, ct, cx) = (
+                    "CC=[%CLAUDECODE%]",
+                    "CS=[%CLAUDE_CODE_SESSION_ID%]",
+                    "CH=[%CLAUDE_CODE_CHILD_SESSION%]",
+                    "CT=[%CLAUDE_CODE_MESSAGING_TOKEN%]",
+                    "CX=[%CODEX_THREAD_ID%]",
+                );
+                assert!(screen.contains(cc), "CLAUDECODE leaked: {screen}");
                 assert!(
-                    screen.contains("CS=[]"),
+                    screen.contains(cs),
                     "CLAUDE_CODE_SESSION_ID leaked: {screen}"
                 );
                 assert!(
-                    screen.contains("CH=[]"),
+                    screen.contains(ch),
                     "CLAUDE_CODE_CHILD_SESSION leaked: {screen}"
                 );
                 assert!(
-                    screen.contains("CT=[]"),
+                    screen.contains(ct),
                     "CLAUDE_CODE_MESSAGING_TOKEN leaked: {screen}"
                 );
                 assert!(
                     screen.contains("OC=[1]"),
                     "set_env opt-back-in must survive the drop: {screen}"
                 );
-                assert!(screen.contains("CX=[]"), "CODEX_THREAD_ID leaked: {screen}");
+                assert!(screen.contains(cx), "CODEX_THREAD_ID leaked: {screen}");
                 break;
             }
             assert!(
