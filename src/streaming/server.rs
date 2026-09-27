@@ -359,6 +359,15 @@ impl StreamingServer {
     ) -> Self {
         let sessions = SessionRegistry::new(config.max_sessions);
 
+        // Apply the configured Kitty file-media gate to the caller-supplied
+        // terminal too (SEC-114, matching the session-factory path below):
+        // PTY output is untrusted input, so `t=t`/`t=f` APCs must not
+        // read/delete arbitrary files just because this constructor bypassed
+        // the factory.
+        terminal
+            .write()
+            .set_allow_file_media(config.kitty_file_media);
+
         // Create default session
         let default_session = Arc::new(StreamSessionState::new(
             "default".to_string(),

@@ -53,6 +53,22 @@ def test_get_default_shell():
     assert len(shell) > 0
 
 
+def test_kitty_file_media_gate_round_trip():
+    """PtyTerminal exposes the Kitty file-media gate (SEC-114) — no spawn needed"""
+    from par_term_emu_core_rust import PtyTerminal
+
+    term = PtyTerminal(80, 24)
+    assert term.get_allow_file_media() == "temp_only"
+    term.set_allow_file_media("all")
+    assert term.get_allow_file_media() == "all"
+    term.set_allow_file_media("off")
+    assert term.get_allow_file_media() == "off"
+    term.set_allow_file_media("temp_only")
+
+    with pytest.raises(ValueError):
+        term.set_allow_file_media("yes")
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="Unix-specific test")
 def test_spawn_simple_command_unix():
     """Test spawning a simple command that exits immediately (Unix)"""

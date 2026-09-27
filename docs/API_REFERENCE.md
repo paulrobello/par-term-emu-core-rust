@@ -1132,6 +1132,10 @@ PtyTerminal(cols: int, rows: int, scrollback: int = 10000)
 #### Keyboard Protocol (PTY-Specific)
 - `force_set_keyboard_flags(flags: int)`: Directly set the Kitty keyboard protocol flags on the underlying terminal (bypasses the CSI sequences that `set_keyboard_flags()` sends to the application). Useful for resetting a stuck keyboard protocol when an application fails to disable it on exit, e.g. `pty.force_set_keyboard_flags(0)`.
 
+#### Kitty File-Media Gate (PTY-Specific)
+- `set_allow_file_media(mode: str)`: Control whether Kitty graphics may load image payloads from filesystem paths (`t=f`/`t=t`) — `"off"`, `"temp_only"` (default), or `"all"`; raises `ValueError` otherwise. Available on both `Terminal` and `PtyTerminal` (SEC-114) — see the [Graphics Extended](#graphics-extended) entry for the full semantics
+- `get_allow_file_media() -> str`: Get the current Kitty file-media mode (`"off"`, `"temp_only"`, or `"all"`)
+
 #### I/O Operations
 - `write(data: bytes)`: Write bytes to the PTY
 - `write_str(s: str)`: Write string to the PTY (convenience method)

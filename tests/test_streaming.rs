@@ -539,6 +539,36 @@ mod streaming_tests {
         }
 
         #[test]
+        fn test_with_config_applies_kitty_file_media_to_caller_terminal() {
+            use par_term_emu_core_rust::graphics::kitty::FileMediaMode;
+            use par_term_emu_core_rust::streaming::StreamingServer;
+            use par_term_emu_core_rust::terminal::Terminal;
+            use parking_lot::RwLock;
+            use std::sync::Arc;
+
+            // SEC-114: with_config must enforce the configured gate on the
+            // caller-supplied terminal, not only on factory-created ones.
+            let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+            terminal.write().set_allow_file_media(FileMediaMode::All);
+
+            let config = StreamingConfig {
+                kitty_file_media: FileMediaMode::Off,
+                ..Default::default()
+            };
+            let _server = StreamingServer::with_config(
+                Arc::clone(&terminal),
+                "127.0.0.1:0".to_string(),
+                config,
+            );
+
+            assert_eq!(
+                terminal.read().allow_file_media(),
+                FileMediaMode::Off,
+                "with_config must apply kitty_file_media to the default session's terminal"
+            );
+        }
+
+        #[test]
         fn test_api_auth_config_not_configured() {
             let config = ApiAuthConfig {
                 api_key: None,
