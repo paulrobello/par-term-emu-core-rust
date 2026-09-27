@@ -22,6 +22,17 @@ use tokio::sync::{broadcast, mpsc};
 /// type, replacing its `#[allow(clippy::type_complexity)]`).
 type PtyWriterHandle = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 
+/// Message capacity of the per-session PTY input queue (QA-131).
+const INPUT_QUEUE_MESSAGES: usize = 256;
+/// Byte budget for the per-session PTY input queue (QA-131): the total
+/// size of chunks waiting to be written to the PTY. A child that never
+/// reads stdin makes the drain task stall, and past this budget further
+/// client input is dropped, counted in
+/// [`SessionMetrics::dropped_messages`], and logged once per second —
+/// keystrokes are lossy under this pressure by design; memory is not
+/// unbounded.
+const MAX_QUEUED_INPUT_BYTES: usize = 4 * 1024 * 1024;
+
 /// Get current time as epoch milliseconds
 pub(crate) fn now_millis() -> u64 {
     std::time::SystemTime::now()
@@ -81,12 +92,25 @@ pub struct StreamSessionState {
     /// Receiver end of the output channel (consumed by broadcaster loop)
     pub(crate) output_rx: Arc<tokio::sync::Mutex<mpsc::Receiver<String>>>,
     /// PTY writer for sending client input (optional, only set if PTY is available)
-    pub(crate) pty_writer: std::sync::RwLock<Option<PtyWriterHandle>>,
+    pub(crate) pty_writer: RwLock<Option<PtyWriterHandle>>,
     /// Serialized PTY input path (QA-110): every input-bearing client
     /// message enqueues bytes here; one blocking drain task (spawned on
     /// first use) owns all PTY writes, so channel order is byte order on
     /// the PTY. `None` until the first input after PTY attach.
-    pty_input_tx: std::sync::RwLock<Option<mpsc::UnboundedSender<Vec<u8>>>>,
+    ///
+    /// Bounded (QA-131): the channel caps queued messages and
+    /// [`Self::queued_input_bytes`] caps their total size, so a client
+    /// feeding a child that never reads stdin drops input instead of
+    /// growing session memory without limit.
+    pty_input_tx: RwLock<Option<mpsc::Sender<Vec<u8>>>>,
+    /// Bytes currently sitting in the PTY input queue (QA-131). Counted up
+    /// by [`Self::enqueue_pty_input`], down by the drain task as it takes
+    /// each chunk; approximate under concurrent producers.
+    queued_input_bytes: AtomicUsize,
+    /// Last `debug_error!` about a dropped PTY input chunk, epoch millis —
+    /// drops are logged at most once per second so a sustained overflow
+    /// cannot flood the log.
+    last_input_drop_log_ms: AtomicU64,
     /// Channel for sending resize requests
     pub(crate) resize_tx: mpsc::UnboundedSender<(u16, u16)>,
     /// Receiver for resize requests
@@ -130,8 +154,10 @@ impl StreamSessionState {
             broadcast_tx,
             output_tx,
             output_rx: Arc::new(tokio::sync::Mutex::new(output_rx)),
-            pty_writer: std::sync::RwLock::new(None),
-            pty_input_tx: std::sync::RwLock::new(None),
+            pty_writer: RwLock::new(None),
+            pty_input_tx: RwLock::new(None),
+            queued_input_bytes: AtomicUsize::new(0),
+            last_input_drop_log_ms: AtomicU64::new(0),
             resize_tx,
             resize_rx: Arc::new(tokio::sync::Mutex::new(resize_rx)),
             client_count: AtomicUsize::new(0),
@@ -305,9 +331,7 @@ impl StreamSessionState {
 
     /// Set the PTY writer for handling client input
     pub fn set_pty_writer(&self, writer: PtyWriterHandle) {
-        if let Ok(mut guard) = self.pty_writer.write() {
-            *guard = Some(writer);
-        }
+        *self.pty_writer.write() = Some(writer);
     }
 
     /// Enqueue client input bytes for the session's PTY (QA-110).
@@ -326,10 +350,19 @@ impl StreamSessionState {
     /// this state: when the session is dropped its sender drops too, the
     /// channel closes, and the task exits instead of leaking a blocking
     /// thread per session.
+    ///
+    /// Bounded (QA-131): the channel holds at most
+    /// [`INPUT_QUEUE_MESSAGES`] chunks totaling at most
+    /// [`MAX_QUEUED_INPUT_BYTES`] bytes. A child that never reads stdin
+    /// stalls the drain task inside `write_all`; past the bounds the input
+    /// is dropped here — counted in
+    /// [`SessionMetrics::dropped_messages`] and logged at most once per
+    /// second — instead of growing session memory without limit. Ordering
+    /// of what survives is preserved either way.
     pub(crate) fn enqueue_pty_input(self: &Arc<Self>, bytes: Vec<u8>) {
         // Fast path: the drain task is up, hand it the bytes.
-        if let Some(tx) = self.pty_input_tx.read().ok().and_then(|g| g.clone()) {
-            let _ = tx.send(bytes);
+        if let Some(tx) = self.pty_input_tx.read().as_ref().cloned() {
+            self.try_enqueue_pty_input(&tx, bytes);
             return;
         }
 
@@ -337,18 +370,20 @@ impl StreamSessionState {
         // task. The write lock makes create-once race-safe; the send runs
         // under it so no input is lost between the empty check and the
         // store.
-        if let Ok(mut guard) = self.pty_input_tx.write() {
-            if guard.is_none() {
-                let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-                let weak = Arc::downgrade(self);
-                tokio::task::spawn_blocking(move || {
-                    use std::io::Write;
-                    while let Some(bytes) = rx.blocking_recv() {
-                        let Some(session) = weak.upgrade() else {
-                            // Session gone; nothing left to write for.
-                            break;
-                        };
-                        let writer = session.pty_writer.read().ok().and_then(|g| g.clone());
+        let mut guard = self.pty_input_tx.write();
+        if guard.is_none() {
+            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
+            let weak = Arc::downgrade(self);
+            tokio::task::spawn_blocking(move || {
+                use std::io::Write;
+                while let Some(bytes) = rx.blocking_recv() {
+                    // Off the queue: release the budget whether this chunk
+                    // is written or not.
+                    if let Some(session) = weak.upgrade() {
+                        session
+                            .queued_input_bytes
+                            .fetch_sub(bytes.len(), Ordering::Relaxed);
+                        let writer = session.pty_writer.read().as_ref().cloned();
                         if let Some(w) = writer {
                             let mut w = w.lock();
                             if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
@@ -360,14 +395,86 @@ impl StreamSessionState {
                                 );
                                 session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                             }
+                        } else {
+                            // PTY detached between enqueue and drain; the
+                            // bytes have nowhere to go (previously a silent
+                            // skip).
+                            session
+                                .metrics
+                                .dropped_messages
+                                .fetch_add(1, Ordering::Relaxed);
+                            crate::debug_error!(
+                                "STREAMING",
+                                "PTY input dropped (no PTY writer) for session {}: {} bytes",
+                                session.id,
+                                bytes.len()
+                            );
                         }
+                    } else {
+                        // Session gone; nothing left to write for.
+                        break;
                     }
-                });
-                *guard = Some(tx);
+                }
+            });
+            *guard = Some(tx);
+        }
+        if let Some(tx) = guard.as_ref() {
+            self.try_enqueue_pty_input(tx, bytes);
+        }
+    }
+
+    /// Enqueue one chunk under the QA-131 bounds, dropping and counting on
+    /// overflow instead of blocking or growing.
+    fn try_enqueue_pty_input(&self, tx: &mpsc::Sender<Vec<u8>>, bytes: Vec<u8>) {
+        let len = bytes.len();
+        if self.queued_input_bytes.load(Ordering::Relaxed) + len > MAX_QUEUED_INPUT_BYTES {
+            self.note_dropped_input(len, "over the byte budget");
+            return;
+        }
+        self.queued_input_bytes.fetch_add(len, Ordering::Relaxed);
+        match tx.try_send(bytes) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
+                self.note_dropped_input(len, "queue full");
             }
-            if let Some(tx) = guard.as_ref() {
-                let _ = tx.send(bytes);
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
+                // The drain task is gone (session dropped): the write side
+                // closing is an error condition, not backpressure.
+                self.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                crate::debug_error!(
+                    "STREAMING",
+                    "PTY input queue closed for session {}; dropping {} bytes",
+                    self.id,
+                    len
+                );
             }
+        }
+    }
+
+    /// Count a dropped input chunk in metrics and log it, at most once per
+    /// second so sustained overflow cannot flood the log.
+    fn note_dropped_input(&self, len: usize, why: &str) {
+        self.metrics
+            .dropped_messages
+            .fetch_add(1, Ordering::Relaxed);
+        let now = now_millis();
+        let last = self.last_input_drop_log_ms.load(Ordering::Relaxed);
+        if now.saturating_sub(last) >= 1000
+            && self
+                .last_input_drop_log_ms
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            crate::debug_error!(
+                "STREAMING",
+                "PTY input for session {} dropped ({}): {} bytes; total dropped messages now {}",
+                self.id,
+                why,
+                len,
+                self.metrics.dropped_messages.load(Ordering::Relaxed)
+            );
         }
     }
 
@@ -662,6 +769,60 @@ mod tests {
 
         // Should be idle with zero timeout
         assert!(session.is_idle(Duration::from_secs(0)));
+    }
+
+    #[tokio::test]
+    async fn pty_input_queue_is_bounded_against_a_stalled_writer() {
+        /// A writer that blocks mid-write until the gate receiver is
+        /// dropped: the bounded `sync_channel` fills on the first byte and
+        /// every later `send` parks. That is the "child never reads stdin"
+        /// stall the byte budget exists for.
+        struct StalledWriter(std::sync::mpsc::SyncSender<u8>);
+        impl std::io::Write for StalledWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                for byte in buf {
+                    self.0.send(*byte).map_err(std::io::Error::other)?;
+                }
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = Arc::new(StreamSessionState::new(
+            "stall".to_string(),
+            terminal,
+            None,
+            true,
+        ));
+        let (gate_tx, gate_rx) = std::sync::mpsc::sync_channel::<u8>(1);
+        session.set_pty_writer(Arc::new(Mutex::new(Box::new(StalledWriter(gate_tx)))));
+
+        // 10 MiB of input in 64 KiB chunks against a drain task that
+        // stalls inside the first write: the queue must stay inside its
+        // byte budget and the overflow must be counted, not absorbed.
+        let chunk = vec![b'x'; 64 * 1024];
+        for _ in 0..160 {
+            session.enqueue_pty_input(chunk.clone());
+        }
+        assert!(
+            session.queued_input_bytes.load(Ordering::Relaxed) <= MAX_QUEUED_INPUT_BYTES,
+            "queued bytes {} must stay under the {} byte budget",
+            session.queued_input_bytes.load(Ordering::Relaxed),
+            MAX_QUEUED_INPUT_BYTES
+        );
+        assert!(
+            session.metrics.dropped_messages.load(Ordering::Relaxed) > 0,
+            "input past the budget must be dropped and counted"
+        );
+
+        // Release the stalled writer so the drain task can drain what
+        // remains and exit with the session instead of parking a blocking
+        // thread past the end of the test.
+        drop(gate_rx);
+        session.enqueue_pty_input(b"tail".to_vec());
     }
     #[tokio::test]
     async fn test_session_registry_basic() {

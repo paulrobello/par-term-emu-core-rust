@@ -1362,11 +1362,7 @@ impl StreamingServer {
     /// process has exited never mutates the terminal (e.g. mouse click
     /// tracking) or counts bytes for a PTY nobody will read.
     fn session_has_writer(session: &Arc<StreamSessionState>) -> bool {
-        session
-            .pty_writer
-            .read()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
+        session.pty_writer.read().is_some()
     }
 
     /// The one client→PTY write path (QA-110), shared by every

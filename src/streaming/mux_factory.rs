@@ -576,8 +576,8 @@ mod tests {
         let writer = session
             .pty_writer
             .read()
-            .expect("pty_writer lock")
-            .clone()
+            .as_ref()
+            .cloned()
             .expect("a mux-backed session accepts input");
         let mut w = writer.lock();
         w.write_all(line.as_bytes()).expect("input write");
@@ -690,8 +690,8 @@ mod tests {
         let writer = session
             .pty_writer
             .read()
-            .expect("pty_writer lock")
-            .clone()
+            .as_ref()
+            .cloned()
             .expect("input path");
         {
             let mut w = writer.lock();
