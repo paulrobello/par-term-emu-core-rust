@@ -383,6 +383,20 @@ fn echo_var(socket: &Path, pane: &str, tag: &str, var: &str) {
     cmd_ok(socket, &format!("send-keys -t {pane} Enter"));
 }
 
+/// What [`echo_var`] prints for a var the pane does NOT have: sh expands an
+/// unset var to empty; cmd.exe echoes the literal `%VAR%` (QA-147 family).
+fn absent_line(tag: &str, var: &str) -> String {
+    #[cfg(unix)]
+    {
+        let _ = var;
+        format!("{tag}=[]")
+    }
+    #[cfg(windows)]
+    {
+        format!("{tag}=[%{var}%]")
+    }
+}
+
 /// tmux `set-environment` semantics: a pane created after the call sees the
 /// session value, a pane created before does not, and `new-session -e`
 /// seeds the first pane.
@@ -409,7 +423,7 @@ fn session_environment_reaches_new_panes_only() {
     echo_var(socket, &before, "SEED", "SEEDED");
     wait_line(socket, &before, "SEED=[from -e]");
     echo_var(socket, &before, "OLD", "PMX_LATE");
-    wait_line(socket, &before, "OLD=[]");
+    wait_line(socket, &before, &absent_line("OLD", "PMX_LATE"));
     echo_var(socket, after, "NEW", "PMX_LATE");
     wait_line(socket, after, "NEW=[late value]");
 
@@ -417,7 +431,7 @@ fn session_environment_reaches_new_panes_only() {
     let unset = cmd_ok(socket, &format!("split-window -t {after}"));
     let unset = unset.trim();
     echo_var(socket, unset, "GONE", "PMX_LATE");
-    wait_line(socket, unset, "GONE=[]");
+    wait_line(socket, unset, &absent_line("GONE", "PMX_LATE"));
 
     let bad = cmd(socket, "set-environment -t $99 X y");
     assert_eq!(bad.code, Some(1), "unknown session is an error");
