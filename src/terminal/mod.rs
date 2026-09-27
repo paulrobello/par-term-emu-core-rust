@@ -2698,7 +2698,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use screenshot::render_terminal (free function); this forwarding method will be removed in a future release"
+        note = "use screenshot::render_terminal (free function); this forwarding method will be removed in 0.55.0"
     )]
     pub fn screenshot(
         &self,
@@ -2713,7 +2713,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use screenshot::save_terminal (free function); this forwarding method will be removed in a future release"
+        note = "use screenshot::save_terminal (free function); this forwarding method will be removed in 0.55.0"
     )]
     pub fn screenshot_to_file(
         &self,

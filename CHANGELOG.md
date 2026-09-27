@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **`PtyTerminal` is documented as what it is: not a `Terminal` subclass** (audit DOC-040). The reference claimed it "inherits all Terminal methods"; at runtime 222 of `Terminal`'s 386 public methods have no `PtyTerminal` counterpart. The false claims are replaced with a generated Method Availability section (full list from `_native.pyi`), and SECURITY.md's Kitty section now names the `PtyTerminal` way to set the file-media mode.
 
+### Changed
+- **Macro and trigger logic moves off the `Terminal` god object onto services** (ARC-039; `src/terminal/macros.rs`, `src/terminal/trigger.rs`; follows the `TerminalBenchmarks` pattern from ARC-021 phase 1). The macro library/playback state machine (16 methods) and the trigger scan/action lifecycle (13 public methods) are now stateless services operating on a borrowed `Terminal`: `terminal::MacroEngine` and `terminal::TriggerEngine`. `Terminal` keeps `#[doc(hidden)]` deprecated forwarding methods so existing Rust callers compile; the Python bindings, the PTY reader path, and the integration tests call the services directly, and parity tests pin each forwarder to its service's output. The Python surface is unchanged (verified by `make stub-check`). par-term call sites checked before the move: zero.
+
+### Deprecated
+- `Terminal::screenshot`/`screenshot_to_file` and `Terminal::benchmark_rendering`/`benchmark_parsing`/`benchmark_grid_ops`/`run_benchmark_suite` — deprecated since 0.53.0; their removal is now pinned to **0.55.0**. Use `screenshot::render_terminal`/`save_terminal` and `terminal::TerminalBenchmarks`.
+- The 16 `Terminal` macro forwarding methods (`load_macro`, `get_macro`, `remove_macro`, `list_macros`, `play_macro`, `stop_macro`, `pause_macro`, `resume_macro`, `set_macro_speed`, `is_macro_playing`, `is_macro_paused`, `get_macro_progress`, `get_current_macro_name`, `tick_macro`, `get_macro_screenshot_triggers`, `recording_to_macro`) — use `terminal::MacroEngine`; removed in 0.56.0.
+- The 13 `Terminal` trigger forwarding methods (`add_trigger`, `remove_trigger`, `set_trigger_enabled`, `list_triggers`, `get_trigger`, `poll_trigger_matches`, `process_trigger_scans`, `get_trigger_highlights`, `clear_trigger_highlights`, `clear_expired_highlights`, `poll_action_results`, `trigger_registry`, `trigger_registry_mut`) — use `terminal::TriggerEngine`; removed in 0.56.0.
+
 ## [0.53.0] - 2026-09-26
 
 ### Security

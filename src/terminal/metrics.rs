@@ -289,7 +289,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_rendering; this forwarding method will be removed in a future release"
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_rendering; this forwarding method will be removed in 0.55.0"
     )]
     pub fn benchmark_rendering(&mut self, iterations: u64) -> BenchmarkResult {
         crate::terminal::benchmarks::TerminalBenchmarks::benchmark_rendering(self, iterations)
@@ -299,7 +299,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_parsing; this forwarding method will be removed in a future release"
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_parsing; this forwarding method will be removed in 0.55.0"
     )]
     pub fn benchmark_parsing(&mut self, text: &str, iterations: u64) -> BenchmarkResult {
         crate::terminal::benchmarks::TerminalBenchmarks::benchmark_parsing(self, text, iterations)
@@ -309,7 +309,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops; this forwarding method will be removed in a future release"
+        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops; this forwarding method will be removed in 0.55.0"
     )]
     pub fn benchmark_grid_ops(&mut self, iterations: u64) -> BenchmarkResult {
         crate::terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops(self, iterations)
@@ -319,7 +319,7 @@ impl Terminal {
     #[doc(hidden)]
     #[deprecated(
         since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite; this forwarding method will be removed in a future release"
+        note = "use terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite; this forwarding method will be removed in 0.55.0"
     )]
     pub fn run_benchmark_suite(&mut self, suite_name: String) -> BenchmarkSuite {
         crate::terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite(self, suite_name)
