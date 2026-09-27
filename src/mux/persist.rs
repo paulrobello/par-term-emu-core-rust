@@ -1800,11 +1800,16 @@ mod tests {
                 "agent_resume_argv",
                 r#"["pi","--session","/tmp/pi-session.jsonl"]"#,
             ),
-            // Keys that must NOT travel: state-shaped and provenance-of-start.
+            // Keys that must NOT travel: state-shaped, provenance-of-start,
+            // and display-only telemetry.
             ("agent_state", "working"),
             ("agent_state_source", "hook"),
             ("agent_seq", "1000"),
             ("agent_session_start_source", "startup"),
+            (
+                "agent_telemetry",
+                r#"{"version":1,"source":"claude_code","sampled_at_unix_ms":1}"#,
+            ),
         ])
     }
 
@@ -1934,6 +1939,10 @@ mod tests {
         assert!(
             !pane.metadata().contains_key("agent_session_start_source"),
             "start source describes the PREVIOUS process's start — stale after a restart"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_telemetry"),
+            "telemetry is display-only and ephemeral — a restored pane serves absent, never a stale sample"
         );
     }
 

@@ -4,8 +4,10 @@
 //! the control socket, send ONE JSON line — `{"id":…,"method":…,
 //! "params":{…}}` — read one reply, and close. par-mux accepts herdr's two
 //! methods verbatim (`pane.report_agent`, `pane.report_agent_session`) so
-//! those scripts port with an env-var rename (`HERDR_*` → `PAR_MUX_*`); the
-//! server's client loop routes every line
+//! those scripts port with an env-var rename (`HERDR_*` → `PAR_MUX_*`), plus
+//! `pane.report_agent_telemetry` (display-only telemetry) and
+//! `pane.release_agent` (claim teardown); the server's client loop routes
+//! every line
 //! [`parse_line`](crate::mux::command::parse_line) classifies as a hook
 //! report here, and anything else remains a tmux control command.
 //!
@@ -27,6 +29,7 @@ use crate::tmux_control::TmuxNotification;
 use parking_lot::Mutex;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Dispatch one hook-report line.
 ///
@@ -53,6 +56,7 @@ pub fn handle_report(line: &str, tree: &Arc<Mutex<MuxTree>>) -> (String, Option<
     match method {
         "pane.report_agent" => handle_state_report(id, params, tree),
         "pane.report_agent_session" => handle_session_report(id, params, tree),
+        "pane.report_agent_telemetry" => handle_telemetry_report(id, params, tree),
         "pane.release_agent" => handle_release_report(id, params, tree),
         other => (error_reply(id, &format!("unknown method: {other}")), None),
     }
@@ -392,7 +396,8 @@ fn handle_session_report(
 /// Every metadata key that constitutes an agent claim, cleared as one unit
 /// by `pane.release_agent` and by the scrape tick's liveness sweep
 /// (`scrape.rs`) alike — roster label, state, hook authority, sequence
-/// stamps, session identity, and the liveness miss counter the sweep keeps.
+/// stamps, session identity, the ephemeral telemetry blob, and the
+/// liveness miss counter the sweep keeps.
 pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent",
     "agent_state",
@@ -405,6 +410,7 @@ pub(crate) const AGENT_CLAIM_KEYS: &[&str] = &[
     "agent_session_path",
     "agent_session_start_source",
     "agent_resume_argv",
+    "agent_telemetry",
     "agent_liveness_misses",
     "agent_liveness_misses_agent",
 ];
@@ -451,6 +457,288 @@ fn handle_release_report(
         })
     };
     (ok_reply(id), notification)
+}
+
+/// The metadata key holding the pane's accepted telemetry as one canonical
+/// JSON object (the validated v1 shape below) — display-only, so the
+/// persistence format's named-key capture never copies it.
+const TELEMETRY_KEY: &str = "agent_telemetry";
+
+/// How old a telemetry sample may be, in milliseconds of wall clock,
+/// before the endpoint drops it: the hub's `STATUSLINE_FRESHNESS_SECONDS`
+/// (55 min, par-remote-herd status_telemetry.py), mirrored so daemon and
+/// hub age data out at the same rate. Absent beats stale — a dropped
+/// sample leaves readers serving nothing rather than something expired.
+const TELEMETRY_FRESHNESS_MS: u64 = 55 * 60 * 1000;
+
+/// `pane.report_agent_telemetry`: versioned, bounded agent telemetry —
+/// model, effort, context and rate-limit percents — for roster display
+/// (card 01a0e3f11c367e62873a8ada8833e6f8, the iOS client's HerdDeck
+/// parity enabler). The producer is a hook tailing the agent harness's
+/// own status file; par-mux never parses transcripts. The object's shape
+/// mirrors the hub's normalized telemetry (`_normalize_claude_record`):
+/// `version` (currently 1), the data `source` that distinguishes
+/// hook-reported from daemon-probed, `sampled_at_unix_ms`, and optional
+/// bounded fields — strings capped (`model` 128, `effort` 32), percents
+/// 0-100 rounded, no control characters.
+///
+/// Like every report it carries the common header and clears the
+/// per-source `seq` rule. Four silent drops, no write and no broadcast
+/// (the roster query owns serving; a notification lands with it, card
+/// 01a0e3f11e287f038dadcf332a1af961): a sample past the freshness window,
+/// a report at or below the last accepted `seq`, a sample older than
+/// the one already stored (a backward step, whatever its `seq`), and a
+/// report whose agent is not the pane's current label (telemetry attaches
+/// to a claim; it never takes one over).
+fn handle_telemetry_report(
+    id: Option<serde_json::Value>,
+    params: &serde_json::Value,
+    tree: &Arc<Mutex<MuxTree>>,
+) -> (String, Option<TmuxNotification>) {
+    let header = match parse_header(params) {
+        Ok(header) => header,
+        Err(message) => return (error_reply(id, &message), None),
+    };
+    let (telemetry, sampled_at) = match parse_telemetry_object(params) {
+        Ok(parsed) => parsed,
+        Err(message) => return (error_reply(id, &message), None),
+    };
+
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(u64::MAX);
+
+    let mut guard = tree.lock();
+    let Some(pane) = guard.pane_mut(header.pane_id) else {
+        return (
+            error_reply(id, &format!("no such pane: {}", header.pane_id)),
+            None,
+        );
+    };
+    if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
+        return (ok_reply(id), None);
+    }
+    if now_ms.saturating_sub(sampled_at) > TELEMETRY_FRESHNESS_MS {
+        return (ok_reply(id), None);
+    }
+    if stored_telemetry_sampled_at(pane.metadata()).is_some_and(|stored| sampled_at < stored) {
+        return (ok_reply(id), None);
+    }
+    // Telemetry attaches to a claim; it never takes one over. A pane
+    // already labeled for a DIFFERENT agent keeps that label and its
+    // telemetry — the release guard's rule, so a stale hook from a
+    // previous agent cannot mislabel a live claim's roster row.
+    if pane
+        .metadata()
+        .get("agent")
+        .map(String::as_str)
+        .is_some_and(|label| label != header.agent)
+    {
+        return (ok_reply(id), None);
+    }
+
+    // The telemetry's own label rides an unclaimed pane like a session
+    // report's would; state itself is never touched — telemetry alone
+    // never puts a pane on the roster.
+    pane.set_metadata("agent", &header.agent);
+    record_seq(pane, header.source.as_deref(), header.seq);
+    if let Some(source) = &header.source {
+        pane.set_metadata("agent_source", source);
+    }
+    pane.set_metadata(TELEMETRY_KEY, &telemetry);
+    (ok_reply(id), None)
+}
+
+/// Validate the `telemetry` object into its canonical stored form — the
+/// same fields re-serialized from validated values, so nothing unbounded
+/// or unknown reaches pane metadata. Mirrors the hub normalizer's bounds:
+/// `model` ≤ 128 chars, `effort` ≤ 32, percents finite 0-100 rounded,
+/// strings trimmed, non-empty, control-character-free.
+fn parse_telemetry_object(params: &serde_json::Value) -> Result<(String, u64), String> {
+    let object = match params.get("telemetry") {
+        Some(value) => value
+            .as_object()
+            .ok_or_else(|| "telemetry must be an object".to_string())?,
+        None => return Err("missing telemetry".to_string()),
+    };
+
+    let version = match object.get("version") {
+        Some(value) => value
+            .as_u64()
+            .ok_or_else(|| "telemetry version must be a non-negative integer".to_string())?,
+        None => return Err("telemetry missing version".to_string()),
+    };
+    if version != 1 {
+        return Err(format!(
+            "unsupported telemetry version: {version} (expected 1)"
+        ));
+    }
+
+    let source = match object.get("source") {
+        Some(value) => value
+            .as_str()
+            .ok_or_else(|| "telemetry source must be a string".to_string())?,
+        None => return Err("telemetry missing source".to_string()),
+    };
+    let source = source.trim();
+    if source.is_empty() {
+        return Err("telemetry source must not be empty".to_string());
+    }
+    if source.chars().any(char::is_control) {
+        return Err("telemetry source must not contain control characters".to_string());
+    }
+    check_value_len("telemetry source", source)?;
+
+    let sampled_at = match object.get("sampled_at_unix_ms") {
+        Some(value) => value.as_u64().ok_or_else(|| {
+            "telemetry sampled_at_unix_ms must be a non-negative integer".to_string()
+        })?,
+        None => return Err("telemetry missing sampled_at_unix_ms".to_string()),
+    };
+
+    let model = bounded_string(object, "model", 128)?;
+    let effort = bounded_string(object, "effort", 32)?;
+    let thinking_enabled = match object.get("thinking_enabled") {
+        Some(value) => Some(
+            value
+                .as_bool()
+                .ok_or_else(|| "telemetry thinking_enabled must be a boolean".to_string())?,
+        ),
+        None => None,
+    };
+    let context_used = parse_percent(object, "context_used_percent")?;
+    let context_remaining = parse_percent(object, "context_remaining_percent")?;
+    let five_hour_remaining = parse_percent(object, "five_hour_remaining_percent")?;
+    let seven_day_remaining = parse_percent(object, "seven_day_remaining_percent")?;
+    let five_hour_resets = unix_ms_field(object, "five_hour_resets_at_unix_ms")?;
+    let seven_day_resets = unix_ms_field(object, "seven_day_resets_at_unix_ms")?;
+
+    let mut validated = serde_json::Map::new();
+    validated.insert("version".to_string(), serde_json::Value::from(1));
+    validated.insert(
+        "source".to_string(),
+        serde_json::Value::String(source.to_string()),
+    );
+    validated.insert(
+        "sampled_at_unix_ms".to_string(),
+        serde_json::Value::from(sampled_at),
+    );
+    if let Some(model) = model {
+        validated.insert("model".to_string(), serde_json::Value::String(model));
+    }
+    if let Some(effort) = effort {
+        validated.insert("effort".to_string(), serde_json::Value::String(effort));
+    }
+    if let Some(thinking_enabled) = thinking_enabled {
+        validated.insert(
+            "thinking_enabled".to_string(),
+            serde_json::Value::Bool(thinking_enabled),
+        );
+    }
+    for (field, percent) in [
+        ("context_used_percent", context_used),
+        ("context_remaining_percent", context_remaining),
+        ("five_hour_remaining_percent", five_hour_remaining),
+        ("seven_day_remaining_percent", seven_day_remaining),
+    ] {
+        if let Some(percent) = percent {
+            validated.insert(field.to_string(), serde_json::Value::from(percent));
+        }
+    }
+    for (field, resets) in [
+        ("five_hour_resets_at_unix_ms", five_hour_resets),
+        ("seven_day_resets_at_unix_ms", seven_day_resets),
+    ] {
+        if let Some(resets) = resets {
+            validated.insert(field.to_string(), serde_json::Value::from(resets));
+        }
+    }
+
+    let canonical = serde_json::Value::Object(validated).to_string();
+    check_value_len("telemetry", &canonical)?;
+    Ok((canonical, sampled_at))
+}
+
+/// One optional bounded string field: trimmed, non-empty, printable-ish
+/// (control characters rejected — the forging rule every interpolated
+/// field follows), and capped at `max_chars`.
+fn bounded_string(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    max_chars: usize,
+) -> Result<Option<String>, String> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    let value = value
+        .as_str()
+        .ok_or_else(|| format!("telemetry {field} must be a string"))?
+        .trim();
+    if value.is_empty() {
+        return Err(format!("telemetry {field} must not be empty"));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(format!(
+            "telemetry {field} must not contain control characters"
+        ));
+    }
+    if value.chars().count() > max_chars {
+        return Err(format!(
+            "telemetry {field} exceeds {max_chars} characters, report rejected"
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
+/// One optional percent field: any finite JSON number 0-100, rounded to
+/// the nearest integer exactly as the hub normalizer rounds.
+fn parse_percent(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u64>, String> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    let number = value
+        .as_f64()
+        .ok_or_else(|| format!("telemetry {field} must be a number"))?;
+    if !(0.0..=100.0).contains(&number) {
+        return Err(format!("telemetry {field} must be between 0 and 100"));
+    }
+    Ok(Some(number.round() as u64))
+}
+
+/// One optional unix-milliseconds timestamp field (the rate-limit reset
+/// horizons). Future by nature, so no freshness applies — only that it is
+/// a non-negative integer.
+fn unix_ms_field(
+    object: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<Option<u64>, String> {
+    let Some(value) = object.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_u64()
+        .map(Some)
+        .ok_or_else(|| format!("telemetry {field} must be a non-negative integer"))
+}
+
+/// The `sampled_at_unix_ms` inside the pane's stored telemetry blob, for
+/// the backward-step drop. A blob that fails to parse reads as absent, so
+/// a hand-corrupted entry costs one report's ordering, not the endpoint.
+fn stored_telemetry_sampled_at(
+    metadata: &std::collections::HashMap<String, String>,
+) -> Option<u64> {
+    metadata
+        .get(TELEMETRY_KEY)
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|value| {
+            value
+                .get("sampled_at_unix_ms")
+                .and_then(serde_json::Value::as_u64)
+        })
 }
 
 /// `session_resume_argv`: the agent's own resume invocation as argv —
@@ -724,6 +1012,399 @@ mod tests {
             pane.metadata().get("agent_seq").map(String::as_str),
             Some("500")
         );
+    }
+
+    /// The daemon-side clock the freshness window compares against.
+    fn now_unix_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock is after the epoch")
+            .as_millis() as u64
+    }
+
+    fn telemetry_report(pane: PaneId, agent: &str, seq: u64, telemetry_json: &str) -> String {
+        format!(
+            r#"{{"id":"t-{seq}","method":"pane.report_agent_telemetry","params":{{"pane_id":"{pane}","agent":"{agent}","seq":{seq},"source":"par-mux:test","telemetry":{telemetry_json}}}}}"#
+        )
+    }
+
+    /// The hub-normalizer output shape, verbatim: version, data source,
+    /// sample time, and the bounded optional fields.
+    fn sample_telemetry(sampled_at: u64) -> String {
+        format!(
+            r#"{{"version":1,"source":"claude_code","sampled_at_unix_ms":{sampled_at},"model":"GLM-5.3","effort":"high","thinking_enabled":true,"context_used_percent":63,"context_remaining_percent":37,"five_hour_remaining_percent":80,"seven_day_remaining_percent":95,"five_hour_resets_at_unix_ms":{},"seven_day_resets_at_unix_ms":{}}}"#,
+            sampled_at + 3_600_000,
+            sampled_at + 86_400_000
+        )
+    }
+
+    /// The valid sample with one field's raw JSON swapped for the
+    /// malformed variant under test.
+    fn sample_with(field: &str, raw_value: &str) -> String {
+        let mut sample = sample_telemetry(now_unix_ms() - 1_000);
+        let needle = format!("\"{field}\":");
+        let start = sample
+            .find(&needle)
+            .unwrap_or_else(|| panic!("{field} present in the sample"));
+        let value_start = start + needle.len();
+        let value_end = sample[value_start..]
+            .find([',', '}'])
+            .map(|offset| value_start + offset)
+            .unwrap_or(sample.len());
+        sample.replace_range(value_start..value_end, raw_value);
+        sample
+    }
+
+    #[test]
+    fn telemetry_report_stores_the_bounded_object() {
+        let (tree, pane_id) = tree_with_pane();
+        let sampled_at = now_unix_ms() - 60_000;
+        let (reply, notification) = handle_report(
+            &telemetry_report(pane_id, "claude", 1_000, &sample_telemetry(sampled_at)),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        assert_eq!(
+            notification, None,
+            "telemetry broadcasts nothing yet — the roster-serving card owns the push"
+        );
+
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("claude")
+        );
+        assert_eq!(
+            pane.metadata().get("agent_seq").map(String::as_str),
+            Some("1000")
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_state"),
+            "telemetry alone never claims roster state"
+        );
+        let stored: serde_json::Value = serde_json::from_str(
+            pane.metadata()
+                .get("agent_telemetry")
+                .expect("the canonical object is stored"),
+        )
+        .unwrap();
+        assert_eq!(stored["version"], 1);
+        assert_eq!(stored["source"], "claude_code");
+        assert_eq!(stored["sampled_at_unix_ms"], sampled_at);
+        assert_eq!(stored["model"], "GLM-5.3");
+        assert_eq!(stored["effort"], "high");
+        assert_eq!(stored["thinking_enabled"], true);
+        assert_eq!(stored["context_used_percent"], 63);
+        assert_eq!(stored["context_remaining_percent"], 37);
+        assert_eq!(stored["five_hour_remaining_percent"], 80);
+        assert_eq!(stored["seven_day_remaining_percent"], 95);
+        assert_eq!(
+            stored["five_hour_resets_at_unix_ms"],
+            sampled_at + 3_600_000
+        );
+        assert_eq!(
+            stored["seven_day_resets_at_unix_ms"],
+            sampled_at + 86_400_000
+        );
+
+        // A replay at the same seq is dropped by the ordering rule — the
+        // stored sample is unchanged even though the replay's sample time
+        // would be newer.
+        drop(guard);
+        handle_report(
+            &telemetry_report(pane_id, "claude", 1_000, &sample_telemetry(now_unix_ms())),
+            &tree,
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        let stored: serde_json::Value = serde_json::from_str(
+            pane.metadata()
+                .get("agent_telemetry")
+                .expect("still stored"),
+        )
+        .unwrap();
+        assert_eq!(
+            stored["sampled_at_unix_ms"], sampled_at,
+            "same-seq replay dropped"
+        );
+    }
+
+    #[test]
+    fn stale_telemetry_sample_is_dropped_absent_beats_stale() {
+        let (tree, pane_id) = tree_with_pane();
+        // Two hours old — past the 55-minute freshness window.
+        let (reply, _) = handle_report(
+            &telemetry_report(
+                pane_id,
+                "claude",
+                1_000,
+                &sample_telemetry(now_unix_ms() - 2 * 3_600_000),
+            ),
+            &tree,
+        );
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "dropped silently, like a stale seq: {reply}"
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            !pane.metadata().contains_key("agent_telemetry"),
+            "absent is served instead of stale"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_seq"),
+            "a dropped report writes nothing, not even the sequence stamp"
+        );
+    }
+
+    #[test]
+    fn telemetry_older_than_the_stored_sample_is_dropped() {
+        let (tree, pane_id) = tree_with_pane();
+        let newer = now_unix_ms() - 30_000;
+        let older = now_unix_ms() - 120_000;
+        handle_report(
+            &telemetry_report(pane_id, "claude", 1_000, &sample_telemetry(newer)),
+            &tree,
+        );
+        let (reply, _) = handle_report(
+            &telemetry_report(pane_id, "claude", 2_000, &sample_telemetry(older)),
+            &tree,
+        );
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "backward step dropped silently: {reply}"
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        let stored: serde_json::Value = serde_json::from_str(
+            pane.metadata()
+                .get("agent_telemetry")
+                .expect("still stored"),
+        )
+        .unwrap();
+        assert_eq!(stored["sampled_at_unix_ms"], newer, "the newer sample wins");
+        assert_eq!(
+            pane.metadata().get("agent_seq").map(String::as_str),
+            Some("1000"),
+            "a dropped report writes nothing, seq included"
+        );
+    }
+
+    #[test]
+    fn malformed_telemetry_is_error_replied_and_writes_nothing() {
+        let (tree, pane_id) = tree_with_pane();
+        let sampled_at = now_unix_ms() - 1_000;
+        let long_model = "m".repeat(129);
+        let bad_payloads: Vec<(String, &str)> = vec![
+            (
+                telemetry_report(pane_id, "claude", 1_000, r#""not an object""#),
+                "telemetry must be an object",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    r#"{"source":"claude_code","sampled_at_unix_ms":1}"#,
+                ),
+                "missing version",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &format!(
+                        r#"{{"version":2,"source":"claude_code","sampled_at_unix_ms":{sampled_at}}}"#
+                    ),
+                ),
+                "unsupported telemetry version: 2",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &format!(r#"{{"version":1,"sampled_at_unix_ms":{sampled_at}}}"#),
+                ),
+                "missing source",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    r#"{"version":1,"source":"claude_code"}"#,
+                ),
+                "missing sampled_at_unix_ms",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &sample_with("context_used_percent", "150"),
+                ),
+                "must be between 0 and 100",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &sample_with("context_used_percent", "-1"),
+                ),
+                "must be between 0 and 100",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &sample_with("thinking_enabled", r#""yes""#),
+                ),
+                "must be a boolean",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    &format!(
+                        r#"{{"version":1,"source":"claude_code","sampled_at_unix_ms":{sampled_at},"model":"{long_model}"}}"#
+                    ),
+                ),
+                "exceeds 128",
+            ),
+            (
+                telemetry_report(
+                    pane_id,
+                    "claude",
+                    1_000,
+                    // The wire form of a control-carried source: the JSON
+                    // escape parses to a real newline at the door.
+                    r#"{"version":1,"source":"claude\ncode","sampled_at_unix_ms":1}"#,
+                ),
+                "must not contain control characters",
+            ),
+            (
+                // No telemetry object at all.
+                format!(
+                    r#"{{"id":"t-1","method":"pane.report_agent_telemetry","params":{{"pane_id":"{pane_id}","agent":"claude","seq":1000,"source":"par-mux:test"}}}}"#
+                ),
+                "missing telemetry",
+            ),
+        ];
+        for (line, expected) in bad_payloads {
+            let (reply, _) = handle_report(&line, &tree);
+            assert!(reply.contains("error"), "error-replied: {reply}");
+            assert!(
+                reply.contains(expected),
+                "expected `{expected}` in: {reply}"
+            );
+        }
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            !pane.metadata().contains_key("agent"),
+            "rejection writes nothing"
+        );
+        assert!(!pane.metadata().contains_key("agent_telemetry"));
+        assert!(
+            !pane.metadata().contains_key("agent_seq"),
+            "not even the sequence stamp — a rejection must not poison ordering (SEC-105)"
+        );
+    }
+
+    #[test]
+    fn telemetry_percents_round_to_integers_like_the_hub() {
+        let (tree, pane_id) = tree_with_pane();
+        let (reply, _) = handle_report(
+            &telemetry_report(
+                pane_id,
+                "claude",
+                1_000,
+                &sample_with("context_used_percent", "63.6"),
+            ),
+            &tree,
+        );
+        assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        let stored: serde_json::Value =
+            serde_json::from_str(pane.metadata().get("agent_telemetry").expect("stored")).unwrap();
+        assert_eq!(
+            stored["context_used_percent"], 64,
+            "63.6 rounds away from zero, hub-style"
+        );
+    }
+
+    #[test]
+    fn release_clears_telemetry_with_the_claim() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "claude", "working", 1_000), &tree);
+        handle_report(
+            &telemetry_report(
+                pane_id,
+                "claude",
+                2_000,
+                &sample_telemetry(now_unix_ms() - 60_000),
+            ),
+            &tree,
+        );
+        let release = format!(
+            r#"{{"id":"t-9","method":"pane.release_agent","params":{{"pane_id":"{pane_id}","agent":"claude","seq":3000,"source":"par-mux:test"}}}}"#
+        );
+        let (reply, _) = handle_report(&release, &tree);
+        assert!(reply.contains(r#""result":"ok""#), "released: {reply}");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            !pane.metadata().contains_key("agent_telemetry"),
+            "a dead agent's telemetry left with its claim"
+        );
+    }
+
+    #[test]
+    fn telemetry_from_a_different_agent_never_takes_over_the_claim() {
+        let (tree, pane_id) = tree_with_pane();
+        handle_report(&state_report(pane_id, "pi", "working", 1_000), &tree);
+        let (reply, _) = handle_report(
+            &telemetry_report(
+                pane_id,
+                "claude",
+                2_000,
+                &sample_telemetry(now_unix_ms() - 60_000),
+            ),
+            &tree,
+        );
+        assert!(
+            reply.contains(r#""result":"ok""#),
+            "mismatched agent dropped silently, like the release guard: {reply}"
+        );
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            pane.metadata().get("agent").map(String::as_str),
+            Some("pi"),
+            "the live claim keeps its label"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_telemetry"),
+            "a foreign agent's telemetry never attaches"
+        );
+    }
+
+    #[test]
+    fn telemetry_report_for_a_missing_pane_errors() {
+        let (tree, _) = tree_with_pane();
+        let (reply, _) = handle_report(
+            &telemetry_report(PaneId(99), "claude", 1, &sample_telemetry(now_unix_ms())),
+            &tree,
+        );
+        assert!(reply.contains("no such pane"), "{reply}");
     }
 
     /// A state report from a named source — the shape every shipped

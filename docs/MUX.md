@@ -243,7 +243,7 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 
 These are set for every spawn path: `new-session`, `new-window`, `split-window`, and restore. They are **fixed at spawn**, as tmux's `TMUX`/`TMUX_PANE` are: a later `rename-session` leaves `PAR_MUX_SESSION` stale, and a `swap-pane` across windows leaves `PAR_MUX_WINDOW_ID` stale. The ids stay valid; the name is advisory. `PAR_MUX_SOCKET`, `PAR_MUX_ENV`, and `PAR_MUX_BIN` are absent when the server has no socket path or binary path to export.
 
-Two methods (`src/mux/hooks.rs`):
+Four methods (`src/mux/hooks.rs`):
 
 ```json
 {"id":1,"method":"pane.report_agent","params":{
@@ -263,11 +263,32 @@ Two methods (`src/mux/hooks.rs`):
 }}
 ```
 
+```json
+{"id":3,"method":"pane.report_agent_telemetry","params":{
+  "pane_id":"%0","agent":"claude","seq":9,
+  "telemetry":{
+    "version":1,
+    "source":"claude_code",
+    "sampled_at_unix_ms":1790532000000,
+    "model":"GLM-5.3",
+    "effort":"high",
+    "thinking_enabled":true,
+    "context_used_percent":63,
+    "context_remaining_percent":37,
+    "five_hour_remaining_percent":80,
+    "seven_day_remaining_percent":95,
+    "five_hour_resets_at_unix_ms":1790553600000,
+    "seven_day_resets_at_unix_ms":1791110400000
+  }
+}}
+```
+
 - Common params: `pane_id`, `agent`, `seq` (monotonic per pane **per source**; a report at or below the last accepted `seq` from its own source is dropped with no write and no broadcast — sources stamp different clocks, e.g. `time.time_ns()` vs `Date.now()*1000`, so freshness is tracked per `source`), and optional `source`.
 - `pane.report_agent` additionally carries `state` (`working`/`blocked`/`idle`; `unknown` is accepted but never written), optional identity (`agent_session_id`/`agent_session_path`), and optional `message` — the blocked reason, stored whitespace-collapsed and cleared when a later report omits it.
 - Validation is at the door: `state` outside the fixed set, an `agent` label containing whitespace or control characters, or a `source` containing control characters is error-replied, nothing written, nothing broadcast. These fields are interpolated verbatim into the space-split `%agent-state-changed` and roster lines, and any process in any pane can reach this endpoint — a newline in a field would forge a control-mode line delivered to every attached client.
 - `pane.report_agent_session` identifies the session by **id or transcript path** (either alone is enough) and may carry `session_resume_argv` — an array of non-empty strings, malformed values error-replied — stored verbatim as the pane's resume invocation. `session_start_source` records startup vs resume provenance. A session report that moves the pane to a **different agent** clears the previous agent's state, hook authority, and blocked reason rather than rebroadcasting them under the new label.
-- `pane.release_agent` is the agent's exit announcement (herdr's SessionEnd shape): it clears the pane's whole claim — label, state, hook authority, blocked reason, sequence stamps, and session identity — broadcasts `%agent-released`, and thereby returns the pane to the roster-less majority (a later restart respawns the original command, not a resume invocation for a dead session). Guards: the releasing `agent` must match the pane's current label, and the report must clear the same per-source `seq` rule; a failing guard is a silent ok no-op, like a stale report.
+- `pane.report_agent_telemetry` carries one `telemetry` object — versioned (`version`, currently 1), bounded (strings capped: `model` 128, `effort` 32; percents 0-100 rounded; no control characters), and stamped (`sampled_at_unix_ms` plus its own `source`, so clients can tell hook-reported from daemon-probed data). The shape mirrors the hub's normalized telemetry (par-remote-herd `status_telemetry.py`), and the producer is a hook tailing the agent harness's own status file — par-mux never parses transcripts. Malformed payloads are error-replied per the rules above. Four silent drops, each an ok no-op with nothing written: a sample older than the 55-minute freshness window (the hub's `STATUSLINE_FRESHNESS_SECONDS`, so daemon and hub age data out together — absent beats stale), a report at or below the last accepted `seq`, a sample older than the one already stored (a backward step, whatever its `seq`), and a report whose `agent` is not the pane's current label — telemetry attaches to a claim, it never takes one over. Telemetry is **display-only and ephemeral**: it never touches pane state or roster membership, never persists (the save format copies named identity keys only), and is cleared with the claim by `pane.release_agent` and the liveness sweep.
+- `pane.release_agent` is the agent's exit announcement (herdr's SessionEnd shape): it clears the pane's whole claim — label, state, hook authority, blocked reason, sequence stamps, session identity, and telemetry — broadcasts `%agent-released`, and thereby returns the pane to the roster-less majority (a later restart respawns the original command, not a resume invocation for a dead session). Guards: the releasing `agent` must match the pane's current label, and the report must clear the same per-source `seq` rule; a failing guard is a silent ok no-op, like a stale report.
 - Replies are one JSON line: `{"id":…,"result":"ok"}` or an error object.
 - Authorization is the socket's own owner-only boundary: a hook claiming another pane's id is same-user by construction — the same trust model tmux control mode has. There is no per-connection authentication beyond the socket.
 
@@ -398,7 +419,7 @@ Seed corpora live in `fuzz/corpus/<target>/`; add a corpus file for every new co
 | `src/mux/ids.rs` | `SessionId`/`WindowId`/`PaneId` (`$N`/`@N`/`%N`) and id allocation |
 | `src/mux/ipc.rs` | Cross-platform local socket transport (Unix socket / Windows named pipe), `0600`/DACL binding, stale-path reclamation |
 | `src/mux/persist.rs` | Save format (version 2), atomic writes, quarantine, restore incl. the agent resume path |
-| `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.release_agent` |
+| `src/mux/hooks.rs` | The JSON hook-report grammar: `pane.report_agent`, `pane.report_agent_session`, `pane.report_agent_telemetry`, `pane.release_agent` |
 | `src/mux/scrape.rs` | The scrape tier engine and its 1 s tick, incl. the claim liveness sweep |
 | `src/mux/foreground.rs` | Process-table snapshot + descendant-tree liveness probe for hook claims (macOS `sysctl KERN_PROC_ALL` + `KERN_PROCARGS2` — libproc is ancestry-gated; Linux `/proc`; inert on Windows) |
 | `src/mux/agent_resume.rs` | The per-agent resume invocation table |
