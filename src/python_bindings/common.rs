@@ -104,14 +104,10 @@ macro_rules! impl_terminal_query_getters {
     ($ty:ty) => {
         #[pymethods]
         impl $ty {
-            /// Get the current terminal dimensions
-            ///
-            /// Returns:
-            ///     Tuple of (cols, rows)
-            fn size(&self) -> pyo3::PyResult<(usize, usize)> {
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                Ok(t.size())
-            }
+            // size and cursor_position are NOT in the shared batch: the
+            // plain terminal serves them from the read lock, while the PTY
+            // wrapper serves them from PtySession's wait-free geometry
+            // mirror (ENH-023) — each impl block defines its own pair.
 
             /// Get the terminal title
             ///
@@ -120,16 +116,6 @@ macro_rules! impl_terminal_query_getters {
             fn title(&self) -> pyo3::PyResult<String> {
                 let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
                 Ok(t.title().to_string())
-            }
-
-            /// Get the cursor position
-            ///
-            /// Returns:
-            ///     Tuple of (col, row)
-            fn cursor_position(&self) -> pyo3::PyResult<(usize, usize)> {
-                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
-                let cursor = t.cursor();
-                Ok((cursor.col, cursor.row))
             }
 
             /// Get current Kitty Keyboard Protocol flags

@@ -205,6 +205,11 @@ name = "terminal_throughput"
 harness = false
 required-features = ["rust-only"]
 
+[[bench]]
+name = "pty_geometry"
+harness = false
+required-features = ["pty_session"]
+
 [features]
 default = ["python"]
 python = ["pyo3", "pyo3/extension-module", "par-term-emu-derive", "pty_session", "screenshot"]

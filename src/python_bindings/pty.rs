@@ -46,6 +46,29 @@ impl crate::python_bindings::common::TerminalAccess for PyPtyTerminal {
 // ARC-003/QA-001 validation: shared getters generated from one definition.
 crate::impl_terminal_simple_getters!(PyPtyTerminal);
 crate::impl_terminal_query_getters!(PyPtyTerminal);
+
+// Geometry getters served from PtySession's wait-free mirror (ENH-023):
+// a polling UI calling size()/cursor_position() many times per second never
+// contends with the PTY reader thread's write lock during output bursts.
+// Python surface identical to the plain Terminal's lock-based pair.
+#[pymethods]
+impl PyPtyTerminal {
+    /// Get the current terminal dimensions
+    ///
+    /// Returns:
+    ///     Tuple of (cols, rows)
+    fn size(&self) -> pyo3::PyResult<(usize, usize)> {
+        Ok(self.inner.size())
+    }
+
+    /// Get the cursor position
+    ///
+    /// Returns:
+    ///     Tuple of (col, row)
+    fn cursor_position(&self) -> pyo3::PyResult<(usize, usize)> {
+        Ok(self.inner.cursor_position())
+    }
+}
 crate::impl_terminal_color_setters!(PyPtyTerminal);
 crate::impl_terminal_state_setters!(PyPtyTerminal);
 crate::impl_terminal_static_helpers!(PyPtyTerminal);

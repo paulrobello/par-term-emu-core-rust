@@ -52,6 +52,29 @@ impl crate::python_bindings::common::TerminalAccess for PyTerminal {
 
 // ARC-003/QA-001: shared query/state getters generated from one definition.
 crate::impl_terminal_query_getters!(PyTerminal);
+
+// The plain terminal's geometry getters, served from the terminal itself
+// (the shared macro leaves these per-type so the PTY wrapper can serve its
+// wait-free mirror instead — ENH-023).
+#[pymethods]
+impl PyTerminal {
+    /// Get the current terminal dimensions
+    ///
+    /// Returns:
+    ///     Tuple of (cols, rows)
+    fn size(&self) -> pyo3::PyResult<(usize, usize)> {
+        Ok(self.inner.size())
+    }
+
+    /// Get the cursor position
+    ///
+    /// Returns:
+    ///     Tuple of (col, row)
+    fn cursor_position(&self) -> pyo3::PyResult<(usize, usize)> {
+        let cursor = self.inner.cursor();
+        Ok((cursor.col, cursor.row))
+    }
+}
 crate::impl_terminal_color_setters!(PyTerminal);
 crate::impl_terminal_state_setters!(PyTerminal);
 crate::impl_terminal_static_helpers!(PyTerminal);

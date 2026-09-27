@@ -42,7 +42,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
     Arc,
 };
 use std::thread::{self, JoinHandle};
@@ -59,6 +59,49 @@ use std::thread::{self, JoinHandle};
 /// # Arguments
 /// * `data` - The raw bytes read from the PTY
 pub type OutputCallback = Arc<dyn Fn(&[u8]) + Send + Sync>;
+
+/// Wait-free geometry mirror (ENH-023). The reader thread and every resize
+/// path publish `(cols, rows, cursor)` here while already holding the
+/// terminal write lock, so hot polling consumers (`size()`,
+/// `cursor_position()`) never contend with output processing for these two
+/// queries. Each value is individually consistent; the size/cursor pair can
+/// straddle a concurrent resize — callers needing a consistent pair use
+/// [`PtySession::snapshot_geometry`].
+#[derive(Debug, Default)]
+struct GeometryMirror {
+    cols: AtomicU32,
+    rows: AtomicU32,
+    /// Cursor column in the low 32 bits, row in the high 32.
+    cursor: AtomicU64,
+}
+
+impl GeometryMirror {
+    /// Publish the terminal's current geometry. Called while holding the
+    /// terminal write lock, so the values a reader Acquires are always ones
+    /// the terminal actually held at some point.
+    fn publish(&self, term: &Terminal) {
+        let (cols, rows) = term.size();
+        let cursor = term.cursor();
+        self.cols.store(cols as u32, Ordering::Release);
+        self.rows.store(rows as u32, Ordering::Release);
+        self.cursor.store(
+            ((cursor.row as u64) << 32) | cursor.col as u64,
+            Ordering::Release,
+        );
+    }
+
+    fn size(&self) -> (usize, usize) {
+        (
+            self.cols.load(Ordering::Acquire) as usize,
+            self.rows.load(Ordering::Acquire) as usize,
+        )
+    }
+
+    fn cursor(&self) -> (usize, usize) {
+        let packed = self.cursor.load(Ordering::Acquire);
+        ((packed & 0xFFFF_FFFF) as usize, (packed >> 32) as usize)
+    }
+}
 
 /// A PTY session that manages a shell process and terminal state
 pub struct PtySession {
@@ -96,6 +139,9 @@ pub struct PtySession {
     update_signal: Arc<(parking_lot::Mutex<()>, parking_lot::Condvar)>,
     /// Whether to reply to XTWINOPS queries (cached from env var PAR_TERM_REPLY_XTWINOPS)
     reply_xtwinops: Arc<AtomicBool>,
+    /// Wait-free mirror of `(cols, rows, cursor)` for the polling getters
+    /// (ENH-023) — see [`GeometryMirror`].
+    geometry: Arc<GeometryMirror>,
     /// Optional callback for raw PTY output (for streaming, logging, etc.)
     /// Wrapped in Arc<Mutex> so it can be updated after the reader thread starts
     output_callback: Arc<Mutex<Option<OutputCallback>>>,
@@ -166,7 +212,7 @@ impl PtySession {
             .map(|v| v != "0" && v.to_lowercase() != "false")
             .unwrap_or(true);
 
-        Self {
+        let session = Self {
             terminal: Arc::new(RwLock::new(Terminal::with_scrollback(
                 cols,
                 rows,
@@ -187,12 +233,15 @@ impl PtySession {
             update_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             update_signal: Arc::new((parking_lot::Mutex::new(()), parking_lot::Condvar::new())),
             reply_xtwinops: Arc::new(AtomicBool::new(reply_xtwinops)),
+            geometry: Arc::new(GeometryMirror::default()),
             output_callback: Arc::new(Mutex::new(None)),
             coprocess_manager: Arc::new(Mutex::new(CoprocessManager::new())),
             child_pid: None,
             #[cfg(test)]
             first_read_delay: None,
-        }
+        };
+        session.geometry.publish(&session.terminal.read());
+        session
     }
 
     /// Set an environment variable for the spawned process
@@ -771,6 +820,7 @@ impl PtySession {
         let update_generation = Arc::clone(&self.update_generation);
         let update_signal = Arc::clone(&self.update_signal);
         let reply_xtwinops = Arc::clone(&self.reply_xtwinops);
+        let geometry = Arc::clone(&self.geometry);
         let output_callback = Arc::clone(&self.output_callback);
         let coprocess_manager = Arc::clone(&self.coprocess_manager);
         // Only the unix SIGWINCH pulse on alt-screen entry signals the child.
@@ -944,6 +994,11 @@ impl PtySession {
                                 applied_gen + 1,
                                 "content applied",
                             );
+                            // Still inside the write guard: refresh the
+                            // wait-free geometry mirror so `size()` and
+                            // `cursor_position()` track processed output
+                            // without ever taking this lock (ENH-023).
+                            geometry.publish(&term);
 
                             batch
                         }; // write guard (`term`) dropped here
@@ -1057,6 +1112,7 @@ impl PtySession {
             term.resize(cols as usize, rows as usize);
             // Record resize event for session recording
             term.record_resize(cols as usize, rows as usize);
+            self.geometry.publish(&term);
         }
 
         // Resize the PTY (sends SIGWINCH to child)
@@ -1145,6 +1201,7 @@ impl PtySession {
             let mut term = self.terminal.write();
             term.resize(cols as usize, rows as usize);
             term.set_pixel_size(pixel_width as usize, pixel_height as usize);
+            self.geometry.publish(&term);
         }
 
         // Resize the PTY (sends SIGWINCH to child)
@@ -1352,7 +1409,11 @@ impl PtySession {
     /// ```
     pub fn with_terminal_mut<R>(&self, f: impl FnOnce(&mut Terminal) -> R) -> R {
         let mut guard = self.terminal.write();
-        f(&mut guard)
+        let result = f(&mut guard);
+        // A caller may have moved the cursor or resized through the closure;
+        // keep the wait-free mirror honest before the guard drops.
+        self.geometry.publish(&guard);
+        result
     }
 
     /// Get a borrowed reference to the underlying terminal `Arc`.
@@ -1438,17 +1499,39 @@ impl PtySession {
         crate::screenshot::save_terminal(&term, path, config, scrollback_offset)
     }
 
-    /// Get the cursor position
+    /// Get the current cursor position `(col, row)`
+    ///
+    /// Wait-free (ENH-023): served from an atomic mirror the reader thread
+    /// and resize paths refresh while holding the terminal write lock. The
+    /// value is individually consistent but may briefly lag the terminal by
+    /// one in-flight `process()` batch; for a size/cursor pair consistent
+    /// with each other use [`snapshot_geometry`](Self::snapshot_geometry).
     pub fn cursor_position(&self) -> (usize, usize) {
-        let term = self.terminal.read();
-        let cursor = term.cursor();
-        (cursor.col, cursor.row)
+        self.geometry.cursor()
     }
 
     /// Get the terminal size
+    ///
+    /// Wait-free (ENH-023): served from an atomic mirror refreshed on every
+    /// resize and by the reader thread — `resize` is visible immediately,
+    /// with no `process()` call needed. See
+    /// [`cursor_position`](Self::cursor_position) for the consistency
+    /// contract.
     pub fn size(&self) -> (usize, usize) {
+        self.geometry.size()
+    }
+
+    /// Size and cursor position read under the terminal read lock, so the
+    /// pair is mutually consistent — the escape hatch for callers that
+    /// cannot tolerate [`size`](Self::size) and
+    /// [`cursor_position`](Self::cursor_position) straddling a resize.
+    ///
+    /// Returns `((cols, rows), (cursor_col, cursor_row))`.
+    pub fn snapshot_geometry(&self) -> ((usize, usize), (usize, usize)) {
         let term = self.terminal.read();
-        term.size()
+        let (cols, rows) = term.size();
+        let cursor = term.cursor();
+        ((cols, rows), (cursor.col, cursor.row))
     }
 
     /// Get a specific line from the active terminal buffer
@@ -3159,6 +3242,38 @@ mod tests {
         );
     }
 
+    /// The geometry mirror (ENH-023): `size()` is served from atomics the
+    /// resize path refreshes, so a resize is visible with no `process()`
+    /// call, and the cursor tracks fed output without a reader thread.
+    #[test]
+    fn size_and_cursor_serve_from_the_geometry_mirror() {
+        let mut session = PtySession::new(80, 24, 1000);
+        assert_eq!(session.size(), (80, 24));
+        assert_eq!(session.cursor_position(), (0, 0));
+
+        session.resize(100, 30).expect("resize");
+        assert_eq!(
+            session.size(),
+            (100, 30),
+            "resize is visible from size() without any process() call"
+        );
+
+        // Fed output moves the mirrored cursor: two lines, cursor parked
+        // after the text on the second row.
+        session.with_terminal_mut(|term| {
+            term.process(b"AB\r\nCD");
+        });
+        assert_eq!(session.cursor_position(), (2, 1));
+        assert_eq!(
+            session.snapshot_geometry(),
+            ((100, 30), (2, 1)),
+            "the locked snapshot agrees with the mirror"
+        );
+    }
+
+    /// Dropping a session that was constructed but never spawned must
+    /// run Drop cleanly (kills coprocesses, signals reader) without
+    /// panicking — there is no child, no reader thread, no writer.
     #[test]
     fn test_drop_on_unspawned_session_does_not_panic() {
         // Dropping a session that was constructed but never spawned must
