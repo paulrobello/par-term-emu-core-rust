@@ -1163,8 +1163,12 @@ mod tests {
             let _ = done_tx.send(());
         });
 
+        // 30 s starvation bound, not a timing assertion: unloaded the exit
+        // lands within the 300 ms test grace, but the daemon thread and
+        // the final save can be starved well past 5 s under full-suite
+        // gate load (same class as the generation-test deadlines, 44d4212).
         done_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
+            .recv_timeout(std::time::Duration::from_secs(30))
             .expect("the empty daemon exits without anyone asking");
         match load_or_quarantine(&dir.path().join("state.json")) {
             Loaded::State(state) => assert!(
@@ -1239,8 +1243,13 @@ mod tests {
         // state through the grace, then exits.
         drop(writer);
         drop(stream);
+        // 30 s starvation bound, not a timing assertion: after the drop the
+        // exit needs one idle tick plus the 300 ms test grace, and that
+        // path can be starved past 5 s under full-suite gate load
+        // (observed 2026-09-27, 1/2243 under make test-rust; same fix
+        // shape as the generation-test deadlines, 44d4212).
         done_rx
-            .recv_timeout(std::time::Duration::from_secs(5))
+            .recv_timeout(std::time::Duration::from_secs(30))
             .expect("the daemon exits after its last client leaves");
     }
 
