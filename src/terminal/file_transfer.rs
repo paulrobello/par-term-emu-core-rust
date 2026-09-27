@@ -84,9 +84,11 @@ pub struct FileTransferManager {
 }
 
 /// Default maximum transfer size: 50 MB
+/// cap: Bytes accepted for one file-transfer payload.
 const DEFAULT_MAX_TRANSFER_SIZE: usize = 50 * 1024 * 1024;
 
 /// Default maximum number of completed transfers to retain
+/// cap: Completed transfers retained from client file-transfer requests.
 const DEFAULT_MAX_COMPLETED: usize = 32;
 
 impl Default for FileTransferManager {

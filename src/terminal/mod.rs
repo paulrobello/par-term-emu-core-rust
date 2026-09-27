@@ -147,16 +147,21 @@ impl Charset {
     }
 }
 
+/// cap: Terminal notifications queued from processed escape-sequence output.
 const DEFAULT_MAX_NOTIFICATIONS: usize = 128;
+/// cap: Clipboard sync events queued from processed escape-sequence output.
 const DEFAULT_MAX_CLIPBOARD_SYNC_EVENTS: usize = 256;
+/// cap: Bytes retained for one queued clipboard sync event.
 const DEFAULT_MAX_CLIPBOARD_EVENT_BYTES: usize = 4096;
 /// Maximum number of unpolled terminal events retained (ARC-006). Past this,
 /// the oldest events are evicted to bound memory under sustained output when
 /// the host polls infrequently. Events already dispatched to observers are
 /// evicted first; only under extreme load are not-yet-dispatched events dropped.
+/// cap: Unpolled terminal events retained from processed output.
 const MAX_TERMINAL_EVENTS: usize = 10_000;
 const CLIPBOARD_TRUNCATION_SUFFIX: &str = " [truncated]";
 /// Hard upper limit for clipboard content (10 MB), regardless of configured max_bytes
+/// cap: Clipboard content bytes accepted from an OSC 52 sequence.
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
 
 /// Current Unix timestamp in milliseconds since the epoch.
@@ -939,6 +944,7 @@ impl Default for SecurityFlagsState {
 
 /// Default max OSC data length: 1 MiB (SEC-003; was 128 MiB, which only
 /// checked at dispatch after vte had already buffered the payload).
+/// cap: Payload bytes accepted for one OSC sequence from terminal output.
 pub const DEFAULT_MAX_OSC_DATA_LENGTH: usize = 1024 * 1024;
 
 /// OSC 1337 badge format string + session variables for evaluation (ARC-001 sub-struct)

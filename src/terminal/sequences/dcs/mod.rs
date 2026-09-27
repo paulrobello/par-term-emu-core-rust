@@ -44,6 +44,7 @@ fn classify_dcs(action: char, intermediates: &[u8]) -> DcsKind {
 /// legitimate XTGETTCAP/DECRQSS reply or Sixel command fragment (sixel pixel
 /// data streams to the parser, not this buffer). Past the cap the sequence is
 /// dropped whole at unhook.
+/// cap: Payload bytes accumulated for one DCS sequence from terminal output.
 const MAX_DCS_BUFFER: usize = 64 * 1024;
 
 impl Terminal {

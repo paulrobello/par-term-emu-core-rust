@@ -43,6 +43,7 @@ const COMPRESSION_THRESHOLD: usize = 256;
 /// 1 MiB is far above any legitimate terminal streaming frame (the WS layer
 /// also caps inbound frames, but this defends against the decompression path
 /// directly).
+/// cap: Decompressed bytes accepted from one zlib-compressed streaming frame.
 const MAX_DECOMPRESSED_SIZE: usize = 1024 * 1024;
 
 /// Wire format flags

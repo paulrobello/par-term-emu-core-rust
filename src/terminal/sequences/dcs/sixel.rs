@@ -5,9 +5,11 @@ use crate::terminal::Terminal;
 use vte::Params;
 
 /// Maximum allowed sixel raster dimension (width or height) in pixels
+/// cap: Width or height accepted for a sixel raster declared in a DCS payload.
 const MAX_SIXEL_DIMENSION: usize = 16384;
 
 /// Maximum number of sixel color registers
+/// cap: Color registers accepted in a sixel palette from a DCS payload.
 const MAX_SIXEL_COLORS: usize = 4096;
 
 impl Terminal {

@@ -48,9 +48,11 @@ const WS_MAX_FRAME_SIZE: usize = 16 * 1024 * 1024;
 /// Maximum accepted `Input` message payload (SEC-005). Larger payloads are
 /// logged and dropped — the WS frame cap (16 MiB) bounds transport memory,
 /// this bounds how much a single message can push at the PTY.
+/// cap: Bytes accepted in one Input message payload from a streaming client.
 const MAX_INPUT_PAYLOAD_BYTES: usize = 64 * 1024;
 /// Maximum accepted `Paste` message payload (SEC-005). Pastes are bulk
 /// transfers, so the cap is higher than single keystroke Input.
+/// cap: Bytes accepted in one Paste message payload from a streaming client.
 const MAX_PASTE_PAYLOAD_BYTES: usize = 256 * 1024;
 
 /// How long a raw connection may take to complete its WebSocket (and TLS)
@@ -155,8 +157,10 @@ pub const MIN_COLS: u16 = 2;
 /// Minimum terminal rows
 pub const MIN_ROWS: u16 = 1;
 /// Maximum terminal columns
+/// cap: Columns a streaming client may request for its terminal.
 pub const MAX_COLS: u16 = 1000;
 /// Maximum terminal rows
+/// cap: Rows a streaming client may request for its terminal.
 pub const MAX_ROWS: u16 = 500;
 
 /// Validate terminal size is within acceptable bounds

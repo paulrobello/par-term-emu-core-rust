@@ -11,6 +11,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// Default maximum memory budget for stored snapshots (4 MiB).
+/// cap: Memory held by snapshots retained from processed terminal output.
 pub const DEFAULT_MAX_MEMORY_BYTES: usize = 4 * 1024 * 1024;
 
 /// Default interval between automatic snapshots (30 seconds).

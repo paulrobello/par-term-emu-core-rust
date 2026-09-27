@@ -73,6 +73,7 @@ struct ReportHeader {
 /// to the full SEC-104 line budget per field per pane. 4 KiB clears any
 /// legitimate label, path, or blocked reason with orders of magnitude to
 /// spare.
+/// cap: Bytes accepted for one hook or agent report value sent from a pane.
 const MAX_REPORT_VALUE_LEN: usize = 4096;
 
 fn check_value_len(field: &str, value: &str) -> Result<(), String> {

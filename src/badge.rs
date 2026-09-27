@@ -186,6 +186,7 @@ impl std::fmt::Display for BadgeFormatError {
 impl std::error::Error for BadgeFormatError {}
 
 /// Maximum allowed badge format length in bytes
+/// cap: Badge format bytes accepted from one OSC 1337 SetBadgeFormat payload.
 const MAX_BADGE_FORMAT_LENGTH: usize = 4096;
 
 /// Decode and validate a base64-encoded badge format string

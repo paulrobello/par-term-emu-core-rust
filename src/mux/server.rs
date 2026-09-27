@@ -82,6 +82,7 @@ const CLIENT_QUEUE_DEPTH: usize = 4096;
 /// Over budget answers one `%error` block and closes the connection — same
 /// exposure class as the queue depth above (peer-euid-verified same user),
 /// so this bounds accidental growth, not an adversary.
+/// cap: Bytes accumulated from one control-socket client line before the daemon closes it.
 const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
 
 /// How often an evicted client's connection threads re-check the eviction

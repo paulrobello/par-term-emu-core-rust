@@ -3,6 +3,7 @@
 //! Handles clipboard history, multiple clipboard slots, and OSC 52 sync events.
 
 /// Maximum allowed clipboard content size in bytes (10 MB)
+/// cap: Clipboard content bytes accepted from an OSC 52 sequence.
 const MAX_CLIPBOARD_CONTENT_SIZE: usize = 10_485_760;
 
 /// Clipboard entry with history

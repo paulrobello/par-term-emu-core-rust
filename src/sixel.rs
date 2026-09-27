@@ -22,22 +22,30 @@ use crate::graphics::{GraphicProtocol, TerminalGraphic};
 
 /// Hard upper bounds for Sixel resources. These are deliberately high but
 /// finite, and are used to clamp user-configurable limits.
+/// cap: Hard ceiling on sixel raster width from payload geometry or user config.
 pub const SIXEL_HARD_MAX_WIDTH: usize = 4096;
 /// Hard upper bound for Sixel image height in pixels.
+/// cap: Hard ceiling on sixel raster height from payload geometry or user config.
 pub const SIXEL_HARD_MAX_HEIGHT: usize = 4096;
 /// Hard upper bound for Sixel repeat counts.
+/// cap: Hard ceiling on one sixel repeat count from an escape payload.
 pub const SIXEL_HARD_MAX_REPEAT: usize = 10_000;
 /// Hard upper bound for concurrent Sixel graphics per terminal.
+/// cap: Hard ceiling on sixel graphics retained from escape payloads.
 pub const SIXEL_HARD_MAX_GRAPHICS: usize = 1024;
 
 /// Default per-terminal Sixel limits. These can be overridden via API but
 /// are themselves clamped to the hard maxima.
+/// cap: Default ceiling on sixel raster width from payload geometry or user config.
 pub const SIXEL_DEFAULT_MAX_WIDTH: usize = 1024;
 /// Default Sixel height limit in pixels.
+/// cap: Default ceiling on sixel raster height from payload geometry or user config.
 pub const SIXEL_DEFAULT_MAX_HEIGHT: usize = 1024;
 /// Default Sixel repeat limit.
+/// cap: Default ceiling on one sixel repeat count from an escape payload.
 pub const SIXEL_DEFAULT_MAX_REPEAT: usize = 10_000;
 /// Default limit on concurrent Sixel graphics.
+/// cap: Default ceiling on sixel graphics retained from escape payloads.
 pub const SIXEL_DEFAULT_MAX_GRAPHICS: usize = 256;
 
 /// Per-terminal Sixel resource limits

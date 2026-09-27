@@ -1112,6 +1112,7 @@ impl KittyParser {
         }
 
         // 5. Check file size (limit to 100MB for safety)
+        /// cap: Bytes read from one kitty file medium named by an escape payload.
         const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024; // 100MB
         if metadata.len() > MAX_FILE_SIZE {
             return Err(GraphicsError::KittyError(format!(

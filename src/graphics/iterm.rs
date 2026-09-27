@@ -14,6 +14,7 @@ use crate::graphics::{
 };
 
 /// Maximum allowed base64-encoded image data size in bytes (100 MB)
+/// cap: Base64 image bytes accepted from one iTerm2 inline-image sequence.
 const MAX_IMAGE_DATA_SIZE: usize = 100 * 1024 * 1024;
 
 /// iTerm2 inline image parser

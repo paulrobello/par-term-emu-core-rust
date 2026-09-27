@@ -34,12 +34,14 @@ pub use serialization::{GraphicsSnapshot, ImageDataRef, SerializableGraphic};
 ///
 /// Shared by all image-decoding graphics protocols (Kitty, iTerm2) so a
 /// single crafted image cannot force an unbounded decode allocation.
+/// cap: Width or height accepted for a graphic decoded from a protocol payload.
 pub const MAX_IMAGE_DIMENSION: usize = 16384;
 
 /// Maximum allowed total pixel count (width * height) for a decoded image.
 ///
 /// Bounds worst-case RGBA allocation to `MAX_IMAGE_PIXELS * 4` bytes (256
 /// MiB) even when width and height individually pass `MAX_IMAGE_DIMENSION`.
+/// cap: Total pixels accepted for a graphic decoded from a protocol payload.
 pub const MAX_IMAGE_PIXELS: usize = 64 * 1024 * 1024;
 
 /// Image display mode for rendering

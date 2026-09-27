@@ -35,6 +35,7 @@ pub const FORMAT_VERSION: u32 = 2;
 /// 136 MB state whose final shutdown save held SIGTERM exit for two
 /// minutes. 100 000 cells (~1 250 lines at 80 cols, ~17 MB) keeps the
 /// newest context while bounding the save far below the exit budget.
+/// cap: Scrollback cells restored per pane from an untrusted on-disk state file.
 const MAX_PERSISTED_SCROLLBACK_CELLS: usize = 100_000;
 
 /// Errors raised while saving or rebuilding persisted mux state.

@@ -31,6 +31,7 @@ const FRONTEND_ARCHIVE_PREFIX: &str = "par-term-web-frontend-v";
 /// Hard cap on the downloaded archive (SEC-007). The real bundle is a few
 /// MiB; anything larger is a misdirected URL or a malicious response and
 /// must not be buffered in memory, let alone extracted.
+/// cap: Bytes accepted from a downloaded web-frontend archive response.
 const MAX_ARCHIVE_BYTES: usize = 50 * 1024 * 1024;
 
 /// Read a response body up to `max_bytes`, failing as soon as the cap is

@@ -31,6 +31,7 @@ const INPUT_QUEUE_MESSAGES: usize = 256;
 /// [`SessionMetrics::dropped_messages`], and logged once per second —
 /// keystrokes are lossy under this pressure by design; memory is not
 /// unbounded.
+/// cap: Client input bytes queued per session pending write to the PTY.
 const MAX_QUEUED_INPUT_BYTES: usize = 4 * 1024 * 1024;
 
 /// Get current time as epoch milliseconds
