@@ -892,6 +892,65 @@ macro_rules! impl_terminal_sixel_graphics {
     };
 }
 
+/// Emit the Kitty file-media gate for `$ty`. (SEC-114: `PtyTerminal` — the
+/// class that runs untrusted programs — had no way to change the mode; the
+/// definitions moved here from `PyTerminal`'s image_api so both classes emit
+/// them from one definition.)
+#[macro_export]
+macro_rules! impl_terminal_kitty_file_media {
+    ($ty:ty) => {
+        #[pymethods]
+        impl $ty {
+            /// Control whether Kitty graphics may load image payloads from
+            /// filesystem paths (the `t=f` file and `t=t` temp-file media).
+            ///
+            /// Terminal output is untrusted input: before this gate a single
+            /// `t=t` escape naming a path could delete that file. The default
+            /// ``"temp_only"`` allows only the spec's gated form — a
+            /// ``*tty-graphics-protocol*`` file inside an allowed temp root,
+            /// deleted only after it decodes as an image. ``"all"`` re-enables
+            /// unrestricted ``t=f`` reads; ``"off"`` refuses both media.
+            ///
+            /// Args:
+            ///     mode: One of ``"off"``, ``"temp_only"`` (default), ``"all"``
+            ///
+            /// Raises:
+            ///     ValueError: If mode is not one of the accepted names
+            ///
+            /// Example:
+            ///     >>> terminal.set_allow_file_media("all")
+            ///     >>> terminal.set_allow_file_media("off")
+            fn set_allow_file_media(&mut self, mode: &str) -> pyo3::PyResult<()> {
+                let parsed = $crate::graphics::kitty::FileMediaMode::from_name(mode).ok_or_else(
+                    || {
+                        pyo3::exceptions::PyValueError::new_err(format!(
+                            "Invalid file media mode {:?}: expected \"off\", \"temp_only\", or \"all\"",
+                            mode
+                        ))
+                    },
+                )?;
+                let mut t = $crate::python_bindings::common::TerminalAccess::term_mut(self);
+                t.set_allow_file_media(parsed);
+                Ok(())
+            }
+
+            /// Get the current Kitty file-media mode.
+            ///
+            /// Returns:
+            ///     str: ``"off"``, ``"temp_only"``, or ``"all"`` — see
+            ///     :meth:`set_allow_file_media`
+            ///
+            /// Example:
+            ///     >>> terminal.get_allow_file_media()
+            ///     'temp_only'
+            fn get_allow_file_media(&self) -> pyo3::PyResult<String> {
+                let t = $crate::python_bindings::common::TerminalAccess::term_ref(self);
+                Ok(t.allow_file_media().as_str().to_string())
+            }
+        }
+    };
+}
+
 /// Emit badge / session-variable methods for `$ty`. (ARC-003/QA-001 batch:
 /// badge API.) `set_badge_color` already lives in `impl_terminal_color_setters!`.
 #[macro_export]

@@ -49,6 +49,7 @@ crate::impl_terminal_color_setters!(PyPtyTerminal);
 crate::impl_terminal_state_setters!(PyPtyTerminal);
 crate::impl_terminal_static_helpers!(PyPtyTerminal);
 crate::impl_terminal_sixel_graphics!(PyPtyTerminal);
+crate::impl_terminal_kitty_file_media!(PyPtyTerminal);
 crate::impl_terminal_badge_session!(PyPtyTerminal);
 crate::impl_terminal_progress_notifications!(PyPtyTerminal);
 crate::impl_terminal_recording!(PyPtyTerminal);
