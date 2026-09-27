@@ -953,7 +953,16 @@ Permissions](#socket-permissions)).
 - **Windows:** named pipes are reachable by other users on the machine
   unless restricted, so the pipe is created with an owner-only security
   descriptor (system and creating user only, nothing for anyone else), and
-  a marker file is written at the socket path.
+  a marker file is written at the socket path. The DACL governs who may
+  connect to a pipe this daemon created — it says nothing about who
+  created the pipe a *client* connects to, since pipe names share one
+  machine-wide namespace. The client therefore verifies the server too
+  (`connect_local_stream`, every connect path): the pipe handle names the
+  server process, its token's user SID must equal the client's own, and
+  any lookup that fails along the way (server exited, access denied) is
+  refused with `PermissionDenied` — fail closed, mirroring the Unix euid
+  check, rather than send keystrokes and clipboard to a pipe another
+  user's process is serving.
 
 Pre-0.52 daemons serve the old default path (directly under the temp
 dir); clients probe it before spawning a replacement so an upgrade never

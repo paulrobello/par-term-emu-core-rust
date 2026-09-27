@@ -131,6 +131,118 @@ fn euid_matches(peer: Option<u32>, me: u32) -> bool {
     peer.is_some_and(|euid| euid == me)
 }
 
+/// Whether the stream's peer runs as this process's user. A peer the
+/// platform will not vouch for is treated as foreign — fail closed.
+///
+/// Windows: named pipes live in a machine-wide namespace, and the owner-only
+/// DACL only governs who may connect to a pipe this process created — it
+/// says nothing about who created the pipe this client connected to. The
+/// pipe handle does name the server, though, so the server process's token
+/// user SID must equal ours or the connection is refused. Every lookup
+/// error along the way (server exited, pid recycled, access denied) also
+/// refuses: unprovable is not same-user.
+#[cfg(windows)]
+fn peer_is_current_user(stream: &LocalStream) -> bool {
+    use interprocess::local_socket::traits::StreamCommon as _;
+
+    match stream.peer_creds() {
+        Ok(creds) => creds.pid().is_some_and(process_user_sid_equals_ours),
+        Err(_) => false,
+    }
+}
+
+/// Whether the process `pid` runs as this process's user, by comparing the
+/// user SIDs of both process tokens.
+#[cfg(windows)]
+fn process_user_sid_equals_ours(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::Security::TOKEN_QUERY;
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    // The FFI contract: handles come back null on failure, BOOL is zero on
+    // failure, and GetTokenInformation (in token_user_buffer) sizes its own
+    // output buffer.
+    unsafe {
+        let server = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if server.is_null() {
+            return false;
+        }
+        let mut server_token = std::ptr::null_mut();
+        let mut own_token = std::ptr::null_mut();
+        let verdict = OpenProcessToken(server, TOKEN_QUERY, &mut server_token) != 0
+            && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut own_token) != 0
+            && token_user_sids_equal(server_token, own_token);
+        if !server_token.is_null() {
+            CloseHandle(server_token);
+        }
+        if !own_token.is_null() {
+            CloseHandle(own_token);
+        }
+        CloseHandle(server);
+        verdict
+    }
+}
+
+/// Whether two process tokens carry the same user SID.
+#[cfg(windows)]
+fn token_user_sids_equal(
+    server_token: windows_sys::Win32::Foundation::HANDLE,
+    own_token: windows_sys::Win32::Foundation::HANDLE,
+) -> bool {
+    use windows_sys::Win32::Security::{EqualSid, TOKEN_USER};
+
+    // The TOKEN_USER each query returns points its SID into that query's
+    // buffer, so the buffers must outlive the PSID borrows. The buffer
+    // lengths are the ones GetTokenInformation itself asked for, so the
+    // TOKEN_USER views are in-bounds.
+    let (Some(server_buf), Some(own_buf)) = (
+        token_user_buffer(server_token),
+        token_user_buffer(own_token),
+    ) else {
+        return false;
+    };
+    unsafe {
+        let server_user = &*(server_buf.as_ptr().cast::<TOKEN_USER>());
+        let own_user = &*(own_buf.as_ptr().cast::<TOKEN_USER>());
+        !server_user.User.Sid.is_null()
+            && !own_user.User.Sid.is_null()
+            && EqualSid(server_user.User.Sid, own_user.User.Sid) != 0
+    }
+}
+
+/// The raw TOKEN_USER bytes of `token`'s user, or `None` on any failure. The
+/// first query with a zero-length buffer is the sizing call — it always
+/// "fails", its value is the needed length.
+#[cfg(windows)]
+fn token_user_buffer(token: windows_sys::Win32::Foundation::HANDLE) -> Option<Vec<u8>> {
+    use windows_sys::Win32::Security::GetTokenInformation;
+
+    unsafe {
+        let mut needed = 0u32;
+        GetTokenInformation(
+            token,
+            windows_sys::Win32::Security::TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        if needed == 0 {
+            return None;
+        }
+        let mut buffer = vec![0u8; needed as usize];
+        let ok = GetTokenInformation(
+            token,
+            windows_sys::Win32::Security::TokenUser,
+            buffer.as_mut_ptr().cast(),
+            needed,
+            &mut needed,
+        );
+        (ok != 0).then_some(buffer)
+    }
+}
+
 /// What an evictor needs to tear this connection down (ENH-012).
 ///
 /// Unix: the connection's threads run with send/recv timeouts, so setting
@@ -295,11 +407,12 @@ impl LocalListener {
 
 /// Connect a stream to the server listening at `path`.
 ///
-/// On Unix the server's identity is verified before the stream is returned:
-/// a socket another user bound would receive everything this client sends it
-/// — keystrokes, clipboard — as its "server", so a peer whose effective UID
-/// is not ours fails closed with `PermissionDenied`. Every connect path
-/// (default, explicit `--socket`, the legacy probe) goes through here.
+/// The server's identity is verified before the stream is returned: a pipe
+/// or socket another user served would receive everything this client sends
+/// it — keystrokes, clipboard — as its "server", so a peer not proven to run
+/// as this user fails closed with `PermissionDenied` (the effective UID on
+/// Unix, the server process token's user SID on Windows). Every connect
+/// path (default, explicit `--socket`, the legacy probe) goes through here.
 pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
     #[cfg(unix)]
     {
@@ -325,7 +438,14 @@ pub fn connect_local_stream(path: &Path) -> io::Result<LocalStream> {
             .to_string_lossy()
             .to_string()
             .to_ns_name::<GenericNamespaced>()?;
-        LocalStream::connect(name)
+        let stream = LocalStream::connect(name)?;
+        if !peer_is_current_user(&stream) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("par-mux: {} is served by another user", path.display()),
+            ));
+        }
+        Ok(stream)
     }
 }
 
@@ -614,6 +734,20 @@ mod tests {
         assert!(!euid_matches(None, current_uid()));
         assert!(euid_matches(Some(current_uid()), current_uid()));
         assert!(!euid_matches(Some(current_uid() + 1), current_uid()));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_user_sid_fails_closed() {
+        // This process is the same user as itself: the pipe client's
+        // positive arm (a cross-user server cannot be staged on one
+        // account, so the refusal arm is covered by an unopenable pid).
+        assert!(process_user_sid_equals_ours(std::process::id()));
+        // PIDs no process can answer for: the idle process and the kernel
+        // range fail OpenProcess, which must read as foreign — an
+        // unprovable server is not a same-user server.
+        assert!(!process_user_sid_equals_ours(0));
+        assert!(!process_user_sid_equals_ours(u32::MAX));
     }
 
     #[cfg(unix)]

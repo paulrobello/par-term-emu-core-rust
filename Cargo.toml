@@ -168,10 +168,16 @@ nix = { version = "0.31.3", features = ["process", "term", "signal"], optional =
 tikv-jemallocator = { version = "0.7.0", optional = true }
 
 # Windows-only: UTF-16 SDDL input for the par-mux named-pipe security
-# descriptor (par-mux.md D4). Referenced by the `mux` feature, which activates
-# it only where the target table applies.
+# descriptor (par-mux.md D4), and the Win32 process/token/SID calls behind the
+# mux client's named-pipe server-identity check (SEC-112). Referenced by the
+# `mux` feature, which activates them only where the target table applies.
 [target.'cfg(windows)'.dependencies]
 widestring = { version = "1.2", optional = true }
+windows-sys = { version = "0.61", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+] }
 
 [build-dependencies]
 # Only needed for regenerating protobuf code (requires protoc installed)
@@ -234,7 +240,7 @@ streaming-bin = ["streaming", "clap", "anyhow", "tracing", "tracing-subscriber",
 # pulled in on Windows builds only. `serde` (Phase 3, D3.1) and `dirs` (D3.4)
 # are intrinsic to the daemon now that it persists its tree on disk — a mux
 # build that cannot save is not a configuration the daemon supports.
-mux = ["pty_session", "interprocess", "widestring", "serde", "dirs", "dep:toml", "clap"]
+mux = ["pty_session", "interprocess", "widestring", "windows-sys", "serde", "dirs", "dep:toml", "clap"]
 
 # Serde derives on the replay-snapshot types (TerminalSnapshot/GridSnapshot and
 # their leaves) — the on-disk format for par-mux Phase 3 persistence (par-mux.md
