@@ -1366,7 +1366,7 @@ impl PtySession {
 
     /// Get the terminal content as a string
     pub fn content(&self) -> String {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.content()
     }
 
@@ -1378,7 +1378,7 @@ impl PtySession {
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Empty lines preserved
     pub fn export_text(&self) -> String {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.export_text()
     }
 
@@ -1390,7 +1390,7 @@ impl PtySession {
     /// - Wrapped lines properly handled (no newline between wrapped segments)
     /// - Efficient escape sequence generation (only emits changes)
     pub fn export_styled(&self) -> String {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.export_styled()
     }
 
@@ -1411,7 +1411,7 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         crate::screenshot::render_terminal(&term, config, scrollback_offset)
     }
 
@@ -1434,20 +1434,20 @@ impl PtySession {
         config: crate::screenshot::ScreenshotConfig,
         scrollback_offset: usize,
     ) -> crate::screenshot::ScreenshotResult<()> {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         crate::screenshot::save_terminal(&term, path, config, scrollback_offset)
     }
 
     /// Get the cursor position
     pub fn cursor_position(&self) -> (usize, usize) {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         let cursor = term.cursor();
         (cursor.col, cursor.row)
     }
 
     /// Get the terminal size
     pub fn size(&self) -> (usize, usize) {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.size()
     }
 
@@ -1456,7 +1456,7 @@ impl PtySession {
     /// This returns a line from whichever screen buffer is currently active
     /// (primary or alternate).
     pub fn get_line(&self, row: usize) -> Option<String> {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.active_grid()
             .row(row)
             .map(|line| line.iter().map(|cell| cell.c).collect())
@@ -1464,13 +1464,13 @@ impl PtySession {
 
     /// Get scrollback content
     pub fn scrollback(&self) -> Vec<String> {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.scrollback()
     }
 
     /// Get the number of scrollback lines
     pub fn scrollback_len(&self) -> usize {
-        let term = self.terminal.write();
+        let term = self.terminal.read();
         term.active_grid().scrollback_len()
     }
 
@@ -1547,7 +1547,7 @@ impl PtySession {
     /// # Returns
     /// The total number of bell events received since terminal creation
     pub fn bell_count(&self) -> u64 {
-        self.terminal.write().bell_count()
+        self.terminal.read().bell_count()
     }
 
     // === Coprocess Management ===
