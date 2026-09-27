@@ -2184,9 +2184,23 @@ mod tests {
         );
         assert!(reply.contains("%end"), "absolute resize succeeds: {reply}");
 
-        let notification = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("a %layout-change follows the size-driven re-layout");
+        // A resized pane's shell gets SIGWINCH and (bash under ConPTY)
+        // emits a DECXCPR query whose %output can beat the %layout-change
+        // to this observer — poll for the layout change instead of
+        // asserting the FIRST notification is it (QA-143; same shape the
+        // split-window test at the banner race hit, run 36051903299).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut notification = String::from("<no notification>");
+        loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok(msg) if msg.contains("%layout-change") => {
+                    notification = msg;
+                    break;
+                }
+                Ok(msg) => notification = msg,
+                Err(_) => break,
+            }
+        }
         assert!(
             notification.contains("%layout-change"),
             "notification: {notification}"
@@ -2226,9 +2240,20 @@ mod tests {
         );
         assert!(reply.contains("%end"), "-C report succeeds: {reply}");
 
-        let notification = rx
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .expect("a %layout-change follows the window resize");
+        // Same drain as the resize test: the re-fitted pane's shell can
+        // race a %output past the %layout-change after its SIGWINCH.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let mut notification = String::from("<no notification>");
+        loop {
+            match rx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+                Ok(msg) if msg.contains("%layout-change") => {
+                    notification = msg;
+                    break;
+                }
+                Ok(msg) => notification = msg,
+                Err(_) => break,
+            }
+        }
         assert!(
             notification.contains("%layout-change") && notification.contains("120x40"),
             "the broadcast carries the new geometry: {notification}"
