@@ -890,10 +890,14 @@ par-term-streamer --enable-http --allowed-origins https://app.example.com,https:
 - Client input is rate-limited (`--input-rate-limit`, default 0 = unlimited).
 - Read-only clients are enforced before PTY writes.
 - Terminal-size updates are validated server-side.
-- File transfers are capped at 50 MiB in memory; no path-traversal writes.
+- File transfers are capped in memory (`DEFAULT_MAX_TRANSFER_SIZE`; no
+  path-traversal writes).
 - OSC data is capped (`DEFAULT_MAX_OSC_DATA_LENGTH`, configurable via
   `Terminal::set_max_osc_data_length` — QA-012).
-- zlib decompression is capped at 1 MiB.
+- zlib decompression is capped (`MAX_DECOMPRESSED_SIZE`).
+- The current values of every size cap live in the
+  [Resource Limits Reference](#resource-limits-reference) table, generated
+  from the code — prose numbers here would drift.
 - Inbound WebSocket frames/messages are capped at 16 MiB each
   (`max_message_size` / `max_frame_size` on the `WebSocketConfig`,
   `src/streaming/server.rs`, 0.43.1). This bounds worst-case per-connection
@@ -912,7 +916,9 @@ The `par-mux` daemon owns PTYs running as the invoking user and serves the
 tmux control-mode protocol over a local socket. This section describes the
 daemon's security posture as of 0.52.0, after the 2026-09-26 security pass
 landed (socket ownership hardening, the 1 MiB control-line budget, and the
-4 KiB hook-value caps); every statement is verified against
+4 KiB hook-value caps — those budgets' current values live in the
+[Resource Limits Reference](#resource-limits-reference) table); every
+statement is verified against
 `src/mux/ipc.rs`, `src/mux/server.rs`, `src/mux/hooks.rs`,
 `src/mux/persist.rs`, and `src/mux/win_resume.rs`.
 
