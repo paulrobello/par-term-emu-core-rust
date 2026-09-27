@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-09-27
+
 ### Breaking (Rust embedders)
 - **`sim` no longer implies `screenshot`** (ENH-024; `Cargo.toml`, `scripts/check_features.sh`, `.github/workflows/ci.yml`). The headless `sim` profile dropped the implied `screenshot` feature, so `cargo build --no-default-features --features sim` no longer compiles `crate::screenshot` or pulls the swash font-shaping stack and the ~700 KB of embedded fonts. **Migration:** add `features = ["sim", "screenshot"]` to keep `crate::screenshot` (verified: `cargo check --no-default-features --features sim,screenshot` compiles and `cargo test --lib --no-default-features --features sim` passes 1786 tests). The sim CI guard and `make check-features` now assert `swash` never reaches `sim`. No first-party consumer uses `sim` today, so the blast radius is zero.
 
