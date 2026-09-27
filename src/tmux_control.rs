@@ -166,6 +166,14 @@ pub enum TmuxNotification {
     /// Arguments: pane_id, agent_label
     AgentReleased { pane_id: String, agent: String },
 
+    /// A pane's agent telemetry changed (`pane.report_agent_telemetry`;
+    /// display-only roster data — model, effort, context and rate-limit
+    /// percents). Carries identity only, no values: clients re-query
+    /// `list-agents` for the fresh blob, the same shape `%sessions-changed`
+    /// teaches.
+    /// Arguments: pane_id, agent_label
+    AgentTelemetryChanged { pane_id: String, agent: String },
+
     /// A pane's user title changed (`select-pane -T`; par-mux pane-title
     /// extension — real tmux never emits this).
     /// Arguments: pane_id, new_title (empty = cleared)
@@ -212,6 +220,7 @@ impl TmuxNotification {
             Self::PasteBufferDeleted { .. } => "paste-buffer-deleted",
             Self::AgentStateChanged { .. } => "agent-state-changed",
             Self::AgentReleased { .. } => "agent-released",
+            Self::AgentTelemetryChanged { .. } => "agent-telemetry-changed",
             Self::PaneTitleChanged { .. } => "pane-title-changed",
             Self::Unknown { .. } => "unknown",
             Self::TerminalOutput { .. } => "terminal-output",
@@ -427,6 +436,7 @@ impl TmuxControlParser {
             "paste-buffer-deleted" => Self::parse_paste_buffer_deleted(args),
             "agent-state-changed" => Self::parse_agent_state_changed(args),
             "agent-released" => Self::parse_agent_released(args),
+            "agent-telemetry-changed" => Self::parse_agent_telemetry_changed(args),
             "pane-title-changed" => Self::parse_pane_title_changed(args),
             _ => Some(TmuxNotification::Unknown {
                 line: line.to_string(),
@@ -767,6 +777,20 @@ impl TmuxControlParser {
             return None;
         }
         Some(TmuxNotification::AgentReleased {
+            pane_id: parts[0].to_string(),
+            agent: parts[1].to_string(),
+        })
+    }
+
+    /// `%agent-telemetry-changed {pane_id} {agent}` — the same two-token
+    /// identity shape as `%agent-released`; the values live on the roster,
+    /// not the push.
+    fn parse_agent_telemetry_changed(args: &str) -> Option<TmuxNotification> {
+        let parts: Vec<&str> = args.split_whitespace().collect();
+        if parts.len() != 2 {
+            return None;
+        }
+        Some(TmuxNotification::AgentTelemetryChanged {
             pane_id: parts[0].to_string(),
             agent: parts[1].to_string(),
         })
@@ -1191,6 +1215,14 @@ mod tests {
             "sessions-changed"
         );
         assert_eq!(TmuxNotification::Exit.notification_type(), "exit");
+        assert_eq!(
+            TmuxNotification::AgentTelemetryChanged {
+                pane_id: "%1".to_string(),
+                agent: "claude".to_string(),
+            }
+            .notification_type(),
+            "agent-telemetry-changed"
+        );
         assert_eq!(
             TmuxNotification::Output {
                 pane_id: "%1".to_string(),

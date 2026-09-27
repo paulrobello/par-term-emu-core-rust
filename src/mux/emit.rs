@@ -114,6 +114,13 @@ pub fn emit(notification: &TmuxNotification) -> String {
         TmuxNotification::AgentReleased { pane_id, agent } => {
             format!("%agent-released {pane_id} {agent}\n")
         }
+        // Identity only, no values: the fresh blob lives on the roster, so
+        // a client re-queries `list-agents` — the same shape
+        // `%sessions-changed` teaches (keeps the push line constant-size
+        // whatever the telemetry carries).
+        TmuxNotification::AgentTelemetryChanged { pane_id, agent } => {
+            format!("%agent-telemetry-changed {pane_id} {agent}\n")
+        }
         TmuxNotification::PaneTitleChanged { pane_id, title } => {
             // The separator is omitted for an empty title (the clear
             // operation) so the wire never carries a trailing space; the
@@ -306,6 +313,26 @@ mod tests {
         let parsed = round_trip(&original);
         assert_eq!(parsed.len(), 1, "one line in, one notification out");
         assert_eq!(&parsed[0], &original, "round trip changed the notification");
+    }
+
+    /// The telemetry push, serialize-then-parse through the real parser
+    /// with full equality (card 01a0e3f11e287f038dadcf332a1af961
+    /// criterion 2 — the T5.5 conformance pattern).
+    #[test]
+    fn agent_telemetry_changed_round_trips() {
+        let original = TmuxNotification::AgentTelemetryChanged {
+            pane_id: "%5".to_string(),
+            agent: "claude".to_string(),
+        };
+        let parsed = round_trip(&original);
+        assert_eq!(parsed.len(), 1, "one line in, one notification out");
+        assert_eq!(&parsed[0], &original, "round trip changed the notification");
+        // And the wire shape itself, spelled out: identity only.
+        assert_eq!(
+            emit(&original),
+            "%agent-telemetry-changed %5 claude\n",
+            "the push carries no values — clients re-query the roster"
+        );
     }
 
     #[test]

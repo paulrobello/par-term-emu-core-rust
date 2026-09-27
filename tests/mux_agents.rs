@@ -14,6 +14,7 @@
 
 mod common;
 
+use base64::Engine as _;
 use common::{spawn_daemon, MuxFixture};
 use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
@@ -321,4 +322,118 @@ fn a_restart_resumes_the_agent_session_rather_than_starting_fresh() {
         saved2.contains("par-mux:fx:resume"),
         "the post-restart hook report (same id, start_source=resume) was accepted: {saved2}"
     );
+}
+
+/// One hook report over its own one-line connection — the send-one-JSON,
+/// read-one-reply, close shape herdr's scripts use (`parse_line` routes a
+/// `{` line from any connection to the hook layer).
+fn hook_report(path: &std::path::Path, json: &str) -> String {
+    let mut stream = UnixStream::connect(path).expect("hook connection accepted");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("timeout installs");
+    writeln!(stream, "{json}").expect("write report");
+    stream.flush().expect("flush");
+    let mut reply = String::new();
+    BufReader::new(stream.try_clone().expect("clone"))
+        .read_line(&mut reply)
+        .expect("one reply line");
+    reply
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock past epoch")
+        .as_millis() as u64
+}
+
+/// Card 01a0e3f11e287f038dadcf332a1af961: telemetry serves on the roster
+/// as one whitespace-free base64 token (fresh sample only) and the push
+/// is identity-only — a broadcast client sees `%agent-telemetry-changed`
+/// and re-queries `list-agents` for the values.
+#[test]
+fn telemetry_serves_on_the_roster_and_pushes_identity_only() {
+    let fixture = MuxFixture::new("telemetry");
+    let path = fixture.socket();
+
+    let mut daemon = spawn_daemon(&fixture);
+    wait_listening(path);
+    let mut control = Control::connect(path);
+    control.command("new-session -s agents");
+    let pane = control
+        .body_lines("list-panes")
+        .first()
+        .expect("new-session created a pane")
+        .clone();
+
+    // Claim the pane, then push fresh telemetry from a separate hook
+    // connection — both through the same one-line grammar.
+    let reply = hook_report(
+        path,
+        &format!(
+            r#"{{"id":1,"method":"pane.report_agent","params":{{"pane_id":"{pane}","agent":"kimi","state":"working","seq":1,"source":"par-mux:test"}}}}"#
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "state accepted: {reply}"
+    );
+    let _ = control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the state broadcast",
+    );
+
+    let sampled_at = unix_now_ms() - 60_000;
+    let reply = hook_report(
+        path,
+        &format!(
+            r#"{{"id":2,"method":"pane.report_agent_telemetry","params":{{"pane_id":"{pane}","agent":"kimi","seq":2,"source":"par-mux:test","telemetry":{{"version":1,"source":"claude_code","sampled_at_unix_ms":{sampled_at},"model":"GLM 5.3","effort":"high","context_used_percent":63}}}}}}"#
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "telemetry accepted: {reply}"
+    );
+
+    // The push carries identity only — no values on the wire.
+    let push = control.line_until(
+        |line| line.starts_with("%agent-telemetry-changed"),
+        "the telemetry broadcast",
+    );
+    assert_eq!(
+        push,
+        format!("%agent-telemetry-changed {pane} kimi\n"),
+        "the push is identity-only; clients re-query the roster"
+    );
+
+    // The roster row carries the fresh blob as one decodable token.
+    let roster = control.body_lines("list-agents");
+    assert_eq!(roster.len(), 1, "one rostered pane: {roster:?}");
+    let row = &roster[0];
+    let prefix = format!("{pane} kimi working hook ");
+    assert!(
+        row.starts_with(&prefix),
+        "the row keeps its pre-telemetry shape up to the token: {row}"
+    );
+    let token = row[prefix.len()..].trim();
+    let encoded = token
+        .strip_prefix("telemetry=")
+        .expect("the one trailing token is telemetry=<b64>");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .expect("the token is standard base64");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&decoded).expect("the token decodes to the canonical JSON");
+    assert_eq!(parsed["version"], 1);
+    assert_eq!(parsed["source"], "claude_code");
+    assert_eq!(parsed["model"], "GLM 5.3", "spaces survive the token");
+    assert_eq!(parsed["context_used_percent"], 63);
+    assert!(
+        !encoded.contains(char::is_whitespace),
+        "the encoded token is whitespace-free even though the payload is not"
+    );
+
+    drop(control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut daemon);
 }

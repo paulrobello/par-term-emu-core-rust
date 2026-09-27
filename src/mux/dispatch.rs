@@ -340,10 +340,17 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             // cannot break the one-line-per-pane shape. Absent
             // message, four tokens exactly.
             let reason = pane.metadata().get("agent_message");
-            let entry = match reason {
+            let mut entry = match reason {
                 Some(reason) => format!("{agent} {state} {source} {reason}"),
                 None => format!("{agent} {state} {source}"),
             };
+            // Fresh telemetry rides as one final whitespace-free token
+            // (base64 of the canonical JSON — string values carry
+            // spaces). Stale or absent telemetry adds nothing, so a
+            // pane without it keeps the exact pre-telemetry row.
+            if let Some(telemetry) = crate::mux::hooks::fresh_telemetry_b64(pane.metadata()) {
+                entry.push_str(&format!(" telemetry={telemetry}"));
+            }
             Some((p, entry))
         })
         .collect();

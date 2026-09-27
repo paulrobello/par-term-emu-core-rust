@@ -1106,7 +1106,7 @@ sections; the numbers live here.
 | `MAX_FILE_SIZE` | 100 MiB | `src/graphics/kitty.rs:1115` | Bytes read from one kitty file medium named by an escape payload. |
 | `MAX_IMAGE_DIMENSION` | 16 KiB | `src/graphics/mod.rs:37` | Width or height accepted for a graphic decoded from a protocol payload. |
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
-| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:80` | Bytes accepted for one hook or agent report value sent from a pane. |
+| `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:81` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
 | `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:85` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |

@@ -575,6 +575,28 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 window_raw_flags: None,
                 raw_line: None,
             },
+            // Identity only — the fresh telemetry blob lives on the
+            // list-agents roster, so clients re-query.
+            TmuxNotification::AgentTelemetryChanged { pane_id, agent } => PyTmuxNotification {
+                notification_type: "agent-telemetry-changed".to_string(),
+                source: None,
+                timestamp: None,
+                command_number: None,
+                flags: None,
+                pane_id: Some(pane_id.clone()),
+                window_id: None,
+                session_id: None,
+                name: Some(agent.clone()),
+                client: None,
+                data: None,
+                delay_ms: None,
+                subscription_name: None,
+                value: None,
+                window_layout: None,
+                window_visible_layout: None,
+                window_raw_flags: None,
+                raw_line: None,
+            },
             TmuxNotification::PaneTitleChanged { pane_id, title } => PyTmuxNotification {
                 notification_type: "pane-title-changed".to_string(),
                 source: None,

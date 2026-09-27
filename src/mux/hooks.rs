@@ -26,6 +26,7 @@ use crate::mux::ids::PaneId;
 use crate::mux::pane::MuxPane;
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -483,9 +484,10 @@ const TELEMETRY_FRESHNESS_MS: u64 = 55 * 60 * 1000;
 /// 0-100 rounded, no control characters.
 ///
 /// Like every report it carries the common header and clears the
-/// per-source `seq` rule. Four silent drops, no write and no broadcast
-/// (the roster query owns serving; a notification lands with it, card
-/// 01a0e3f11e287f038dadcf332a1af961): a sample past the freshness window,
+/// per-source `seq` rule. An accepted write broadcasts
+/// `%agent-telemetry-changed` (card 01a0e3f11e287f038dadcf332a1af961) —
+/// identity only, no values: clients re-query the roster. Four silent
+/// drops, no write and no broadcast: a sample past the freshness window,
 /// a report at or below the last accepted `seq`, a sample older than
 /// the one already stored (a backward step, whatever its `seq`), and a
 /// report whose agent is not the pane's current label (telemetry attaches
@@ -547,7 +549,13 @@ fn handle_telemetry_report(
         pane.set_metadata("agent_source", source);
     }
     pane.set_metadata(TELEMETRY_KEY, &telemetry);
-    (ok_reply(id), None)
+    (
+        ok_reply(id),
+        Some(TmuxNotification::AgentTelemetryChanged {
+            pane_id: header.pane_id.to_string(),
+            agent: header.agent.clone(),
+        }),
+    )
 }
 
 /// Validate the `telemetry` object into its canonical stored form — the
@@ -739,6 +747,28 @@ fn stored_telemetry_sampled_at(
                 .get("sampled_at_unix_ms")
                 .and_then(serde_json::Value::as_u64)
         })
+}
+
+/// The pane's telemetry for the roster row: the stored canonical JSON,
+/// base64-encoded so it rides as ONE whitespace-free token
+/// (`telemetry=<b64>` — string values carry spaces, the row is
+/// space-split). `None` when the pane holds no telemetry or the sample
+/// has aged past [`TELEMETRY_FRESHNESS_MS`] — the reader-side half of
+/// absent-beats-stale, so a pane whose hook stopped pushing serves the
+/// plain four-token row again without any write.
+pub(crate) fn fresh_telemetry_b64(
+    metadata: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let raw = metadata.get(TELEMETRY_KEY)?;
+    let sampled_at = stored_telemetry_sampled_at(metadata)?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(u64::MAX);
+    if now_ms.saturating_sub(sampled_at) > TELEMETRY_FRESHNESS_MS {
+        return None;
+    }
+    Some(base64::engine::general_purpose::STANDARD.encode(raw))
 }
 
 /// `session_resume_argv`: the agent's own resume invocation as argv —
@@ -1065,8 +1095,12 @@ mod tests {
         );
         assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
         assert_eq!(
-            notification, None,
-            "telemetry broadcasts nothing yet — the roster-serving card owns the push"
+            notification,
+            Some(TmuxNotification::AgentTelemetryChanged {
+                pane_id: pane_id.to_string(),
+                agent: "claude".to_string(),
+            }),
+            "an accepted write pushes the identity-only telemetry signal"
         );
 
         let guard = tree.lock();
@@ -1134,7 +1168,7 @@ mod tests {
     fn stale_telemetry_sample_is_dropped_absent_beats_stale() {
         let (tree, pane_id) = tree_with_pane();
         // Two hours old — past the 55-minute freshness window.
-        let (reply, _) = handle_report(
+        let (reply, notification) = handle_report(
             &telemetry_report(
                 pane_id,
                 "claude",
@@ -1147,6 +1181,7 @@ mod tests {
             reply.contains(r#""result":"ok""#),
             "dropped silently, like a stale seq: {reply}"
         );
+        assert_eq!(notification, None, "a dropped report broadcasts nothing");
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert!(
@@ -1371,7 +1406,7 @@ mod tests {
     fn telemetry_from_a_different_agent_never_takes_over_the_claim() {
         let (tree, pane_id) = tree_with_pane();
         handle_report(&state_report(pane_id, "pi", "working", 1_000), &tree);
-        let (reply, _) = handle_report(
+        let (reply, notification) = handle_report(
             &telemetry_report(
                 pane_id,
                 "claude",
@@ -1384,6 +1419,7 @@ mod tests {
             reply.contains(r#""result":"ok""#),
             "mismatched agent dropped silently, like the release guard: {reply}"
         );
+        assert_eq!(notification, None, "a dropped report broadcasts nothing");
         let guard = tree.lock();
         let pane = guard.pane(pane_id).expect("pane exists");
         assert_eq!(
@@ -1394,6 +1430,34 @@ mod tests {
         assert!(
             !pane.metadata().contains_key("agent_telemetry"),
             "a foreign agent's telemetry never attaches"
+        );
+    }
+
+    /// The roster reader's half of absent-beats-stale: a stored blob whose
+    /// sample aged past the window serves nothing, so the row loses its
+    /// telemetry token without any write (fabricated metadata — the write
+    /// side would never let this blob land).
+    #[test]
+    fn fresh_telemetry_serving_drops_aged_samples() {
+        let (tree, pane_id) = tree_with_pane();
+        {
+            let mut guard = tree.lock();
+            let pane = guard.pane_mut(pane_id).expect("pane exists");
+            pane.set_metadata("agent", "kimi");
+            pane.set_metadata(
+                TELEMETRY_KEY,
+                &format!(
+                    r#"{{"version":1,"source":"claude_code","sampled_at_unix_ms":{}}}"#,
+                    now_unix_ms() - 2 * 3_600_000
+                ),
+            );
+        }
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert_eq!(
+            fresh_telemetry_b64(pane.metadata()),
+            None,
+            "an aged sample is served as absent"
         );
     }
 
