@@ -24,6 +24,7 @@ impl Terminal {
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
                     self.active_grid_mut()
                         .insert_lines(n, cursor_row, scroll_bottom);
+                    self.mark_rows_dirty(cursor_row, scroll_bottom);
                 }
             }
             'M' => {
@@ -39,6 +40,7 @@ impl Terminal {
                 if cursor_row >= scroll_top && cursor_row <= scroll_bottom {
                     self.active_grid_mut()
                         .delete_lines(n, cursor_row, scroll_bottom);
+                    self.mark_rows_dirty(cursor_row, scroll_bottom);
                 }
             }
             '@' => {
