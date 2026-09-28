@@ -207,6 +207,12 @@ name = "terminal_throughput"
 harness = false
 required-features = ["rust-only"]
 
+# FFI per-frame dirty-readback cost (ParDeck RQ2) — same gating as above.
+[[bench]]
+name = "ffi_readback"
+harness = false
+required-features = ["rust-only"]
+
 [[bench]]
 name = "pty_geometry"
 harness = false

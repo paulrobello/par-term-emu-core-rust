@@ -299,7 +299,14 @@ make xcframework
 # → target/xcframework/TerminalCore.xcframework
 ```
 
-`TerminalCore.xcframework` (device + simulator slices) is also attached to every GitHub release. The C surface covers state snapshots (`terminal_get_state`/`terminal_free_state`) and event observers (`terminal_add_observer`/`terminal_remove_observer`); drop the xcframework into an Xcode project and import `terminal_core.h`.
+`TerminalCore.xcframework` (device + simulator slices) is also attached to every GitHub release. Drop it into an Xcode project and import `terminal_core.h`.
+
+The C surface is a full embedding API, not just snapshots:
+
+- **Lifecycle/input**: `terminal_create` / `terminal_free` / `terminal_feed` (VT bytes) / `terminal_resize`
+- **Damage**: `terminal_dirty_ranges` returns coalesced inclusive dirty-row ranges (the emulator knows exactly what changed) and `terminal_mark_clean` consumes them
+- **Pinned readback**: `terminal_read_row` / `terminal_read_scrollback_row` copy cells into caller-owned buffers — no allocation, no full-grid copy per frame; `terminal_get_cursor` / `terminal_get_modes` carry per-frame state
+- **Key encoding**: `terminal_encode_key` turns key events into PTY bytes (xterm legacy + kitty level-1 disambiguate, honoring application cursor keys and the negotiated kitty flags) so the frontend never reimplements key translation
 
 ### Optional Components
 
