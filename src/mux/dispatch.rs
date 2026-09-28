@@ -24,6 +24,7 @@ use crate::mux::server::{
 };
 use crate::mux::tree::MuxTree;
 use crate::tmux_control::TmuxNotification;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, SyncSender};
@@ -308,16 +309,51 @@ fn cmd_list_panes(ctx: &Ctx<'_>) -> Outcome {
     Outcome::ok(ctx, &body)
 }
 
+/// Format one roster row's entry (everything after the pane id): agent,
+/// state, source, then zero or more whitespace-free `key=value` tokens —
+/// `reason=<base64>` (blocked reason), `telemetry=<base64>`,
+/// `host_telemetry=<base64>`. Every token after `source` is key=value,
+/// so a consumer parses positions 1-4 then splits each remaining token
+/// on its first `=` (ARC-060: a free-text reason column was ambiguous).
+fn roster_row_entry(
+    agent: &str,
+    state: &str,
+    source: &str,
+    reason: Option<&str>,
+    telemetry_b64: Option<&str>,
+    host_telemetry_b64: Option<&str>,
+) -> String {
+    let mut entry = format!("{agent} {state} {source}");
+    if let Some(reason) = reason {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(reason.as_bytes());
+        entry.push_str(&format!(" reason={encoded}"));
+    }
+    if let Some(telemetry) = telemetry_b64 {
+        entry.push_str(&format!(" telemetry={telemetry}"));
+    }
+    if let Some(host) = host_telemetry_b64 {
+        entry.push_str(&format!(" host_telemetry={host}"));
+    }
+    entry
+}
+
 fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
     // Wire contract: list-agents is the roster — one line per pane a
     // hook has CLAIMED or a pattern has MATCHED, `%N <agent> <state>
     // <source>` with source `hook` or `scrape` (T5.4 + the scrape
     // tier's provenance rule: a consumer must tell a claim from a
-    // guess), plus an optional trailing blocked-reason column (the
-    // rest of the line; whitespace-collapsed at the endpoint). Panes
-    // without either are absent outright: `unknown` means no hook ever
-    // reported and no rule ever matched, never "idle" (the Phase 5
-    // ruling). Fixed shape, no -F — the T4.E decision.
+    // guess), then zero or more whitespace-free `key=value` tokens:
+    // `reason=<base64>` (the blocked reason, standard base64 of the
+    // whitespace-collapsed message) and `telemetry=<base64>` /
+    // `host_telemetry=<base64>` (fresh samples only). Every token
+    // after `source` is key=value, so a consumer parses positions 1-4
+    // then splits each remaining token on its first `=` — a free-text
+    // reason column after `source` was ambiguous (ARC-060: a reason
+    // reading `hook` or containing `telemetry=` defeated positional
+    // parsers). Panes without state are absent outright: `unknown`
+    // means no hook ever reported and no rule ever matched, never
+    // "idle" (the Phase 5 ruling). Fixed shape, no -F — the T4.E
+    // decision.
     let guard = ctx.tree.lock();
     let mut roster: Vec<(PaneId, String)> = guard
         .sessions()
@@ -335,15 +371,10 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
                 .get("agent_state_source")
                 .map(String::as_str)
                 .unwrap_or("hook");
-            // The blocked reason rides as the rest of the line —
-            // already whitespace-collapsed by the endpoint, so it
-            // cannot break the one-line-per-pane shape. Absent
-            // message, four tokens exactly.
-            let reason = pane.metadata().get("agent_message");
-            let mut entry = match reason {
-                Some(reason) => format!("{agent} {state} {source} {reason}"),
-                None => format!("{agent} {state} {source}"),
-            };
+            // The blocked reason rides as one whitespace-free
+            // `reason=<base64>` token (same standard engine as the
+            // telemetry tokens). Absent message, no token.
+            let reason = pane.metadata().get("agent_message").map(String::as_str);
             // Fresh telemetry rides as one final whitespace-free token
             // (base64 of the canonical JSON — string values carry
             // spaces). Stale or absent telemetry adds nothing, so a
@@ -351,12 +382,16 @@ fn cmd_list_agents(ctx: &Ctx<'_>) -> Outcome {
             // host probe's sibling token follows the same rule, aged
             // per field — and neither ever triggers a probe: the roster
             // reads only what the cadence thread already wrote.
-            if let Some(telemetry) = crate::mux::hooks::fresh_telemetry_b64(pane.metadata()) {
-                entry.push_str(&format!(" telemetry={telemetry}"));
-            }
-            if let Some(host) = crate::mux::host_probe::fresh_host_telemetry_b64(pane.metadata()) {
-                entry.push_str(&format!(" host_telemetry={host}"));
-            }
+            let telemetry = crate::mux::hooks::fresh_telemetry_b64(pane.metadata());
+            let host = crate::mux::host_probe::fresh_host_telemetry_b64(pane.metadata());
+            let entry = roster_row_entry(
+                agent,
+                state,
+                source,
+                reason,
+                telemetry.as_deref(),
+                host.as_deref(),
+            );
             Some((p, entry))
         })
         .collect();
@@ -989,7 +1024,8 @@ fn cmd_version(ctx: &Ctx<'_>) -> Outcome {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_start_dir;
+    use super::{resolve_start_dir, roster_row_entry};
+    use base64::Engine as _;
 
     /// The `-c` degrade rule (card 01a0d9b2fb02): an existing directory
     /// passes through untouched; a missing one falls back to home with a
@@ -1009,6 +1045,63 @@ mod tests {
         assert!(
             note.contains("/par-mux-test-no-such-dir is gone") && note.contains("pane started in"),
             "note names the gone dir and the landing dir: {note}"
+        );
+    }
+
+    #[test]
+    fn roster_row_entry_encodes_the_reason_as_one_unambiguous_token() {
+        // ARC-060: a reason ending in `hook` or containing `telemetry=`
+        // cannot be confused with the source column or the key=value
+        // tail — every token after source is key=value and base64.
+        let entry = roster_row_entry(
+            "pi",
+            "blocked",
+            "hook",
+            Some("waiting on telemetry=x hook"),
+            Some("dGVsZW1ldHJ5"),
+            Some("aG9zdA=="),
+        );
+        let mut tokens = entry.split_whitespace();
+        assert_eq!(tokens.next(), Some("pi"), "agent is positional 1");
+        assert_eq!(tokens.next(), Some("blocked"), "state is positional 2");
+        assert_eq!(tokens.next(), Some("hook"), "source is positional 3");
+        let rest: Vec<&str> = tokens.collect();
+        assert_eq!(rest.len(), 3, "one token per optional field: {rest:?}");
+        assert_eq!(
+            rest[0].split_once('=').map(|(k, _)| k),
+            Some("reason"),
+            "reason precedes the telemetry tokens"
+        );
+        for token in &rest {
+            let (key, value) = token.split_once('=').expect("key=value token");
+            assert!(
+                !value.contains(char::is_whitespace),
+                "{key} token is whitespace-free"
+            );
+            assert!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(value)
+                    .is_ok(),
+                "{key} token is standard base64"
+            );
+        }
+        let reason_b64 = rest[0].strip_prefix("reason=").unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(reason_b64)
+            .unwrap();
+        assert_eq!(
+            decoded, b"waiting on telemetry=x hook",
+            "the reason round-trips with both ambiguity shapes intact"
+        );
+        assert!(
+            !rest.contains(&"hook"),
+            "no token can be mistaken for the source"
+        );
+
+        // Absent fields add nothing: the row keeps its exact shorter shape.
+        assert_eq!(
+            roster_row_entry("pi", "working", "hook", None, None, None),
+            "pi working hook"
         );
     }
 }

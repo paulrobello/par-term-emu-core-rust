@@ -14,6 +14,7 @@
 
 mod common;
 
+use base64::Engine as _;
 use common::{spawn_daemon, MuxFixture};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::Shutdown;
@@ -205,6 +206,52 @@ fn report_with_message(pane: &str, state: &str, message: &str, seq: u64) -> Stri
     )
 }
 
+/// The decoded fields of one roster row (ARC-060 grammar): positions 1-4
+/// fixed (`%N agent state source`), then zero or more whitespace-free
+/// `key=value` tokens. This is the positional parse a roster consumer
+/// writes — the shape par-term's fixed parser targets.
+struct RosterRow {
+    pane: String,
+    agent: String,
+    state: String,
+    source: String,
+    reason: Option<String>,
+    telemetry: Option<Vec<u8>>,
+    host_telemetry: Option<Vec<u8>>,
+}
+
+fn parse_roster_row(row: &str) -> RosterRow {
+    let mut tokens = row.split_whitespace();
+    let pane = tokens.next().expect("pane token").to_string();
+    let agent = tokens.next().expect("agent token").to_string();
+    let state = tokens.next().expect("state token").to_string();
+    let source = tokens.next().expect("source token").to_string();
+    let mut fields = RosterRow {
+        pane,
+        agent,
+        state,
+        source,
+        reason: None,
+        telemetry: None,
+        host_telemetry: None,
+    };
+    for token in tokens {
+        let (key, value) = token.split_once('=').unwrap_or_else(|| {
+            panic!("every token after source is key=value, got {token:?} in {row:?}")
+        });
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(value)
+            .unwrap_or_else(|_| panic!("{key} token is standard base64 in {row:?}"));
+        match key {
+            "reason" => fields.reason = Some(String::from_utf8(decoded).expect("reason is UTF-8")),
+            "telemetry" => fields.telemetry = Some(decoded),
+            "host_telemetry" => fields.host_telemetry = Some(decoded),
+            other => panic!("unknown roster token {other:?} in {row:?}"),
+        }
+    }
+    fields
+}
+
 /// The pi session-report shape the shipped par-term asset sends: path-only
 /// ref (`currentSessionRef` drops the id when a path exists) plus the
 /// resume invocation the extension reports so Phase 6 needs no table entry
@@ -250,18 +297,24 @@ fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
     );
 
     // The reason is readable through list-agents without waiting for a
-    // broadcast — the reattaching-client case the roster serves.
+    // broadcast — the reattaching-client case the roster serves. It rides
+    // as one `reason=<base64>` token: parse positions 1-4, then every
+    // remaining token on its first `=` (the ARC-060 grammar).
     let roster = stage.control.command("list-agents").join("");
     let lines = body_lines(&roster);
+    let row = lines
+        .iter()
+        .find(|line| line.starts_with(&format!("{} pi blocked hook", stage.pane)))
+        .expect("the rostered pane carries its blocked row");
+    let fields = parse_roster_row(row);
+    assert_eq!(
+        fields.reason.as_deref(),
+        Some("permission needed for rm -rf build/"),
+        "the reason decodes from the roster line: {row}"
+    );
     assert!(
-        lines.contains(
-            &format!(
-                "{} pi blocked hook permission needed for rm -rf build/",
-                stage.pane
-            )
-            .as_str()
-        ),
-        "the reason rides the roster line: {lines:?}"
+        fields.telemetry.is_none() && fields.host_telemetry.is_none(),
+        "no telemetry tokens on this row: {row}"
     );
 
     // A later report without a message (empty string = absent) clears it: a
@@ -280,6 +333,82 @@ fn a_blocked_reason_rides_the_roster_line_and_leaves_with_the_state() {
         lines.contains(&format!("{} pi working hook", stage.pane).as_str()),
         "no reason residue on a message-less state: {lines:?}"
     );
+
+    drop(stage.control.0.shutdown(Shutdown::Both));
+    sigterm_clean(&mut stage.daemon);
+}
+
+/// ARC-060 conformance: a blocked reason containing `telemetry=` and
+/// ending in `hook` — the two shapes that made the old free-text column
+/// ambiguous — rides the roster next to a fresh telemetry token, and the
+/// positional parse a roster consumer writes (tokens 1-4, then each
+/// remaining token split on its first `=`) recovers every field.
+#[test]
+fn roster_reason_and_telemetry_tokens_parse_positionally() {
+    let mut stage = stage("reason-telemetry");
+
+    // The reply block's body lines, with protocol framing stripped (the
+    // roster test's local helper, repeated here).
+    fn body_lines(text: &str) -> Vec<&str> {
+        text.lines()
+            .filter(|l| {
+                !l.starts_with("%output")
+                    && !l.starts_with("%begin")
+                    && !l.starts_with("%end")
+                    && !l.starts_with("%error")
+            })
+            .map(str::trim)
+            .collect()
+    }
+
+    let reply = hook_round_trip(
+        &stage.path,
+        &report_with_message(&stage.pane, "blocked", "waiting on telemetry=x hook", 1_000),
+    );
+    assert!(reply.contains(r#""result":"ok""#), "accepted: {reply}");
+    stage.control.line_until(
+        |line| line.starts_with("%agent-state-changed"),
+        "the blocked broadcast",
+    );
+
+    let sampled_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock past epoch")
+        .as_millis() as u64
+        - 60_000;
+    let reply = hook_round_trip(
+        &stage.path,
+        &format!(
+            r#"{{"id":2,"method":"pane.report_agent_telemetry","params":{{"pane_id":"{}","agent":"pi","seq":1001,"source":"par-mux:test","telemetry":{{"version":1,"source":"claude_code","sampled_at_unix_ms":{},"model":"GLM 5.3"}}}}}}"#,
+            stage.pane, sampled_at
+        ),
+    );
+    assert!(
+        reply.contains(r#""result":"ok""#),
+        "telemetry accepted: {reply}"
+    );
+    stage.control.line_until(
+        |line| line.starts_with("%agent-telemetry-changed"),
+        "the telemetry broadcast",
+    );
+
+    let roster = stage.control.command("list-agents").join("");
+    let lines = body_lines(&roster);
+    assert_eq!(lines.len(), 1, "one rostered pane: {lines:?}");
+    let fields = parse_roster_row(lines[0]);
+    assert_eq!(fields.pane, stage.pane);
+    assert_eq!(fields.agent, "pi");
+    assert_eq!(fields.state, "blocked");
+    assert_eq!(fields.source, "hook");
+    assert_eq!(
+        fields.reason.as_deref(),
+        Some("waiting on telemetry=x hook"),
+        "the reason decodes with both ambiguity shapes intact"
+    );
+    let telemetry = fields.telemetry.expect("the telemetry token rides the row");
+    let parsed: serde_json::Value = serde_json::from_slice(&telemetry)
+        .expect("the telemetry token decodes to the canonical JSON");
+    assert_eq!(parsed["model"], "GLM 5.3");
 
     drop(stage.control.0.shutdown(Shutdown::Both));
     sigterm_clean(&mut stage.daemon);
