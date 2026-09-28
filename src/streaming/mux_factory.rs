@@ -54,7 +54,14 @@ pub struct MuxSessionFactory {
     selector: MuxPaneSelector,
     scrollback: usize,
     sessions: RwLock<HashMap<String, Arc<MirrorLink>>>,
-    streaming_server: RwLock<Option<Arc<StreamingServer>>>,
+    // Weak on purpose: the server holds this factory strongly
+    // (`with_factory`), so a strong back-reference is a reference cycle
+    // that keeps every session — and each session's daemon-connection
+    // drain thread holds the server strongly in turn — alive after the
+    // last real owner drops. Measured as the stress test hanging at
+    // runtime teardown: the enqueue drain's blocking task never sees the
+    // channel close because the cycle keeps the session state alive.
+    streaming_server: RwLock<Option<std::sync::Weak<StreamingServer>>>,
 }
 
 /// One streaming session's link to its pane.
@@ -100,7 +107,7 @@ impl MuxSessionFactory {
     /// The server whose sessions this factory closes when a pane goes away
     /// and to which it announces mirror re-fits.
     pub fn set_streaming_server(&self, server: Arc<StreamingServer>) {
-        *self.streaming_server.write() = Some(server);
+        *self.streaming_server.write() = Some(Arc::downgrade(&server));
     }
 
     fn pane_for(
@@ -356,11 +363,16 @@ impl SessionFactory for MuxSessionFactory {
 /// Read the daemon connection in order: apply the pane's `%output` to the
 /// mirror and forward it to viewers, re-fit on `%layout-change`, and mark the
 /// link dead when the pane or the connection goes away.
+///
+/// The server is held weakly: this thread's own lifetime is tied to the
+/// mirror link the factory owns, and the factory is owned by the server —
+/// a strong capture here would close the loop that kept the server (and
+/// every session's state) alive after the last real owner dropped.
 fn spawn_drain(
     link: Arc<MirrorLink>,
     reader: Lines,
     session_id: String,
-    server: Option<Arc<StreamingServer>>,
+    server: Option<std::sync::Weak<StreamingServer>>,
 ) {
     std::thread::spawn(move || {
         let pane_id = format!("%{}", link.pane);
@@ -431,11 +443,14 @@ fn spawn_drain(
                             }
                             changed
                         };
-                        if let (true, Some(server)) = (changed, server.as_ref()) {
-                            server.send_to_session(
-                                &session_id,
-                                ServerMessage::resize(cols as u16, rows as u16),
-                            );
+                        if changed {
+                            if let Some(server) = server.as_ref().and_then(std::sync::Weak::upgrade)
+                            {
+                                server.send_to_session(
+                                    &session_id,
+                                    ServerMessage::resize(cols as u16, rows as u16),
+                                );
+                            }
                         }
                     }
                     TmuxNotification::WindowClose { window_id } if window_id == link.window => {
@@ -453,7 +468,7 @@ fn spawn_drain(
         }
         link.alive.store(false, Ordering::Relaxed);
         if !link.closed.load(Ordering::Relaxed) {
-            if let Some(server) = server {
+            if let Some(server) = server.and_then(|weak| weak.upgrade()) {
                 server.close_session(&session_id, "mux pane closed".to_string());
             }
         }
@@ -746,14 +761,19 @@ mod tests {
     /// the client types — alternating the server's enqueue path (queue ->
     /// drain -> writer) with the writer directly, across interleaved resizes
     /// and a second viewer's daemon connection — must append exactly one
-    /// line to the pane-side file. It reproduces the residual as a STALL,
-    /// not a loss: frames park 10-60 s somewhere between the session's
-    /// completed socket writes and the daemon's read loop (the queue-side
-    /// park in the old tokio channel is fixed; the daemon read-wake park is
-    /// card-open), so it stays ignored until that leg is fixed. Run on
-    /// demand with `--ignored --nocapture` and DEBUG_LEVEL=3: the MUX
-    /// receipt log + PTY_WRITE ledger place any park exactly.
-    #[ignore = "repro for 01a0e80db3e870e282af0cf84405043b: daemon read-wake stall open"]
+    /// line to the pane-side file. It reproduced the residual as a STALL,
+    /// not a loss: the enqueue drain's park (first tokio `blocking_recv`,
+    /// then std `recv`) held queued chunks for the full deadline until an
+    /// unrelated thread unpark released them; the drain is now a polling
+    /// loop over the channel, the writer mutex, and a plain thread. What
+    /// the repro still catches on this machine is narrower: the drain
+    /// THREAD itself stops executing — observed parked inside a 10 ms
+    /// `nanosleep` for a full 15 s while sibling threads (test thread,
+    /// daemon read loops) ran on schedule, released at test teardown —
+    /// tracked as its own card. Run with `--ignored --nocapture` and
+    /// DEBUG_LEVEL=3: the MUX receipt log, PTY_WRITE ledger, and the
+    /// enqueue/drain pickup logs place any park exactly.
+    #[ignore = "repro: drain-thread deschedule (macOS 27 seed) — own card; the input-path parks are fixed"]
     #[tokio::test(flavor = "multi_thread")]
     async fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
         let (dir, socket, _control, pane) = daemon();

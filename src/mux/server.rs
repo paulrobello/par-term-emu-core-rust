@@ -505,6 +505,8 @@ fn handle_client(
         // before EOF, matching `Lines`' last-item behavior.
         let mut line = String::new();
         let mut undecodable = false;
+        let pickup_started = std::time::Instant::now();
+        let mut wakes = 0u32;
         loop {
             match reader.read_line(&mut line) {
                 Ok(0) => {
@@ -535,9 +537,30 @@ fn handle_client(
                     ));
                     break 'connection;
                 }
-                Ok(_) if line.ends_with('\n') => break,
+                Ok(_) if line.ends_with('\n') => {
+                    // Wake-cadence evidence (card 01a0e80db3e870e282af0cf84405043b):
+                    // a line that took poll wakes or >1 poll interval to arrive
+                    // is the signature of a parked read loop — log it so a
+                    // stall's cadence is readable in the debug file.
+                    let waited = pickup_started.elapsed();
+                    if wakes > 0 || waited > EVICTION_POLL {
+                        crate::debug_log!(
+                            "MUX",
+                            "client {client_id} picked up a {} B line after {:?} and {wakes} poll wakes",
+                            line.len(),
+                            waited
+                        );
+                    }
+                    break;
+                }
                 Ok(_) => continue,
                 Err(err) if is_poll_wake(&err) => {
+                    wakes += 1;
+                    crate::debug_log!(
+                        "MUX",
+                        "client {client_id} read poll wake #{wakes} ({:?} since line start)",
+                        pickup_started.elapsed()
+                    );
                     if evicted.load(Ordering::Relaxed) {
                         break 'connection;
                     }
@@ -623,7 +646,15 @@ fn handle_client(
                     command_number,
                     shutdown: shutdown.as_deref(),
                 };
+                let dispatch_started = std::time::Instant::now();
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
+                if dispatch_started.elapsed() > Duration::from_millis(100) {
+                    crate::debug_log!(
+                        "MUX",
+                        "client {client_id} dispatch of command #{command_number} took {:?}",
+                        dispatch_started.elapsed()
+                    );
+                }
                 if reply_is_error(&reply) {
                     // A rejected command writes nothing to any pane and has
                     // no other trace; without this log the rejection is

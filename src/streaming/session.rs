@@ -383,49 +383,112 @@ impl StreamSessionState {
         if guard.is_none() {
             let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
             let weak = Arc::downgrade(self);
-            tokio::task::spawn_blocking(move || {
-                use std::io::Write;
-                while let Ok(bytes) = rx.recv() {
-                    // Off the queue: release the budget whether this chunk
-                    // is written or not.
-                    if let Some(session) = weak.upgrade() {
-                        session
-                            .queued_input_bytes
-                            .fetch_sub(bytes.len(), Ordering::Relaxed);
-                        let writer = session.pty_writer.read().as_ref().cloned();
-                        if let Some(w) = writer {
-                            let mut w = w.lock();
-                            if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+            // A plain thread, not `spawn_blocking`: the blocking-pool shape
+            // was measured losing the thread wholesale — parked in a
+            // 10 ms `nanosleep` for a full 15 s while every other thread
+            // in the process ran on schedule, across four different park
+            // primitives (tokio `blocking_recv`, std `recv`,
+            // `recv_timeout`'s dispatch semaphore, and plain `sleep`).
+            // Whatever the OS-level trigger, it followed the blocking-pool
+            // thread, not the primitive; a detached std thread exits when
+            // the channel closes (the sender dies with the session), so
+            // the lifetime story is unchanged.
+            let spawned = std::thread::Builder::new()
+                .name("pty-input-drain".to_string())
+                .spawn(move || {
+                    use std::io::Write;
+                    // Poll, don't park. Every park-based wait on this drain
+                    // was measured losing its wakeup while chunks sat queued
+                    // (card 01a0e80db3e870e282af0cf84405043b): the tokio
+                    // channel's `blocking_recv` (444be93), then std `recv`,
+                    // then std `recv_timeout(250ms)` — the last observed parked
+                    // in `semaphore_timedwait_trap` for a full 15 s, deaf to
+                    // both the 250 ms deadline and the sender's signal, while
+                    // `nanosleep`-based sleeps in the same process kept firing
+                    // on schedule. A `try_recv` + sleep loop sits on the
+                    // primitive that provably wakes, bounds a lost event to
+                    // one poll interval, and drains the queue without parking
+                    // whenever input is flowing.
+                    const DRAIN_POLL: Duration = Duration::from_millis(10);
+                    loop {
+                        let bytes = match rx.try_recv() {
+                            Ok(bytes) => bytes,
+                            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                                std::thread::sleep(DRAIN_POLL);
+                                continue;
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                        };
+                        crate::debug_log!("STREAMING", "drain picked up {} B", bytes.len());
+                        // Off the queue: release the budget whether this chunk
+                        // is written or not.
+                        if let Some(session) = weak.upgrade() {
+                            session
+                                .queued_input_bytes
+                                .fetch_sub(bytes.len(), Ordering::Relaxed);
+                            let writer = session.pty_writer.read().as_ref().cloned();
+                            if let Some(w) = writer {
+                                // try_lock + retry, not a blocking lock: a
+                                // blocking `lock` was measured losing its
+                                // unlock wake for the rest of the burst (the
+                                // same lost-wake disease the channel poll
+                                // above defends against), stranding every
+                                // later chunk behind a mutex a woken thread
+                                // never took. Polling bounds that to one
+                                // interval; the uncontended fast path (the
+                                // only production shape — all input flows
+                                // through this drain) never waits at all.
+                                let mut w = loop {
+                                    match w.try_lock() {
+                                        Some(guard) => break guard,
+                                        None => std::thread::sleep(DRAIN_POLL),
+                                    }
+                                };
+                                if let Err(e) = w.write_all(&bytes).and_then(|_| w.flush()) {
+                                    crate::debug_error!(
+                                        "STREAMING",
+                                        "PTY input write error for session {}: {}",
+                                        session.id,
+                                        e
+                                    );
+                                    session.metrics.errors.fetch_add(1, Ordering::Relaxed);
+                                }
+                            } else {
+                                // PTY detached between enqueue and drain; the
+                                // bytes have nowhere to go (previously a silent
+                                // skip).
+                                session
+                                    .metrics
+                                    .dropped_messages
+                                    .fetch_add(1, Ordering::Relaxed);
                                 crate::debug_error!(
                                     "STREAMING",
-                                    "PTY input write error for session {}: {}",
+                                    "PTY input dropped (no PTY writer) for session {}: {} bytes",
                                     session.id,
-                                    e
+                                    bytes.len()
                                 );
-                                session.metrics.errors.fetch_add(1, Ordering::Relaxed);
                             }
                         } else {
-                            // PTY detached between enqueue and drain; the
-                            // bytes have nowhere to go (previously a silent
-                            // skip).
-                            session
-                                .metrics
-                                .dropped_messages
-                                .fetch_add(1, Ordering::Relaxed);
-                            crate::debug_error!(
-                                "STREAMING",
-                                "PTY input dropped (no PTY writer) for session {}: {} bytes",
-                                session.id,
-                                bytes.len()
-                            );
+                            // Session gone; nothing left to write for.
+                            break;
                         }
-                    } else {
-                        // Session gone; nothing left to write for.
-                        break;
                     }
+                });
+            match spawned {
+                Ok(_joined) => *guard = Some(tx),
+                Err(spawn_err) => {
+                    // The channel dies with the failed thread; leave the
+                    // sender unset so a later enqueue retries the slow
+                    // path instead of queuing into a drain that will never
+                    // run.
+                    crate::debug_error!(
+                        "STREAMING",
+                        "PTY input drain thread failed to spawn for session {}: {}",
+                        self.id,
+                        spawn_err
+                    );
                 }
-            });
-            *guard = Some(tx);
+            }
         }
         if let Some(tx) = guard.as_ref() {
             self.try_enqueue_pty_input(tx, bytes);
@@ -442,7 +505,14 @@ impl StreamSessionState {
         }
         self.queued_input_bytes.fetch_add(len, Ordering::Relaxed);
         match tx.try_send(bytes) {
-            Ok(()) => {}
+            Ok(()) => {
+                crate::debug_log!(
+                    "STREAMING",
+                    "enqueued {len} B for session {} (queued bytes now {})",
+                    self.id,
+                    self.queued_input_bytes.load(Ordering::Relaxed)
+                );
+            }
             Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
                 self.note_dropped_input(len, "queue full");
