@@ -61,6 +61,7 @@ pub mod grapheme;
 pub mod graphics;
 pub mod grid;
 pub mod html_export;
+pub mod keyboard;
 pub mod macros;
 pub mod mouse;
 #[cfg(feature = "mux")]

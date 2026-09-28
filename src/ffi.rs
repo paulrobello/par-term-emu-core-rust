@@ -21,7 +21,7 @@ use crate::terminal::{Terminal, TerminalEvent, TerminalEventKind};
 /// The `text` field holds the UTF-8 bytes of the base character (up to 4 bytes
 /// for any Unicode scalar value). `text_len` indicates how many bytes are valid.
 #[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SharedCell {
     /// UTF-8 encoded character bytes (up to 4 bytes for any Unicode scalar)
     pub text: [u8; 4],
@@ -145,59 +145,16 @@ impl SharedState {
         for row_idx in 0..rows {
             if let Some(row_cells) = grid.row(row_idx) {
                 for col_idx in 0..cols {
-                    if col_idx < row_cells.len() {
-                        let cell = &row_cells[col_idx];
-                        let mut text = [0u8; 4];
-                        let encoded = cell.c.encode_utf8(&mut text);
-                        let text_len = encoded.len() as u8;
-
-                        let (fg_r, fg_g, fg_b) = cell.fg.to_rgb();
-                        let (bg_r, bg_g, bg_b) = cell.bg.to_rgb();
-                        let attrs = cell.flags.to_bitflags();
-
-                        cells_vec.push(SharedCell {
-                            text,
-                            text_len,
-                            fg_r,
-                            fg_g,
-                            fg_b,
-                            bg_r,
-                            bg_g,
-                            bg_b,
-                            attrs,
-                            width: cell.width,
-                        });
-                    } else {
-                        // Pad with default (space) cells
-                        cells_vec.push(SharedCell {
-                            text: [b' ', 0, 0, 0],
-                            text_len: 1,
-                            fg_r: 255,
-                            fg_g: 255,
-                            fg_b: 255,
-                            bg_r: 0,
-                            bg_g: 0,
-                            bg_b: 0,
-                            attrs: 0,
-                            width: 1,
-                        });
-                    }
+                    let cell = row_cells
+                        .get(col_idx)
+                        .map(SharedCell::from_cell)
+                        .unwrap_or_else(SharedCell::blank);
+                    cells_vec.push(cell);
                 }
             } else {
                 // Row doesn't exist — fill with default cells
                 for _ in 0..cols {
-                    cells_vec.push(SharedCell {
-                        text: [b' ', 0, 0, 0],
-                        text_len: 1,
-                        fg_r: 255,
-                        fg_g: 255,
-                        fg_b: 255,
-                        bg_r: 0,
-                        bg_g: 0,
-                        bg_b: 0,
-                        attrs: 0,
-                        width: 1,
-                    });
+                    cells_vec.push(SharedCell::blank());
                 }
             }
         }
@@ -356,6 +313,382 @@ impl TerminalObserver for FfiObserver {
 }
 
 // ---------------------------------------------------------------------------
+// Embedding surface — lifecycle, feed, damage, pinned readback, key encoding
+// ---------------------------------------------------------------------------
+
+/// An inclusive [start, end] range of dirty screen rows, in coalesced form.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermRowRange {
+    /// First dirty row (0-indexed, inclusive)
+    pub start: u32,
+    /// Last dirty row (0-indexed, inclusive)
+    pub end: u32,
+}
+
+/// Cursor position and style, C-compatible.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TermCursorState {
+    pub col: u32,
+    pub row: u32,
+    /// Whether the cursor is visible (DECTCEM)
+    pub visible: bool,
+    /// Cursor style code: 0 blinking block, 1 steady block, 2 blinking
+    /// underline, 3 steady underline, 4 blinking bar, 5 steady bar
+    pub style: u8,
+}
+
+/// Terminal mode state a renderer needs per frame, C-compatible.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TermModeState {
+    /// Alternate screen buffer active
+    pub alt_screen: bool,
+    /// Bracketed paste mode (paste input should be wrapped in ESC[200~…201~)
+    pub bracketed_paste: bool,
+    /// Application cursor keys (arrows encode as SS3, not CSI)
+    pub application_cursor: bool,
+    /// Origin mode (DECOM) — cursor addresses are scroll-region-relative
+    pub origin_mode: bool,
+    /// Insert mode (IRM) — typed characters shift the row right
+    pub insert_mode: bool,
+    /// Autowrap (DECAWM)
+    pub auto_wrap: bool,
+    /// Mouse tracking mode (0=Off, 1=X10, 2=Normal, 3=ButtonEvent, 4=AnyEvent)
+    pub mouse_mode: u8,
+    /// Kitty keyboard protocol progressive-enhancement flags
+    pub kitty_flags: u16,
+    pub cols: u32,
+    pub rows: u32,
+}
+
+impl SharedCell {
+    /// Build a `SharedCell` from one grid cell.
+    fn from_cell(cell: &crate::cell::Cell) -> Self {
+        let mut text = [0u8; 4];
+        let text_len = cell.c.encode_utf8(&mut text).len() as u8;
+        let (fg_r, fg_g, fg_b) = cell.fg.to_rgb();
+        let (bg_r, bg_g, bg_b) = cell.bg.to_rgb();
+        SharedCell {
+            text,
+            text_len,
+            fg_r,
+            fg_g,
+            fg_b,
+            bg_r,
+            bg_g,
+            bg_b,
+            attrs: cell.flags.to_bitflags(),
+            width: cell.width,
+        }
+    }
+
+    /// The default (space) cell used to pad short rows.
+    pub fn blank() -> Self {
+        SharedCell {
+            text: [b' ', 0, 0, 0],
+            text_len: 1,
+            fg_r: 255,
+            fg_g: 255,
+            fg_b: 255,
+            bg_r: 0,
+            bg_g: 0,
+            bg_b: 0,
+            attrs: 0,
+            width: 1,
+        }
+    }
+}
+
+/// Create a terminal for C embedding.
+///
+/// # Safety
+/// Caller owns the returned `Terminal` and must release it with
+/// `terminal_free`. Returns null on allocation failure.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_create(cols: u32, rows: u32, scrollback: u32) -> *mut Terminal {
+    if cols == 0 || rows == 0 {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(Box::new(Terminal::with_scrollback(
+        cols as usize,
+        rows as usize,
+        scrollback as usize,
+    )))
+}
+
+/// Free a `Terminal` created by `terminal_create`.
+///
+/// # Safety
+/// `term` must have been returned by `terminal_create` and must not be
+/// used after this call.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_free(term: *mut Terminal) {
+    if !term.is_null() {
+        drop(unsafe { Box::from_raw(term) });
+    }
+}
+
+/// Feed raw PTY/application output bytes into the terminal (VT parsing).
+///
+/// # Safety
+/// `bytes` must be valid for reads of `len` bytes. `term` must be a valid
+/// pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_feed(term: *mut Terminal, bytes: *const u8, len: u32) {
+    if term.is_null() || bytes.is_null() {
+        return;
+    }
+    let term_ref = unsafe { &mut *term };
+    let data = unsafe { std::slice::from_raw_parts(bytes, len as usize) };
+    term_ref.process(data);
+}
+
+/// Resize the terminal grid.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u32) {
+    if term.is_null() || cols == 0 || rows == 0 {
+        return;
+    }
+    let term_ref = unsafe { &mut *term };
+    term_ref.resize(cols as usize, rows as usize);
+}
+
+/// Coalesce the dirty-row bitset into inclusive row ranges.
+///
+/// Writes up to `cap` ranges into `out` (caller-owned) and returns the
+/// total range count — if the return exceeds `cap`, call again with a
+/// larger buffer. A renderer redraws only rows inside the returned ranges.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` `TermRowRange` values when the
+/// total is being fetched it may be null with cap 0.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_dirty_ranges(
+    term: *const Terminal,
+    out: *mut TermRowRange,
+    cap: u32,
+) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    let term_ref = unsafe { &*term };
+    let rows = term_ref.get_dirty_rows();
+    let mut ranges: Vec<TermRowRange> = Vec::new();
+    for &row in &rows {
+        let row = row as u32;
+        match ranges.last_mut() {
+            // Consecutive rows coalesce; anything else starts a new range.
+            Some(last) if last.end + 1 == row => last.end = row,
+            _ => ranges.push(TermRowRange {
+                start: row,
+                end: row,
+            }),
+        }
+    }
+    let fill = (ranges.len() as u32).min(cap);
+    if fill > 0 && !out.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(ranges.as_ptr(), out, fill as usize);
+        }
+    }
+    ranges.len() as u32
+}
+
+/// Mark the screen clean (all damage consumed).
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_mark_clean(term: *mut Terminal) {
+    if term.is_null() {
+        return;
+    }
+    unsafe { &mut *term }.mark_clean();
+}
+
+/// Copy a run of grid cells into a caller-owned buffer (pinned readback —
+/// no allocation, no full-grid copy). Returns the number of cells written.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` `SharedCell` values.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_read_row(
+    term: *const Terminal,
+    row: u32,
+    col_start: u32,
+    out: *mut SharedCell,
+    cap: u32,
+) -> u32 {
+    if term.is_null() || out.is_null() {
+        return 0;
+    }
+    let term_ref = unsafe { &*term };
+    let grid = term_ref.active_grid();
+    let Some(row_cells) = grid.row(row as usize) else {
+        return 0;
+    };
+    let cols = grid.cols() as u32;
+    let mut written = 0u32;
+    let mut col = col_start;
+    while col < cols && written < cap {
+        let cell = row_cells
+            .get(col as usize)
+            .map(SharedCell::from_cell)
+            .unwrap_or_else(SharedCell::blank);
+        unsafe { *out.add(written as usize) = cell };
+        col += 1;
+        written += 1;
+    }
+    written
+}
+
+/// Copy a run of scrollback cells into a caller-owned buffer.
+/// `line` indexes scrollback from the oldest (0) to the newest
+/// (`scrollback_count - 1`). Returns the number of cells written.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` `SharedCell` values.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_read_scrollback_row(
+    term: *const Terminal,
+    line: u32,
+    col_start: u32,
+    out: *mut SharedCell,
+    cap: u32,
+) -> u32 {
+    if term.is_null() || out.is_null() {
+        return 0;
+    }
+    let term_ref = unsafe { &*term };
+    let grid = term_ref.active_grid();
+    let Some(line_cells) = grid.scrollback_line(line as usize) else {
+        return 0;
+    };
+    let cols = grid.cols() as u32;
+    let mut written = 0u32;
+    let mut col = col_start;
+    while col < cols && written < cap {
+        let cell = line_cells
+            .get(col as usize)
+            .map(SharedCell::from_cell)
+            .unwrap_or_else(SharedCell::blank);
+        unsafe { *out.add(written as usize) = cell };
+        col += 1;
+        written += 1;
+    }
+    written
+}
+
+/// Number of lines currently held in scrollback.
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_scrollback_count(term: *const Terminal) -> u32 {
+    if term.is_null() {
+        return 0;
+    }
+    unsafe { &*term }.active_grid().scrollback_len() as u32
+}
+
+/// Read cursor position/style.
+///
+/// # Safety
+/// `out` must be valid for writes of one `TermCursorState`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_get_cursor(term: *const Terminal, out: *mut TermCursorState) {
+    if term.is_null() || out.is_null() {
+        return;
+    }
+    let term_ref = unsafe { &*term };
+    let cursor = term_ref.cursor();
+    let style = match cursor.style {
+        crate::cursor::CursorStyle::BlinkingBlock => 0u8,
+        crate::cursor::CursorStyle::SteadyBlock => 1,
+        crate::cursor::CursorStyle::BlinkingUnderline => 2,
+        crate::cursor::CursorStyle::SteadyUnderline => 3,
+        crate::cursor::CursorStyle::BlinkingBar => 4,
+        crate::cursor::CursorStyle::SteadyBar => 5,
+    };
+    unsafe {
+        *out = TermCursorState {
+            col: cursor.col as u32,
+            row: cursor.row as u32,
+            visible: cursor.visible,
+            style,
+        };
+    }
+}
+
+/// Read per-frame mode state.
+///
+/// # Safety
+/// `out` must be valid for writes of one `TermModeState`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut TermModeState) {
+    if term.is_null() || out.is_null() {
+        return;
+    }
+    let term_ref = unsafe { &*term };
+    let mouse_mode = match term_ref.mouse_mode() {
+        MouseMode::Off => 0u8,
+        MouseMode::X10 => 1,
+        MouseMode::Normal => 2,
+        MouseMode::ButtonEvent => 3,
+        MouseMode::AnyEvent => 4,
+    };
+    let (cols, rows) = term_ref.size();
+    unsafe {
+        *out = TermModeState {
+            alt_screen: term_ref.is_alt_screen_active(),
+            bracketed_paste: term_ref.bracketed_paste(),
+            application_cursor: term_ref.application_cursor(),
+            origin_mode: term_ref.origin_mode(),
+            insert_mode: term_ref.insert_mode(),
+            auto_wrap: term_ref.auto_wrap_mode(),
+            mouse_mode,
+            kitty_flags: term_ref.keyboard_flags(),
+            cols: cols as u32,
+            rows: rows as u32,
+        };
+    }
+}
+
+/// Encode a key event against the terminal's negotiated input state
+/// (application cursor keys, kitty keyboard flags). Writes up to `cap`
+/// bytes into `out` (caller-owned) and returns the total encoded length —
+/// if the return exceeds `cap`, call again with a larger buffer. The
+/// returned bytes are what a frontend would write to the PTY.
+///
+/// # Safety
+/// `ev` must be valid for reads of one `TermKeyEvent`; `out` must be valid
+/// for writes of `cap` bytes.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_encode_key(
+    term: *const Terminal,
+    ev: *const crate::keyboard::TermKeyEvent,
+    out: *mut u8,
+    cap: u32,
+) -> u32 {
+    if term.is_null() || ev.is_null() || out.is_null() {
+        return 0;
+    }
+    let term_ref = unsafe { &*term };
+    let ev_ref = unsafe { &*ev };
+    let bytes = crate::keyboard::encode_key(ev_ref, term_ref);
+    let fill = (bytes.len() as u32).min(cap);
+    if fill > 0 {
+        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
+    }
+    bytes.len() as u32
+}
+
+// ---------------------------------------------------------------------------
 // C API extern functions
 // ---------------------------------------------------------------------------
 
@@ -452,5 +785,224 @@ mod tests {
         assert_eq!(offset_of!(SharedState, title), 24);
         assert_eq!(offset_of!(SharedState, cells), 56);
         assert_eq!(size_of::<TerminalObserverVtable>(), 48);
+        assert_eq!(size_of::<TermRowRange>(), 8);
+        assert_eq!(size_of::<TermCursorState>(), 12);
+        assert_eq!(size_of::<TermModeState>(), 20);
+        assert_eq!(size_of::<crate::keyboard::TermKeyEvent>(), 8);
+        assert_eq!(offset_of!(crate::keyboard::TermKeyEvent, codepoint), 4);
+    }
+
+    // ------------------------------------------------------------------
+    // Embedding-surface round trip: a seeded VT replay through the FFI
+    // must match the core's own screen state byte-for-byte, and the
+    // dirty ranges must cover every row that actually changed.
+    // ------------------------------------------------------------------
+
+    const RT_COLS: usize = 20;
+    const RT_ROWS: usize = 5;
+
+    /// FFI-read one full row through a pinned caller buffer.
+    fn read_row_ffi(term: *const Terminal, row: usize) -> Vec<SharedCell> {
+        let mut buf = vec![SharedCell::blank(); RT_COLS];
+        let n = unsafe { terminal_read_row(term, row as u32, 0, buf.as_mut_ptr(), RT_COLS as u32) };
+        assert_eq!(n as usize, RT_COLS);
+        buf
+    }
+
+    /// The core's own view of a row, through the same SharedCell conversion.
+    fn reference_row(term: &Terminal, row: usize) -> Vec<SharedCell> {
+        let grid = term.active_grid();
+        grid.row(row)
+            .expect("row exists")
+            .iter()
+            .map(SharedCell::from_cell)
+            .chain(std::iter::repeat(SharedCell::blank()))
+            .take(RT_COLS)
+            .collect()
+    }
+
+    #[test]
+    fn ffi_round_trip_matches_core_state() {
+        let term = unsafe { terminal_create(RT_COLS as u32, RT_ROWS as u32, 200) };
+        assert!(!term.is_null());
+
+        // Frame chunks: text, colors, cursor moves, wide chars, full erase,
+        // and enough lines to push rows into scrollback.
+        let frames: [&[u8]; 7] = [
+            b"hello world",
+            b"\x1b[31mred\x1b[0m plain \x1b[1;32mbold-green\x1b[0m",
+            b"\x1b[3;2HX at 3;2",
+            "\u{6F22}\u{5B57} wide".as_bytes(), // CJK wide chars
+            b"\x1b[2J\x1b[Hcleared",
+            b"one\ntwo\nthree\nfour\nfive\nsix\nseven\neight", // forces scroll
+            b"\x1b[104;200H tail write",
+        ];
+
+        let mut prev_screen: Vec<Vec<SharedCell>> =
+            (0..RT_ROWS).map(|r| read_row_ffi(term, r)).collect();
+
+        for (i, frame) in frames.iter().enumerate() {
+            unsafe { terminal_feed(term, frame.as_ptr(), frame.len() as u32) };
+
+            // 1. Screen byte-for-byte: FFI readback == the core's own cells.
+            for row in 0..RT_ROWS {
+                let ffi = read_row_ffi(term, row);
+                let core = reference_row(unsafe { &*term }, row);
+                assert_eq!(ffi, core, "frame {i}: row {row} FFI != core");
+            }
+
+            // 2. Damage completeness: every row that differs from the
+            //    previous frame must be inside a dirty range.
+            let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+            let got = unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+            assert_eq!(got, cap);
+
+            for (row, prev) in prev_screen.iter_mut().enumerate() {
+                let now = read_row_ffi(term, row);
+                if &now != prev {
+                    let inside = ranges
+                        .iter()
+                        .any(|r| row >= r.start as usize && row <= r.end as usize);
+                    assert!(
+                        inside,
+                        "frame {i}: row {row} changed but is not in any dirty range {ranges:?}"
+                    );
+                }
+                *prev = now;
+            }
+
+            unsafe { terminal_mark_clean(term) };
+            let after = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+            assert_eq!(after, 0, "frame {i}: mark_clean left dirty ranges");
+        }
+
+        // 3. Scrollback: FFI readback matches the core's scrollback cells,
+        //    oldest first (line 0 = oldest).
+        let sb = unsafe { terminal_scrollback_count(term) };
+        assert!(sb >= 3, "expected scrollback after 8-line frame, got {sb}");
+        let grid = unsafe { &*term }.active_grid();
+        for line in 0..sb as usize {
+            let mut buf = vec![SharedCell::blank(); RT_COLS];
+            let n = unsafe {
+                terminal_read_scrollback_row(term, line as u32, 0, buf.as_mut_ptr(), RT_COLS as u32)
+            };
+            assert_eq!(n as usize, RT_COLS);
+            let core: Vec<SharedCell> = grid
+                .scrollback_line(line)
+                .expect("scrollback line exists")
+                .iter()
+                .map(SharedCell::from_cell)
+                .collect();
+            assert_eq!(buf, core, "scrollback line {line} FFI != core");
+        }
+
+        // 4. Cursor + modes match the core's accessors.
+        let mut cur = TermCursorState {
+            col: 0,
+            row: 0,
+            visible: false,
+            style: 0,
+        };
+        unsafe { terminal_get_cursor(term, &mut cur) };
+        let c = unsafe { &*term }.cursor();
+        assert_eq!(cur.col as usize, c.col);
+        assert_eq!(cur.row as usize, c.row);
+        assert_eq!(cur.visible, c.visible);
+
+        let mut modes = TermModeState::default();
+        unsafe { terminal_get_modes(term, &mut modes) };
+        let t = unsafe { &*term };
+        assert_eq!(modes.cols as usize, RT_COLS);
+        assert_eq!(modes.rows as usize, RT_ROWS);
+        assert_eq!(modes.alt_screen, t.is_alt_screen_active());
+        assert_eq!(modes.bracketed_paste, t.bracketed_paste());
+        assert_eq!(modes.application_cursor, t.application_cursor());
+        assert_eq!(modes.auto_wrap, t.auto_wrap_mode());
+
+        // 5. Key encoding through the FFI matches the direct encoder.
+        for ev in [
+            crate::keyboard::TermKeyEvent::char_('a', crate::keyboard::modifiers::CTRL),
+            crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Up, 0),
+            crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Enter, 0),
+        ] {
+            let mut buf = [0u8; 32];
+            let n = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 32) };
+            assert_eq!(
+                &buf[..n as usize],
+                crate::keyboard::encode_key(&ev, unsafe { &*term }).as_slice()
+            );
+        }
+
+        unsafe { terminal_free(term) };
+    }
+
+    #[test]
+    fn ffi_dirty_ranges_coalesce_and_resize_marks_damage() {
+        let term = unsafe { terminal_create(10, 6, 50) };
+        unsafe { terminal_feed(term, b"\x1b[Hrow0\x1b[3Hrow2\x1b[5Hrow4".as_ptr(), 26) };
+
+        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        // Rows 0, 2, 4 were written: three one-row ranges, none adjacent.
+        assert_eq!(
+            ranges,
+            vec![
+                TermRowRange { start: 0, end: 0 },
+                TermRowRange { start: 2, end: 2 },
+                TermRowRange { start: 4, end: 4 },
+            ]
+        );
+
+        // A full-row write makes the ranges coalesce.
+        unsafe { terminal_feed(term, b"\x1b[2Hxxxx\x1b[4Hxxxx".as_ptr(), 18) };
+        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        assert_eq!(ranges, vec![TermRowRange { start: 0, end: 4 }]);
+
+        // Resize must mark the whole (new) screen dirty.
+        unsafe { terminal_mark_clean(term) };
+        unsafe { terminal_resize(term, 12, 4) };
+        let cap = unsafe { terminal_dirty_ranges(term, std::ptr::null_mut(), 0) };
+        let mut ranges = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+        unsafe { terminal_dirty_ranges(term, ranges.as_mut_ptr(), cap) };
+        assert_eq!(ranges, vec![TermRowRange { start: 0, end: 3 }]);
+
+        unsafe { terminal_free(term) };
+    }
+
+    /// Damage localization gate for the readback benchmark: an in-place
+    /// status rewrite must dirty only a small fraction of the screen. If
+    /// this fails, damage tracking has regressed into full repaints and the
+    /// ffi_readback dirty benchmark would be benchmarking a full copy.
+    #[test]
+    fn status_frames_localize_damage() {
+        let (cols, rows) = (120usize, 40usize);
+        let mut term = Terminal::with_scrollback(cols, rows, 500);
+        // Fill the screen with a scrolling stream first.
+        for f in 0..8 {
+            let mut frame = format!("\x1b[1;1H\x1b[2K== frame {f:05} ==");
+            for line in 0..3 {
+                frame.push_str(&format!(
+                    "\x1b[{row};1H\x1b[2Kstatus[{line}]: {val:x>16}",
+                    row = line + 2,
+                    val = f * (line + 1)
+                ));
+            }
+            frame.push_str(&format!(
+                "\x1b[{rows};1Hlog line {f} padding-padding-padding\r\n"
+            ));
+            term.process(frame.as_bytes());
+            term.mark_clean();
+        }
+        // A status-only frame (no scroll append) must stay localized.
+        term.process(b"\x1b[1;1H\x1b[2K== session frame 00100 ==\x1b[3;1H\x1b[2Kstatus[0]: hello");
+        let dirty = term.get_dirty_rows();
+        assert!(
+            dirty.len() <= 3,
+            "status frame dirtied {dirty:?} of {rows} rows — damage tracking degraded"
+        );
     }
 }

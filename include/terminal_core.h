@@ -106,6 +106,134 @@ typedef struct TerminalObserverVtable {
 _Static_assert(sizeof(TerminalObserverVtable) == 48, "vtable must match Rust repr(C) layout (LP64)");
 #endif
 
+/* ------------------------------------------------------------------ */
+/* Embedding surface — lifecycle, feed, damage, pinned readback, keys  */
+/* ------------------------------------------------------------------ */
+
+/* Inclusive [start, end] range of dirty rows returned by
+ * terminal_dirty_ranges — a renderer redraws only rows inside ranges. */
+typedef struct TermRowRange {
+    uint32_t start; /* first dirty row, 0-indexed, inclusive */
+    uint32_t end;   /* last dirty row, 0-indexed, inclusive */
+} TermRowRange;
+
+_Static_assert(sizeof(TermRowRange) == 8, "TermRowRange must match Rust repr(C) layout");
+
+typedef struct TermCursorState {
+    uint32_t col;
+    uint32_t row;
+    bool visible;
+    uint8_t style; /* 0 blinking block, 1 steady block, 2 blinking
+                    * underline, 3 steady underline, 4 blinking bar,
+                    * 5 steady bar */
+} TermCursorState;
+
+#ifdef __LP64__
+_Static_assert(sizeof(TermCursorState) == 12, "TermCursorState must match Rust repr(C) layout (LP64)");
+#endif
+
+typedef struct TermModeState {
+    bool alt_screen;
+    bool bracketed_paste;
+    bool application_cursor;
+    bool origin_mode;
+    bool insert_mode;
+    bool auto_wrap;
+    uint8_t mouse_mode;   /* TERM_MOUSE_MODE_* */
+    uint16_t kitty_flags; /* kitty keyboard progressive-enhancement flags */
+    uint32_t cols;
+    uint32_t rows;
+} TermModeState;
+
+#ifdef __LP64__
+_Static_assert(sizeof(TermModeState) == 20, "TermModeState must match Rust repr(C) layout (LP64)");
+#endif
+
+/* Key-event modifier bits (TermKeyEvent.modifiers) — kitty protocol order. */
+#define TERM_MOD_SHIFT (1u << 0)
+#define TERM_MOD_ALT   (1u << 1)
+#define TERM_MOD_CTRL  (1u << 2)
+#define TERM_MOD_SUPER (1u << 3)
+#define TERM_MOD_HYPER (1u << 4)
+#define TERM_MOD_META  (1u << 5)
+
+/* TermKey codes. Functional-key values ARE the kitty protocol functional
+ * codes; do not renumber. */
+#define TERM_KEY_UNKNOWN    0
+#define TERM_KEY_CHAR       1
+#define TERM_KEY_TAB        9
+#define TERM_KEY_ENTER      13
+#define TERM_KEY_ESCAPE     27
+#define TERM_KEY_BACKSPACE  127
+#define TERM_KEY_INSERT     57426
+#define TERM_KEY_DELETE     57427
+#define TERM_KEY_LEFT       57428
+#define TERM_KEY_RIGHT      57429
+#define TERM_KEY_UP         57430
+#define TERM_KEY_DOWN       57431
+#define TERM_KEY_PAGE_UP    57432
+#define TERM_KEY_PAGE_DOWN  57433
+#define TERM_KEY_HOME       57434
+#define TERM_KEY_END        57435
+#define TERM_KEY_F1         57376
+#define TERM_KEY_F2         57377
+#define TERM_KEY_F3         57378
+#define TERM_KEY_F4         57379
+#define TERM_KEY_F5         57380
+#define TERM_KEY_F6         57381
+#define TERM_KEY_F7         57382
+#define TERM_KEY_F8         57383
+#define TERM_KEY_F9         57384
+#define TERM_KEY_F10        57385
+#define TERM_KEY_F11        57386
+#define TERM_KEY_F12        57387
+
+typedef struct TermKeyEvent {
+    uint16_t key;       /* TERM_KEY_* */
+    uint8_t modifiers;  /* TERM_MOD_* bitfield */
+    uint8_t _pad;
+    uint32_t codepoint; /* Unicode scalar for TERM_KEY_CHAR (typed form for
+                         * plain text, base form for Ctrl/Alt), else 0 */
+} TermKeyEvent;
+
+_Static_assert(sizeof(TermKeyEvent) == 8, "TermKeyEvent must match Rust repr(C) layout");
+_Static_assert(offsetof(TermKeyEvent, codepoint) == 4, "TermKeyEvent.codepoint offset must match Rust");
+
+/* Lifecycle */
+Terminal *terminal_create(uint32_t cols, uint32_t rows, uint32_t scrollback);
+void terminal_free(Terminal *term);
+
+/* Feed raw application/PTY output bytes (VT parsing). */
+void terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
+void terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
+
+/* Damage: coalesced inclusive dirty-row ranges. Writes up to `cap` ranges
+ * into `out` and returns the TOTAL range count — if the return exceeds
+ * `cap`, call again with a larger buffer (out may be NULL when cap is 0). */
+uint32_t terminal_dirty_ranges(Terminal *term, TermRowRange *out, uint32_t cap);
+void terminal_mark_clean(Terminal *term);
+
+/* Pinned readback into caller-owned buffers — no allocation, no full-grid
+ * copy. Both return the number of cells written. Rows are 0-indexed;
+ * scrollback `line` runs from oldest (0) to newest (count-1). */
+uint32_t terminal_read_row(Terminal *term, uint32_t row, uint32_t col_start,
+                           SharedCell *out, uint32_t cap);
+uint32_t terminal_read_scrollback_row(Terminal *term, uint32_t line,
+                                      uint32_t col_start, SharedCell *out,
+                                      uint32_t cap);
+uint32_t terminal_scrollback_count(Terminal *term);
+
+/* Cursor and per-frame mode state. */
+void terminal_get_cursor(Terminal *term, TermCursorState *out);
+void terminal_get_modes(Terminal *term, TermModeState *out);
+
+/* Encode a key event against the terminal's negotiated input state
+ * (application cursor keys, kitty keyboard flags) — the bytes a frontend
+ * writes to the PTY. Writes up to `cap` bytes into `out` and returns the
+ * TOTAL encoded length — if the return exceeds `cap`, retry larger. */
+uint32_t terminal_encode_key(Terminal *term, const TermKeyEvent *ev,
+                             uint8_t *out, uint32_t cap);
+
 /* Snapshot the terminal's current state. Caller owns the result and must
  * free it with terminal_free_state. Returns NULL if term is NULL. */
 SharedState *terminal_get_state(const Terminal *term);
