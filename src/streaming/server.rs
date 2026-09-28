@@ -1455,6 +1455,10 @@ impl StreamingServer {
                 data.len(),
                 MAX_INPUT_PAYLOAD_BYTES
             );
+            session
+                .metrics
+                .dropped_messages
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
         if let Some(ref mut limiter) = rate_limiter {
@@ -1465,6 +1469,10 @@ impl StreamingServer {
                     transport_label,
                     client_id
                 );
+                session
+                    .metrics
+                    .dropped_messages
+                    .fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
@@ -1474,6 +1482,23 @@ impl StreamingServer {
                 .input_bytes
                 .fetch_add(data.len(), Ordering::Relaxed);
             Self::enqueue_input(session, data.into_bytes());
+        } else {
+            // The no-writer guard in `handle_client_message` closes the
+            // connection before dispatch; reaching here means the writer
+            // detached between that check and this one. Count it so the
+            // metric never reports a drop-free session the logs disagree
+            // with.
+            crate::debug_error!(
+                "STREAMING",
+                "Input from {} {} dropped: session {} lost its PTY writer mid-dispatch",
+                transport_label,
+                client_id,
+                session.id
+            );
+            session
+                .metrics
+                .dropped_messages
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1618,6 +1643,10 @@ impl StreamingServer {
                 content.len(),
                 MAX_PASTE_PAYLOAD_BYTES
             );
+            session
+                .metrics
+                .dropped_messages
+                .fetch_add(1, Ordering::Relaxed);
             return;
         }
         if let Some(ref mut limiter) = rate_limiter {
@@ -1628,6 +1657,10 @@ impl StreamingServer {
                     transport_label,
                     client_id
                 );
+                session
+                    .metrics
+                    .dropped_messages
+                    .fetch_add(1, Ordering::Relaxed);
                 return;
             }
         }
@@ -1661,6 +1694,19 @@ impl StreamingServer {
             frame.extend_from_slice(&payload);
             frame.extend_from_slice(&end);
             Self::enqueue_input(session, frame);
+        } else {
+            // Same mid-dispatch detach race as `handle_input`'s else arm.
+            crate::debug_error!(
+                "STREAMING",
+                "Paste from {} {} dropped: session {} lost its PTY writer mid-dispatch",
+                transport_label,
+                client_id,
+                session.id
+            );
+            session
+                .metrics
+                .dropped_messages
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 

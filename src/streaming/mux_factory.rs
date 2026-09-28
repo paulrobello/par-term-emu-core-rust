@@ -366,19 +366,36 @@ fn spawn_drain(
         let pane_id = format!("%{}", link.pane);
         let mut parser = TmuxControlParser::new(true);
         let mut in_reply = false;
+        let mut reply_body = Vec::new();
         for line in reader {
             let Ok(line) = line else { break };
             if link.closed.load(Ordering::Relaxed) {
                 break;
             }
-            // Reply blocks (input and resize acks) carry nothing to mirror.
+            // Reply blocks (input and resize acks) carry nothing to mirror,
+            // but an %error-terminated one means the daemon rejected a
+            // command this mirror sent (bad send-keys payload, unknown
+            // pane): without this log the rejection is invisible on both
+            // sides of the socket — no PTY_WRITE, no log — and looks
+            // identical to input lost inside the streamer.
             if line.starts_with("%begin") {
                 in_reply = true;
+                reply_body.clear();
                 continue;
             }
             if in_reply {
-                if line.starts_with("%end") || line.starts_with("%error") {
+                if line.starts_with("%end") {
                     in_reply = false;
+                } else if line.starts_with("%error") {
+                    in_reply = false;
+                    crate::debug_error!(
+                        "STREAMING",
+                        "mux daemon rejected a command for pane %{}: {}",
+                        link.pane,
+                        reply_body.join(" | ")
+                    );
+                } else {
+                    reply_body.push(line);
                 }
                 continue;
             }

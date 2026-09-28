@@ -565,6 +565,13 @@ fn handle_client(
                 registered = true;
             }
             command_number += 1;
+            crate::debug_error!(
+                "MUX",
+                "non-UTF-8 command line #{} from client {} ({} bytes)",
+                command_number,
+                client_id,
+                line.len()
+            );
             if tx
                 .send(emit_block(command_number, "line is not valid UTF-8", false))
                 .is_err()
@@ -610,6 +617,18 @@ fn handle_client(
                     shutdown: shutdown.as_deref(),
                 };
                 let reply = dispatch_contained(command, &ctx, persist.as_ref(), Some(&tx));
+                if reply_is_error(&reply) {
+                    // A rejected command writes nothing to any pane and has
+                    // no other trace; without this log the rejection is
+                    // invisible on both sides of the socket.
+                    crate::debug_error!(
+                        "MUX",
+                        "command #{} from client {} rejected: {}",
+                        command_number,
+                        client_id,
+                        summarize_line(&line)
+                    );
+                }
                 if tx.send(reply).is_err() {
                     break 'connection;
                 }
@@ -625,6 +644,14 @@ fn handle_client(
                     registered = true;
                 }
                 command_number += 1;
+                crate::debug_error!(
+                    "MUX",
+                    "unparseable command #{} from client {}: {} ({})",
+                    command_number,
+                    client_id,
+                    summarize_line(&line),
+                    err
+                );
                 if tx.send(emit_block(command_number, &err, false)).is_err() {
                     break 'connection;
                 }
@@ -634,6 +661,31 @@ fn handle_client(
     if registered {
         clients.lock().retain(|(id, _, _, _)| *id != client_id);
     }
+}
+
+/// True when a dispatch reply block ends in `%error` — the daemon's
+/// rejection shape ([`emit_block`] with `ok: false`).
+fn reply_is_error(reply: &str) -> bool {
+    reply
+        .lines()
+        .last()
+        .is_some_and(|l| l.starts_with("%error"))
+}
+
+/// A command line reduced for logging: send-keys hex payloads run ~1 KiB,
+/// so keep the head and the size, cutting on a char boundary.
+fn summarize_line(line: &str) -> String {
+    const HEAD: usize = 120;
+    if line.len() <= HEAD {
+        return line.to_string();
+    }
+    let cut = line
+        .char_indices()
+        .take_while(|(i, _)| *i < HEAD)
+        .map(|(i, _)| i)
+        .last()
+        .unwrap_or(0);
+    format!("{}... ({} bytes total)", &line[..cut], line.len())
 }
 
 /// Write one line, tolerating send-timeout wakes: a healthy slow consumer's
@@ -1097,6 +1149,34 @@ mod tests {
             .prefix("par-mux-server-")
             .tempdir()
             .expect("create test temp dir")
+    }
+
+    #[test]
+    fn reply_is_error_detects_the_error_terminator() {
+        assert!(reply_is_error(
+            "%begin 1 2 1\ncan't find pane\n%error 1 2 1\n"
+        ));
+        assert!(!reply_is_error("%begin 1 2 1\n%end 1 2 1\n"));
+        // Notifications pushed between commands are not replies.
+        assert!(!reply_is_error("%output %1 61"));
+    }
+
+    #[test]
+    fn summarize_line_keeps_short_lines_and_cut_points_whole() {
+        assert_eq!(
+            summarize_line("send-keys -t %1 -H 61"),
+            "send-keys -t %1 -H 61"
+        );
+        let long = "send-keys -t %1 -H ".to_string() + &"61 ".repeat(200);
+        let summary = summarize_line(&long);
+        assert!(summary.starts_with("send-keys -t %1 -H 61 "));
+        assert!(summary.contains(&format!("{} bytes total", long.len())));
+        // The cut must not split a multi-byte char.
+        let multibyte = "é".repeat(200);
+        let cut = summarize_line(&multibyte);
+        assert!(cut.contains(&format!("{} bytes total", multibyte.len())));
+        assert!(cut.ends_with("bytes total)"));
+        assert!(cut.is_char_boundary(cut.find("...").expect("ellipsis marker")));
     }
 
     #[cfg(unix)]
