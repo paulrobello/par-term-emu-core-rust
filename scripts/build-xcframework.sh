@@ -52,6 +52,22 @@ xcodebuild -create-xcframework \
     -library "target/$SIM_TARGET/release/$LIB_NAME" -headers include \
     -output "$OUT_DIR/TerminalCore.xcframework"
 
+# Swift consumers import the module as `import TerminalCore`; without a
+# module map in each slice every embedder must hand-roll a bridging header
+# (verified 2026-09-27 from ParDeck). -create-xcframework has no flag for
+# this, so write it into every slice post-create.
+echo "==> Writing Modules/module.modulemap into slices"
+for slice_dir in "$OUT_DIR"/TerminalCore.xcframework/ios-*; do
+    [ -d "$slice_dir" ] || continue
+    mkdir -p "$slice_dir/Modules"
+    cat > "$slice_dir/Modules/module.modulemap" <<'MAP'
+module TerminalCore {
+    header "../Headers/terminal_core.h"
+    export *
+}
+MAP
+done
+
 # Positive control: exactly two slices with the right platform identity, and
 # each archive actually consumable by the Apple linker with the C API
 # resolving. (nm is NOT used as a gate: Apple nm's LLVM reader chokes on
@@ -109,5 +125,27 @@ for lib in "$OUT_DIR"/TerminalCore.xcframework/*/"$LIB_NAME"; do
     esac
     echo "    link probe OK: $slice"
 done
+
+# Swift import probe: the module map must make the C API importable from
+# Swift (typecheck only — linking is already covered by the probes above).
+sim_slice="$(find "$OUT_DIR/TerminalCore.xcframework" -maxdepth 1 -type d -name '*simulator*' | head -1)"
+cat > "$probe_dir/probe.swift" <<'EOF'
+import TerminalCore
+
+let ev = TermKeyEvent(key: UInt16(TERM_KEY_ENTER), modifiers: 0, _pad: 0, codepoint: 0)
+terminal_free_state(nil)
+_ = ev
+EOF
+if [ ! -f "$sim_slice/Modules/module.modulemap" ]; then
+    echo "ERROR: no Modules/module.modulemap in $sim_slice" >&2
+    exit 1
+fi
+xcrun -sdk iphonesimulator swiftc -target arm64-apple-ios14.0-simulator \
+    -typecheck -Xcc -fmodule-map-file="$sim_slice/Modules/module.modulemap" \
+    "$probe_dir/probe.swift" || {
+        echo "ERROR: Swift import probe failed" >&2
+        exit 1
+    }
+echo "    Swift import probe OK: import TerminalCore typechecks"
 
 echo "==> OK: $OUT_DIR/TerminalCore.xcframework (device + simulator)"
