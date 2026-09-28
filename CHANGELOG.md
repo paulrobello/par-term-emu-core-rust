@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **RIS resets the terminal, not the embedder's configuration** (audit ARC-058, `src/terminal/mod.rs`). `Terminal::reset()` (ESC c, and `PyTerminal.reset()`) used to rebuild the whole `Terminal`, silently reverting every host-set policy to its default — one escape from a remote program turned a hardened embedder's `disable_insecure_sequences` off, re-enabled `accept_osc7`, restored the 1 MiB OSC cap after the host lowered it, dropped the answerback string, detached all observers and triggers, and reverted file-media/clipboard/sixel limits. All of that now survives RIS: security policy, kitty file-media mode and temp-file retention, graphics and clipboard limits, answerback, theme colors (OSC 4 palette drift resets to the *configured* palette, xterm-style, via a new `configured_palette` copy written by `set_ansi_palette_color`), unicode config, observers and event subscriptions, the trigger registry, macros, notification config, the badge format, active recordings, tmux control flags, pixel dimensions, and profiling. RIS also now marks every screen row dirty (the damage contract). **DECSTR (CSI ! p) is a real soft reset** instead of a screen-and-scrollback-erasing full reset: it resets modes (DECTCEM/IRM/DECOM/DECAWM/DECCKM/DECKPAM/DECSCA/DECSDM/DECSACE), SGR, charsets, margins, the cursor (home, visible), pushed colors, and the DECSC saved state, while screen content and scrollback are untouched. This is a behavior change for any consumer that relied on DECSTR clearing the screen — xterm/VT510 semantics are the contract now.
+
 ## [0.55.0] - 2026-09-27
 
 ### Removed (breaking for Rust embedders)

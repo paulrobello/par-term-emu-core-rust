@@ -177,7 +177,7 @@ Create a new terminal with specified dimensions.
 - `content() -> str`: Get terminal content as a string
 - `size() -> tuple[int, int]`: Get terminal dimensions (cols, rows)
 - `resize(cols: int, rows: int)`: Resize the terminal. When width changes, main-screen scrollback content is automatically reflowed (wrapped lines are unwrapped or re-wrapped as needed). All cell attributes are preserved. The alternate screen (if active) is never reflowed — each row is truncated or padded in place instead, matching xterm/tmux behavior, since full-screen apps redraw the alt screen themselves on resize.
-- `reset()`: Reset terminal to default state
+- `reset()`: Reset terminal to default state (RIS). Clears screen/scrollback/cursor/SGR/modes/graphics/title and marks every row dirty, but embedder configuration survives: security policy (`accept_osc7`, `disable_insecure_sequences`, `max_osc_data_length`), file-media and clipboard policy and limits, graphics limits, answerback string, theme colors (OSC 4 palette drift resets to the configured palette), unicode config, observers, event subscriptions, triggers, macros, notification config, badge format, active recordings, tmux control flags, pixel dimensions, and profiling (ARC-058)
 - `title() -> str`: Get terminal title
 - `set_title(title: str)`: Set terminal title programmatically
 - `window_position() -> tuple[int, int]`: Get the host-supplied window position in pixels `(x, y)`; defaults to `(0, 0)` if never set
