@@ -103,7 +103,7 @@ pub struct StreamSessionState {
     /// [`Self::queued_input_bytes`] caps their total size, so a client
     /// feeding a child that never reads stdin drops input instead of
     /// growing session memory without limit.
-    pty_input_tx: RwLock<Option<mpsc::Sender<Vec<u8>>>>,
+    pub(crate) pty_input_tx: RwLock<Option<std::sync::mpsc::SyncSender<Vec<u8>>>>,
     /// Bytes currently sitting in the PTY input queue (QA-131). Counted up
     /// by [`Self::enqueue_pty_input`], down by the drain task as it takes
     /// each chunk; approximate under concurrent producers.
@@ -371,13 +371,21 @@ impl StreamSessionState {
         // task. The write lock makes create-once race-safe; the send runs
         // under it so no input is lost between the empty check and the
         // store.
+        //
+        // The channel is std, not tokio: both ends of this handoff are
+        // synchronous (a runtime worker calling try_send, a blocking-pool
+        // thread calling recv), and a parked tokio `blocking_recv` can miss
+        // a `try_send` wakeup for as long as nothing else stirs the
+        // runtime — measured as keystrokes parked in the queue for a full
+        // 60 s (card 01a0e80db3e870e282af0cf84405043b). std's condvar
+        // wakeup has no runtime context to lose.
         let mut guard = self.pty_input_tx.write();
         if guard.is_none() {
-            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
             let weak = Arc::downgrade(self);
             tokio::task::spawn_blocking(move || {
                 use std::io::Write;
-                while let Some(bytes) = rx.blocking_recv() {
+                while let Ok(bytes) = rx.recv() {
                     // Off the queue: release the budget whether this chunk
                     // is written or not.
                     if let Some(session) = weak.upgrade() {
@@ -426,7 +434,7 @@ impl StreamSessionState {
 
     /// Enqueue one chunk under the QA-131 bounds, dropping and counting on
     /// overflow instead of blocking or growing.
-    fn try_enqueue_pty_input(&self, tx: &mpsc::Sender<Vec<u8>>, bytes: Vec<u8>) {
+    fn try_enqueue_pty_input(&self, tx: &std::sync::mpsc::SyncSender<Vec<u8>>, bytes: Vec<u8>) {
         let len = bytes.len();
         if self.queued_input_bytes.load(Ordering::Relaxed) + len > MAX_QUEUED_INPUT_BYTES {
             self.note_dropped_input(len, "over the byte budget");
@@ -435,11 +443,11 @@ impl StreamSessionState {
         self.queued_input_bytes.fetch_add(len, Ordering::Relaxed);
         match tx.try_send(bytes) {
             Ok(()) => {}
-            Err(mpsc::error::TrySendError::Full(_)) => {
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
                 self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
                 self.note_dropped_input(len, "queue full");
             }
-            Err(mpsc::error::TrySendError::Closed(_)) => {
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
                 self.queued_input_bytes.fetch_sub(len, Ordering::Relaxed);
                 // The drain task is gone (session dropped): the write side
                 // closing is an error condition, not backpressure.

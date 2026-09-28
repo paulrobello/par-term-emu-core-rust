@@ -610,6 +610,13 @@ fn handle_client(
                     registered = true;
                 }
                 command_number += 1;
+                crate::debug_log!(
+                    "MUX",
+                    "received #{} from client {}: {}",
+                    command_number,
+                    client_id,
+                    summarize_line(&line)
+                );
                 let ctx = Ctx {
                     tree: &tree,
                     clients: &clients,

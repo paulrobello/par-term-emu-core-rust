@@ -741,6 +741,165 @@ mod tests {
         wait_mirror(&b, "DELTA-AFTER");
     }
 
+    /// The residual single-frame loss (card 01a0e80db3e870e282af0cf84405043b)
+    /// never reproduced on demand; this is the standing repro. Every frame
+    /// the client types — alternating the server's enqueue path (queue ->
+    /// drain -> writer) with the writer directly, across interleaved resizes
+    /// and a second viewer's daemon connection — must append exactly one
+    /// line to the pane-side file. It reproduces the residual as a STALL,
+    /// not a loss: frames park 10-60 s somewhere between the session's
+    /// completed socket writes and the daemon's read loop (the queue-side
+    /// park in the old tokio channel is fixed; the daemon read-wake park is
+    /// card-open), so it stays ignored until that leg is fixed. Run on
+    /// demand with `--ignored --nocapture` and DEBUG_LEVEL=3: the MUX
+    /// receipt log + PTY_WRITE ledger place any park exactly.
+    #[ignore = "repro for 01a0e80db3e870e282af0cf84405043b: daemon read-wake stall open"]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
+        let (dir, socket, _control, pane) = daemon();
+        let viewer_a = streaming(&socket);
+        // A second viewer doubles the pane's %output fanout and the daemon
+        // connections racing the input socket.
+        let viewer_b = streaming(&socket);
+        let a = mirror(&viewer_a, &pane);
+        let _b = mirror(&viewer_b, &pane);
+
+        // Keystroke-sized frames (the original observation was ~6-16 B
+        // sends): everything typed behind a running `cat` is one file line
+        // per marker, so a 4-char marker + CR is a true 5 B input frame.
+        #[cfg(unix)]
+        let mut expected_cat: Vec<String> = Vec::new();
+        #[cfg(unix)]
+        {
+            let cat_file = dir.path().join("keystrokes.txt");
+            type_line(&a, &format!("cat >> {}", cat_file.display()));
+            // The shell opens the redirect target before exec, so the file
+            // existing means `cat` owns the terminal's input from here on.
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !cat_file.exists() {
+                assert!(Instant::now() < deadline, "cat never started");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            for i in 0..30u32 {
+                let marker = format!("T{i:02}");
+                expected_cat.push(marker.clone());
+                let frame = format!("{marker}\r");
+                if i % 2 == 0 {
+                    a.enqueue_pty_input(frame.into_bytes());
+                } else {
+                    let writer = a.pty_writer.read().as_ref().cloned().expect("input path");
+                    let mut w = writer.lock();
+                    w.write_all(frame.as_bytes()).expect("keystroke write");
+                    w.flush().expect("flush");
+                }
+            }
+            // EOF ends `cat`: the pane is a shell again for phase 2.
+            let writer = a.pty_writer.read().as_ref().cloned().expect("input path");
+            let mut w = writer.lock();
+            w.write_all(b"\x04").expect("eof");
+            w.flush().expect("flush");
+            let deadline = Instant::now() + Duration::from_secs(15);
+            while expected_cat.len()
+                != std::fs::read_to_string(&cat_file)
+                    .map(|t| t.lines().count())
+                    .unwrap_or(0)
+            {
+                assert!(
+                    Instant::now() < deadline,
+                    "keystroke frames never fully appended; rerun with DEBUG_LEVEL=1 — \
+                     the debug log names the dropping side"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let mut want = expected_cat;
+            let mut got: Vec<String> = std::fs::read_to_string(&cat_file)
+                .expect("keystrokes file")
+                .lines()
+                .map(str::trim)
+                .map(str::to_string)
+                .collect();
+            want.sort();
+            got.sort();
+            assert_eq!(got, want, "keystroke frames lost or duplicated");
+        }
+
+        let file = dir.path().join("frames.txt");
+        // Marker byte lengths spanning the observed small-frame range; the
+        // full typed line (echo + redirect + temp path) runs ~60-330 B.
+        const SIZES: [usize; 6] = [12, 24, 64, 120, 180, 240];
+        let mut expected: Vec<String> = Vec::new();
+        for batch in 0..3 {
+            for cycle in 0..5 {
+                for (i, &size) in SIZES.iter().enumerate() {
+                    let index = batch * 5 * SIZES.len() + cycle * SIZES.len() + i;
+                    let mut marker = format!("F{batch}_{cycle:02}_{size}");
+                    marker.extend(std::iter::repeat_n('x', size - marker.len()));
+                    expected.push(marker.clone());
+                    let cmd = format!("echo {marker} >> {}", file.display());
+                    if index.is_multiple_of(2) {
+                        let mut bytes = cmd.into_bytes();
+                        bytes.push(b'\r');
+                        a.enqueue_pty_input(bytes);
+                    } else {
+                        type_line(&a, &cmd);
+                    }
+                    // Resizes interleaved with typing: the original
+                    // observation sat next to resize traffic.
+                    if index % 10 == 9 {
+                        let to = if (index / 10).is_multiple_of(2) {
+                            (120, 40)
+                        } else {
+                            (80, 24)
+                        };
+                        a.resize_tx.send(to).expect("resize request");
+                    }
+                }
+            }
+            // Each batch is a fresh burst on an idle path — the shape the
+            // loss was seen in — so let the shell drain it before the next.
+            let want = expected.len();
+            let deadline = Instant::now() + Duration::from_secs(20);
+            let have = || {
+                std::fs::read_to_string(&file)
+                    .map(|t| t.lines().count())
+                    .unwrap_or(0)
+            };
+            while have() < want {
+                assert!(
+                    Instant::now() < deadline,
+                    "batch {batch}: {}/{} frames reached the pane; rerun with \
+                     DEBUG_LEVEL=1 — the debug log names the dropping side",
+                    have(),
+                    want
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+
+        let got: Vec<String> = std::fs::read_to_string(&file)
+            .expect("frames file")
+            .lines()
+            .map(str::trim)
+            .map(str::to_string)
+            .collect();
+        let mut want = expected;
+        let mut got_sorted = got.clone();
+        want.sort();
+        got_sorted.sort();
+        let missing: Vec<&String> = want.iter().filter(|m| !got.contains(*m)).collect();
+        let extra: Vec<&String> = got.iter().filter(|m| !want.contains(*m)).collect();
+        assert_eq!(
+            got_sorted, want,
+            "frames lost = {missing:?}, extra/duplicated = {extra:?}"
+        );
+
+        // Teardown: the drain task `enqueue_pty_input` spawned lives until
+        // every channel sender drops, and this session outlives the test in
+        // the streaming server's registry — so drop the sender here or
+        // tokio's blocking-pool shutdown blocks past the test's end.
+        *a.pty_input_tx.write() = None;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn a_killed_pane_marks_its_mirror_dead() {
         let (_dir, socket, mut control, pane) = daemon();
