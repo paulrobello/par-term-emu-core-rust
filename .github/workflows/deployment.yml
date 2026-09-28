@@ -204,6 +204,37 @@ jobs:
           path: release-binaries/${{ matrix.asset_name }}
           retention-days: 1
 
+  # iOS xcframework for the C FFI (ParDeck on-device embedding). Built from
+  # the headless rust-only profile — the default python feature links the
+  # host libpython and cannot produce an iOS artifact.
+  ios-xcframework:
+    name: Build iOS xcframework
+    runs-on: macos-latest
+    timeout-minutes: 40
+    needs: [version-check]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Build TerminalCore.xcframework
+        run: make xcframework
+
+      - name: Zip xcframework
+        run: |
+          cd target/xcframework
+          zip -qry TerminalCore.xcframework.zip TerminalCore.xcframework
+
+      - name: Upload xcframework artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-xcframework
+          path: target/xcframework/TerminalCore.xcframework.zip
+          retention-days: 1
+
   # Linux builds
   linux:
     name: Linux ${{ matrix.target }} - Python ${{ matrix.python-version }}
@@ -439,7 +470,7 @@ jobs:
     name: Create GitHub Release
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend]
+    needs: [build-streaming-binaries, linux, macos, windows, sdist, package-web-frontend, ios-xcframework]
     permissions:
       contents: write
       id-token: write
@@ -478,6 +509,12 @@ jobs:
         with:
           name: web-frontend
           path: web-frontend
+
+      - name: Download iOS xcframework
+        uses: actions/download-artifact@v8
+        with:
+          name: ios-xcframework
+          path: xcframework
 
       - name: Sign the dists with Sigstore
         uses: sigstore/gh-action-sigstore-python@v3.5.0
@@ -529,6 +566,15 @@ jobs:
         run: |
           gh release upload \
           'v${{ steps.get_version.outputs.version }}' web-frontend/* \
+          --repo '${{ github.repository }}' \
+          --clobber
+
+      - name: Upload iOS xcframework to GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload \
+          'v${{ steps.get_version.outputs.version }}' xcframework/TerminalCore.xcframework.zip \
           --repo '${{ github.repository }}' \
           --clobber
 

@@ -425,3 +425,32 @@ pub unsafe extern "C" fn terminal_remove_observer(term: *mut Terminal, id: u64) 
     let term_ref = unsafe { &mut *term };
     term_ref.remove_observer(id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::{align_of, offset_of, size_of};
+
+    // Pin the #[repr(C)] layout to the values asserted by the C header
+    // (include/terminal_core.h). If a test here fails, the header's
+    // _Static_asserts are stale too — update both, never just one.
+    #[test]
+    fn shared_cell_layout_matches_header() {
+        assert_eq!(size_of::<SharedCell>(), 16);
+        assert_eq!(align_of::<SharedCell>(), 2);
+        assert_eq!(offset_of!(SharedCell, text), 0);
+        assert_eq!(offset_of!(SharedCell, text_len), 4);
+        assert_eq!(offset_of!(SharedCell, attrs), 12);
+        assert_eq!(offset_of!(SharedCell, width), 14);
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn shared_state_layout_matches_header() {
+        assert_eq!(size_of::<SharedState>(), 80);
+        assert_eq!(align_of::<SharedState>(), 8);
+        assert_eq!(offset_of!(SharedState, title), 24);
+        assert_eq!(offset_of!(SharedState, cells), 56);
+        assert_eq!(size_of::<TerminalObserverVtable>(), 48);
+    }
+}

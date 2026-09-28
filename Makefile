@@ -172,6 +172,11 @@ build-streaming:
 	fi
 	uv run maturin develop --features streaming
 
+# TerminalCore.xcframework (iOS device + simulator) from the C FFI surface —
+# what ParDeck embeds. Requires Xcode; not part of checkall.
+xcframework:
+	bash scripts/build-xcframework.sh
+
 dev-streaming:
 	@echo "Building library with streaming feature (release mode)..."
 	@if [ ! -d ".venv" ]; then \

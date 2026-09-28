@@ -289,6 +289,18 @@ cargo build --bin par-term-streamer --no-default-features --features streaming-b
 
 See [docs/RUST_USAGE.md](docs/RUST_USAGE.md) for detailed Rust API documentation and examples.
 
+### Embedding in iOS Apps
+
+The core ships a C API (`src/ffi.rs`, header `include/terminal_core.h`) for on-device embedding — the same emulator as par-term, packaged as a static xcframework for iOS device and simulator:
+
+```bash
+# Requires Xcode + rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+make xcframework
+# → target/xcframework/TerminalCore.xcframework
+```
+
+`TerminalCore.xcframework` (device + simulator slices) is also attached to every GitHub release. The C surface covers state snapshots (`terminal_get_state`/`terminal_free_state`) and event observers (`terminal_add_observer`/`terminal_remove_observer`); drop the xcframework into an Xcode project and import `terminal_core.h`.
+
 ### Optional Components
 
 #### Terminfo Installation
