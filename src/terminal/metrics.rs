@@ -285,46 +285,6 @@ impl Terminal {
 
     // === Feature 28: Benchmarking Suite ===
 
-    /// Run rendering benchmark
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_rendering; this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn benchmark_rendering(&mut self, iterations: u64) -> BenchmarkResult {
-        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_rendering(self, iterations)
-    }
-
-    /// Run parsing benchmark
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_parsing; this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn benchmark_parsing(&mut self, text: &str, iterations: u64) -> BenchmarkResult {
-        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_parsing(self, text, iterations)
-    }
-
-    /// Run grid operations benchmark
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops; this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn benchmark_grid_ops(&mut self, iterations: u64) -> BenchmarkResult {
-        crate::terminal::benchmarks::TerminalBenchmarks::benchmark_grid_ops(self, iterations)
-    }
-
-    /// Run full benchmark suite
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite; this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn run_benchmark_suite(&mut self, suite_name: String) -> BenchmarkSuite {
-        crate::terminal::benchmarks::TerminalBenchmarks::run_benchmark_suite(self, suite_name)
-    }
-
     /// Get comprehensive terminal statistics
     pub fn get_stats(&self) -> TerminalStats {
         let (cols, rows) = self.size();

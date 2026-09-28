@@ -247,29 +247,6 @@ fn test_run_benchmark_suite() {
     );
 }
 
-/// The deprecated Terminal forwarding methods must keep returning exactly
-/// what the service returns (ARC-021 phase 1 keeps them for one minor
-/// release; par-term still calls them).
-#[test]
-fn test_benchmark_forwarders_match_service() {
-    use crate::terminal::TerminalBenchmarks;
-    let mut term = Terminal::new(80, 24);
-    term.process(b"forwarder parity\r\nsecond line\r\n");
-
-    let mut via_service = Terminal::new(80, 24);
-    via_service.process(b"forwarder parity\r\nsecond line\r\n");
-
-    #[allow(deprecated)]
-    let forwarded = term.benchmark_parsing("x", 3);
-    let served = TerminalBenchmarks::benchmark_parsing(&mut via_service, "x", 3);
-    assert_eq!(forwarded.iterations, served.iterations);
-    assert_eq!(forwarded.category, served.category);
-
-    #[allow(deprecated)]
-    let suite = term.run_benchmark_suite("parity".to_string());
-    assert_eq!(suite.results.len(), 2);
-}
-
 #[test]
 fn test_get_stats_dimensions() {
     let term = Terminal::new(80, 24);

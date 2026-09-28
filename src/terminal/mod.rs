@@ -2694,47 +2694,6 @@ impl Terminal {
         view
     }
 
-    /// Take a screenshot of the current visible buffer
-    ///
-    /// Renders the terminal's visible screen buffer to an image using the provided configuration.
-    ///
-    /// # Arguments
-    /// * `config` - Screenshot configuration (font, size, format, etc.)
-    /// * `scrollback_offset` - Number of lines to scroll back from current position (default: 0)
-    ///
-    /// # Returns
-    /// * `Ok(Vec<u8>)` - Image bytes in the configured format
-    /// * `Err(ScreenshotError)` - If rendering or encoding fails
-    #[cfg(feature = "screenshot")]
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use screenshot::render_terminal (free function); this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn screenshot(
-        &self,
-        config: crate::screenshot::ScreenshotConfig,
-        scrollback_offset: usize,
-    ) -> crate::screenshot::ScreenshotResult<Vec<u8>> {
-        crate::screenshot::render_terminal(self, config, scrollback_offset)
-    }
-
-    /// Take a screenshot and save to file
-    #[cfg(feature = "screenshot")]
-    #[doc(hidden)]
-    #[deprecated(
-        since = "0.53.0",
-        note = "use screenshot::save_terminal (free function); this forwarding method will be removed in 0.55.0"
-    )]
-    pub fn screenshot_to_file(
-        &self,
-        path: &std::path::Path,
-        config: crate::screenshot::ScreenshotConfig,
-        scrollback_offset: usize,
-    ) -> crate::screenshot::ScreenshotResult<()> {
-        crate::screenshot::save_terminal(self, path, config, scrollback_offset)
-    }
-
     /// Drain and return pending responses
     pub fn drain_responses(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.response_buffer)

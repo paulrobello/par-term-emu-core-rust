@@ -167,22 +167,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_terminal_and_deprecated_forwarder_agree() {
-        use crate::terminal::Terminal;
-
-        let mut term = Terminal::new(80, 24);
-        term.process(b"forwarder parity\r\n");
-
-        let free = render_terminal(&term, ScreenshotConfig::default(), 0).expect("free fn renders");
-        #[allow(deprecated)]
-        let forwarded = term
-            .screenshot(ScreenshotConfig::default(), 0)
-            .expect("forwarder renders");
-        // Same config + state must encode identical PNG bytes.
-        assert_eq!(free, forwarded);
-    }
-
-    #[test]
     fn test_flag_emoji_rendering() {
         let mut grid = Grid::new(80, 24, 1000);
 
