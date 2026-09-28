@@ -74,9 +74,11 @@ typedef struct SharedState {
     bool cursor_visible;
     bool alt_screen_active;
     uint8_t mouse_mode;       /* TERM_MOUSE_MODE_* */
-    char *title;              /* NUL-terminated, owned (title_len bytes) */
+    char *title;              /* NUL-terminated, owned; title_len == strlen(title)
+                                  (interior NULs in the source are replaced
+                                  with U+FFFD, never truncated) */
     uint32_t title_len;
-    char *cwd;                /* NUL-terminated, owned, or NULL */
+    char *cwd;                /* NUL-terminated, owned, or NULL; cwd_len == strlen(cwd) */
     uint32_t cwd_len;
     SharedCell *cells;        /* cell_count entries, owned */
     uint32_t cell_count;

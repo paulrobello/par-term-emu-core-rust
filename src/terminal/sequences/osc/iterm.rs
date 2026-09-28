@@ -125,7 +125,10 @@ impl Terminal {
         // carrying a raw path; the OSC 7 security gate applies equally here.
         // Unlike OSC 7 it carries no host info, so the previously recorded
         // hostname/username are passed through unchanged.
-        if path.is_empty() || !self.security_state.accept_osc7 {
+        // Control characters are rejected like parse_osc7_url (SEC-117):
+        // the cwd feeds C-string FFI fields and line-oriented consumers.
+        if path.is_empty() || path.chars().any(char::is_control) || !self.security_state.accept_osc7
+        {
             return;
         }
         let si = &self.shell_state.shell_integration;

@@ -284,7 +284,11 @@ impl Terminal {
         }
     }
 
-    /// Parse OSC 7 payload and return decoded path, hostname, username
+    /// Parse OSC 7 payload and return decoded path, hostname, username.
+    ///
+    /// A decoded path containing NUL or any control character is rejected
+    /// outright (SEC-117): the cwd feeds C-string FFI fields and
+    /// line-oriented consumers that treat those bytes as structure.
     pub(crate) fn parse_osc7_url(
         url_str: &str,
     ) -> Option<(String, Option<String>, Option<String>)> {
@@ -293,6 +297,9 @@ impl Terminal {
                 let raw_path = url.path();
                 if !raw_path.is_empty() && raw_path.starts_with('/') {
                     let path = percent_decode_str(raw_path).decode_utf8_lossy().to_string();
+                    if path.chars().any(char::is_control) {
+                        return None;
+                    }
                     let username = url.username();
                     let username = if username.is_empty() {
                         None
@@ -361,7 +368,7 @@ impl Terminal {
                 .to_string();
         }
 
-        if path.is_empty() || !path.starts_with('/') {
+        if path.is_empty() || !path.starts_with('/') || path.chars().any(char::is_control) {
             return None;
         }
 

@@ -8,6 +8,26 @@ use std::collections::HashSet;
 use std::ffi::{c_char, CString};
 use std::sync::Arc;
 
+/// A C string plus its byte length for the FFI snapshot fields (SEC-117).
+///
+/// The length must always name the bytes of the string the pointer names —
+/// `strlen` of the result, never the source's length. An interior NUL
+/// cannot ride in a C string, so it is replaced with U+FFFD rather than
+/// truncating (the old `unwrap_or_default` shape reported the source
+/// length beside an empty string, and a consumer honoring the length
+/// over-read the heap).
+fn to_c_string(s: &str) -> (*mut c_char, u32) {
+    // Infallible: the only failure mode of `CString::new` is an interior
+    // NUL, replaced above.
+    let cs = if s.contains('\0') {
+        CString::new(s.replace('\0', "\u{FFFD}")).expect("interior NUL replaced")
+    } else {
+        CString::new(s).expect("no interior NUL")
+    };
+    let len = cs.as_bytes().len() as u32;
+    (cs.into_raw(), len)
+}
+
 use crate::mouse::MouseMode;
 use crate::observer::TerminalObserver;
 use crate::terminal::{Terminal, TerminalEvent, TerminalEventKind};
@@ -122,19 +142,11 @@ impl SharedState {
         };
 
         // Title
-        let title_str = term.title();
-        let title_len = title_str.len() as u32;
-        let title_cstring = CString::new(title_str).unwrap_or_default();
-        let title = title_cstring.into_raw();
+        let (title, title_len) = to_c_string(term.title());
 
         // CWD
-        let cwd_opt = term.current_directory();
-        let (cwd, cwd_len) = match cwd_opt {
-            Some(s) => {
-                let len = s.len() as u32;
-                let cs = CString::new(s).unwrap_or_default();
-                (cs.into_raw(), len)
-            }
+        let (cwd, cwd_len) = match term.current_directory() {
+            Some(s) => to_c_string(s),
             None => (std::ptr::null_mut(), 0u32),
         };
 
@@ -762,6 +774,7 @@ pub unsafe extern "C" fn terminal_remove_observer(term: *mut Terminal, id: u64) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CStr;
     use std::mem::{align_of, offset_of, size_of};
 
     // Pin the #[repr(C)] layout to the values asserted by the C header
@@ -1004,5 +1017,36 @@ mod tests {
             dirty.len() <= 3,
             "status frame dirtied {dirty:?} of {rows} rows — damage tracking degraded"
         );
+    }
+
+    /// SEC-117: the string length fields must always equal `strlen` of
+    /// the NUL-terminated C string they accompany — an interior NUL is
+    /// replaced (U+FFFD), never silently truncated while the length
+    /// still names the source bytes.
+    #[test]
+    fn string_lengths_equal_strlen() {
+        let (ptr, len) = to_c_string("a\0b");
+        let bytes = unsafe { CStr::from_ptr(ptr) }.to_bytes().to_vec();
+        drop(unsafe { CString::from_raw(ptr) });
+        assert_eq!(bytes.len() as u32, len, "len == strlen");
+        assert_eq!(
+            bytes,
+            b"a\xEF\xBF\xBDb".to_vec(),
+            "NUL replaced, not dropped"
+        );
+
+        // End to end: OSC 7 carrying %00 is rejected at the source, so
+        // the snapshot's cwd is absent — never a truncated string with a
+        // stale length (the audit's cwd_len 4003 / strlen 0 shape).
+        let mut term = Terminal::with_scrollback(10, 5, 100);
+        term.process(b"\x1b]2;hello\x07");
+        term.process(b"\x1b]7;file:///tmp/a%00b\x07");
+        let state = SharedState::from_terminal(&term);
+        assert!(state.cwd.is_null(), "decoded-NUL cwd is rejected upstream");
+        assert_eq!(state.cwd_len, 0);
+        let title = unsafe { CStr::from_ptr(state.title) };
+        assert_eq!(title.to_bytes().len() as u32, state.title_len);
+        assert_eq!(title.to_bytes(), b"hello");
+        drop(state); // Drop frees title/cwd/cells
     }
 }

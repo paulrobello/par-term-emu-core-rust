@@ -2131,3 +2131,40 @@ fn test_osc1337_filepart_without_multipartfile() {
         "FilePart without MultipartFile must produce an InlineImageDropped diagnostic"
     );
 }
+
+#[test]
+fn test_osc7_rejects_decoded_nul_and_control_chars() {
+    let mut term = Terminal::new(80, 24);
+
+    term.process(b"\x1b]7;file:///tmp/a%00b\x1b\\");
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        None,
+        "a decoded NUL must not enter the cwd state"
+    );
+    term.process(b"\x1b]7;file:///tmp/a%0Ab\x1b\\");
+    assert_eq!(
+        term.shell_state.shell_integration.cwd(),
+        None,
+        "a decoded C0 control must not enter the cwd state"
+    );
+
+    // The gate rejects the path; it does not disable OSC 7.
+    term.process(b"\x1b]7;file:///tmp/ok\x1b\\");
+    assert_eq!(term.shell_state.shell_integration.cwd(), Some("/tmp/ok"));
+}
+
+#[test]
+fn test_current_dir_rejects_control_chars() {
+    let mut term = Terminal::new(80, 24);
+
+    // The OSC parser cannot deliver raw C0 controls, but the handler is a
+    // pub(crate) seam — it must reject them the way parse_osc7_url does.
+    term.handle_current_dir("/tmp/a\0b");
+    assert_eq!(term.shell_state.shell_integration.cwd(), None);
+    term.handle_current_dir("/tmp/a\nb");
+    assert_eq!(term.shell_state.shell_integration.cwd(), None);
+
+    term.handle_current_dir("/tmp/ok");
+    assert_eq!(term.shell_state.shell_integration.cwd(), Some("/tmp/ok"));
+}
