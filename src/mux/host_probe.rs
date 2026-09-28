@@ -13,6 +13,12 @@
 //! daemon-probed from hook-reported data (the same manners rule the
 //! telemetry endpoint applies). Like hook telemetry it is display-only:
 //! the save format's named-key capture never copies it.
+//!
+//! Trust rule (SEC-115): the probe runs only in a pane child's
+//! kernel-reported cwd — never a directory program output picked through
+//! OSC 7 — and every git invocation goes through [`git_command`]'s
+//! hardened config, so no repo-configured hook, filter or transport
+//! executes. A pane whose child cwd cannot be read is simply not probed.
 
 use crate::mux::tree::MuxTree;
 use parking_lot::Mutex;
@@ -105,14 +111,25 @@ fn git_branch(cwd: &Path) -> Option<String> {
     Some(branch)
 }
 
-/// Whether the worktree has changes: `diff-index --quiet HEAD --`
-/// (tracked modifications, exit 1) OR `ls-files --others
-/// --exclude-standard --directory` (untracked, any output) — the hub's
-/// pair. The verdict map is three-way (0 clean, 1 dirty, anything else —
-/// 128 above all, not-a-repo or a git error — no verdict): a failing
-/// repo must serve absent, never read as "dirty".
+/// Whether the worktree has changes: `diff-index --cached --quiet HEAD
+/// --` (staged changes, exit 1) OR `ls-files --others
+/// --exclude-standard --directory` (untracked, any output). The verdict
+/// map is three-way (0 clean, 1 dirty, anything else — 128 above all,
+/// not-a-repo or a git error — no verdict): a failing repo must serve
+/// absent, never read as "dirty".
+///
+/// `--cached` is a deliberate narrowing (SEC-115): the worktree-walking
+/// forms (`diff-index` without it, `status`) read file content and so
+/// execute the repo's clean filters and fsmonitor hook; `--cached`
+/// compares HEAD against the index alone and runs nothing the repo
+/// configured. The price: an unstaged-only edit to a tracked file reads
+/// clean.
 fn git_dirty(cwd: &Path) -> Option<bool> {
-    let tracked = run_git(cwd, &["diff-index", "--quiet", "HEAD", "--"], GIT_TIMEOUT)?;
+    let tracked = run_git(
+        cwd,
+        &["diff-index", "--cached", "--quiet", "HEAD", "--"],
+        GIT_TIMEOUT,
+    )?;
     match tracked.status.code() {
         Some(1) => return Some(true),
         Some(0) => {}
@@ -126,14 +143,47 @@ fn git_dirty(cwd: &Path) -> Option<bool> {
     Some(!untracked.stdout.is_empty())
 }
 
+/// Every probe git invocation, hardened (SEC-115): the probe runs in a
+/// directory pane state chose, so nothing the repo's config names may
+/// execute. `core.fsmonitor=false` and `core.hooksPath=/dev/null` close
+/// the two config-specified command vectors; `safe.bareRepository=explicit`
+/// keeps a stray bare repo from being entered; `protocol.ext.allow=never`
+/// blocks the ext remote transport; `--no-optional-locks` (plus
+/// `GIT_OPTIONAL_LOCKS=0`) stops the probe writing the repo's index;
+/// `GIT_TERMINAL_PROMPT=0` stops it waiting on a prompt; and clearing
+/// `GIT_DIR`/`GIT_WORK_TREE` stops an inherited environment from
+/// redirecting the repo root away from `-C`.
+fn git_command(cwd: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args([
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "safe.bareRepository=explicit",
+            "-c",
+            "protocol.ext.allow=never",
+            "--no-optional-locks",
+            "-C",
+        ])
+        .arg(cwd)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE");
+    command
+}
+
 /// Run one git invocation under a deadline. Returns `None` when git
 /// could not run or did not finish in time (the caller serves absent) —
 /// a probe failure is data absence, not an error path. stdin is null
-/// and stderr is dropped: the probe asks, it never feeds.
+/// and stderr is dropped: the probe asks, it never feeds. Every call
+/// goes through [`git_command`] — a bare `git -C` here is the SEC-115
+/// bug shape.
 fn run_git(cwd: &Path, args: &[&str], timeout: Duration) -> Option<std::process::Output> {
-    let Ok(mut child) = Command::new("git")
-        .arg("-C")
-        .arg(cwd)
+    let Ok(mut child) = git_command(cwd)
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -243,7 +293,7 @@ pub(crate) fn host_probe_sweep(tree: &Arc<Mutex<MuxTree>>) {
         if Instant::now() >= sweep_deadline {
             break;
         }
-        if let Some(cwd) = parts.cwd() {
+        if let Some(cwd) = parts.probe_cwd() {
             results.push((*pane_id, host_telemetry_json(&probe_cwd(&cwd), now_ms)));
         }
     }
@@ -395,12 +445,134 @@ mod tests {
         let probe = probe_cwd(repo.path());
         assert_eq!(probe.git_dirty, Some(true));
 
+        // A fresh repo pins the --cached narrowing (SEC-115): an
+        // unstaged-only edit to a tracked file reads clean (detecting it
+        // would read worktree content and run the repo's clean filter),
+        // the same edit staged reads dirty.
+        let repo = git_repo();
+        std::fs::write(repo.path().join("tracked.txt"), "two\n").unwrap();
+        let probe = probe_cwd(repo.path());
+        assert_eq!(probe.git_dirty, Some(false), "unstaged-only edit is clean");
+        let staged = Command::new("git")
+            .arg("-C")
+            .arg(repo.path())
+            .args(["add", "--all"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        assert!(staged.expect("git runs").success(), "git add in fixture");
+        let probe = probe_cwd(repo.path());
+        assert_eq!(probe.git_dirty, Some(true), "staged edit is dirty");
+
         // Not a repo at all: every git field absent, disk still measured.
         let plain = tempfile::tempdir().unwrap();
         let probe = probe_cwd(plain.path());
         assert_eq!(probe.git_branch, None);
         assert_eq!(probe.git_dirty, None);
         assert!(probe.disk_free_percent.is_some() || cfg!(windows));
+    }
+
+    /// SEC-115: a repo whose config names an fsmonitor hook must not run
+    /// it — the probe's git calls run with every config-specified
+    /// execution vector disabled.
+    #[cfg(unix)]
+    #[test]
+    fn fsmonitor_hook_does_not_run() {
+        if !Command::new("git")
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return; // no git on PATH — the probe serves absent anyway
+        }
+        let repo = git_repo();
+        let marker = tempfile::tempdir().unwrap();
+        let marker_path = marker.path().join("PWNED");
+        let mut config = std::fs::read_to_string(repo.path().join(".git/config")).unwrap();
+        config.push_str(&format!(
+            "\n[core]\n\tfsmonitor = \"sh -c 'touch {}'\"\n",
+            marker_path.display()
+        ));
+        std::fs::write(repo.path().join(".git/config"), config).unwrap();
+
+        let probe = probe_cwd(repo.path());
+        assert_eq!(probe.git_branch.as_deref(), Some("main"));
+        let _ = probe.git_dirty; // exercised for the hook, verdict irrelevant
+        assert!(
+            !marker_path.exists(),
+            "the repo-configured fsmonitor hook must never run"
+        );
+    }
+
+    /// SEC-115: the sweep's git target is the child's kernel-reported cwd,
+    /// never the OSC 7 value pane output controls. The pane's shell lives
+    /// in a git repo while its terminal reports a hostile OSC 7 path —
+    /// telemetry must carry the repo's state, proving the probe ran where
+    /// the kernel says the child is.
+    #[cfg(unix)]
+    #[test]
+    fn sweep_probes_child_cwd_not_osc7() {
+        let repo = git_repo();
+        let mut tree = MuxTree::new(Box::new(ShellPaneFactory {
+            cwd: Some(repo.path().to_path_buf()),
+            ..ShellPaneFactory::default()
+        }));
+        let session = tree
+            .new_session("probe", 80, 24)
+            .expect("test session spawns");
+        let pane_id = tree
+            .session(session)
+            .expect("session exists")
+            .windows
+            .iter()
+            .filter_map(|window| tree.window(*window))
+            .flat_map(|window| window.panes())
+            .next()
+            .expect("a new session has a pane");
+        let tree = Arc::new(Mutex::new(tree));
+        {
+            let mut guard = tree.lock();
+            let pane = guard.pane_mut(pane_id).unwrap();
+            pane.set_metadata("agent", "kimi");
+            pane.set_metadata("agent_state", "working");
+            // The attacker's write: pane output picks the probe directory.
+            pane.terminal()
+                .write()
+                .process(b"\x1b]7;file:///nonexistent-osc7\x07");
+        }
+        host_probe_sweep(&tree);
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).unwrap();
+        // The seam: persistence semantics keep the OSC 7 value, the probe
+        // target is the kernel-reported child cwd.
+        let parts = pane.snapshot_capture_parts();
+        assert_eq!(
+            parts.cwd(),
+            Some(std::path::PathBuf::from("/nonexistent-osc7")),
+            "persistence cwd still prefers OSC 7"
+        );
+        let probed = parts.probe_cwd().expect("the pane has a live child");
+        assert_ne!(probed, std::path::PathBuf::from("/nonexistent-osc7"));
+        assert_eq!(
+            std::fs::canonicalize(&probed).ok(),
+            std::fs::canonicalize(repo.path()).ok(),
+            "probe_cwd is the child's actual cwd"
+        );
+        let raw = pane
+            .metadata()
+            .get(HOST_TELEMETRY_KEY)
+            .expect("rostered pane probed");
+        let parsed: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            parsed["git_branch"]["value"], "main",
+            "the probe ran in the child's cwd, not the OSC 7 path"
+        );
+        assert_eq!(parsed["git_dirty"]["value"], false);
     }
 
     #[test]

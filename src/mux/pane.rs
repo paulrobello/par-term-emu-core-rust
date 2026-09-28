@@ -166,6 +166,17 @@ impl PaneSnapshotParts {
         }
         self.child_pid.and_then(process_cwd)
     }
+
+    /// The host-probe target (SEC-115): only the child's kernel-reported
+    /// cwd — pane output must never choose the directory the daemon runs
+    /// git in, and OSC 7 is program output. `None` (no child, reaped pid,
+    /// platform without a pid→cwd path) skips the pane entirely: absent
+    /// telemetry beats probing a directory output picked. Contrast
+    /// [`Self::cwd`], which keeps the OSC 7 preference where trust is not
+    /// load-bearing (persistence and session restore).
+    pub(crate) fn probe_cwd(&self) -> Option<std::path::PathBuf> {
+        self.child_pid.and_then(process_cwd)
+    }
 }
 
 /// [`MuxPane::persisted_snapshot`]'s logic over collected parts: serve the
