@@ -383,32 +383,31 @@ impl StreamSessionState {
         if guard.is_none() {
             let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(INPUT_QUEUE_MESSAGES);
             let weak = Arc::downgrade(self);
-            // A plain thread, not `spawn_blocking`: the blocking-pool shape
-            // was measured losing the thread wholesale — parked in a
-            // 10 ms `nanosleep` for a full 15 s while every other thread
-            // in the process ran on schedule, across four different park
-            // primitives (tokio `blocking_recv`, std `recv`,
-            // `recv_timeout`'s dispatch semaphore, and plain `sleep`).
-            // Whatever the OS-level trigger, it followed the blocking-pool
-            // thread, not the primitive; a detached std thread exits when
-            // the channel closes (the sender dies with the session), so
-            // the lifetime story is unchanged.
+            // A plain thread, not `spawn_blocking`: it owns one blocking
+            // job for the session's lifetime with no runtime tasks to
+            // coordinate against. The stall once blamed on the
+            // blocking-pool thread shape (a drain "frozen mid-nanosleep
+            // across four park primitives") was re-diagnosed as the
+            // stress test holding the PTY-writer mutex across its own
+            // deadline poll (card 01a0e99aa9447543a302f2ab5b5cbe01);
+            // thread origin was never the variable. A detached std
+            // thread exits when the channel closes (the sender dies
+            // with the session), so the lifetime story is unchanged.
             let spawned = std::thread::Builder::new()
                 .name("pty-input-drain".to_string())
                 .spawn(move || {
                     use std::io::Write;
-                    // Poll, don't park. Every park-based wait on this drain
-                    // was measured losing its wakeup while chunks sat queued
-                    // (card 01a0e80db3e870e282af0cf84405043b): the tokio
-                    // channel's `blocking_recv` (444be93), then std `recv`,
-                    // then std `recv_timeout(250ms)` — the last observed parked
-                    // in `semaphore_timedwait_trap` for a full 15 s, deaf to
-                    // both the 250 ms deadline and the sender's signal, while
-                    // `nanosleep`-based sleeps in the same process kept firing
-                    // on schedule. A `try_recv` + sleep loop sits on the
-                    // primitive that provably wakes, bounds a lost event to
-                    // one poll interval, and drains the queue without parking
-                    // whenever input is flowing.
+                    // Poll, don't park. The stall this loop was written
+                    // for was re-diagnosed as the drain contending on a
+                    // PTY-writer mutex a stress test held across its own
+                    // 15 s deadline poll (card
+                    // 01a0e99aa9447543a302f2ab5b5cbe01); the earlier
+                    // "lost wakeup" parks (card
+                    // 01a0e80db3e870e282af0cf84405043b) stalled the
+                    // same way, against that guard. `try_recv` + sleep
+                    // keeps any future wait — channel or mutex — bounded
+                    // to one poll interval instead of a park with no
+                    // deadline.
                     const DRAIN_POLL: Duration = Duration::from_millis(10);
                     loop {
                         let bytes = match rx.try_recv() {
@@ -428,16 +427,16 @@ impl StreamSessionState {
                                 .fetch_sub(bytes.len(), Ordering::Relaxed);
                             let writer = session.pty_writer.read().as_ref().cloned();
                             if let Some(w) = writer {
-                                // try_lock + retry, not a blocking lock: a
-                                // blocking `lock` was measured losing its
-                                // unlock wake for the rest of the burst (the
-                                // same lost-wake disease the channel poll
-                                // above defends against), stranding every
-                                // later chunk behind a mutex a woken thread
-                                // never took. Polling bounds that to one
-                                // interval; the uncontended fast path (the
-                                // only production shape — all input flows
-                                // through this drain) never waits at all.
+                                // try_lock + retry, not a blocking lock:
+                                // whatever holds this mutex (a viewer's
+                                // direct write, a slow daemon flush), a
+                                // blocking `lock` waits on it with no
+                                // deadline and strands every later chunk
+                                // behind the same wait. Polling bounds any
+                                // hold to one interval; the uncontended
+                                // fast path (the only production shape —
+                                // all input flows through this drain)
+                                // never waits at all.
                                 let mut w = loop {
                                     match w.try_lock() {
                                         Some(guard) => break guard,

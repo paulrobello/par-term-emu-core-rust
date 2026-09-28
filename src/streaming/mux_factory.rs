@@ -765,15 +765,14 @@ mod tests {
     /// not a loss: the enqueue drain's park (first tokio `blocking_recv`,
     /// then std `recv`) held queued chunks for the full deadline until an
     /// unrelated thread unpark released them; the drain is now a polling
-    /// loop over the channel, the writer mutex, and a plain thread. What
-    /// the repro still catches on this machine is narrower: the drain
-    /// THREAD itself stops executing — observed parked inside a 10 ms
-    /// `nanosleep` for a full 15 s while sibling threads (test thread,
-    /// daemon read loops) ran on schedule, released at test teardown —
-    /// tracked as its own card. Run with `--ignored --nocapture` and
-    /// DEBUG_LEVEL=3: the MUX receipt log, PTY_WRITE ledger, and the
-    /// enqueue/drain pickup logs place any park exactly.
-    #[ignore = "repro: drain-thread deschedule (macOS 27 seed) — own card; the input-path parks are fixed"]
+    /// loop over the channel, the writer mutex, and a plain thread. The
+    /// "drain thread stops executing" reading of the last stall was wrong:
+    /// the test's direct EOF write both held the PTY-writer guard across
+    /// its own deadline poll (mid-stall sampling shows the drain looping
+    /// on `try_lock` against that guard) and jumped the queue so `cat`
+    /// exited before the queued frames arrived. EOF now takes the queue.
+    /// Run with DEBUG_LEVEL=3 for the MUX receipt log, PTY_WRITE ledger,
+    /// and the enqueue/drain pickup logs.
     #[tokio::test(flavor = "multi_thread")]
     async fn stress_input_frames_of_varied_sizes_all_land_exactly_once() {
         let (dir, socket, _control, pane) = daemon();
@@ -813,11 +812,12 @@ mod tests {
                     w.flush().expect("flush");
                 }
             }
-            // EOF ends `cat`: the pane is a shell again for phase 2.
-            let writer = a.pty_writer.read().as_ref().cloned().expect("input path");
-            let mut w = writer.lock();
-            w.write_all(b"\x04").expect("eof");
-            w.flush().expect("flush");
+            // EOF ends `cat`: the pane is a shell again for phase 2. It
+            // must take the same queue as the frames above it — a direct
+            // writer write races the drain and lands first, so `cat`
+            // exits and the queued frames arrive at the shell instead of
+            // the file.
+            a.enqueue_pty_input(b"\x04".to_vec());
             let deadline = Instant::now() + Duration::from_secs(15);
             while expected_cat.len()
                 != std::fs::read_to_string(&cat_file)
@@ -848,6 +848,11 @@ mod tests {
         // full typed line (echo + redirect + temp path) runs ~60-330 B.
         const SIZES: [usize; 6] = [12, 24, 64, 120, 180, 240];
         let mut expected: Vec<String> = Vec::new();
+        let have = || {
+            std::fs::read_to_string(&file)
+                .map(|t| t.lines().count())
+                .unwrap_or(0)
+        };
         for batch in 0..3 {
             for cycle in 0..5 {
                 for (i, &size) in SIZES.iter().enumerate() {
@@ -873,26 +878,26 @@ mod tests {
                         };
                         a.resize_tx.send(to).expect("resize request");
                     }
+                    // Wait for each line before the next: a PTY's kernel
+                    // input queue (~1 KB, canonical while the shell runs a
+                    // child) drops bytes typed faster than the pane drains
+                    // — plain bash + script(1) loses 24/30 the same way, so
+                    // that is tty semantics, not this input path. The
+                    // barrier keeps the send rate within what a pane can
+                    // consume while preserving the size coverage.
+                    let want = expected.len();
+                    let deadline = Instant::now() + Duration::from_secs(5);
+                    while have() < want {
+                        assert!(
+                            Instant::now() < deadline,
+                            "frame {index}: {}/{} lines reached the pane; rerun \
+                             with DEBUG_LEVEL=1 — the debug log names the side",
+                            have(),
+                            want
+                        );
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
                 }
-            }
-            // Each batch is a fresh burst on an idle path — the shape the
-            // loss was seen in — so let the shell drain it before the next.
-            let want = expected.len();
-            let deadline = Instant::now() + Duration::from_secs(20);
-            let have = || {
-                std::fs::read_to_string(&file)
-                    .map(|t| t.lines().count())
-                    .unwrap_or(0)
-            };
-            while have() < want {
-                assert!(
-                    Instant::now() < deadline,
-                    "batch {batch}: {}/{} frames reached the pane; rerun with \
-                     DEBUG_LEVEL=1 — the debug log names the dropping side",
-                    have(),
-                    want
-                );
-                std::thread::sleep(Duration::from_millis(50));
             }
         }
 
