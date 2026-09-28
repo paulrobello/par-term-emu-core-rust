@@ -570,6 +570,10 @@ impl StreamSessionState {
         crate::debug_info!("STREAMING", "Shutting down session {}: {}", self.id, reason);
         let msg = ServerMessage::shutdown(reason);
         self.broadcast(msg);
+        // Detach the PTY writer so input arriving after shutdown hits the
+        // server's writer-detached guard (logged, counted, connection
+        // closed) instead of queueing bytes for a process that is gone.
+        self.pty_writer.write().take();
         self.shutdown.notify_waiters();
     }
 
@@ -1035,5 +1039,20 @@ mod tests {
             result.unwrap_err(),
             StreamingError::MaxSessionsReached
         ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_detaches_the_pty_writer() {
+        let terminal = Arc::new(RwLock::new(Terminal::new(80, 24)));
+        let session = StreamSessionState::new("writer-detach".to_string(), terminal, None, true);
+        session.set_pty_writer(Arc::new(Mutex::new(Box::new(Vec::<u8>::new()))));
+        assert!(session.pty_writer.read().is_some());
+
+        session.shutdown("pane closed".to_string());
+
+        // Input arriving after shutdown must hit the server's
+        // writer-detached guard (logged, counted, connection closed),
+        // not queue bytes for a process that is gone.
+        assert!(session.pty_writer.read().is_none());
     }
 }
