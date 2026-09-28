@@ -511,13 +511,22 @@ mod tests {
 
     /// SEC-115: the sweep's git target is the child's kernel-reported cwd,
     /// never the OSC 7 value pane output controls. The pane's shell lives
-    /// in a git repo while its terminal reports a hostile OSC 7 path —
-    /// telemetry must carry the repo's state, proving the probe ran where
-    /// the kernel says the child is.
+    /// in a git repo whose config names an fsmonitor hook while its
+    /// terminal reports a hostile OSC 7 path — telemetry must carry the
+    /// repo's state (the probe ran where the kernel says the child is)
+    /// and the hook must never run.
     #[cfg(unix)]
     #[test]
     fn sweep_probes_child_cwd_not_osc7() {
         let repo = git_repo();
+        let marker = tempfile::tempdir().unwrap();
+        let marker_path = marker.path().join("PWNED");
+        let mut config = std::fs::read_to_string(repo.path().join(".git/config")).unwrap();
+        config.push_str(&format!(
+            "\n[core]\n\tfsmonitor = \"sh -c 'touch {}'\"\n",
+            marker_path.display()
+        ));
+        std::fs::write(repo.path().join(".git/config"), config).unwrap();
         let mut tree = MuxTree::new(Box::new(ShellPaneFactory {
             cwd: Some(repo.path().to_path_buf()),
             ..ShellPaneFactory::default()
@@ -573,6 +582,10 @@ mod tests {
             "the probe ran in the child's cwd, not the OSC 7 path"
         );
         assert_eq!(parsed["git_dirty"]["value"], false);
+        assert!(
+            !marker_path.exists(),
+            "the sweep never executed the repo-configured fsmonitor hook"
+        );
     }
 
     #[test]
