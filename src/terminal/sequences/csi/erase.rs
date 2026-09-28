@@ -24,16 +24,27 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 let cursor_row = self.cursor.row;
                 match n {
-                    0 => self
-                        .active_grid_mut()
-                        .clear_screen_below(cursor_col, cursor_row, bg),
-                    1 => self
-                        .active_grid_mut()
-                        .clear_screen_above(cursor_col, cursor_row, bg),
+                    0 => {
+                        self.active_grid_mut()
+                            .clear_screen_below(cursor_col, cursor_row, bg);
+                        for row in cursor_row..self.active_grid().rows() {
+                            self.mark_row_dirty(row);
+                        }
+                    }
+                    1 => {
+                        self.active_grid_mut()
+                            .clear_screen_above(cursor_col, cursor_row, bg);
+                        for row in 0..=cursor_row {
+                            self.mark_row_dirty(row);
+                        }
+                    }
                     2 => {
                         self.active_grid_mut().clear_with_bg(bg);
                         self.graphics.graphics_store.clear();
                         self.graphics.graphics_store.clear_scrollback_graphics();
+                        for row in 0..self.active_grid().rows() {
+                            self.mark_row_dirty(row);
+                        }
                         self.events.terminal_events.push(
                             crate::terminal::TerminalEvent::ScreenCleared {
                                 include_scrollback: false,
@@ -50,6 +61,9 @@ impl Terminal {
                         self.active_grid_mut().clear_scrollback();
                         self.graphics.graphics_store.clear();
                         self.graphics.graphics_store.clear_scrollback_graphics();
+                        for row in 0..self.active_grid().rows() {
+                            self.mark_row_dirty(row);
+                        }
                         self.events.terminal_events.push(
                             crate::terminal::TerminalEvent::ScreenCleared {
                                 include_scrollback: true,
@@ -76,13 +90,20 @@ impl Terminal {
                 let cursor_col = self.cursor.col;
                 let cursor_row = self.cursor.row;
                 match n {
-                    0 => self
-                        .active_grid_mut()
-                        .clear_line_right(cursor_col, cursor_row, bg),
-                    1 => self
-                        .active_grid_mut()
-                        .clear_line_left(cursor_col, cursor_row, bg),
-                    2 => self.active_grid_mut().clear_row_with_bg(cursor_row, bg),
+                    0 => {
+                        self.active_grid_mut()
+                            .clear_line_right(cursor_col, cursor_row, bg);
+                        self.mark_row_dirty(cursor_row);
+                    }
+                    1 => {
+                        self.active_grid_mut()
+                            .clear_line_left(cursor_col, cursor_row, bg);
+                        self.mark_row_dirty(cursor_row);
+                    }
+                    2 => {
+                        self.active_grid_mut().clear_row_with_bg(cursor_row, bg);
+                        self.mark_row_dirty(cursor_row);
+                    }
                     _ => {}
                 }
             }
@@ -100,6 +121,7 @@ impl Terminal {
                 let cursor_row = self.cursor.row;
                 self.active_grid_mut()
                     .erase_characters(cursor_col, cursor_row, n, bg);
+                self.mark_row_dirty(cursor_row);
             }
             _ => {}
         }
@@ -187,6 +209,7 @@ impl Terminal {
             if let Some(cells) = self.active_grid_mut().row_mut(row) {
                 cells[col].reset();
                 cells[col].bg = bg;
+                self.mark_row_dirty(row);
             }
         }
 

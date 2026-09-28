@@ -100,9 +100,7 @@ impl Terminal {
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, top, bottom);
                     // Mark all rows in scroll region as dirty
-                    for row in top..=bottom {
-                        self.mark_row_dirty(row);
-                    }
+                    self.mark_rows_dirty(top, bottom);
                     // Cursor stays at scroll_region_bottom per VT spec
                 } else {
                     // Not at scroll region bottom, or outside region - just move cursor down
@@ -189,6 +187,7 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;
@@ -224,6 +223,7 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 // Cursor stays at scroll_region_bottom
             } else {
                 self.cursor.row += 1;
@@ -604,6 +604,7 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;

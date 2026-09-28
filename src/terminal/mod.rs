@@ -1537,9 +1537,18 @@ impl Terminal {
         self.grid.resize(cols, rows);
         // The alt screen never reflows (see Grid::resize_without_reflow).
         self.alt_grid.resize_without_reflow(cols, rows);
-        // Keep the dirty-row mask sized to the visible rows; a shrink drops
-        // stale bits for rows that no longer exist.
+        // Keep the dirty-row mask sized to the visible rows, then mark every
+        // row dirty: a resize reflows/redraws the whole screen, and a
+        // damage-driven renderer (FFI readback) must repaint all of it.
         self.dirty_rows.resize(rows.div_ceil(64), 0);
+        for word in self.dirty_rows.iter_mut() {
+            *word = u64::MAX;
+        }
+        let last_word_bits = rows % 64;
+        if last_word_bits != 0 {
+            let last = self.dirty_rows.len() - 1;
+            self.dirty_rows[last] = (1u64 << last_word_bits) - 1;
+        }
 
         // Update pixel dimensions proportionally (10x20 per cell if not explicitly set)
         // This ensures CSI 14 t queries return valid pixel dimensions after resize
@@ -1753,6 +1762,9 @@ impl Terminal {
                 // Clear the alternate screen buffer to ensure it starts blank
                 self.alt_grid.clear();
             }
+            // The whole visible screen just changed — every row is dirty.
+            let rows = self.grid.rows();
+            self.mark_rows_dirty(0, rows.saturating_sub(1));
             // Notify about alt screen entry
             self.events
                 .terminal_events
@@ -1779,6 +1791,9 @@ impl Terminal {
             self.cursor = self.alt_cursor;
             // Save alternate cursor for when we switch back
             self.alt_cursor = alt_cursor;
+            // The whole visible screen just changed — every row is dirty.
+            let rows = self.grid.rows();
+            self.mark_rows_dirty(0, rows.saturating_sub(1));
             // Reset keyboard protocol flags when exiting alternate screen
             // TUI apps may enable Kitty keyboard protocol and fail to disable it on exit
             if self.keyboard_state.keyboard_flags != 0 {
@@ -3144,6 +3159,15 @@ impl Terminal {
         // If we have triggers, also add to pending trigger rows
         if self.triggers.trigger_registry.has_active_triggers() {
             self.triggers.pending_trigger_rows.insert(row);
+        }
+    }
+
+    /// Mark an inclusive range of rows dirty — scrolling changes every row
+    /// in the scrolled region, not just the ones that received cells.
+    pub(crate) fn mark_rows_dirty(&mut self, top: usize, bottom: usize) {
+        let last_row = self.active_grid().rows().saturating_sub(1);
+        for row in top..=bottom.min(last_row) {
+            self.mark_row_dirty(row);
         }
     }
 

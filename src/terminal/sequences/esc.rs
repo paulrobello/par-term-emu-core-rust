@@ -47,6 +47,7 @@ impl Terminal {
                         .scroll_region_down(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_down(1, scroll_top, scroll_bottom);
+                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                 }
             }
             (b'D', _) => {
@@ -70,6 +71,7 @@ impl Terminal {
                         .scroll_region_up(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                 }
             }
             (b'E', _) => {
@@ -97,6 +99,7 @@ impl Terminal {
                         .scroll_region_up(1, scroll_top, scroll_bottom);
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
+                    self.mark_rows_dirty(scroll_top, scroll_bottom);
                 }
             }
             (b'c', _) => {
