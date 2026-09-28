@@ -693,6 +693,10 @@ pub(crate) struct ColorThemeState {
     pub(crate) cursor_color: Color,
     /// ANSI color palette (0-15) - modified by OSC 4/104
     pub(crate) ansi_palette: [Color; 16],
+    /// Embedder-configured palette (written by `set_ansi_palette_color`).
+    /// RIS restores `ansi_palette` from this copy, so OSC 4 drift resets to
+    /// the configured colors the way xterm restores its resource palette.
+    pub(crate) configured_palette: [Color; 16],
     /// Color stack for XTPUSHCOLORS/XTPOPCOLORS (fg, bg, underline)
     pub(crate) color_stack: Vec<(Color, Color, Option<Color>)>,
     /// Palette stack for XTPUSHCOLORS/XTPOPCOLORS (dynamic + ANSI palette snapshots)
@@ -735,6 +739,7 @@ impl Default for ColorThemeState {
             default_bg: Color::Named(NamedColor::Black),
             cursor_color: Color::Named(NamedColor::White),
             ansi_palette: Terminal::default_ansi_palette(),
+            configured_palette: Terminal::default_ansi_palette(),
             color_stack: Vec::new(),
             palette_stack: Vec::new(),
             palette_stack_last: 0,
@@ -3135,18 +3140,161 @@ impl Terminal {
         ObserverDispatchBatch { events, observers }
     }
 
-    /// Reset the terminal to its initial state (RIS)
+    /// Reset the terminal to its initial state (RIS).
+    ///
+    /// xterm semantics: RIS clears the *terminal* — grids, scrollback,
+    /// cursor, SGR, modes, margins, charsets, keyboard protocol,
+    /// hyperlinks, graphics, title, selection — but not the embedder's
+    /// configuration. Security policy ([`set_accept_osc7`],
+    /// [`set_disable_insecure_sequences`], [`set_max_osc_data_length`]),
+    /// file-media and clipboard policy, graphics/clipboard limits, the
+    /// answerback string, theme colors, unicode config, observers, event
+    /// subscriptions, triggers, macros, notification config, the badge
+    /// format, active recordings, tmux control flags, pixel dimensions,
+    /// and profiling all survive (ARC-058). DECSTR (CSI ! p) is the softer
+    /// [`Terminal::soft_reset`], which resets modes without touching the
+    /// screen.
     pub fn reset(&mut self) {
         let (cols, rows) = self.size();
         let scrollback = self.grid.max_scrollback();
 
-        // Save current tab stops
+        // xterm keeps user-configured tab stops across RIS.
         let tab_stops = self.tab_stops.clone();
 
-        *self = Self::with_scrollback(cols, rows, scrollback);
+        let mut fresh = Self::with_scrollback(cols, rows, scrollback);
 
-        // Restore tab stops
+        // Security policy survives; the in-flight OSC-guard fields reset
+        // with the parser state they track.
+        fresh.security_state.accept_osc7 = self.security_state.accept_osc7;
+        fresh.security_state.disable_insecure_sequences =
+            self.security_state.disable_insecure_sequences;
+        fresh.security_state.max_osc_data_length = self.security_state.max_osc_data_length;
+
+        // Kitty host policy survives; parser transmission state resets.
+        fresh.kitty_parser.allow_file_media = self.kitty_parser.allow_file_media;
+        fresh.kitty_parser.retain_temp_files = self.kitty_parser.retain_temp_files;
+
+        // Graphics limits survive; store contents reset with the grid.
+        fresh.graphics.sixel_limits = self.graphics.sixel_limits;
+        fresh.graphics.cell_dimensions = self.graphics.cell_dimensions;
+        fresh.graphics.graphics_store =
+            GraphicsStore::with_limits(*self.graphics.graphics_store.limits());
+
+        // Answerback is embedder identification, not terminal state.
+        fresh.title_state.answerback_string = self.title_state.answerback_string.take();
+
+        // Clipboard policy and caps survive; content and history reset.
+        fresh.clipboard_state.allow_clipboard_read = self.clipboard_state.allow_clipboard_read;
+        fresh.clipboard_state.max_clipboard_history = self.clipboard_state.max_clipboard_history;
+        fresh.clipboard_sync.max_history = self.clipboard_sync.max_history;
+        fresh.clipboard_sync.max_events = self.clipboard_sync.max_events;
+        fresh.clipboard_sync.max_event_bytes = self.clipboard_sync.max_event_bytes;
+        fresh.clipboard_sync.remote_session_id = self.clipboard_sync.remote_session_id.take();
+
+        // Theme survives wholesale, except the OSC-driven parts: palette
+        // drift resets to the configured copy and the XTPUSHCOLORS stacks
+        // clear.
+        std::mem::swap(&mut fresh.theme, &mut self.theme);
+        fresh.theme.ansi_palette = fresh.theme.configured_palette;
+        fresh.theme.color_stack.clear();
+        fresh.theme.palette_stack.clear();
+        fresh.theme.palette_stack_last = 0;
+
+        std::mem::swap(&mut fresh.unicode_state, &mut self.unicode_state);
+
+        // Observers keep their registration and ID sequence; buffered
+        // events reset with everything else they describe.
+        std::mem::swap(&mut fresh.events.observers, &mut self.events.observers);
+        fresh.events.next_observer_id = self.events.next_observer_id;
+        std::mem::swap(&mut fresh.event_subscription, &mut self.event_subscription);
+
+        // The trigger registry survives; highlights, action results, and
+        // pending scan rows reset.
+        std::mem::swap(
+            &mut fresh.triggers.trigger_registry,
+            &mut self.triggers.trigger_registry,
+        );
+
+        std::mem::swap(&mut fresh.macros, &mut self.macros);
+
+        std::mem::swap(
+            &mut fresh.notifications_state.notification_config,
+            &mut self.notifications_state.notification_config,
+        );
+        fresh.notifications_state.max_notifications = self.notifications_state.max_notifications;
+        std::mem::swap(
+            &mut fresh.notifications_state.custom_triggers,
+            &mut self.notifications_state.custom_triggers,
+        );
+
+        std::mem::swap(
+            &mut fresh.badge_state.badge_format,
+            &mut self.badge_state.badge_format,
+        );
+
+        // An in-flight recording keeps recording.
+        std::mem::swap(&mut fresh.recording_state, &mut self.recording_state);
+
+        // tmux control-mode flag and auto-detect survive; buffered
+        // notifications reset.
+        std::mem::swap(&mut fresh.tmux.tmux_parser, &mut self.tmux.tmux_parser);
+
+        fresh.pixel_width = self.pixel_width;
+        fresh.pixel_height = self.pixel_height;
+        std::mem::swap(&mut fresh.profiling, &mut self.profiling);
+
+        *self = fresh;
         self.tab_stops = tab_stops;
+
+        // The whole screen changed under whoever is watching it.
+        self.mark_rows_dirty(0, rows.saturating_sub(1));
+    }
+
+    /// Soft terminal reset (DECSTR, `CSI ! p`) per VT510.
+    ///
+    /// Resets the state a program can set through escapes — cursor
+    /// visibility (DECTCEM on) and position (home), IRM/DECOM/DECAWM/
+    /// DECCKM/DECKPAM, selective erase (DECSCA), scroll margins (DECSTBM
+    /// full screen), charsets (G0-G3 ASCII, GL=G0), SGR defaults, DECSDM,
+    /// DECSACE, pushed colors, and the DECSC saved state (home, default
+    /// attributes) — while leaving screen content, scrollback, and all
+    /// embedder configuration untouched.
+    pub fn soft_reset(&mut self) {
+        let (cols, rows) = self.size();
+
+        self.cursor.col = 0;
+        self.cursor.row = 0;
+        self.cursor.visible = true;
+        self.modes.insert_mode = false;
+        self.modes.origin_mode = false;
+        self.modes.auto_wrap = true;
+        self.modes.application_cursor = false;
+        self.modes.application_keypad = false;
+        self.modes.char_protected = false;
+        self.modes.sixel_display_mode = false;
+        self.modes.attribute_change_extent = AttributeChangeExtent::Rectangle;
+        self.margins = MarginState::new(cols, rows);
+
+        // SGR default — the fresh-terminal baseline.
+        self.fg = Color::Named(NamedColor::White);
+        self.bg = Color::Named(NamedColor::Black);
+        self.underline_color = None;
+        self.flags = CellFlags::default();
+
+        self.charset_state = CharsetState::default();
+
+        // DECSC saved state: home with default attributes.
+        self.saved_state = SavedCursorState {
+            saved_cursor: Some(Cursor::new()),
+            ..SavedCursorState::default()
+        };
+
+        // Pushed colors are discarded.
+        self.theme.color_stack.clear();
+        self.theme.palette_stack.clear();
+        self.theme.palette_stack_last = 0;
+
+        self.pending_wrap = false;
     }
 
     /// Mark a row as dirty (needs redrawing)

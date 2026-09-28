@@ -200,6 +200,7 @@ impl Terminal {
             return Err(format!("Invalid palette index: {} (must be 0-15)", index));
         }
         self.theme.ansi_palette[index] = color;
+        self.theme.configured_palette[index] = color;
         Ok(())
     }
 

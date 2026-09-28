@@ -4026,3 +4026,153 @@ fn test_modify_other_keys_ignored_for_other_params() {
     term.process(b"\x1b[>0;1m");
     assert_eq!(term.modify_other_keys_mode(), 0);
 }
+
+// ARC-058: RIS resets the VT, not the embedder's configuration.
+
+#[test]
+fn ris_preserves_host_config() {
+    use crate::graphics::kitty::FileMediaMode;
+    use crate::observer::TerminalObserver;
+    use crate::terminal::TriggerEngine;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut term = Terminal::new(80, 24);
+
+    // Every embedder setter to a non-default value.
+    term.set_allow_file_media(FileMediaMode::All);
+    term.set_disable_insecure_sequences(true);
+    term.set_accept_osc7(false);
+    term.set_max_osc_data_length(4096);
+    term.set_sixel_limits(11, 22, 33);
+    term.set_max_sixel_graphics(7);
+    term.set_cell_dimensions(9, 19);
+    term.set_answerback_string(Some("par-test".to_string()));
+    term.set_allow_clipboard_read(true);
+    term.set_ansi_palette_color(1, Color::Rgb(1, 2, 3)).unwrap();
+    term.set_faint_text_alpha(0.25);
+
+    #[derive(Default)]
+    struct CountingObserver {
+        events: AtomicUsize,
+    }
+    impl TerminalObserver for CountingObserver {
+        fn on_event(&self, _event: &TerminalEvent) {
+            self.events.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+    let observer = std::sync::Arc::new(CountingObserver::default());
+    term.add_observer(observer.clone());
+    term.set_event_subscription(std::collections::HashSet::from([
+        TerminalEventKind::BellRang,
+        TerminalEventKind::TitleChanged,
+    ]));
+    TriggerEngine::add_trigger(&mut term, "t".into(), "MARKER".into(), vec![]).unwrap();
+
+    term.mark_clean();
+    term.process(b"\x1bc"); // RIS
+
+    assert_eq!(term.allow_file_media(), FileMediaMode::All);
+    assert!(term.disable_insecure_sequences());
+    assert!(!term.accept_osc7());
+    assert_eq!(term.max_osc_data_length(), 4096);
+    assert_eq!(term.sixel_limits().max_width, 11);
+    assert_eq!(term.sixel_limits().max_height, 22);
+    assert_eq!(term.sixel_limits().max_repeat, 33);
+    assert_eq!(term.max_sixel_graphics(), 7);
+    assert_eq!(term.cell_dimensions(), (9, 19));
+    assert_eq!(term.answerback_string(), Some("par-test"));
+    assert!(term.allow_clipboard_read());
+    assert_eq!(term.get_ansi_color(1), Some(Color::Rgb(1, 2, 3)));
+    assert_eq!(term.faint_text_alpha(), 0.25);
+
+    assert_eq!(term.observer_count(), 1, "observers must survive RIS");
+    assert_eq!(
+        TriggerEngine::list_triggers(&term).len(),
+        1,
+        "trigger registry must survive RIS"
+    );
+
+    // The whole screen changed.
+    let dirty = term.get_dirty_rows();
+    assert_eq!(dirty.len(), 24, "every screen row must be dirty after RIS");
+    assert_eq!(dirty.last(), Some(&23));
+
+    // The surviving observer still receives events emitted after the reset.
+    let batch = term.process_deferred(b"\x07");
+    batch.deliver();
+    assert_eq!(
+        observer.events.load(Ordering::SeqCst),
+        1,
+        "observer must receive the post-reset bell"
+    );
+}
+
+#[test]
+fn ris_resets_osc4_palette_drift_to_configured() {
+    let mut term = Terminal::new(80, 24);
+    term.set_ansi_palette_color(2, Color::Rgb(10, 20, 30))
+        .unwrap();
+    // OSC 4 drifts palette entry 2 away from the configured value.
+    term.process(b"\x1b]4;2;rgb:ff/00/00\x07");
+    assert_eq!(term.get_ansi_color(2), Some(Color::Rgb(0xff, 0, 0)));
+
+    term.process(b"\x1bc");
+
+    // RIS restores the configured palette, not the factory default.
+    assert_eq!(term.get_ansi_color(2), Some(Color::Rgb(10, 20, 30)));
+}
+
+#[test]
+fn decstr_keeps_screen_and_scrollback() {
+    let mut term = Terminal::with_scrollback(80, 5, 10);
+    for i in 0..8 {
+        term.process(format!("line{i}\r\n").as_bytes());
+    }
+    let before = term.export_text();
+    assert_eq!(term.grid().total_lines_scrolled(), 4);
+
+    // Non-default state a program can set: SGR, DECAWM off, DECOM on,
+    // margins, cursor hidden and moved, DECSC saved state.
+    term.process(b"\x1b[31;1m\x1b[?7l\x1b[?6h\x1b[2;3r\x1b[?25l\x1b[3;2H\x1b7");
+
+    term.process(b"\x1b[!p"); // DECSTR
+
+    // Screen content and scrollback are untouched.
+    assert_eq!(term.export_text(), before);
+    assert_eq!(term.grid().total_lines_scrolled(), 4);
+
+    // Modes, SGR, margins, and cursor reset.
+    assert_eq!(term.fg, Color::Named(NamedColor::White));
+    assert_eq!(term.bg, Color::Named(NamedColor::Black));
+    assert!(!term.flags.bold());
+    assert!(term.modes.auto_wrap);
+    assert!(!term.modes.origin_mode);
+    assert_eq!(term.margins.scroll_region_top, 0);
+    assert_eq!(term.margins.scroll_region_bottom, 4);
+    assert!(term.cursor.visible);
+    assert_eq!((term.cursor.col, term.cursor.row), (0, 0));
+
+    // The saved cursor is home with default attributes.
+    let saved = term.saved_state.saved_cursor.unwrap();
+    assert_eq!((saved.col, saved.row), (0, 0));
+}
+
+#[test]
+fn decstr_preserves_host_config() {
+    use crate::graphics::kitty::FileMediaMode;
+
+    let mut term = Terminal::new(80, 24);
+    term.set_disable_insecure_sequences(true);
+    term.set_accept_osc7(false);
+    term.set_max_osc_data_length(4096);
+    term.set_allow_file_media(FileMediaMode::All);
+    term.set_answerback_string(Some("par-test".to_string()));
+
+    term.process(b"\x1b[!p");
+
+    assert!(term.disable_insecure_sequences());
+    assert!(!term.accept_osc7());
+    assert_eq!(term.max_osc_data_length(), 4096);
+    assert_eq!(term.allow_file_media(), FileMediaMode::All);
+    assert_eq!(term.answerback_string(), Some("par-test"));
+}

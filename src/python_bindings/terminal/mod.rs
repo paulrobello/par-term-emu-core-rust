@@ -178,7 +178,17 @@ impl PyTerminal {
         Ok(())
     }
 
-    /// Reset the terminal to default state
+    /// Reset the terminal to default state (RIS).
+    ///
+    /// Clears the screen, scrollback, cursor, SGR, modes, margins,
+    /// charsets, keyboard protocol, hyperlinks, graphics, and title, and
+    /// marks every row dirty. Embedder configuration survives: security
+    /// policy (accept_osc7, disable_insecure_sequences,
+    /// max_osc_data_length), file-media and clipboard policy, graphics and
+    /// clipboard limits, answerback string, theme colors, unicode config,
+    /// observers, event subscriptions, triggers, macros, notification
+    /// config, badge format, active recordings, tmux control flags, pixel
+    /// dimensions, and profiling (ARC-058).
     fn reset(&mut self) -> PyResult<()> {
         self.inner.reset();
         Ok(())

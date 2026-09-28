@@ -92,7 +92,7 @@ impl Terminal {
                     }
                 } else if intermediates.contains(&b'!') {
                     // DECSTR - Soft Terminal Reset: CSI ! p
-                    self.reset();
+                    self.soft_reset();
                 } else if intermediates.contains(&b'$') {
                     // DECRQM - Request Mode (ANSI or DEC): CSI ? Pa $ p
                     let private = intermediates.contains(&b'?');
