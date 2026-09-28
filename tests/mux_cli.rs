@@ -437,3 +437,218 @@ fn session_environment_reaches_new_panes_only() {
     assert_eq!(bad.code, Some(1), "unknown session is an error");
     drop(daemon);
 }
+
+/// Run the binary with `PAR_MUX_SOCKET` naming `socket` and no explicit
+/// `--socket`/NAME: what a command typed inside a pane of that daemon sees.
+/// `PAR_MUX_ENV` is stripped so the suite may itself run inside a pane.
+fn par_mux_env(socket: &Path, args: &[&str]) -> Run {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .args(args)
+        .env("PAR_MUX_SOCKET", socket)
+        .env_remove("PAR_MUX_ENV")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("par-mux spawns");
+    let mut out_pipe = child.stdout.take().expect("stdout piped");
+    let mut err_pipe = child.stderr.take().expect("stderr piped");
+    let out = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = out_pipe.read_to_string(&mut s);
+        s
+    });
+    let err = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = err_pipe.read_to_string(&mut s);
+        s
+    });
+    let deadline = Instant::now() + CLI_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll par-mux") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("par-mux {args:?} did not exit within {CLI_DEADLINE:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Run {
+        code: status.code(),
+        stdout: out.join().expect("stdout reader"),
+        stderr: err.join().expect("stderr reader"),
+    }
+}
+
+/// A daemon a test holds no `Child` for (the `--restart` successor is a
+/// detached grandchild): shutdown is asked over the socket on drop instead.
+struct EnvDaemonGuard {
+    socket: std::path::PathBuf,
+}
+
+impl Drop for EnvDaemonGuard {
+    fn drop(&mut self) {
+        if let Ok(mut stream) = par_term_emu_core_rust::mux::connect_local_stream(&self.socket) {
+            use std::io::Write;
+            let _ = writeln!(stream, "kill-server");
+            let _ = stream.flush();
+        }
+    }
+}
+
+/// The pane env contract's socket var is the CLI's fallback target: with
+/// `PAR_MUX_SOCKET` set and no `--socket`/NAME given, `--cmd` reaches the
+/// daemon that variable names — the daemon that spawned the pane — instead
+/// of the unnamed default socket.
+#[test]
+fn the_env_socket_default_targets_the_panes_daemon() {
+    let fixture = MuxFixture::new("clienvsock");
+    let _daemon = daemon_with_session(&fixture, "clienvsock");
+
+    let run = par_mux_env(fixture.socket(), &["--cmd", "list-sessions"]);
+    assert_eq!(
+        run.code,
+        Some(0),
+        "env-defaulted --cmd must succeed; stdout={:?} stderr={:?}",
+        run.stdout,
+        run.stderr
+    );
+    assert!(
+        run.stdout.contains("clienvsock"),
+        "the reply came from the env-named daemon: {:?}",
+        run.stdout
+    );
+}
+
+/// `--restart`/`--stop` honor the env socket too, the "rebuild the daemon
+/// from inside its own pane" remedy: the restart stops the running daemon
+/// (final save), its detached successor rebinds the same socket and serves
+/// the saved tree back, and a later `--stop` through the same env cleanly
+/// retires the successor. Unix-only: the successor is a forked, detached
+/// process here; a Windows `--restart` serves in the foreground instead.
+#[test]
+#[cfg(unix)]
+fn restart_and_stop_honor_the_env_socket() {
+    let fixture = MuxFixture::new("envrestart");
+    let mut first = daemon_with_session(&fixture, "envrestart");
+    let socket = fixture.socket();
+
+    // --state-dir mirrors the stopped daemon's, so the successor loads the
+    // save the stop just wrote instead of the platform state dir's tree.
+    let state_dir = fixture
+        .state_dir()
+        .to_str()
+        .expect("utf-8 state dir")
+        .to_string();
+    let restart = par_mux_env(socket, &["--restart", "--state-dir", state_dir.as_str()]);
+    assert_eq!(
+        restart.code,
+        Some(0),
+        "--restart via the env socket succeeds: {:?}",
+        restart.stderr
+    );
+    let status = first.wait().expect("the stopped daemon exits");
+    assert!(
+        status.success(),
+        "a kill-server shutdown exits cleanly, got {status:?}"
+    );
+
+    wait_listening(socket);
+    let _successor = EnvDaemonGuard {
+        socket: socket.to_path_buf(),
+    };
+    let listed = par_mux_env(socket, &["--cmd", "list-sessions"]);
+    assert_eq!(
+        listed.code,
+        Some(0),
+        "the successor serves the env socket: {:?}",
+        listed.stderr
+    );
+    assert!(
+        listed.stdout.contains("envrestart"),
+        "the saved tree was restored: {:?}",
+        listed.stdout
+    );
+
+    let stop = par_mux_env(socket, &["--stop"]);
+    assert_eq!(
+        stop.code,
+        Some(0),
+        "--stop via the env socket: {:?}",
+        stop.stderr
+    );
+    assert!(
+        stop.stderr.contains("stopped the daemon"),
+        "the stop report names the env socket: {:?}",
+        stop.stderr
+    );
+    assert!(
+        par_term_emu_core_rust::mux::connect_local_stream(socket).is_err(),
+        "the socket is released after the stop"
+    );
+}
+
+/// Explicit targeting wins over the env default: both the `--socket` flag
+/// and the positional NAME reach their daemon while `PAR_MUX_SOCKET` points
+/// at a path nothing serves.
+#[test]
+fn explicit_socket_and_name_beat_the_env_default() {
+    let fixture = MuxFixture::new("envprec");
+    // Short and unique: macOS caps a Unix socket path at 104 bytes.
+    let name = format!(
+        "t{}",
+        fixture
+            .socket()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.rsplit('-').next())
+            .expect("fixture name carries a unique suffix")
+    );
+    let named_socket = par_term_emu_core_rust::mux::default_socket_path(&name);
+    let daemon = Command::new(env!("CARGO_BIN_EXE_par-mux"))
+        .arg(&name)
+        .arg("--state-dir")
+        .arg(fixture.state_dir())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("daemon spawns");
+    let _daemon = NamedDaemon {
+        child: daemon,
+        socket: named_socket.clone(),
+    };
+    wait_listening(&named_socket);
+
+    let by_name = par_mux_env(fixture.socket(), &[&name, "--cmd", "version"]);
+    assert_eq!(
+        by_name.code,
+        Some(0),
+        "NAME overrides the env default: {:?}",
+        by_name.stderr
+    );
+    assert!(
+        by_name
+            .stdout
+            .contains(par_term_emu_core_rust::mux::build_stamp()),
+        "the named daemon answered: {:?}",
+        by_name.stdout
+    );
+
+    let by_flag = par_mux_env(
+        fixture.socket(),
+        &[
+            "--socket",
+            named_socket.to_str().expect("utf-8 socket path"),
+            "--cmd",
+            "version",
+        ],
+    );
+    assert_eq!(
+        by_flag.code,
+        Some(0),
+        "--socket overrides the env default: {:?}",
+        by_flag.stderr
+    );
+}

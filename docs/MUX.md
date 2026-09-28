@@ -86,9 +86,10 @@ par-mux --cmd 'capture-pane -t %3 -S -200'
 par-mux --cmd list-agents
 par-mux --cmd 'split-window -h -t %3'
 
-# A named daemon, or an explicit socket
+# A named daemon, an explicit socket, or (inside a pane) the socket the pane spawned with
 par-mux work --cmd list-panes
 par-mux --socket /tmp/par-mux-test.sock --cmd version
+par-mux --cmd list-sessions   # resolves $PAR_MUX_SOCKET before the default socket
 ```
 
 | Outcome | stdout | stderr | Exit code |
@@ -109,6 +110,8 @@ Client mode never starts a daemon: a bare `par-mux --cmd list-sessions` with not
 | Access control | Socket file mode `0600` (owner only); the fallback directory is mode `0700` and its owner and mode are verified before bind and connect; accepted connections are refused unless the peer runs as the daemon's user | Owner-only security descriptor (system + creating user, nothing for anyone else) |
 
 The fallback-directory guard is tmux's `/tmp/tmux-<uid>` defense: `/tmp` is world-writable and shared by every local user, so a socket named directly under it could be pre-bound by another user, whose server would then receive a client's keystrokes and clipboard. A fallback directory that exists but is owned by another user, grants group/other access, or is not a directory fails closed with `PermissionDenied` on both the bind and the connect side; remove or fix the directory to proceed. Explicit `--socket` paths are not guarded — whoever named the path chose its location. `$XDG_RUNTIME_DIR` needs no guard: the OS provisions it per-user.
+
+Which socket one `par-mux` invocation targets follows one precedence (`resolve_socket_path` in `src/mux/ipc.rs`): an explicit `--socket PATH`, then the positional `NAME`, then `$PAR_MUX_SOCKET`, then the unnamed `default`. The env tier is what makes the client flags work from inside a pane — every pane spawns with `PAR_MUX_SOCKET` naming its own daemon, so `par-mux --cmd list-sessions`, `--stop`, and `--restart` typed there target that daemon instead of failing against `par-mux-default.sock`. An empty value counts as unset. Note that `--stop`/`--restart` resolved this way kill the daemon that owns the very pane the command was typed into — the panes die with it, which is the point of a restart but worth knowing before typing it.
 
 The on-disk state file (see [Persistence and Restart](#persistence-and-restart)) never lives next to the socket:
 
@@ -236,7 +239,7 @@ Every pane process is seeded with the env contract (`src/mux/pane.rs`):
 | Variable | Value |
 |----------|-------|
 | `PAR_MUX_PANE_ID` | The pane's own id (`%N`) |
-| `PAR_MUX_SOCKET` | The control socket path |
+| `PAR_MUX_SOCKET` | The control socket path. Also the CLI's fallback target: a `par-mux` invocation with no `--socket` and no positional NAME uses it before the unnamed default socket, so `par-mux --cmd …` / `--stop` / `--restart` typed inside a pane reach their own daemon |
 | `PAR_MUX_ENV` | `1` — marks the contract as present |
 | `PAR_MUX_SESSION_ID` | The owning session's id (`$N`) |
 | `PAR_MUX_SESSION` | The owning session's name |

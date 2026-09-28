@@ -18,9 +18,10 @@ use clap::Parser;
     long_about = None
 )]
 struct Cli {
-    /// Named default socket path (par-mux::default_socket_path). Ignored if --socket is set.
-    #[arg(default_value = "default")]
-    name: String,
+    /// Named default socket path (par-mux::default_socket_path). Ignored if
+    /// --socket is set; if absent, `$PAR_MUX_SOCKET` decides before the
+    /// `default` name does.
+    name: Option<String>,
 
     /// Bind an explicit socket path instead of the named default.
     #[arg(long, value_name = "PATH")]
@@ -159,11 +160,15 @@ fn main() -> std::process::ExitCode {
 
     // `par-mux <name>` binds that named default path; `par-mux --socket <p>`
     // binds an explicit path (what MuxClient::connect_or_spawn_at spawns).
-    // Client mode resolves its target through the same rule.
-    let path = match cli.socket.clone() {
-        Some(p) => p,
-        None => par_term_emu_core_rust::mux::default_socket_path(&cli.name),
-    };
+    // With neither given, `$PAR_MUX_SOCKET` — what every pane spawns with —
+    // names the daemon to target before the `default` name is fallen back
+    // to, so client flags typed inside a pane reach their own daemon, not
+    // the unnamed default.
+    let path = par_term_emu_core_rust::mux::resolve_socket_path(
+        cli.socket.as_deref(),
+        cli.name.as_deref(),
+        std::env::var_os("PAR_MUX_SOCKET").as_deref(),
+    );
 
     if let Some(command) = cli.command.as_deref() {
         return run_command(&path, command);

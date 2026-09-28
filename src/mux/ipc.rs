@@ -526,6 +526,30 @@ pub fn default_socket_path(name: &str) -> PathBuf {
     }
 }
 
+/// The socket a CLI invocation targets, honoring the pane env contract.
+///
+/// Precedence: an explicit `--socket` path wins, then the positional NAME,
+/// then `$PAR_MUX_SOCKET` — the variable every pane spawns with, so a
+/// command typed inside a pane reaches the daemon that owns it — then the
+/// `default` name. An empty env value counts as unset: a pane script
+/// expanding an unset variable produces the empty string.
+pub fn resolve_socket_path(
+    socket: Option<&Path>,
+    name: Option<&str>,
+    env_socket: Option<&std::ffi::OsStr>,
+) -> PathBuf {
+    if let Some(path) = socket {
+        return path.to_path_buf();
+    }
+    if let Some(name) = name {
+        return default_socket_path(name);
+    }
+    match env_socket.filter(|value| !value.is_empty()) {
+        Some(path) => PathBuf::from(path),
+        None => default_socket_path("default"),
+    }
+}
+
 /// The per-UID directory the shared-temp fallback serves its sockets from.
 ///
 /// `std::env::temp_dir()` is `/tmp` on Linux: world-writable, shared by
@@ -734,6 +758,36 @@ mod tests {
         assert!(!euid_matches(None, current_uid()));
         assert!(euid_matches(Some(current_uid()), current_uid()));
         assert!(!euid_matches(Some(current_uid() + 1), current_uid()));
+    }
+
+    #[test]
+    fn resolve_socket_path_precedence() {
+        let explicit = Path::new("/tmp/resolve-explicit.sock");
+        let env = std::ffi::OsStr::new("/tmp/resolve-env.sock");
+        // --socket beats everything, NAME beats the env, the env beats the
+        // default name, and nothing falls to `default`.
+        assert_eq!(
+            resolve_socket_path(Some(explicit), Some("named"), Some(env)),
+            explicit
+        );
+        assert_eq!(
+            resolve_socket_path(None, Some("named"), Some(env)),
+            default_socket_path("named")
+        );
+        assert_eq!(
+            resolve_socket_path(None, None, Some(env)),
+            PathBuf::from("/tmp/resolve-env.sock")
+        );
+        assert_eq!(
+            resolve_socket_path(None, None, None),
+            default_socket_path("default")
+        );
+        // An empty env value is an unset one: a pane script expanding an
+        // unset variable hands the CLI the empty string.
+        assert_eq!(
+            resolve_socket_path(None, None, Some(std::ffi::OsStr::new(""))),
+            default_socket_path("default")
+        );
     }
 
     #[cfg(windows)]
