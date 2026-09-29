@@ -522,6 +522,15 @@ fn handle_telemetry_report(
     if is_stale(pane.metadata(), header.source.as_deref(), header.seq) {
         return (ok_reply(id), None);
     }
+    // A future stamp would saturate the freshness subtraction to 0 and
+    // read as maximally fresh forever (QA-156) — it is malformed, not
+    // stale, so it error-replies instead of dropping silently.
+    if sampled_at > now_ms {
+        return (
+            error_reply(id, "telemetry sampled_at_unix_ms is in the future"),
+            None,
+        );
+    }
     if now_ms.saturating_sub(sampled_at) > TELEMETRY_FRESHNESS_MS {
         return (ok_reply(id), None);
     }
@@ -1192,6 +1201,37 @@ mod tests {
         assert!(
             !pane.metadata().contains_key("agent_seq"),
             "a dropped report writes nothing, not even the sequence stamp"
+        );
+    }
+
+    #[test]
+    fn future_dated_telemetry_sample_is_rejected() {
+        let (tree, pane_id) = tree_with_pane();
+        // A minute into the future — the freshness subtraction would
+        // saturate to 0 and read as maximally fresh (QA-156).
+        let (reply, notification) = handle_report(
+            &telemetry_report(
+                pane_id,
+                "claude",
+                1_000,
+                &sample_telemetry(now_unix_ms() + 60_000),
+            ),
+            &tree,
+        );
+        assert!(
+            reply.contains("sampled_at_unix_ms is in the future"),
+            "error-replied as malformed: {reply}"
+        );
+        assert_eq!(notification, None, "a rejected report broadcasts nothing");
+        let guard = tree.lock();
+        let pane = guard.pane(pane_id).expect("pane exists");
+        assert!(
+            !pane.metadata().contains_key("agent_telemetry"),
+            "future-dated telemetry must not be stored"
+        );
+        assert!(
+            !pane.metadata().contains_key("agent_seq"),
+            "a rejected report writes nothing, not even the sequence stamp"
         );
     }
 
