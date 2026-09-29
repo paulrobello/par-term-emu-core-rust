@@ -1039,6 +1039,37 @@ impl PyTerminal {
         Ok(())
     }
 
+    /// Get the current damage generation
+    ///
+    /// Independent damage consumers (more than one renderer watching the
+    /// same terminal) remember this value between frames and pass it to
+    /// `dirty_rows_since()`. Unlike `mark_clean()` — which advances the
+    /// default consumer used by `get_dirty_rows()` — a remembered
+    /// generation cannot hide damage from other consumers.
+    ///
+    /// Returns:
+    ///     int: Monotonic damage generation counter
+    ///
+    /// Example:
+    ///     gen = term.damage_generation()
+    ///     term.process(b"more output")
+    ///     rows = term.dirty_rows_since(gen)  # only the new edit
+    fn damage_generation(&self) -> PyResult<u64> {
+        Ok(self.inner.damage_generation())
+    }
+
+    /// Get rows changed since the given damage generation
+    ///
+    /// Args:
+    ///     gen: A generation captured from an earlier `damage_generation()` call
+    ///
+    /// Returns:
+    ///     list[int]: Sorted 0-indexed row numbers changed since `gen`.
+    ///         A screen switch reports every row of the newly visible grid.
+    fn dirty_rows_since(&self, gen: u64) -> PyResult<Vec<usize>> {
+        Ok(self.inner.dirty_rows_since(gen).collect())
+    }
+
     /// Mark a specific row as dirty
     ///
     /// Args:
