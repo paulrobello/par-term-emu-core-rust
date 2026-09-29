@@ -2713,7 +2713,7 @@ mod tests {
         // Live process: refused without -k.
         assert!(matches!(
             tree.begin_respawn(pane, false, None, None),
-            Err(MuxError::PaneAlive(pane))
+            Err(MuxError::PaneAlive(_pane))
         ));
 
         // Kill the process the way the reaper observes it: type exit,

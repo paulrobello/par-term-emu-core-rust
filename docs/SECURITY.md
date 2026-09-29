@@ -1115,7 +1115,7 @@ sections; the numbers live here.
 | `MAX_IMAGE_PIXELS` | 67,108,864 | `src/graphics/mod.rs:44` | Total pixels accepted for a graphic decoded from a protocol payload. |
 | `MAX_REPORT_VALUE_LEN` | 4,096 | `src/mux/hooks.rs:81` | Bytes accepted for one hook or agent report value sent from a pane. |
 | `MAX_PERSISTED_SCROLLBACK_CELLS` | 100,000 | `src/mux/persist.rs:38` | Scrollback cells restored per pane from an untrusted on-disk state file. |
-| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:85` | Bytes accumulated from one control-socket client line before the daemon closes it. |
+| `MAX_CONTROL_LINE_BYTES` | 1 MiB | `src/mux/server.rs:84` | Bytes accumulated from one control-socket client line before the daemon closes it. |
 | `SIXEL_HARD_MAX_WIDTH` | 4 KiB | `src/sixel.rs:25` | Hard ceiling on sixel raster width from payload geometry or user config. |
 | `SIXEL_HARD_MAX_HEIGHT` | 4 KiB | `src/sixel.rs:28` | Hard ceiling on sixel raster height from payload geometry or user config. |
 | `SIXEL_HARD_MAX_REPEAT` | 10,000 | `src/sixel.rs:31` | Hard ceiling on one sixel repeat count from an escape payload. |

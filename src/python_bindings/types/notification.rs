@@ -598,7 +598,8 @@ impl From<&crate::tmux_control::TmuxNotification> for PyTmuxNotification {
                 raw_line: None,
             },
             TmuxNotification::PaneTitleChanged { pane_id, title } => PyTmuxNotification {
-                notification_type: "pane-title-changed".to_string(),                source: None,
+                notification_type: "pane-title-changed".to_string(),
+                source: None,
                 timestamp: None,
                 command_number: None,
                 flags: None,

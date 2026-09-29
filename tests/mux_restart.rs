@@ -11,7 +11,7 @@ mod common;
 
 use common::{
     command, pane_ids, sigterm_clean, spawn_daemon, wait_for, wait_for_pid, wait_listening,
-    wait_until, MuxFixture,
+    MuxFixture,
 };
 use interprocess::TryClone as _;
 use par_term_emu_core_rust::mux::connect_local_stream;
