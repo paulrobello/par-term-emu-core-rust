@@ -12,6 +12,16 @@
  *   `cells` pointers are valid only until that call.
  * - The vtable (including its user_data) must stay valid for the lifetime
  *   of the observer registration.
+ *
+ * Cross-cutting contract notes (DOC-071):
+ * - Reads target the ACTIVE grid: while the alternate screen is active,
+ *   terminal_scrollback_count returns 0 — the alternate screen has no
+ *   scrollback.
+ * - Handles are single-threaded: no concurrent calls on one Terminal.
+ * - No entry point catches a panic. A panic inside any call aborts the
+ *   host process (Rust 1.81+ abort-on-FFI-unwind semantics, ARC-087).
+ * - Allocation failure aborts the process; this surface has no error
+ *   channel, so out-of-memory is fatal by design.
  */
 
 #ifndef PAR_TERM_EMU_CORE_TERMINAL_CORE_H
@@ -203,11 +213,12 @@ typedef struct TermKeyEvent {
 _Static_assert(sizeof(TermKeyEvent) == 8, "TermKeyEvent must match Rust repr(C) layout");
 _Static_assert(offsetof(TermKeyEvent, codepoint) == 4, "TermKeyEvent.codepoint offset must match Rust");
 
-/* Lifecycle */
+/* Lifecycle. terminal_create returns NULL when cols or rows is 0. */
 Terminal *terminal_create(uint32_t cols, uint32_t rows, uint32_t scrollback);
 void terminal_free(Terminal *term);
 
-/* Feed raw application/PTY output bytes (VT parsing). */
+/* Feed raw application/PTY output bytes (VT parsing). terminal_resize
+ * with a zero dimension is a no-op. */
 void terminal_feed(Terminal *term, const uint8_t *bytes, uint32_t len);
 void terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
 
@@ -218,8 +229,10 @@ uint32_t terminal_dirty_ranges(Terminal *term, TermRowRange *out, uint32_t cap);
 void terminal_mark_clean(Terminal *term);
 
 /* Pinned readback into caller-owned buffers — no allocation, no full-grid
- * copy. Both return the number of cells written. Rows are 0-indexed;
- * scrollback `line` runs from oldest (0) to newest (count-1). */
+ * copy. Both return the number of cells written; with out == NULL and
+ * cap 0 they return the number of cells available from col_start (the
+ * sizing answer). Rows are 0-indexed; scrollback `line` runs from oldest
+ * (0) to newest (count-1). */
 uint32_t terminal_read_row(Terminal *term, uint32_t row, uint32_t col_start,
                            SharedCell *out, uint32_t cap);
 uint32_t terminal_read_scrollback_row(Terminal *term, uint32_t line,
@@ -234,7 +247,8 @@ void terminal_get_modes(Terminal *term, TermModeState *out);
 /* Encode a key event against the terminal's negotiated input state
  * (application cursor keys, kitty keyboard flags) — the bytes a frontend
  * writes to the PTY. Writes up to `cap` bytes into `out` and returns the
- * TOTAL encoded length — if the return exceeds `cap`, retry larger. */
+ * TOTAL encoded length — if the return exceeds `cap`, retry larger
+ * (out may be NULL with cap 0 to fetch the total). */
 uint32_t terminal_encode_key(Terminal *term, const TermKeyEvent *ev,
                              uint8_t *out, uint32_t cap);
 

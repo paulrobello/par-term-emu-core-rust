@@ -415,9 +415,12 @@ impl SharedCell {
 
 /// Create a terminal for C embedding.
 ///
+/// Returns NULL when `cols` or `rows` is 0. Allocation failure aborts the
+/// process — this surface has no error channel, so OOM is fatal by design.
+///
 /// # Safety
 /// Caller owns the returned `Terminal` and must release it with
-/// `terminal_free`. Returns null on allocation failure.
+/// `terminal_free`.
 #[no_mangle]
 pub unsafe extern "C" fn terminal_create(cols: u32, rows: u32, scrollback: u32) -> *mut Terminal {
     if cols == 0 || rows == 0 {
@@ -457,7 +460,7 @@ pub unsafe extern "C" fn terminal_feed(term: *mut Terminal, bytes: *const u8, le
     term_ref.process(data);
 }
 
-/// Resize the terminal grid.
+/// Resize the terminal grid. A zero `cols` or `rows` is a no-op.
 ///
 /// # Safety
 /// `term` must be a valid pointer to a `Terminal`.
@@ -477,8 +480,9 @@ pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u
 /// larger buffer. A renderer redraws only rows inside the returned ranges.
 ///
 /// # Safety
-/// `out` must be valid for writes of `cap` `TermRowRange` values when the
-/// total is being fetched it may be null with cap 0.
+/// `out` must be valid for writes of `cap` `TermRowRange` values. It may
+/// be NULL only as a sizing call, with `cap` 0 — the call then just
+/// returns the total range count.
 #[no_mangle]
 pub unsafe extern "C" fn terminal_dirty_ranges(
     term: *const Terminal,
@@ -524,10 +528,14 @@ pub unsafe extern "C" fn terminal_mark_clean(term: *mut Terminal) {
 }
 
 /// Copy a run of grid cells into a caller-owned buffer (pinned readback —
-/// no allocation, no full-grid copy). Returns the number of cells written.
+/// no allocation, no full-grid copy). Returns the number of cells written;
+/// with `out` NULL it returns the number of cells available from
+/// `col_start` (the sizing answer) instead. Reads target the active grid,
+/// so while the alternate screen is active there is no scrollback.
 ///
 /// # Safety
-/// `out` must be valid for writes of `cap` `SharedCell` values.
+/// `out` must be valid for writes of `cap` `SharedCell` values, or NULL
+/// with `cap` 0 for a sizing call.
 #[no_mangle]
 pub unsafe extern "C" fn terminal_read_row(
     term: *const Terminal,
@@ -536,7 +544,7 @@ pub unsafe extern "C" fn terminal_read_row(
     out: *mut SharedCell,
     cap: u32,
 ) -> u32 {
-    if term.is_null() || out.is_null() {
+    if term.is_null() {
         return 0;
     }
     let term_ref = unsafe { &*term };
@@ -545,6 +553,10 @@ pub unsafe extern "C" fn terminal_read_row(
         return 0;
     };
     let cols = grid.cols() as u32;
+    let total = cols.saturating_sub(col_start);
+    if out.is_null() {
+        return total;
+    }
     let mut written = 0u32;
     let mut col = col_start;
     while col < cols && written < cap {
@@ -561,10 +573,13 @@ pub unsafe extern "C" fn terminal_read_row(
 
 /// Copy a run of scrollback cells into a caller-owned buffer.
 /// `line` indexes scrollback from the oldest (0) to the newest
-/// (`scrollback_count - 1`). Returns the number of cells written.
+/// (`scrollback_count - 1`). Returns the number of cells written; with
+/// `out` NULL it returns the number of cells available from `col_start`
+/// (the sizing answer) instead.
 ///
 /// # Safety
-/// `out` must be valid for writes of `cap` `SharedCell` values.
+/// `out` must be valid for writes of `cap` `SharedCell` values, or NULL
+/// with `cap` 0 for a sizing call.
 #[no_mangle]
 pub unsafe extern "C" fn terminal_read_scrollback_row(
     term: *const Terminal,
@@ -573,7 +588,7 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
     out: *mut SharedCell,
     cap: u32,
 ) -> u32 {
-    if term.is_null() || out.is_null() {
+    if term.is_null() {
         return 0;
     }
     let term_ref = unsafe { &*term };
@@ -582,6 +597,10 @@ pub unsafe extern "C" fn terminal_read_scrollback_row(
         return 0;
     };
     let cols = grid.cols() as u32;
+    let total = cols.saturating_sub(col_start);
+    if out.is_null() {
+        return total;
+    }
     let mut written = 0u32;
     let mut col = col_start;
     while col < cols && written < cap {
@@ -679,7 +698,8 @@ pub unsafe extern "C" fn terminal_get_modes(term: *const Terminal, out: *mut Ter
 ///
 /// # Safety
 /// `ev` must be valid for reads of one `TermKeyEvent`; `out` must be valid
-/// for writes of `cap` bytes.
+/// for writes of `cap` bytes, or NULL with `cap` 0 to fetch the total
+/// encoded length.
 #[no_mangle]
 pub unsafe extern "C" fn terminal_encode_key(
     term: *const Terminal,
@@ -687,14 +707,14 @@ pub unsafe extern "C" fn terminal_encode_key(
     out: *mut u8,
     cap: u32,
 ) -> u32 {
-    if term.is_null() || ev.is_null() || out.is_null() {
+    if term.is_null() || ev.is_null() {
         return 0;
     }
     let term_ref = unsafe { &*term };
     let ev_ref = unsafe { &*ev };
     let bytes = crate::keyboard::encode_key(ev_ref, term_ref);
     let fill = (bytes.len() as u32).min(cap);
-    if fill > 0 {
+    if fill > 0 && !out.is_null() {
         unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, fill as usize) };
     }
     bytes.len() as u32
@@ -1043,6 +1063,45 @@ mod tests {
             dirty.len() <= 3,
             "status frame dirtied {dirty:?} of {rows} rows — damage tracking degraded"
         );
+    }
+
+    /// DOC-071: every buffer-returning embedding call accepts
+    /// out == NULL / cap == 0 as a sizing call and returns the total,
+    /// the way terminal_dirty_ranges always has.
+    #[test]
+    fn ffi_sizing_calls_return_totals_without_buffers() {
+        let term = unsafe { terminal_create(20, 5, 100) };
+        assert!(!term.is_null());
+        unsafe { terminal_feed(term, b"hello\nworld".as_ptr(), 11) };
+
+        // read_row sizes to the columns available from col_start.
+        let n = unsafe { terminal_read_row(term, 0, 0, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 20);
+        let n = unsafe { terminal_read_row(term, 0, 17, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 3);
+        let n = unsafe { terminal_read_row(term, 0, 20, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 0);
+        let n = unsafe { terminal_read_row(term, 99, 0, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 0, "row past the screen sizes to 0");
+
+        // read_scrollback_row sizes the same way, once scrollback exists.
+        unsafe { terminal_feed(term, b"a\nb\nc\nd\ne\nf\ng\nh".as_ptr(), 15) };
+        let sb = unsafe { terminal_scrollback_count(term) };
+        assert!(sb >= 1, "expected scrollback after 8 lines on 5 rows");
+        let n = unsafe { terminal_read_scrollback_row(term, 0, 0, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 20);
+        let n = unsafe { terminal_read_scrollback_row(term, sb - 1, 18, std::ptr::null_mut(), 0) };
+        assert_eq!(n, 2);
+
+        // encode_key sizing total equals the written length for the event.
+        let ev = crate::keyboard::TermKeyEvent::functional(crate::keyboard::TermKey::Up, 0);
+        let total = unsafe { terminal_encode_key(term, &ev, std::ptr::null_mut(), 0) };
+        let mut buf = [0u8; 16];
+        let written = unsafe { terminal_encode_key(term, &ev, buf.as_mut_ptr(), 16) };
+        assert_eq!(total, written);
+        assert_eq!(&buf[..written as usize], b"\x1b[A");
+
+        unsafe { terminal_free(term) };
     }
 
     /// SEC-117: the string length fields must always equal `strlen` of
