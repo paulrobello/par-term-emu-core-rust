@@ -111,6 +111,30 @@ impl Grid {
             .filter_map(move |(row, &gen)| (gen > since).then_some(row))
     }
 
+    /// Invoke `f(start, end)` once per maximal run of consecutive rows
+    /// damaged since generation `since`, ascending, without allocating.
+    /// Coalesces exactly the rows [`Grid::damage_indices`] would yield
+    /// one by one (ENH-026).
+    pub fn for_each_damage_range_since(&self, since: u64, mut f: impl FnMut(u32, u32)) {
+        let mut run: Option<(u32, u32)> = None;
+        for (row, &gen) in self.row_gen.iter().enumerate() {
+            if gen > since {
+                let row = row as u32;
+                match run {
+                    Some((start, end)) if end + 1 == row => run = Some((start, row)),
+                    Some((start, end)) => {
+                        f(start, end);
+                        run = Some((row, row));
+                    }
+                    None => run = Some((row, row)),
+                }
+            }
+        }
+        if let Some((start, end)) = run {
+            f(start, end);
+        }
+    }
+
     /// Get the number of columns
     pub fn cols(&self) -> usize {
         self.cols

@@ -499,6 +499,10 @@ pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u
 }
 
 /// Coalesce ascending row numbers into inclusive ranges.
+///
+/// Reference algorithm for the `for_each_dirty_range` equivalence tests —
+/// the FFI entry points coalesce in place since ENH-026.
+#[cfg(test)]
 fn coalesce_row_ranges(rows: impl Iterator<Item = usize>) -> Vec<TermRowRange> {
     let mut ranges: Vec<TermRowRange> = Vec::new();
     for row in rows {
@@ -513,18 +517,6 @@ fn coalesce_row_ranges(rows: impl Iterator<Item = usize>) -> Vec<TermRowRange> {
         }
     }
     ranges
-}
-
-/// Copy ranges into the caller buffer under the sizing-call contract:
-/// fill at most `cap`, return the total range count.
-fn write_row_ranges(ranges: &[TermRowRange], out: *mut TermRowRange, cap: u32) -> u32 {
-    let fill = (ranges.len() as u32).min(cap);
-    if fill > 0 && !out.is_null() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(ranges.as_ptr(), out, fill as usize);
-        }
-    }
-    ranges.len() as u32
 }
 
 /// Coalesce the dirty-row generations into inclusive row ranges.
@@ -548,8 +540,14 @@ pub unsafe extern "C" fn terminal_dirty_ranges(
         return 0;
     }
     let term_ref = unsafe { &*term };
-    let ranges = coalesce_row_ranges(term_ref.get_dirty_rows().into_iter());
-    write_row_ranges(&ranges, out, cap)
+    let mut total: u32 = 0;
+    term_ref.for_each_dirty_range(|start, end| {
+        if total < cap && !out.is_null() {
+            unsafe { out.add(total as usize).write(TermRowRange { start, end }) };
+        }
+        total += 1;
+    });
+    total
 }
 
 /// Current damage generation. A renderer remembers this value between
@@ -589,8 +587,14 @@ pub unsafe extern "C" fn terminal_dirty_ranges_since(
         return 0;
     }
     let term_ref = unsafe { &*term };
-    let ranges = coalesce_row_ranges(term_ref.dirty_rows_since(gen));
-    write_row_ranges(&ranges, out, cap)
+    let mut total: u32 = 0;
+    term_ref.for_each_dirty_range_since(gen, |start, end| {
+        if total < cap && !out.is_null() {
+            unsafe { out.add(total as usize).write(TermRowRange { start, end }) };
+        }
+        total += 1;
+    });
+    total
 }
 
 /// Mark the screen clean (all damage consumed).
@@ -1488,6 +1492,32 @@ mod tests {
             assert_eq!(switched[0], TermRowRange { start: 0, end: 3 });
 
             terminal_free(term);
+        }
+    }
+
+    /// ENH-026: `for_each_dirty_range` coalesces runs in place (no Vec)
+    /// and must match the reference algorithm over `get_dirty_rows()`
+    /// for every shape a renderer can meet.
+    #[test]
+    fn for_each_dirty_range_matches_reference() {
+        // (rows, marked ranges): empty, a single row, a run crossing the
+        // 64-row boundary, two separate runs, and every row at once.
+        let cases: [(usize, &[(usize, usize)]); 5] = [
+            (24, &[]),
+            (24, &[(7, 7)]),
+            (200, &[(62, 66)]),
+            (24, &[(3, 5), (10, 12)]),
+            (200, &[(0, 199)]),
+        ];
+        for (rows, marks) in cases {
+            let mut term = Terminal::with_scrollback(10, rows, 0);
+            for &(top, bottom) in marks {
+                term.grid.mark_rows_damage(top, bottom);
+            }
+            let mut runs = Vec::new();
+            term.for_each_dirty_range(|start, end| runs.push(TermRowRange { start, end }));
+            let reference = coalesce_row_ranges(term.get_dirty_rows().into_iter());
+            assert_eq!(runs, reference, "rows={rows} marks={marks:?}");
         }
     }
 
