@@ -100,7 +100,6 @@ impl Terminal {
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, top, bottom);
                     // Mark all rows in scroll region as dirty
-                    self.mark_rows_dirty(top, bottom);
                     // Pending trigger rows follow their scrolled content
                     self.shift_pending_trigger_rows(false, 1, top, bottom);
                     // Cursor stays at scroll_region_bottom per VT spec
@@ -173,7 +172,6 @@ impl Terminal {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
-            self.mark_row_dirty(current_row);
 
             // Move to left margin or column 0
             self.cursor.col = if self.margins.use_lr_margins {
@@ -189,7 +187,6 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
@@ -206,7 +203,6 @@ impl Terminal {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
-            self.mark_row_dirty(current_row);
 
             // Wrap to left margin if DECLRMM is enabled
             self.cursor.col = if self.margins.use_lr_margins {
@@ -226,7 +222,6 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 // Cursor stays at scroll_region_bottom
             } else {
                 self.cursor.row += 1;
@@ -267,7 +262,6 @@ impl Terminal {
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         // New text landed: render damage plus trigger scan
-        self.mark_row_dirty(cursor_row);
         self.mark_row_written(cursor_row);
 
         // Advance cursor by character width
@@ -362,7 +356,6 @@ impl Terminal {
                 // cost of rendering an N×M placeholder rectangle (e.g., 40×20
                 // = 800 cells × 3 diacritics = 2400 normalize calls).
                 if target_cell.c == crate::graphics::placeholder::PLACEHOLDER_CHAR {
-                    self.mark_row_dirty(target_row);
                     return true;
                 }
 
@@ -408,7 +401,6 @@ impl Terminal {
                     }
                 }
 
-                self.mark_row_dirty(target_row);
                 self.mark_row_written(target_row);
             }
             return true;
@@ -483,7 +475,6 @@ impl Terminal {
                             }
                         }
 
-                        self.mark_row_dirty(target_row);
                         self.mark_row_written(target_row);
                     }
                     return true;
@@ -569,10 +560,8 @@ impl Terminal {
                 }
             }
 
-            self.mark_row_dirty(prev_row);
             self.mark_row_written(prev_row);
             if cursor_row != prev_row {
-                self.mark_row_dirty(cursor_row);
                 self.mark_row_written(cursor_row);
             }
             return;
@@ -596,7 +585,6 @@ impl Terminal {
             // Mark the current row as wrapped (line continues to next row)
             let current_row = self.cursor.row;
             self.active_grid_mut().set_line_wrapped(current_row, true);
-            self.mark_row_dirty(current_row);
 
             // Move to left margin or column 0
             self.cursor.col = if self.margins.use_lr_margins {
@@ -612,7 +600,6 @@ impl Terminal {
                     .scroll_region_up(1, scroll_top, scroll_bottom);
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
-                self.mark_rows_dirty(scroll_top, scroll_bottom);
                 self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
@@ -650,7 +637,6 @@ impl Terminal {
         }
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
-        self.mark_row_dirty(cursor_row);
         self.mark_row_written(cursor_row);
 
         // Advance cursor by 1
