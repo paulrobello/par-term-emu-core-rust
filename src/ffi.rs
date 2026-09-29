@@ -236,8 +236,17 @@ impl Drop for SharedState {
 ///
 /// Each function pointer receives the `user_data` pointer and a
 /// Debug-formatted (`{:?}`) event description as a NUL-terminated C string.
-/// The callee must NOT free the event string — it is owned by the caller and
-/// valid only for the duration of the callback.
+/// The payload is DIAGNOSTIC TEXT, not a stable format: it changes whenever
+/// the Rust event enum changes — parse it only for logging. The callee must
+/// NOT free the event string — it is owned by the caller and valid only for
+/// the duration of the callback.
+///
+/// Callbacks fire inline while the terminal is processing input. A callback
+/// must NOT re-enter the FFI on the same `Terminal` handle (any
+/// `terminal_*` function): the terminal is mutably borrowed for the
+/// duration of the dispatch, so re-entry aliases `&`/`&mut` — undefined
+/// behavior. Queue what you need and call back after `terminal_feed`
+/// returns.
 #[repr(C)]
 pub struct TerminalObserverVtable {
     /// Called for zone lifecycle events
@@ -411,6 +420,19 @@ impl SharedCell {
             width: 1,
         }
     }
+}
+
+/// ABI version of the C surface (ARC-063). Must equal
+/// `TERM_CORE_ABI_VERSION` in include/terminal_core.h; bump both on any
+/// layout or contract change.
+pub const TERM_CORE_ABI_VERSION: u32 = 1;
+
+/// The ABI version this library implements. A binary detects a mismatch
+/// by comparing this call's return against its compiled-in header macro.
+/// Safe to call at any time — it touches no terminal state.
+#[no_mangle]
+pub extern "C" fn terminal_abi_version() -> u32 {
+    TERM_CORE_ABI_VERSION
 }
 
 /// Create a terminal for C embedding.
@@ -1102,6 +1124,23 @@ mod tests {
         assert_eq!(&buf[..written as usize], b"\x1b[A");
 
         unsafe { terminal_free(term) };
+    }
+
+    /// ARC-063: the exported ABI version must equal the header's
+    /// TERM_CORE_ABI_VERSION, so a binary can detect a layout mismatch by
+    /// comparing the two. Bumping one side without the other fails here.
+    #[test]
+    fn abi_version_matches_header_macro() {
+        assert_eq!(terminal_abi_version(), 1);
+        let header = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/include/terminal_core.h"
+        ))
+        .expect("header readable");
+        assert!(
+            header.contains("#define TERM_CORE_ABI_VERSION 1"),
+            "header TERM_CORE_ABI_VERSION drifted from terminal_abi_version()"
+        );
     }
 
     /// SEC-117: the string length fields must always equal `strlen` of

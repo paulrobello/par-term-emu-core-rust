@@ -22,6 +22,12 @@
  *   host process (Rust 1.81+ abort-on-FFI-unwind semantics, ARC-087).
  * - Allocation failure aborts the process; this surface has no error
  *   channel, so out-of-memory is fatal by design.
+ *
+ * ABI version (ARC-063): TERM_CORE_ABI_VERSION below is the contract
+ * version of this header. A binary compares it against
+ * terminal_abi_version() at runtime to detect a layout mismatch; bump
+ * the macro and the Rust constant together on any layout or contract
+ * change.
  */
 
 #ifndef PAR_TERM_EMU_CORE_TERMINAL_CORE_H
@@ -34,6 +40,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/* Contract version of this header (ARC-063). Compare against
+ * terminal_abi_version() at runtime to detect a layout mismatch; bump on
+ * any layout or contract change to the C surface. */
+#define TERM_CORE_ABI_VERSION 1
 
 /* Opaque handle to the Rust `Terminal`. */
 typedef struct Terminal Terminal;
@@ -102,7 +113,12 @@ _Static_assert(offsetof(SharedState, title) == 24, "SharedState.title offset mus
 #endif
 
 /* Event callback: receives user_data and a NUL-terminated, Debug-formatted
- * event description valid only for the duration of the call. Do not free. */
+ * event description valid only for the duration of the call. Do not free.
+ * The text is DIAGNOSTIC, not a stable format — it changes whenever the
+ * Rust event enum changes; parse it only for logging. Callbacks fire
+ * inline while the terminal processes input; a callback must NOT call any
+ * terminal_* function on the same handle (the terminal is mutably
+ * borrowed for the dispatch — re-entry is undefined behavior). */
 typedef void (*term_event_cb)(void *user_data, const char *event_text);
 
 typedef struct TerminalObserverVtable {
@@ -214,6 +230,7 @@ _Static_assert(sizeof(TermKeyEvent) == 8, "TermKeyEvent must match Rust repr(C) 
 _Static_assert(offsetof(TermKeyEvent, codepoint) == 4, "TermKeyEvent.codepoint offset must match Rust");
 
 /* Lifecycle. terminal_create returns NULL when cols or rows is 0. */
+uint32_t terminal_abi_version(void);
 Terminal *terminal_create(uint32_t cols, uint32_t rows, uint32_t scrollback);
 void terminal_free(Terminal *term);
 
