@@ -44,7 +44,7 @@ extern "C" {
 /* Contract version of this header (ARC-063). Compare against
  * terminal_abi_version() at runtime to detect a layout mismatch; bump on
  * any layout or contract change to the C surface. */
-#define TERM_CORE_ABI_VERSION 1
+#define TERM_CORE_ABI_VERSION 2
 
 /* Opaque handle to the Rust `Terminal`. */
 typedef struct Terminal Terminal;
@@ -244,6 +244,14 @@ void terminal_resize(Terminal *term, uint32_t cols, uint32_t rows);
  * `cap`, call again with a larger buffer (out may be NULL when cap is 0). */
 uint32_t terminal_dirty_ranges(Terminal *term, TermRowRange *out, uint32_t cap);
 void terminal_mark_clean(Terminal *term);
+
+/* Per-consumer damage (ENH-025): a renderer remembers the generation
+ * between frames and asks for the ranges since then. Independent of
+ * terminal_mark_clean, which advances the default consumer only — one
+ * consumer repainting cannot hide damage from another. */
+uint64_t terminal_damage_generation(Terminal *term);
+uint32_t terminal_dirty_ranges_since(Terminal *term, uint64_t gen,
+                                     TermRowRange *out, uint32_t cap);
 
 /* Pinned readback into caller-owned buffers — no allocation, no full-grid
  * copy. Both return the number of cells written; with out == NULL and

@@ -425,7 +425,7 @@ impl SharedCell {
 /// ABI version of the C surface (ARC-063). Must equal
 /// `TERM_CORE_ABI_VERSION` in include/terminal_core.h; bump both on any
 /// layout or contract change.
-pub const TERM_CORE_ABI_VERSION: u32 = 1;
+pub const TERM_CORE_ABI_VERSION: u32 = 2;
 
 /// The ABI version this library implements. A binary detects a mismatch
 /// by comparing this call's return against its compiled-in header macro.
@@ -495,11 +495,41 @@ pub unsafe extern "C" fn terminal_resize(term: *mut Terminal, cols: u32, rows: u
     term_ref.resize(cols as usize, rows as usize);
 }
 
-/// Coalesce the dirty-row bitset into inclusive row ranges.
+/// Coalesce ascending row numbers into inclusive ranges.
+fn coalesce_row_ranges(rows: impl Iterator<Item = usize>) -> Vec<TermRowRange> {
+    let mut ranges: Vec<TermRowRange> = Vec::new();
+    for row in rows {
+        let row = row as u32;
+        match ranges.last_mut() {
+            // Consecutive rows coalesce; anything else starts a new range.
+            Some(last) if last.end + 1 == row => last.end = row,
+            _ => ranges.push(TermRowRange {
+                start: row,
+                end: row,
+            }),
+        }
+    }
+    ranges
+}
+
+/// Copy ranges into the caller buffer under the sizing-call contract:
+/// fill at most `cap`, return the total range count.
+fn write_row_ranges(ranges: &[TermRowRange], out: *mut TermRowRange, cap: u32) -> u32 {
+    let fill = (ranges.len() as u32).min(cap);
+    if fill > 0 && !out.is_null() {
+        unsafe {
+            std::ptr::copy_nonoverlapping(ranges.as_ptr(), out, fill as usize);
+        }
+    }
+    ranges.len() as u32
+}
+
+/// Coalesce the dirty-row generations into inclusive row ranges.
 ///
 /// Writes up to `cap` ranges into `out` (caller-owned) and returns the
 /// total range count — if the return exceeds `cap`, call again with a
 /// larger buffer. A renderer redraws only rows inside the returned ranges.
+/// Serves the built-in default consumer; `terminal_mark_clean` advances it.
 ///
 /// # Safety
 /// `out` must be valid for writes of `cap` `TermRowRange` values. It may
@@ -515,26 +545,49 @@ pub unsafe extern "C" fn terminal_dirty_ranges(
         return 0;
     }
     let term_ref = unsafe { &*term };
-    let rows = term_ref.get_dirty_rows();
-    let mut ranges: Vec<TermRowRange> = Vec::new();
-    for &row in &rows {
-        let row = row as u32;
-        match ranges.last_mut() {
-            // Consecutive rows coalesce; anything else starts a new range.
-            Some(last) if last.end + 1 == row => last.end = row,
-            _ => ranges.push(TermRowRange {
-                start: row,
-                end: row,
-            }),
-        }
+    let ranges = coalesce_row_ranges(term_ref.get_dirty_rows().into_iter());
+    write_row_ranges(&ranges, out, cap)
+}
+
+/// Current damage generation. A renderer remembers this value between
+/// frames and passes it to `terminal_dirty_ranges_since` to observe only
+/// what changed since — independent of `terminal_mark_clean`, which
+/// advances the default consumer's generation and cannot hide damage from
+/// generation consumers (ENH-025).
+///
+/// # Safety
+/// `term` must be a valid pointer to a `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_damage_generation(term: *const Terminal) -> u64 {
+    if term.is_null() {
+        return 0;
     }
-    let fill = (ranges.len() as u32).min(cap);
-    if fill > 0 && !out.is_null() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(ranges.as_ptr(), out, fill as usize);
-        }
+    unsafe { &*term }.damage_generation()
+}
+
+/// Coalesced dirty-row ranges since generation `gen`, from an earlier
+/// `terminal_damage_generation` call. Same buffer contract as
+/// `terminal_dirty_ranges`: fills up to `cap` ranges into `out` and
+/// returns the total count; `out` may be NULL with `cap` 0 as a sizing
+/// call. A screen switch dirties every row of the newly visible grid.
+///
+/// # Safety
+/// `out` must be valid for writes of `cap` `TermRowRange` values, or NULL
+/// with `cap` 0 for a sizing call. `term` must be a valid pointer to a
+/// `Terminal`.
+#[no_mangle]
+pub unsafe extern "C" fn terminal_dirty_ranges_since(
+    term: *const Terminal,
+    gen: u64,
+    out: *mut TermRowRange,
+    cap: u32,
+) -> u32 {
+    if term.is_null() {
+        return 0;
     }
-    ranges.len() as u32
+    let term_ref = unsafe { &*term };
+    let ranges = coalesce_row_ranges(term_ref.dirty_rows_since(gen));
+    write_row_ranges(&ranges, out, cap)
 }
 
 /// Mark the screen clean (all damage consumed).
@@ -1131,16 +1184,95 @@ mod tests {
     /// comparing the two. Bumping one side without the other fails here.
     #[test]
     fn abi_version_matches_header_macro() {
-        assert_eq!(terminal_abi_version(), 1);
+        assert_eq!(terminal_abi_version(), 2);
         let header = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/include/terminal_core.h"
         ))
         .expect("header readable");
         assert!(
-            header.contains("#define TERM_CORE_ABI_VERSION 1"),
+            header.contains("#define TERM_CORE_ABI_VERSION 2"),
             "header TERM_CORE_ABI_VERSION drifted from terminal_abi_version()"
         );
+    }
+
+    /// ENH-025: the FFI generation consumer and the built-in default
+    /// consumer (`terminal_dirty_ranges`/`terminal_mark_clean`) each
+    /// observe the same edit, and the default consumer's mark_clean does
+    /// not hide damage from the generation consumer.
+    #[test]
+    fn two_damage_consumers_are_isolated() {
+        let term = unsafe { terminal_create(20, 4, 0) };
+        assert!(!term.is_null());
+        unsafe {
+            terminal_feed(term, b"hello\r\nworld".as_ptr(), 12);
+
+            // Both consumers observe the edit.
+            let gen0 = terminal_damage_generation(term);
+            assert!(gen0 > 0, "feeding must advance the generation");
+            assert_eq!(
+                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                1,
+                "default consumer sees rows 0-1 coalesced"
+            );
+            assert_eq!(
+                terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
+                0,
+                "nothing changed since gen0 was captured"
+            );
+
+            terminal_feed(term, b"!".as_ptr(), 1);
+
+            let cap = terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0);
+            assert_eq!(cap, 1, "generation consumer sees only row 1");
+            let mut since = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+            assert_eq!(
+                terminal_dirty_ranges_since(term, gen0, since.as_mut_ptr(), cap),
+                cap
+            );
+            assert_eq!(since[0], TermRowRange { start: 1, end: 1 });
+            assert_eq!(
+                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                1,
+                "default consumer also sees row 1"
+            );
+
+            // The default consumer repaints; the generation consumer's
+            // window is untouched.
+            terminal_mark_clean(term);
+            assert_eq!(
+                terminal_dirty_ranges(term, std::ptr::null_mut(), 0),
+                0,
+                "mark_clean advances the default consumer"
+            );
+            assert_eq!(
+                terminal_dirty_ranges_since(term, gen0, std::ptr::null_mut(), 0),
+                1,
+                "mark_clean must not hide damage from the generation consumer"
+            );
+
+            // A fresh generation window starts empty.
+            let gen1 = terminal_damage_generation(term);
+            assert!(gen1 > gen0);
+            assert_eq!(
+                terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0),
+                0
+            );
+
+            // A screen switch dirties every row of the new grid for any
+            // consumer holding an older generation.
+            let bytes = b"\x1b[?1049h";
+            terminal_feed(term, bytes.as_ptr(), bytes.len() as u32);
+            let cap = terminal_dirty_ranges_since(term, gen1, std::ptr::null_mut(), 0);
+            let mut switched = vec![TermRowRange { start: 0, end: 0 }; cap as usize];
+            assert_eq!(
+                terminal_dirty_ranges_since(term, gen1, switched.as_mut_ptr(), cap),
+                cap
+            );
+            assert_eq!(switched[0], TermRowRange { start: 0, end: 3 });
+
+            terminal_free(term);
+        }
     }
 
     /// SEC-117: the string length fields must always equal `strlen` of

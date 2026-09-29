@@ -2,7 +2,7 @@
 
 How to embed the terminal emulator from C, C++, Swift, or any language with a C FFI. The surface lives in a hand-written header, [`include/terminal_core.h`](../include/terminal_core.h), which mirrors `src/ffi.rs`: the Rust types are `#[repr(C)]`, and `_Static_assert`s in the header pin the shared layout so header and library cannot drift apart silently.
 
-- **Embedding functions** — `terminal_abi_version`, `terminal_create`/`terminal_free`, `terminal_feed`, `terminal_resize`, `terminal_dirty_ranges`/`terminal_mark_clean`, `terminal_read_row`/`terminal_read_scrollback_row`/`terminal_scrollback_count`, `terminal_get_cursor`/`terminal_get_modes`, `terminal_encode_key`
+- **Embedding functions** — `terminal_abi_version`, `terminal_create`/`terminal_free`, `terminal_feed`, `terminal_resize`, `terminal_dirty_ranges`/`terminal_mark_clean`, `terminal_damage_generation`/`terminal_dirty_ranges_since`, `terminal_read_row`/`terminal_read_scrollback_row`/`terminal_scrollback_count`, `terminal_get_cursor`/`terminal_get_modes`, `terminal_encode_key`
 - **Snapshot functions** — `terminal_get_state`/`terminal_free_state`
 - **Observer functions** — `terminal_add_observer`/`terminal_remove_observer`
 - **Types** — `Terminal` (opaque), `SharedCell`, `SharedState`, `TermRowRange`, `TermCursorState`, `TermModeState`, `TermKeyEvent`, `TerminalObserverVtable`
@@ -172,6 +172,12 @@ int render_frame(Terminal *term, const uint8_t *bytes, uint32_t len) {
     return 0;
 }
 ```
+
+### Per-Consumer Damage
+
+`terminal_dirty_ranges`/`terminal_mark_clean` serve one built-in default consumer: `mark_clean` advances that consumer and the next `dirty_ranges` call reports only newer edits. When more than one renderer watches the same `Terminal` (an FFI renderer plus the Python `get_dirty_rows` default consumer, say), one consumer repainting must not hide damage from the other.
+
+For that, use the generation pair: remember `terminal_damage_generation(term)` instead of calling `mark_clean`, and query `terminal_dirty_ranges_since(term, gen, out, cap)` with the remembered value. Same buffer contract as `terminal_dirty_ranges` (NULL/0 sizing call, total-count return). Consumers that hold their own generations never interact — each sees every edit after the generation it captured. A screen switch dirties every row of the newly visible grid for any older generation.
 
 `terminal_read_row(term, row, col_start, out, cap)` writes up to `cap` cells starting at `col_start` and returns the number written; with `out == NULL` and `cap == 0` it returns the number of cells available from `col_start` (the sizing answer). Rows are 0-indexed.
 
@@ -382,7 +388,7 @@ The Swift names are the C names unchanged; struct initializers are memberwise. W
 
 ## ABI Version
 
-`TERM_CORE_ABI_VERSION` (in the header) and `terminal_abi_version()` (in the library) are the contract version of this surface — struct layouts, function signatures, and the behavioral contracts above. They are bumped together on any layout or contract change to the C surface. Guard at startup:
+`TERM_CORE_ABI_VERSION` (in the header) and `terminal_abi_version()` (in the library) are the contract version of this surface — struct layouts, function signatures, and the behavioral contracts above. They are bumped together on any layout or contract change to the C surface. Version 2 added `terminal_damage_generation` and `terminal_dirty_ranges_since` (per-consumer damage). Guard at startup:
 
 ```c
 #include "terminal_core.h"
