@@ -1536,6 +1536,10 @@ impl Terminal {
     pub fn resize(&mut self, cols: usize, rows: usize) {
         crate::debug_log!("TERMINAL_RESIZE", "Requested resize to {}x{}", cols, rows);
 
+        // Reflow moves rows across the scrollback boundary; pending trigger
+        // indices cannot follow that, so scan before it happens (ARC-064).
+        self.flush_pending_trigger_rows();
+
         let old_cols = self.grid.cols().max(1);
         let old_rows = self.grid.rows().max(1);
 
@@ -1755,6 +1759,9 @@ impl Terminal {
     /// on the alternate screen — xterm does not nest alt screens.
     fn enter_alt_screen(&mut self, clear_alt: bool) {
         if !self.alt_screen_active {
+            // Pending trigger rows index the primary grid; scan them before
+            // the visible grid swaps underneath (ARC-064).
+            self.flush_pending_trigger_rows();
             debug::log_screen_switch(true, "use_alt_screen");
             // Save current (primary) cursor position before switching
             let primary_cursor = self.cursor;
@@ -1785,6 +1792,9 @@ impl Terminal {
     /// leaves its contents intact. No-op when already on the primary screen.
     fn exit_alt_screen(&mut self, clear_alt: bool) {
         if self.alt_screen_active {
+            // Pending trigger rows index the alternate grid; scan them
+            // before the visible grid swaps back (ARC-064).
+            self.flush_pending_trigger_rows();
             debug::log_screen_switch(false, "use_primary_screen");
             if clear_alt {
                 self.alt_grid.clear();
@@ -3348,7 +3358,6 @@ impl Terminal {
 
     /// Scan pending rows before content moves somewhere row indices cannot
     /// follow (alt-screen grid swap, reflowing resize).
-    #[allow(dead_code)] // wired to the grid-swap and resize sites in ARC-064 pt 2
     pub(crate) fn flush_pending_trigger_rows(&mut self) {
         if !self.triggers.pending_trigger_rows.is_empty() {
             crate::terminal::TriggerEngine::process_trigger_scans(self);

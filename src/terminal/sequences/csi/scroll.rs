@@ -24,6 +24,7 @@ impl Terminal {
                 let bottom = self.margins.scroll_region_bottom;
                 self.active_grid_mut().scroll_region_up(n, top, bottom);
                 self.mark_rows_dirty(top, bottom);
+                self.shift_pending_trigger_rows(false, n, top, bottom);
                 self.adjust_graphics_for_scroll_up(n, top, bottom);
             }
             'T' => {
@@ -39,6 +40,7 @@ impl Terminal {
                 let bottom = self.margins.scroll_region_bottom;
                 self.active_grid_mut().scroll_region_down(n, top, bottom);
                 self.mark_rows_dirty(top, bottom);
+                self.shift_pending_trigger_rows(true, n, top, bottom);
                 self.adjust_graphics_for_scroll_down(n, top, bottom);
             }
             _ => {}

@@ -48,6 +48,7 @@ impl Terminal {
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_down(1, scroll_top, scroll_bottom);
                     self.mark_rows_dirty(scroll_top, scroll_bottom);
+                    self.shift_pending_trigger_rows(true, 1, scroll_top, scroll_bottom);
                 }
             }
             (b'D', _) => {
@@ -72,6 +73,7 @@ impl Terminal {
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
                     self.mark_rows_dirty(scroll_top, scroll_bottom);
+                    self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 }
             }
             (b'E', _) => {
@@ -100,6 +102,7 @@ impl Terminal {
                     // Adjust graphics to scroll with content
                     self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
                     self.mark_rows_dirty(scroll_top, scroll_bottom);
+                    self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 }
             }
             (b'c', _) => {

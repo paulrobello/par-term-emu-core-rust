@@ -591,6 +591,12 @@ impl Terminal {
                             scroll_bottom,
                         );
                         self.mark_rows_dirty(scroll_top, scroll_bottom);
+                        self.shift_pending_trigger_rows(
+                            false,
+                            scroll_amount,
+                            scroll_top,
+                            scroll_bottom,
+                        );
 
                         // Adjust new graphic's position for the scroll
                         let original_row = graphic.position.1;

@@ -25,6 +25,7 @@ impl Terminal {
                     self.active_grid_mut()
                         .insert_lines(n, cursor_row, scroll_bottom);
                     self.mark_rows_dirty(cursor_row, scroll_bottom);
+                    self.shift_pending_trigger_rows(true, n, cursor_row, scroll_bottom);
                 }
             }
             'M' => {
@@ -41,6 +42,7 @@ impl Terminal {
                     self.active_grid_mut()
                         .delete_lines(n, cursor_row, scroll_bottom);
                     self.mark_rows_dirty(cursor_row, scroll_bottom);
+                    self.shift_pending_trigger_rows(false, n, cursor_row, scroll_bottom);
                 }
             }
             '@' => {
