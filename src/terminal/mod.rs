@@ -3303,10 +3303,55 @@ impl Terminal {
         if word < self.dirty_rows.len() {
             self.dirty_rows[word] |= 1u64 << (row % 64);
         }
+    }
 
-        // If we have triggers, also add to pending trigger rows
+    /// Queue a row for trigger scanning (ARC-064).
+    ///
+    /// Triggers observe written text, not incidental render damage: only
+    /// the printable-write path calls this, so erases, scrolls, attribute
+    /// changes and screen switches cannot re-fire a trigger that already
+    /// matched. Render damage still goes through `mark_row_dirty`.
+    pub(crate) fn mark_row_written(&mut self, row: usize) {
         if self.triggers.trigger_registry.has_active_triggers() {
             self.triggers.pending_trigger_rows.insert(row);
+        }
+    }
+
+    /// Move pending trigger rows with their content after a region scroll.
+    ///
+    /// Rows outside the scrolled region are untouched. A row whose content
+    /// left the region is dropped — that text is no longer on screen.
+    pub(crate) fn shift_pending_trigger_rows(
+        &mut self,
+        down: bool,
+        n: usize,
+        top: usize,
+        bottom: usize,
+    ) {
+        if self.triggers.pending_trigger_rows.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.triggers.pending_trigger_rows);
+        self.triggers.pending_trigger_rows = pending
+            .into_iter()
+            .filter_map(|r| {
+                if r < top || r > bottom {
+                    Some(r)
+                } else if down {
+                    (r + n <= bottom).then_some(r + n)
+                } else {
+                    r.checked_sub(n).filter(|nr| *nr >= top)
+                }
+            })
+            .collect();
+    }
+
+    /// Scan pending rows before content moves somewhere row indices cannot
+    /// follow (alt-screen grid swap, reflowing resize).
+    #[allow(dead_code)] // wired to the grid-swap and resize sites in ARC-064 pt 2
+    pub(crate) fn flush_pending_trigger_rows(&mut self) {
+        if !self.triggers.pending_trigger_rows.is_empty() {
+            crate::terminal::TriggerEngine::process_trigger_scans(self);
         }
     }
 

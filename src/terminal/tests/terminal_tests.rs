@@ -4284,3 +4284,53 @@ fn decstr_preserves_host_config() {
     assert_eq!(term.allow_file_media(), FileMediaMode::All);
     assert_eq!(term.answerback_string(), Some("par-test"));
 }
+
+// --- ARC-064: triggers fire on written text, not on incidental damage ---
+
+#[test]
+fn alt_screen_switch_does_not_refire_triggers() {
+    let mut term = Terminal::new(80, 24);
+    TriggerEngine::add_trigger(&mut term, "err".into(), "ERROR".into(), vec![]).unwrap();
+    term.process(b"ERROR one\r\nERROR two\r\n");
+    TriggerEngine::process_trigger_scans(&mut term);
+    assert_eq!(TriggerEngine::poll_trigger_matches(&mut term).len(), 2);
+
+    term.process(b"\x1b[?1049h\x1b[?1049l");
+    TriggerEngine::process_trigger_scans(&mut term);
+    assert_eq!(
+        TriggerEngine::poll_trigger_matches(&mut term).len(),
+        0,
+        "alt-screen switch marks damage but wrote no text; no trigger may re-fire"
+    );
+}
+
+#[test]
+fn scroll_does_not_refire_triggers() {
+    let mut term = Terminal::new(80, 24);
+    TriggerEngine::add_trigger(&mut term, "err".into(), "ERROR".into(), vec![]).unwrap();
+    term.process(b"ERROR alpha\r\n");
+    TriggerEngine::process_trigger_scans(&mut term);
+    assert_eq!(TriggerEngine::poll_trigger_matches(&mut term).len(), 1);
+
+    term.process(b"\x1b[1T"); // SD: scroll down; the ERROR line stays visible at row 1
+    TriggerEngine::process_trigger_scans(&mut term);
+    assert_eq!(
+        TriggerEngine::poll_trigger_matches(&mut term).len(),
+        0,
+        "a line scrolled while visible must not re-match"
+    );
+}
+
+#[test]
+fn wrapped_line_is_scanned_where_the_scroll_left_it() {
+    let mut term = Terminal::new(80, 24);
+    TriggerEngine::add_trigger(&mut term, "err".into(), "ERROR".into(), vec![]).unwrap();
+    term.process(b"\x1b[24;1HERROR bottom\r\n");
+    TriggerEngine::process_trigger_scans(&mut term);
+    let matches = TriggerEngine::poll_trigger_matches(&mut term);
+    assert_eq!(matches.len(), 1, "the written line is scanned exactly once");
+    assert_eq!(
+        matches[0].row, 22,
+        "the scan follows scrolled content, not the write index"
+    );
+}

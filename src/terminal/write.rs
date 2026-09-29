@@ -101,6 +101,8 @@ impl Terminal {
                     self.adjust_graphics_for_scroll_up(1, top, bottom);
                     // Mark all rows in scroll region as dirty
                     self.mark_rows_dirty(top, bottom);
+                    // Pending trigger rows follow their scrolled content
+                    self.shift_pending_trigger_rows(false, 1, top, bottom);
                     // Cursor stays at scroll_region_bottom per VT spec
                 } else {
                     // Not at scroll region bottom, or outside region - just move cursor down
@@ -188,6 +190,7 @@ impl Terminal {
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
                 self.mark_rows_dirty(scroll_top, scroll_bottom);
+                self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;
@@ -263,8 +266,9 @@ impl Terminal {
         }
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
-        // Mark row as dirty for rendering
+        // New text landed: render damage plus trigger scan
         self.mark_row_dirty(cursor_row);
+        self.mark_row_written(cursor_row);
 
         // Advance cursor by character width
         self.cursor.col += char_width;
@@ -405,6 +409,7 @@ impl Terminal {
                 }
 
                 self.mark_row_dirty(target_row);
+                self.mark_row_written(target_row);
             }
             return true;
         }
@@ -479,6 +484,7 @@ impl Terminal {
                         }
 
                         self.mark_row_dirty(target_row);
+                        self.mark_row_written(target_row);
                     }
                     return true;
                 }
@@ -564,8 +570,10 @@ impl Terminal {
             }
 
             self.mark_row_dirty(prev_row);
+            self.mark_row_written(prev_row);
             if cursor_row != prev_row {
                 self.mark_row_dirty(cursor_row);
+                self.mark_row_written(cursor_row);
             }
             return;
         }
@@ -605,6 +613,7 @@ impl Terminal {
                 // Adjust graphics to scroll with content
                 self.adjust_graphics_for_scroll_up(1, scroll_top, scroll_bottom);
                 self.mark_rows_dirty(scroll_top, scroll_bottom);
+                self.shift_pending_trigger_rows(false, 1, scroll_top, scroll_bottom);
                 // Cursor remains at bottom of region
             } else {
                 self.cursor.row += 1;
@@ -642,6 +651,7 @@ impl Terminal {
 
         self.active_grid_mut().set(cursor_col, cursor_row, cell);
         self.mark_row_dirty(cursor_row);
+        self.mark_row_written(cursor_row);
 
         // Advance cursor by 1
         self.cursor.col += 1;
