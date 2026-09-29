@@ -28,7 +28,7 @@ jobs:
         if: success()
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-        uses: Ilshidur/action-discord@0.4.0
+        uses: Ilshidur/action-discord@d2594079a10f1d6739ee50a2471f0ca57418b554 # 0.4.0
         with:
           args: 'Release and publish workflow has been triggered for {{ EVENT_PAYLOAD.repository.full_name }}.'
         continue-on-error: true
