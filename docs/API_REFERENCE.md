@@ -1821,12 +1821,12 @@ Difference between two screen snapshots. Obtain one from `diff_snapshots(old_sna
 Tmux control mode notification.
 
 **Properties:**
-- `notification_type: str`: Notification type (e.g. "layout_change", "output", "pane_mode", "agent_state_changed" — the last is par-mux agent-fed, carried as `name`=agent label and `value`=state)
-- `source: str | None`: For `agent_state_changed`, who asserted the state: `"hook"` (the agent's own report) or `"scrape"` (a pattern matched pane content). `None` for every other notification type and for lines without a `source=` token
+- `notification_type: str`: Notification type — one of the exact runtime strings: `begin`, `end`, `error`, `output`, `pane-mode-changed`, `window-pane-changed`, `window-close`, `unlinked-window-close`, `window-add`, `unlinked-window-add`, `window-renamed`, `unlinked-window-renamed`, `session-changed`, `client-session-changed`, `session-renamed`, `sessions-changed`, `session-window-changed`, `client-detached`, `exit`, `pause`, `extended-output`, `continue`, `subscription-changed`, `layout-change`, `paste-buffer-changed`, `paste-buffer-deleted`, `agent-state-changed`, `agent-released`, `agent-telemetry-changed`, `pane-title-changed`, `unknown`, `terminal-output`. The agent and pane-title types are par-mux-fed; compare against the hyphenated string exactly.
+- `source: str | None`: For `agent-state-changed`, who asserted the state: `"hook"` (the agent's own report) or `"scrape"` (a pattern matched pane content). `None` for every other notification type and for lines without a `source=` token
 - `pane_id: str | None`: Pane identifier
 - `window_id: str | None`: Window identifier
 - `session_id: str | None`: Session identifier
-- `name: str | None`: Session/window name
+- `name: str | None`: Session/window name; for `agent-state-changed`, `agent-released` and `agent-telemetry-changed`, the agent label
 - `client: str | None`: Client name
 - `data: bytes | None`: Raw notification data
 - `timestamp: int | None`: Notification timestamp
@@ -1834,7 +1834,7 @@ Tmux control mode notification.
 - `flags: str | None`: Raw flags
 - `delay_ms: int | None`: Delay in milliseconds
 - `subscription_name: str | None`: Subscription name
-- `value: str | None`: Subscription value
+- `value: str | None`: Subscription value; for `agent-state-changed`, the agent's new state (`agent-released` and `agent-telemetry-changed` carry identity only — re-query `list-agents` for the payload)
 - `window_layout: str | None`: Window layout string
 - `window_visible_layout: str | None`: Visible window layout
 - `window_raw_flags: str | None`: Raw window flags string
