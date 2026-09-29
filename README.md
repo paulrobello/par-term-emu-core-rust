@@ -115,7 +115,7 @@ is documented there (older README release notes were merged into the changelog).
 - **Observer API** - Push-based event delivery with sync callbacks and async queues; convenience wrappers for common patterns (bell, title, CWD, command completion, zone changes)
 - **General-purpose File Transfer** - OSC 1337 `File=` with `inline=0` for host-to-terminal downloads, `RequestUpload` for terminal-to-host uploads, with progress tracking and lifecycle events
 - **Instant Replay** - Cell-level terminal snapshots with input-stream delta recording, size-based eviction, and timeline navigation via `SnapshotManager` and `ReplaySession`
-- **C-Compatible FFI** - `#[repr(C)]` types (`SharedState`, `SharedCell`) and C API (`terminal_get_state`, `terminal_add_observer`) for embedding in C/C++ applications
+- **C-Compatible FFI** - embedding API in `include/terminal_core.h` (`terminal_create`/`feed`/`dirty_ranges`/`read_row` render loop, key encoding, snapshots, observers; `SharedState`/`SharedCell`) for C/C++ and Swift apps — see the [FFI Guide](docs/FFI_GUIDE.md) and `make xcframework` for iOS
 
 ### Graphics Support
 

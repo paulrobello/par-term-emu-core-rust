@@ -2461,7 +2461,7 @@ print(f"Snapshot at {info['timestamp']}, size: {info['estimated_size_bytes']} by
 
 ## C-Compatible FFI
 
-The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability.
+The library provides a C-compatible FFI layer for embedding the terminal emulator in C/C++ applications. All types use `#[repr(C)]` for ABI stability, pinned by `_Static_assert`s against the Rust side. The authoritative reference is the hand-written header `include/terminal_core.h` — see the [FFI Guide](FFI_GUIDE.md) for the full surface (lifecycle, the damage-driven render loop, key encoding, snapshots, observers, and the `make xcframework` iOS build).
 
 ### SharedCell
 
@@ -2495,6 +2495,8 @@ A frozen snapshot of the full terminal state, allocated on the heap.
 | `cwd_len` | `u32` | Length of the CWD string in bytes (excluding NUL; 0 if cwd is null) |
 | `cells` | `*mut SharedCell` | Row-major cell array of `cols * rows` entries (owned) |
 | `cell_count` | `u32` | Number of cells in the array |
+| `scrollback_lines` | `u32` | Lines currently in the scrollback buffer (0 while the alternate screen is active) |
+| `total_lines` | `u32` | Total lines (visible grid + scrollback) |
 
 ### C API Functions
 
@@ -2515,20 +2517,20 @@ bool terminal_remove_observer(Terminal* term, uint64_t id);
 
 ### TerminalObserverVtable
 
-A C function-pointer table for receiving terminal events. Each callback receives a `user_data` pointer and a JSON-encoded event string (valid only for the duration of the callback).
+A C function-pointer table for receiving terminal events. Each callback receives a `user_data` pointer and a Debug-formatted event text (valid only for the duration of the callback) — diagnostic text with no stable format, not JSON; parse it only for logging. Callbacks fire inline while the terminal processes input and must not re-enter any `terminal_*` function on the same handle.
 
 ```c
 typedef struct {
-    // Called for zone lifecycle events (prompt start/end, command start/end, output start/end)
-    void (*on_zone_event)(void* user_data, const char* event_json);     // optional
-    // Called for command completion events
-    void (*on_command_event)(void* user_data, const char* event_json);  // optional
-    // Called for environment change events (CWD, title, etc.)
-    void (*on_environment_event)(void* user_data, const char* event_json); // optional
-    // Called for screen-related events (bell, resize, graphics, file transfers, etc.)
-    void (*on_screen_event)(void* user_data, const char* event_json);   // optional
+    // Called for OSC 133 shell-integration zone lifecycle events (ZoneOpened/Closed/ScrolledOut)
+    void (*on_zone_event)(void* user_data, const char* event_text);     // optional
+    // Called for shell integration events (prompt/command start/finish)
+    void (*on_command_event)(void* user_data, const char* event_text);  // optional
+    // Called for environment change events (CWD, hostname, username)
+    void (*on_environment_event)(void* user_data, const char* event_text); // optional
+    // Called for screen-related events (title, bell, resize, clear, graphics, file transfers, etc.)
+    void (*on_screen_event)(void* user_data, const char* event_text);   // optional
     // Called for ALL events (catch-all, fires in addition to the specific callbacks above)
-    void (*on_event)(void* user_data, const char* event_json);          // optional
+    void (*on_event)(void* user_data, const char* event_text);          // optional
     // Opaque user data passed to every callback
     void* user_data;
 } TerminalObserverVtable;

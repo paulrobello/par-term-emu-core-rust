@@ -17,7 +17,7 @@ A comprehensive guide for using the par-term-emu-core-rust library in pure Rust 
 - [Example Projects](#example-projects)
 - [API Documentation](#api-documentation)
 - [Core Components](#core-components)
-- [C FFI](#c-ffi-future)
+- [C FFI](#c-ffi)
 - [Related Documentation](#related-documentation)
 
 ## Overview
@@ -574,33 +574,11 @@ cargo doc --all-features --open
 - **Rate Limiting**: Input rate limiting to prevent abuse
 - **System Stats**: Optional system resource monitoring
 
-## C FFI (Future)
+## C FFI
 
-While the library is built as `cdylib`, C FFI bindings are not yet provided. To use from C/C++, you would need to:
+The library ships a C embedding surface: hand-written header [`include/terminal_core.h`](../include/terminal_core.h) mirroring `src/ffi.rs`, with a damage-driven render loop (`terminal_feed` / `terminal_dirty_ranges` / `terminal_read_row`), key encoding, snapshots, and observers. Build it for Apple platforms with `make xcframework`, or as a static library with `cargo rustc --lib --crate-type staticlib`.
 
-1. Create wrapper functions with `#[no_mangle]` and `extern "C"`
-2. Use C-compatible types
-3. Generate header files with `cbindgen`
-
-> **Note:** This is a future enhancement. The following is an example of how it could be implemented:
-
-```rust
-use par_term_emu_core_rust::terminal::Terminal;
-
-#[no_mangle]
-pub extern "C" fn terminal_new(cols: usize, rows: usize) -> *mut Terminal {
-    Box::into_raw(Box::new(Terminal::new(cols, rows)))
-}
-
-#[no_mangle]
-pub extern "C" fn terminal_free(ptr: *mut Terminal) {
-    if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(ptr));
-        }
-    }
-}
-```
+See the [FFI Guide](FFI_GUIDE.md) for the full surface, contracts, and examples.
 
 ## Related Documentation
 
