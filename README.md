@@ -278,7 +278,12 @@ Available binaries: Linux (x86_64, ARM64), macOS (Intel, Apple Silicon), Windows
 
 **Or install from crates.io:**
 ```bash
-cargo install par-term-emu-core-rust --features streaming-bin
+# Streaming server (no-default-features is required: the default python feature
+# links libpython and fails at link time for a standalone binary)
+cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer
+
+# Terminal multiplexer daemon + client
+cargo install par-term-emu-core-rust --no-default-features --features mux --bin par-mux
 ```
 
 **Or build from source:**

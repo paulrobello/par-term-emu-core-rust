@@ -156,8 +156,9 @@ tar -xzf par-term-web-frontend-v*.tar.gz -C ./web_term
 ### Install from crates.io
 
 ```bash
-# Install the streaming server globally
-cargo install par-term-emu-core-rust --features streaming-bin
+# Install the streaming server globally (no-default-features is required:
+# the default python feature links libpython and fails at link time)
+cargo install par-term-emu-core-rust --no-default-features --features streaming-bin --bin par-term-streamer
 
 # Run the server
 par-term-streamer --port 8099 --theme dracula
