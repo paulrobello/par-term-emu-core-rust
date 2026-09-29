@@ -114,7 +114,7 @@ impl MuxSessionFactory {
         &self,
         session_id: &str,
         writer: &mut LocalStream,
-        reader: &mut Lines,
+        reader: &mut MuxLines,
     ) -> io::Result<u32> {
         match self.selector {
             MuxPaneSelector::Pane(n) => Ok(n),
@@ -135,11 +135,11 @@ impl MuxSessionFactory {
 }
 
 /// The daemon connection's reader, line by line.
-type Lines = std::io::Lines<BufReader<LocalStream>>;
+type MuxLines = std::io::Lines<BufReader<LocalStream>>;
 
 /// Send one command and read its reply block, skipping pushed lines read
 /// along the way. `%error` becomes an `Err`.
-fn command(writer: &mut LocalStream, reader: &mut Lines, line: &str) -> io::Result<Vec<String>> {
+fn command(writer: &mut LocalStream, reader: &mut MuxLines, line: &str) -> io::Result<Vec<String>> {
     writeln!(writer, "{line}")?;
     writer.flush()?;
     let mut body: Option<Vec<String>> = None;
@@ -370,7 +370,7 @@ impl SessionFactory for MuxSessionFactory {
 /// every session's state) alive after the last real owner dropped.
 fn spawn_drain(
     link: Arc<MirrorLink>,
-    reader: Lines,
+    reader: MuxLines,
     session_id: String,
     server: Option<std::sync::Weak<StreamingServer>>,
 ) {
