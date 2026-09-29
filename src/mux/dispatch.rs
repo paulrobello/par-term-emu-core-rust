@@ -181,6 +181,12 @@ pub(super) fn dispatch_command(
         } => cmd_join_pane(ctx, source, target, direction, percent),
         MuxCommand::MoveWindow { source, index } => cmd_move_window(ctx, source, index),
         MuxCommand::SwapWindows { source, target } => cmd_swap_windows(ctx, source, target),
+        MuxCommand::RespawnPane {
+            pane,
+            kill,
+            start_dir,
+            command,
+        } => cmd_respawn_pane(ctx, pane, kill, start_dir.as_deref(), command),
         MuxCommand::NewWindow {
             session,
             name,
@@ -805,6 +811,70 @@ fn cmd_join_pane(
                 outcome = outcome.notifying(TmuxNotification::SessionsChanged);
             }
             outcome
+        }
+        Err(err) => Outcome::err(ctx, &err.to_string()),
+    }
+}
+
+/// `respawn-pane -t %N [-k] [-c dir] [command]`: restart the pane's
+/// process in place — same pane id, window, and layout; a fresh
+/// terminal. Two-phase (ARC-022): resolve and refuse a live pane without
+/// `-k` under the lock, spawn off it, re-lock to swap. `%pane-respawned`
+/// is the cue clients clear their exited-state chrome on.
+fn cmd_respawn_pane(
+    ctx: &Ctx<'_>,
+    pane: Target<PaneId>,
+    kill: bool,
+    start_dir: Option<&str>,
+    command: Option<String>,
+) -> Outcome {
+    let (cwd, note) = resolve_start_dir(start_dir);
+    // Phase 1: resolve, refuse a live pane, snapshot the restart plan.
+    let (plan, factory) = {
+        let mut guard = ctx.tree.lock();
+        let pane = match guard.resolve_pane_target(pane) {
+            Ok(id) => id,
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        };
+        match guard.begin_respawn(pane, kill, command, cwd.as_deref()) {
+            Ok(plan) => (plan, guard.factory()),
+            Err(err) => return Outcome::err(ctx, &err.to_string()),
+        }
+    };
+    // Phase 2: spawn the replacement off the tree lock.
+    let spawned = factory.create_pane(
+        plan.pane_id,
+        plan.cols,
+        plan.rows,
+        plan.command.as_deref(),
+        &plan.context(),
+    );
+    // Phase 3: swap in, re-wire the output sink the factory does not set.
+    match spawned {
+        Ok(pane) => {
+            let outcome = {
+                let mut guard = ctx.tree.lock();
+                match guard.complete_respawn(plan, pane) {
+                    Ok(pane_id) => {
+                        if let Some(pane) = guard.pane_mut(pane_id) {
+                            pane.on_output(pane_output_sink(ctx.clients, pane_id));
+                            if let Some(note) = &note {
+                                // Same visibility rule as a fresh spawn's
+                                // gone cwd: the note lands on the screen.
+                                pane.terminal().write().process(note.as_bytes());
+                            }
+                        }
+                        Ok(pane_id)
+                    }
+                    Err(err) => Err(err),
+                }
+            };
+            match outcome {
+                Ok(pane_id) => Outcome::ok(ctx, "").notifying(TmuxNotification::PaneRespawned {
+                    pane_id: pane_id.to_string(),
+                }),
+                Err(err) => Outcome::err(ctx, &err.to_string()),
+            }
         }
         Err(err) => Outcome::err(ctx, &err.to_string()),
     }

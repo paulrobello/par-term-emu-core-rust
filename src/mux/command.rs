@@ -212,6 +212,21 @@ pub enum MuxCommand {
         /// Second window (`-t`).
         target: Target<WindowId>,
     },
+    /// Restart a pane's process in place (`respawn-pane`): same pane id,
+    /// window, and layout; a fresh terminal.
+    RespawnPane {
+        /// The pane to restart (`-t`).
+        pane: Target<PaneId>,
+        /// `-k`: kill a still-running process first; without it a live
+        /// pane is refused.
+        kill: bool,
+        /// `-c`: the restart's working directory, replacing the stored
+        /// one.
+        start_dir: Option<String>,
+        /// The command to run, replacing the stored one — the trailing
+        /// text after the flags.
+        command: Option<String>,
+    },
     /// Print a pane's screen, optionally including scrollback.
     CapturePane {
         /// Target pane.
@@ -310,6 +325,7 @@ impl MuxCommand {
             | MuxCommand::JoinPane { .. }
             | MuxCommand::MoveWindow { .. }
             | MuxCommand::SwapWindows { .. }
+            | MuxCommand::RespawnPane { .. }
             | MuxCommand::SetBuffer { .. }
             | MuxCommand::SetEnvironment { .. }
             | MuxCommand::RenameSession { .. }
@@ -767,6 +783,7 @@ const COMMANDS: &[(&str, CommandParser)] = &[
     ("join-pane", parse_join_pane),
     ("move-window", parse_move_window),
     ("swap-window", parse_swap_windows),
+    ("respawn-pane", parse_respawn_pane),
     ("capture-pane", parse_capture_pane),
     ("set-buffer", parse_set_buffer),
     ("set-client-colors", parse_set_client_colors),
@@ -1173,6 +1190,35 @@ fn parse_swap_windows(a: &Args<'_>) -> Result<MuxCommand, String> {
     Ok(MuxCommand::SwapWindows {
         source: a.window("-s")?,
         target: a.window("-t")?,
+    })
+}
+
+fn parse_respawn_pane(a: &Args<'_>) -> Result<MuxCommand, String> {
+    let pane = a.pane("-t")?;
+    let kill = a.has_flag("-k");
+    let start_dir = a.quoted_flag("-c")?;
+    // The command, when given, is the trailing text after the flags;
+    // anchor on whichever value flag sits LAST on the line so a command
+    // argument is never eaten as a flag value. A bare `-k` between the
+    // anchor and the command is the kill flag, already parsed — strip
+    // that one leading token.
+    let mut command = if start_dir.is_some() {
+        a.trailing_after("-c")
+    } else {
+        a.trailing_after("-t")
+    };
+    if kill {
+        let mut tokens = command.split(' ');
+        if tokens.next() == Some("-k") {
+            command = tokens.collect::<Vec<_>>().join(" ");
+        }
+    }
+    let command = (!command.trim().is_empty()).then_some(command);
+    Ok(MuxCommand::RespawnPane {
+        pane,
+        kill,
+        start_dir,
+        command,
     })
 }
 
@@ -2213,6 +2259,34 @@ mod tests {
             MuxCommand::SwapWindows {
                 source: Target::Id(WindowId(0)),
                 target: Target::Id(WindowId(2))
+            }
+        );
+        // respawn-pane: -k and the trailing command both ride along.
+        assert_eq!(
+            parse_command("respawn-pane -t %0").unwrap(),
+            MuxCommand::RespawnPane {
+                pane: Target::Id(PaneId(0)),
+                kill: false,
+                start_dir: None,
+                command: None
+            }
+        );
+        assert_eq!(
+            parse_command("respawn-pane -t %0 -k -c /tmp sleep 60").unwrap(),
+            MuxCommand::RespawnPane {
+                pane: Target::Id(PaneId(0)),
+                kill: true,
+                start_dir: Some("/tmp".to_string()),
+                command: Some("sleep 60".to_string())
+            }
+        );
+        assert_eq!(
+            parse_command("respawn-pane -t %0 -k top").unwrap(),
+            MuxCommand::RespawnPane {
+                pane: Target::Id(PaneId(0)),
+                kill: true,
+                start_dir: None,
+                command: Some("top".to_string())
             }
         );
     }
